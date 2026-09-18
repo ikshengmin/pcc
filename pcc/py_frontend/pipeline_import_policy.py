@@ -76,7 +76,18 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
     # died at runtime with "No module named 'contextlib'".
     # functools also exposes real factories and metadata-bearing callable
     # values; recognizing decorator syntax alone cannot own its imports.
-    {"platform", "subprocess", "contextvars", "contextlib", "functools"}
+    # ``json``: builtin dispatch owns ``loads``/``dumps``, but
+    # ``JSONDecodeError`` is a class value.  ``except json.JSONDecodeError``
+    # left ``py_cpy_ensure_init`` in the IR, so ``--python-libpython=off``
+    # replaced the whole enclosing function with a fail-closed stub, and
+    # ``from json import JSONDecodeError`` raised "No module named 'json'".
+    # ``pcc/tools/runtime_archive_provenance._load_json_object`` catches that
+    # class, so pcc1 could not verify a runtime archive it had just built:
+    # ``provenance_valid`` swallows the NotImplementedError and answers False,
+    # and every compile then failed with "runtime archive has invalid
+    # provenance" -- including the stage1 function smoke.
+    {"platform", "subprocess", "contextvars", "contextlib", "functools",
+     "json"}
 )
 
 # A shallow explicit multi-file compile normally admits every directly
@@ -84,7 +95,8 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
 # also classified as compiler-owned builtin dispatch but still exposes
 # semantic objects that require its compiled provider.
 REQUIRED_COMPILED_STDLIB_PROVIDERS = frozenset(
-    {"platform", "subprocess", "contextvars", "contextlib", "functools"}
+    {"platform", "subprocess", "contextvars", "contextlib", "functools",
+     "json"}
 )
 
 NATIVE_IMPORT_FROMS = {

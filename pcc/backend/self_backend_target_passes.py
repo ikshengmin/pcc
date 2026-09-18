@@ -16,6 +16,7 @@ no longer carries enough SSA/use information to prove them safely.
 
 from dataclasses import dataclass
 import os
+import re
 from typing import Protocol
 
 from . import BackendUnavailable
@@ -658,8 +659,364 @@ class VerifyPreparedModulePass:
         return prepared
 
 
+# ---------------------------------------------------------------------------
+# Frame-address folding
+# ---------------------------------------------------------------------------
+#
+# The AArch64 emitter addresses every frame slot as ``[x29, #-offset]``.  The
+# unscaled ``ldur``/``stur`` form carries a signed 9-bit immediate, so once a
+# frame grows past 256 bytes the emitter has to materialise the address first:
+#
+#     sub  x15, x29, #1032
+#     ldur x9, [x15]
+#
+# The scaled ``ldr``/``str`` form carries an unsigned, width-scaled 12-bit
+# immediate reaching 32760 bytes, but only for a non-negative displacement, so
+# it cannot express a negative ``x29`` offset.  It can express the same slot
+# from ``sp``: the prologue establishes ``x29 = sp`` and then subtracts the
+# frame size ``F``, which makes ``[x29, #-offset]`` and ``[sp, #F - offset]``
+# the same address for as long as ``sp`` is unchanged.
+#
+# This is the addressing-mode formation LLVM 20.1.8 performs in
+# ``AArch64RegisterInfo::eliminateFrameIndex`` / ``AArch64InstrInfo``'s
+# ``rewriteAArch64FrameIndex``, which picks the widest immediate form the
+# opcode admits before falling back to a scratch register.
+#
+# ``x9``-``x17`` are the emitter's block-local scratch registers, so the
+# address register is dropped only after an in-block liveness scan proves the
+# ``sub`` dead.
+#
+# Measured neutral for throughput on the C=100 gateway handler: 1,486 static
+# instructions removed from ``py_obj`` (-10%) and 220 KB from the runtime
+# archive, with retired instructions unchanged (+0.02%) and cycles -0.29%.
+# The folded ``sub`` sites are in cold code -- a hot frame is small enough that
+# ``ldur``'s signed 9-bit displacement already reaches its slots.  Opt-in, for
+# code size.  Any ``sp`` adjustment the prologue model does not cover
+# disables folding until a later prologue re-establishes the frame.
+
+_AARCH64_PROLOGUE_FRAME_POINTER = "mov x29, sp"
+_AARCH64_EPILOGUE_RESTORE = "ldp x29, x30, [sp], #16"
+
+# unscaled opcode -> (scaled opcode, access width in bytes)
+_AARCH64_UNSCALED_TO_SCALED = {
+    "ldur": ("ldr", None),
+    "stur": ("str", None),
+    "ldurb": ("ldrb", 1),
+    "sturb": ("strb", 1),
+    "ldurh": ("ldrh", 2),
+    "sturh": ("strh", 2),
+    "ldursw": ("ldrsw", 4),
+}
+
+_AARCH64_UNSCALED_MAX = 255
+_AARCH64_SCALED_IMM12 = 4095
+
+
+def _aarch64_scaled_offset_fits(offset: int, width: int) -> bool:
+    if offset < 0 or offset % width:
+        return False
+    return offset // width <= _AARCH64_SCALED_IMM12
+
+
+def _aarch64_frame_slot_access(
+    line: str,
+    address_register: str,
+) -> tuple[str, str, int] | None:
+    """Return ``(opcode, transfer register, width)`` for a bare slot access."""
+
+    stripped = line.strip()
+    opcode, _separator, operands = stripped.partition(" ")
+    entry = _AARCH64_UNSCALED_TO_SCALED.get(opcode)
+    if entry is None:
+        return None
+    match = re.fullmatch(
+        r"([wx]\d+), \[" + re.escape(address_register) + r"\]",
+        operands.strip(),
+    )
+    if match is None:
+        return None
+    transfer = match.group(1)
+    scaled, fixed_width = entry
+    width = fixed_width if fixed_width is not None else (8 if transfer[0] == "x" else 4)
+    return scaled, transfer, width
+
+
+def _aarch64_register_dead_in_block(
+    lines: list[str],
+    start: int,
+    register: str,
+) -> bool:
+    """True when ``register`` is never read again before the block ends.
+
+    ``x9``-``x17`` are never live into a basic block in this emitter, so the
+    scan may stop at the first label or terminator.  A redefinition also ends
+    the scan: the old value cannot be observed after it.
+    """
+
+    pattern = re.compile(r"\b" + re.escape(register) + r"\b")
+    for index in range(start, len(lines)):
+        line = lines[index]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("."):
+            continue
+        if re.fullmatch(r"[A-Za-z_][\w.$]*:", stripped):
+            return True
+        opcode, _separator, operands = stripped.partition(" ")
+        if opcode in ("b", "br", "ret"):
+            return True
+        if not pattern.search(operands):
+            if opcode in ("bl", "blr"):
+                return True
+            continue
+        # A plain destination write kills the old value; anything else reads it.
+        destination, _comma, remainder = operands.partition(",")
+        if (
+            destination.strip() == register
+            and opcode not in _AARCH64_STORE_LIKE_OPCODES
+            and not pattern.search(remainder)
+        ):
+            return True
+        return False
+    return True
+
+
+_AARCH64_STORE_LIKE_OPCODES = frozenset(
+    {
+        "str", "stur", "strb", "sturb", "strh", "sturh", "stp",
+        "cmp", "cmn", "tst", "cbz", "cbnz", "tbz", "tbnz",
+        "b", "bl", "blr", "br", "ret",
+    }
+)
+
+
+def fold_aarch64_frame_addresses(lines: list[str]) -> list[str]:
+    """Fold ``sub xD, x29, #imm`` + ``[xD]`` into one ``sp``-relative access."""
+
+    out: list[str] = []
+    frame_size: int | None = None
+    saw_frame_pointer = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+
+        if stripped == _AARCH64_PROLOGUE_FRAME_POINTER:
+            saw_frame_pointer = True
+            frame_size = None
+            out.append(line)
+            index += 1
+            continue
+
+        stack_adjust = re.fullmatch(r"(add|sub) sp, sp, #(\d+)", stripped)
+        if stack_adjust is not None:
+            amount = int(stack_adjust.group(2))
+            if stack_adjust.group(1) == "sub" and saw_frame_pointer and frame_size is None:
+                frame_size = amount
+                saw_frame_pointer = False
+            elif (
+                stack_adjust.group(1) == "add"
+                and frame_size == amount
+                and index + 1 < len(lines)
+                and lines[index + 1].strip() == _AARCH64_EPILOGUE_RESTORE
+            ):
+                pass  # ordinary epilogue; the frame stays modelled for later blocks
+            else:
+                frame_size = None
+                saw_frame_pointer = False
+            out.append(line)
+            index += 1
+            continue
+
+        if stripped.startswith("mov sp,") or re.match(r"^(add|sub) sp, ", stripped):
+            frame_size = None
+            saw_frame_pointer = False
+            out.append(line)
+            index += 1
+            continue
+
+        materialize = re.fullmatch(r"sub (x\d+), x29, #(\d+)", stripped)
+        if materialize is not None and frame_size is not None and index + 1 < len(lines):
+            address_register = materialize.group(1)
+            slot_offset = int(materialize.group(2))
+            access = _aarch64_frame_slot_access(lines[index + 1], address_register)
+            if access is not None and slot_offset <= frame_size:
+                scaled_opcode, transfer, width = access
+                offset = frame_size - slot_offset
+                folded: str | None = None
+                if _aarch64_scaled_offset_fits(offset, width):
+                    folded = f"{scaled_opcode} {transfer}, [sp, #{offset}]"
+                elif 0 <= offset <= _AARCH64_UNSCALED_MAX:
+                    unscaled_opcode = _aarch64_opcode(lines[index + 1])
+                    folded = f"{unscaled_opcode} {transfer}, [sp, #{offset}]"
+                if folded is not None and _aarch64_register_dead_in_block(
+                    lines, index + 2, address_register
+                ):
+                    indent = lines[index + 1][: len(lines[index + 1]) - len(lines[index + 1].lstrip())]
+                    out.append(indent + folded)
+                    index += 2
+                    continue
+
+        out.append(line)
+        index += 1
+    return out
+
+
+@dataclass(frozen=True)
+class FoldFrameAddressPass:
+    name: str = "aarch64-fold-frame-address"
+
+    def run(self, asm_text: str, ctx: SelfTargetPassContext) -> str:
+        if "aarch64" not in ctx.target_id:
+            return asm_text
+        lines = asm_text.splitlines()
+        folded = fold_aarch64_frame_addresses(lines)
+        out = "\n".join(folded)
+        if asm_text.endswith("\n"):
+            out += "\n"
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Immediate folding and redundant register copies
+# ---------------------------------------------------------------------------
+#
+# The AArch64 emitter materialises every IR constant into its own register
+# before use, so a comparison against a literal costs two instructions:
+#
+#     movz x10, #1, lsl #0
+#     cmp  x9, x10
+#
+# The add/subtract immediate form carries an unsigned 12-bit field (optionally
+# shifted left by 12), which covers the constants this emitter actually
+# produces for guards.  Folding the literal into the consumer retires the
+# ``movz`` and frees the scratch register.  ``cmp``/``cmn`` are the aliases of
+# ``subs``/``adds`` to the zero register and take the same field.
+#
+# The emitter also produces ``mov rA, rB`` immediately followed by
+# ``mov rB, rA`` where an SSA value is copied into a scratch and straight back.
+# The second copy restores what the first read, so both are dead once nothing
+# else reads ``rA``.
+#
+# LLVM 20.1.8 performs both in ``AArch64InstrInfo::foldImmediate`` and the
+# generic ``MachineCopyPropagation`` pass.
+#
+# Measured, and the result is why this pass is opt-in rather than part of any
+# default list.  On the C=100 gateway handler it removed 5.69% of retired
+# instructions and moved cycles by -0.39% (ABBA, eight paired runs, hardware
+# counters).  IPC fell 5.07 -> 4.76: the ``movz``/``mov`` pairs it retires were
+# filling issue slots already idle under the latency of something else.  The
+# same workload through LLVM's backend runs 2.42x fewer instructions at a
+# *lower* IPC (3.85) and still takes 1.98x fewer cycles, so the binding
+# constraint is not instruction count -- it is the dependent store/load chain
+# through the per-value stack slot every SSA value keeps.  Removing those needs
+# register allocation across calls, and calls are 51% of the instructions in
+# the blocks this backend allocates.  Reach for this pass for code size, not
+# for throughput.  Every rewrite here is gated on an
+# in-block liveness scan proving the materialising register dead, for the same
+# reason as the frame-address fold: ``x9``-``x17`` are block-local scratch in
+# this emitter, so the scan is both sufficient and conservative.
+
+_AARCH64_ADDSUB_IMM12 = 4095
+
+# Consumers whose second source operand may become an add/sub immediate.
+_AARCH64_IMMEDIATE_CONSUMERS = frozenset({"cmp", "cmn", "add", "sub", "adds", "subs"})
+
+
+def _aarch64_movz_immediate(operands: str) -> tuple[str, int] | None:
+    """Return ``(destination, value)`` for a plain 64/32-bit constant move."""
+
+    match = re.fullmatch(
+        r"([wx]\d+), #(\d+)(?:, lsl #0)?",
+        operands.strip(),
+    )
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2))
+
+
+def _aarch64_fold_immediate_into(line: str, register: str, value: int) -> str | None:
+    """Rewrite ``<op> rD, rN, <register>`` / ``cmp rN, <register>``."""
+
+    if value < 0 or value > _AARCH64_ADDSUB_IMM12:
+        return None
+    stripped = line.strip()
+    opcode, _separator, operands = stripped.partition(" ")
+    if opcode not in _AARCH64_IMMEDIATE_CONSUMERS:
+        return None
+    parts = [part.strip() for part in operands.split(",")]
+    # Only the final source operand becomes the immediate, and a shifted or
+    # extended operand form is left alone.
+    if len(parts) not in (2, 3) or parts[-1] != register:
+        return None
+    if any(part != register and re.search(r"\b(lsl|lsr|asr|ror|[us]xt[bhwx])\b", part)
+           for part in parts):
+        return None
+    indent = line[: len(line) - len(line.lstrip())]
+    return f"{indent}{opcode} {', '.join(parts[:-1])}, #{value}"
+
+
+def fold_aarch64_immediates(lines: list[str]) -> list[str]:
+    """Fold materialised constants into their consumer and drop copy pairs."""
+
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        opcode, _separator, operands = stripped.partition(" ")
+
+        if opcode in ("mov", "movz") and index + 1 < len(lines):
+            constant = _aarch64_movz_immediate(operands)
+            if constant is not None:
+                register, value = constant
+                folded = _aarch64_fold_immediate_into(lines[index + 1], register, value)
+                if folded is not None and _aarch64_register_dead_in_block(
+                    lines, index + 2, register
+                ):
+                    out.append(folded)
+                    index += 2
+                    continue
+
+        if opcode == "mov" and index + 1 < len(lines):
+            following = lines[index + 1].strip()
+            next_opcode, _sep, next_operands = following.partition(" ")
+            if next_opcode == "mov":
+                source = [part.strip() for part in operands.split(",")]
+                target = [part.strip() for part in next_operands.split(",")]
+                if (
+                    len(source) == 2
+                    and len(target) == 2
+                    and source[0] == target[1]
+                    and source[1] == target[0]
+                    and _aarch64_register_dead_in_block(lines, index + 2, source[0])
+                ):
+                    out.append(line)
+                    index += 2
+                    continue
+
+        out.append(line)
+        index += 1
+    return out
+
+
+@dataclass(frozen=True)
+class FoldImmediatePass:
+    name: str = "aarch64-fold-immediate"
+
+    def run(self, asm_text: str, ctx: SelfTargetPassContext) -> str:
+        if "aarch64" not in ctx.target_id:
+            return asm_text
+        folded = fold_aarch64_immediates(asm_text.splitlines())
+        out = "\n".join(folded)
+        if asm_text.endswith("\n"):
+            out += "\n"
+        return out
+
+
 _PASS_REGISTRY: dict[str, SelfTargetPass] = {
     "strip-trailing-whitespace": StripTrailingWhitespacePass(),
+    "aarch64-fold-frame-address": FoldFrameAddressPass(),
+    "aarch64-fold-immediate": FoldImmediatePass(),
 }
 _MEMORY_PASS_REGISTRY: dict[str, SelfTargetMemoryPass] = {
     "verify-prepared-module": VerifyPreparedModulePass(),

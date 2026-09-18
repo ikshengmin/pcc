@@ -44,6 +44,10 @@ _SECTION_FLAGS = {
     ("__TEXT", "__const", ""): DATA_SECTION_FLAGS,
     ("__DATA", "__data", ""): DATA_SECTION_FLAGS,
     ("__DATA", "__const", ""): DATA_SECTION_FLAGS,
+    ("__DATA", "__thread_data", "thread_local_regular"):
+        spec.S_THREAD_LOCAL_REGULAR,
+    ("__DATA", "__thread_vars", "thread_local_variables"):
+        spec.S_THREAD_LOCAL_VARIABLES,
     ("__DATA", "__mod_init_func", "mod_init_funcs"):
         MOD_INIT_SECTION_FLAGS,
     ("__DATA", "__pcc_stackmaps", "regular"):

@@ -1310,6 +1310,8 @@ def test_http_and_sha256_runtime_is_owned_by_pcc_python(
         "py_sha256_file_hex", "py_sha256_file_hex_bounded",
         "py_sha256_bytes_digest", "py_sha256_state_new",
         "py_sha256_state_update", "py_sha256_state_digest",
+        "py_md5_bytes_digest", "py_md5_state_new",
+        "py_md5_state_update", "py_md5_state_digest",
     ):
         assert owners[symbol] == {"py_hash_runtime.o"}
     assert owners["py_http_download_to_file"] == {"py_http_runtime.o"}

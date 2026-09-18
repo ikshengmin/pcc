@@ -1166,6 +1166,44 @@ class AssignmentStatementLoweringMixin:
             else:
                 self._discard_owned_local_gc_root(target.ident, alloca)
 
+    def _emit_destructured_literal_element(self, elem: Expr):
+        """Evaluate one element of ``a, b = <e0>, <e1>`` with its ownership.
+
+        Each element is stored through the tuple-unpack protocol, whose default
+        ("any non-Dyn value is owned", Dyn is borrowed) is written for
+        ``py_tuple_get`` results.  A ``Name`` element that is itself an owned
+        local loads a *borrowed* reference to a managed object, so binding it
+        as owned made two locals own one reference, and binding it as borrowed
+        left the target's loop-carried owned flag from the previous iteration in
+        place, so the next owned store released the borrowed pointer.  Either
+        way the object was freed while the source still owned it:
+        ``symbol, offset = item, 0`` in ``arm64_asm_driver._append_line``
+        (``item`` a comprehension element, hence Dyn) followed by
+        ``symbol = symbol.strip()`` released ``item``'s string, and ``item``'s
+        cleanup then reached a dead cell.  Mirror plain ``x = y``: a copy of an
+        owned local (or an ``except ... as e`` binding) takes its own reference,
+        emitted before any target is stored so ``a, b = b, a`` also survives
+        the release of the old values.  Every other element keeps the existing
+        protocol.
+        """
+        value = self._emit_expr(elem)
+        if not isinstance(value.type, ir.PointerType):
+            return value, None
+        if value in getattr(self, "_cpy_values", ()):
+            return value, None
+        if isinstance(elem, Name) and (
+            elem.ident in getattr(self, "_owned_local_names", set())
+            or elem.ident in getattr(self, "_except_binding_names", set())
+        ):
+            return (
+                self._gc_retain(
+                    value,
+                    name=self._fresh(elem.ident + ".unpack.copy.retain"),
+                ),
+                True,
+            )
+        return value, None
+
     def _emit_tuple_unpack_assign(
         self,
         stmt: Assign,
@@ -1249,10 +1287,14 @@ class AssignmentStatementLoweringMixin:
                 i = 0
                 while i < len(target.elems):
                     elem = rhs.elems[i]
+                    elem_value, elem_owned = self._emit_destructured_literal_element(
+                        elem
+                    )
                     self._store_unpack_target(
                         target.elems[i],
-                        self._emit_expr(elem),
+                        elem_value,
                         elem.ty,
+                        value_is_owned=elem_owned,
                     )
                     i += 1
                 return
@@ -1279,8 +1321,9 @@ class AssignmentStatementLoweringMixin:
                     rhs_vals.append(self._emit_exact_int_operand_object(e))
                     rhs_owned.append(self._pcc_pointer_source_is_owned(e))
                 else:
-                    rhs_vals.append(self._emit_expr(e))
-                    rhs_owned.append(None)
+                    elem_value, elem_owned = self._emit_destructured_literal_element(e)
+                    rhs_vals.append(elem_value)
+                    rhs_owned.append(elem_owned)
                 rhs_tys.append(e.ty)
             i = 0
             while i < len(target.elems):

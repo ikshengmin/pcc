@@ -40,22 +40,23 @@
 
 extern int32_t py_class_attr_cache_epoch;
 extern int32_t pcc_class_del_defined_count;
-extern PyObject *py_inst_field_cache_cls0;
-extern PyObject *py_inst_field_cache_cls1;
-extern PyObject *py_inst_field_cache_cls2;
-extern PyObject *py_inst_field_cache_cls3;
-extern const char *py_inst_field_cache_name0;
-extern const char *py_inst_field_cache_name1;
-extern const char *py_inst_field_cache_name2;
-extern const char *py_inst_field_cache_name3;
-extern int32_t py_inst_field_cache_idx0;
-extern int32_t py_inst_field_cache_idx1;
-extern int32_t py_inst_field_cache_idx2;
-extern int32_t py_inst_field_cache_idx3;
-extern int32_t py_inst_field_cache_epoch0;
-extern int32_t py_inst_field_cache_epoch1;
-extern int32_t py_inst_field_cache_epoch2;
-extern int32_t py_inst_field_cache_epoch3;
+/* Keep each cache entry coherent without sharing mutable state across threads. */
+static _Thread_local PyObject *py_inst_field_cache_cls0 = NULL;
+static _Thread_local PyObject *py_inst_field_cache_cls1 = NULL;
+static _Thread_local PyObject *py_inst_field_cache_cls2 = NULL;
+static _Thread_local PyObject *py_inst_field_cache_cls3 = NULL;
+static _Thread_local const char *py_inst_field_cache_name0 = NULL;
+static _Thread_local const char *py_inst_field_cache_name1 = NULL;
+static _Thread_local const char *py_inst_field_cache_name2 = NULL;
+static _Thread_local const char *py_inst_field_cache_name3 = NULL;
+static _Thread_local int32_t py_inst_field_cache_idx0 = -1;
+static _Thread_local int32_t py_inst_field_cache_idx1 = -1;
+static _Thread_local int32_t py_inst_field_cache_idx2 = -1;
+static _Thread_local int32_t py_inst_field_cache_idx3 = -1;
+static _Thread_local int32_t py_inst_field_cache_epoch0 = -1;
+static _Thread_local int32_t py_inst_field_cache_epoch1 = -1;
+static _Thread_local int32_t py_inst_field_cache_epoch2 = -1;
+static _Thread_local int32_t py_inst_field_cache_epoch3 = -1;
 
 static int32_t class_attr_cache_epoch_load(void) {
     return __atomic_load_n(&py_class_attr_cache_epoch, __ATOMIC_ACQUIRE);
@@ -798,28 +799,34 @@ static int32_t field_cache_lookup(PyClassObject *cls, const char *name) {
     int32_t epoch = class_attr_cache_epoch_load();
     if (py_inst_field_cache_epoch0 == epoch
         && py_inst_field_cache_cls0 == (PyObject *)cls
-        && py_inst_field_cache_name0 == name) {
+        && py_inst_field_cache_name0 != NULL
+        && strcmp(py_inst_field_cache_name0, name) == 0) {
         return (int32_t)py_inst_field_cache_idx0;
     }
     if (py_inst_field_cache_epoch1 == epoch
         && py_inst_field_cache_cls1 == (PyObject *)cls
-        && py_inst_field_cache_name1 == name) {
+        && py_inst_field_cache_name1 != NULL
+        && strcmp(py_inst_field_cache_name1, name) == 0) {
         return (int32_t)py_inst_field_cache_idx1;
     }
     if (py_inst_field_cache_epoch2 == epoch
         && py_inst_field_cache_cls2 == (PyObject *)cls
-        && py_inst_field_cache_name2 == name) {
+        && py_inst_field_cache_name2 != NULL
+        && strcmp(py_inst_field_cache_name2, name) == 0) {
         return (int32_t)py_inst_field_cache_idx2;
     }
     if (py_inst_field_cache_epoch3 == epoch
         && py_inst_field_cache_cls3 == (PyObject *)cls
-        && py_inst_field_cache_name3 == name) {
+        && py_inst_field_cache_name3 != NULL
+        && strcmp(py_inst_field_cache_name3, name) == 0) {
         return (int32_t)py_inst_field_cache_idx3;
     }
     return -1;
 }
 
 static void field_cache_store(PyClassObject *cls, const char *name, int32_t idx) {
+    /* The caller buffer may change or die as soon as the lookup returns. */
+    name = cls->field_names[idx];
     int32_t epoch = class_attr_cache_epoch_load();
     switch (field_cache_slot(cls, name)) {
         case 0:

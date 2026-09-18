@@ -3,7 +3,10 @@ from __future__ import annotations
 from . import BackendUnavailable
 from .self_backend_aarch64_darwin_mem import (
     emitted_addsub_register_line,
+    emitted_addsub_immediate_line,
+    emitted_fixed_instruction_line,
     emitted_global_address_lines,
+    emitted_memory_instruction_line,
     emitted_move_register_line,
 )
 from .self_backend_aarch64_darwin_regs import emit_add_offset, emit_const_to_reg
@@ -33,9 +36,37 @@ def materialize_global_address(
     module_symbols: PreparedModuleSymbols,
 ) -> list[str]:
     symbol = asm_symbol(name, module_symbols)
+    if name in module_symbols.thread_local_symbols:
+        return _materialize_thread_local_address(symbol, reg)
     if name not in module_symbols.defined_symbols:
         return emitted_global_address_lines(reg, symbol, True)
     return emitted_global_address_lines(reg, symbol, False)
+
+
+def _materialize_thread_local_address(symbol: str, reg: str) -> list[str]:
+    # Darwin's TLV resolver preserves GPRs except x0/x16/x17/LR, and all
+    # vector registers. Preserve its clobbers and NZCV so address formation
+    # remains transparent to the surrounding register/condition allocation.
+    # ABI: llvm/lib/Target/AArch64/AArch64CallingConvention.td,
+    # CSR_Darwin_AArch64_TLS (used only as an ABI reference).
+    saved = ("x0", "x16", "x17", "x30")
+    lines = [emitted_addsub_immediate_line("sub", "sp", "sp", 48)]
+    for index, saved_reg in enumerate(saved):
+        lines.append(emitted_memory_instruction_line("str", saved_reg, "sp", index * 8))
+    lines.append(emitted_fixed_instruction_line("mrs x17, nzcv"))
+    lines.append(emitted_memory_instruction_line("str", "x17", "sp", 32))
+    lines.extend(emitted_global_address_lines("x0", symbol, False))
+    lines.append(emitted_memory_instruction_line("ldr", "x16", "x0"))
+    lines.append(emitted_fixed_instruction_line("blr x16"))
+    lines.append(emitted_memory_instruction_line("ldr", "x17", "sp", 32))
+    lines.append(emitted_fixed_instruction_line("msr nzcv, x17"))
+    if reg != "x0":
+        lines.append(emitted_move_register_line(reg, "x0"))
+    for index, saved_reg in enumerate(saved):
+        if saved_reg != reg:
+            lines.append(emitted_memory_instruction_line("ldr", saved_reg, "sp", index * 8))
+    lines.append(emitted_addsub_immediate_line("add", "sp", "sp", 48))
+    return lines
 
 
 def materialize_index_to_x10(

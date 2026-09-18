@@ -1910,7 +1910,7 @@ class NativeVirtualThreadLoweringMixin:
         )
 
         direct_generator = str(
-            os.environ.get("PCC_DIRECT_GENERATOR_TASKS", "0") or "0"
+            os.environ.get("PCC_DIRECT_GENERATOR_TASKS", "1") or "1"
         ).strip().lower() in ("1", "true", "yes", "on")
         if direct_generator:
             cont = gen

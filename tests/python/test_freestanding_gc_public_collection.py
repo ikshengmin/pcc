@@ -63,6 +63,7 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_minor_heap_size",
     "pcc_gc_pause",
     "pcc_gc_read_barrier_enabled",
+    "pcc_gc_refcount_provenance_probe",
     "pcc_gc_stepmul",
 }
 
@@ -179,6 +180,7 @@ def test_public_collection_preserves_config_and_collection_order():
         "PCC_GC_DEBT_THRESHOLD",
         "PCC_GC_MINOR_HEAP_SIZE",
         "PCC_GC_MINOR_ALLOC_MAX",
+        "PCC_GC_REFCOUNT_PROVENANCE_PROBE",
     ):
         assert env_name in config
     assert "33554432, 256, 1099511627776" in config

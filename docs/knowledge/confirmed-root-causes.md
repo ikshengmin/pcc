@@ -8,11 +8,15 @@ Extraction can include hypotheses, test status and superseded conclusions.
 Check the original experiment, revision and later updates against current
 code and matching execution before adopting a cause. Read only relevant hits.
 
-1588 confirmations across 474 investigations.
+1593 confirmations across 479 investigations.
 
 ## [Investigation: direct AArch64 instruction capture order and lifetime](../investigations/aarch64-direct-instruction-capture-order.md)
 
 - Test [CONFIRMED] — All four nodes failed on the resumed WIP before production edits. HFA stores
+
+## [Investigation: retired raw span cache hides an object at a reused address](../investigations/allocator-span-cache-raw-address-reuse.md)
+
+- Test [CONFIRMED] — The control archive returns `granule=-1 managed=0` and exit 9. The repaired
 
 ## [Investigation: backend-0 finalizer re-enters the tracked-object table lock](../investigations/backend0-finalizer-table-lock-reentrancy.md)
 
@@ -1232,6 +1236,10 @@ code and matching execution before adopting a cause. Read only relevant hits.
 - Test [CONFIRMED] — Observed 2026-08-07 under the pytest gate (`PCC_GC_BACKEND=3 ... -n0
 - is not yet CONFIRMED.
 
+## [Investigation: GC3 in-place promotion leaves an old owner on the young list](../investigations/gc3-in-place-promotion-young-list.md)
+
+- Test [CONFIRMED] — `red.stdout`: C GC3 returns 10. `original-probes.json` demonstrates that the
+
 ## [Investigation: GC4 bootstrap pcc-Python GC config fast path](../investigations/gc4-bootstrap-config-fastpath-2026-06-05.md)
 
 - No.2 reduce pcc-Python GC config/backend double-dispatch [CONFIRMED stage2]
@@ -1529,6 +1537,10 @@ code and matching execution before adopting a cause. Read only relevant hits.
 ## [Investigation: native re.sub loses result ownership in raw-scaffold code](../investigations/native-re-sub-owned-result-raw-scaffold.md)
 
 - Test [CONFIRMED] — The 32-function native/host mismatch is observed before the fix. Full source
+
+## [Investigation: native stack-map structural scans decode unused record fields](../investigations/native-stackmap-structural-scan-cost.md)
+
+- Test [CONFIRMED] — `scan-focused.stdout`: three boundary tests passed: both architectures,
 
 ## [Investigation: native subprocess failures lose CalledProcessError fields](../investigations/native-subprocess-called-process-error-returncode.md)
 
@@ -2455,6 +2467,10 @@ code and matching execution before adopting a cause. Read only relevant hits.
 - Bootstrap harness boundary [CONFIRMED] — The full gate also proved two harness assumptions that needed to be explicit:
 - Final gates [CONFIRMED] — Strict real M1 canary behavior, with the test setting both host escape hatches
 
+## [Investigation: scaffold block creation duplicates C control-flow labels](../investigations/scaffold-basic-block-name-collisions.md)
+
+- Test [CONFIRMED] — `native.ll` vs `host.ll`: repeated labels occur only in the native control.
+
 ## [Investigation: self scalar ALU selection copies allocated registers](../investigations/self-aarch64-alu-register-copies.md)
 
 - Test [CONFIRMED] — The focused load/load/sub/store test fails on the original x9/x10/x11
@@ -2660,6 +2676,10 @@ code and matching execution before adopting a cause. Read only relevant hits.
 - CONFIRMED — Cold runtime rebuild ~20-30 min serial -> ~4-6 min with -j8 (one-time per
 - CONFIRMED — The full link previously failed with "too many stack-map locations" / "native
 - CONFIRMED — Pre-fix the pcc1's `__bss`/`__common` globals read the file's padding bytes;
+
+## [Investigation: stage1 lazy-import discovery spawns host probes that execute the pcc package](../investigations/stage1-lazy-import-host-probe-spawn.md)
+
+- Test [CONFIRMED] — `test_recursive_stdlib_lazy_lookup.py` failed before the one-line change
 
 ## [Investigation: private Stage1 environment disables every worker bytecode cache](../investigations/stage1-private-pycache-disabled-worker-startup.md)
 

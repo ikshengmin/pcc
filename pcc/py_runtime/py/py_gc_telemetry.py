@@ -263,6 +263,8 @@ def pcc_gc_telemetry(metric: i64) -> i64:
     gc_backend_current()
     if metric == 116:
         return load_i64(global_addr("pcc_gc_unmanaged_refcount_ops"), 0)
+    if metric == 117:
+        return load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0)
     if metric == 6:
         return load_i32(global_addr("pcc_gc_debt_bytes"), 0)
     if metric == 7:

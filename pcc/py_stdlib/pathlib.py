@@ -25,7 +25,16 @@ class PurePath:
         return f"PurePath({self._raw!r})"
 
     def __truediv__(self, other) -> "PurePath":
-        return PurePath(_op.join(self._raw, str(other)))
+        # ``self.__class__`` and not ``PurePath``: CPython preserves the subclass
+        # through every combining operation, so ``Path(root) / "pcc"`` stays a
+        # ``Path``.  Hard-coding the base class here dropped every filesystem
+        # method from the result -- ``bootstrap_source_sha256`` builds its
+        # paths this way and died on ``'PurePath' object has no attribute
+        # 'is_file'``.  Compiled, that AttributeError was swallowed by
+        # ``codegen_checksum``'s ``except Exception``, which answered
+        # "unknown", which the fail-closed staleness rule read as a stale
+        # archive -- so pcc1 rejected every runtime archive it was given.
+        return self.__class__(_op.join(self._raw, str(other)))
 
     @property
     def name(self) -> str:
@@ -33,7 +42,7 @@ class PurePath:
 
     @property
     def parent(self) -> "PurePath":
-        return PurePath(_op.dirname(self._raw))
+        return self.__class__(_op.dirname(self._raw))
 
     def _parent_raw_paths(self) -> list:
         """Ancestor path strings, closest first, as CPython orders them.
@@ -90,13 +99,32 @@ class PurePath:
 
     def with_suffix(self, suffix: str) -> "PurePath":
         base, _old = _op.splitext(self._raw)
-        return PurePath(base + suffix)
+        return self.__class__(base + suffix)
 
     def with_name(self, name: str) -> "PurePath":
         parent = _op.dirname(self._raw)
         if parent:
-            return PurePath(_op.join(parent, name))
-        return PurePath(name)
+            return self.__class__(_op.join(parent, name))
+        return self.__class__(name)
+
+    def relative_to(self, other) -> "PurePath":
+        """``self`` expressed relative to ``other``, or ``ValueError``.
+
+        ``pcc/bootstrap_cache_identity.py`` builds its source-set keys from
+        ``path.relative_to(base)``; without it the compiled compiler could not
+        compute its own identity and fell back to "unknown", which the
+        fail-closed archive staleness rule then read as a stale runtime.
+        """
+        base = str(other)
+        mine = self._raw
+        if base == mine:
+            return self.__class__(".")
+        prefix = base if base.endswith("/") else base + "/"
+        if not mine.startswith(prefix):
+            raise ValueError(
+                repr(mine) + " is not in the subpath of " + repr(base)
+            )
+        return self.__class__(mine[len(prefix):])
 
     def match(self, pattern: str) -> bool:
         if pattern.startswith("*."):
@@ -110,7 +138,7 @@ class Path(PurePath):
         """Same ancestors as ``PurePath.parents``, as ``Path`` objects."""
         out: list = []
         for raw in self._parent_raw_paths():
-            out.append(Path(raw))
+            out.append(self.__class__(raw))
         return out
 
     def absolute(self) -> "Path":
@@ -129,16 +157,100 @@ class Path(PurePath):
         """
         return Path(_op.normpath(self.absolute()._raw))
 
+    @staticmethod
+    def _name_matches(name: str, pattern: str) -> bool:
+        """``*`` and ``?`` matching, which is what this tree's globs use.
+
+        Deliberately not a full ``fnmatch``: importing the provider's
+        ``fnmatch`` from here fails to resolve inside the compiled closure,
+        and character classes appear in no call site.  A pattern containing
+        ``[`` is rejected rather than silently mismatched.
+        """
+        if "[" in pattern:
+            raise ValueError(
+                "pcc pathlib glob supports * and ? only, got " + repr(pattern)
+            )
+        name_len = len(name)
+        pattern_len = len(pattern)
+        name_index = 0
+        pattern_index = 0
+        star_pattern = -1
+        star_name = 0
+        while name_index < name_len:
+            if pattern_index < pattern_len and (
+                pattern[pattern_index] == "?"
+                or pattern[pattern_index] == name[name_index]
+            ):
+                name_index = name_index + 1
+                pattern_index = pattern_index + 1
+            elif pattern_index < pattern_len and pattern[pattern_index] == "*":
+                star_pattern = pattern_index
+                star_name = name_index
+                pattern_index = pattern_index + 1
+            elif star_pattern >= 0:
+                pattern_index = star_pattern + 1
+                star_name = star_name + 1
+                name_index = star_name
+            else:
+                return False
+        while pattern_index < pattern_len and pattern[pattern_index] == "*":
+            pattern_index = pattern_index + 1
+        return pattern_index == pattern_len
+
+    def _walk_entries(self, recursive: bool) -> list:
+        out: list = []
+        stack: list = [self._raw]
+        while stack:
+            current = stack.pop()
+            try:
+                names = sorted(os.listdir(current))
+            except OSError:
+                continue
+            for entry in names:
+                full = _op.join(current, entry)
+                out.append(full)
+                if recursive and _op.isdir(full):
+                    stack.append(full)
+        return out
+
+    def glob(self, pattern: str) -> list:
+        """Non-recursive match in this directory, sorted like a sorted walk.
+
+        CPython returns a generator; a list is the same thing to every caller
+        in this tree and keeps the provider free of generator lowering.
+        """
+        out: list = []
+        for full in self._walk_entries(False):
+            if self._name_matches(_op.basename(full), pattern):
+                out.append(self.__class__(full))
+        out.sort(key=lambda item: str(item))
+        return out
+
+    def rglob(self, pattern: str) -> list:
+        """Recursive ``glob``; ``"*"`` therefore means every entry below."""
+        out: list = []
+        for full in self._walk_entries(True):
+            if self._name_matches(_op.basename(full), pattern):
+                out.append(self.__class__(full))
+        out.sort(key=lambda item: str(item))
+        return out
+
     def exists(self) -> bool:
         return _op.exists(self._raw)
 
     def is_file(self) -> bool:
-        # Real os.path.isfile would stat; defer until extern stat lands.
-        return _op.exists(self._raw)
+        # Both of these answered ``exists()``, so a directory was a file and a
+        # file was a directory.  ``bootstrap_cache_identity`` branches on
+        # ``entry.is_file()`` to decide between "hash this one file" and "walk
+        # this tree": compiled, it took the file branch for the ``pcc``
+        # package and hashed 2 paths where the host hashed 606, so pcc1's
+        # codegen identity never matched the one recorded in a runtime
+        # archive and every archive read as stale.  ``os.path.isfile`` and
+        # ``isdir`` are both native and agree with CPython.
+        return _op.isfile(self._raw)
 
     def is_dir(self) -> bool:
-        # Same caveat as is_file.
-        return _op.exists(self._raw)
+        return _op.isdir(self._raw)
 
     def read_bytes(self) -> bytes:
         with open(self._raw, "rb") as f:

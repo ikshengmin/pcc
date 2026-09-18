@@ -165,6 +165,34 @@ def test_sharded_symbol_owner_is_independent_of_parallel_insertion_order() -> No
         definitions.add("_shared", SymbolDefinition(0, 0))
 
 
+def test_shard_index_keeps_low_six_bits_of_fnv1a() -> None:
+    """Shard selection must equal full-width FNV-1a modulo 64.
+
+    The production accumulator tracks only the low six bits; this pins it to
+    the reference 64-bit hash for symbol-shaped ASCII, high code points and
+    length boundaries, so shard ownership stays part of the proof.
+    """
+
+    def reference(name: str) -> int:
+        value = 0xCBF29CE484222325
+        for character in name:
+            value = ((value ^ ord(character)) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+        return value % ShardedSymbolDefinitions._SHARD_COUNT
+
+    names = ["", " ", "_main", "_py_sha256_state_update", ".pystr.obj.17"]
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.$"
+    for index in range(400):
+        length = index % 24
+        start = (index * 7) % len(alphabet)
+        names.append("".join(
+            alphabet[(start + position * 3) % len(alphabet)]
+            for position in range(length)
+        ))
+    names.extend(chr(code) for code in (0x7F, 0x80, 0x10FFFF, 0x1F600))
+    for name in names:
+        assert ShardedSymbolDefinitions._shard_index(name) == reference(name)
+
+
 def test_parallel_output_rejects_overlap_and_out_of_bounds() -> None:
     with pytest.raises(ParallelLinkError, match="overlaps"):
         materialize_output(8, [

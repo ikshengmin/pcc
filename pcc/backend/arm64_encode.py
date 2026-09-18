@@ -3093,6 +3093,16 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         rm, _ = _reg(ops[2])
         return _sf(d64) | 0x5A800000 | (rm << 16) | (_cond(ops[3]) << 12) | (rn << 5) | rd
 
+    if mn in ("mrs", "msr"):
+        if len(ops) != 2:
+            raise EncodeError(mn + " needs a register and NZCV")
+        register = ops[0] if mn == "mrs" else ops[1]
+        system = ops[1] if mn == "mrs" else ops[0]
+        rn, n64 = _reg(register)
+        if system.lower() != "nzcv" or not n64 or register.lower() == "sp":
+            raise EncodeError("only 64-bit NZCV transfers are supported")
+        return (0xD53B4200 if mn == "mrs" else 0xD51B4200) | rn
+
     if mn == "blr":
         rn, n64 = _reg(ops[0])
         if not n64:

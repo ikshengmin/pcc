@@ -540,6 +540,14 @@ count, base alignment, exact cell alignment and the LIVE lifecycle word are all
 still verified downstream in their original order. An 8-byte aligned slot
 cannot tear and correctness depends on no second field.
 
+**Correction — 2026-09-16:** raw-slab trim now retires bindings and allows
+address reuse, so the permanence argument above applies only to object-family
+spans. Caching raw descriptors can incorrectly hide a later LIVE object at the
+same address. The [address-reuse investigation](allocator-span-cache-raw-address-reuse.md)
+records the deterministic failure and the fix to cache only object spans.
+The historical measurements below are preserved; they do not certify the later
+trim/address-reuse behavior.
+
 `pcc_allocator_granule_span_cache_set_fill(0)` clears the cache and stops
 filling, so the control arm runs the walk. One archive, one binary, two arms.
 The control arm still pays one load of a zero slot and one compare, which

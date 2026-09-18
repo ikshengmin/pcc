@@ -12,6 +12,7 @@ class PreparedModuleSymbols:
     internal_prefix: str
     defined_symbols: frozenset[str]
     internal_symbols: frozenset[str]
+    thread_local_symbols: frozenset[str]
 
 
 def _stable_symbol_digest(text: str) -> str:
@@ -60,4 +61,5 @@ def prepare_module_symbols(
         internal_prefix=internal_prefix,
         defined_symbols=defined_symbols,
         internal_symbols=internal_symbols,
+        thread_local_symbols=frozenset(global_.name for global_ in globals_ if global_.tls_model),
     )

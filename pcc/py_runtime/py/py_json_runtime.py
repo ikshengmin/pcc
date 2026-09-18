@@ -39,6 +39,8 @@ from pcc.unsafe import (
 )
 
 
+py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
+py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
@@ -462,7 +464,23 @@ def _parse_value(data, n: int, pos):
 
 @c_abi_export("py_json_loads")
 def py_json_loads(text):
-    if ptr_is_null(text) != 0 or _type_of(text) != PY_TYPE_STR:
+    # Every failure below has to leave a pending exception.  Returning NULL
+    # without one made a malformed document vanish: `json.loads('{"k":')`
+    # answered `<null>` in compiled code where CPython raises, and a caller
+    # that checked for an exception instead saw "compiled native function
+    # returned NULL without exc".  `JSONDecodeError` subclasses `ValueError`,
+    # so `except ValueError` catches this; a handler naming
+    # `json.JSONDecodeError` specifically does not, because this helper cannot
+    # reach the provider's class.  Recorded, not silently accepted.
+    if ptr_is_null(text) != 0:
+        py_raise_owned(
+            py_exc_new(2, cstr("json.loads requires a string document"))
+        )
+        return null()
+    if _type_of(text) != PY_TYPE_STR:
+        py_raise_owned(
+            py_exc_new(2, cstr("json.loads requires a string document"))
+        )
         return null()
     data = py_str_utf8(text)
     n: int = py_str_byte_len(text)
@@ -470,6 +488,9 @@ def py_json_loads(text):
     store_i64(pos, 0, 0)
     result = _parse_value(data, n, pos)
     if ptr_is_null(result) != 0:
+        py_raise_owned(
+            py_exc_new(2, cstr("json.loads could not decode the document"))
+        )
         return null()
     _skip_ws(data, n, pos)
     # Preserve the established native helper contract: trailing non-whitespace

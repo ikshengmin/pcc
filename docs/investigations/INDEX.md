@@ -596,6 +596,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
 
 - [aarch64-direct-instruction-capture-order.md](aarch64-direct-instruction-capture-order.md) — **direct AArch64 instruction capture order and lifetime**
   - Active. Correctness gate for the uncommitted producer-side instruction transport;
+- [allocator-span-cache-raw-address-reuse.md](allocator-span-cache-raw-address-reuse.md) — **retired raw span cache hides an object at a reused address**
+  - Resolved locally on 2026-09-16: deterministic regression and scoped native
 - [backend0-finalizer-table-lock-reentrancy.md](backend0-finalizer-table-lock-reentrancy.md) — **backend-0 finalizer re-enters the tracked-object table lock**
   - Backend 0 runs user `__del__` methods while `py_gc_collect()` holds the
 - [backend3-4-selfhost-bootstrap-bad-incref.md](backend3-4-selfhost-bootstrap-bad-incref.md) — **backend #3/#4 self-host bootstrap BAD_INCREF (pre-existing, f4922050)**
@@ -798,6 +800,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - The C Backend-3 oldifier treats `PY_TYPE_CPY_HANDLE` as shallow-copy safe even
 - [gc3-cycle-collect-undercount-10k-cycles.md](gc3-cycle-collect-undercount-10k-cycles.md) — **GC3 `gc.collect()` undercounts a 10k two-node cycle workload (test_gc_collect_cycle_throughput red under PCC_GC_BACKEND=3)**
   - active — pre-existing GC3 behavior gap surfaced (and attribution-proven NOT
+- [gc3-in-place-promotion-young-list.md](gc3-in-place-promotion-young-list.md) — **GC3 in-place promotion leaves an old owner on the young list**
+  - Resolved locally on 2026-09-16: the C mirror now matches the existing
 - [gc4-bootstrap-config-fastpath-2026-06-05.md](gc4-bootstrap-config-fastpath-2026-06-05.md) — **GC4 bootstrap pcc-Python GC config fast path**
   - resolved for the focused backend #4 full bootstrap gate; five-GC matrix still
 - [gc4-pcc2-graph-lock-deadlock-stage2-miscompile.md](gc4-pcc2-graph-lock-deadlock-stage2-miscompile.md) — **pcc2 under GC4 deadlocks on the minor graph lock — stage2-only, pcc1 is fine (suspected pcc1 codegen miscompile)**
@@ -942,6 +946,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - `B-P0-PKG` gating feature (a) from the 2026-05-28 NEXT pivot note in
 - [native-re-sub-owned-result-raw-scaffold.md](native-re-sub-owned-result-raw-scaffold.md) — **native re.sub loses result ownership in raw-scaffold code**
   - After repairing borrowed-local replacement, the owned native optimizer still
+- [native-stackmap-structural-scan-cost.md](native-stackmap-structural-scan-cost.md) — **native stack-map structural scans decode unused record fields**
+  - Resolved locally on 2026-09-16. The optimization is retained after correctness
 - [native-subprocess-called-process-error-returncode.md](native-subprocess-called-process-error-returncode.md) — **native subprocess failures lose CalledProcessError fields**
   - Under the self backend with `--python-libpython=off`, native lowering for
 - [native-subprocess-provider-omitted-from-shallow-multi-file-closure.md](native-subprocess-provider-omitted-from-shallow-multi-file-closure.md) — **native subprocess provider omitted from shallow multi-file closure**
@@ -1032,6 +1038,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - The current-source `tests/python/test_runtime_oracle_diff.py` session fixture
 - [s-p0-native-self-emitter-no-host.md](s-p0-native-self-emitter-no-host.md) — **native self-backend emission from pcc1 without host Python**
   - resolved 2026-07-13
+- [scaffold-basic-block-name-collisions.md](scaffold-basic-block-name-collisions.md) — **scaffold block creation duplicates C control-flow labels**
+  - Resolved locally on 2026-09-16. Native emitted execution is verified; the
 - [self-aarch64-alu-register-copies.md](self-aarch64-alu-register-copies.md) — **self scalar ALU selection copies allocated registers**
   - After the memory-operand change (see self-aarch64-memory-register-copies.md),
 - [self-aarch64-call-result-spills.md](self-aarch64-call-result-spills.md) — **self AArch64 spills block-local integer call results**
@@ -1076,6 +1084,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - resolved 2026-05-30 for the common cases: `print(*items)` (#62, No.1),
 - [stage1-cold-build-speedup-2026-08-15.md](stage1-cold-build-speedup-2026-08-15.md) — **cold self-host stage1 build >25 min / never completes — link + frontend speedup to ~5.1 min**
   - resolved (2026-08-15) — cold `pcc0 -> pcc1` self-backend build measured
+- [stage1-lazy-import-host-probe-spawn.md](stage1-lazy-import-host-probe-spawn.md) — **stage1 lazy-import discovery spawns host probes that execute the pcc package**
+  - Resolved locally on 2026-09-17. Red→green regression landed; the 420-second
 - [stage1-private-pycache-disabled-worker-startup.md](stage1-private-pycache-disabled-worker-startup.md) — **private Stage1 environment disables every worker bytecode cache**
   - The source-frozen Stage1 harness gives every CPython process an isolated
 - [stage1-receipt-metric-contract-rejected.md](stage1-receipt-metric-contract-rejected.md) — **Stage1 receipt validator rejects current producer metric labels**

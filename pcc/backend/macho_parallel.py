@@ -107,11 +107,15 @@ class ShardedSymbolDefinitions:
     def _shard_index(cls, name: str) -> int:
         # FNV-1a over Unicode scalar values.  Python's randomized ``hash`` is
         # deliberately avoided because shard ownership is part of the proof.
-        value = ((0xCBF29CE4 << 32) | 0x84222325)
+        # Every consumer uses this value only modulo 64.  Multiplication mod
+        # 2**64 keeps the low six bits equal to (low & 63) * (m & 63) mod 64,
+        # so the full-width big-integer product is pure CPython overhead and
+        # this accumulator reaches the identical shard with machine-word
+        # arithmetic.  FNV prime 1099511628211 & 63 == 51.
+        low = 0xCBF29CE484222325 & 63
         for character in name:
-            value ^= ord(character)
-            value = (value * 1099511628211) & ((0xFFFFFFFF << 32) | 0xFFFFFFFF)
-        return value % cls._SHARD_COUNT
+            low = ((low ^ ord(character)) * 51) & 63
+        return low
 
     def add(self, name: str, definition: SymbolDefinition) -> None:
         if not isinstance(name, str) or not name:

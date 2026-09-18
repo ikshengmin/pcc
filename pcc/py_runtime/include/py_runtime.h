@@ -475,8 +475,23 @@ enum {
      * See docs/investigations/vthread-asyncio-throughput-gap.md and the
      * Phase A/B record in runtime-module-optimizer-throughput.md.  Non-zero
      * means some caller is refcounting a non-object; it is a correctness
-     * ratchet first and an optimization prerequisite second. */
-    PCC_GC_COUNTER_UNMANAGED_REFCOUNT_OPS = 116
+     * ratchet first and an optimization prerequisite second.
+     *
+     * The prerequisite closed on 2026-09-08 (this counter read 0 on the
+     * gateway workload and on the set/ownership-cleanup probes), so
+     * PCC_GC_REFCOUNT_PROVENANCE_PROBE now selects whether the hot path
+     * probes at all: 0 trusts the caller, 1 probes and counts here, 2 probes,
+     * counts and reports the first miss on stderr for audits such as a Stage2
+     * self-compile, 3 also aborts on that first miss so the crash report
+     * names the site.  PCC_GC_KNOWN_REF_CHECKS=1 makes pcc_gc_retain_known /
+     * pcc_gc_release_known take the checked path too, so an audit covers the
+     * compiler-proven lanes.  Unset resolves per backend: 0 on the non-moving
+     * collectors (0-2), 1 on the relocating collectors (3-4), where a refcount
+     * can legitimately reach a pre-move address and the probe is what makes
+     * that a no-op.  The counter only moves in modes 1 and 2. */
+    PCC_GC_COUNTER_UNMANAGED_REFCOUNT_OPS = 116,
+    /* Current PCC_GC_REFCOUNT_PROVENANCE_PROBE mode (0, 1 or 2). */
+    PCC_GC_COUNTER_REFCOUNT_PROVENANCE_PROBE = 117
 };
 
 int64_t   pcc_gc_backend(void);
@@ -932,6 +947,7 @@ PyObject *py_os_urandom(PyObject *n);
 
 /* ---- List -------------------------------------------------------------- */
 PyObject *py_list_new(int64_t initial_capacity);
+PyObject *py_list_from_static_items(PyObject *const *items, int64_t count);
 void      py_list_append(PyObject *lst, PyObject *item);
 /* Borrowed-item append for compiler-proven fresh native instances.  This is
  * not ownership transfer: the caller keeps and releases its owned ref. */
@@ -967,6 +983,7 @@ void      py_list_reverse(PyObject *lst);
 /* ---- Dict -------------------------------------------------------------- */
 PyObject *py_dict_new(void);
 PyObject *py_dict_new_presized(int64_t expected_items);
+PyObject *py_dict_from_static_pairs(PyObject *const *pairs, int64_t count);
 void      py_dict_set(PyObject *d, PyObject *k, PyObject *v);
 PyObject *py_dict_get(PyObject *d, PyObject *k);     /* new ref; NULL if missing */
 PyObject *py_dict_getitem(PyObject *d, PyObject *k); /* d[k]; KeyError if missing */
@@ -1630,6 +1647,13 @@ const char *py_bytes_data_ptr(PyObject *data);
 PyObject   *py_sha256_state_new(void);
 PyObject   *py_sha256_state_update(PyObject *state, PyObject *data);
 PyObject   *py_sha256_state_digest(PyObject *state);
+/* Private hashlib ABI: immutable 112-byte MD5 state, bytes input, owned
+ * results. Layout: four little-endian i64 state words at offsets 0/8/16/24,
+ * u64 byte count at 32, u64 buffered length at 40, 64-byte block at 48. */
+PyObject   *py_md5_state_new(void);
+PyObject   *py_md5_state_update(PyObject *state, PyObject *data);
+PyObject   *py_md5_state_digest(PyObject *state);
+PyObject   *py_md5_bytes_digest(PyObject *data);
 
 /* ---- Exceptions (Phase 3) --------------------------------------------- */
 

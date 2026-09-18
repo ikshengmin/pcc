@@ -657,7 +657,10 @@ def _validate_index(
     *,
     one_based: bool = False,
 ) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
+    # ``type(x) is int`` is the paired isinstance check in one test; see the
+    # note in ``macho_obj._validate_relocation``.  These three run tens of
+    # millions of times per stage1 link.
+    if type(value) is not int:
         raise NativeObjectError(f"{context} index must be an integer")
     lower = 1 if one_based else 0
     upper = count + 1 if one_based else count
@@ -666,7 +669,7 @@ def _validate_index(
 
 
 def _validate_uint(value: object, bits: int, context: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
+    if type(value) is not int:
         raise NativeObjectError(f"{context} must be an integer")
     limit = (1 << bits) - 1
     if not 0 <= value <= limit:
@@ -674,7 +677,7 @@ def _validate_uint(value: object, bits: int, context: str) -> None:
 
 
 def _validate_sint(value: object, bits: int, context: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
+    if type(value) is not int:
         raise NativeObjectError(f"{context} must be an integer")
     lower = -(1 << (bits - 1))
     upper = (1 << (bits - 1)) - 1

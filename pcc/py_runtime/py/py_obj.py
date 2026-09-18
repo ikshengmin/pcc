@@ -274,14 +274,46 @@ def _ptr_can_have_header(o) -> bool:
     return pcc_gc_pointer_is_managed(o) != 0
 
 
+pcc_platform_write = extern(
+    "pcc_platform_write", (c_int64, c_ptr, c_int64), c_int64
+)
+pcc_platform_getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+
+def _refcount_provenance_probe_enabled() -> int:
+    """Mirror of py_obj.c's pcc_gc_refcount_provenance_probe read.
+
+    PCC_GC_REFCOUNT_PROVENANCE_PROBE: 0 trusts the caller and skips the
+    managed-pointer probe on the refcount hot path, 1 probes and counts misses
+    in pcc_gc_unmanaged_refcount_ops, 2 probes, counts and reports the first
+    miss on stderr, 3 also aborts on that first miss so the crash report names
+    the site.  Every caller reads the selected backend first, which runs
+    pcc_gc_config_ensure, so the value is already configured here.
+    """
+    return load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0)
+
+
 def _note_unmanaged_refcount_op() -> None:
-    """Mirror of py_obj.c's pcc_gc_unmanaged_refcount_ops increment.
+    """Mirror of py_obj.c's pcc_note_unmanaged_refcount_op.
 
     PCC_GC_COUNTER_UNMANAGED_REFCOUNT_OPS (116).  Read the enum comment in
     py_runtime.h for why this is a ratchet and not just telemetry.
     """
     slot = global_addr("pcc_gc_unmanaged_refcount_ops")
     store_i64(slot, 0, load_i64(slot, 0) + 1)
+    mode: int = _refcount_provenance_probe_enabled()
+    if mode >= 2:
+        reported = global_addr("pcc_gc_refcount_provenance_probe_reported")
+        if load_i32(reported, 0) == 0:
+            store_i32(reported, 0, 1)
+            pcc_platform_write(
+                2,
+                cstr("pcc runtime: refcount operation on an unmanaged pointer (PCC_GC_REFCOUNT_PROVENANCE_PROBE=2)\n"),
+                93,
+            )
+            if mode == 3:
+                pcc_platform_abort()
 
 
 def _gc_relocation_candidate(o) -> int:
@@ -1156,7 +1188,7 @@ def _py_incref_prepare(o, prepared) -> None:
         backend = pcc_gc_backend()
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if not _ptr_can_have_header(o):
+    if _refcount_provenance_probe_enabled() != 0 and not _ptr_can_have_header(o):
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
@@ -1247,7 +1279,7 @@ def py_incref(o) -> None:
         _py_incref_prepare(o, prepared)
         _py_incref_finish(prepared)
         return
-    if not _ptr_can_have_header(o):
+    if _refcount_provenance_probe_enabled() != 0 and not _ptr_can_have_header(o):
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
@@ -1276,7 +1308,7 @@ def _py_decref_prepare(o, prepared) -> None:
         backend = pcc_gc_backend()
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if not _ptr_can_have_header(o):
+    if _refcount_provenance_probe_enabled() != 0 and not _ptr_can_have_header(o):
         _note_unmanaged_refcount_op()
         return
     tag_dbg: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
@@ -1400,7 +1432,7 @@ def py_decref(o) -> None:
         _py_decref_prepare(o, prepared)
         _py_decref_finish(prepared)
         return
-    if not _ptr_can_have_header(o):
+    if _refcount_provenance_probe_enabled() != 0 and not _ptr_can_have_header(o):
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
@@ -1435,12 +1467,31 @@ def py_decref(o) -> None:
 
 # Verification is a diagnostic control, set before exercising a workload.
 # The ordinary APIs always validate; only compiler-proven object lanes use it.
-define_global_i32("pcc_gc_known_ref_checks", 0)
+# -1 means "not yet resolved": the first proven refcount reads
+# PCC_GC_KNOWN_REF_CHECKS once and stores 0 or 1.
+define_global_i32("pcc_gc_known_ref_checks", -1)
 
 
 @c_abi_export("pcc_gc_set_known_ref_checks")
 def pcc_gc_set_known_ref_checks(enabled: int) -> None:
     atomic_store_i32(global_addr("pcc_gc_known_ref_checks"), 0, 1 if enabled != 0 else 0, "release")
+
+
+def _known_ref_checks() -> int:
+    """Mirror of py_obj.c's pcc_known_ref_checks.
+
+    PCC_GC_KNOWN_REF_CHECKS=1 sends every compiler-proven refcount through
+    the checked path, so an audit (PCC_GC_REFCOUNT_PROVENANCE_PROBE=2/3) also
+    sees the operations the frontend believed needed no provenance.
+    """
+    checks: int = atomic_load_i32(global_addr("pcc_gc_known_ref_checks"), 0, "acquire")
+    if checks >= 0:
+        return checks
+    checks = 0
+    if ptr_is_null(pcc_platform_getenv(cstr("PCC_GC_KNOWN_REF_CHECKS"))) == 0:
+        checks = 1
+    atomic_store_i32(global_addr("pcc_gc_known_ref_checks"), 0, checks, "release")
+    return checks
 
 
 @c_abi_export("pcc_gc_retain_known")
@@ -1452,7 +1503,7 @@ def pcc_gc_retain_known(o):
     """
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return o
-    if _gc_backend_fast() != 0 or atomic_load_i32(global_addr("pcc_gc_known_ref_checks"), 0, "acquire") != 0:
+    if _gc_backend_fast() != 0 or _known_ref_checks() != 0:
         return pcc_gc_retain(o)
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (flags & PY_FLAG_IMMORTAL) != 0:
@@ -1470,7 +1521,7 @@ def pcc_gc_release_known(o) -> None:
     """Consume one proven owner; terminal release uses the existing finish."""
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return
-    if _gc_backend_fast() != 0 or atomic_load_i32(global_addr("pcc_gc_known_ref_checks"), 0, "acquire") != 0:
+    if _gc_backend_fast() != 0 or _known_ref_checks() != 0:
         pcc_gc_release(o)
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)

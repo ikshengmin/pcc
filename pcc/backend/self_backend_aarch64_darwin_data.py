@@ -114,6 +114,9 @@ def emit_globals(
 ) -> list[str]:
     lines: list[str] = []
     for global_ in globals_:
+        if global_.tls_model:
+            lines.extend(_emit_thread_local_global(global_, module_symbols))
+            continue
         if global_.name == _GLOBAL_CTORS_NAME:
             lines.extend(_emit_global_ctors(global_, module_symbols))
             continue
@@ -129,6 +132,39 @@ def emit_globals(
         lines.append(f"{asm_symbol(global_.name, module_symbols)}:")
         lines.append(emit_global_initializer(global_, module_symbols))
         lines.append("")
+    return lines
+
+
+def _emit_thread_local_global(global_: GlobalDef, module_symbols: PreparedModuleSymbols) -> list[str]:
+    """Emit the template and descriptor consumed by Darwin's TLV resolver."""
+    if global_.tls_model != "default":
+        raise BackendUnavailable(
+            "self-aarch64-darwin TLS does not support model " + repr(global_.tls_model)
+        )
+    allowed_prefixes = {"thread_local", "internal", "private", "dso_local",
+                        "unnamed_addr", "local_unnamed_addr"}
+    if any(word not in allowed_prefixes for word in global_.ir_prefix.split()):
+        raise BackendUnavailable("self-aarch64-darwin TLS does not support this linkage prefix")
+    ty = global_.type
+    if not ((ty.is_int and ty.width <= 64) or ty.is_ptr):
+        raise BackendUnavailable("self-aarch64-darwin TLS supports scalar integers and null pointers")
+    if ty.is_ptr and global_.initializer not in ("null", "0", "zeroinitializer"):
+        raise BackendUnavailable("self-aarch64-darwin TLS pointer initializer must be null")
+    if any(not attr.startswith("align ") for attr in global_.trailing_attributes):
+        raise BackendUnavailable("self-aarch64-darwin TLS does not support custom global attributes")
+    alignment = max(global_.alignment, ty.align)
+    if alignment <= 0 or alignment & (alignment - 1):
+        raise BackendUnavailable("self-aarch64-darwin TLS alignment must be a power of two")
+    symbol = asm_symbol(global_.name, module_symbols)
+    initial = symbol + "$tlv$init"
+    lines = [".section __DATA,__thread_data,thread_local_regular",
+             f".p2align {align_pow2(alignment)}", initial + ":",
+             emit_global_initializer(global_, module_symbols),
+             ".section __DATA,__thread_vars,thread_local_variables", ".p2align 3"]
+    if not global_.is_internal:
+        lines.append(".globl " + symbol)
+    lines.extend([symbol + ":", "  .quad __tlv_bootstrap", "  .quad 0",
+                  "  .quad " + initial, ""])
     return lines
 
 
@@ -148,6 +184,12 @@ def emit_zero_fill(size: int) -> list[str]:
     return [f"  .space {size}"]
 
 
+def _initializer_symbol(name: str, module_symbols: PreparedModuleSymbols) -> str:
+    if name in module_symbols.thread_local_symbols:
+        raise BackendUnavailable("self-aarch64-darwin cannot store a TLS address in a global initializer")
+    return asm_symbol(name, module_symbols)
+
+
 def emit_scalar_initializer(
     ty: TypeDesc,
     init: str,
@@ -160,16 +202,16 @@ def emit_scalar_initializer(
         init = "1"
     if ty.is_ptr:
         if init.startswith("gep0:"):
-            return [f"  .quad {asm_symbol(init.split(':', 1)[1], module_symbols)}"]
+            return [f"  .quad {_initializer_symbol(init.split(':', 1)[1], module_symbols)}"]
         if init.startswith("gepconst:"):
             base, offset_text = init.split(":", 2)[1:]
             offset = int(offset_text)
             suffix = "" if offset == 0 else f"+{offset}"
-            return [f"  .quad {asm_symbol(base, module_symbols)}{suffix}"]
+            return [f"  .quad {_initializer_symbol(base, module_symbols)}{suffix}"]
         if init.startswith("getelementptr"):
             base, offset = parse_constant_gep(init)
             suffix = "" if offset == 0 else f"+{offset}"
-            return [f"  .quad {asm_symbol(base, module_symbols)}{suffix}"]
+            return [f"  .quad {_initializer_symbol(base, module_symbols)}{suffix}"]
         if init.startswith("inttoptr"):
             decoded = decode_value_token(init)
             if decoded.startswith("inttoptrconst:"):
@@ -189,17 +231,17 @@ def emit_scalar_initializer(
             # "invalid literal for int()".
             decoded = decode_value_token(init)
             if decoded.startswith("@"):
-                return [f"  .quad {asm_symbol(decoded[1:], module_symbols)}"]
+                return [f"  .quad {_initializer_symbol(decoded[1:], module_symbols)}"]
             if decoded.startswith("gep0:"):
                 return [
-                    f"  .quad {asm_symbol(decoded.split(':', 1)[1], module_symbols)}"
+                    f"  .quad {_initializer_symbol(decoded.split(':', 1)[1], module_symbols)}"
                 ]
             if decoded.startswith("gepconst:"):
                 base, offset_text = decoded.split(":", 2)[1:]
                 offset = int(offset_text)
                 suffix = "" if offset == 0 else f"+{offset}"
                 return [
-                    f"  .quad {asm_symbol(base, module_symbols)}{suffix}"
+                    f"  .quad {_initializer_symbol(base, module_symbols)}{suffix}"
                 ]
             if decoded.startswith("inttoptrconst:"):
                 return [f"  .quad {int(decoded.split(':', 1)[1])}"]
@@ -208,7 +250,7 @@ def emit_scalar_initializer(
                 f"for {global_name!r}: {init!r}"
             )
         if init.startswith("@"):
-            return [f"  .quad {asm_symbol(decode_global_name(init), module_symbols)}"]
+            return [f"  .quad {_initializer_symbol(decode_global_name(init), module_symbols)}"]
         return [f"  .quad {int(init)}"]
     if ty.is_int:
         if ty.width <= 8:

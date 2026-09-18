@@ -73,6 +73,10 @@ BOOTSTRAP_SELF_BACKEND_JOBS="${PCC_BOOTSTRAP_SELF_BACKEND_JOBS:-${PCC_SELF_BACKE
 BOOTSTRAP_MACHO_LINK_JOBS="${PCC_BOOTSTRAP_MACHO_LINK_JOBS:-${PCC_MACHO_LINK_JOBS:-8}}"
 BOOTSTRAP_MAX_TREE_RSS_BYTES="${PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES:-17179869184}"
 BOOTSTRAP_STAGE_TIMEOUT="${PCC_BOOTSTRAP_STAGE_TIMEOUT:-600}"
+# Stage smoke compiles run under refcount provenance probe mode 2 (report the
+# first refcount operation on a non-managed pointer) and fail on a report.
+BOOTSTRAP_SMOKE_REFCOUNT_AUDIT="${PCC_BOOTSTRAP_SMOKE_REFCOUNT_AUDIT:-1}"
+BOOTSTRAP_SMOKE_REFCOUNT_PROBE_MODE="${PCC_BOOTSTRAP_SMOKE_REFCOUNT_PROBE_MODE:-2}"
 BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES="${PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES:-8589934592}"
 BOOTSTRAP_EXTERNAL_MEMORY_GUARD="${PCC_BOOTSTRAP_EXTERNAL_MEMORY_GUARD:-0}"
 BOOTSTRAP_IN_PROCESS_CODEGEN="${PCC_BOOTSTRAP_IN_PROCESS_CODEGEN:-0}"
@@ -243,15 +247,29 @@ stage_exec_barrier() {
     local smoke_src="${smoke_dir}/smoke.py"
     local smoke_out="${smoke_dir}/smoke"
     printf 'def main() -> int:\n    return 0\n\nmain()\n' > "${smoke_src}"
+    # The smoke compile doubles as a refcount-provenance audit: in probe mode 2
+    # the runtime reports the first refcount operation that reaches a pointer
+    # which is not a managed object (a freed cell, a raw value).  The probe
+    # would otherwise mask such an operation on GC0-2 and the stage's own
+    # compile would still "pass"; with the probe off it corrupts the object
+    # free list and the stage dies much later in the allocator.  Set
+    # PCC_BOOTSTRAP_SMOKE_REFCOUNT_AUDIT=0 to run the smoke without the audit.
+    local smoke_err="${smoke_dir}/smoke.stderr"
     env \
         "PCC_RUNTIME_CC=${BOOTSTRAP_RUNTIME_CC}" \
         "PCC_RUNTIME_HIGH=${BOOTSTRAP_RUNTIME_HIGH}" \
+        "PCC_GC_REFCOUNT_PROVENANCE_PROBE=${BOOTSTRAP_SMOKE_REFCOUNT_PROBE_MODE}" \
         "${out_exe}" \
         --ir-scaffold=on \
         --backend "${BACKEND}" \
         --python-libpython "${BOOTSTRAP_PYTHON_LIBPYTHON}" \
-        "${smoke_src}" -o "${smoke_out}" >/dev/null 2>&1
+        "${smoke_src}" -o "${smoke_out}" >/dev/null 2>"${smoke_err}"
     local smoke_returncode=$?
+    if [[ "${smoke_returncode}" == "0" && "${BOOTSTRAP_SMOKE_REFCOUNT_AUDIT}" != "0" ]] \
+        && grep -q "refcount operation on an unmanaged pointer" "${smoke_err}"; then
+        echo "stage smoke: refcount provenance audit failed (a refcount operation reached a non-managed pointer; rerun ${out_exe} with PCC_GC_REFCOUNT_PROVENANCE_PROBE=3 for the site)" >&2
+        smoke_returncode=97
+    fi
     rm -rf "${smoke_dir}"
     return "${smoke_returncode}"
 }

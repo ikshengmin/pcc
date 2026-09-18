@@ -77,6 +77,8 @@ from pcc.unsafe import (
     atomic_rmw_i32,
     cstr,
     define_global_i32,
+    define_thread_local_i32,
+    define_thread_local_ptr_null,
     call_ptr1,
     call_ptr2,
     call_ptr3,
@@ -111,6 +113,25 @@ from pcc.unsafe import (
 # this is zero -- the common program, and every pcc1 compile.  Mirrors
 # ``pcc_class_del_defined_count`` in py_substrate.c / py_class.c.
 define_global_i32("pcc_class_del_defined_count", 0)
+
+# Cache entries belong to a thread; separate key/index writes must never race.
+# The shared class epoch invalidates every thread after metadata relocation.
+define_thread_local_ptr_null("py_inst_field_cache_cls0")
+define_thread_local_ptr_null("py_inst_field_cache_cls1")
+define_thread_local_ptr_null("py_inst_field_cache_cls2")
+define_thread_local_ptr_null("py_inst_field_cache_cls3")
+define_thread_local_ptr_null("py_inst_field_cache_name0")
+define_thread_local_ptr_null("py_inst_field_cache_name1")
+define_thread_local_ptr_null("py_inst_field_cache_name2")
+define_thread_local_ptr_null("py_inst_field_cache_name3")
+define_thread_local_i32("py_inst_field_cache_idx0", -1)
+define_thread_local_i32("py_inst_field_cache_idx1", -1)
+define_thread_local_i32("py_inst_field_cache_idx2", -1)
+define_thread_local_i32("py_inst_field_cache_idx3", -1)
+define_thread_local_i32("py_inst_field_cache_epoch0", -1)
+define_thread_local_i32("py_inst_field_cache_epoch1", -1)
+define_thread_local_i32("py_inst_field_cache_epoch2", -1)
+define_thread_local_i32("py_inst_field_cache_epoch3", -1)
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
@@ -980,31 +1001,35 @@ def _field_cache_lookup(cls, name) -> int:
     if (
         load_i32(global_addr("py_inst_field_cache_epoch0"), 0) == epoch
         and ptr_eq(global_load_ptr("py_inst_field_cache_cls0"), cls) != 0
-        and ptr_eq(global_load_ptr("py_inst_field_cache_name0"), name) != 0
+        and _strs_eq(global_load_ptr("py_inst_field_cache_name0"), name) != 0
     ):
         return load_i32(global_addr("py_inst_field_cache_idx0"), 0)
     if (
         load_i32(global_addr("py_inst_field_cache_epoch1"), 0) == epoch
         and ptr_eq(global_load_ptr("py_inst_field_cache_cls1"), cls) != 0
-        and ptr_eq(global_load_ptr("py_inst_field_cache_name1"), name) != 0
+        and _strs_eq(global_load_ptr("py_inst_field_cache_name1"), name) != 0
     ):
         return load_i32(global_addr("py_inst_field_cache_idx1"), 0)
     if (
         load_i32(global_addr("py_inst_field_cache_epoch2"), 0) == epoch
         and ptr_eq(global_load_ptr("py_inst_field_cache_cls2"), cls) != 0
-        and ptr_eq(global_load_ptr("py_inst_field_cache_name2"), name) != 0
+        and _strs_eq(global_load_ptr("py_inst_field_cache_name2"), name) != 0
     ):
         return load_i32(global_addr("py_inst_field_cache_idx2"), 0)
     if (
         load_i32(global_addr("py_inst_field_cache_epoch3"), 0) == epoch
         and ptr_eq(global_load_ptr("py_inst_field_cache_cls3"), cls) != 0
-        and ptr_eq(global_load_ptr("py_inst_field_cache_name3"), name) != 0
+        and _strs_eq(global_load_ptr("py_inst_field_cache_name3"), name) != 0
     ):
         return load_i32(global_addr("py_inst_field_cache_idx3"), 0)
     return -1
 
 
 def _field_cache_store(cls, name, idx: int) -> None:
+    # Callers may reuse or release name immediately after the lookup. Cache
+    # the immutable class-owned spelling, not a borrowed caller buffer.
+    names = load_ptr(cls, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
+    name = load_ptr(names, idx * C_POINTER_SIZE)
     slot: int = _field_cache_slot(cls, name)
     epoch: int = _class_attr_cache_epoch()
     if slot == 0:

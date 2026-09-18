@@ -63,6 +63,7 @@ _MODULE_SYMBOLS = PreparedModuleSymbols(
     internal_prefix="",
     defined_symbols=frozenset(),
     internal_symbols=frozenset(),
+    thread_local_symbols=frozenset(),
 )
 _VARARG_FUNCTIONS: frozenset[str] = frozenset()
 _TLS_GLOBALS: dict[str, GlobalDef] = {}

@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 extern void pcc_debug_note_alloc_size(void *ptr, int64_t size);
 void pcc_gc_pin(PyObject *o);
@@ -167,6 +168,37 @@ static void pcc_gc_fire_callbacks(const char *phase) {
 }
 
 extern int64_t pcc_gc_unmanaged_refcount_ops;
+extern int32_t pcc_gc_refcount_provenance_probe;
+extern int32_t pcc_gc_refcount_provenance_probe_reported;
+
+/* PCC_GC_REFCOUNT_PROVENANCE_PROBE: 0 trusts the caller and skips the
+ * managed-pointer probe on the refcount hot path, 1 probes and counts misses,
+ * 2 probes, counts and reports the first miss on stderr.  Callers read the
+ * selected backend first, which runs pcc_gc_init_config, so the value is
+ * already configured when they get here. */
+static int pcc_refcount_provenance_probe_enabled(void) {
+    return __atomic_load_n(
+        &pcc_gc_refcount_provenance_probe, __ATOMIC_RELAXED
+    ) != 0;
+}
+
+static void pcc_note_unmanaged_refcount_op(void) {
+    __atomic_add_fetch(
+        &pcc_gc_unmanaged_refcount_ops, 1, __ATOMIC_RELAXED
+    );
+    int32_t mode = __atomic_load_n(
+        &pcc_gc_refcount_provenance_probe, __ATOMIC_RELAXED
+    );
+    if (mode >= 2
+        && __atomic_exchange_n(
+            &pcc_gc_refcount_provenance_probe_reported, 1, __ATOMIC_RELAXED
+        ) == 0) {
+        static const char message[] =
+            "pcc runtime: refcount operation on an unmanaged pointer (PCC_GC_REFCOUNT_PROVENANCE_PROBE=2)\n";
+        (void)write(2, message, sizeof(message) - 1);
+        if (mode == 3) abort();
+    }
+}
 
 static int py_pointer_can_have_header(PyObject *o) {
     return pcc_gc_pointer_is_managed(o) != 0;
@@ -1155,10 +1187,9 @@ static void pcc_incref_prepare(
     if (o == NULL) return;
     if (PY_IS_TAGGED_INT(o)) return;  /* tagged ints carry no refcount */
     int64_t backend = pcc_gc_backend();
-    if (!py_pointer_can_have_header(o)) {
-        __atomic_add_fetch(
-            &pcc_gc_unmanaged_refcount_ops, 1, __ATOMIC_RELAXED
-        );
+    if (pcc_refcount_provenance_probe_enabled()
+        && !py_pointer_can_have_header(o)) {
+        pcc_note_unmanaged_refcount_op();
         pcc_refcount_prepare_debug_bad(prepared, -2, debug_runtime_mode);
         return;
     }
@@ -1382,10 +1413,9 @@ static void pcc_decref_prepare(
     if (o == NULL) return;
     if (PY_IS_TAGGED_INT(o)) return;
     int64_t backend = pcc_gc_backend();
-    if (!py_pointer_can_have_header(o)) {
-        __atomic_add_fetch(
-            &pcc_gc_unmanaged_refcount_ops, 1, __ATOMIC_RELAXED
-        );
+    if (pcc_refcount_provenance_probe_enabled()
+        && !py_pointer_can_have_header(o)) {
+        pcc_note_unmanaged_refcount_op();
         pcc_refcount_prepare_debug_bad(prepared, -2, debug_runtime_mode);
         return;
     }
@@ -1550,15 +1580,28 @@ void py_decref(PyObject *o) {
 }
 
 
-static int32_t pcc_gc_known_ref_checks = 0;
+/* -1 = not yet resolved: the first proven refcount reads
+ * PCC_GC_KNOWN_REF_CHECKS once and stores 0 or 1.  Set to 1, every
+ * compiler-proven refcount takes the checked path so an audit
+ * (PCC_GC_REFCOUNT_PROVENANCE_PROBE=2/3) also sees the operations the
+ * frontend believed needed no provenance. */
+static int32_t pcc_gc_known_ref_checks = -1;
 
 void pcc_gc_set_known_ref_checks(int64_t enabled) {
     __atomic_store_n(&pcc_gc_known_ref_checks, enabled != 0, __ATOMIC_RELEASE);
 }
 
+static int32_t pcc_known_ref_checks(void) {
+    int32_t checks = __atomic_load_n(&pcc_gc_known_ref_checks, __ATOMIC_ACQUIRE);
+    if (checks >= 0) return checks;
+    checks = getenv("PCC_GC_KNOWN_REF_CHECKS") != NULL ? 1 : 0;
+    __atomic_store_n(&pcc_gc_known_ref_checks, checks, __ATOMIC_RELEASE);
+    return checks;
+}
+
 PyObject *pcc_gc_retain_known(PyObject *o) {
     if (o == NULL || PY_IS_TAGGED_INT(o)) return o;
-    if (pcc_gc_backend() != 0 || __atomic_load_n(&pcc_gc_known_ref_checks, __ATOMIC_ACQUIRE) != 0)
+    if (pcc_gc_backend() != 0 || pcc_known_ref_checks() != 0)
         return pcc_gc_retain(o);
     PyObjectHeader *h = py_header(o);
     int32_t flags = py_header_flags_load(h);
@@ -1571,7 +1614,7 @@ PyObject *pcc_gc_retain_known(PyObject *o) {
 
 void pcc_gc_release_known(PyObject *o) {
     if (o == NULL || PY_IS_TAGGED_INT(o)) return;
-    if (pcc_gc_backend() != 0 || __atomic_load_n(&pcc_gc_known_ref_checks, __ATOMIC_ACQUIRE) != 0) {
+    if (pcc_gc_backend() != 0 || pcc_known_ref_checks() != 0) {
         pcc_gc_release(o); return;
     }
     PyObjectHeader *h = py_header(o);

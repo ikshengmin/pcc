@@ -32,6 +32,75 @@ RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 ARCHIVE_NAME = "libpy_runtime_pcc_py.a"
 
 
+def test_granule_cache_survives_raw_address_reuse(
+    tmp_path: Path, pcc_py_runtime_archive: Path,
+) -> None:
+    """A retired raw span must not hide a new object at the same address.
+
+    The external C driver is an ABI oracle for the self-emitted allocator.
+    Rebinding one reserved mapping makes OS address reuse deterministic;
+    clearing the positive cache exercises the normal span-cache miss path.
+    """
+    source = tmp_path / "span_reuse.c"
+    output = tmp_path / "span_reuse"
+    source.write_text(textwrap.dedent(r'''
+        #define _GNU_SOURCE
+        #include "py_internal.h"
+        #include <sys/mman.h>
+        #include <stdint.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+
+        extern int64_t pcc_allocator_granule_retire_slab_locked(void *);
+        extern void pcc_allocator_lock_acquire(void);
+        extern void pcc_allocator_lock_release(void);
+        extern int64_t pcc_allocator_exact_object_cache[8192];
+
+        int main(void) {
+            if (pcc_gc_set_backend(atoi(getenv("PCC_GC_BACKEND"))) != 0) return 10;
+            void *base = mmap(NULL, 65536, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANON, -1, 0);
+            if (base == MAP_FAILED) return 1;
+            PyObject *object = (PyObject *)((char *)base + 48);
+            if (pcc_gc_granule_register_slab(base, 2, 112) != 1) return 2;
+            if (pcc_gc_granule_is_object_start(object) != -1) return 3;
+            pcc_allocator_lock_acquire();
+            int64_t retired = pcc_allocator_granule_retire_slab_locked(base);
+            pcc_allocator_lock_release();
+            if (retired != 1) return 4;
+            if (pcc_gc_granule_register_slab(base, 1, 112) != 1) return 5;
+            /* GC_STATE_RESERVED in freestanding_allocator.py. */
+            *(int64_t *)base = INT64_C(5783538902897647429);
+            ((PyObjectHeader *)object)->refcount = 1;
+            ((PyObjectHeader *)object)->type_tag = PY_TYPE_INT;
+            if (pcc_gc_granule_object_publish(object) != 1) return 6;
+            for (int slot = 0; slot < 8192; slot++) {
+                __atomic_store_n(&pcc_allocator_exact_object_cache[slot],
+                                 0, __ATOMIC_RELAXED);
+            }
+            int64_t granule = pcc_gc_granule_is_object_start(object);
+            int64_t managed = pcc_gc_pointer_is_managed(object);
+            printf("granule=%lld managed=%lld\n",
+                   (long long)granule, (long long)managed);
+            return granule == 1 && managed == 1 ? 0 : 9;
+        }
+    '''), encoding="utf-8")
+    built = subprocess.run(
+        [os.environ.get("CC", "cc"), "-std=c11", "-pthread",
+         f"-I{RUNTIME_DIR / 'include'}", f"-I{RUNTIME_DIR / 'src'}",
+         str(source), str(pcc_py_runtime_archive), "-lm", "-o", str(output)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert built.returncode == 0, built.stdout + built.stderr
+    for backend in range(5):
+        ran = subprocess.run(
+            [str(output)], capture_output=True, text=True, timeout=10,
+            env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
+        )
+        assert ran.returncode == 0, f"GC{backend}: {ran.stdout}{ran.stderr}"
+        assert ran.stdout == "granule=1 managed=1\n"
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:

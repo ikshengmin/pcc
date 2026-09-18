@@ -260,16 +260,24 @@ def _unpack_generic(
                 continue
             numeric = int.from_bytes(raw[cursor : cursor + width], byteorder)
             if signed != 0:
-                if width == 1:
-                    modulus = 0x100
-                elif width == 2:
-                    modulus = 0x10000
-                elif width == 4:
-                    modulus = 0x100000000
-                else:
-                    modulus = 0x10000000000000000
-                if numeric >= modulus // 2:
-                    numeric -= modulus
+                # Derive both bounds from ``width`` with one shift each.
+                #
+                # The replaced form chose ``modulus`` through an if/elif/else
+                # over 0x100 / 0x10000 / 0x100000000 / 0x10000000000000000 and
+                # tested ``numeric >= modulus // 2``.  Compiled, that returned
+                # every 8-byte signed big-endian field exactly one modulus low
+                # -- ">q" and ">qq" decoded 806238318454171918 as
+                # -17640505755255379698 -- while widths 1/2/4 and every
+                # little-endian form were correct.  The same shape in an
+                # isolated probe answers correctly, so the trigger is
+                # something about this function, not the branch chain itself;
+                # it is not diagnosed.  This form is differentially checked
+                # against CPython across the signed/unsigned and
+                # little/big-endian matrix in
+                # tests/python/test_native_isinstance_and_struct_boundaries.py.
+                sign_bit = 1 << (width * 8 - 1)
+                if numeric >= sign_bit:
+                    numeric -= sign_bit * 2
             cursor += width
             values.append(bool(numeric) if kind == _KIND_BOOL else numeric)
     return tuple(values)
@@ -361,12 +369,38 @@ def _unpack_fields(byteorder: str, fields, buffer, offset: int):
     )
 
 
+def _single_int_shape(plan, byteorder: str):
+    """``(width, byteorder, sign_bit, modulus)`` for a one-integer format.
+
+    ``"<Q"``/``"<I"``/``"<i"`` and friends are nearly every call the compiled
+    linker makes: the Mach-O relocation reader and the stack-map validator do
+    nothing else, tens of thousands of times per link.  Reading the bytes is
+    not what costs -- 200k compiled ``<Q`` reads take 0.197s through
+    ``int.from_bytes`` and 1.724s through the generic plan -- so the plan walk,
+    its values list and its result tuple are the 8.8x.
+
+    ``sign_bit``/``modulus`` are precomputed because ``int.from_bytes`` cannot
+    take ``signed=`` here: that keyword leaves a ``py_cpy_*`` call in the IR and
+    ``--python-libpython=off`` then replaces the whole function with a
+    fail-closed stub.  A literal or dynamic ``byteorder`` argument stays native.
+    """
+    if len(plan) != 1:
+        return None
+    kind, width, signed, count = plan[0]
+    if kind != _KIND_INT or count != 1:
+        return None
+    if signed != 0:
+        return (width, byteorder, 1 << (width * 8 - 1), 1 << (width * 8))
+    return (width, byteorder, 0, 0)
+
+
 class Struct:
     def __init__(self, fmt: str):
         self.format = fmt
         self._byteorder, self._fields = _parse_format(fmt)
         self.size = _format_size(self._fields)
         self._plan = _build_plan(self._fields)
+        self._single_int = _single_int_shape(self._plan, self._byteorder)
 
     def pack(self, *values) -> bytes:
         return _pack_fields(self._byteorder, self._fields, values)
@@ -380,6 +414,25 @@ class Struct:
         return _unpack_plan(self._byteorder, self._plan, self.size, raw, 0)
 
     def unpack_from(self, buffer, offset: int = 0) -> tuple:
+        shape = self._single_int
+        if shape is not None:
+            width, byteorder, sign_bit, modulus = shape
+            raw = (
+                buffer
+                if isinstance(buffer, (bytes, bytearray))
+                else bytes(buffer)
+            )
+            start = _normalize_offset(len(raw), offset)
+            if start + width > len(raw):
+                raise error(
+                    "unpack_from requires a buffer of at least "
+                    + str(start + width)
+                    + " bytes"
+                )
+            value = int.from_bytes(raw[start : start + width], byteorder)
+            if sign_bit and value >= sign_bit:
+                value = value - modulus
+            return (value,)
         return _unpack_plan(
             self._byteorder, self._plan, self.size, buffer, offset
         )

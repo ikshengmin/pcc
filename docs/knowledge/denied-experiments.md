@@ -9,7 +9,11 @@ Search by symbol/symptom; inspect the matching experiment and its updates.
 Verify current code, source revision and artifacts before reusing a verdict.
 Do not repeat a matching failed experiment without identifying new evidence.
 
-649 verdicts across 136 investigations.
+652 verdicts across 139 investigations.
+
+## [Investigation: retired raw span cache hides an object at a reused address](../investigations/allocator-span-cache-raw-address-reuse.md)
+
+- Host compiler/Python helpers and runtime cc were denied for these replays.
 
 ## [Investigation: backend-0 finalizer re-enters the tracked-object table lock](../investigations/backend0-finalizer-table-lock-reentrancy.md)
 
@@ -308,6 +312,10 @@ Do not repeat a matching failed experiment without identifying new evidence.
 
 - The initial spelling `py_cpy_handle_move_owned_ref` is [DENIED]. Strict
 
+## [Investigation: GC3 in-place promotion leaves an old owner on the young list](../investigations/gc3-in-place-promotion-young-list.md)
+
+- runtimes. The hypothesis that no collection occurred is therefore denied.
+
 ## [Investigation: GC4 bootstrap pcc-Python GC config fast path](../investigations/gc4-bootstrap-config-fastpath-2026-06-05.md)
 
 - No.1 optimize worker startup / shell wrapper [DENIED for current GC4 hotspot]
@@ -405,6 +413,10 @@ Do not repeat a matching failed experiment without identifying new evidence.
 
 - Update (2026-06-10): phase (i) as originally designed is DENIED by engine-fidelity inspection; dependency order revised — Code inspection of `pcc/py_runtime/src/py_re.c` (336 lines) shows the
 - The original No.1 phase (i) is therefore **DENIED as designed**.
+
+## [Investigation: native stack-map structural scans decode unused record fields](../investigations/native-stackmap-structural-scan-cost.md)
+
+- and host Python/compiler/runtime-cc helpers are denied. Every run must produce
 
 ## [Investigation: native subprocess provider omitted from shallow multi-file closure](../investigations/native-subprocess-provider-omitted-from-shallow-multi-file-closure.md)
 

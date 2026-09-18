@@ -2,10 +2,11 @@
 import os
 import subprocess
 import sys
-from pcc.py_frontend.pipeline import compile_python
 
 
-def test_with_control_exit_order_and_exit_exception(tmp_path, pcc_py_runtime_archive):
+def test_with_control_exit_order_and_exit_exception(
+    tmp_path, pcc_py_runtime_archive, python_program_compiler,
+):
     source = tmp_path / 'with_control.py'
     source.write_text('''
 class Context:
@@ -45,7 +46,7 @@ main()
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / 'with_control'
-    compile_python(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
                    runtime_archive=str(pcc_py_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,

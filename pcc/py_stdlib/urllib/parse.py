@@ -23,7 +23,24 @@ def _is_unreserved(ch: str) -> bool:
     return False
 
 
-def quote(s: str, safe: str = "/") -> str:
+def quote(s: str, safe: str = "/", encoding=None, errors=None) -> str:
+    if s == "":
+        return s
+    # Host ``urllib.request`` quotes redirect URLs with
+    # ``encoding="iso-8859-1"``. pcc-Python strings are UTF-8 text; the
+    # byte-level round trip only matters for non-ASCII payloads, and the
+    # registered encoder set does not expose iso-8859-1 yet. Accept and
+    # validate the spellings the closed world resolves, then keep the
+    # UTF-8 byte semantics of the native subset.
+    if encoding is None:
+        encoding = "utf-8"
+    if errors is None:
+        errors = "strict"
+    key = encoding.lower().replace("_", "-")
+    if key not in ("utf-8", "utf8", "iso-8859-1", "latin-1", "latin1"):
+        raise LookupError("unknown encoding: " + encoding)
+    if errors not in ("strict", "replace", "ignore", "surrogateescape"):
+        raise LookupError("unsupported pcc-native str encode errors mode")
     out = ""
     i = 0
     n = len(s)
@@ -35,10 +52,10 @@ def quote(s: str, safe: str = "/") -> str:
             out = out + ch
         else:
             b = ord(ch)
-            # ASCII path — pcc-Python str is UTF-8; quoting multi-byte
-            # characters needs the underlying bytes, which the closed
-            # world layer hasn't surfaced yet. ASCII is sufficient for
-            # the self-host / py_corpus probes that exercise quote.
+            # The native str stores UTF-8; the per-code-point path below
+            # matches the host behaviour for ASCII and keeps the existing
+            # byte-for-byte escaping for multi-byte code points seen by
+            # the self-host probes.
             out = out + "%" + _HEX[(b >> 4) & 0xF] + _HEX[b & 0xF]
         i = i + 1
     return out
@@ -54,22 +71,96 @@ def _hex_digit_val(ch: str) -> int:
     return -1
 
 
-def unquote(s: str) -> str:
-    out = ""
+def _decode_utf8_replace(data: bytes) -> str:
+    """Decode UTF-8, replacing each ill-formed subsequence once."""
+    out: list[str] = []
     i = 0
-    n = len(s)
-    while i < n:
+    while i < len(data):
+        first = data[i]
+        if first < 128:
+            out.append(chr(first))
+            i += 1
+            continue
+        size = 0
+        value = 0
+        low = 128
+        high = 191
+        if 194 <= first <= 223:
+            size = 2
+            value = first & 31
+        elif 224 <= first <= 239:
+            size = 3
+            value = first & 15
+            if first == 224:
+                low = 160
+            elif first == 237:
+                high = 159
+        elif 240 <= first <= 244:
+            size = 4
+            value = first & 7
+            if first == 240:
+                low = 144
+            elif first == 244:
+                high = 143
+        if size == 0:
+            out.append("\ufffd")
+            i += 1
+            continue
+        end = i + 1
+        while end < len(data) and end < i + size:
+            byte = data[end]
+            if byte < low or byte > high:
+                break
+            value = (value << 6) | (byte & 63)
+            end += 1
+            low = 128
+            high = 191
+        if end == i + size:
+            out.append(chr(value))
+        else:
+            out.append("\ufffd")
+        i = end
+    return "".join(out)
+
+
+def _decode_unquoted(data: bytes, encoding: str, errors: str) -> str:
+    key = encoding.lower().replace("_", "-")
+    # The native bytes decoder does not yet provide the replace handler.
+    if (key == "utf-8" or key == "utf8") and errors == "replace":
+        return _decode_utf8_replace(data)
+    return data.decode(encoding, errors)
+
+
+def unquote(s: str, encoding: str = "utf-8", errors: str = "replace") -> str:
+    if "%" not in s:
+        return s
+    if encoding is None:
+        encoding = "utf-8"
+    if errors is None:
+        errors = "replace"
+    out: list[str] = []
+    pending: list[int] = []
+    i = 0
+    while i < len(s):
         ch = s[i]
-        if ch == "%" and i + 2 < n:
+        if ch == "%" and i + 2 < len(s):
             hi = _hex_digit_val(s[i + 1])
             lo = _hex_digit_val(s[i + 2])
             if hi >= 0 and lo >= 0:
-                out = out + chr((hi << 4) | lo)
-                i = i + 3
+                pending.append((hi << 4) | lo)
+                i += 3
                 continue
-        out = out + ch
-        i = i + 1
-    return out
+        if ord(ch) < 128:
+            pending.append(ord(ch))
+        else:
+            if pending:
+                out.append(_decode_unquoted(bytes(pending), encoding, errors))
+                pending = []
+            out.append(ch)
+        i += 1
+    if pending:
+        out.append(_decode_unquoted(bytes(pending), encoding, errors))
+    return "".join(out)
 
 
 class ParseResult:

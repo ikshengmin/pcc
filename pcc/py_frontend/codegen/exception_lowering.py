@@ -103,34 +103,44 @@ class ExceptionLoweringMixin:
     def _current_try_err_block(self):
         return self._try_err_block
 
-    def _emit_generator_exceptional_finally(
+    def _emit_exceptional_finally(
         self,
         stmt: Try,
         current_exc: ir.Value,
         outer_err_block,
     ) -> bool:
-        """Run a generator ``finally`` with its unwinding exception rooted.
+        """Run exceptional cleanup with the original exception rooted.
 
-        Resume points receive thrown-in cancellation through TLS.  Leaving that
-        old exception pending while emitting cleanup makes every ordinary
-        post-call check mistake it for a new cleanup failure.  Move it into the
-        generator's managed frame slot, clear TLS for cleanup, then restore it
-        unless cleanup raised a replacement exception.
-
-        The slot is part of the heap frame rather than a C stack temporary, so
-        even a forbidden cleanup yield cannot leave an updateable GC root
-        pointing into a returned carrier stack. ``py_gen_close`` will reject
-        that yield and the terminal task-failure path releases the frame.
+        Cleanup must run with clear TLS: nested handlers may clear their own
+        exception, and ordinary call checks must not see the unwinding one.
+        Generators need a heap-frame slot across suspension; ordinary functions
+        use the existing owned-local root and function-exit cleanup contract.
         """
-        if not stmt.finally_body or not self._generator_ctx_stack:
+        if not stmt.finally_body:
             return False
-        ctx = self._generator_ctx_stack[-1]
-        hidden = self._generator_finally_exception_name(stmt)
-        frame_entry = ctx["frame_slots"].get(hidden)
-        if frame_entry is None:
-            return False
+        active_roots = []
+        if self._generator_ctx_stack:
+            ctx = self._generator_ctx_stack[-1]
+            hidden = self._generator_finally_exception_name(stmt)
+            frame_entry = ctx["frame_slots"].get(hidden)
+            if frame_entry is None:
+                return False
+            exception_slot = frame_entry[1]
+            active_roots = ctx["active_exception_unwind_roots"]
+        else:
+            hidden = self._fresh("finally.exception.owner")
+            exception_slot = self._alloca_in_entry(
+                _CSTR, name=self._fresh("finally.exception.slot")
+            )
+            self._store_entry_initializer(exception_slot, ir.Constant(_CSTR, None))
+            self.env[hidden] = (exception_slot, _CSTR, DynType(name="dyn"))
+            self._ensure_owned_local_gc_root(hidden, exception_slot, _CSTR)
+            self._owned_local_names.add(hidden)
+            self._owned_local_has_value.add(hidden)
+            owned_flag = self._ensure_owned_local_flag(hidden, exception_slot)
+            self.builder.store(ir.Constant(_I1, 1), owned_flag)
         root_ptr = self._as_gc_ptr(
-            frame_entry[1],
+            exception_slot,
             name=self._fresh("finally.exception.root"),
         )
         self.builder.call(
@@ -143,12 +153,16 @@ class ExceptionLoweringMixin:
             name=self._fresh("finally.cleanup.error")
         )
         saved_err_block = self._push_try_err_block(cleanup_error_bb)
-        active_roots = ctx["active_exception_unwind_roots"]
+        saved_active_excs = self._active_handler_excs
+        self._active_handler_excs = list(saved_active_excs) + [
+            (self.current_function, current_exc, exception_slot)
+        ]
         active_roots.append(root_ptr)
         try:
             self._emit_stmts(stmt.finally_body)
         finally:
             active_roots.pop()
+            self._active_handler_excs = saved_active_excs
             self._restore_try_err_block(saved_err_block)
 
         if not self._builder_block_is_terminated():
@@ -156,7 +170,7 @@ class ExceptionLoweringMixin:
             # the finally body may have resumed into blocks the try-entry
             # cast does not dominate.
             restore_root_ptr = self._as_gc_ptr(
-                frame_entry[1],
+                exception_slot,
                 name=self._fresh("finally.exception.root"),
             )
             saved_exc = self.builder.call(
@@ -173,7 +187,7 @@ class ExceptionLoweringMixin:
 
         self.builder.position_at_end(cleanup_error_bb)
         cleanup_root_ptr = self._as_gc_ptr(
-            frame_entry[1],
+            exception_slot,
             name=self._fresh("finally.exception.root"),
         )
         cleanup_exc = self.builder.call(
@@ -510,7 +524,7 @@ class ExceptionLoweringMixin:
 
         if not stmt.handlers:
             outer = prev_err_block or self._ensure_fn_err_exit()
-            emitted_rooted_finally = self._emit_generator_exceptional_finally(
+            emitted_rooted_finally = self._emit_exceptional_finally(
                 stmt,
                 current_exc,
                 outer,
@@ -632,7 +646,7 @@ class ExceptionLoweringMixin:
                 # the unmatched-exception path.
                 outer = prev_err_block or self._ensure_fn_err_exit()
                 emitted_rooted_finally = (
-                    self._emit_generator_exceptional_finally(
+                    self._emit_exceptional_finally(
                         stmt,
                         current_exc,
                         outer,

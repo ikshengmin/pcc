@@ -292,6 +292,12 @@ def emitted_fixed_instruction_line(mnemonic: str) -> str:
             word = 0xD503233F
         elif mnemonic == "autiasp":
             word = 0xD50323BF
+        elif mnemonic == "mrs x17, nzcv":
+            word = 0xD53B4211
+        elif mnemonic == "msr nzcv, x17":
+            word = 0xD51B4211
+        elif mnemonic == "blr x16":
+            word = 0xD63F0200
         else:
             raise EncodeError("unsupported emitted fixed instruction " + mnemonic)
         records.append4(word, EMITTED_INSTRUCTION_SCALAR, 0, -1)

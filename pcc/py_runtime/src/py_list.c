@@ -439,6 +439,24 @@ PyObject *py_list_new(int64_t initial_capacity) {
     return (PyObject *)l;
 }
 
+/* Compiler-owned static arrays contain immortal objects or tagged integers.
+ * Only the new list needs a moving root across the append calls. */
+PyObject *py_list_from_static_items(PyObject *const *items, int64_t count) {
+    PyObject *list = py_list_new(count);
+    if (list == NULL || count <= 0) return list;
+    void *list_handle = NULL;
+    if (list_prepare_moving_root(&list, &list_handle) != 0) {
+        py_decref(list);
+        return NULL;
+    }
+    for (int64_t i = 0; i < count; i++) {
+        py_list_append(list_reload_moving_root(&list, list_handle), items[i]);
+    }
+    list = list_reload_moving_root(&list, list_handle);
+    list_finish_moving_root(list_handle);
+    return list;
+}
+
 void py_list_append(PyObject *lst, PyObject *item) {
     if (lst == NULL) return;
     assert(!PY_IS_TAGGED_INT(lst));

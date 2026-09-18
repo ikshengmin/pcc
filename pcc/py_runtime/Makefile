@@ -22,6 +22,15 @@ PCC      ?= pcc
 CLANG    ?= clang
 PYTHON   ?= python3
 PCC_IR_TO_OBJ ?= $(PYTHON) -m pcc.tools.ir_to_obj
+# ``pcc --emit-llvm`` applies the default tier (mem2reg,sroa) and
+# ``ir_to_obj`` documents that it takes already-optimized IR, so nothing ran
+# the rest of the owned pipeline over the runtime: the archive every compiled
+# program links shipped un-inlined.  ``py_obj.ll`` alone loses 8.8% of its
+# lines here and every call to ``_ptr_can_have_header`` -- a one-line wrapper
+# around ``pcc_gc_pointer_is_managed`` that a C=100 gateway profile put at
+# 1,788 samples.  Same list ``benchmarks/build_runtime_variants.py`` uses,
+# which measured +12.3% on that arm.
+PCC_RUNTIME_IR_PASSES ?= mem2reg,sroa,instsimplify,inline-defined,instsimplify,instcombine,dce
 PCC_REPO_ROOT ?= $(abspath ../..)
 
 CFLAGS   ?= -O2 -fPIC -Wall -Wextra -std=c11
@@ -494,6 +503,8 @@ endif
 # pipeline._ensure_runtime's explicit full-rebuild decision.
 $(OBJDIR_PY)/%.o: $(PYDIR)/%.py | $(OBJDIR_PY)
 	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) $(PCC) --python-library --emit-llvm=$(OBJDIR_PY)/$*.ll $<
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.native_ir.driver "$(PCC_RUNTIME_IR_PASSES)" $(OBJDIR_PY)/$*.ll $(OBJDIR_PY)/$*.opt.ll
+	mv $(OBJDIR_PY)/$*.opt.ll $(OBJDIR_PY)/$*.ll
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/$*.ll $@ --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F)
 
 # The receipt is a completion sidecar emitted with the object.  Give it an

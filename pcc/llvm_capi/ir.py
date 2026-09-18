@@ -1355,17 +1355,7 @@ class Function(Value):
         module.globals[name] = self
 
     def append_basic_block(self, name: str = "") -> Block:
-        if not name:
-            name = "bb" + str(self._block_counter)
-            self._block_counter += 1
-        else:
-            # Dedup against existing blocks + SSA names in this
-            # function. Matches llvmlite: repeated
-            # ``append_basic_block("then")`` yields ``then``, ``then.1``...
-            name = self._unique(name)
-        blk = Block(self, name)
-        self.blocks.append(blk)
-        return blk
+        return _function_append_basic_block_canonical(self, name)
 
     def _fresh(self) -> str:
         """Generate a fresh ``.N`` identifier for anonymous temps
@@ -1561,6 +1551,19 @@ class Function(Value):
             ],
             "",
         )
+
+
+def _function_append_basic_block_canonical(fn: Function, name: str) -> Block:
+    # All entry points must reserve names in the same function-local scope.
+    # Auto names participate too: an explicit "bb0" must not collide with
+    # the first anonymous block, in either order.
+    if not name:
+        name = "bb" + str(fn._block_counter)
+        fn._block_counter += 1
+    name = Function._unique(fn, name)
+    block = Block(fn, name)
+    fn.blocks.append(block)
+    return block
 
 
 def _value_ref(value) -> str:
@@ -4245,11 +4248,7 @@ def scaffold_IRBuilder_append_basic_block(builder, name):
 
 
 def scaffold_Function_append_basic_block(fn, name):
-    if not name:
-        name = "bb"
-    blk = Block(fn, name)
-    fn.blocks.append(blk)
-    return blk
+    return _function_append_basic_block_canonical(fn, name)
 
 
 # Direct publication calls known class methods as unbound functions and passes

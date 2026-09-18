@@ -4,10 +4,9 @@ import os
 import subprocess
 import sys
 
-from pcc.py_frontend.pipeline import compile_python
-
-
-def test_nested_sibling_captures_the_materialized_function_binding(tmp_path, pcc_py_runtime_archive):
+def test_nested_sibling_captures_the_materialized_function_binding(
+    tmp_path, pcc_py_runtime_archive, python_program_compiler,
+):
     source = tmp_path / "sibling_function.py"
     source.write_text('''import gc
 def factory(label):
@@ -73,7 +72,7 @@ main()
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "sibling_function"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(output), backend="self", libpython_mode="off",
                    runtime_archive=str(pcc_py_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=10,
@@ -82,7 +81,9 @@ main()
         assert ran.stdout == expected.stdout
 
 
-def test_nested_factory_parameters_locals_and_shadowing(tmp_path, pcc_py_runtime_archive):
+def test_nested_factory_parameters_locals_and_shadowing(
+    tmp_path, pcc_py_runtime_archive, python_program_compiler,
+):
     source = tmp_path / "factory_cells.py"
     source.write_text('''
 import gc
@@ -159,7 +160,7 @@ main()
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "factory_cells"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
                    runtime_archive=str(pcc_py_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True,

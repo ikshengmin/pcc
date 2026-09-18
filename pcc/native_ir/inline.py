@@ -101,6 +101,17 @@ def inline_module(
             instruction_count = sum(len(block.instructions) for block in blocks)
             if instruction_count > 32:
                 continue
+            if len(blocks) > 1 and (
+                re.search(r"=\s*phi\s+ptr\b", body_text)
+                or header.split("@", 1)[0].split()[-1] == "ptr"
+            ):
+                # Splicing a multi-block callee joins its exits in a new
+                # continuation and clones the PHIs it already had.  A merged
+                # managed pointer loses the single root the precise stack map
+                # needs, which ``ir_to_obj`` reports as ambiguous root
+                # provenance.  Single-block callees substitute their result
+                # textually and create no merge, so they stay eligible.
+                continue
             if any(word in body_text for word in (
                 "alloca ", "musttail ", "invoke ", "callbr ", "blockaddress(",
                 "@llvm.returnaddress", "@llvm.frameaddress", "@llvm.va_start",
@@ -241,9 +252,18 @@ _CALL_RE_TEMPLATE = (
     r"(?:tail\s+|musttail\s+|notail\s+)?call\s+"
     r"[^@]*@(?P<callee>{callee})\s*\((?P<args>[^)]*)\)\s*$"
 )
+# A call may spell the callee's function type explicitly, as in
+# ``call i1 (ptr) @f(ptr %x)``.  LLVM requires that form only for variadic
+# callees but permits it everywhere, and the pcc Python frontend emits it for
+# every call, so the optional ``(?:\((?P<params>[^)]*)\)\s*)?`` group is part
+# of every call-site pattern below.  It is spelled out in each template rather
+# than shared through a name: ``.format`` on a receiver that is a plain string
+# literal lowers natively, while any other receiver expression sends this
+# module top through the CPython fallback, which pcc1 cannot link.
 _VOID_CALL_RE_TEMPLATE = (
     r"^(?P<indent>\s*)"
     r"(?:(?:tail|musttail|notail)\s+)?call\s+void\s+"
+    r"(?:\((?P<params>[^)]*)\)\s*)?"
     r"@(?P<callee>{callee})\s*\((?P<args>[^)]*)\)\s*$"
 )
 _NOOP_GEP_RE = re.compile(
@@ -252,9 +272,14 @@ _NOOP_GEP_RE = re.compile(
 _BARE_CALL_RE_TEMPLATE = (
     r"^(?P<indent>\s*)"
     r"(?:(?:tail|musttail|notail)\s+)?call\s+"
-    r"(?P<ret>[^@%\s]+)\s+@(?P<callee>{callee})\s*\((?P<args>[^)]*)\)\s*$"
+    r"(?P<ret>[^@%\s(]+)\s*"
+    r"(?:\((?P<params>[^)]*)\)\s*)?"
+    r"@(?P<callee>{callee})\s*\((?P<args>[^)]*)\)\s*$"
 )
 
+_CALL_RETURN_TYPE_RE = re.compile(
+    r"\bcall\s+(?P<ret>[^@%\s(]+)\s*(?:\((?P<params>[^)]*)\)\s*)?@"
+)
 _DIRECT_CALLEE_RE = re.compile(r"\bcall\b[^@]*@(?P<callee>[\w.$]+)\s*\(")
 _VALUE_CALL_RE = re.compile(_CALL_RE_TEMPLATE.format(callee=r"[\w.$]+"))
 _VOID_CALL_RE = re.compile(_VOID_CALL_RE_TEMPLATE.format(callee=r"[\w.$]+"))
@@ -267,9 +292,17 @@ def _call_signature_matches(text: str, actuals_raw: list[str], info: dict) -> bo
     # subset also leaves calling-convention/return-attribute forms untouched.
     if "musttail" in text or "notail" in text:
         return False
-    signature = re.search(r"\bcall\s+(\S+)\s+@", text)
-    if signature is None or signature.group(1) != info["return_type"]:
+    signature = _CALL_RETURN_TYPE_RE.search(text)
+    if signature is None or signature.group("ret") != info["return_type"]:
         return False
+    declared = signature.group("params")
+    if declared is not None:
+        # An explicit function type is the call's own ABI contract. Variadic
+        # forms and any parameter list that disagrees with the definition stay
+        # an ABI boundary rather than an SSA substitution.
+        declared_types = [part.strip() for part in declared.split(",") if part.strip()]
+        if "..." in declared_types or declared_types != info["arg_types"]:
+            return False
     actual_types = []
     for raw in actuals_raw:
         parts = raw.split()
@@ -369,10 +402,10 @@ def _inline_calls_in_function(
             if not is_void_call and not is_bare_call:
                 ret_val = info["ret_val"].strip()
                 ret_rewritten = _apply_remap_token(ret_val, remap)
-                type_m = re.search(r"call\s+([^@%\s]+)\s+@", stripped)
+                type_m = _CALL_RETURN_TYPE_RE.search(stripped)
                 if not type_m:
                     continue
-                ret_ty = type_m.group(1).strip()
+                ret_ty = type_m.group("ret").strip()
                 if ret_ty in _PASSTHROUGH_RET_TYPES:
                     value_replacements[m.group("res")] = ret_rewritten
                 else:
@@ -409,8 +442,11 @@ def _inline_multiblock_call_sites(ir_text: str, candidates: dict[str, dict]) -> 
     for fn in module.functions:
         if fn.name in addressed:
             continue
-        if any(inst.opcode in ("invoke", "callbr", "indirectbr", "catchswitch", "catchpad", "cleanuppad") or "blockaddress(" in inst.text
-               for block in fn.blocks for inst in block.instructions):
+        # ``probe`` rather than ``inst``: the generator expression binds its
+        # variable in the CPython domain, and the native ``for inst`` loops
+        # below could not rebind a name that already carries that domain.
+        if any(probe.opcode in ("invoke", "callbr", "indirectbr", "catchswitch", "catchpad", "cleanuppad") or "blockaddress(" in probe.text
+               for block in fn.blocks for probe in block.instructions):
             continue
         # Build namespace and predecessor-use indices once per function.
         # Serializing/scanning the growing function at every call site made
@@ -477,7 +513,12 @@ def _inline_multiblock_call_sites(ir_text: str, candidates: dict[str, dict]) -> 
             remap = {arg: actual for arg, actual in zip(info["args"], call_info["actuals"], strict=True)}
             incoming = []
             for clone in cloned:
-                clone.instructions = [llvm_line(_apply_remap(inst.text, remap)) for inst in clone.instructions]
+                # ``cloned`` rather than ``inst``: a comprehension binds its
+                # variable in the CPython domain, and the enclosing function's
+                # native ``inst`` binding cannot be joined with it.
+                clone.instructions = [
+                    llvm_line(_apply_remap(cloned.text, remap)) for cloned in clone.instructions
+                ]
                 term = clone.terminator
                 if term.opcode == "ret":
                     if info["return_type"] != "void":

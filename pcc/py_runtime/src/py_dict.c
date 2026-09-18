@@ -842,6 +842,27 @@ void py_dict_set(PyObject *dict, PyObject *key, PyObject *value) {
     (void)py_dict_rooted_op(dict, key, value, 2, NULL);
 }
 
+/* Compiler-owned pairs are borrowed immortal objects or tagged integers.
+ * Keep only the new dict rooted across insertion and ordinary table growth. */
+PyObject *py_dict_from_static_pairs(PyObject *const *pairs, int64_t count) {
+    PyObject *dict = py_dict_new();
+    if (dict == NULL || count <= 0) return dict;
+    void *dict_handle = NULL;
+    if (py_dict_prepare_moving_root(&dict, &dict_handle) != 0) {
+        py_decref(dict);
+        return NULL;
+    }
+    for (int64_t i = 0; i < count; i++) {
+        py_dict_set(
+            py_dict_reload_moving_root(&dict, dict_handle),
+            pairs[i * 2], pairs[i * 2 + 1]
+        );
+    }
+    dict = py_dict_reload_moving_root(&dict, dict_handle);
+    py_dict_finish_moving_root(dict_handle);
+    return dict;
+}
+
 PyObject *py_dict_get(PyObject *dict, PyObject *key) {
     if (!py_object_is_dict(dict) || key == NULL) return NULL;
     return py_dict_rooted_op(dict, key, NULL, 0, NULL);

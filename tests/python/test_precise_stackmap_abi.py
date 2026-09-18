@@ -420,6 +420,55 @@ def test_precise_stackmap_rejects_truncation_trailing_and_wrong_target():
         validate_stack_map_payload(payload, expected_arch=ARCH_X86_64)
 
 
+@pytest.mark.parametrize("arch", [ARCH_AARCH64, ARCH_X86_64])
+def test_structural_stackmap_scans_preserve_counts_and_buffer_semantics(arch, monkeypatch):
+    class IndexedBytes(bytes):
+        def __getitem__(self, index):
+            raise AssertionError("struct reads the buffer, not Python indexing")
+
+    value = _map(arch, "scan_counts")
+    function = value.functions[0]
+    record = replace(
+        function.records[0], safepoint_id=(1 << 64) - 1,
+        locations=tuple(_location(arch, -8 * (index + 1)) for index in range(257)),
+    )
+    value = replace(value, functions=(replace(function, frame_size=4096, records=(record,)),))
+    payload = encode_stack_map(value)
+    assert decode_stack_map(payload) == value
+    table_start = HEADER_SIZE + FUNCTION_SIZE + RECORD_SIZE
+    expected = (1, [(function.function_id, HEADER_SIZE, table_start)], table_start, 257)
+    for buffer in (payload, bytearray(payload), memoryview(payload), IndexedBytes(payload)):
+        assert wire_stackmaps._scan_stack_map_payload(buffer) == expected
+        assert function_address_offsets(buffer) == (HEADER_SIZE + 8,)
+
+    monkeypatch.setattr(wire_stackmaps, "MAX_LOCATIONS", 256)
+    for scan in (function_address_offsets, wire_stackmaps._scan_stack_map_payload):
+        with pytest.raises(PreciseStackMapError, match="too many stack-map locations"):
+            scan(payload)
+
+
+def test_structural_stackmap_scans_keep_record_bounds_and_final_validation():
+    payload = encode_stack_map(_map(ARCH_AARCH64, "scan_bounds"))
+    records_start = HEADER_SIZE + FUNCTION_SIZE
+    for scan in (function_address_offsets, wire_stackmaps._scan_stack_map_payload):
+        for length in range(3 * RECORD_SIZE):
+            with pytest.raises(PreciseStackMapError, match="truncated safepoint record"):
+                scan(payload[:records_start + length])
+
+    # Structural scans deliberately do not interpret reserved bits. The final
+    # semantic boundary must continue rejecting them after this fast scan.
+    malformed = bytearray(payload)
+    struct.pack_into("<H", malformed, records_start + 22, 1)
+    malformed = bytes(malformed)
+    assert function_address_offsets(malformed) == function_address_offsets(payload)
+    assert wire_stackmaps._scan_stack_map_payload(malformed) == (
+        wire_stackmaps._scan_stack_map_payload(payload)
+    )
+    for validate in (decode_stack_map, validate_stack_map_payload):
+        with pytest.raises(PreciseStackMapError, match="non-zero reserved stack-map field"):
+            validate(malformed)
+
+
 def test_wire_stackmap_validator_matches_final_decode_semantics():
     first_map = _map(ARCH_AARCH64, "first", address=0x1000)
     second_map = _map(ARCH_AARCH64, "second", address=0x2000)

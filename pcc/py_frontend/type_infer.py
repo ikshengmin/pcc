@@ -4049,9 +4049,15 @@ def _class_fields_from_def(
     ctx: _InferCtx, stmt: ClassDef
 ) -> tuple[tuple[str, Type], ...]:
     from .pipeline_exports import instance_field_assignment_statements
+    import os
+    import sys
+
+    trace_fields = os.environ.get("PCC_DEBUG_FIELD_INFER", "") == "1"
 
     fields: list[tuple[str, Type]] = []
     for body_stmt in stmt.body:
+        if trace_fields:
+            print("FIELD body", stmt.name, type(body_stmt).__name__, getattr(body_stmt, "name", ""), file=sys.stderr)
         if isinstance(body_stmt, Assign):
             body_annotation = _annotation_or_none(body_stmt)
             if body_annotation is None:
@@ -4066,6 +4072,8 @@ def _class_fields_from_def(
             isinstance(body_stmt, FuncDef) and body_stmt.args
             and body_stmt.args[0].name == "self"
         ):
+            if trace_fields:
+                print("FIELD enter", stmt.name, body_stmt.name, file=sys.stderr)
             arg_types = {
                 arg.name: ctx.resolve_annotation(_annotation_or_none(arg))
                 for arg in body_stmt.args
@@ -4075,6 +4083,8 @@ def _class_fields_from_def(
             for arg_name, arg_ty in arg_types.items():
                 init_scope.define(arg_name, arg_ty)
             for init_stmt in instance_field_assignment_statements(body_stmt.body):
+                if trace_fields:
+                    print("FIELD assignment", body_stmt.name, type(init_stmt).__name__, file=sys.stderr)
                 explicit_ty: Optional[Type] = None
                 init_annotation = _annotation_or_none(init_stmt)
                 if init_annotation is not None:
@@ -4095,6 +4105,8 @@ def _class_fields_from_def(
                         or _name_ident(target.obj) != "self"
                     ):
                         continue
+                    if trace_fields:
+                        print("FIELD target", body_stmt.name, target.name, file=sys.stderr)
                     # Method writes contribute field order, but must not
                     # replace constructor/declaration types with a cleanup
                     # sentinel (e.g. an exhausted list replaced by ()).
@@ -4106,6 +4118,8 @@ def _class_fields_from_def(
                             if known_name == target.name:
                                 field_known = True
                                 known_field_ty = _known_ty
+                                if trace_fields:
+                                    print("FIELD match", known_name, type(_known_ty).__name__, type(known_field_ty).__name__, isinstance(known_field_ty, NoneType), file=sys.stderr)
                                 break
                         # `self._x = None` in the constructor does not
                         # describe the field, it only says where it starts.
@@ -4120,6 +4134,8 @@ def _class_fields_from_def(
                         if field_known and not isinstance(
                             known_field_ty, NoneType
                         ):
+                            if trace_fields:
+                                print("FIELD skip", target.name, file=sys.stderr)
                             continue
                         widen_from_none = field_known
                     field_ty = explicit_ty
@@ -4151,6 +4167,8 @@ def _class_fields_from_def(
                         # demanding a better type there left the whole
                         # TaskGroup on the CPython fallback.
                         field_ty = DynType(name="dyn")
+                    if trace_fields:
+                        print("FIELD append", target.name, type(field_ty).__name__, widen_from_none, file=sys.stderr)
                     _append_field(fields, target.name, field_ty)
     return tuple(fields)
 

@@ -206,7 +206,7 @@ def emit_generator_may_park_child(
         name=host._fresh("vthread.delegate.propagate")
     )
     fast_completed = str(
-        os.environ.get("PCC_FAST_COMPLETED_CONTINUATIONS", "0") or "0"
+        os.environ.get("PCC_FAST_COMPLETED_CONTINUATIONS", "1") or "1"
     ).strip().lower() in ("1", "true", "yes", "on")
     result_ready_bb = None
     if fast_completed:
@@ -1276,7 +1276,7 @@ class GeneratorLoweringMixin:
         self._emit_thread_safepoint()
 
         first_entry_init = str(
-            os.environ.get("PCC_GENERATOR_FIRST_ENTRY_INIT", "0") or "0"
+            os.environ.get("PCC_GENERATOR_FIRST_ENTRY_INIT", "1") or "1"
         ).strip().lower() in ("1", "true", "yes", "on")
         argument_names = {arg.name for arg in fd.args if arg.name != ""}
         if len(frame_names) == len(argument_names):

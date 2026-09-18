@@ -39,6 +39,16 @@ define_global_i32("pcc_gc_backend_selected", 0)
 # counts every refcount operation that missed provenance, which on a long-lived
 # service is not bounded by anything an i32 covers.
 define_global_i64("pcc_gc_unmanaged_refcount_ops", 0)
+# Mirror of py_gc_backend.c's pcc_gc_refcount_provenance_probe: whether the
+# refcount hot path asks pcc_gc_pointer_is_managed before it touches a header.
+# 0 trusts the caller (default on the non-moving collectors 0-2), 1 probes and
+# counts misses in pcc_gc_unmanaged_refcount_ops (default on the relocating
+# collectors 3-4), 2 probes, counts and reports the first miss on stderr, 3
+# also aborts on that first miss so the crash report names the site.
+# Starts at 1 so a refcount that runs before pcc_gc_config_ensure has read
+# PCC_GC_REFCOUNT_PROVENANCE_PROBE keeps the historical check.
+define_global_i32("pcc_gc_refcount_provenance_probe", 1)
+define_global_i32("pcc_gc_refcount_provenance_probe_reported", 0)
 define_global_i32("pcc_gc_metric_alloc", 0)
 define_global_i32("pcc_gc_metric_store", 0)
 define_global_i32("pcc_gc_metric_load", 0)

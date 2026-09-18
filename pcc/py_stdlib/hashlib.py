@@ -1,4 +1,4 @@
-"""Owned hashlib algorithms with native incremental SHA-256 under pcc.
+"""Owned hashlib algorithms with native incremental SHA-256 and MD5 under pcc.
 
 CPython uses the Python implementation; pcc uses the same native context
 operations for constructor data, update(), copy(), and digest().
@@ -11,6 +11,9 @@ from pcc.unsafe import null, ptr_is_null
 _native_sha256_new = extern("py_sha256_state_new", (), c_obj)
 _native_sha256_update = extern("py_sha256_state_update", (c_obj, c_obj), c_obj)
 _native_sha256_digest = extern("py_sha256_state_digest", (c_obj,), c_obj)
+_native_md5_new = extern("py_md5_state_new", (), c_obj)
+_native_md5_update = extern("py_md5_state_update", (c_obj, c_obj), c_obj)
+_native_md5_digest = extern("py_md5_state_digest", (c_obj,), c_obj)
 
 
 def _native_transform_available() -> bool:
@@ -320,6 +323,9 @@ class _MD5(_SHA1):
         self._h = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476]
         self._buf = b""
         self._counter = 0
+        self._native_state = b""
+        if _NATIVE_TRANSFORM_AVAILABLE:
+            self._native_state = _native_md5_new()
         if data:
             self.update(data)
 
@@ -328,7 +334,23 @@ class _MD5(_SHA1):
         other._h = list(self._h)
         other._buf = self._buf
         other._counter = self._counter
+        # Snapshots are immutable; update replaces only this instance's state.
+        other._native_state = self._native_state
         return other
+
+    def update(self, data):
+        data = _as_bytes(data)
+        if self._native_state:
+            self._native_state = _native_md5_update(self._native_state, data)
+            return None
+        self._counter += len(data)
+        data = self._buf + data
+        i = 0
+        while i + 64 <= len(data):
+            self._compress(data[i:i+64])
+            i += 64
+        self._buf = data[i:]
+        return None
 
     def _compress(self, block):
         words = []
@@ -359,6 +381,8 @@ class _MD5(_SHA1):
                    (self._h[3] + d) & 0xffffffff]
 
     def digest(self):
+        if self._native_state:
+            return _native_md5_digest(self._native_state)
         clone = self.copy()
         bit_length = (clone._counter * 8) & 0xffffffffffffffff
         padding = (55 - len(clone._buf)) % 64

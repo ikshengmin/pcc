@@ -175,6 +175,194 @@ PyObject *py_sha256_bytes_digest(PyObject *data) {
     sha256_final(&ctx, digest);
     return py_bytes_new((const char *)digest, 32);
 }
+/* MD5 (RFC 1321). Little-endian state words, byte count, and digest. */
+typedef struct {
+    uint32_t state[4];
+    uint64_t byte_count;
+    unsigned char block[64];
+    size_t block_len;
+} PccMd5;
+
+static uint32_t md5_rotl(uint32_t value, unsigned shift) {
+    return (value << shift) | (value >> (32U - shift));
+}
+
+static void md5_transform(PccMd5 *ctx, const unsigned char block[64]) {
+    static const uint32_t k[64] = {
+        0xd76aa478U, 0xe8c7b756U, 0x242070dbU, 0xc1bdceeeU,
+        0xf57c0fafU, 0x4787c62aU, 0xa8304613U, 0xfd469501U,
+        0x698098d8U, 0x8b44f7afU, 0xffff5bb1U, 0x895cd7beU,
+        0x6b901122U, 0xfd987193U, 0xa679438eU, 0x49b40821U,
+        0xf61e2562U, 0xc040b340U, 0x265e5a51U, 0xe9b6c7aaU,
+        0xd62f105dU, 0x02441453U, 0xd8a1e681U, 0xe7d3fbc8U,
+        0x21e1cde6U, 0xc33707d6U, 0xf4d50d87U, 0x455a14edU,
+        0xa9e3e905U, 0xfcefa3f8U, 0x676f02d9U, 0x8d2a4c8aU,
+        0xfffa3942U, 0x8771f681U, 0x6d9d6122U, 0xfde5380cU,
+        0xa4beea44U, 0x4bdecfa9U, 0xf6bb4b60U, 0xbebfbc70U,
+        0x289b7ec6U, 0xeaa127faU, 0xd4ef3085U, 0x04881d05U,
+        0xd9d4d039U, 0xe6db99e5U, 0x1fa27cf8U, 0xc4ac5665U,
+        0xf4292244U, 0x432aff97U, 0xab9423a7U, 0xfc93a039U,
+        0x655b59c3U, 0x8f0ccc92U, 0xffeff47dU, 0x85845dd1U,
+        0x6fa87e4fU, 0xfe2ce6e0U, 0xa3014314U, 0x4e0811a1U,
+        0xf7537e82U, 0xbd3af235U, 0x2ad7d2bbU, 0xeb86d391U
+    };
+    static const unsigned char shifts[64] = {
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+        5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+        4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+        6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
+    };
+    uint32_t m[16];
+    for (size_t i = 0; i < 16; i++) {
+        size_t j = i * 4;
+        m[i] = (uint32_t)block[j] | ((uint32_t)block[j + 1] << 8)
+            | ((uint32_t)block[j + 2] << 16) | ((uint32_t)block[j + 3] << 24);
+    }
+    uint32_t a = ctx->state[0], b = ctx->state[1];
+    uint32_t c = ctx->state[2], d = ctx->state[3];
+    for (size_t i = 0; i < 64; i++) {
+        uint32_t f;
+        unsigned g;
+        if (i < 16) {
+            f = (b & c) | ((~b) & d);
+            g = i;
+        } else if (i < 32) {
+            f = (d & b) | ((~d) & c);
+            g = (5U * i + 1U) & 15U;
+        } else if (i < 48) {
+            f = b ^ c ^ d;
+            g = (3U * i + 5U) & 15U;
+        } else {
+            f = c ^ (b | (~d));
+            g = (7U * i) & 15U;
+        }
+        uint32_t temp = d;
+        d = c;
+        c = b;
+        b = b + md5_rotl(a + f + k[i] + m[g], shifts[i]);
+        a = temp;
+    }
+    ctx->state[0] += a; ctx->state[1] += b;
+    ctx->state[2] += c; ctx->state[3] += d;
+}
+
+static void md5_init(PccMd5 *ctx) {
+    static const uint32_t initial[4] = {
+        0x67452301U, 0xefcdab89U, 0x98badcfeU, 0x10325476U
+    };
+    memcpy(ctx->state, initial, sizeof(initial));
+    ctx->byte_count = 0;
+    ctx->block_len = 0;
+    memset(ctx->block, 0, sizeof(ctx->block));
+}
+
+static void md5_update(PccMd5 *ctx, const unsigned char *data, size_t len) {
+    ctx->byte_count += (uint64_t)len;
+    while (len > 0) {
+        size_t room = 64 - ctx->block_len;
+        size_t take = len < room ? len : room;
+        memcpy(ctx->block + ctx->block_len, data, take);
+        ctx->block_len += take;
+        data += take;
+        len -= take;
+        if (ctx->block_len == 64) {
+            md5_transform(ctx, ctx->block);
+            ctx->block_len = 0;
+        }
+    }
+}
+
+static void md5_final(PccMd5 *ctx, unsigned char out[16]) {
+    ctx->block[ctx->block_len++] = 0x80;
+    if (ctx->block_len > 56) {
+        while (ctx->block_len < 64) ctx->block[ctx->block_len++] = 0;
+        md5_transform(ctx, ctx->block);
+        ctx->block_len = 0;
+    }
+    while (ctx->block_len < 56) ctx->block[ctx->block_len++] = 0;
+    for (size_t i = 0; i < 8; i++) {
+        ctx->block[56 + i] = (unsigned char)((ctx->byte_count << 3) >> (i * 8));
+    }
+    md5_transform(ctx, ctx->block);
+    for (size_t i = 0; i < 4; i++) {
+        out[i * 4] = (unsigned char)ctx->state[i];
+        out[i * 4 + 1] = (unsigned char)(ctx->state[i] >> 8);
+        out[i * 4 + 2] = (unsigned char)(ctx->state[i] >> 16);
+        out[i * 4 + 3] = (unsigned char)(ctx->state[i] >> 24);
+    }
+}
+
+/* Match the pcc-Python private MD5 context ABI without depending on C padding:
+ * four little-endian 64-bit words, byte count, buffered length, then the
+ * 64-byte partial block (112 bytes). Every returned snapshot is immutable
+ * and owned by its caller. */
+static PyObject *md5_state_pack(const PccMd5 *ctx) {
+    unsigned char state[112];
+    for (size_t i = 0; i < 4; i++) {
+        uint64_t word = ctx->state[i];
+        for (size_t j = 0; j < 8; j++) {
+            state[i * 8 + j] = (unsigned char)(word >> (j * 8));
+        }
+    }
+    for (size_t j = 0; j < 8; j++) {
+        state[32 + j] = (unsigned char)(ctx->byte_count >> (j * 8));
+        state[40 + j] = (unsigned char)((uint64_t)ctx->block_len >> (j * 8));
+    }
+    memcpy(state + 48, ctx->block, 64);
+    return py_bytes_new((const char *)state, 112);
+}
+
+static void md5_state_load(PccMd5 *ctx, PyObject *state_obj) {
+    const unsigned char *state =
+        (const unsigned char *)py_bytes_data_ptr(state_obj);
+    for (size_t i = 0; i < 4; i++) {
+        uint32_t word = 0;
+        for (size_t j = 0; j < 4; j++) {
+            word |= (uint32_t)state[i * 8 + j] << (j * 8);
+        }
+        ctx->state[i] = word;
+    }
+    uint64_t block_len = 0;
+    ctx->byte_count = 0;
+    for (size_t j = 0; j < 8; j++) {
+        ctx->byte_count |= (uint64_t)state[32 + j] << (j * 8);
+        block_len |= (uint64_t)state[40 + j] << (j * 8);
+    }
+    ctx->block_len = (size_t)block_len;
+    memcpy(ctx->block, state + 48, 64);
+}
+
+PyObject *py_md5_state_new(void) {
+    PccMd5 ctx;
+    md5_init(&ctx);
+    return md5_state_pack(&ctx);
+}
+
+PyObject *py_md5_state_update(PyObject *state, PyObject *data) {
+    PccMd5 ctx;
+    md5_state_load(&ctx, state);
+    md5_update(&ctx, (const unsigned char *)py_bytes_data_ptr(data),
+               (size_t)py_bytes_len(data));
+    return md5_state_pack(&ctx);
+}
+
+PyObject *py_md5_state_digest(PyObject *state) {
+    PccMd5 ctx;
+    unsigned char digest[16];
+    md5_state_load(&ctx, state);
+    md5_final(&ctx, digest);
+    return py_bytes_new((const char *)digest, 16);
+}
+
+PyObject *py_md5_bytes_digest(PyObject *data) {
+    PccMd5 ctx;
+    unsigned char digest[16];
+    md5_init(&ctx);
+    md5_update(&ctx, (const unsigned char *)py_bytes_data_ptr(data),
+               (size_t)py_bytes_len(data));
+    md5_final(&ctx, digest);
+    return py_bytes_new((const char *)digest, 16);
+}
 
 static PyObject *sha256_file_hex_bounded(PyObject *path_obj, int64_t max_bytes) {
     if (max_bytes <= 0) return py_str_new("", 0);

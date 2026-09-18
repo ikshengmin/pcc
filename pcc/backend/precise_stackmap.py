@@ -1126,6 +1126,35 @@ def validate_stack_map_payload(
         raise PreciseStackMapError("stack-map record layout changed during validation")
 
 
+def _skip_safepoint_records(
+    payload: bytes, cursor: int, record_count: int, total_locations: int,
+) -> tuple[int, int]:
+    """Check fixed record bounds/counts without decoding unused fields.
+
+    These structural scans need only the uint16 location count at byte 20
+    of the v2 <QIIIHHBBHI record. Full semantic validation still decodes all
+    fields before publication. Keep the struct path for other buffers (and
+    subclasses whose Python indexing need not expose their buffer bytes).
+    """
+    byte_indexing = type(payload) is bytes or type(payload) is bytearray
+    record_size = _RECORD.size
+    payload_size = len(payload)
+    for _ in range(record_count):
+        end = cursor + record_size
+        if end > payload_size:
+            raise PreciseStackMapError("truncated safepoint record")
+        if byte_indexing:
+            location_count = payload[cursor + 20] | (payload[cursor + 21] << 8)
+        else:
+            fields, _end = _take(payload, cursor, _RECORD, "safepoint record")
+            location_count = fields[4]
+        total_locations += location_count
+        if total_locations > MAX_LOCATIONS:
+            raise PreciseStackMapError("too many stack-map locations")
+        cursor = end
+    return cursor, total_locations
+
+
 def function_address_offsets(payload: bytes) -> tuple[int, ...]:
     """Return byte offsets which must carry function-symbol relocations.
 
@@ -1165,17 +1194,9 @@ def function_address_offsets(payload: bytes) -> tuple[int, ...]:
                 + " exceeds "
                 + str(MAX_RECORDS)
             )
-        for _ in range(record_count):
-            record_fields, cursor = _take(
-                payload, cursor, _RECORD, "safepoint record"
-            )
-            _rid, _io, _eo, _cid, location_count, _reserved, _kind, _rflags, _rs, _rl = (
-                record_fields
-            )
-            total_locations += location_count
-            if total_locations > MAX_LOCATIONS:
-                raise PreciseStackMapError("too many stack-map locations")
-            # v2: locations live in the shared table after every function.
+        cursor, total_locations = _skip_safepoint_records(
+            payload, cursor, record_count, total_locations,
+        )
     if cursor + table_count * _LOCATION.size != len(payload):
         raise PreciseStackMapError("stack-map size disagrees with decoded records")
     return tuple(offsets)
@@ -1217,16 +1238,9 @@ def _scan_stack_map_payload(payload: bytes):
                 + " exceeds "
                 + str(MAX_RECORDS)
             )
-        for _ in range(record_count):
-            record_fields, cursor = _take(
-                payload, cursor, _RECORD, "safepoint record"
-            )
-            _rid, _io, _eo, _cid, location_count, _res, _k, _f, _rs, _rl = (
-                record_fields
-            )
-            total_locations += location_count
-            if total_locations > MAX_LOCATIONS:
-                raise PreciseStackMapError("too many stack-map locations")
+        cursor, total_locations = _skip_safepoint_records(
+            payload, cursor, record_count, total_locations,
+        )
         functions.append((function_id, fn_start, cursor))
     table_start = cursor
     if table_start + table_count * _LOCATION.size != len(payload):

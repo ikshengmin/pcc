@@ -517,47 +517,65 @@ def _validate_relocation(
     known: dict[str, int],
     section_by_name: dict[tuple[str, str], Section],
 ) -> None:
-    for field_name, value in (
-        ("offset", r.offset),
-        ("type", r.type),
-        ("length", r.length),
-        ("addend", r.addend),
-    ):
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise MachOEmitError(
-                f"relocation {field_name} must be an integer, got {value!r}"
-            )
-    if (
-        r.target_offset is not None
-        and (
-            not isinstance(r.target_offset, int)
-            or isinstance(r.target_offset, bool)
+    # This runs once per relocation, and a final link validates every
+    # relocation of every input twice: once on the caller's sections and
+    # again on the rows regenerated after conversion (see
+    # ``native_object._validate_native_object``).  At 14.5M relocations for a
+    # stage1 link the old shape -- a 4-tuple of (name, value) pairs built per
+    # call, a paired ``isinstance(v, int) and not isinstance(v, bool)`` per
+    # field, and a generator for the section names -- was ~150M isinstance
+    # calls and about 40% of link preparation.
+    #
+    # ``type(x) is int`` is the same test: bool is a subclass of int, so an
+    # exact type check rejects it without the second call.  Every check,
+    # message and error type below is unchanged.
+    if type(r.offset) is not int:
+        raise MachOEmitError(
+            f"relocation offset must be an integer, got {r.offset!r}"
         )
-    ):
+    if type(r.type) is not int:
+        raise MachOEmitError(
+            f"relocation type must be an integer, got {r.type!r}"
+        )
+    if type(r.length) is not int:
+        raise MachOEmitError(
+            f"relocation length must be an integer, got {r.length!r}"
+        )
+    if type(r.addend) is not int:
+        raise MachOEmitError(
+            f"relocation addend must be an integer, got {r.addend!r}"
+        )
+    if r.target_offset is not None and type(r.target_offset) is not int:
         raise MachOEmitError(
             "relocation target_offset must be an integer or None, got "
             f"{r.target_offset!r}"
         )
-    if not isinstance(r.pcrel, bool):
+    if type(r.pcrel) is not bool:
         raise MachOEmitError(
             f"relocation pcrel must be bool, got {r.pcrel!r}"
         )
-    if not isinstance(r.symbol, str):
+    if type(r.symbol) is not str:
         raise MachOEmitError(
             f"relocation symbol must be a string, got {r.symbol!r}"
         )
-    if r.minuend is not None and not isinstance(r.minuend, str):
+    if r.minuend is not None and type(r.minuend) is not str:
         raise MachOEmitError(
             f"SUBTRACTOR minuend must be a string, got {r.minuend!r}"
         )
-    if r.section is not None:
-        if (
-            not isinstance(r.section, tuple)
-            or len(r.section) != 2
-            or not all(
-                isinstance(name, str) and bool(name) and name.isascii()
-                for name in r.section
+    section_target = r.section
+    if section_target is not None:
+        if type(section_target) is not tuple or len(section_target) != 2:
+            raise MachOEmitError(
+                f"bad section-target name {r.section!r}"
             )
+        seg_name, sect_name = section_target
+        if (
+            type(seg_name) is not str
+            or not seg_name
+            or not seg_name.isascii()
+            or type(sect_name) is not str
+            or not sect_name
+            or not sect_name.isascii()
         ):
             raise MachOEmitError(
                 f"bad section-target name {r.section!r}"

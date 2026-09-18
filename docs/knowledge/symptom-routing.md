@@ -7,7 +7,7 @@ Search for the error text or symbol after locating its current code path.
 Read the matching experiment and later corrections, expanding as needed.
 Titles, snippets and status are historical locators, not current diagnosis.
 
-582 investigations.
+587 investigations.
 
 - [`2**52` does not round-trip through pcc1's float formatting or parsing](../investigations/pcc1-float-repr-strtod-17-digit-defect.md) — **Root cause identified, minimised to a two-line probe, bisected per stage, and**
   - `stage2 -> stage3` · `verify: cmp pcc2 pcc3` · `0x...004` · `0x...000` · `1000.0` · `123456789012345.0`
@@ -551,6 +551,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `pcc1 -> pcc2 -> pcc3` · `Parser._parse_*` · `pcc/py_runtime/py/py_gc_backend.py` · `_init_config()` · `pcc_gc_try_minor_alloc` · `_promote_young_if_known`
 - [Investigation: GC3 cpy-handle oldification loses foreign ownership](../investigations/gc3-cpy-handle-oldify-foreign-ownership.md) — **active**
   - `PY_TYPE_CPY_HANDLE` · `pcc_gc_relocate_copy_supported_tag` · `pcc_gc_generational_oldify_copy` · `py_cpy_handle.c` · `py_cpy_handle_release_fn` · `py_dealloc_cpy_handle`
+- [Investigation: GC3 in-place promotion leaves an old owner on the young list](../investigations/gc3-in-place-promotion-young-list.md) — **Resolved locally on 2026-09-16: the C mirror now matches the existing**
+  - `test_class_lookup_reloads_relocated_method_and_class` · `pcc_gc_promote_young_object` · `young_next` · `young_prev` · `freestanding_gc_generational_promotion.py` · `/private/tmp/pcc-gc3-round4-knjyia_r`
 - [Investigation: GC3 million-vthread release is quadratic](../investigations/gc-backend3-vthread-million-release-quadratic.md) — **resolved**
   - `py_decref -> pcc_gc_free_object_memory` · `tests/benchmarks/vthread/test_vthread_real_runtime.py` · `PY_FLAG_GC_MALLOC_ALLOC` · `pcc_gc_free_object_memory` · `PY_FLAG_GC_MINOR_ARENA` · `pcc_gc_minor_block_containing_unlocked()`
 - [Investigation: gc3/gc4 stage2 ~10-14x slower than gc0 — per-frame index-entry malloc](../investigations/gc-frame-index-entry-pool-perf.md) — **active — entry-pool/open-addressing slices are bootstrap-verified from prior turns; the 2026-06-15 working-tree slice restores the full five-GC bootstrap matrix**
@@ -730,6 +732,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
 - [Investigation: native re.sub loses result ownership in raw-scaffold code](../investigations/native-re-sub-owned-result-raw-scaffold.md) — **active**
 - [Investigation: native self-backend emission from pcc1 without host Python](../investigations/s-p0-native-self-emitter-no-host.md) — **resolved 2026-07-13**
   - `PCC_HOST_PYTHON=/usr/bin/false` · `pipeline.py` · `pcc.backend.*` · `py_cpy_*` · `--backend self --python-libpython=off` · `list.sort`
+- [Investigation: native stack-map structural scans decode unused record fields](../investigations/native-stackmap-structural-scan-cost.md) — **Resolved locally on 2026-09-16. The optimization is retained after correctness**
+  - `function_address_offsets` · `_scan_stack_map_payload` · `pcc/backend/precise_stackmap.py` · `profile/receipt.json` · `profile/environment.json` · `profile/cpu.folded`
 - [Investigation: native subprocess failures lose CalledProcessError fields](../investigations/native-subprocess-called-process-error-returncode.md) — **resolved**
   - `subprocess.run(..., check=True)` · `subprocess.check_call(...)` · `pcc/cli_bootstrap.py` · `subprocess.CalledProcessError` · `exc.returncode` · `AttributeError: returncode`
 - [Investigation: native subprocess provider omitted from shallow multi-file closure](../investigations/native-subprocess-provider-omitted-from-shallow-multi-file-closure.md) — **resolved**
@@ -912,6 +916,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `_multiarray_umath` · `pcc.package build-exec --from-compile-commands` · `build.ninja` · `LINK_ARGS` · `compile_commands.json` · `--meson-target <Ninja output>`
 - [Investigation: resurrection test class attributes lower through libpython](../investigations/resurrection-class-attr-libpython-fallback.md) — **resolved**
   - `tests/test_gc_resurrection.py::test_resurrection_only_happens_once_per_object` · `py_cpy_*` · `Lazarus.resurrected = Lazarus.resurrected + 1` · `Lazarus.stash.append(self)` · `Lazarus.stash.clear()` · `to the`
+- [Investigation: retired raw span cache hides an object at a reused address](../investigations/allocator-span-cache-raw-address-reuse.md) — **Resolved locally on 2026-09-16: deterministic regression and scoped native**
+  - `Relocation.type` · `_granule_retire_slab_locked` · `PCC_RUNTIME_ARCHIVE` · `granule=-1 managed=0` · `granule=1 managed=1` · `span-red.stdout`
 - [Investigation: return root does not dominate a parking finally continuation](../investigations/vthread-return-root-after-parking-finally.md) — **active**
   - `_proxy_exchange_attempt` · `gen.return.root.28.21` · `vthread.delegate.completed.37`
 - [Investigation: rollback rejects a broken promoted compiler](../investigations/pcc1-rollback-damaged-active-toolchain.md) — **resolved**
@@ -920,6 +926,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `pcc --backend self` · `pcc --backend llvm` · `475716 17984 13476` · `pcc_gc_load_borrowed_ptr` · `pcc_gc_load_ptr` · `store_root_take`
 - [Investigation: runtime-oracle pcc archive rejects host `stdatomic.h` expansion](../investigations/runtime-oracle-pcc-archive-stdatomic-preprocess.md) — **resolved**
   - `stdatomic.h` · `tests/python/test_runtime_oracle_diff.py` · `libpy_runtime_pcc.a` · `python-pcc-built-archive-weak-symbol-duplicates.md` · `src/py_re_engine.c` · `Error: <input>:1011: before 'LBRACE' ('{')`
+- [Investigation: scaffold block creation duplicates C control-flow labels](../investigations/scaffold-basic-block-name-collisions.md) — **Resolved locally on 2026-09-16. Native emitted execution is verified; the**
+  - `repeatedly defined` · `, and` · `scaffold_Function_append_basic_block` · `pcc/llvm_capi/ir.py` · `native.ll` · `host.ll`
 - [Investigation: scaffold tests assert OFF-mode `py_cpy_*` behavior that pcc closed](../investigations/python-scaffold-off-mode-historical-py_cpy-assertions-stale.md) — **resolved**
   - `py_cpy_*` · `assert n_on < n_off` · `off=0 on=0` · `assert n_off > 0` · `n_off=0` · `tests/python/test_ir_scaffold_load.py::test_off_mode_still_uses_py_cpy_for_load`
 - [Investigation: scheduler queue entries should own GC root slots](../investigations/gc-scheduler-root-queue-api.md) — **resolved**
@@ -981,6 +989,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `__lt__` · `over a custom-` · `sorted([Ver(3), Ver(1), Ver(2)])` · `[3, 1, 2]` · `[1, 2, 3]` · `min(...).v`
 - [Investigation: stack-map plan per-call label scans make huge-module emit quadratic](../investigations/self-backend-stackmap-label-scan-quadratic-emit.md) — **resolved locally 2026-08-15**
   - `_l1_codegen_static_methods` · `_PyEval_EvalFrameDefault` · `_platform_memcmp` · `FunctionStackMapPlan.instruction_suffix_lines(block, index)` · `instruction_suffix_labels` · `self_backend_emit.emit_function_blocks`
+- [Investigation: stage1 lazy-import discovery spawns host probes that execute the pcc package](../investigations/stage1-lazy-import-host-probe-spawn.md) — **Resolved locally on 2026-09-17. Red→green regression landed; the 420-second**
+  - `_expand_recursive_stdlib` · `_host_find_spec_origin` · `importlib.util.find_spec` · `pcc/__init__.py` · `roadmap_deepwire._install_pipeline_profile` · `subprocess.check_output`
 - [Investigation: Stage1 receipt validator rejects current producer metric labels](../investigations/stage1-receipt-metric-contract-rejected.md) — **resolved**
   - `test_build_receipt_validates_current_producer_metric_contract[producer]`
 - [Investigation: stage1 self-backend ir-scaffold segfault](../investigations/stage1-self-backend-ir-scaffold-segfault.md) — **active**

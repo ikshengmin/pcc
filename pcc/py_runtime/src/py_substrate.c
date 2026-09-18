@@ -21,22 +21,6 @@ int32_t py_class_attr_cache_epoch = 0;
 /* Classes that ever had __del__ installed; never decremented.  Mirrors the
  * pcc_class_del_defined_count global in the py_class.py port. */
 int32_t pcc_class_del_defined_count = 0;
-PyObject *py_inst_field_cache_cls0 = NULL;
-PyObject *py_inst_field_cache_cls1 = NULL;
-PyObject *py_inst_field_cache_cls2 = NULL;
-PyObject *py_inst_field_cache_cls3 = NULL;
-const char *py_inst_field_cache_name0 = NULL;
-const char *py_inst_field_cache_name1 = NULL;
-const char *py_inst_field_cache_name2 = NULL;
-const char *py_inst_field_cache_name3 = NULL;
-int32_t py_inst_field_cache_idx0 = -1;
-int32_t py_inst_field_cache_idx1 = -1;
-int32_t py_inst_field_cache_idx2 = -1;
-int32_t py_inst_field_cache_idx3 = -1;
-int32_t py_inst_field_cache_epoch0 = -1;
-int32_t py_inst_field_cache_epoch1 = -1;
-int32_t py_inst_field_cache_epoch2 = -1;
-int32_t py_inst_field_cache_epoch3 = -1;
 
 void *py_mem_alloc(size_t bytes) {
     return malloc(bytes);

@@ -1506,9 +1506,7 @@ def _expand_recursive_stdlib(
             source,
             include_function_bodies=True,
         ):
-            if lazy_name in import_names:
-                continue
-            lazy_provider = _locate_stdlib_module_source(lazy_name)
+            lazy_provider = _locate_native_stdlib_module_source(lazy_name)
             if (
                 lazy_provider is not None
                 and _native_stdlib_root_for_path(lazy_provider) is not None

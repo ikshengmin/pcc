@@ -2985,6 +2985,13 @@ def py_virtual_thread_carrier_failure_count() -> int:
 def py_virtual_thread_run_once() -> int:
     py_virtual_thread_poll_timers()
     py_virtual_thread_poll_io(0)
+    return _run_ready_step()
+
+
+def _run_ready_step() -> int:
+    # One ready virtual thread, with no timer or fd poll of its own.  The
+    # caller owns how often the schedule is observed; ``run_once`` keeps the
+    # published per-step polling, while the idle driver polls once per batch.
     ready = py_virtual_thread_poll_ready()
     if ptr_is_null(ready):
         return 0
@@ -3036,10 +3043,17 @@ def py_virtual_thread_run_until_idle(max_steps: int) -> int:
     ran = 0
     steps = 0
     while steps < max_steps:
-        step = py_virtual_thread_run_once()
-        if step < 0:
-            return -1
-        if step == 0:
+        # Observe timers and fds once per batch, then drain the threads that
+        # were already ready at that observation.  Polling per resumed thread
+        # cost three scheduler lock round-trips and a clock read each, which a
+        # ready-only workload never amortized; a C=100 profile put this
+        # function at 44% of self samples.  The batch is the count sampled
+        # before the drain, so a thread re-queued while draining waits for the
+        # next observation and cannot starve the timers.
+        py_virtual_thread_poll_timers()
+        py_virtual_thread_poll_io(0)
+        batch = py_virtual_thread_ready_count()
+        if batch <= 0:
             # Park the carrier in the existing kqueue/epoll owner when only
             # fd-blocked sequential work remains.  This is not a sleep scan:
             # the waitset owns the interrupt wake and the earliest deadline.
@@ -3048,8 +3062,15 @@ def py_virtual_thread_run_until_idle(max_steps: int) -> int:
             if py_virtual_thread_poll_io(-1) < 0:
                 return -1
             continue
-        ran = ran + step
-        steps = steps + 1
+        while batch > 0 and steps < max_steps:
+            step = _run_ready_step()
+            if step < 0:
+                return -1
+            if step == 0:
+                break
+            ran = ran + step
+            steps = steps + 1
+            batch = batch - 1
     return ran
 
 

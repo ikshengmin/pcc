@@ -448,6 +448,10 @@ def _runtime_signatures_part_7():
     "py_sha256_state_new": (_PYOBJ, [], False),
     "py_sha256_state_update": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_sha256_state_digest": (_PYOBJ, [_PYOBJ], False),
+    "py_md5_bytes_digest": (_PYOBJ, [_PYOBJ], False),
+    "py_md5_state_new": (_PYOBJ, [], False),
+    "py_md5_state_update": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    "py_md5_state_digest": (_PYOBJ, [_PYOBJ], False),
     "py_i64_buffer_new": (_PYOBJ, [_I64], False),
     "py_i64_buffer_set_item": (_I64, [_PYOBJ, _I64, _PYOBJ], False),
     "py_i64_buffer_get_item": (_PYOBJ, [_PYOBJ, _I64], False),
@@ -1380,6 +1384,11 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_young_promotions',
         'pcc_gc_backend4_zpage_node_free_count',
         'pcc_gc_backend_selected',
+        # PCC_GC_REFCOUNT_PROVENANCE_PROBE mode and its first-miss report flag
+        # (py_runtime.h:117).  Written by pcc_gc_config_ensure and the
+        # refcount-prepare mirrors, read by pcc_gc_telemetry.
+        'pcc_gc_refcount_provenance_probe',
+        'pcc_gc_refcount_provenance_probe_reported',
         'pcc_gc_cms_mutator_assists',
         'pcc_gc_cms_queue_pushes',
         'pcc_gc_cms_wb_flushes',

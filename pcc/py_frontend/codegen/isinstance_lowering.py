@@ -511,6 +511,28 @@ def emit_isinstance_call_impl(
     )
     if protocol_check is not None:
         return protocol_check
+    if (
+        ir_symbol is None
+        and isinstance(class_arg, Name)
+        and cls_ident in host.class_lowering.classes
+        and (
+            class_arg.ident in host.env
+            or class_arg.ident in getattr(host, "_module_globals", {})
+        )
+    ):
+        # A module/local binding shadows the builtin tag tables: a bare
+        # ``NoneType`` name imported from a user module (e.g. the py_ast
+        # descriptor class) must dispatch to the imported class object,
+        # while the syntactic ``type(None)`` form (a Call, not a Name)
+        # keeps the builtin PY_TYPE_NONE check below.
+        obj_val = host._emit_as_object(expr.args[0])
+        return host.class_lowering.emit_isinstance(obj_val, cls_ident)
+    # These two were computed-and-discarded when the shadowing guard above
+    # landed, which left every builtin-type check falling through to the
+    # class-table path and answering False: `isinstance("x", str)`,
+    # `isinstance(7, int)`, `isinstance(b"", bytes)` and `isinstance(str, type)`
+    # all returned False, and `struct.unpack_from` raised
+    # `TypeError: Struct() argument 1 must be a str` on its own format literal.
     ct = host._compile_time_isinstance(expr.args[0], cls_ident)
     if ct is not None:
         return ct

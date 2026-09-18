@@ -206,6 +206,14 @@ def pcc_gc_config_ensure() -> i64:
         pcc_platform_getenv(cstr("PCC_GC_MINOR_ALLOC_MAX")),
         16, 16, 1073741824,
     )
+    # -1 (unset) resolves per backend: the relocating collectors (3, 4) keep
+    # the probe because a refcount can legitimately reach a pre-move address
+    # there; the non-moving collectors trust the caller.
+    refcount_probe: i64 = pcc_gc_config_parse_env_i32(
+        pcc_platform_getenv(cstr("PCC_GC_REFCOUNT_PROVENANCE_PROBE")), -1, -1, 3
+    )
+    if refcount_probe < 0:
+        refcount_probe = 1 if (backend == 3 or backend == 4) else 0
     store_i32(global_addr("pcc_gc_backend_selected"), 0, backend)
     if backend == 3 or backend == 4:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1)
@@ -216,6 +224,7 @@ def pcc_gc_config_ensure() -> i64:
     store_i32(global_addr("pcc_gc_debt_threshold_override"), 0, threshold)
     store_i32(global_addr("pcc_gc_minor_heap_size"), 0, minor_heap_size)
     store_i32(global_addr("pcc_gc_minor_alloc_max"), 0, minor_alloc_max)
+    store_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0, refcount_probe)
     if backend != 0:
         store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
     pcc_gc_maybe_start_cms_worker()

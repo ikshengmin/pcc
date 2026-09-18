@@ -79,6 +79,16 @@ int32_t pcc_gc_backend4_remap_active = 0;
 /* Not static: py_obj.c's refcount prepare paths are the only writers, and the
  * pcc-Python mirror reaches the same symbol through global_addr(). */
 int64_t pcc_gc_unmanaged_refcount_ops = 0;
+/* Whether the refcount hot path asks pcc_gc_pointer_is_managed before it
+ * touches a header.  0 trusts the caller (default on the non-moving
+ * collectors 0-2), 1 probes and counts misses in
+ * pcc_gc_unmanaged_refcount_ops (default on the relocating collectors 3-4),
+ * 2 probes, counts and reports the first miss on stderr, 3 also aborts on
+ * that first miss so the crash report names the site.  Starts at 1 so a refcount that runs
+ * before pcc_gc_init_config has read PCC_GC_REFCOUNT_PROVENANCE_PROBE keeps
+ * the historical check. */
+int32_t pcc_gc_refcount_provenance_probe = 1;
+int32_t pcc_gc_refcount_provenance_probe_reported = 0;
 int64_t pcc_gc_backend4_remap_epoch = 0;
 PyObject *pcc_gc_backend4_remap_pending_obj = NULL;
 static int32_t pcc_gc_config_initialized = 0;
@@ -1172,6 +1182,16 @@ static void pcc_gc_init_config(void) {
         16,
         1LL << 30
     );
+    /* -1 (unset) resolves per backend: the relocating collectors keep the
+     * probe because a refcount can legitimately reach a pre-move address
+     * there; the non-moving collectors trust the caller. */
+    int64_t refcount_probe = pcc_gc_parse_env_i64(
+        "PCC_GC_REFCOUNT_PROVENANCE_PROBE", -1, -1, 3
+    );
+    if (refcount_probe < 0) {
+        refcount_probe = pcc_gc_backend_kind_uses_forwarding(backend) ? 1 : 0;
+    }
+    pcc_gc_refcount_provenance_probe = (int32_t)refcount_probe;
     if (pcc_gc_selected_backend != PCC_GC_KIND_REFCOUNT_CYCLE) {
         pcc_gc_cycle_requested_store(1);
     }
@@ -9802,6 +9822,11 @@ int64_t pcc_gc_telemetry(int64_t metric) {
             &pcc_gc_unmanaged_refcount_ops, __ATOMIC_RELAXED
         );
     }
+    if (metric == PCC_GC_COUNTER_REFCOUNT_PROVENANCE_PROBE) {
+        return __atomic_load_n(
+            &pcc_gc_refcount_provenance_probe, __ATOMIC_RELAXED
+        );
+    }
     if (metric == PCC_GC_COUNTER_GENZGC_STORE_BUFFER_CROSS_THREAD_MEDIUM_FLUSHED_ENTRIES) {
         return pcc_gc_backend4_store_buffer_cross_thread_medium_flushed_entries();
     }
@@ -11020,6 +11045,13 @@ static void pcc_gc_promote_young_object(PyObject *o) {
             pcc_gc_selected_backend == PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR
             && (py_header_flags_load(h) & PY_FLAG_GC_MINOR_ARENA) != 0
         ) {
+            /* In-place promotion must release the young-list links before
+             * they can be reused by the old-owner promotion worklist. A
+             * pinned owner left on the young list cannot enqueue its later
+             * old-to-young edges. Match the pcc-Python promotion path. */
+            pcc_gc_backend3_young_unlink(
+                (PccGcObjectNode *)pcc_gc_object_index_find(o)
+            );
             py_header_flags_update(
                 h,
                 PY_FLAG_GC_YOUNG | PY_FLAG_GC_REMEMBERED,

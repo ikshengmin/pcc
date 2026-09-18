@@ -11,6 +11,7 @@ produce IR that neither would have produced alone.
 from pcc.native_ir.mem2reg import mem2reg_text
 from pcc.native_ir.instsimplify import simplify_module_text
 from pcc.native_ir.simplifycfg import simplify_cfg_text
+from pcc.native_ir.foldselect import fold_two_entry_phi_text
 from pcc.native_ir.instcombine import instcombine_text
 from pcc.native_ir.dce import dce_module_text
 from pcc.native_ir.inline import inline_module
@@ -21,7 +22,10 @@ from .compiled_default_passes import (
 )
 
 
-OWNED_PASS_NAMES = ("mem2reg", "sroa", "instsimplify", "simplifycfg", "instcombine", "dce", "inline", "inline-defined")
+OWNED_PASS_NAMES = (
+    "mem2reg", "sroa", "instsimplify", "simplifycfg", "fold-two-entry-phi",
+    "instcombine", "dce", "inline", "inline-defined",
+)
 
 
 def owns_passes(names: list[str]) -> bool:
@@ -81,6 +85,8 @@ def run_owned_passes(text: str, names: list[str], strict_no_libpython: bool) -> 
                 current, changed = simplify_module_text(current)
             elif name == "simplifycfg":
                 current, changed = simplify_cfg_text(current)
+            elif name == "fold-two-entry-phi":
+                current, changed = fold_two_entry_phi_text(current)
             elif name == "instcombine":
                 current, changed = instcombine_text(current)
             elif name == "dce":

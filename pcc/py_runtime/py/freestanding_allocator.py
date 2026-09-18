@@ -80,9 +80,11 @@ define_global_i64("pcc_allocator_mapped", 0)
 # answers "yes".  See docs/investigations/vthread-asyncio-throughput-gap.md.
 #
 # Why caching a span pointer is safe here, with no key array and no 16-byte
-# atomic: a key's span binding is permanent (there is no unregister/unbind path
-# in this file) and span arenas are immortal allocator metadata, so an entry
-# can never point at freed memory.  A stale or wrong entry is rejected by
+# atomic: only object-family spans enter this cache. Their bindings are
+# permanent and span arenas are immortal allocator metadata. Raw spans can
+# be retired by trim and their addresses reused by object slabs; caching a
+# raw span would then hide a live object behind stale kind-2 metadata.
+# A stale or wrong object-span entry is rejected by
 # checking ptr against the SPAN'S OWN base, and every other property -- kind,
 # stride, count, base alignment, exact cell alignment, the LIVE lifecycle word
 # -- is still verified downstream in its original order.  An 8-byte aligned
@@ -1948,8 +1950,11 @@ def _granule_object_start_uncached(ptr, object_bits: i64, object_slot: i64) -> i
         )
         if span_bits == 0:
             return -1
-        if load_i32(global_addr("pcc_allocator_granule_span_cache_fill"), 0) != 0:
-            store_i64(cache, cache_slot, span_bits)
+        # Only object bindings survive trim/address reuse. A raw descriptor
+        # remains allocated after retirement but no longer owns its address.
+        if load_i64(ptr_add(null(), span_bits), 0) == 1:
+            if load_i32(global_addr("pcc_allocator_granule_span_cache_fill"), 0) != 0:
+                store_i64(cache, cache_slot, span_bits)
     span = ptr_add(null(), span_bits)
     if load_i64(span, 0) != 1:
         return -1

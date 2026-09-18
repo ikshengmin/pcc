@@ -1,12 +1,4 @@
-"""``finally`` must run when no ``except`` handler matches, no-libpython.
-
-The try/except/finally lowering branched the unmatched-exception ("propagate")
-path straight to the outer error block WITHOUT executing the ``finally`` body —
-so a ``finally`` next to a non-matching ``except`` was silently skipped before
-the exception propagated (Python guarantees ``finally`` always runs). Fix emits
-``finally_body`` on the propagate path too (`exception_lowering.py`). The
-bare ``try/finally`` (no handlers) path was already correct.
-"""
+"""Native finally execution and exception preservation across cleanup."""
 from __future__ import annotations
 
 import subprocess
@@ -71,3 +63,73 @@ def test_finally_runs_on_unmatched_handler_matches_cpython(tmp_path, monkeypatch
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == cpython
+
+
+def test_finally_preserves_exception_across_cleanup(tmp_path, monkeypatch):
+    from pcc.py_frontend.pipeline import compile_python
+
+    src = tmp_path / "cleanup.py"
+    exe = tmp_path / "cleanup.out"
+    src.write_text(textwrap.dedent("""
+        import gc
+
+        def cleanup() -> None:
+            try:
+                raise AttributeError("temporary")
+            except AttributeError:
+                pass
+            gc.collect()
+
+        def fail(mode: int) -> int:
+            try:
+                raise ValueError("original")
+            except BaseException:
+                raise
+            finally:
+                cleanup()
+                if mode == 1:
+                    raise
+                if mode == 2:
+                    raise TypeError("replacement")
+                if mode == 3:
+                    return 42
+
+        def nested() -> None:
+            try:
+                raise KeyError("outer")
+            finally:
+                try:
+                    fail(0)
+                except ValueError:
+                    cleanup()
+
+        def main() -> None:
+            for mode in range(4):
+                try:
+                    print("returned", fail(mode))
+                except ValueError as exc:
+                    print("original", str(exc))
+                except TypeError as exc:
+                    print("replacement", str(exc), str(exc.__context__))
+            try:
+                nested()
+            except KeyError:
+                print("outer preserved")
+
+        main()
+        """).lstrip(), encoding="utf-8")
+    expected = subprocess.run(
+        [sys.executable, str(src)], capture_output=True, text=True, timeout=30,
+    )
+    assert expected.returncode == 0, expected.stderr
+    compile_python(
+        str(src), str(exe),
+        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+    )
+    for backend in range(5):
+        monkeypatch.setenv("PCC_GC_BACKEND", str(backend))
+        result = subprocess.run(
+            [str(exe)], capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, (backend, result.stderr)
+        assert result.stdout == expected.stdout, (backend, result.stdout)

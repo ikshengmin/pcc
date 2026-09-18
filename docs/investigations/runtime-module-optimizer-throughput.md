@@ -1389,3 +1389,216 @@ The user requested a pause after this regression run. No further builds or
 benchmarks were started. The dated handoff in the existing evidence directory
 is `HANDOFF-2026-09-14-paused.md`; all failed gates and pending native checks
 remain explicit. No commit or installation promotion occurred.
+
+
+## Update — 2026-09-19 Phase B: the refcount provenance probe becomes a per-backend GC configuration
+
+### What changed
+
+`py_incref`/`py_decref` asked `pcc_gc_pointer_is_managed` (four-level radix
+walk, then the graph lock on a miss) before touching any header. Both mirrors
+now read one i32, `pcc_gc_refcount_provenance_probe`, configured once in
+`pcc_gc_config_ensure` / `pcc_gc_init_config` from
+`PCC_GC_REFCOUNT_PROVENANCE_PROBE`:
+
+```
+0   trust the caller; no probe on the hot path
+1   probe, count misses in PCC_GC_COUNTER_UNMANAGED_REFCOUNT_OPS (116)
+2   probe, count, and report the first miss once on stderr
+    ("pcc runtime: refcount operation on an unmanaged pointer ...")
+unset  0 on the non-moving collectors (GC0, GC1, GC2)
+       1 on the relocating collectors (GC3, GC4)
+```
+
+Sites: `py_obj.py` (four: incref/decref prepare for GC1–4, the GC0 inline
+paths of `py_incref`/`py_decref`), `py_obj.c` (two: both prepares). The
+GC-internal `_gc_relocation_candidate` / relocation-candidate query still
+probes unconditionally — it is not a refcount operation. New telemetry metric
+117 returns the resolved mode. The two new globals are registered in
+`FREESTANDING_GC_I32_GLOBALS`; the global starts at 1 so a refcount that runs
+before configuration keeps the historical check.
+
+### Why the default is per backend
+
+The first cut defaulted to 0 everywhere. The 5-GC production contract then
+failed `test_valuebox_pointer_payload_survives_gc[4]` with `rc=-6
+[BAD_INCREF]` — under the relocating collector a refcount legitimately reaches
+a pre-move address, and the probe is what turns that into a counted no-op
+instead of a header read. Forcing the probe on (`=1`) made that test pass
+again, so the relocating collectors keep it by default and the knob resolves
+per backend. Everything that was DENIED on 2026-09-06 was measured on GC0–2;
+this preserves GC3/4 semantics unchanged.
+
+### Measurement (gateway benchmark, C=100, GC0, Stage1 building concurrently)
+
+Same binary, env only (`PCC_GC_REFCOUNT_PROVENANCE_PROBE=1` vs unset), ABBA ×3:
+
+```
+                        instructions      cycles      QPS (median of 5)
+baseline restore.bin       11105.8M      2209.3M      30321
+probe on   (=1)            11218.3M      2218.6M      29964   (+1.0% / +0.4% vs baseline: the mode read)
+probe off  (default GC0)    8773.9M      1786.3M      37408   (-21.0% / -19.1% vs baseline)
+same binary off vs on          -21.8%       -19.5%             +24.8%
+```
+
+Mode 2 on the gateway benchmark (100 tasks × 200 requests) reports nothing:
+the ratchet holds on this workload with the probe off.
+
+### Gates
+
+```
+tests/python/test_refcount_provenance_probe.py            15 passed
+   (both mirrors pinned to each other; compiled fake-object program under
+    every backend and every mode; clamp semantics)
+test_freestanding_gc_public_collection.py                 env list + RAW_GLOBAL_IMPORTS updated
+bottom-line gates (host/cc absent)                        C 'hello 15 36' rc=42; Python '135' rc=0; libSystem only
+GC0–4 production contract (scripts/run_gc_production_contract.sh)
+   per backend: 174 passed, 2 failed, 5 errors — identical set on every backend,
+   identical with the probe forced on, therefore not Phase B:
+     ERROR  test_extension_module_state_roots[0..4]   self-link mode does not support
+                                                      native-extension export anchors (recorded)
+     FAILED test_valueclass_pointer_payload...[4]     "relocated" assertion, fails with probe on too
+     FAILED test_vthread_io_waitset_runtime[auto-2]   GC2 mode=auto rc=12, fails with probe on too
+```
+
+### Stage1 / pcc1 on this tree
+
+Stage1 had been failing since before this update. Two frontend gaps in
+`pcc/native_ir/inline.py` blocked it:
+
+1. a generator-expression / list-comprehension variable named `inst` in the
+   same function as a native `for inst in ...` — the frontend refuses to join a
+   CPython-domain binding with a native for-target (`for_loop_lowering.py`);
+   renamed to `probe` / `cloned`;
+2. `_VOID_CALL_RE_TEMPLATE.format(callee=...)` lowers natively only while the
+   receiver is a string *literal*; building the template as
+   `r"..." + _EXPLICIT_SIGNATURE + r"..."` sent the whole module top through
+   `py_cpy_call_kw` (the only `py_cpy_*` calls in the 883 MB closure IR).
+   The optional explicit-signature group is now spelled out in each literal.
+
+With both fixed pcc1 links (360 MB). Its smoke compile then dies with
+`EXC_ARM_DA_ALIGN` in `pcc_allocator_alloc_object` (`stlr` of
+`GC_STATE_RESERVED` into a garbage cell popped from the object free list),
+reached from the assembler's `py_dict_from_static_pairs`. It is identical under
+probe modes 0/1/2 with no unmanaged-pointer report in mode 2, crashes under GC0
+and GC1, and passes under GC3 — heap corruption from a refcount-driven free,
+not the probe. Bisection: with the four codegen defaults flipped earlier in this session
+forced off, the smoke crashes under the probe-off default, passes under
+`PCC_GC_REFCOUNT_PROVENANCE_PROBE=1`, and under `=2` reports one refcount
+operation on a non-managed pointer. With the four flags on it crashes under
+every mode with no report: `pcc_gc_release_known` bypasses the probe. So the
+2026-09-06 denial's evidence was real for pcc1's own shapes, and "the counter
+reads 0 on the gateway workload" was never a pcc1 claim.
+
+### Root cause: destructured tuple literals did not retain a copied owned local
+
+lldb on the mode-2 report (`breakpoint set -n pcc_platform_write -c '$x0 ==
+2'`), reading the object at frame 1's `[x29-8]`, gave ten hits, all at the
+same site in `AArch64ModuleBuilder._append_line`, all `tag=4` (str) heap cells
+whose refcount word held a pointer — freed cells on the object free list. The
+statement is line 362:
+
+```python
+symbol, offset = item, 0        # item: a comprehension element (Dyn), owned
+...
+symbol = symbol.strip()         # rebinding released the shared string
+```
+
+`_emit_tuple_unpack_assign` bound each element of a destructured *literal*
+through the tuple-unpack store protocol, whose default ("non-Dyn is owned, Dyn
+is borrowed") is written for `py_tuple_get` results. A Dyn `Name` element was
+therefore bound as borrowed without clearing the target's loop-carried owned
+flag, so the next owned store released the borrowed pointer; a non-Dyn `Name`
+element was bound as owned without a retain. Either way two locals owned one
+reference. Reproduced on the host in 3 s (flags off, probe 1: 100 misses per
+150 items; plain `symbol = item`: 0).
+
+Fix: `_emit_destructured_literal_element` (assignment_statement_lowering.py)
+— a `Name` element that is an owned local or `except ... as e` binding takes
+its own reference (`pcc_gc_retain`) before any target is stored, so
+`a, b = b, a` also survives the release of the old values; every other element
+keeps the existing protocol. After the fix the shape reads 0 under every
+combination of the four flags and probe on/off, and the program survives with
+the probe off. Regression: `tests/python/test_tuple_literal_assignment_ownership.py`.
+
+### Exposing this class without lldb
+
+- `PCC_GC_REFCOUNT_PROVENANCE_PROBE=3`: report and abort at the first miss —
+  the crash report names the function.
+- `PCC_GC_KNOWN_REF_CHECKS=1`: `pcc_gc_retain_known`/`release_known` take the
+  checked path, so the audit covers the compiler-proven lanes too.
+- `scripts/bootstrap.sh`: every stage smoke now runs in probe mode 2 and fails
+  (rc 97) on a report; `PCC_BOOTSTRAP_SMOKE_REFCOUNT_AUDIT=0` opts out.
+- The counter was the signal all along (it moved on pcc1); nothing read it.
+
+
+## Update — 2026-09-19: where the LLVM-O2 codegen gap actually lives
+
+The 2026-09-08 census attributed 61% of the self backend's excess instructions
+to frame load/store and named "the block-local register allocator's
+call-crossing/PHI spills" as owner 1. This update replaces that description
+with a count, per value, of *why* each scalar SSA definition keeps its slot.
+
+`scripts/probe_self_backend_value_classes.py` wraps the allocator and
+classifies every scalar definition of a module, using the same facts the
+allocator itself computes (function-level live intervals on, so the numbers
+are the best case of the current design):
+
+```
+                                        py_obj   py_dict   py_list
+scalar definitions                        2969      3152      3623
+  already assigned a register             1610      1268      1842
+  call result, crosses another call        337       678       474
+  call result, no call until last use      154       142       203
+  call result, only feeds the next call     10        61        65
+  ordinary value crossing a call (ptr)      41       150       183
+  ordinary value crossing a call (int)      15        42        40
+  PHI input                                361       455       299
+  last use is a call operand                296       225       401
+  no non-PHI use                           145       131       116
+```
+
+### The single structural cause
+
+`_REGISTER_POOL` in `self_backend_aarch64_darwin_regalloc.py` is
+`(1, 2, 3, 4, 5, 6, 7, 8)`. Those are caller-saved under AAPCS64, and the
+backend uses **no callee-saved register at all** — a grep for `x19`..`x28`
+across `pcc/backend/self_backend_aarch64_darwin*.py` returns nothing outside
+comments. A value that is live across a call therefore cannot be in a register
+by construction, which is exactly what `_interval_touches_call` encodes.
+
+LLVM's O0 pipeline (RegAllocFast) has the same shape, which is why self ≈
+LLVM -O0. What RegAllocGreedy adds at O2 is not a cleverer heuristic over the
+same pool: it allocates over the *full* register file, and the values it keeps
+in callee-saved registers across calls are precisely the rows above that pcc
+must spill. Those rows are 393 of 2969 in `py_obj` (13%), 870 of 3152 in
+`py_dict` (28%) and 697 of 3623 in `py_list` (19%).
+
+### Port order this implies
+
+1. **Call results whose interval touches no other call** (164 / 203 / 268).
+   These need no new register class: the result arrives in `x0` and one `mov`
+   into a pool register replaces a slot store plus a reload at every use.
+   Implemented behind `PCC_SELF_CALL_RESULT_REGISTERS` (default off,
+   `tests/python/test_self_backend_call_result_registers.py`); the
+   throughput measurement is still pending.
+2. **A callee-saved pool (`x19`-`x28`)**, with prologue/epilogue save/restore
+   and spill weights in the RegAllocGreedy sense
+   (`~/pcc_refs/llvm-project-20.1.8-full-depth1/llvm/lib/CodeGen/CalcSpillWeights.cpp`).
+   This is the row set above and the largest single block of the 2.43x.
+   Constraint from the GC, not from the ABI: a *managed pointer* in a
+   callee-saved register must still be visible to the precise stack map at
+   every safepoint, so either the stack map learns to describe registers or
+   pointer values stay on the slot path and only integers take this route.
+   The census splits the two for that reason (ptr 41/150/183, int 15/42/40).
+3. **PHI values and PHI inputs** (361 / 455 / 299 inputs). Requires the PHI
+   elimination in `emit_phi_assignments` to be register-aware rather than
+   slot-to-slot.
+4. **Call operands** (296 / 225 / 401). Smallest of the four and the most
+   delicate: ABI argument setup overwrites `x1`-`x8` before every operand has
+   been copied, which is why `_interval_touches_call` treats a value whose last
+   use is a call operand as spilled.
+
+Claim boundary: three runtime modules on Darwin arm64, host `pcc`, allocator
+facts only. It is not a QPS measurement and not a claim that the four slices
+sum to the measured 2.43x emitter gap.

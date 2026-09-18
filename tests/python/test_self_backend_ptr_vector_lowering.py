@@ -49,6 +49,7 @@ def test_symbolic_ptr_vector_literal_materializes_to_gprs():
         internal_prefix="__test_",
         defined_symbols=frozenset({"global_a"}),
         internal_symbols=frozenset(),
+        thread_local_symbols=frozenset(),
     )
     lines = materialize_value(
         func,

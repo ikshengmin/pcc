@@ -1,7 +1,7 @@
-"""Owned SHA-256 compression, incremental state and file hashing.
+"""Owned SHA-256 and MD5 compression, incremental state and SHA file hashing.
 
-The private hashlib state is an immutable, GC-owned 144-byte snapshot:
-eight i64 state words, bit count, partial block length, and 64 block bytes.
+Private hashlib snapshots are immutable GC-owned bytes. SHA-256 uses 144
+bytes; MD5 uses 112: state words, count, partial length and 64 block bytes.
 All compression uses compiler-owned memory and machine-bit intrinsics.
 """
 
@@ -323,3 +323,205 @@ def py_sha256_file_hex_bounded(path_object, max_bytes: int):
     return _sha256_file_hex_bounded(path_object, max_bytes)
 
 
+
+
+define_global_i64_array(
+    "pcc_md5_round_constants",
+    0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
+    0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+    0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
+    0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+    0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+    0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6,
+    0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905,
+    0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942,
+    0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44,
+    0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6,
+    0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039,
+    0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+    0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3,
+    0x8f0ccc92, 0xffeff47d, 0x85845dd1, 0x6fa87e4f,
+    0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82,
+    0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+)
+
+
+def _rotl32(value: int, shift: int) -> int:
+    value = value & 0xFFFFFFFF
+    # MD5's rotate counts are in 4..23; use machine shifts as in SHA-256.
+    low: int = logical_shift_right_i64(value, 32 - shift) & 0xFFFFFFFF
+    return (logical_shift_left_i64(value, shift) | low) & 0xFFFFFFFF
+
+
+define_global_i64_array(
+    "pcc_md5_rotate_counts",
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+)
+
+_MD5_CONTEXT_BYTES = 112
+
+
+def _md5_transform(context, block) -> None:
+    """RFC 1321 compression over one little-endian 64-byte block.
+
+    Context: four i64 state words, byte count at 32, buffered length at 40,
+    and 64 block bytes at 48. Compression uses unboxed machine operations.
+    """
+    words = stack_alloc(128)
+    constants = global_addr("pcc_md5_round_constants")
+    shifts = global_addr("pcc_md5_rotate_counts")
+    index: int = 0
+    while index < 16:
+        offset: int = index * 4
+        word: int = (
+            (load_i8(block, offset) & 255)
+            | ((load_i8(block, offset + 1) & 255) * 0x100)
+            | ((load_i8(block, offset + 2) & 255) * 0x10000)
+            | ((load_i8(block, offset + 3) & 255) * 0x1000000)
+        )
+        store_i64(words, index * 8, word)
+        index = index + 1
+    a: int = load_i64(context, 0) & 0xFFFFFFFF
+    b: int = load_i64(context, 8) & 0xFFFFFFFF
+    c: int = load_i64(context, 16) & 0xFFFFFFFF
+    d: int = load_i64(context, 24) & 0xFFFFFFFF
+    index = 0
+    while index < 64:
+        if index < 16:
+            mixed: int = (b & c) | ((~b) & d)
+            word_index: int = index
+        elif index < 32:
+            mixed = (d & b) | ((~d) & c)
+            word_index = (5 * index + 1) & 15
+        elif index < 48:
+            mixed = b ^ c ^ d
+            word_index = (3 * index + 5) & 15
+        else:
+            mixed = c ^ (b | (~d))
+            word_index = (7 * index) & 15
+        value: int = (
+            a
+            + mixed
+            + load_i64(constants, index * 8)
+            + load_i64(words, word_index * 8)
+        ) & 0xFFFFFFFF
+        rotated: int = _rotl32(value, load_i64(shifts, index * 8))
+        prior_b: int = b
+        b = (prior_b + rotated) & 0xFFFFFFFF
+        a = d
+        d = c
+        c = prior_b
+        index = index + 1
+    store_i64(context, 0, (load_i64(context, 0) + a) & 0xFFFFFFFF)
+    store_i64(context, 8, (load_i64(context, 8) + b) & 0xFFFFFFFF)
+    store_i64(context, 16, (load_i64(context, 16) + c) & 0xFFFFFFFF)
+    store_i64(context, 24, (load_i64(context, 24) + d) & 0xFFFFFFFF)
+
+
+def _md5_init(context) -> None:
+    memset(context, 0, _MD5_CONTEXT_BYTES)
+    store_i64(context, 0, 0x67452301)
+    store_i64(context, 8, 0xEFCDAB89)
+    store_i64(context, 16, 0x98BADCFE)
+    store_i64(context, 24, 0x10325476)
+
+
+def _md5_update(context, data, length: int) -> None:
+    store_i64(context, 32, load_i64(context, 32) + length)
+    source_offset: int = 0
+    while source_offset < length:
+        block_length: int = load_i64(context, 40)
+        room: int = 64 - block_length
+        take: int = length - source_offset
+        if take > room:
+            take = room
+        index: int = 0
+        while index < take:
+            store_i8(
+                context,
+                48 + block_length + index,
+                load_i8(data, source_offset + index),
+            )
+            index = index + 1
+        block_length = block_length + take
+        store_i64(context, 40, block_length)
+        source_offset = source_offset + take
+        if block_length == 64:
+            _md5_transform(context, ptr_add(context, 48))
+            store_i64(context, 40, 0)
+
+
+def _md5_final(context, digest) -> None:
+    block_length: int = load_i64(context, 40)
+    store_i8(context, 48 + block_length, 0x80)
+    block_length = block_length + 1
+    if block_length > 56:
+        while block_length < 64:
+            store_i8(context, 48 + block_length, 0)
+            block_length = block_length + 1
+        _md5_transform(context, ptr_add(context, 48))
+        block_length = 0
+    while block_length < 56:
+        store_i8(context, 48 + block_length, 0)
+        block_length = block_length + 1
+    bit_count: int = logical_shift_left_i64(load_i64(context, 32), 3)
+    index: int = 0
+    while index < 8:
+        store_i8(
+            context,
+            48 + 56 + index,
+            logical_shift_right_i64(bit_count, index * 8) & 255,
+        )
+        index = index + 1
+    _md5_transform(context, ptr_add(context, 48))
+    index = 0
+    while index < 4:
+        value: int = load_i64(context, index * 8)
+        store_i8(digest, index * 4, value & 255)
+        store_i8(digest, index * 4 + 1, logical_shift_right_i64(value, 8) & 255)
+        store_i8(digest, index * 4 + 2, logical_shift_right_i64(value, 16) & 255)
+        store_i8(digest, index * 4 + 3, logical_shift_right_i64(value, 24) & 255)
+        index = index + 1
+
+
+@c_abi_export("py_md5_bytes_digest")
+def py_md5_bytes_digest(data_object):
+    """MD5 of a bytes-like object, as a 16-byte ``bytes``."""
+    if ptr_is_null(data_object):
+        return null()
+    context = stack_alloc(_MD5_CONTEXT_BYTES)
+    _md5_init(context)
+    length: int = py_bytes_len(data_object)
+    if length > 0:
+        _md5_update(context, py_bytes_data_ptr(data_object), length)
+    digest = stack_alloc(16)
+    _md5_final(context, digest)
+    return py_bytes_new(digest, 16)
+
+
+@c_abi_export("py_md5_state_new")
+def py_md5_state_new():
+    """Return an immutable GC-owned snapshot of the native MD5 context."""
+    context = stack_alloc(_MD5_CONTEXT_BYTES)
+    _md5_init(context)
+    return py_bytes_new(context, _MD5_CONTEXT_BYTES)
+
+
+@c_abi_export("py_md5_state_update")
+def py_md5_state_update(state_object, data_object):
+    context = stack_alloc(_MD5_CONTEXT_BYTES)
+    memcpy(context, py_bytes_data_ptr(state_object), _MD5_CONTEXT_BYTES)
+    _md5_update(context, py_bytes_data_ptr(data_object), py_bytes_len(data_object))
+    return py_bytes_new(context, _MD5_CONTEXT_BYTES)
+
+
+@c_abi_export("py_md5_state_digest")
+def py_md5_state_digest(state_object):
+    context = stack_alloc(_MD5_CONTEXT_BYTES)
+    memcpy(context, py_bytes_data_ptr(state_object), _MD5_CONTEXT_BYTES)
+    digest = stack_alloc(16)
+    _md5_final(context, digest)
+    return py_bytes_new(digest, 16)

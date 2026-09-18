@@ -441,6 +441,7 @@ def test_pcc_python_runtime_archive_plan_selects_python_allocator_object():
 def test_default_pcc_python_runtime_uses_allocator_under_all_gc_backends(
     tmp_path,
     pcc_py_runtime_archive,
+    python_program_compiler,
 ):
     source = tmp_path / "allocator_runtime_smoke.py"
     executable = tmp_path / "allocator_runtime_smoke"
@@ -457,11 +458,10 @@ def test_default_pcc_python_runtime_uses_allocator_under_all_gc_backends(
         "    main()\n",
         encoding="utf-8",
     )
-    pipeline.compile_python(
+    python_program_compiler(
         str(source),
         str(executable),
         backend="self",
-        ir_scaffold_mode="on",
         libpython_mode="off",
         runtime_archive=str(pcc_py_runtime_archive),
     )

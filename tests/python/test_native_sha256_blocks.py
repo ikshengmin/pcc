@@ -1,4 +1,4 @@
-"""Native SHA-256 rotation preserves block, padding, and high-bit inputs."""
+"""Native hash compression preserves padding, high-bit inputs and snapshots."""
 
 import os
 import subprocess
@@ -60,7 +60,7 @@ def test_md5_is_md5_including_incremental_updates(tmp_path, pcc_py_runtime_archi
     source.write_text('''
 import hashlib
 def main():
-    for data in [b"", b"a", b"abc", b"x" * 55, b"x" * 56, b"x" * 64, b"\\x80\\xff" * 257]:
+    for data in [b"", b"a", b"abc", b"x" * 55, b"x" * 56, b"x" * 63, b"x" * 64, b"x" * 65, b"\\x80\\xff" * 257]:
         h = hashlib.md5(data)
         print(h.hexdigest())
         h.update(b"suffix")
@@ -68,6 +68,20 @@ def main():
         saved = h.copy()
         h.update(b"tail")
         print(saved.hexdigest())
+        print(h.hexdigest())
+    data = b"\\x00\\x7f\\x80\\xff" * 257
+    for size in [1, 55, 56, 63, 64, 65]:
+        h = hashlib.md5()
+        for index in range(0, len(data), size):
+            h.update(data[index:index + size])
+        before = h.digest()
+        print(h.hexdigest())
+        print(before == h.digest())
+        h.update(b"")
+        print(before == h.digest())
+        saved = h.copy()
+        h.update(b"tail")
+        print(saved.digest() == before)
         print(h.hexdigest())
 main()
 ''', encoding="utf-8")

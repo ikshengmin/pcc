@@ -149,6 +149,7 @@ _MODULE_SYMBOLS = PreparedModuleSymbols(
     internal_prefix="",
     defined_symbols=frozenset(),
     internal_symbols=frozenset(),
+    thread_local_symbols=frozenset(),
 )
 
 

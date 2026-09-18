@@ -21,6 +21,9 @@ from .self_backend_aarch64_darwin_abi import (
     reg_name_indexed,
 )
 from .self_backend_aarch64_darwin_flow import emit_bit_count_intrinsic_call
+from .self_backend_aarch64_darwin_regalloc import (
+    commit_allocated_scalar_result_indexed,
+)
 from .self_backend_aarch64_darwin_materialize import (
     materialize_aggregate_storage_address,
     materialize_indirect_aggregate_arg_pointer,
@@ -2310,13 +2313,25 @@ def emit_call_instruction_indexed(
                 )
             )
         else:
-            lines.extend(
-                _store_indexed_scalar_result(
-                    kernel,
-                    slot_id,
-                    slot_type_id,
-                )
+            # PCC_SELF_CALL_RESULT_REGISTERS: a result the allocator placed in
+            # a pool register is committed with one move and its slot is left
+            # unwritten, exactly like any other register-projected scalar.
+            allocated_lines = commit_allocated_scalar_result_indexed(
+                func,
+                dest_value_id,
+                ret_type_id,
+                reg_name_indexed(kernel, ret_type_id, 0),
             )
+            if allocated_lines is not None:
+                lines.extend(allocated_lines)
+            else:
+                lines.extend(
+                    _store_indexed_scalar_result(
+                        kernel,
+                        slot_id,
+                        slot_type_id,
+                    )
+                )
     return lines
 
 

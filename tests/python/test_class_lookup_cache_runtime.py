@@ -6,6 +6,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 
@@ -175,12 +177,13 @@ def test_class_lookup_reloads_relocated_method_and_class(
         extern int32_t py_class_attr_cache_epoch;
 
         static int force_minor_refill(void) {
+            int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_MINOR_COLLECTIONS);
             for (int i = 0; i < 64; i++) {
                 PyObject *filler = py_str_new("filler", 6);
                 if (filler == NULL) return 0;
                 pcc_gc_release(filler);
             }
-            return 1;
+            return pcc_gc_telemetry(PCC_GC_COUNTER_MINOR_COLLECTIONS) > before;
         }
 
         int main(void) {
@@ -198,6 +201,9 @@ def test_class_lookup_reloads_relocated_method_and_class(
             cls = (PyClassObject *)pcc_gc_load_ptr(NULL, &class_root);
             if (cls == NULL) return 5;
             if (RELOC_BACKEND == PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR) {
+                if ((cls->h.flags & PY_FLAG_GC_OLD) == 0 ||
+                    (cls->h.flags & PY_FLAG_GC_YOUNG) != 0 ||
+                    (cls->h.flags & PY_FLAG_GC_MINOR_ARENA) == 0) return 17;
                 pcc_gc_pin((PyObject *)cls);
             }
 
@@ -375,3 +381,120 @@ def test_class_lookup_concurrent_reads_are_stable_for_immutable_classes(
         assert result.returncode == 0, (
             runtime_name + ": " + result.stdout + result.stderr
         )
+
+
+@pytest.mark.parametrize("runtime_kind", ["pcc-python", "c"])
+def test_instance_field_cache_concurrent_reads_keep_name_and_index_together(
+    tmp_path: Path,
+    request,
+    runtime_kind,
+) -> None:
+    """The external C driver exercises the self-emitted runtime's field ABI."""
+    source = r'''
+        #include "py_internal.h"
+        #include <pthread.h>
+        #include <stdint.h>
+
+        /* Equal low address bits force both names into the same cache slot. */
+        _Alignas(64) static const char names[2][64] = {"left", "right"};
+        static int start;
+        static int failed;
+        typedef struct {
+            PyObject *instance;
+            PyObject **values;
+            int first;
+        } Lookup;
+
+        static void *worker(void *opaque) {
+            Lookup *arg = (Lookup *)opaque;
+            while (!__atomic_load_n(&start, __ATOMIC_ACQUIRE)) {}
+            for (int i = 0; i < 200000; i++) {
+                int field = (i + arg->first) & 1;
+                PyObject *got = py_instance_getattr(arg->instance, names[field]);
+                if (got != arg->values[field]) {
+                    __atomic_store_n(&failed, 1, __ATOMIC_RELEASE);
+                    return NULL;
+                }
+                py_decref(got);
+            }
+            return NULL;
+        }
+
+        int main(void) {
+            const char *fields[2] = {names[0], names[1]};
+            if (pcc_gc_set_backend(0) != 0) return 12;
+            PyClassObject *cls = py_class_new("Fields", NULL, 0, fields, 2);
+            if (!cls) return 2;
+            PyObject *instance = py_instance_new(cls);
+            if (!instance) return 3;
+            /* Heap objects make both threads exercise atomic retain/release;
+             * small tagged integers would bypass refcounting entirely. */
+            PyObject *left = py_str_new("left-value", 10);
+            PyObject *right = py_str_new("right-value", 11);
+            if (!left || !right) return 10;
+            py_instance_set_field(instance, 0, left);
+            py_instance_set_field(instance, 1, right);
+            PyObject *values[2] = {left, right};
+            int64_t left_refs = ((PyObjectHeader *)left)->refcount;
+            int64_t right_refs = ((PyObjectHeader *)right)->refcount;
+            Lookup args[2] = {{instance, values, 0}, {instance, values, 1}};
+            pthread_t threads[2];
+            if (pthread_create(&threads[0], NULL, worker, &args[0])) return 4;
+            if (pthread_create(&threads[1], NULL, worker, &args[1])) return 5;
+            __atomic_store_n(&start, 1, __ATOMIC_RELEASE);
+            if (pthread_join(threads[0], NULL)) return 6;
+            if (pthread_join(threads[1], NULL)) return 7;
+            if (((PyObjectHeader *)left)->refcount != left_refs ||
+                ((PyObjectHeader *)right)->refcount != right_refs) return 11;
+            return __atomic_load_n(&failed, __ATOMIC_ACQUIRE) ? 9 : 0;
+        }
+    '''
+    archive = (
+        cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
+        if runtime_kind == "pcc-python"
+        else request.getfixturevalue("threaded_c_runtime_archive")
+    )
+    result = _compile_and_run(
+        tmp_path, "instance_field_cache_threads", source,
+        archive,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("runtime_kind", ["pcc-python", "c"])
+def test_instance_field_cache_does_not_retain_a_borrowed_name_buffer(
+    tmp_path: Path,
+    request,
+    runtime_kind,
+) -> None:
+    source = r'''
+        #include "py_internal.h"
+        #include <string.h>
+
+        int main(void) {
+            const char *fields[2] = {"left", "right"};
+            PyClassObject *cls = py_class_new("Fields", NULL, 0, fields, 2);
+            if (!cls) return 2;
+            PyObject *instance = py_instance_new(cls);
+            if (!instance) return 3;
+            PyObject *left = py_int_from_i64(11);
+            PyObject *right = py_int_from_i64(22);
+            py_instance_set_field(instance, 0, left);
+            py_instance_set_field(instance, 1, right);
+            char name[16] = "left";
+            PyObject *got = py_instance_getattr(instance, name);
+            if (got != left) return 4;
+            py_decref(got);
+            strcpy(name, "right");
+            got = py_instance_getattr(instance, name);
+            if (got != right) return 5;
+            py_decref(got);
+            return 0;
+        }
+    '''
+    result = _compile_and_run(
+        tmp_path, "instance_field_cache_borrowed_name", source,
+        request.getfixturevalue("pcc_py_runtime_archive" if runtime_kind == "pcc-python"
+                                else "c_runtime_archive"),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
