@@ -9,7 +9,7 @@ Search by symbol/symptom; inspect the matching experiment and its updates.
 Verify current code, source revision and artifacts before reusing a verdict.
 Do not repeat a matching failed experiment without identifying new evidence.
 
-652 verdicts across 139 investigations.
+655 verdicts across 141 investigations.
 
 ## [Investigation: retired raw span cache hides an object at a reused address](../investigations/allocator-span-cache-raw-address-reuse.md)
 
@@ -466,6 +466,10 @@ Do not repeat a matching failed experiment without identifying new evidence.
 - Stage2 is no slower than the non-regressed Stage1 target;
 - DENIED — The candidate was correct on its focused GC0 boundary, built a source-frozen
 - [`020-no99-exact-str-chain-denied.md`](../goal/evidence/PERF-P0-PROVEN-NATIVE-DATA-PLANE-PARALLEL-EMIT/020-no99-exact-str-chain-denied.md).
+
+## [Investigation: pcc1 infers `NoneType` for a field the host compiler infers as sliceable](../investigations/pcc1-field-type-join-diverges-from-host.md)
+
+- The parentheses hypothesis above is **denied**: two managers fail with or
 
 ## [Investigation: pcc1 traps while scaling finite float literals through raw integers](../investigations/pcc1-float-literal-bignum-scale-raw-int-trap.md)
 
@@ -958,6 +962,7 @@ Do not repeat a matching failed experiment without identifying new evidence.
 - The obvious fix is already denied, and its prerequisite is the real work — Removing that probe is Phase B in
 - (line 7230). It was written, measured and **DENIED**: dropping it on GC0..2
 - `PCC_PYTHON_IR_PASSES=default` therefore had no effect on that route. The new
+- per backend. Everything that was DENIED on 2026-09-06 was measured on GC0–2;
 
 ## [Investigation: self AArch64 spills block-local integer call results](../investigations/self-aarch64-call-result-spills.md)
 
@@ -999,6 +1004,10 @@ Do not repeat a matching failed experiment without identifying new evidence.
 - No.2 cmp_threeway: getattr(bound) + 1-arg call [DENIED — see No.1 update]
 - No.3 cmp_threeway: py_class_lookup + py_obj_call [DENIED — reached-but-ineffective]
 - DENIED — ineffective — Even with the dispatch compiled into the archive (verified: `__lt__` appears in
+
+## [Investigation: stage1 lazy-import discovery spawns host probes that execute the pcc package](../investigations/stage1-lazy-import-host-probe-spawn.md)
+
+- `_read_relocations` (255,304 calls / 15,408 distinct pairs) measured no wall
 
 ## [Investigation: stage1 self-backend ir-scaffold segfault](../investigations/stage1-self-backend-ir-scaffold-segfault.md)
 

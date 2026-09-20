@@ -31,6 +31,9 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+pcc_gc_index_slot_size = extern("pcc_gc_index_slot_size", (), c_int64)
+
+
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
@@ -430,11 +433,11 @@ def pcc_gc_forwarding_install_plan_prepare(
     store_i64(plan, 48, forwarding_cap)
     store_i64(plan, 64, target_cap)
     if identity_cap > 0:
-        store_ptr(plan, 24, calloc(identity_cap, 24))
+        store_ptr(plan, 24, calloc(identity_cap, pcc_gc_index_slot_size()))
     if forwarding_cap > 0:
-        store_ptr(plan, 40, calloc(forwarding_cap, 24))
+        store_ptr(plan, 40, calloc(forwarding_cap, pcc_gc_index_slot_size()))
     if target_cap > 0:
-        store_ptr(plan, 56, calloc(target_cap, 24))
+        store_ptr(plan, 56, calloc(target_cap, pcc_gc_index_slot_size()))
     if (
         ptr_is_null(load_ptr(plan, 0)) != 0
         or ptr_is_null(load_ptr(plan, 8)) != 0

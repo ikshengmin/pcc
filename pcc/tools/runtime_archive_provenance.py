@@ -17,7 +17,13 @@ from pathlib import Path
 import tempfile
 from typing import Iterable, Sequence
 
-from pcc.backend.ar import ArchiveFormatError, read_members
+if __package__:
+    from ..backend.ar import ArchiveFormatError, read_members
+else:
+    # Direct file-spec consumers already running from an installed/source pcc
+    # keep the same canonical reader. Isolated wheel hooks supply a private
+    # package rooted at their own source artifact instead.
+    from pcc.backend.ar import ArchiveFormatError, read_members
 
 RECEIPT_SCHEMA = "pcc.runtime-object-provenance.v1"
 MANIFEST_SCHEMA = "pcc.runtime-archive-provenance.v2"

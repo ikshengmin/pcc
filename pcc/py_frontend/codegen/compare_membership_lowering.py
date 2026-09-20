@@ -441,8 +441,30 @@ class CompareMembershipLoweringMixin:
             if (isinstance(lhs_ty, DynType) and rhs_scalar) or (
                 isinstance(rhs_ty, DynType) and lhs_scalar
             ):
-                lhs = self._emit_expr(expr.lhs)
-                rhs = self._emit_expr(expr.rhs)
+                # Dynamic equality consumes Python objects. Project ordinary
+                # integer expressions before evaluation so a raw-ABI module
+                # cannot narrow an intermediate bignum through i64 arithmetic.
+                # A freestanding module is exempt: its contract forbids every
+                # managed-runtime reference, and the guard at the top of this
+                # method already rejects the out-of-range literals that make
+                # narrowing possible, so there is no bignum here to preserve.
+                # Without this, `extern_returning_dyn(...) != 0` boxed the 0
+                # and the whole runtime archive stopped building.
+                project_ints = not getattr(self, "_freestanding_module", False)
+                lhs = (
+                    self._emit_expr_as_pcc_object(expr.lhs)
+                    if project_ints
+                    and isinstance(lhs_ty, IntType)
+                    and lhs_ty.name == "int"
+                    else self._emit_expr(expr.lhs)
+                )
+                rhs = (
+                    self._emit_expr_as_pcc_object(expr.rhs)
+                    if project_ints
+                    and isinstance(rhs_ty, IntType)
+                    and rhs_ty.name == "int"
+                    else self._emit_expr(expr.rhs)
+                )
                 lhs_dyn_obj = isinstance(lhs_ty, DynType) and isinstance(
                     lhs.type,
                     ir.PointerType,
@@ -1088,184 +1110,103 @@ class CompareMembershipLoweringMixin:
         ):
             return self._emit_owned_string_predicate(expr, True)
         weak_dict_kind = self._weak_dict_kind_for_expr(expr.rhs)
-        rhs = self._emit_expr(expr.rhs)
-        if rhs in getattr(self, "_cpy_values", ()):
-            container_cpy, container_owned = self._marshal_to_cpython(
-                rhs,
-                container_ty,
+
+        # Evaluate each operand once, in Python order. Preserve the original
+        # domain until the container is known: a late CPython container must
+        # receive the original CPython needle, not a converted copy.
+        lhs_raw = self._emit_expr(expr.lhs)
+        lhs_is_cpy = lhs_raw in getattr(self, "_cpy_values", ())
+        cpy_live = ()
+        pcc_live = ()
+        if lhs_is_cpy:
+            self._guard_cpy_value_not_null(lhs_raw)
+            lhs = lhs_raw
+            if not self._cpy_value_is_owned(lhs):
+                self.builder.call(self.runtime["py_cpy_incref"], [lhs])
+                self._mark_owned_cpy_value(lhs)
+            cpy_live = (lhs,)
+        else:
+            lhs = self._emit_value_as_pcc_object_or_bridge(
+                lhs_raw, expr.lhs.ty, "membership.needle",
             )
-            result = self._emit_cpy_method_call_src(
-                container_cpy,
-                "__contains__",
-                (expr.lhs,),
-                receiver_owned=container_owned,
+            if lhs is lhs_raw and not self._owned_release_needed(lhs, expr.lhs):
+                lhs = self._gc_retain(lhs, name=self._fresh("membership.lhs.retain"))
+            self._gc_pin(lhs)
+            pcc_live = ((lhs, True),)
+        rhs_raw = self._emit_expr_with_cpy_operand_cleanup(
+            expr.rhs, cpy_live, pinned_pcc=pcc_live,
+        )
+        if rhs_raw in getattr(self, "_cpy_values", ()):
+            self._guard_cpy_value_not_null(
+                rhs_raw, cpy_live, pinned_pcc_on_error=pcc_live,
+            )
+            if not self._cpy_value_is_owned(rhs_raw):
+                self.builder.call(self.runtime["py_cpy_incref"], [rhs_raw])
+                self._mark_owned_cpy_value(rhs_raw)
+            if lhs_is_cpy:
+                lhs_cpy, lhs_owned = lhs, True
+            else:
+                lhs_cpy, lhs_owned = self._marshal_to_cpython(lhs, DynType(name="dyn"))
+                self._guard_cpy_value_not_null(
+                    lhs_cpy, (rhs_raw,), pinned_pcc_on_error=pcc_live,
+                )
+                self._gc_unpin(lhs)
+                self._gc_release(lhs)
+            result = self._emit_cpy_method_call1_value(
+                rhs_raw, "__contains__", lhs_cpy,
+                arg_owned=lhs_owned, receiver_owned=True,
             )
             self._guard_cpy_value_not_null(result)
-            as_i32 = self.builder.call(
-                self.runtime["py_cpy_truthy"],
-                [result],
-                name=self._fresh("cpy.contains.i32"),
+            status = self.builder.call(
+                self.runtime["py_cpy_truthy"], [result], name=self._fresh("cpy.contains.i32"),
             )
-            self._guard_cpy_status_not_negative(as_i32, (result,))
+            self._guard_cpy_status_not_negative(status, (result,))
             self.builder.call(self.runtime["py_cpy_decref"], [result])
             self._forget_owned_cpy_value(result)
-            contains = self.builder.icmp_signed(
-                "!=",
-                as_i32,
-                ir.Constant(_I32, 0),
-                name=self._fresh("cpy.contains.i1"),
-            )
-            if expr.op == "not in":
-                return self.builder.not_(
-                    contains,
-                    name=self._fresh("cpy.not_in"),
-                )
-            return contains
-        if weak_dict_kind == "value":
-            key = self._emit_membership_needle_object(
-                expr.lhs,
-                "weak.value.dict.in.key",
-            )
-            res_i32 = self.builder.call(
-                self.runtime["py_weak_value_dict_contains"],
-                [rhs, key],
-                name=self._fresh("weak.value.dict.in"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            result = self.builder.icmp_signed(
-                "!=",
-                res_i32,
-                ir.Constant(_I64, 0),
-                name=self._fresh("weak.value.dict.in.i1"),
-            )
-            if expr.op == "not in":
-                return self.builder.not_(
-                    result,
-                    name=self._fresh("weak.value.dict.notin"),
-                )
-            return result
-
-        if isinstance(container_ty, StrType):
-            # Needle is expected to be a pcc str (single char or
-            # substring). When the lhs type is DynType (e.g. a
-            # comprehension loop variable bound by ``for ch in s``
-            # where the comp-scope inference didn't propagate the
-            # element type), we still have a ``PyObject*`` — py_str_*
-            # helpers tolerate foreign types by length/bytes compare.
-            lhs = self._emit_expr(expr.lhs)
-            lhs_ty = expr.lhs.ty
-            needle = lhs
-            if not isinstance(lhs.type, ir.PointerType):
-                needle = marshal.marshal_to_object(
-                    self.builder, self.module, self.runtime, lhs, lhs_ty
-                )
-            res_i32 = self.builder.call(
-                self.runtime["py_str_contains"],
-                [rhs, needle],
-                name=self._fresh("str.in"),
-            )
-        elif isinstance(container_ty, ListType):
-            needle = self._emit_membership_needle_object(
-                expr.lhs,
-                "cpy.list.in.key",
-            )
-            res_i32 = self.builder.call(
-                self.runtime["py_list_contains"],
-                [rhs, needle],
-                name=self._fresh("list.in"),
-            )
-        elif isinstance(container_ty, DictType):
-            key = self._emit_membership_needle_object(
-                expr.lhs,
-                "cpy.dict.in.key",
-            )
-            res_i32 = self.builder.call(
-                self.runtime["py_dict_contains"],
-                [rhs, key],
-                name=self._fresh("dict.in"),
-            )
-        elif isinstance(container_ty, TupleType):
-            # Tuple literal fast path: unroll against static elements.
-            # General tuple values can use the runtime's generic
-            # ``py_obj_contains`` dispatcher, which already handles
-            # tuple containers via linear scan.
-            if isinstance(expr.rhs, TupleExpr):
-                return self._emit_membership_tuple_literal(
-                    expr.lhs,
-                    expr.rhs,
-                    negate=(expr.op == "not in"),
-                )
-            key = self._emit_membership_needle_object(
-                expr.lhs,
-                "cpy.tuple.in.key",
-            )
-            res_i32 = self.builder.call(
-                self.runtime["py_obj_contains"],
-                [rhs, key],
-                name=self._fresh("tuple.in"),
-            )
-        elif isinstance(container_ty, DynType) or isinstance(container_ty, Type):
-            # DynType / imprecise Type container — route through the runtime
-            # ``py_obj_contains`` dispatcher. This covers self-host paths
-            # where Optional[dict] or getattr(...) inference collapses to the
-            # abstract Type base; known concrete str/list/dict/tuple cases
-            # above still keep their specialized fast paths.
-            key = self._emit_membership_needle_object(
-                expr.lhs,
-                "cpy.obj.in.key",
-            )
-            res_i32 = self.builder.call(
-                self.runtime["py_obj_contains"],
-                [rhs, key],
-                name=self._fresh("obj.in"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            result = self.builder.icmp_signed(
-                "!=",
-                res_i32,
-                ir.Constant(_I32, 0),
-                name=self._fresh("obj.in.i1"),
-            )
-            if expr.op == "not in":
-                result = self.builder.not_(
-                    result,
-                    name=self._fresh("obj.notin"),
-                )
-            return result
         else:
-            key = self._emit_membership_needle_object(
-                expr.lhs,
-                "cpy.obj.in.key",
+            rhs = self._emit_value_as_pcc_object_or_bridge(
+                rhs_raw, container_ty, "membership.container",
+                cpy_owned_on_error=cpy_live, pinned_pcc_on_error=pcc_live,
             )
-            res_i32 = self.builder.call(
-                self.runtime["py_obj_contains"],
-                [rhs, key],
-                name=self._fresh("obj.in"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            result = self.builder.icmp_signed(
-                "!=",
-                res_i32,
-                ir.Constant(_I32, 0),
-                name=self._fresh("obj.in.i1"),
-            )
-            if expr.op == "not in":
-                result = self.builder.not_(
-                    result,
-                    name=self._fresh("obj.notin"),
+            if rhs is rhs_raw and not self._owned_release_needed(rhs, expr.rhs):
+                rhs = self._gc_retain(rhs, name=self._fresh("membership.rhs.retain"))
+            self._gc_pin(rhs)
+            if lhs_is_cpy:
+                lhs = self._emit_value_as_pcc_object_or_bridge(
+                    lhs, expr.lhs.ty, "membership.cpy.needle",
+                    pinned_pcc_on_error=((rhs, True),),
                 )
-            return result
-
-        # The specialized contains helpers use -1/pending-error for failures.
-        # Check the exception channel before interpreting the status as a
-        # boolean; ``-1 != 0`` is not a successful membership result.
-        self._emit_post_call_err_check(getattr(expr, "span", None))
-        res = self.builder.icmp_signed(
-            "!=", res_i32, ir.Constant(_I32, 0), name=self._fresh("in.i1")
+                self._gc_pin(lhs)
+            if weak_dict_kind == "value":
+                helper = "py_weak_value_dict_contains"
+            elif isinstance(container_ty, StrType):
+                helper = "py_str_contains"
+            elif isinstance(container_ty, ListType):
+                helper = "py_list_contains"
+            elif isinstance(container_ty, DictType):
+                helper = "py_dict_contains"
+            else:
+                # Tuple literals have already been evaluated, including all
+                # element effects. Runtime contains preserves identity and
+                # comparison short-circuiting without emitting them again.
+                helper = "py_obj_contains"
+            status = self.builder.call(
+                self.runtime[helper], [rhs, lhs], name=self._fresh("native.contains"),
+            )
+            self._emit_post_call_err_check(
+                getattr(expr, "span", None),
+                pinned_release_on_error=((lhs, True), (rhs, True)),
+            )
+            self._gc_unpin(rhs)
+            self._gc_release(rhs)
+            self._gc_unpin(lhs)
+            self._gc_release(lhs)
+        contains = self.builder.icmp_signed(
+            "!=", status, ir.Constant(status.type, 0), name=self._fresh("in.i1"),
         )
         if expr.op == "not in":
-            return self.builder.not_(res, name=self._fresh("not_in"))
-        return res
+            return self.builder.not_(contains, name=self._fresh("not_in"))
+        return contains
 
     def _emit_membership_needle_object(self, expr: Expr, name_hint: str) -> ir.Value:
         valueclass_payload = self._maybe_emit_valueclass_constructor_payload(

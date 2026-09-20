@@ -1037,6 +1037,17 @@ class AssignmentStatementLoweringMixin:
             and target.ident not in getattr(self, "_current_global_names", set())
             and (
                 target.ident in getattr(self, "_owned_local_names", set())
+                # This statement can run again after a later statement in the
+                # loop has made the same slot owned. Emit the flag protocol
+                # at the first borrowed store too, rather than depending on
+                # which assignment was visited first during code generation.
+                or (
+                    bool(self.loop_stack)
+                    and not getattr(self, "_suppress_implicit_gc_roots", False)
+                    and value not in getattr(self, "_cpy_values", ())
+                    and self._is_object(stmt.value.ty)
+                    and not self._expr_returns_unsafe_raw_pointer(stmt.value)
+                )
                 or (
                     rhs_returns_owned_object
                     and (not in_raw_scaffold or rhs_is_safe_owned_in_raw)

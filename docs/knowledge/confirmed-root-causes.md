@@ -8,7 +8,7 @@ Extraction can include hypotheses, test status and superseded conclusions.
 Check the original experiment, revision and later updates against current
 code and matching execution before adopting a cause. Read only relevant hits.
 
-1593 confirmations across 479 investigations.
+1598 confirmations across 481 investigations.
 
 ## [Investigation: direct AArch64 instruction capture order and lifetime](../investigations/aarch64-direct-instruction-capture-order.md)
 
@@ -1542,6 +1542,13 @@ code and matching execution before adopting a cause. Read only relevant hits.
 
 - Test [CONFIRMED] — `scan-focused.stdout`: three boundary tests passed: both architectures,
 
+## [Investigation: native Stage2 link exceeds its budget while assembling inputs](../investigations/native-stage2-link-asm-memory-budget.md)
+
+- Test [CONFIRMED] — The original native-link attempt fails as above. Replaying only the largest
+- Round 1: materialized range ownership [CONFIRMED] — After the membership fix, ordinary relocation validation still accounted for
+- Round 2: int.from_bytes arguments [CONFIRMED] — The next reduction separated symbol-name reading from validation. Name reading
+- Round 3: dynamic equality narrowed an integer expression [CONFIRMED] — The new conversion test exposed a separate failure: a correctly decoded
+
 ## [Investigation: native subprocess failures lose CalledProcessError fields](../investigations/native-subprocess-called-process-error-returncode.md)
 
 - Test [CONFIRMED] — The focused regression fails against current source after a successful strict
@@ -1727,6 +1734,10 @@ code and matching execution before adopting a cause. Read only relevant hits.
 - Test [CONFIRMED] — The compiled-pcc1 failure above was observed on 2026-07-22 after a current
 - No.1 Treat a matching existing Meson payload as a completed build [CONFIRMED]
 - CONFIRMED — The focused selector regression passes:
+
+## [Investigation: pcc1 infers `NoneType` for a field the host compiler infers as sliceable](../investigations/pcc1-field-type-join-diverges-from-host.md)
+
+- Smallest ordinary-program failure [CONFIRMED] — class Box:
 
 ## [Investigation: pcc1 traps while scaling finite float literals through raw integers](../investigations/pcc1-float-literal-bignum-scale-raw-int-trap.md)
 

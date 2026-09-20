@@ -285,6 +285,31 @@ def _isinstance_classinfo_as_tuple(class_arg: Expr) -> Expr:
     )
 
 
+def _name_is_imported_into_module(host, ident: str) -> bool:
+    """True when this module binds ``ident`` with an import statement.
+
+    ``from x import NoneType`` and ``import x as NoneType`` both shadow a
+    builtin type name for the whole module without creating an ``env`` entry
+    or a module global, so neither of the other two checks sees them.
+    """
+    module = getattr(host, "ast_module", None)
+    if module is None:
+        return False
+    for stmt in getattr(module, "body", ()) or ():
+        names = getattr(stmt, "names", None)
+        if not names or not isinstance(names, tuple):
+            continue
+        if type(stmt).__name__ not in ("Import", "ImportFrom"):
+            continue
+        for entry in names:
+            if not isinstance(entry, tuple) or not entry:
+                continue
+            bound = entry[1] if len(entry) > 1 and entry[1] else entry[0]
+            if bound == ident:
+                return True
+    return False
+
+
 def emit_isinstance_call_impl(
     host,
     expr: Call,
@@ -518,6 +543,7 @@ def emit_isinstance_call_impl(
         and (
             class_arg.ident in host.env
             or class_arg.ident in getattr(host, "_module_globals", {})
+            or _name_is_imported_into_module(host, class_arg.ident)
         )
     ):
         # A module/local binding shadows the builtin tag tables: a bare
@@ -525,6 +551,17 @@ def emit_isinstance_call_impl(
         # descriptor class) must dispatch to the imported class object,
         # while the syntactic ``type(None)`` form (a Call, not a Name)
         # keeps the builtin PY_TYPE_NONE check below.
+        #
+        # ``from py_ast import NoneType`` binds the name without putting it in
+        # ``env`` or ``_module_globals``, so the guard used to miss exactly the
+        # case it was written for.  pcc's own ``type_infer`` then compiled
+        # ``isinstance(known_field_ty, NoneType)`` -- the test that decides
+        # whether a field first seen as ``self.x = None`` may be widened by a
+        # later write -- into a builtin ``is None`` check, which is False for a
+        # ``NoneType()`` descriptor.  Under CPython that line is real Python
+        # and answers True, so host pcc widened the field and pcc1 did not:
+        # stage2 died with "Layer 1 slice on type NoneType not supported" on
+        # ``pcc/ply/lex.py``'s ``self.lexdata[lexpos:]``.
         obj_val = host._emit_as_object(expr.args[0])
         return host.class_lowering.emit_isinstance(obj_val, cls_ident)
     # These two were computed-and-discarded when the shadowing guard above

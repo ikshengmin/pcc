@@ -199,7 +199,7 @@ def py_file_open(path, mode):
 
 @c_abi_export("py_file_read_all")
 def py_file_read_all(file):
-    f = _checked_file(file)
+    f = _checked_open_file(file)
     if ptr_is_null(f):
         return null()
     fp = load_ptr(f, 16)
@@ -247,7 +247,7 @@ def py_file_read_all(file):
 def py_file_read(file, limit: int):
     if limit < 0:
         return py_file_read_all(file)
-    f = _checked_file(file)
+    f = _checked_open_file(file)
     if ptr_is_null(f):
         return null()
     fp = load_ptr(f, 16)
@@ -310,10 +310,10 @@ def py_file_write(file, text):
 
 
 def _checked_open_file(file):
-    """Shared open-file precondition for readline/seek/tell/flush.
+    """Shared open-file precondition for reads, seek, tell and flush.
 
-    NULL / non-file receivers return null silently (matching the older
-    read/write helpers); a closed file raises ValueError exactly like
+    NULL / non-file receivers return null silently; a closed file raises
+    ValueError exactly like
     CPython ("I/O operation on closed file.").
     """
     if ptr_is_null(file):

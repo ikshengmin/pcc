@@ -539,6 +539,18 @@ def test_l1_codegen_lambda_counters_are_initialized():
     assert codegen._lambda_counter == []
 
 
+def test_l1_codegen_static_literal_counters_are_initialized():
+    """Fixed-layout pcc1 instances cannot rely on missing-attribute defaults."""
+    from pcc.py_frontend.codegen.layer1 import L1CodeGen
+    from pcc.py_frontend.py_ast import Module
+
+    codegen = L1CodeGen(Module(name="static_literal_counter_probe", body=[]))
+
+    assert codegen._static_agg_counter == 0
+    assert codegen._static_dict_counter == 0
+    assert codegen._static_seq_counter == 0
+
+
 def test_l1_codegen_scaffold_binding_tables_are_initialized():
     """Self-hosted fixed-layout scaffold slots must start as containers."""
     from pcc.py_frontend.codegen.layer1 import L1CodeGen

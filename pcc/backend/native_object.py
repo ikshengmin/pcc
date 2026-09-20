@@ -48,6 +48,8 @@ from .macho_obj import (
     _DATA_IN_CODE_KINDS,
     _DATA_IN_CODE_UNITS,
     _PROVEN_RELOCATION_SHAPES,
+    _claim_relocation_offset,
+    _relocation_offset_bitmap,
     _validate_relocation,
     _validate_section,
     emit_object,
@@ -137,28 +139,45 @@ class NativeObject:
         sections: list[Section] | tuple[Section, ...],
         *,
         undefined: list[str] | tuple[str, ...] = (),
+        _consume_relocations: bool = False,
     ) -> "NativeObject":
+        """Build the indexed object; normally borrow all source containers.
+
+        The linker may transfer its newly allocated relocation lists with
+        ``_consume_relocations``. Each converted entry is then cleared so
+        source and indexed record graphs do not coexist in full. This mode
+        is only for buffers the caller owns exclusively; ordinary inputs
+        remain untouched. Validate the entire input before consuming entries.
+        """
         source_sections = tuple(sections)
         undefined_names = tuple(undefined)
         _validate_source_sections(source_sections, undefined_names)
-
-        defined: list[tuple[TextSymbol, int]] = []
-        for section_index, section in enumerate(source_sections, start=1):
-            for symbol in section.symbols:
-                defined.append((symbol, section_index))
-        defined.sort(key=lambda pair: (pair[1], pair[0].offset))
-        local_defined = [pair for pair in defined if not pair[0].external]
-        external_defined = [pair for pair in defined if pair[0].external]
+        if _consume_relocations:
+            for section in source_sections:
+                if not isinstance(section.relocations, list):
+                    raise NativeObjectError("owned relocation buffers must be lists")
 
         symbols: list[NativeSymbol] = []
-        for symbol, section_index in local_defined + external_defined:
-            symbols.append(NativeSymbol(
-                name=symbol.name,
-                section_index=section_index,
-                offset=symbol.offset,
-                external=symbol.external,
-                private_external=symbol.private_external,
-            ))
+        # Canonical order is visibility, section number, then offset (stable
+        # for ties). Stream those partitions instead of retaining a global
+        # list of (symbol, section) pairs and tuple-valued sort keys. Merged
+        # sections already carry offset-ordered symbols.
+        external = False
+        while True:
+            for section_index, section in enumerate(source_sections, start=1):
+                for symbol in _source_symbols_in_offset_order(section):
+                    if symbol.external != external:
+                        continue
+                    symbols.append(NativeSymbol(
+                        name=symbol.name,
+                        section_index=section_index,
+                        offset=symbol.offset,
+                        external=symbol.external,
+                        private_external=symbol.private_external,
+                    ))
+            if external:
+                break
+            external = True
         for name in sorted(undefined_names):
             symbols.append(NativeSymbol(
                 name=name,
@@ -175,7 +194,11 @@ class NativeObject:
         native_sections: list[NativeSection] = []
         for section in source_sections:
             relocations: list[NativeRelocation] = []
-            for relocation in section.relocations:
+            source_relocations = section.relocations
+            relocation_index = 0
+            relocation_count = len(source_relocations)
+            while relocation_index < relocation_count:
+                relocation: Relocation = source_relocations[relocation_index]
                 is_section_target = relocation.section is not None
                 relocations.append(NativeRelocation(
                     offset=relocation.offset,
@@ -197,6 +220,9 @@ class NativeObject:
                     ),
                     target_offset=relocation.target_offset,
                 ))
+                if _consume_relocations:
+                    source_relocations[relocation_index] = None
+                relocation_index += 1
             native_sections.append(NativeSection(
                 segname=section.segname,
                 sectname=section.sectname,
@@ -456,6 +482,11 @@ def _validate_source_sections(
         known = {name: index for index, name in enumerate(seen)}
         for section_index, section in enumerate(sections):
             relocation_offsets: set[int] = set()
+            count = (
+                len(section.relocations) if relocation_counts is None
+                else relocation_counts[section_index]
+            )
+            offset_bitmap = _relocation_offset_bitmap(len(section.data), count)
             relocations = (
                 section.relocations if relocation_source is None
                 else relocation_source(section_index)
@@ -464,13 +495,14 @@ def _validate_source_sections(
                 _validate_relocation(
                     section, relocation, known, section_by_name,
                 )
-                if relocation.offset in relocation_offsets:
+                if not _claim_relocation_offset(
+                    relocation.offset, offset_bitmap, relocation_offsets,
+                ):
                     raise MachOEmitError(
                         "multiple relocation requests at offset "
                         f"{relocation.offset} in {section.segname},"
                         f"{section.sectname}"
                     )
-                relocation_offsets.add(relocation.offset)
     except MachOEmitError as exc:
         raise NativeObjectError(str(exc)) from exc
 
@@ -716,7 +748,7 @@ class NativeObjectView:
             addrs.append(vm_cursor)
             vm_cursor += section.vm_size
 
-        payloads = [bytearray(section.data) for section in native.sections]
+        payloads: list[bytes | bytearray] = [section.data for section in native.sections]
         for section_index, section in enumerate(native.sections):
             for relocation in section.relocations:
                 if relocation.target_section_index is None:
@@ -750,6 +782,8 @@ class NativeObjectView:
                         "section-target value does not fit relocation width"
                     )
                 encoded_target = target_value.to_bytes(width, "little")
+                if not isinstance(payloads[section_index], bytearray):
+                    payloads[section_index] = bytearray(payloads[section_index])
                 encoded_index = 0
                 while encoded_index < width:
                     payloads[section_index][start + encoded_index] = encoded_target[
@@ -757,15 +791,16 @@ class NativeObjectView:
                     ]
                     encoded_index += 1
 
-        data = bytearray()
+        file_size = 0
+        self._payloads = payloads
+        self._data_cache: bytes | None = None
         self._sections: list[dict] = []
         for index, section in enumerate(native.sections):
             if section.vm_size == section.zerofill_size and section.zerofill_size:
                 file_offset = 0
             else:
-                file_offset = _align_up(len(data), section.align_log2)
-                data.extend(b"\0" * (file_offset - len(data)))
-                data.extend(payloads[index])
+                file_offset = _align_up(file_size, section.align_log2)
+                file_size = file_offset + len(payloads[index])
             self._sections.append({
                 "segname_str": section.segname,
                 "sectname_str": section.sectname,
@@ -777,8 +812,6 @@ class NativeObjectView:
                 "nreloc": _raw_relocation_count(section),
                 "_pcc_native_index": index,
             })
-        self.data = bytes(data)
-
         self._symbols: list[dict] = []
         for symbol in native.symbols:
             if symbol.section_index:
@@ -818,6 +851,34 @@ class NativeObjectView:
         }
         self.commands: tuple = ()
 
+    @property
+    def data(self) -> bytes:
+        """Materialize the legacy flat view only for callers requesting it."""
+        if self._data_cache is None:
+            chunks: list[bytes] = []
+            cursor = 0
+            for index, section in enumerate(self.native.sections):
+                if section.zerofill_size:
+                    continue
+                offset = self._sections[index]["offset"]
+                chunks.append(b"\0" * (offset - cursor))
+                payload = bytes(self._payloads[index])
+                chunks.append(payload)
+                cursor = offset + len(payload)
+            self._data_cache = b"".join(chunks)
+        return self._data_cache
+
+    @data.setter
+    def data(self, value: bytes) -> None:
+        self._data_cache = value
+
+    def section_data(self, section: dict) -> bytes | bytearray:
+        index = self._relocation_section_index(section)
+        if self._data_cache is not None:
+            start = section["offset"]
+            return self._data_cache[start:start + section["size"]]
+        return self._payloads[index]
+
     def sections(self) -> list[dict]:
         return self._sections
 
@@ -830,11 +891,11 @@ class NativeObjectView:
             self._relocations[index] = _raw_relocations(self.native.sections[index])
         return self._relocations[index]
 
-    def iter_relocations(self, section: dict):
+    def iter_relocations(self, section: dict, *, ordered: bool = True):
         index = self._relocation_section_index(section)
         if index in self._relocations:
             return iter(self._relocations[index])
-        return _iter_raw_relocations(self.native.sections[index])
+        return _iter_raw_relocations(self.native.sections[index], ordered=ordered)
 
     def _relocation_section_index(self, section: dict) -> int:
         index = section.get("_pcc_native_index")
@@ -859,58 +920,86 @@ def _raw_relocations(section: NativeSection) -> list[dict]:
     return list(_iter_raw_relocations(section))
 
 
-def _iter_raw_relocations(section: NativeSection):
-    for relocation in sorted(
-        section.relocations, key=lambda item: item.offset, reverse=True
-    ):
-        if relocation.addend:
-            yield {
-                "r_address": relocation.offset,
-                "r_symbolnum": relocation.addend,
-                "r_pcrel": 0,
-                "r_length": relocation.length,
-                "r_extern": 0,
-                "r_type": spec.ARM64_RELOC_ADDEND,
-            }
-        if relocation.type == spec.ARM64_RELOC_SUBTRACTOR:
+def _iter_raw_relocations(section: NativeSection, *, ordered: bool = True):
+    count: int = len(section.relocations)
+    _validate_count(count, "relocation", allow_zero=True)
+    if count > 8388608:
+        raise NativeObjectError("relocation ordering index exceeds 23 bits")
+    # Signed Mach-O addresses occupy 31 bits and the object count is bounded
+    # below 2**23. Pack descending address + original index into 54 bits:
+    # fixed-width storage, stable ties, no per-record sort-key tuples.
+    capacity: int = 0
+    if ordered:
+        capacity = count
+    order = CompilerIntArena(capacity)
+    try:
+        if ordered:
+            index: int = 0
+            while index < count:
+                offset: int = section.relocations[index].offset
+                if offset < 0 or offset > 0x7FFFFFFF:
+                    raise NativeObjectError("relocation offset exceeds signed r_address range")
+                order.append((0x7FFFFFFF - offset) * 8388608 + index)
+                index += 1
+            order.sort()
+        index: int = 0
+        while index < count:
+            source_index: int = index
+            if ordered:
+                source_index = order.get_unchecked(index) & 0x7FFFFF
+            relocation = section.relocations[source_index]
+            index += 1
+            if relocation.addend:
+                yield {
+                    "r_address": relocation.offset,
+                    "r_symbolnum": relocation.addend,
+                    "r_pcrel": 0,
+                    "r_length": relocation.length,
+                    "r_extern": 0,
+                    "r_type": spec.ARM64_RELOC_ADDEND,
+                }
+            if relocation.type == spec.ARM64_RELOC_SUBTRACTOR:
+                assert relocation.symbol_index is not None
+                assert relocation.minuend_index is not None
+                yield {
+                    "r_address": relocation.offset,
+                    "r_symbolnum": relocation.symbol_index,
+                    "r_pcrel": 0,
+                    "r_length": relocation.length,
+                    "r_extern": 1,
+                    "r_type": spec.ARM64_RELOC_SUBTRACTOR,
+                }
+                yield {
+                    "r_address": relocation.offset,
+                    "r_symbolnum": relocation.minuend_index,
+                    "r_pcrel": 0,
+                    "r_length": relocation.length,
+                    "r_extern": 1,
+                    "r_type": spec.ARM64_RELOC_UNSIGNED,
+                }
+                continue
+            if relocation.target_section_index is not None:
+                yield {
+                    "r_address": relocation.offset,
+                    "r_symbolnum": relocation.target_section_index,
+                    "r_pcrel": 1 if relocation.pcrel else 0,
+                    "r_length": relocation.length,
+                    "r_extern": 0,
+                    "r_type": relocation.type,
+                }
+                continue
             assert relocation.symbol_index is not None
-            assert relocation.minuend_index is not None
             yield {
                 "r_address": relocation.offset,
                 "r_symbolnum": relocation.symbol_index,
-                "r_pcrel": 0,
-                "r_length": relocation.length,
-                "r_extern": 1,
-                "r_type": spec.ARM64_RELOC_SUBTRACTOR,
-            }
-            yield {
-                "r_address": relocation.offset,
-                "r_symbolnum": relocation.minuend_index,
-                "r_pcrel": 0,
-                "r_length": relocation.length,
-                "r_extern": 1,
-                "r_type": spec.ARM64_RELOC_UNSIGNED,
-            }
-            continue
-        if relocation.target_section_index is not None:
-            yield {
-                "r_address": relocation.offset,
-                "r_symbolnum": relocation.target_section_index,
                 "r_pcrel": 1 if relocation.pcrel else 0,
                 "r_length": relocation.length,
-                "r_extern": 0,
+                "r_extern": 1,
                 "r_type": relocation.type,
             }
-            continue
-        assert relocation.symbol_index is not None
-        yield {
-            "r_address": relocation.offset,
-            "r_symbolnum": relocation.symbol_index,
-            "r_pcrel": 1 if relocation.pcrel else 0,
-            "r_length": relocation.length,
-            "r_extern": 1,
-            "r_type": relocation.type,
-        }
+
+    finally:
+        order.close()
 
 
 def _pack_native_relocation_records(records: CompilerIntArena) -> bytes:
@@ -1607,6 +1696,7 @@ def _validate_packed_relocations(
 ) -> set[int]:
     section = packed.sections[section_index]
     seen_offsets: set[int] = set()
+    offset_bitmap = _relocation_offset_bitmap(section.data_size, section.relocation_count)
     targeted_symbols: set[int] = set()
     for fields in _packed_relocations_in_storage_order(packed, section):
         (
@@ -1721,12 +1811,11 @@ def _validate_packed_relocations(
                 f"relocation offset {offset} is not instruction-aligned in "
                 f"{section.sectname}"
             )
-        if offset in seen_offsets:
+        if not _claim_relocation_offset(offset, offset_bitmap, seen_offsets):
             raise NativeObjectError(
                 f"multiple relocation requests at offset {offset} in "
                 f"{section.segname},{section.sectname}"
             )
-        seen_offsets.add(offset)
     return targeted_symbols
 
 

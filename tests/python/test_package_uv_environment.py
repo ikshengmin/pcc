@@ -122,7 +122,11 @@ def test_wheel_contract_exposes_native_pcc1_and_verified_reuse_input():
     assert 'cmd.append("-B")' in hook
     assert "refusing to publish a wheel" in hook
     assert 'if version == "editable":' in hook
-    assert 'requires = ["hatchling", "llvmlite==0.46.0"]' in pyproject
+    import tomllib
+
+    metadata = tomllib.loads(pyproject)
+    assert metadata["project"]["dependencies"] == []
+    assert metadata["build-system"]["requires"] == ["hatchling"]
     assert '[project.scripts]\npcc = "pcc.cli_launcher:main"' in pyproject
 
 

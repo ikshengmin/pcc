@@ -600,6 +600,10 @@ def _filter_ir_scaffold_closure(
 
 
 def _host_find_spec_origin(mod_name: str) -> str:
+    if sys.implementation.name == "pcc":
+        # Native discovery uses owned providers and configured source roots.
+        # An unavailable provider must not be discovered by another Python.
+        return ""
     py_cmd = str(os.environ.get("PCC_HOST_PYTHON", "") or "python3").strip()
     probe = (
         "import importlib.util,sys\n"
@@ -622,6 +626,8 @@ _HOST_SITE_ROOTS_CACHE: Optional[list[str]] = None
 
 
 def _host_sysconfig_roots(keys: list[str]) -> list[str]:
+    if sys.implementation.name == "pcc":
+        return []
     py_cmd = str(os.environ.get("PCC_HOST_PYTHON", "") or "python3").strip()
     probe = (
         "import os,sys,sysconfig\n"

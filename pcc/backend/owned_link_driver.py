@@ -10,7 +10,8 @@ import sys
 
 from pcc.backend.arm64_asm_driver import assemble_file
 from pcc.backend.macho_exec import link_executable
-from pcc.backend.native_object import NativeObject, decode_native_object
+from pcc.backend.native_object import NativeObject, decode_packed_native_object
+from pcc.backend.macho_internal_inputs import read_internal_input_manifest
 
 
 def main() -> None:
@@ -18,6 +19,7 @@ def main() -> None:
     entry = "_main"
     objects = []
     archives = []
+    manifest = ""
     index = 1
     while index < len(sys.argv):
         option = sys.argv[index]
@@ -29,6 +31,10 @@ def main() -> None:
             output = value
         elif option == "--entry":
             entry = value
+        elif option == "--internal-input-manifest":
+            if manifest:
+                raise ValueError("native linker accepts only one internal input manifest")
+            manifest = value
         elif option == "--asm":
             with open(value, "r") as stream:
                 assembly = stream.read()
@@ -38,16 +44,27 @@ def main() -> None:
             with open(value, "rb") as stream:
                 data = stream.read()
             if option == "--native-object":
-                objects.append(decode_native_object(data))
+                objects.append(decode_packed_native_object(data))
             elif option == "--archive":
                 archives.append(data)
             else:
                 objects.append(data)
         else:
             raise ValueError("unsupported native linker option: " + option)
+    if manifest:
+        if objects:
+            raise ValueError("internal input manifest cannot be combined with direct inputs")
+        for kind, path in read_internal_input_manifest(manifest):
+            if kind == "PCO":
+                with open(path, "rb") as stream:
+                    objects.append(decode_packed_native_object(stream.read()))
+            else:
+                with open(path, "r") as stream:
+                    sections, undefined = assemble_file(stream.read())
+                objects.append(NativeObject.from_sections(sections, undefined=undefined))
     if not output or not objects:
         raise ValueError("native linker requires --out and object/assembly input")
-    image = link_executable(objects, archives=archives, entry=entry)
+    image = link_executable(objects, archives=archives, entry=entry, _consume_inputs=True)
     temporary = output + ".tmp"
     with open(temporary, "wb") as stream:
         stream.write(image)

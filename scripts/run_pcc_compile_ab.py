@@ -819,11 +819,12 @@ def _seal_runtime_bundle(
             f"runtime target {target_id!r} != claim platform {expected_target_id!r}"
         )
     emitters = sorted({row.get("object_emitter") for row in members})
-    checksums = sorted({row.get("codegen_checksum") for row in members})
+    member_checksums = [row.get("codegen_checksum") for row in members]
     if len(emitters) != 1 or not isinstance(emitters[0], str) or not emitters[0]:
         raise CompileABError("runtime archive has mixed or unknown object emitters")
-    if len(checksums) != 1 or not _is_sha256(checksums[0]):
-        raise CompileABError("runtime archive has mixed or unknown codegen checksums")
+    if any(not _is_sha256(checksum) for checksum in member_checksums):
+        raise CompileABError("runtime archive has unknown codegen checksums")
+    checksums = sorted(set(member_checksums))
     manifest_path = Path(str(bundled_archive) + ".provenance.json")
     capi_path = Path(str(bundled_archive) + ".capi_syms")
     wheel_path = Path(str(bundled_archive) + ".wheel")
@@ -841,16 +842,22 @@ def _seal_runtime_bundle(
         encoding="utf-8",
     )
     copied[wheel_path.relative_to(bundle_dir).as_posix()] = _path_receipt(wheel_path)
-    return {
+    verification = {
         "provider": provider_receipt,
         "ar": _path_receipt(ar_path),
         "manifest_target": manifest_target,
         "manifest_member_count": member_count,
         "wheel_target": target_id,
         "object_emitter": emitters[0],
-        "codegen_checksum": checksums[0],
+        "codegen_checksum": checksums[0] if len(checksums) == 1 else None,
         "producer_claim": "binary-integrity-only; producer source closure not proven",
     }
+    if len(checksums) > 1:
+        # Incremental archives have a producer identity per member. The
+        # verified, frozen manifest binds each member to its producer; never
+        # collapse those identities into a claim of one current compiler.
+        verification["codegen_checksums"] = checksums
+    return verification
 
 
 def _prepare_runtime_bundle(
@@ -984,7 +991,7 @@ def runtime_bundle_evidence(bundle: dict[str, Any]) -> dict[str, Any]:
             "sha256": portable["sha256"],
             "size_bytes": portable["size_bytes"],
         }
-    return {
+    evidence = {
         "files": portable_files,
         "provider": _portable_file_receipt(provider, "runtime provenance provider"),
         "ar": _portable_file_receipt(ar, "runtime ar tool"),
@@ -995,6 +1002,9 @@ def runtime_bundle_evidence(bundle: dict[str, Any]) -> dict[str, Any]:
         "codegen_checksum": verification.get("codegen_checksum"),
         "producer_claim": verification.get("producer_claim"),
     }
+    if "codegen_checksums" in verification:
+        evidence["codegen_checksums"] = verification["codegen_checksums"]
+    return evidence
 
 
 def external_tool_evidence(host_python: Path) -> list[dict[str, Any]]:

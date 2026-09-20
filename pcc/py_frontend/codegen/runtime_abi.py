@@ -686,6 +686,11 @@ def _runtime_signatures_part_11():
     # ---- Generic object ops ---------------------------------------
     "py_obj_call": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_method1": (_PYOBJ, [_PYOBJ, _CSTR, _PYOBJ], False),
+    # self.foo(a, b) where a subclass overrides foo: the receiver class is
+    # the only dynamic part, so the caller hands over a complete argument
+    # tuple (receiver at index 0) and this resolves and calls in one step,
+    # instead of getattr + bound method + a second tuple + py_obj_call.
+    "py_instance_method_call_direct": (_PYOBJ, [_PYOBJ, _CSTR, _PYOBJ], False),
     "py_obj_add": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_sub": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_mul": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -1387,6 +1392,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         # PCC_GC_REFCOUNT_PROVENANCE_PROBE mode and its first-miss report flag
         # (py_runtime.h:117).  Written by pcc_gc_config_ensure and the
         # refcount-prepare mirrors, read by pcc_gc_telemetry.
+        'pcc_allocator_double_free_reported',
         'pcc_gc_refcount_provenance_probe',
         'pcc_gc_refcount_provenance_probe_reported',
         'pcc_gc_cms_mutator_assists',
@@ -1468,6 +1474,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_remap_epoch',
         # PCC_GC_COUNTER_UNMANAGED_REFCOUNT_OPS (py_runtime.h:116).  Written
         # by both refcount-prepare mirrors, read by pcc_gc_telemetry.
+        'pcc_allocator_double_frees',
         'pcc_gc_unmanaged_refcount_ops',
         'pcc_gc_backend4_relocation_reset_owner',
         'pcc_gc_backend4_reseed_plan_probe_allocation_limit',
@@ -2234,6 +2241,7 @@ def _cross_object_signatures_part_6():
     "py_tls_exc_get": ((), "c_ptr"),
     "py_tls_exc_set": (("c_ptr",), "c_void"),
     "pcc_gc_object_index_find": (("c_ptr",), "c_ptr"),
+    "pcc_gc_index_slot_size": ((), "c_int64"),
     "pcc_gc_object_index_insert": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_object_index_plan_capacity": (("c_int64",), "c_int64"),
     "pcc_gc_object_index_plan_commit": (

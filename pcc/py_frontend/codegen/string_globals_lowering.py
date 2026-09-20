@@ -123,6 +123,15 @@ class StringGlobalsLoweringMixin:
         return ir.Value(ir.PointerType(_I8), expr)
 
     def _cstr_global(self, payload: str, name: str) -> ir.GlobalVariable:
+        # Filenames and dynamic attribute/module names may contain characters
+        # that are not backend identifiers. Keep them in the UTF-8 payload;
+        # a pooled numeric label gives the private global a safe unique name.
+        if (
+            not name
+            or name[0] not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_.$"
+            or name.strip("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.$")
+        ):
+            return self._pooled_cstr_global(payload, ".cstr.symbol")
         data = self._utf8_byte_values(payload) + [0]
         arr_ty = ir.ArrayType(_I8, len(data))
         existing = self.module.globals.get(name)

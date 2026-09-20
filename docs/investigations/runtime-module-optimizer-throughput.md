@@ -1602,3 +1602,166 @@ must spill. Those rows are 393 of 2969 in `py_obj` (13%), 870 of 3152 in
 Claim boundary: three runtime modules on Darwin arm64, host `pcc`, allocator
 facts only. It is not a QPS measurement and not a claim that the four slices
 sum to the measured 2.43x emitter gap.
+
+
+## Update — 2026-09-19: a double free is now named where it happens
+
+Removing the refcount provenance probe turned two latent ownership defects
+into crashes, and both landed arbitrarily far from their cause. The first was
+the destructured-literal retain above. The second still reproduces, and
+chasing it through lldb cost more than writing the check that names it.
+
+The allocator's object free lists are intrusive: a freed cell's first word is
+the list link. Freeing one cell twice therefore puts it on its list twice, and
+a later pair of allocations hands the same address to two owners. Neither
+owner is wrong at the point it writes, so the failure appears as something
+else entirely -- `EXC_ARM_DA_ALIGN` on a release store inside
+`pcc_allocator_alloc_object`, or a `TypeError` raised by code that never
+touched the object.
+
+`free()` now refuses a cell it has already taken. The marker is a poison word,
+not the granule lifecycle word:
+
+```
+FREE_LIST_POISON at [cell + 8]   written by pcc_allocator_put_small_object
+                                 cleared by pcc_allocator_take_small_object
+                                 overwritten by every live object's (tag, flags)
+```
+
+The lifecycle word cannot serve. `pcc_allocator_refill_small_object` links
+freshly carved cells through the same push path with the word already reading
+`GC_STATE_FREE`, and the GC retires a granule to `GC_STATE_FREE` *before*
+calling `free()` on it. Both were measured as false positives first: the push
+site reported 1,803,656 double frees on a 1000-object program, and the free
+site with the lifecycle word still reported 2,046. With the poison word the
+same program reports zero.
+
+A cell that still carries the poison is counted in
+`pcc_allocator_double_frees` (`PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES`,
+telemetry metric 118) and dropped rather than linked, so the heap stays
+self-consistent and the run reaches a diagnosable point instead of corrupting
+an unrelated object. Under the ownership-audit mode -- the same
+`PCC_GC_REFCOUNT_PROVENANCE_PROBE` knob, 2 or 3 -- the first one is reported on
+stderr, and 3 aborts so the crash report names the caller.
+
+Every bootstrap stage smoke runs under that mode and fails the stage (rc 97) on
+either report, printing the smoke's stderr. The two ownership defects this
+series found were both invisible to the gateway benchmark and to the
+bottom-line gates; they are now a build gate.
+
+Regression: `tests/python/test_allocator_double_free_detector.py`, which pins
+the push/pop poison pairing (every size class clears it, or the next free of
+that cell reports a double free that did not happen), the check's position
+before the link, the counter's telemetry route, and zero reports on an
+ordinary object-churning program.
+
+
+## Update — 2026-09-19: py_incref stopped at type tag 500
+
+With the destructured-literal retain fixed and the double-free check in place,
+the Stage1 smoke still reported one refcount operation on a non-object. Audit
+mode 3 named the site directly from the crash report:
+
+```
+pcc_platform_abort
+py_incref
+py_tuple_get_known                                  the callee's argument unpack
+user_pcc_backend_macho_archive__inspect_member_native_adapter
+py_func_call_kwargs / py_obj_call
+user_pcc_backend_macho_parallel___nested_run_worker
+```
+
+The argument tuple built by the caller held a dead `_PendingMember`. The
+element had been stored with `py_tuple_set_item`, which retains through
+`py_incref`, and the caller then released its own reference -- balanced, unless
+the retain did nothing.
+
+It did nothing. Both refcount mirrors screened their operand with
+
+```python
+tag < PY_TYPE_NONE
+or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER)
+or (tag > 500 and pcc_capi_is_cext_type_tag(tag) == 0)     # <-- here
+```
+
+and returned without touching the header when it matched. User-class tags are
+handed out from `PY_TYPE_USER_CLASS_START` (104) upward, one per class in the
+compiled closure; C-extension tags start at `PY_TYPE_CEXT_TAG_BASE` (0x10000).
+The literal 500 is neither boundary. Every user class past roughly the 440th
+was therefore unrefcounted: `py_incref` and `py_decref` were silently no-ops
+for its instances. The crashing object's tag was 541.
+
+Nothing small reaches 500 classes, which is why the gateway benchmark, the
+bottom-line gates and every focused test missed it for as long as the guard has
+existed. pcc's own closure crosses it, so pcc1 stopped refcounting a subset of
+its own instances -- and the failure surfaced as a `TypeError` in unrelated
+code, because the freed cell was reused.
+
+Fixed in both mirrors: four guards in `py_obj.py`, three in `py_obj.c` and one
+in `pcc_threads.c` now compare against the C-extension tag base, which is named
+`PY_TYPE_CEXT_TAG_BASE` in `py_runtime.h`. The pcc-Python mirror spells it as
+the literal `(0x10000)`, matching `py_capi_type_runtime.py`: comparing against
+the *imported* name lowers through `py_obj_ge`, the generic object comparison,
+and segfaults on the first refcount. That cost one rebuild cycle and is
+recorded in the regression test.
+
+Regression: `tests/python/test_user_class_tag_refcount_boundary.py` compiles a
+620-class program and checks that an instance of one of the last classes
+survives 200 round trips through a call's argument tuple with the unmanaged and
+double-free counters at zero.
+
+### Stage1 now passes
+
+```
+scripts/bootstrap.sh --backend self --stage 1      rc=0  (6m47s)
+  smoke under PCC_GC_REFCOUNT_PROVENANCE_PROBE=3 (abort at the first report)
+pcc1 smoke, five audit configurations                rc=0, 0 unmanaged, 0 double frees
+  default / probe=2 / probe=3 / probe=2 + PCC_GC_KNOWN_REF_CHECKS=1 / probe=3 + known
+bottom-line gates (host pcc and cc absent)           C 'hello 15 36' rc=42; Python '135' rc=0; libSystem only
+```
+
+Three ownership defects were between the probe-off default and a working
+pcc1, and all three were invisible to every benchmark in the repo. Stage2 is
+the remaining gate.
+
+## Update — 2026-09-19: native string decoding repeatedly compiled a late regex
+
+A source-frozen native Stage2 attempt reached its 5.5 GiB tree limit while
+`pcc.cli_bootstrap` codegen overlapped a ~3.08 GB coordinator. Its native
+worker was sampled using its own binary identity; replay without the resident
+coordinator succeeds in 122.464 s at 3,402,514,432 bytes peak tree RSS.
+This separates the coexistence limit from a codegen capability failure.
+
+In the actual worker's 2,302-sample trace, `_pcc_re_core__compile` accounts for
+354 self samples (15.4%). The compile subtree includes 494 samples below
+`decode_llvm_c_string` and 62 below `emit_typed_initializer`. The first-64
+immutable regex cache falls back to compilation for later patterns. The
+cstring decoder called `re.fullmatch('[0-9A-Fa-f]{2}', ...)` once per escaped
+byte, so one late pattern was repeatedly compiled. A separate coordinator
+startup trace contains waiting `read` frames under host-find-spec probes;
+those blocked samples are not on-CPU attribution.
+
+The decoder now checks the fixed two-character ASCII alphabet with a native
+string operation and reuses the slice for conversion. Existing non-hex escape
+behavior, all 256 byte values, invalid/truncated tokens and non-byte Unicode
+behavior are pinned against the previous decoder. 73 decoder/token-classifier
+tests pass.
+
+Native component measurement, not a Stage2 speed claim: both old and new
+function bodies were compiled into the same binary against the same runtime.
+Inputs are the eight longest literal strings from the frozen cli_bootstrap
+source, rendered with the owned IR constant formatter, plus an all-byte
+sample (7,828 decoded bytes). Eighty distinct complex patterns prime the cache
+before the measured decoder. All nine decoded outputs match each other and
+the original bytes. Three alternating pairs of ten iterations yield median
+1.520801 s old / 0.201190 s new, **7.559x for this decoder**. The original
+worker and a newly built compiler still require a controlled comparison before
+claiming end-to-end improvement.
+
+Evidence: `/private/tmp/pcc-stage2-native-ayfmxjgz/`:
+`codegen-worker.folded`, `replay-cli.result.json`, `cstring-pairs.json`,
+`cstring-pairs.result.json`, `cstring-primed-verify.stdout` and the frozen
+benchmark source/input files. Compiler used for the original worker:
+`0373254d264bae2d461f481ed084124c6ccbdace262b15e8407511b4a5703ffe`;
+source `81a16324935f9dc06d7320512d0fd69202a716c92db6d560598b26838a77cca4`;
+runtime `d8f82e49001889450c2d6a7a084397889e0f638e609fec7a9a0ed9932a3aeef6`.

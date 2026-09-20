@@ -34,6 +34,7 @@ from . import macho_spec as spec
 from .macho_codesign import _CD_HEADER_SIZE as _CD_FIXED
 from .macho_codesign import _align8, build_signature
 from .macho_archive import ArchiveError, read_archive, select_members
+from .macho_obj import _build_string_table
 from .macho_link import (
     LinkInput,
     LinkError,
@@ -265,6 +266,7 @@ def prepare_executable_object(
     *,
     archives: list[bytes] = (),
     semantic_manifest=None,
+    _consume_inputs: bool = False,
 ) -> NativeObject:
     """Resolve a final link job into its reusable relocatable state.
 
@@ -273,17 +275,23 @@ def prepare_executable_object(
     the command-line objects.  The returned object is still pre-layout and
     pre-relocation, so compatible input payloads can patch it before final
     executable layout without re-reading and re-merging every input module.
+
+    ``_consume_inputs`` transfers the caller's mutable input list. The owned
+    CLI uses it to retire decoded inputs after the merge; ordinary API calls
+    borrow the list and preserve its contents.
     """
 
     # Archives are pools, not inputs: pull only the members that satisfy
     # something still undefined, repeatedly (see macho_archive).
-    objects = _coerce_link_objects(list(objects))
+    resolved_objects = _coerce_link_objects(list(objects))
+    if _consume_inputs:
+        objects.clear()
     # Validate before archive selection reads the main inputs' symbol tables;
     # otherwise a malformed/foreign input can escape this final-link boundary
     # as a low-level parser exception instead of a deterministic LinkError.
-    _validate_input_load_commands(objects)
+    _validate_input_load_commands(resolved_objects)
     if archives:
-        already_defined, pending = _external_symbol_state(objects)
+        already_defined, pending = _external_symbol_state(resolved_objects)
         for archive_index, archive in enumerate(archives):
             try:
                 members = read_archive(archive)
@@ -296,19 +304,19 @@ def prepare_executable_object(
                 pending,
                 already_defined=already_defined,
             )
-            objects.extend(_coerce_link_objects(
+            resolved_objects.extend(_coerce_link_objects(
                 list(pulled),
-                start_index=len(objects),
+                start_index=len(resolved_objects),
             ))
-            already_defined, pending = _external_symbol_state(objects)
+            already_defined, pending = _external_symbol_state(resolved_objects)
         # Archive members are inputs too.  Validate the selected set before the
         # relocatable core consumes it; unselected members were already parsed
         # by read_archive and a malformed member failed above.
-        _validate_input_load_commands(objects)
+        _validate_input_load_commands(resolved_objects)
     # Even one input goes through the relocatable core: that is where CPU,
     # symbol-provenance, companion-relocation, and section-target contracts
     # are normalized and checked. A one-object fast path must not bypass them.
-    merged = link_relocatable_native(objects)
+    merged = link_relocatable_native(resolved_objects, _consume_inputs=_consume_inputs)
     if semantic_manifest is not None:
         # Imported lazily so the ordinary linker path and compiled-stage
         # closure do not acquire semantic-layout policy or JSON machinery.
@@ -331,15 +339,27 @@ def link_executable(
     minos: tuple[int, int] = (12, 0),
     identifier: bytes = b"pcc-linked",
     semantic_manifest=None,
+    _consume_inputs: bool = False,
 ) -> bytes:
+    # Finish only after the preparation frame has returned. In a compiled
+    # caller, temporary arguments may stay owned until that frame exits.
+    plan = _prepare_executable_inputs(
+        objects, archives, entry, minos, identifier, semantic_manifest, _consume_inputs,
+    )
+    return _finish_executable_image(plan, identifier, None)
+
+
+def _prepare_executable_inputs(objects, archives, entry, minos, identifier,
+                               semantic_manifest, consume_inputs):
     # Preserve fail-closed option validation before parsing potentially large
     # inputs.  ``link_prepared_executable`` validates again for direct users.
     minos = _validate_minos(minos)
-    return link_prepared_executable(
+    return _prepare_executable_image(
         prepare_executable_object(
             objects,
             archives=archives,
             semantic_manifest=semantic_manifest,
+            _consume_inputs=consume_inputs,
         ),
         entry=entry,
         minos=minos,
@@ -361,6 +381,19 @@ def link_prepared_executable(
     ``NativeObject``: external Mach-O and archive validation must happen in
     :func:`prepare_executable_object`, never be bypassed by a cache hit.
     """
+    plan = _prepare_executable_image(merged, entry=entry, minos=minos,
+                                     identifier=identifier)
+    return _finish_executable_image(plan, identifier, phase_callback)
+
+
+def _prepare_executable_image(
+    merged: NativeObject,
+    *,
+    entry: str = "_main",
+    minos: tuple[int, int] = (12, 0),
+    identifier: bytes = b"pcc-linked",
+):
+    """Resolve addresses into immutable output regions, without allocating an image."""
 
     minos = _validate_minos(minos)
     if not isinstance(merged, NativeObject):
@@ -435,7 +468,8 @@ def link_prepared_executable(
     names_all = [s["name"] for s in symbols]
     imports_set = set(imports)
     for sec in sections:
-        for r in obj.iter_relocations(sec):
+        # Reference classification is set-based and does not depend on address order.
+        for r in obj.iter_relocations(sec, ordered=False):
             if not r["r_extern"]:
                 continue
             nm = names_all[r["r_symbolnum"]]
@@ -505,7 +539,7 @@ def link_prepared_executable(
         out = _Out(
             segname, sectname, sec["flags"], sec["align"],
             bytearray() if is_zf
-            else bytearray(obj.data[sec["offset"]:sec["offset"] + sec["size"]]),
+            else bytearray(obj.section_data(sec)),
         )
         out.zerofill_size = sec["size"] if is_zf else 0
         if segname == "__TEXT":
@@ -1135,8 +1169,7 @@ def link_prepared_executable(
     symtab_off = _align(fixups_off + len(fixups), 8)
 
     # --- symbol table ------------------------------------------------------
-    strtab = bytearray(b"\0")
-    nlists = bytearray()
+    nlist_parts: list[bytes] = []
     # Symbols in dropped unwind sections have no address; they are not in
     # sym_addr and must not appear in the symbol table either.
     defined_items = [
@@ -1159,15 +1192,17 @@ def link_prepared_executable(
     # the command disagree with the actual nlist entries and confuses tools
     # (and future dyld consumers) that trust the partition indices.
     ordered = local_defs + external_defs
+    string_offsets, strtab = _build_string_table(
+        [name for name, _sym in ordered] + imports,
+    )
     for name, sym in ordered:
-        strx = len(strtab)
-        strtab += name.encode() + b"\0"
+        strx = string_offsets[name]
         out, sec_addr = section_addr[sym["n_sect"]]
         # Derived from text_sections so the two orders cannot drift.
         n_sect = 1 + (
             text_sections + ([got] if code_imports else []) + data_out
         ).index(out)
-        nlists += spec.NLIST_64.pack({
+        nlist_parts.append(spec.NLIST_64.pack({
             "n_strx": strx,
             "n_type": (
                 spec.N_SECT
@@ -1175,19 +1210,18 @@ def link_prepared_executable(
                 | (spec.N_PEXT if sym["n_type"] & spec.N_PEXT else 0)
             ),
             "n_sect": n_sect, "n_desc": 0, "n_value": sym_addr[name],
-        })
+        }))
     n_local = len(local_defs)
     n_extdef = len(external_defs)
     n_defined = n_local + n_extdef
     for name in imports:
-        strx = len(strtab)
-        strtab += name.encode() + b"\0"
-        nlists += spec.NLIST_64.pack({
+        strx = string_offsets[name]
+        nlist_parts.append(spec.NLIST_64.pack({
             "n_strx": strx, "n_type": spec.N_UNDF | spec.N_EXT,
             "n_sect": spec.NO_SECT, "n_desc": 1 << 8, "n_value": 0,
-        })
-    while len(strtab) % 8:
-        strtab += b"\0"
+        }))
+    nlists = b"".join(nlist_parts)
+    nlist_parts.clear()
     strtab_off = symtab_off + len(nlists)
     sig_off = _align(strtab_off + len(strtab), 16)
     # __LINKEDIT must COVER the code signature: dyld's strict validation
@@ -1317,10 +1351,18 @@ def link_prepared_executable(
         OutputRegion(symtab_off, bytes(nlists), "symbol table"),
         OutputRegion(strtab_off, bytes(strtab), "string table"),
     ))
+    return sig_off, regions, sig_size, text_filesize
+
+
+def _finish_executable_image(plan, identifier, phase_callback) -> bytes:
+    sig_off, regions, sig_size, text_filesize = plan
     try:
         image = materialize_output(sig_off, regions)
     except ParallelLinkError as exc:
         raise LinkError(f"parallel Mach-O output failed: {exc}") from exc
+    # The immutable image owns the bytes now. Retire per-section copies before
+    # allocating hash pages, the signature, and the final signed image.
+    regions.clear()
 
     if phase_callback is not None:
         phase_callback("sign_begin")

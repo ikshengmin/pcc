@@ -602,7 +602,7 @@ static void pcc_gc_incref_fresh_native_instance(PyObject *o) {
         h->type_tag != PY_TYPE_INSTANCE
         && (
             h->type_tag < PY_TYPE_USER_CLASS_START
-            || h->type_tag > 500
+            || h->type_tag >= PY_TYPE_CEXT_TAG_BASE
         )
     ) {
         /* Fail safely if a future compiler caller widens the trusted lane
@@ -1195,7 +1195,7 @@ static void pcc_incref_prepare(
     }
     PyObjectHeader *h = py_header(o);
     if (
-        (!py_type_tag_is_valid(h->type_tag) || h->type_tag > 500)
+        (!py_type_tag_is_valid(h->type_tag) || h->type_tag >= PY_TYPE_CEXT_TAG_BASE)
         && pcc_capi_is_cext_type_tag((int64_t)h->type_tag) == 0
     ) {
         pcc_refcount_prepare_debug_bad(
@@ -1421,7 +1421,7 @@ static void pcc_decref_prepare(
     }
     PyObjectHeader *h = py_header(o);
     if (
-        (!py_type_tag_is_valid(h->type_tag) || h->type_tag > 500)
+        (!py_type_tag_is_valid(h->type_tag) || h->type_tag >= PY_TYPE_CEXT_TAG_BASE)
         && pcc_capi_is_cext_type_tag((int64_t)h->type_tag) == 0
     ) {
         pcc_refcount_prepare_debug_bad(

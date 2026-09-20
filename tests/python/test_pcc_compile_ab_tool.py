@@ -1221,6 +1221,50 @@ def test_runtime_bundle_copies_provenance_sources_and_detects_changes(
         tool._verify_runtime_bundle(bundle)
 
 
+@pytest.mark.parametrize("checksums", [["a" * 64], ["a" * 64, "b" * 64]])
+def test_runtime_bundle_preserves_every_verified_codegen_identity(
+    tmp_path, monkeypatch, checksums,
+):
+    from types import SimpleNamespace
+
+    tool = _load_tool()
+    archive = tmp_path / "runtime.a"
+    archive.write_bytes(b"archive whose members were verified")
+    for suffix, content in [
+        (".target", "darwin:arm64:arm64-apple-darwin\n"),
+        (".provenance.json", "{}\n"), (".capi_syms", "PyAnchor\n"),
+    ]:
+        Path(str(archive) + suffix).write_text(content)
+    manifest = {
+        "target_triple": "arm64-apple-darwin", "member_count": len(checksums),
+        "members": [{"object_emitter": "pcc", "codegen_checksum": checksum}
+                    for checksum in checksums],
+    }
+    calls = []
+
+    def verify(path, **kwargs):
+        calls.append((path, kwargs["runtime_root"]))
+        return manifest
+
+    monkeypatch.setattr(tool, "_load_provenance_provider", lambda: (
+        SimpleNamespace(verify_runtime_archive_manifest=verify), tool._path_receipt(SCRIPT),
+    ))
+    copied = {}
+    verification = tool._seal_runtime_bundle(tmp_path, archive, copied)
+    assert calls == [(archive, tmp_path)]
+    assert verification["codegen_checksum"] == (checksums[0] if len(checksums) == 1 else None)
+    if len(checksums) > 1:
+        assert verification["codegen_checksums"] == checksums
+    evidence = tool.runtime_bundle_evidence({"files": copied, "verification": verification})
+    assert evidence.get("codegen_checksums") == verification.get("codegen_checksums")
+    assert evidence["producer_claim"] == "binary-integrity-only; producer source closure not proven"
+
+    for invalid in (None, "unknown", "f" * 63):
+        manifest["members"][-1]["codegen_checksum"] = invalid
+        with pytest.raises(tool.CompileABError, match="unknown codegen checksum"):
+            tool._seal_runtime_bundle(tmp_path, archive, {})
+
+
 def test_runtime_bundle_requires_provenance_even_after_archive_rename(
     tmp_path, monkeypatch
 ):

@@ -87,12 +87,11 @@ def test_cpy_needle_in_native_list_bridges(mode):
 
 
 def test_cpy_container_still_uses_cpython_contains():
+    # os.environ.keys() is now native and no longer exercises this boundary.
     program = textwrap.dedent(
         """
-        import os
-
         def f(name: str) -> bool:
-            return name in os.environ.keys()
+            return name in eval("['a', 'b']")
         """
     )
     ir = _compile_to_ll(program, "membership_cpy_container", mode="off")
@@ -107,6 +106,55 @@ def test_cpy_container_still_uses_cpython_contains():
     # native ``py_obj_contains`` path.
     assert "@.cpy.attr.__contains__" in body, body
     assert "@py_obj_contains" not in body, body
+
+
+def test_os_environ_keys_membership_stays_native():
+    ir = _compile_to_ll(
+        'import os\ndef f(name: str) -> bool:\n    return name in os.environ.keys()\n',
+        "membership_native_environ_keys", mode="off",
+    )
+    body = _function_body(ir, "f")
+    assert body is not None
+    assert "@py_os_environ_snapshot" in body
+    assert "@py_obj_contains" in body
+    assert "@.cpy.attr.__contains__" not in body
+
+
+@pytest.mark.parametrize("foreign_needle", [False, True])
+def test_late_cpy_container_preserves_precomputed_needle(monkeypatch, foreign_needle):
+    from pcc.py_frontend.codegen.layer1 import L1CodeGen
+    from pcc.py_frontend.py_ast import Call, Name
+
+    original_hint = L1CodeGen._expr_looks_cpython
+    original_emit = L1CodeGen._emit_expr
+
+    def is_eval(expr):
+        return isinstance(expr, Call) and isinstance(expr.func, Name) and expr.func.ident == "eval"
+
+    def hide_eval_hint(self, expr):
+        return False if is_eval(expr) else original_hint(self, expr)
+
+    def emit_late_eval(self, expr):
+        # Supply a real CPython call despite the deliberately hidden source
+        # hint. The operand's emitted domain must govern the late dispatch.
+        if is_eval(expr):
+            function = self._load_cpython_builtin("eval")
+            return self._emit_cpy_func_call(function, "late.eval", expr.args)
+        return original_emit(self, expr)
+
+    monkeypatch.setattr(L1CodeGen, "_expr_looks_cpython", hide_eval_hint)
+    monkeypatch.setattr(L1CodeGen, "_emit_expr", emit_late_eval)
+    needle = 'decimal.Decimal("1")' if foreign_needle else '"a"'
+    ir = _compile_to_ll(
+        'import decimal\ndef f() -> bool:\n    return ' + needle + ' in eval("[1]")\n',
+        "membership_late_cpy_" + str(foreign_needle), mode="off",
+    )
+    body = _function_body(ir, "f")
+    assert body is not None
+    assert "@.cpy.attr.__contains__" in body
+    assert "@py_cpy_to_pcc_obj" not in body
+    if not foreign_needle:
+        assert "@py_cpy_from_pcc_obj" in body
 
 
 @pytest.mark.parametrize("mode", ["off", "on"])

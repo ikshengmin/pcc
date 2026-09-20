@@ -883,7 +883,7 @@ class ExactIntLoweringMixin:
             return self._emit_int_literal_object(-int(literal.value))
         if (
             isinstance(expr, UnaryOp)
-            and expr.op == "-"
+            and expr.op in ("-", "~")
             and isinstance(expr.operand.ty, (IntType, BoolType))
         ):
             operand = self._emit_exact_int_operand_object(expr.operand)
@@ -900,11 +900,18 @@ class ExactIntLoweringMixin:
             if operand_pinned:
                 self._gc_pin(operand)
                 operand_cleanup = ((operand, operand_owned),)
-            result = self.builder.call(
-                self.runtime["py_int_neg"],
-                [operand],
-                name=self._fresh("exact.int.neg"),
-            )
+            if expr.op == "~":
+                result = self.builder.call(
+                    self.runtime["py_int_xor"],
+                    [operand, self._emit_int_literal_object(-1)],
+                    name=self._fresh("exact.int.invert"),
+                )
+            else:
+                result = self.builder.call(
+                    self.runtime["py_int_neg"],
+                    [operand],
+                    name=self._fresh("exact.int.neg"),
+                )
             self._emit_post_call_err_check(
                 None,
                 pinned_release_on_error=operand_cleanup,
@@ -1044,12 +1051,13 @@ class ExactIntLoweringMixin:
                 # typed pcc.i64/pcc.u64 expressions returned at function entry.
                 return True
             return False
-        if isinstance(expr, UnaryOp) and expr.op == "-":
+        if isinstance(expr, UnaryOp) and expr.op in ("-", "~"):
             if isinstance(expr.operand, IntLit):
                 # Classify the folded signed literal, not its positive
                 # operand.  2**63 needs an exact object by itself, while
                 # -2**63 is the valid lower endpoint of the raw i64 lane.
-                value = -int(expr.operand.value)
+                value = int(expr.operand.value)
+                value = -value if expr.op == "-" else ~value
                 return value < -(1 << 63) or value > (1 << 63) - 1
             if self._int_expr_needs_exact_object_boundary(expr.operand):
                 return True

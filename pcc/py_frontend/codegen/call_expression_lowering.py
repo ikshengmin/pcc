@@ -416,6 +416,7 @@ class CallExpressionLoweringMixin:
         phi = self.builder.phi(_CSTR, name=self._fresh("method.dict.dispatch.result"))
         for value, block in incoming:
             phi.add_incoming(value, block)
+        self._note_owned_dynamic_call_value(phi)
         return phi
 
     def _emit_globals_builtin(self) -> ir.Value:
@@ -760,6 +761,10 @@ class CallExpressionLoweringMixin:
         self.builder.branch(cond_bb)
 
         self.builder.position_at_end(end_bb)
+        # This helper is also called directly for resumable generator loops,
+        # bypassing expression-shape ownership inference. The iterator retains
+        # the list; its caller must consume this independent construction owner.
+        self._note_owned_object_value(out)
         return out
 
     def _name_binds_cpy_returning_callable(self, name: str) -> bool:
@@ -900,6 +905,7 @@ class CallExpressionLoweringMixin:
                 [fn_val, args_tuple, kwargs_obj],
                 name=self._fresh("obj.call"),
             )
+            self._note_owned_dynamic_call_value(result)
             self._gc_release(args_tuple)
             if expr.kwargs:
                 self._gc_release(kwargs_obj)
@@ -1742,6 +1748,7 @@ class CallExpressionLoweringMixin:
                         expr, key_expr, reverse_const
                     )
                     if keyed is not None:
+                        self._note_owned_object_value(keyed)
                         return keyed
             elif not other_kwarg:
                 # Custom-class elements with a user __lt__: the runtime
@@ -1786,6 +1793,7 @@ class CallExpressionLoweringMixin:
                             self.runtime["py_list_reverse"],
                             [new_list],
                         )
+                    self._note_owned_object_value(new_list)
                     return new_list
                 src_val = self._emit_expr(expr.args[0])
                 src_obj = marshal.marshal_to_object(
@@ -1805,6 +1813,9 @@ class CallExpressionLoweringMixin:
                         self.runtime["py_list_reverse"],
                         [result],
                     )
+                # sorted always returns a fresh list. Preserve that owner at
+                # raw-ABI and branch joins instead of inferring it from Call.
+                self._note_owned_object_value(result)
                 return result
         if name == "reversed" and len(expr.args) == 1 and not expr.kwargs:
             return self._emit_reversed_builtin(expr)
@@ -2365,6 +2376,11 @@ class CallExpressionLoweringMixin:
                 # Downstream CPython consumers therefore own and must consume
                 # it, just like the direct user-function call path.
                 self._mark_owned_cpy_value(result)
+            else:
+                # The native callable ABI returns a new reference even when
+                # a parameter's default (for example None) hid its return
+                # type from source-level ownership inference.
+                self._note_owned_dynamic_call_value(result)
             return result
 
         fn = self.functions.get(name)
@@ -2387,6 +2403,7 @@ class CallExpressionLoweringMixin:
                     [native_star_val, args_tuple, kwargs_obj],
                     name=self._fresh(f"{name}.native.star.call"),
                 )
+                self._note_owned_dynamic_call_value(result)
                 self._gc_release(args_tuple)
                 if expr.kwargs:
                     self._gc_release(kwargs_obj)
@@ -2484,6 +2501,7 @@ class CallExpressionLoweringMixin:
                     [fn_val, args_tuple, kwargs_obj],
                     name=self._fresh(f"{name}.obj.call"),
                 )
+                self._note_owned_dynamic_call_value(result)
                 self._gc_release(args_tuple)
                 if expr.kwargs:
                     self._gc_release(kwargs_obj)
@@ -2518,6 +2536,7 @@ class CallExpressionLoweringMixin:
                 [fn_val, args_tuple, kwargs_obj],
                 name=self._fresh(f"{name}.dyn.call"),
             )
+            self._note_owned_dynamic_call_value(result)
             self._gc_release(args_tuple)
             if expr.kwargs:
                 self._gc_release(kwargs_obj)

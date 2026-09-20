@@ -454,6 +454,10 @@ class ExprDispatchLoweringMixin:
                 # generically by py_obj_truediv in _emit_binop_value below: a
                 # DynType may box a number at runtime, so it must not route to
                 # the __truediv__ dunder (a tagged int has no such attribute).
+            if self._int_expr_needs_exact_object_boundary(expr):
+                exact_result = self._maybe_emit_exact_int_object(expr)
+                if exact_result is not None:
+                    return exact_result
             if (
                 expr.op == "**"
                 and isinstance(expr.lhs, IntLit)
@@ -608,6 +612,10 @@ class ExprDispatchLoweringMixin:
                 self._gc_unpin(result)
             return result
         if _expr_is_unary(expr, expr_kind):
+            if self._int_expr_needs_exact_object_boundary(expr):
+                exact_result = self._maybe_emit_exact_int_object(expr)
+                if exact_result is not None:
+                    return exact_result
             return self._emit_unary(expr)
         if _expr_is_compare(expr, expr_kind):
             return self._emit_compare(expr)

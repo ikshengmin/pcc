@@ -688,204 +688,24 @@ class NumericBuiltinLoweringMixin:
                 src_val,
                 arg_ty,
             )
-            owned_dict_keys = None
-            if isinstance(arg_ty, DictType):
-                # The walk below indexes the source positionally, and for a
-                # dict py_obj_getitem(d, i) is a KEY lookup for 0, 1, 2 ….
-                # Iterating a mapping yields its keys, so any()/all() over a
-                # string-keyed dict silently answered False/False.
-                src_obj = self.builder.call(
-                    self.runtime["py_dict_keys"],
-                    [src_obj],
-                    name=self._fresh(f"{name}.src.dict.keys"),
+            # The walk owns its input even when the expression is borrowed:
+            # __len__/__getitem__/__bool__ may replace the original owner.
+            if not self._owned_release_needed(src_obj, arg):
+                src_obj = self._gc_retain(src_obj, name=self._fresh(f"{name}.src.retain"))
+            self._gc_pin(src_obj)
+            previous_target = self._current_try_err_block()
+            if isinstance(arg_ty, DynType):
+                target = previous_target or self._ensure_fn_err_exit()
+                self._try_err_block = self._make_cpy_operand_cleanup_block(
+                    (), (), target, f"{name}.src.cleanup", ((src_obj, True),),
                 )
-                owned_dict_keys = src_obj
-            fn_ = self.current_function
-            n_val = self.builder.call(
-                self.runtime["py_obj_len"],
-                [src_obj],
-                name=self._fresh(f"{name}.src.len"),
-            )
-            # Fail-closed edges are emitted for DynType sources only: a
-            # statically known List/Tuple/Dict/Set walk cannot raise from
-            # len/getitem, and adding checks there would grow every static
-            # shape's IR for nothing (the cost guard in
-            # tests/python/test_native_container_builtin_error_paths.py
-            # pins that).  A dyn source can raise from a user __len__ and,
-            # for a dyn-held mapping, from the positional py_obj_getitem
-            # (KeyError) — without the checks the walk kept looping over
-            # NULL elements and returned a silently wrong bool.
-            walk_can_raise = isinstance(arg_ty, DynType)
-            if walk_can_raise:
-                self._emit_post_call_err_check(expr.span)
-                # py_obj_len returned 0 silently for a dyn-held scalar, so
-                # any(5)/all(5) answered False/True where CPython raises.
-                self._emit_non_iterable_scalar_guard(src_obj, name)
-            idx_slot = self._alloca_in_entry(_I64, name=f"{name}.idx.addr")
-            self.builder.store(ir.Constant(_I64, 0), idx_slot)
-            # Result alloca — default identity (any=False, all=True).
-            result_slot = self._alloca_in_entry(
-                _I1,
-                name=f"{name}.result.addr",
-            )
-            init = 0 if name == "any" else 1
-            self.builder.store(
-                ir.Constant(_I1, init),
-                result_slot,
-            )
-
-            cond_bb = fn_.append_basic_block(
-                name=self._fresh(f"{name}.cond"),
-            )
-            body_bb = fn_.append_basic_block(
-                name=self._fresh(f"{name}.body"),
-            )
-            step_bb = fn_.append_basic_block(
-                name=self._fresh(f"{name}.step"),
-            )
-            end_bb = fn_.append_basic_block(
-                name=self._fresh(f"{name}.end"),
-            )
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(cond_bb)
-            cur = self.builder.load(
-                idx_slot,
-                name=self._fresh(f"{name}.idx"),
-            )
-            cond = self.builder.icmp_signed(
-                "<",
-                cur,
-                n_val,
-                name=self._fresh(f"{name}.cond.i1"),
-            )
-            self.builder.cbranch(cond, body_bb, end_bb)
-            self.builder.position_at_end(body_bb)
-            idx_box = self.builder.call(
-                self.runtime["py_int_from_i64"],
-                [cur],
-                name=self._fresh(f"{name}.idx.box"),
-            )
-            elem = self.builder.call(
-                self.runtime["py_obj_getitem"],
-                [src_obj, idx_box],
-                name=self._fresh(f"{name}.elem"),
-            )
-            if walk_can_raise:
-                # elem is the raising call's own NULL return on this edge
-                # (pcc_gc_release is NULL-safe); idx_box is live owned.
-                self._emit_post_call_err_check(
-                    expr.span,
-                    release_on_error=(elem, idx_box),
-                )
-                # py_obj_getitem returns NULL WITHOUT raising for a missing
-                # dict key (py_dict_get is the silent variant) and for
-                # unsupported tags.  Without this guard the walk fed NULL
-                # into py_obj_truthy and returned a silently wrong bool for
-                # a dyn-held mapping.
-                elem_null = self.builder.icmp_unsigned(
-                    "==",
-                    elem,
-                    ir.Constant(elem.type, None),
-                    name=self._fresh(f"{name}.elem.null"),
-                )
-                badelem_bb = fn_.append_basic_block(
-                    name=self._fresh(f"{name}.elem.bad")
-                )
-                elemok_bb = fn_.append_basic_block(
-                    name=self._fresh(f"{name}.elem.ok")
-                )
-                self.builder.cbranch(elem_null, badelem_bb, elemok_bb)
-                self.builder.position_at_end(badelem_bb)
-                self._gc_release(
-                    idx_box,
-                    self._release_context_label(f"{name}.idx.box"),
-                )
-                message = self._ptr_to_cstr(
-                    self._cstr_global(
-                        name + "() argument is not indexable from 0..len-1"
-                        " (mappings iterate by key in CPython; unsupported"
-                        " here for dyn sources)",
-                        f".{name}.dyn.typeerror",
-                    )
-                )
-                exc = self.builder.call(
-                    self.runtime["py_exc_new"],
-                    [ir.Constant(_I64, 3), message],
-                    name=self._fresh(f"{name}.dyn.exc"),
-                )
-                self.builder.call(self.runtime["py_raise"], [exc])
-                err_target = (
-                    self._current_try_err_block()
-                    or self._ensure_fn_err_exit()
-                )
-                self.builder.branch(err_target)
-                self.builder.position_at_end(elemok_bb)
-            truthy_i32 = self.builder.call(
-                self.runtime["py_obj_truthy"],
-                [elem],
-                name=self._fresh(f"{name}.truthy"),
-            )
-            # py_int_from_i64 and py_obj_getitem both return NEW refs, and
-            # nothing downstream takes ownership of either: the truthiness
-            # test is read-only.  Released here rather than after the
-            # short-circuit branch below, so every exit edge is covered by
-            # construction instead of by three separate cleanups.
-            self._gc_release(elem, self._release_context_label(f"{name}.elem"))
-            self._gc_release(
-                idx_box, self._release_context_label(f"{name}.idx.box")
-            )
-            if walk_can_raise:
-                # Covers a raising user __bool__/__len__ inside
-                # py_obj_truthy; the loop temps were already released just
-                # above, so this edge has nothing left to drop.
-                self._emit_post_call_err_check(expr.span)
-            truthy = self.builder.icmp_signed(
-                "!=",
-                truthy_i32,
-                ir.Constant(_I32, 0),
-                name=self._fresh(f"{name}.truthy.i1"),
-            )
-            if name == "any":
-                # Truthy → result True, exit. Falsy → continue.
-                exit_bb = fn_.append_basic_block(
-                    name=self._fresh("any.hit"),
-                )
-                self.builder.cbranch(truthy, exit_bb, step_bb)
-                self.builder.position_at_end(exit_bb)
-                self.builder.store(ir.Constant(_I1, 1), result_slot)
-                self.builder.branch(end_bb)
-            else:  # all
-                exit_bb = fn_.append_basic_block(
-                    name=self._fresh("all.miss"),
-                )
-                self.builder.cbranch(truthy, step_bb, exit_bb)
-                self.builder.position_at_end(exit_bb)
-                self.builder.store(ir.Constant(_I1, 0), result_slot)
-                self.builder.branch(end_bb)
-            self.builder.position_at_end(step_bb)
-            nxt = self.builder.add(
-                cur,
-                ir.Constant(_I64, 1),
-                name=self._fresh(f"{name}.idx.next"),
-            )
-            self.builder.store(nxt, idx_slot)
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(end_bb)
-            if owned_dict_keys is not None:
-                # ``py_dict_keys`` returns a NEW list ref (py_runtime.h).
-                # ``end_bb`` is the single join for the exhausted walk and for
-                # both short-circuit exits, so one release here covers every
-                # edge that reaches the result load.
-                self._gc_release(
-                    owned_dict_keys,
-                    self._release_context_label(f"{name}.src.dict.keys"),
-                )
-            if isinstance(arg_ty, (BytesType, ByteArrayType)):
-                self._gc_release_if_owned(src_obj, arg)
-            return self.builder.load(
-                result_slot,
-                name=self._fresh(f"{name}.result"),
-            )
+            try:
+                result = self._emit_any_all_runtime_walk(expr, name, src_obj)
+            finally:
+                self._try_err_block = previous_target
+            self._gc_unpin(src_obj)
+            self._gc_release(src_obj, self._release_context_label(f"{name}.src"))
+            return result
         elems = arg.elems
         if not elems:
             return ir.Constant(_I1, 0 if name == "any" else 1)
@@ -938,6 +758,213 @@ class NumericBuiltinLoweringMixin:
         for val, pred_bb in incoming:
             phi.add_incoming(val, pred_bb)
         return phi
+
+    def _emit_any_all_runtime_walk(
+        self,
+        expr: Call,
+        name: str,
+        src_obj: ir.Value,
+    ) -> ir.Value:
+        """Walk an input whose owner and error cleanup are held by the caller."""
+        arg_ty = expr.args[0].ty
+        owned_dict_keys = None
+        if isinstance(arg_ty, DictType):
+            # The walk below indexes the source positionally, and for a
+            # dict py_obj_getitem(d, i) is a KEY lookup for 0, 1, 2 ….
+            # Iterating a mapping yields its keys, so any()/all() over a
+            # string-keyed dict silently answered False/False.
+            src_obj = self.builder.call(
+                self.runtime["py_dict_keys"],
+                [src_obj],
+                name=self._fresh(f"{name}.src.dict.keys"),
+            )
+            owned_dict_keys = src_obj
+            self._gc_pin(owned_dict_keys)
+        fn_ = self.current_function
+        n_val = self.builder.call(
+            self.runtime["py_obj_len"],
+            [src_obj],
+            name=self._fresh(f"{name}.src.len"),
+        )
+        # Fail-closed edges are emitted for DynType sources only: a
+        # statically known List/Tuple/Dict/Set walk cannot raise from
+        # len/getitem, and adding checks there would grow every static
+        # shape's IR for nothing (the cost guard in
+        # tests/python/test_native_container_builtin_error_paths.py
+        # pins that).  A dyn source can raise from a user __len__ and,
+        # for a dyn-held mapping, from the positional py_obj_getitem
+        # (KeyError) — without the checks the walk kept looping over
+        # NULL elements and returned a silently wrong bool.
+        walk_can_raise = isinstance(arg_ty, DynType)
+        if walk_can_raise:
+            self._emit_post_call_err_check(expr.span)
+            # py_obj_len returned 0 silently for a dyn-held scalar, so
+            # any(5)/all(5) answered False/True where CPython raises.
+            self._emit_non_iterable_scalar_guard(src_obj, name)
+        idx_slot = self._alloca_in_entry(_I64, name=f"{name}.idx.addr")
+        self.builder.store(ir.Constant(_I64, 0), idx_slot)
+        # Result alloca — default identity (any=False, all=True).
+        result_slot = self._alloca_in_entry(
+            _I1,
+            name=f"{name}.result.addr",
+        )
+        init = 0 if name == "any" else 1
+        self.builder.store(
+            ir.Constant(_I1, init),
+            result_slot,
+        )
+
+        cond_bb = fn_.append_basic_block(
+            name=self._fresh(f"{name}.cond"),
+        )
+        body_bb = fn_.append_basic_block(
+            name=self._fresh(f"{name}.body"),
+        )
+        step_bb = fn_.append_basic_block(
+            name=self._fresh(f"{name}.step"),
+        )
+        end_bb = fn_.append_basic_block(
+            name=self._fresh(f"{name}.end"),
+        )
+        self.builder.branch(cond_bb)
+        self.builder.position_at_end(cond_bb)
+        cur = self.builder.load(
+            idx_slot,
+            name=self._fresh(f"{name}.idx"),
+        )
+        cond = self.builder.icmp_signed(
+            "<",
+            cur,
+            n_val,
+            name=self._fresh(f"{name}.cond.i1"),
+        )
+        self.builder.cbranch(cond, body_bb, end_bb)
+        self.builder.position_at_end(body_bb)
+        idx_box = self.builder.call(
+            self.runtime["py_int_from_i64"],
+            [cur],
+            name=self._fresh(f"{name}.idx.box"),
+        )
+        elem = self.builder.call(
+            self.runtime["py_obj_getitem"],
+            [src_obj, idx_box],
+            name=self._fresh(f"{name}.elem"),
+        )
+        if walk_can_raise:
+            # elem is the raising call's own NULL return on this edge
+            # (pcc_gc_release is NULL-safe); idx_box is live owned.
+            self._emit_post_call_err_check(
+                expr.span,
+                release_on_error=(elem, idx_box),
+            )
+            # py_obj_getitem returns NULL WITHOUT raising for a missing
+            # dict key (py_dict_get is the silent variant) and for
+            # unsupported tags.  Without this guard the walk fed NULL
+            # into py_obj_truthy and returned a silently wrong bool for
+            # a dyn-held mapping.
+            elem_null = self.builder.icmp_unsigned(
+                "==",
+                elem,
+                ir.Constant(elem.type, None),
+                name=self._fresh(f"{name}.elem.null"),
+            )
+            badelem_bb = fn_.append_basic_block(
+                name=self._fresh(f"{name}.elem.bad")
+            )
+            elemok_bb = fn_.append_basic_block(
+                name=self._fresh(f"{name}.elem.ok")
+            )
+            self.builder.cbranch(elem_null, badelem_bb, elemok_bb)
+            self.builder.position_at_end(badelem_bb)
+            self._gc_release(
+                idx_box,
+                self._release_context_label(f"{name}.idx.box"),
+            )
+            message = self._ptr_to_cstr(
+                self._cstr_global(
+                    name + "() argument is not indexable from 0..len-1"
+                    " (mappings iterate by key in CPython; unsupported"
+                    " here for dyn sources)",
+                    f".{name}.dyn.typeerror",
+                )
+            )
+            exc = self.builder.call(
+                self.runtime["py_exc_new"],
+                [ir.Constant(_I64, 3), message],
+                name=self._fresh(f"{name}.dyn.exc"),
+            )
+            self.builder.call(self.runtime["py_raise"], [exc])
+            err_target = (
+                self._current_try_err_block()
+                or self._ensure_fn_err_exit()
+            )
+            self.builder.branch(err_target)
+            self.builder.position_at_end(elemok_bb)
+        truthy_i32 = self.builder.call(
+            self.runtime["py_obj_truthy"],
+            [elem],
+            name=self._fresh(f"{name}.truthy"),
+        )
+        # py_int_from_i64 and py_obj_getitem both return NEW refs, and
+        # nothing downstream takes ownership of either: the truthiness
+        # test is read-only.  Released here rather than after the
+        # short-circuit branch below, so every exit edge is covered by
+        # construction instead of by three separate cleanups.
+        self._gc_release(elem, self._release_context_label(f"{name}.elem"))
+        self._gc_release(
+            idx_box, self._release_context_label(f"{name}.idx.box")
+        )
+        if walk_can_raise:
+            # Covers a raising user __bool__/__len__ inside
+            # py_obj_truthy; the loop temps were already released just
+            # above, so this edge has nothing left to drop.
+            self._emit_post_call_err_check(expr.span)
+        truthy = self.builder.icmp_signed(
+            "!=",
+            truthy_i32,
+            ir.Constant(_I32, 0),
+            name=self._fresh(f"{name}.truthy.i1"),
+        )
+        if name == "any":
+            # Truthy → result True, exit. Falsy → continue.
+            exit_bb = fn_.append_basic_block(
+                name=self._fresh("any.hit"),
+            )
+            self.builder.cbranch(truthy, exit_bb, step_bb)
+            self.builder.position_at_end(exit_bb)
+            self.builder.store(ir.Constant(_I1, 1), result_slot)
+            self.builder.branch(end_bb)
+        else:  # all
+            exit_bb = fn_.append_basic_block(
+                name=self._fresh("all.miss"),
+            )
+            self.builder.cbranch(truthy, step_bb, exit_bb)
+            self.builder.position_at_end(exit_bb)
+            self.builder.store(ir.Constant(_I1, 0), result_slot)
+            self.builder.branch(end_bb)
+        self.builder.position_at_end(step_bb)
+        nxt = self.builder.add(
+            cur,
+            ir.Constant(_I64, 1),
+            name=self._fresh(f"{name}.idx.next"),
+        )
+        self.builder.store(nxt, idx_slot)
+        self.builder.branch(cond_bb)
+        self.builder.position_at_end(end_bb)
+        if owned_dict_keys is not None:
+            # ``py_dict_keys`` returns a NEW list ref (py_runtime.h).
+            # ``end_bb`` is the single join for the exhausted walk and for
+            # both short-circuit exits, so one release here covers every
+            # edge that reaches the result load.
+            self._gc_unpin(owned_dict_keys)
+            self._gc_release(
+                owned_dict_keys,
+                self._release_context_label(f"{name}.src.dict.keys"),
+            )
+        return self.builder.load(
+            result_slot,
+            name=self._fresh(f"{name}.result"),
+        )
 
     def _maybe_emit_any_all_map_lambda(
         self,

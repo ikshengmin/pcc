@@ -59,7 +59,7 @@ def test_locator_supports_dotted_pcc_py_stdlib_packages():
 def test_locator_finds_py_stdlib_from_stage_binary_ancestor(tmp_path, monkeypatch):
     """Compiled pcc1 has a synthetic ``__file__`` value, so native stdlib
     discovery must also work from the stage binary path."""
-    from pcc.py_frontend import pipeline
+    from pcc.py_frontend import pipeline_dependency_closure as pipeline
 
     repo = tmp_path / "repo"
     py_stdlib = repo / "pcc" / "py_stdlib"
@@ -85,7 +85,7 @@ def test_locator_finds_py_stdlib_from_stage_binary_ancestor(tmp_path, monkeypatc
 
 
 def test_pcc_owned_stdlib_provider_bypasses_fail_soft_probe(monkeypatch):
-    from pcc.py_frontend import pipeline
+    from pcc.py_frontend import pipeline_dependency_closure as pipeline
 
     monkeypatch.setattr(
         pipeline,
@@ -97,7 +97,7 @@ def test_pcc_owned_stdlib_provider_bypasses_fail_soft_probe(monkeypatch):
 
 
 def test_locator_accepts_host_stdlib_provider(monkeypatch, tmp_path):
-    from pcc.py_frontend import pipeline
+    from pcc.py_frontend import pipeline_dependency_closure as pipeline
 
     stdlib = tmp_path / "python" / "lib"
     stdlib.mkdir(parents=True)
@@ -116,8 +116,27 @@ def test_locator_accepts_host_stdlib_provider(monkeypatch, tmp_path):
     assert pipeline._locate_stdlib_module_source("hostmod") == str(provider)
 
 
+def test_native_discovery_never_spawns_host_python_probes(monkeypatch):
+    from types import SimpleNamespace
+    from pcc.py_frontend import pipeline_dependency_closure as closure
+
+    attempts = []
+
+    def refused_probe(*args, **kwargs):
+        attempts.append(args)
+        raise OSError("host Python unavailable")
+
+    monkeypatch.setattr(closure, "sys", SimpleNamespace(
+        implementation=SimpleNamespace(name="pcc"),
+    ))
+    monkeypatch.setattr(closure.subprocess, "check_output", refused_probe)
+    assert closure._host_find_spec_origin("missing_provider") == ""
+    assert closure._host_sysconfig_roots(["stdlib", "platstdlib"]) == []
+    assert attempts == []
+
+
 def test_locator_rejects_host_site_packages_provider(monkeypatch, tmp_path):
-    from pcc.py_frontend import pipeline
+    from pcc.py_frontend import pipeline_dependency_closure as pipeline
 
     stdlib = tmp_path / "python" / "lib"
     site = stdlib / "site-packages"

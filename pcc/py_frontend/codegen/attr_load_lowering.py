@@ -208,7 +208,7 @@ class AttrLoadLoweringMixin:
         runtime_args = tuple(a for a in ast_fd.args if a.name != "") if ast_fd else ()
         user_args = runtime_args[1:] if runtime_args else ()
         adapter_name = (
-            f"user_{(self.ast_module.name or 'mod').replace('.', '_')}"
+            f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
             f"_{info.name}_{method_name}_bound_adapter"
         )
         existing = self.module.globals.get(adapter_name)
@@ -317,7 +317,7 @@ class AttrLoadLoweringMixin:
         runtime_args = tuple(a for a in ast_fd.args if a.name != "") if ast_fd else ()
         user_args = runtime_args[1:] if runtime_args else ()
         adapter_name = (
-            f"user_{(self.ast_module.name or 'mod').replace('.', '_')}"
+            f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
             f"_{owner_info.name}_{method_name}_classmethod_attr_adapter"
         )
         existing = self.module.globals.get(adapter_name)
@@ -508,7 +508,7 @@ class AttrLoadLoweringMixin:
         ast_fd = self.class_lowering._find_method_def(owner_info.name, method_name)
         runtime_args = tuple(a for a in ast_fd.args if a.name != "") if ast_fd else ()
         adapter_name = (
-            f"user_{(self.ast_module.name or 'mod').replace('.', '_')}"
+            f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
             f"_{owner_info.name}_{method_name}_unbound_method_attr_adapter"
         )
         existing = self.module.globals.get(adapter_name)
@@ -566,7 +566,7 @@ class AttrLoadLoweringMixin:
 
         if cache:
             cache_name = (
-                f"user_{(self.ast_module.name or 'mod').replace('.', '_')}"
+                f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
                 f"_{owner_info.name}_{method_name}_unbound_method_attr_value_cache"
             )
             return self._emit_cached_zero_capture_func_value(

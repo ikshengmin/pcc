@@ -457,16 +457,30 @@ class BuiltinTypeAttrLoweringMixin:
     ) -> Optional[ir.Value]:
         if expr.kwargs:
             return None
+        if name in ("bytes", "bytearray", "memoryview") and len(expr.args) == 1:
+            src = self._emit_as_object(expr.args[0])
+            if not self._owned_release_needed(src, expr.args[0]):
+                src = self._gc_retain(src, name=self._fresh("buffer.source.retain"))
+            self._gc_pin(src)
+            helper = {
+                "bytes": "py_bytes_from_obj",
+                "bytearray": "py_bytearray_from_obj",
+                "memoryview": "py_memoryview_new",
+            }[name]
+            result = self.builder.call(
+                self.runtime[helper], [src], name=self._fresh(name + ".from"),
+            )
+            self._note_owned_object_value(result)
+            self._emit_post_call_err_check(
+                getattr(expr, "span", None), pinned_release_on_error=((src, True),),
+            )
+            # bytes(existing_bytes) may return the same object with a new ref.
+            self._gc_pin(result)
+            self._gc_unpin(src)
+            self._gc_release(src)
+            self._gc_unpin(result)
+            return result
         if name == "bytes":
-            if len(expr.args) == 1:
-                src = self._emit_as_object(expr.args[0])
-                result = self.builder.call(
-                    self.runtime["py_bytes_from_obj"],
-                    [src],
-                    name=self._fresh("bytes.from"),
-                )
-                self._emit_post_call_err_check(getattr(expr, "span", None))
-                return result
             if not expr.args:
                 return self.builder.call(
                     self.runtime["py_bytes_new"],
@@ -502,15 +516,6 @@ class BuiltinTypeAttrLoweringMixin:
                     [encoded],
                     name=self._fresh("bytearray.encode"),
                 )
-        if name == "bytearray" and len(expr.args) == 1:
-            src = self._emit_as_object(expr.args[0])
-            result = self.builder.call(
-                self.runtime["py_bytearray_from_obj"],
-                [src],
-                name=self._fresh("bytearray.from"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
         if name == "bytearray" and not expr.args:
             # bytearray() -> empty bytearray, built from an empty bytes object
             # (mirrors the bytes() 0-arg path above). Without this the 0-arg
@@ -524,12 +529,5 @@ class BuiltinTypeAttrLoweringMixin:
                 self.runtime["py_bytearray_from_obj"],
                 [empty],
                 name=self._fresh("bytearray.empty"),
-            )
-        if name == "memoryview" and len(expr.args) == 1:
-            src = self._emit_as_object(expr.args[0])
-            return self.builder.call(
-                self.runtime["py_memoryview_new"],
-                [src],
-                name=self._fresh("memoryview.new"),
             )
         return None

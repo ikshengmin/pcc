@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from pcc.py_frontend import pipeline
+from pcc.py_frontend.pipeline_targets import host_target_triple
 from pcc.py_frontend.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
 
 
@@ -53,6 +54,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_id",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_index_slot_size",
     "calloc",
     "free",
     "malloc",
@@ -161,6 +163,7 @@ def test_forwarding_identity_has_exact_strict_object_closure(
         emit_llvm_only=True,
         libpython_mode="off",
         python_library=True,
+        target_triple=host_target_triple(),
     )
     source = llvm_ir
     if emitter == "self":

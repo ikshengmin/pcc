@@ -715,21 +715,38 @@ class SubscriptLoweringMixin:
         obj_ty = expr.obj.ty
         slice_log("obj ty end")
 
+        # Slicing borrows its operands. A field/call receiver is already a
+        # NEW reference; a borrowed binding needs an independent owner while
+        # later bounds can replace that binding or run a collector.
+        if not self._owned_release_needed(obj, expr.obj):
+            obj = self._gc_retain(obj, name=self._fresh("slice.receiver.retain"))
+        self._gc_pin(obj)
+        pinned = [(obj, True)]
+
         def _bound(e: Optional[Expr]) -> ir.Value:
             if e is None:
                 slice_log("bound none")
                 return ir.Constant(_CSTR, None)
             slice_log("bound expr emit begin")
-            v = self._emit_expr(e)
+            v = self._emit_expr_with_cpy_operand_cleanup(
+                e, (), pinned_pcc=tuple(pinned),
+            )
             slice_log("bound expr emit end")
             slice_log("bound marshal begin")
-            return marshal.marshal_to_object(
+            value = marshal.marshal_to_object(
                 self.builder,
                 self.module,
                 self.runtime,
                 v,
                 e.ty,
             )
+            # Boxing a scalar creates its own result reference (or an
+            # immortal/tagged value). Pointer passthrough can still borrow.
+            if value is v and not self._owned_release_needed(value, e):
+                value = self._gc_retain(value, name=self._fresh("slice.bound.retain"))
+            self._gc_pin(value)
+            pinned.append((value, True))
+            return value
 
         slice_log("lo begin")
         lo = _bound(sl.lo)
@@ -757,11 +774,23 @@ class SubscriptLoweringMixin:
                 f"Layer 1 slice on type {type(obj_ty).__name__} not supported"
             )
         slice_log("call begin")
-        return self.builder.call(
+        result = self.builder.call(
             self.runtime[helper],
             [obj, lo, hi, step],
             name=self._fresh("slice"),
         )
+        self._note_owned_object_value(result)
+        self._emit_post_call_err_check(
+            getattr(expr, "span", None), pinned_release_on_error=tuple(pinned),
+        )
+        # A user __getitem__ may return the receiver itself. Preserve its NEW
+        # result reference across operand finalizers and moving collections.
+        self._gc_pin(result)
+        for value, _owned in reversed(pinned):
+            self._gc_unpin(value)
+            self._gc_release(value)
+        self._gc_unpin(result)
+        return result
 
     def _maybe_emit_runtime_dict_lookup(
         self,

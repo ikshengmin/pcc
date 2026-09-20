@@ -4,6 +4,50 @@ from pathlib import Path
 import subprocess
 import pytest
 
+
+@pytest.mark.parametrize("store, read", [
+    ("result.append((value,))", "entry[0]"),
+    ("result.append([value])", "entry[0]"),
+    ('result.append({"item": value})', 'entry["item"]'),
+    ("result.append(value)", "entry"),
+])
+def test_nullable_local_survives_container_store_and_reassignment(
+    tmp_path, pcc_py_runtime_archive, python_program_compiler, store, read,
+):
+    source = tmp_path / "nullable_container.py"
+    source.write_text('''
+class Box:
+    def __init__(self, value):
+        self.value = value
+def copy_box(box) -> Box:
+    return Box(box.value)
+def main():
+    result = []
+    for source in [Box(1), Box(2), None, Box(3)]:
+        if source is not None:
+            value = copy_box(source)
+        else:
+            value = None
+        STORE
+    for entry in result:
+        item = READ
+        if item is None:
+            print("none")
+        else:
+            print(isinstance(item, Box))
+            print(item.value)
+main()
+'''.replace("STORE", store).replace("READ", read))
+    binary = tmp_path / "nullable_container"
+    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+                            runtime_archive=str(pcc_py_runtime_archive))
+    for backend in range(5):
+        ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
+                             env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
+        assert ran.returncode == 0, f"GC{backend}: {ran.stdout}{ran.stderr}"
+        assert ran.stdout.splitlines() == ["True", "1", "True", "2", "none", "True", "3"]
+
+
 @pytest.mark.parametrize("body", [
     'result = (text.strip(),)\n    return len(result)',
     'result = [text.strip()]\n    return len(result)',

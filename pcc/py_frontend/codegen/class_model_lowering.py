@@ -169,7 +169,7 @@ class ClassModelLoweringMixin:
                         return registered
                     expected_global = (
                         ".class."
-                        + mod_name.replace(".", "_").replace("-", "_")
+                        + self._module_symbol_suffix(mod_name)
                         + "."
                         + expr.name
                     )
@@ -211,7 +211,7 @@ class ClassModelLoweringMixin:
                         return registered
                     expected_global = (
                         ".class."
-                        + mod_name.replace(".", "_").replace("-", "_")
+                        + self._module_symbol_suffix(mod_name)
                         + "."
                         + expr.func.name
                     )

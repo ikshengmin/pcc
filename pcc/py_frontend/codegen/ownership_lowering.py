@@ -32,6 +32,7 @@ from ..py_ast import (
     TupleExpr,
     TupleType,
     Type,
+    UnaryOp,
 )
 
 _I1 = ir.IntType(1)
@@ -672,18 +673,22 @@ class OwnershipLoweringMixin:
             return True
         if self._expr_returns_owned_object(expr):
             return True
-        if isinstance(value_ty, IntType) and isinstance(expr, Name):
-            if self._int_expr_needs_exact_object_boundary(expr):
+        if (
+            isinstance(value_ty, (IntType, FloatType, BoolType, NoneType))
+            and isinstance(expr, Name)
+        ):
+            if isinstance(value_ty, IntType) and self._int_expr_needs_exact_object_boundary(expr):
                 # Exact-int locals are pointer-form borrowed loads.  Container
                 # stores retain them just like every other borrowed object;
                 # only the freshly boxed/raw scalar and fresh exact-expression
                 # lanes below need a balancing release.
                 return False
-            # Any other name whose slot already holds an object pointer -- an
-            # ``int`` parameter above all -- is a borrowed load too.  Treating
-            # it as a fresh box released ``a`` after ``[a, a]`` appended it: a
-            # no-op for a tagged small int, an over-release that freed the
-            # caller's bignum while the list still referenced it.
+            # A name in an object slot is borrowed: marshal_to_object passes
+            # its pointer through, even when the semantic type is scalar.
+            # This includes a nullable local whose last inferred arm is None
+            # but whose live value is a heap object. Releasing that load after
+            # a container store consumes the local's reference; rebinding the
+            # local then frees an object the container still holds.
             slot = self.env.get(expr.ident)
             if slot is not None:
                 return not isinstance(slot[1], ir.PointerType)
@@ -730,6 +735,15 @@ class OwnershipLoweringMixin:
 
     def _raw_scaffold_object_rhs_is_owned(self, expr: Expr) -> bool:
         if not self._module_uses_raw_int_scaffold:
+            return True
+        if isinstance(expr.ty, (IntType, BoolType)) and (
+            isinstance(expr, BinOp)
+            or (isinstance(expr, UnaryOp) and expr.op in ("-", "~"))
+        ):
+            # These operations can promote to fresh boxed integers even in
+            # a module whose usual integer lane is raw i64. Pointer-aware
+            # callers must consume that owner; the raw-lane callers still
+            # reject non-pointer values before considering object cleanup.
             return True
         if isinstance(expr, Call):
             # The raw integer ABI does not turn Python regex results into

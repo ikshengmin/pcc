@@ -279,6 +279,10 @@ PyObject *py_bytes_from_obj(PyObject *o) {
     if (o == NULL) {
         return py_bytes_new(NULL, 0);
     }
+    if (py_type_of(o) == PY_TYPE_BYTES) {
+        py_incref(o);
+        return o;
+    }
     int64_t n = 0;
     const char *data = bytes_data(o, &n);
     int32_t tag = py_type_of(o);

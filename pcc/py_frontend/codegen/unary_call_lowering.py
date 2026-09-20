@@ -595,14 +595,32 @@ class UnaryCallLoweringMixin:
             # raises ValueError/TypeError per CPython, so emit the
             # post-call err check. signed= falls through (rejected
             # honestly under --python-libpython=off).
-            bytes_obj = self._emit_as_object(expr.args[0])
-            order_obj = self._emit_as_object(expr.args[1])
+            bytes_obj = self._emit_expr_as_pcc_object(expr.args[0])
+            if not self._owned_release_needed(bytes_obj, expr.args[0]):
+                bytes_obj = self._gc_retain(bytes_obj, name=self._fresh("from_bytes.buffer.retain"))
+            self._gc_pin(bytes_obj)
+            order_obj = self._emit_expr_with_cpy_operand_cleanup(
+                expr.args[1], (), pinned_pcc=((bytes_obj, True),), as_pcc_object=True,
+            )
+            if not self._owned_release_needed(order_obj, expr.args[1]):
+                order_obj = self._gc_retain(order_obj, name=self._fresh("from_bytes.order.retain"))
+            self._gc_pin(order_obj)
             result = self.builder.call(
                 self.runtime["py_int_from_bytes"],
                 [bytes_obj, order_obj],
                 name=self._fresh("int.from_bytes"),
             )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
+            self._emit_post_call_err_check(
+                getattr(expr, "span", None),
+                pinned_release_on_error=((bytes_obj, True), (order_obj, True)),
+            )
+            self._note_owned_object_value(result)
+            self._gc_pin(result)
+            self._gc_unpin(order_obj)
+            self._gc_release(order_obj)
+            self._gc_unpin(bytes_obj)
+            self._gc_release(bytes_obj)
+            self._gc_unpin(result)
             return result
         if (
             builtin_name == "str"

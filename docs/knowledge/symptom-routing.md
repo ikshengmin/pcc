@@ -7,7 +7,7 @@ Search for the error text or symbol after locating its current code path.
 Read the matching experiment and later corrections, expanding as needed.
 Titles, snippets and status are historical locators, not current diagnosis.
 
-587 investigations.
+589 investigations.
 
 - [`2**52` does not round-trip through pcc1's float formatting or parsing](../investigations/pcc1-float-repr-strtod-17-digit-defect.md) — **Root cause identified, minimised to a two-line probe, bisected per stage, and**
   - `stage2 -> stage3` · `verify: cmp pcc2 pcc3` · `0x...004` · `0x...000` · `1000.0` · `123456789012345.0`
@@ -177,7 +177,7 @@ Titles, snippets and status are historical locators, not current diagnosis.
 - [Investigation: acquired package install loses index provenance](../investigations/package-acquisition-install-provenance.md) — **resolved**
   - `resolved_from: direct` · `test_pcc1_package_install_writes_manifest_without_host_python` · `pip_index_plan["installs"][0]["resolved_from"]` · `2 passed in 0.73s` · `resolved_from: index-url` · `artifact_path`
 - [Investigation: an owned rebind consumes a borrowed local's source reference](../investigations/borrowed-local-owned-rebind-consumes-source.md) — **active**
-  - `200000 200000 a b`
+  - `200000 200000 a b` · `pcc.backend.self_backend_precise_stackmaps` · `pcc_gc_release_known` · `emit_function_prologue` · `(line 94). The callee chain includes` · `src_addr_reg`
 - [Investigation: avoid full generator frames on nonparking factory paths](../investigations/vthread-continuation-factory-fast-path.md) — **active**
 - [Investigation: Backend #1 collects function-local live cycles](../investigations/gc-backend1-live-cycle-roots.md) — **resolved**
   - `PCC_GC_BACKEND=1` · `gc.collect()` · `attributes, but Backend #1 raises` · `AttributeError: peer` · `instead of` · `tests/test_gc_effectiveness.py::test_collect_does_not_break_live_cycle`
@@ -734,6 +734,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `PCC_HOST_PYTHON=/usr/bin/false` · `pipeline.py` · `pcc.backend.*` · `py_cpy_*` · `--backend self --python-libpython=off` · `list.sort`
 - [Investigation: native stack-map structural scans decode unused record fields](../investigations/native-stackmap-structural-scan-cost.md) — **Resolved locally on 2026-09-16. The optimization is retained after correctness**
   - `function_address_offsets` · `_scan_stack_map_payload` · `pcc/backend/precise_stackmap.py` · `profile/receipt.json` · `profile/environment.json` · `profile/cpu.folded`
+- [Investigation: native Stage2 link exceeds its budget while assembling inputs](../investigations/native-stage2-link-asm-memory-budget.md) — **Stopped at the user's one-repair-round limit — 2026-09-21, unsuccessful.**
+  - `owned_link_driver` · `arm64_asm_driver` · `loop-stage2/codegen-launch.json` · `loop-stage2-codegen.result.json` · `MEMORY_LIMIT` · `loop-stage2-link-active.folded`
 - [Investigation: native subprocess failures lose CalledProcessError fields](../investigations/native-subprocess-called-process-error-returncode.md) — **resolved**
   - `subprocess.run(..., check=True)` · `subprocess.check_call(...)` · `pcc/cli_bootstrap.py` · `subprocess.CalledProcessError` · `exc.returncode` · `AttributeError: returncode`
 - [Investigation: native subprocess provider omitted from shallow multi-file closure](../investigations/native-subprocess-provider-omitted-from-shallow-multi-file-closure.md) — **resolved**
@@ -810,6 +812,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `pcc.cli_bootstrap_pytest` · `pcc/llvm_capi/ir.py` · `pcc/cli_bootstrap.py` · `py_str_concat` · `_text_lines` · `pcc1-stage2-emit-throughput-and-memory.md`
 - [Investigation: pcc1 frontend rebuilds text that the self backend parses back into the same indexed kernel](../investigations/pcc1-frontend-direct-indexed-kernel-plane.md) — **active**
   - `InstructionRecord.text` · `pcc1-exact-str-concat-chain-object-tax.md` · `arm64_encode` · `assemble_file` · `pcc.llvm_capi.ir` · `PCC_TEXT_INDEXED_KERNEL_EMIT=1`
+- [Investigation: pcc1 infers `NoneType` for a field the host compiler infers as sliceable](../investigations/pcc1-field-type-join-diverges-from-host.md)
+  - `pcc.ply.lex` · `_pcc_py_module_top_pcc_ply_lex` · `user_pcc_ply_lex_lex` · `pcc/ply/lex.py` · `ply/lex.py` · `self.lexdata = None`
 - [Investigation: pcc1 list-of-functions value-position lowering via syntactic FuncDef fallback](../investigations/python-pcc1-list-of-functions-syntactic-fallback.md) — **resolved**
   - `py_cpy_*` · `pcc/py_frontend/codegen/literal_lowering.py::_emit_list_literal` · `_emit_native_func_value` · `py_func_new_named` · `isinstance(expr.ty.elem, FuncType)` · `pcc.py_frontend.py_ast`
 - [Investigation: pcc1 loses an owned object across an IfExpr local assignment](../investigations/pcc1-owned-ifexpr-local-transfer.md) — **resolved 2026-08-27**

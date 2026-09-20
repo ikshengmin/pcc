@@ -9,10 +9,21 @@ from pcc.llvm_capi.compat import ir
 _VOID = ir.VoidType()
 
 
+def module_symbol_suffix(name: str) -> str:
+    name = name.replace(".", "_").replace("-", "_")
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    if not name.strip(alphabet):
+        return name
+    parts = []
+    for character in name:
+        parts.append(character if character in alphabet else "_")
+    return "".join(parts)
+
+
 class ModuleNameLoweringMixin:
     def _module_symbol_suffix(self, module_name: Optional[str] = None) -> str:
         name = module_name or self.module.name or "mod"
-        return name.replace(".", "_").replace("-", "_")
+        return module_symbol_suffix(name)
 
     def _emit_module_teardown_call(self, module_name: Optional[str] = None) -> None:
         fini_name = self._module_teardown_name(module_name)
@@ -30,4 +41,3 @@ class ModuleNameLoweringMixin:
 
     def _module_teardown_name(self, module_name: Optional[str] = None) -> str:
         return f"_pcc_py_module_fini_{self._module_symbol_suffix(module_name)}"
-

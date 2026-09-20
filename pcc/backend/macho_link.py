@@ -129,7 +129,7 @@ class _MergedSection:
     sectname: str
     flags: int
     align_log2: int = 0
-    data: bytearray = field(default_factory=bytearray)
+    data: bytes | bytearray = field(default_factory=bytearray)
     data_parts: list[bytes | bytearray] = field(default_factory=list)
     data_size: int = 0
     symbols: list[TextSymbol] = field(default_factory=list)
@@ -756,9 +756,12 @@ def _coerce_link_objects(
         raise LinkError(f"parallel input parsing failed: {exc}") from exc
 
 
-def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
+def link_relocatable_native(
+    objects: list[LinkInput], *, _consume_inputs: bool = False,
+) -> NativeObject:
     """Merge inputs into pcc's indexed object without a Mach-O round trip."""
-    objects = list(objects)
+    if not _consume_inputs:
+        objects = list(objects)
     if not objects:
         raise LinkError("nothing to link")
 
@@ -772,7 +775,10 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
     # one deterministic table after all native symbols have been inspected.
     stack_map_payloads: list[bytes] = []
     stack_map_symbol_by_function_id: dict[int, str] = {}
-    # (merged section, offset, target key, this input's section addresses)
+    # (merged section, relocation, this input's section addresses). Defer
+    # section targets so rewriting never searches or removes from the large
+    # symbol-relocation prefix. Appending rewrites later preserves the old
+    # remove-and-append order exactly.
     rebases: list = []
 
     # Parse/scan inputs through stable worker partitions and retain
@@ -995,8 +1001,8 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
             for reloc in _read_relocations(
                 obj, sec, symbols, local_rename, offset_bias=base,
             ):
-                target.relocations.append(reloc)
                 if reloc.section is None:
+                    target.relocations.append(reloc)
                     referenced.add(reloc.symbol)
                     if reloc.minuend is not None:
                         referenced.add(reloc.minuend)
@@ -1005,8 +1011,7 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
                     # record what it has to be rebased by once the merged
                     # layout is known.
                     rebases.append((
-                        target, reloc.offset, reloc.section,
-                        input_section_addr,
+                        target, reloc, input_section_addr,
                     ))
 
         for symbol_index, sym in enumerate(symbols):
@@ -1060,9 +1065,11 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
 
     # Keep each input payload once while calculating offsets. Growing the
     # merged bytearray for every object copies an ever-larger prefix in the
-    # native runtime; materialize each section once before relocation writes.
+    # native runtime. Keep the joined bytes immutable until an actual section
+    # rebase needs a write, so unchanged text is not copied into a bytearray
+    # here and back into bytes at the output boundary.
     for section in merged.values():
-        section.data = bytearray(b"".join(section.data_parts))
+        section.data = b"".join(section.data_parts)
         section.data_parts.clear()
 
     if stack_map_payloads:
@@ -1072,11 +1079,14 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
             )
         except PreciseStackMapError as exc:
             raise LinkError(f"merged stack-map table is invalid: {exc}") from exc
+        # The merged payload owns its bytes. Input table snapshots can be
+        # large in a self-host link and are no longer needed after this phase.
+        stack_map_payloads = None
         stack_key = ("__DATA", "__pcc_stackmaps")
         stack_section = _MergedSection(
             stack_key[0], stack_key[1], spec.S_REGULAR,
             align_log2=3,
-            data=bytearray(stack_payload),
+            data=stack_payload,
         )
         for function_id, address_offset in stack_address_offsets:
             symbol = stack_map_symbol_by_function_id[function_id]
@@ -1117,13 +1127,18 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
         for sym in section.symbols:
             symbol_at.setdefault((key, sym.offset), sym.name)
 
-    for target, offset, target_key, input_addrs in rebases:
+    for target, entry, input_addrs in rebases:
+        offset = entry.offset
+        target_key = entry.section
+        assert target_key is not None
         if target_key not in input_addrs:
             raise LinkError(
                 f"section-target relocation names {target_key}, which the "
                 "same input does not contain"
             )
         old_addr, new_base = input_addrs[target_key]
+        if not isinstance(target.data, bytearray):
+            target.data = bytearray(target.data)
         stored, = _struct.unpack_from("<Q", target.data, offset)
         rebased = (stored - old_addr + new_base) & _U64_MASK
 
@@ -1132,11 +1147,6 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
         # address baked in — which survives any later reordering, so pcc
         # does the same whenever a defined symbol sits exactly there.
         owner = symbol_at.get((target_key, rebased))
-        entry = next(
-            r for r in target.relocations
-            if r.offset == offset and r.section == target_key
-        )
-        target.relocations.remove(entry)
         if owner is not None:
             _struct.pack_into("<Q", target.data, offset, 0)
             target.relocations.append(Relocation(
@@ -1157,6 +1167,29 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
                 target_offset=rebased,
             ))
 
+    # These private tables have finished their last semantic use. In
+    # particular, rebases still owns the source records that were replaced.
+    rebases = None
+    symbol_at = None
+    defined = None
+    referenced = None
+    local_renames = None
+    if _consume_inputs:
+        # Payloads and source records have been copied into private merge
+        # buffers. Retire the transferred inputs and inspection projections
+        # before constructing the final object. Borrowed API inputs keep
+        # their existing lifetime and contents.
+        objects.clear()
+        indexed_objects.clear()
+        inspected_inputs.clear()
+        parsed_objects.clear()
+        symbol_tables.clear()
+        relocation_target_indices.clear()
+        obj = None
+        sections = None
+        symbols = None
+        sec = None
+
     out_sections = []
     for key in order:
         m = merged[key]
@@ -1166,14 +1199,18 @@ def link_relocatable_native(objects: list[LinkInput]) -> NativeObject:
             data=bytes(m.data),
             align_log2=m.align_log2, flags=m.flags,
             symbols=tuple(sorted(m.symbols, key=lambda s: s.offset)),
-            relocations=tuple(m.relocations),
+            # This is a fresh merge buffer, independent of every caller input.
+            # Transfer it so indexing can retire source records incrementally.
+            relocations=m.relocations,
             data_in_code=tuple(sorted(
                 m.data_in_code, key=lambda region: region.offset,
             )),
             zerofill_size=zero,
         ))
     try:
-        return NativeObject.from_sections(out_sections, undefined=unresolved)
+        return NativeObject.from_sections(
+            out_sections, undefined=unresolved, _consume_relocations=True,
+        )
     except (MachOEmitError, NativeObjectError) as exc:
         raise LinkError(f"merged object is outside the proven subset: {exc}") from exc
 

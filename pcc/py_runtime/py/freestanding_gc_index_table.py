@@ -1,8 +1,11 @@
 """Freestanding pointer indexes shared by all production GC backends.
 
-The tables are open-addressed arrays of 24-byte slots::
+The tables are open-addressed arrays of 16-byte slots::
 
-    key: ptr, node: ptr, state: i8, padding: 7 bytes
+    key: ptr, node: ptr
+
+NULL keys mark empty slots. Keys are never NULL on insertion and backward-
+shift deletion leaves no tombstones, so a separate occupancy byte is redundant.
 
 They deliberately depend only on ``pcc.unsafe`` raw memory operations and the
 freestanding allocator ABI.  ``src/py_gc_index_table.c`` remains a host-C
@@ -21,7 +24,6 @@ from pcc.unsafe import (
     global_store_ptr,
     is_tagged_int,
     load_i64,
-    load_i8,
     load_ptr,
     logical_shift_right_i64,
     null,
@@ -30,7 +32,6 @@ from pcc.unsafe import (
     ptr_eq,
     ptr_is_null,
     store_i64,
-    store_i8,
     store_ptr,
 )
 
@@ -99,6 +100,12 @@ def pcc_gc_index_py_hash_ptr(key: c_ptr) -> i64:
     return value ^ logical_shift_right_i64(value, 32)
 
 
+@c_abi_export("pcc_gc_index_slot_size")
+def pcc_gc_index_slot_size() -> i64:
+    """Bytes per opaque index slot, also used by preallocated GC plans."""
+    return 16
+
+
 @c_abi_export("pcc_gc_index_py_next_pow2")
 def pcc_gc_index_py_next_pow2(value: i64) -> i64:
     if value < 8:
@@ -114,6 +121,11 @@ def pcc_gc_index_py_rehash_capacity(
     cap: i64, count: i64, minimum: i64
 ) -> i64:
     desired: i64 = (count + 1) * 4
+    # At the half-full growth boundary, rounding 4 * (count + 1)
+    # up to a power of two quadruples the old capacity. A doubled table
+    # already restores quarter occupancy and preserves lookup headroom.
+    if count + 1 > logical_shift_right_i64(cap, 1):
+        desired = (count + 1) * 2
     if desired < minimum:
         desired = minimum
     compact: i64 = pcc_gc_index_py_next_pow2(desired)
@@ -137,11 +149,11 @@ def pcc_gc_index_py_find_slot(slots: c_ptr, cap: i64, key: c_ptr) -> i64:
     mask: i64 = cap - 1
     index: i64 = pcc_gc_index_py_hash_ptr(key) & mask
     while True:
-        offset: i64 = index * 24
-        state: i64 = load_i8(slots, offset + 16)
-        if state == 0:
+        offset: i64 = index * 16
+        candidate = load_ptr(slots, offset)
+        if ptr_is_null(candidate) != 0:
             return -index - 1
-        if ptr_eq(load_ptr(slots, offset), key):
+        if ptr_eq(candidate, key):
             return index
         index = (index + 1) & mask
 
@@ -154,7 +166,7 @@ def pcc_gc_index_py_rehash_slots(
     requested_cap: i64,
 ) -> i64:
     new_cap: i64 = pcc_gc_index_py_next_pow2(requested_cap)
-    new_slots = calloc(new_cap, 24)
+    new_slots = calloc(new_cap, 16)
     if ptr_is_null(new_slots):
         return -1
 
@@ -164,25 +176,19 @@ def pcc_gc_index_py_rehash_slots(
     if ptr_is_null(old_slots) == 0:
         index: i64 = 0
         while index < old_cap:
-            old_offset: i64 = index * 24
+            old_offset: i64 = index * 16
             if (
-                load_i8(old_slots, old_offset + 16)
-                == 1
+                ptr_is_null(load_ptr(old_slots, old_offset)) == 0
             ):
                 key = load_ptr(old_slots, old_offset)
                 result: i64 = pcc_gc_index_py_find_slot(new_slots, new_cap, key)
                 new_index: i64 = -result - 1
-                new_offset: i64 = new_index * 24
+                new_offset: i64 = new_index * 16
                 store_ptr(new_slots, new_offset, key)
                 store_ptr(
                     new_slots,
                     new_offset + 8,
                     load_ptr(old_slots, old_offset + 8),
-                )
-                store_i8(
-                    new_slots,
-                    new_offset + 16,
-                    1,
                 )
                 new_used = new_used + 1
             index = index + 1
@@ -208,7 +214,7 @@ def pcc_gc_index_py_find(
         return null()
     return load_ptr(
         slots,
-        result * 24 + 8,
+        result * 16 + 8,
     )
 
 
@@ -264,12 +270,11 @@ def pcc_gc_index_py_insert(
         result = pcc_gc_index_py_find_slot(slots, cap, key)
 
     index: i64 = -result - 1
-    offset: i64 = index * 24
-    if load_i8(slots, offset + 16) == 0:
+    offset: i64 = index * 16
+    if ptr_is_null(load_ptr(slots, offset)) != 0:
         store_i64(used_cell, 0, used + 1)
     store_ptr(slots, offset, key)
     store_ptr(slots, offset + 8, node)
-    store_i8(slots, offset + 16, 1)
     store_i64(count_cell, 0, count + 1)
     return 1
 
@@ -306,7 +311,7 @@ def pcc_gc_index_py_upsert(
     if result >= 0:
         store_ptr(
             slots,
-            result * 24 + 8,
+            result * 16 + 8,
             node,
         )
         return 0
@@ -328,12 +333,11 @@ def pcc_gc_index_py_upsert(
         result = pcc_gc_index_py_find_slot(slots, cap, key)
 
     index: i64 = -result - 1
-    offset: i64 = index * 24
-    if load_i8(slots, offset + 16) == 0:
+    offset: i64 = index * 16
+    if ptr_is_null(load_ptr(slots, offset)) != 0:
         store_i64(used_cell, 0, used + 1)
     store_ptr(slots, offset, key)
     store_ptr(slots, offset + 8, node)
-    store_i8(slots, offset + 16, 1)
     store_i64(count_cell, 0, count + 1)
     return 1
 
@@ -365,7 +369,7 @@ def pcc_gc_index_py_replace_raw(
     cap: i64 = load_i64(cap_cell, 0)
     result: i64 = pcc_gc_index_py_find_slot(slots, cap, key)
     if result >= 0:
-        offset: i64 = result * 24
+        offset: i64 = result * 16
         old = load_ptr(slots, offset + 8)
         store_ptr(slots, offset + 8, node)
         return old
@@ -387,12 +391,11 @@ def pcc_gc_index_py_replace_raw(
         result = pcc_gc_index_py_find_slot(slots, cap, key)
 
     index: i64 = -result - 1
-    offset = index * 24
-    if load_i8(slots, offset + 16) == 0:
+    offset = index * 16
+    if ptr_is_null(load_ptr(slots, offset)) != 0:
         store_i64(used_cell, 0, used + 1)
     store_ptr(slots, offset, key)
     store_ptr(slots, offset + 8, node)
-    store_i8(slots, offset + 16, 1)
     store_i64(count_cell, 0, count + 1)
     return null()
 
@@ -419,7 +422,7 @@ def pcc_gc_index_py_remove(
     result: i64 = pcc_gc_index_py_find_slot(slots, cap, key)
     if result < 0:
         return null()
-    node = load_ptr(slots, result * 24 + 8)
+    node = load_ptr(slots, result * 16 + 8)
     # Backward-shift deletion: close the probe-chain gap instead of writing
     # a tombstone. An entry at ``probe`` (home slot ``home``) may fill the
     # hole iff its home lies cyclically outside (hole, probe], i.e.
@@ -433,26 +436,24 @@ def pcc_gc_index_py_remove(
     done: i64 = 0
     while done == 0:
         probe = (probe + 1) & mask
-        probe_off: i64 = probe * 24
-        if load_i8(slots, probe_off + 16) != 1:
+        probe_off: i64 = probe * 16
+        if ptr_is_null(load_ptr(slots, probe_off)) != 0:
             done: i64 = 1
         else:
             probe_key = load_ptr(slots, probe_off)
             home: i64 = pcc_gc_index_py_hash_ptr(probe_key) & mask
             if ((probe - home) & mask) >= ((probe - hole) & mask):
-                hole_off: i64 = hole * 24
+                hole_off: i64 = hole * 16
                 store_ptr(slots, hole_off, probe_key)
                 store_ptr(
                     slots,
                     hole_off + 8,
                     load_ptr(slots, probe_off + 8),
                 )
-                store_i8(slots, hole_off + 16, 1)
                 hole = probe
-    clear_off: i64 = hole * 24
+    clear_off: i64 = hole * 16
     store_ptr(slots, clear_off, null())
     store_ptr(slots, clear_off + 8, null())
-    store_i8(slots, clear_off + 16, 0)
     store_i64(count_cell, 0, load_i64(count_cell, 0) - 1)
     store_i64(used_cell, 0, load_i64(used_cell, 0) - 1)
     return node
@@ -652,6 +653,8 @@ def pcc_gc_object_index_plan_capacity(extra: i64) -> i64:
         return 0
     wanted: i64 = count + extra
     desired: i64 = wanted * 4
+    if cap > 0 and wanted > logical_shift_right_i64(cap, 1):
+        desired = wanted * 2
     if desired < 16384:
         desired = 16384
     capacity: i64 = pcc_gc_index_py_next_pow2(desired)
@@ -682,20 +685,19 @@ def pcc_gc_object_index_plan_commit(
     new_used: i64 = 0
     index: i64 = 0
     while index < old_cap:
-        old_offset: i64 = index * 24
-        if load_i8(old_slots, old_offset + 16) == 1:
+        old_offset: i64 = index * 16
+        if ptr_is_null(load_ptr(old_slots, old_offset)) == 0:
             key = load_ptr(old_slots, old_offset)
             result: i64 = pcc_gc_index_py_find_slot(
                 new_slots, prepared_cap, key
             )
-            new_offset: i64 = (-result - 1) * 24
+            new_offset: i64 = (-result - 1) * 16
             store_ptr(new_slots, new_offset, key)
             store_ptr(
                 new_slots,
                 new_offset + 8,
                 load_ptr(old_slots, old_offset + 8),
             )
-            store_i8(new_slots, new_offset + 16, 1)
             new_used = new_used + 1
         index = index + 1
     global_store_ptr("pcc_py_gc_object_slots", new_slots)
@@ -723,10 +725,9 @@ def pcc_gc_object_index_insert_preallocated(obj: c_ptr, node: c_ptr) -> i64:
     used: i64 = load_i64(global_addr("pcc_py_gc_object_used"), 0)
     if used + 1 > logical_shift_right_i64(cap, 1):
         return -1
-    offset: i64 = (-result - 1) * 24
+    offset: i64 = (-result - 1) * 16
     store_ptr(slots, offset, obj)
     store_ptr(slots, offset + 8, node)
-    store_i8(slots, offset + 16, 1)
     store_i64(
         global_addr("pcc_py_gc_object_count"),
         0,
@@ -783,6 +784,8 @@ def pcc_gc_forwarding_plan_index_capacity(kind: i64, extra: i64) -> i64:
         return 0
     wanted: i64 = count + extra
     desired: i64 = wanted * 4
+    if cap > 0 and wanted > logical_shift_right_i64(cap, 1):
+        desired = wanted * 2
     if desired < 256:
         desired = 256
     capacity: i64 = pcc_gc_index_py_next_pow2(desired)
@@ -833,20 +836,19 @@ def pcc_gc_forwarding_plan_index_commit(
     new_used: i64 = 0
     index: i64 = 0
     while index < old_cap:
-        old_offset: i64 = index * 24
-        if load_i8(old_slots, old_offset + 16) == 1:
+        old_offset: i64 = index * 16
+        if ptr_is_null(load_ptr(old_slots, old_offset)) == 0:
             key = load_ptr(old_slots, old_offset)
             result: i64 = pcc_gc_index_py_find_slot(
                 new_slots, prepared_cap, key
             )
-            new_offset: i64 = (-result - 1) * 24
+            new_offset: i64 = (-result - 1) * 16
             store_ptr(new_slots, new_offset, key)
             store_ptr(
                 new_slots,
                 new_offset + 8,
                 load_ptr(old_slots, old_offset + 8),
             )
-            store_i8(new_slots, new_offset + 16, 1)
             new_used = new_used + 1
         index = index + 1
     store_ptr(slots_cell, 0, new_slots)
@@ -897,10 +899,9 @@ def pcc_gc_forwarding_plan_index_insert(
     used: i64 = load_i64(used_cell, 0)
     if used + 1 > logical_shift_right_i64(cap, 1):
         return -1
-    offset: i64 = (-result - 1) * 24
+    offset: i64 = (-result - 1) * 16
     store_ptr(slots, offset, obj)
     store_ptr(slots, offset + 8, node)
-    store_i8(slots, offset + 16, 1)
     store_i64(count_cell, 0, load_i64(count_cell, 0) + 1)
     store_i64(used_cell, 0, used + 1)
     return 1
@@ -1082,6 +1083,8 @@ def pcc_gc_frame_index_plan_capacity(extra: i64) -> i64:
         return 0
     wanted: i64 = count + extra
     desired: i64 = wanted * 4
+    if cap > 0 and wanted > logical_shift_right_i64(cap, 1):
+        desired = wanted * 2
     if desired < 256:
         desired = 256
     capacity: i64 = pcc_gc_index_py_next_pow2(desired)
@@ -1117,20 +1120,19 @@ def pcc_gc_frame_index_plan_commit(
     new_used: i64 = 0
     index: i64 = 0
     while index < old_cap:
-        old_offset: i64 = index * 24
-        if load_i8(old_slots, old_offset + 16) == 1:
+        old_offset: i64 = index * 16
+        if ptr_is_null(load_ptr(old_slots, old_offset)) == 0:
             key = load_ptr(old_slots, old_offset)
             result: i64 = pcc_gc_index_py_find_slot(
                 new_slots, prepared_cap, key
             )
-            new_offset: i64 = (-result - 1) * 24
+            new_offset: i64 = (-result - 1) * 16
             store_ptr(new_slots, new_offset, key)
             store_ptr(
                 new_slots,
                 new_offset + 8,
                 load_ptr(old_slots, old_offset + 8),
             )
-            store_i8(new_slots, new_offset + 16, 1)
             new_used = new_used + 1
         index = index + 1
     store_ptr(slots_cell, 0, new_slots)
@@ -1180,7 +1182,7 @@ def pcc_gc_frame_index_replace_preallocated(
     cap: i64 = load_i64(global_addr("pcc_py_gc_frame_cap"), 0)
     result: i64 = pcc_gc_index_py_find_slot(table, cap, slots)
     if result >= 0:
-        offset: i64 = result * 24
+        offset: i64 = result * 16
         old = load_ptr(table, offset + 8)
         store_ptr(table, offset + 8, node)
         return old
@@ -1188,10 +1190,9 @@ def pcc_gc_frame_index_replace_preallocated(
     if used + 1 > logical_shift_right_i64(cap, 1):
         return node
     count: i64 = load_i64(global_addr("pcc_py_gc_frame_count"), 0)
-    offset = (-result - 1) * 24
+    offset = (-result - 1) * 16
     store_ptr(table, offset, slots)
     store_ptr(table, offset + 8, node)
-    store_i8(table, offset + 16, 1)
     store_i64(global_addr("pcc_py_gc_frame_used"), 0, used + 1)
     store_i64(global_addr("pcc_py_gc_frame_count"), 0, count + 1)
     return null()
@@ -1269,6 +1270,8 @@ def pcc_gc_zpage_owner_index_plan_capacity(extra: i64) -> i64:
         return 0
     wanted: i64 = count + extra
     desired: i64 = wanted * 4
+    if cap > 0 and wanted > logical_shift_right_i64(cap, 1):
+        desired = wanted * 2
     if desired < 256:
         desired = 256
     capacity: i64 = pcc_gc_index_py_next_pow2(desired)
@@ -1298,20 +1301,19 @@ def pcc_gc_zpage_owner_index_plan_commit(
     new_used: i64 = 0
     index: i64 = 0
     while index < old_cap:
-        old_offset: i64 = index * 24
-        if load_i8(old_slots, old_offset + 16) == 1:
+        old_offset: i64 = index * 16
+        if ptr_is_null(load_ptr(old_slots, old_offset)) == 0:
             key = load_ptr(old_slots, old_offset)
             result: i64 = pcc_gc_index_py_find_slot(
                 new_slots, prepared_cap, key
             )
-            new_offset: i64 = (-result - 1) * 24
+            new_offset: i64 = (-result - 1) * 16
             store_ptr(new_slots, new_offset, key)
             store_ptr(
                 new_slots,
                 new_offset + 8,
                 load_ptr(old_slots, old_offset + 8),
             )
-            store_i8(new_slots, new_offset + 16, 1)
             new_used = new_used + 1
         index = index + 1
     global_store_ptr("pcc_py_gc_zpage_owner_slots", new_slots)
@@ -1338,16 +1340,15 @@ def pcc_gc_zpage_owner_index_upsert_preallocated(
     result: i64 = pcc_gc_index_py_find_slot(slots, cap, obj)
     offset: i64 = 0
     if result >= 0:
-        offset = result * 24
+        offset = result * 16
         store_ptr(slots, offset + 8, node)
         return 0
     used: i64 = load_i64(global_addr("pcc_py_gc_zpage_owner_used"), 0)
     if used + 1 > logical_shift_right_i64(cap, 1):
         return -1
-    offset = (-result - 1) * 24
+    offset = (-result - 1) * 16
     store_ptr(slots, offset, obj)
     store_ptr(slots, offset + 8, node)
-    store_i8(slots, offset + 16, 1)
     store_i64(
         global_addr("pcc_py_gc_zpage_owner_count"),
         0,

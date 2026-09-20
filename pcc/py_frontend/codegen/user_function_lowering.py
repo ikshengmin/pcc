@@ -1775,7 +1775,7 @@ class UserFunctionLoweringMixin:
         arity = entry["original_arity"]
         free_names = entry["free_names"]
         adapter_name = (
-            f"user_{(self.ast_module.name or 'mod').replace('.', '_')}"
+            f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
             f"_{orig_name}_adapter"
         )
         fnty = ir.FunctionType(_CSTR, [_CSTR] * arity)
@@ -1881,7 +1881,7 @@ class UserFunctionLoweringMixin:
         real hoisted FuncDef ABI, then boxes the result back to PyObject*.
         """
         adapter_name = (
-            f"user_{(self.ast_module.name or 'mod').replace('.', '_')}"
+            f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
             f"_{orig_name}_native_adapter"
         )
         # The Python name is a live binding and may be reused by a later
@@ -2415,7 +2415,7 @@ class UserFunctionLoweringMixin:
         if not is_module_top_level or free_names:
             return fn_obj
 
-        safe_mod = (self.ast_module.name or "mod").replace(".", "_").replace("-", "_")
+        safe_mod = self._module_symbol_suffix(self.ast_module.name or "mod")
         safe_name = resolved_name.replace(".", "_").replace("-", "_")
         cache_name = "__pcc_native_func_value_cache_" + safe_mod + "_" + safe_name
         if fd.name in self._duplicate_module_function_names:
@@ -2534,7 +2534,7 @@ class UserFunctionLoweringMixin:
 
     def _lru_cache_global_name(self, func_name: str) -> str:
         mod_name = self.ast_module.name or "mod"
-        safe_mod = mod_name.replace(".", "_").replace("-", "_")
+        safe_mod = self._module_symbol_suffix(mod_name)
         safe_func = func_name.replace(".", "_").replace("-", "_")
         return "__pcc_lru_cache_" + safe_mod + "_" + safe_func
 

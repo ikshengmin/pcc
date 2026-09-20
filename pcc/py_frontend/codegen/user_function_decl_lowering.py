@@ -98,7 +98,7 @@ class UserFunctionDeclLoweringMixin:
         # Normalise dotted module names so the mangled symbol is a
         # valid LLVM identifier (dots in LLVM identifiers work when
         # quoted but read oddly).
-        sanitized: str = mod_name.replace(".", "_").replace("-", "_")
+        sanitized: str = self._module_symbol_suffix(mod_name)
         return f"user_{sanitized}_{name}"
 
     def _func_decorators(self, fd: FuncDef) -> tuple:

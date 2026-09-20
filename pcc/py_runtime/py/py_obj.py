@@ -579,7 +579,7 @@ def _gc_incref_fresh_native_instance(o) -> None:
     if is_tagged_int(o) != 0:
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag != PY_TYPE_INSTANCE and (tag < PY_TYPE_USER_CLASS_START or tag > 500):
+    if tag != PY_TYPE_INSTANCE and (tag < PY_TYPE_USER_CLASS_START or tag >= (0x10000)):
         # Keep an accidental future caller safe; the optimized frontend lane
         # proves this exact tag and therefore never takes the generic query.
         py_incref(o)
@@ -1177,6 +1177,13 @@ def _py_refcount_prepared_reset(prepared, o) -> None:
     store_i64(prepared, 48, 0)
 
 
+# 0x10000 is PY_TYPE_CEXT_TAG_BASE (py_runtime.h), the first tag handed out by
+# pcc_capi_register_cext_type.  It is spelled as a literal here and in
+# py_capi_type_runtime.py rather than imported: a comparison against the
+# imported name lowers through the generic object comparison instead of the
+# raw integer one.  Everything from PY_TYPE_USER_CLASS_START up to it is a pcc
+# user class and must be refcounted; the guards used to stop at 500, which
+# silently made py_incref a no-op past roughly the 440th class.
 def _py_incref_prepare(o, prepared) -> None:
     _py_refcount_prepared_reset(prepared, o)
     if ptr_is_null(o) != 0:
@@ -1195,7 +1202,7 @@ def _py_incref_prepare(o, prepared) -> None:
     if (
         tag < PY_TYPE_NONE
         or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER)
-        or (tag > 500 and pcc_capi_is_cext_type_tag(tag) == 0)
+        or (tag >= (0x10000) and pcc_capi_is_cext_type_tag(tag) == 0)
     ):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
@@ -1283,7 +1290,7 @@ def py_incref(o) -> None:
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER) or (tag > 500 and pcc_capi_is_cext_type_tag(tag) == 0):
+    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER) or (tag >= (0x10000) and pcc_capi_is_cext_type_tag(tag) == 0):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and pcc_gc_object_is_known(o) == 0:
@@ -1315,7 +1322,7 @@ def _py_decref_prepare(o, prepared) -> None:
     if (
         tag_dbg < PY_TYPE_NONE
         or (tag_dbg > PY_TYPE_CPY_HANDLE and tag_dbg < PY_TYPE_USER)
-        or (tag_dbg > 500 and pcc_capi_is_cext_type_tag(tag_dbg) == 0)
+        or (tag_dbg >= (0x10000) and pcc_capi_is_cext_type_tag(tag_dbg) == 0)
     ):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
@@ -1436,7 +1443,7 @@ def py_decref(o) -> None:
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER) or (tag > 500 and pcc_capi_is_cext_type_tag(tag) == 0):
+    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER) or (tag >= (0x10000) and pcc_capi_is_cext_type_tag(tag) == 0):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and pcc_gc_object_is_known(o) == 0:

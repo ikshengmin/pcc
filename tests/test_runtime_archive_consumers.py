@@ -47,7 +47,10 @@ def _write_valid_runtime_archive(
     target_triple = llvm.get_default_triple()
     ir_text = (
         f'target triple = "{target_triple}"\n'
-        f"define i32 @cache_member() {{ ret i32 {return_value} }}\n"
+        "define i32 @cache_member() {\n"
+        "entry:\n"
+        f"  ret i32 {return_value}\n"
+        "}\n"
     )
     ir_path.write_text(ir_text, encoding="utf-8")
     object_bytes = emit_object(ir_text)
@@ -204,6 +207,35 @@ def test_hatch_build_fails_closed_when_in_tree_provenance_verifier_is_missing(
         match="runtime archive provenance verifier is missing",
     ):
         _load_hatch_build(monkeypatch, hook_path=isolated_hook)
+
+
+def test_hatch_verifies_archive_without_importing_an_installed_pcc(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "runtime"
+    archive = _write_valid_runtime_archive(runtime_root)
+    real_import = builtins.__import__
+
+    def reject_public_pcc(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "pcc" or name.startswith("pcc."):
+            raise AssertionError("isolated hook imported public pcc: " + name)
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", reject_public_pcc)
+    module = _load_hatch_build(monkeypatch)
+    result = module.verify_runtime_archive_manifest(archive, runtime_root=runtime_root)
+    assert result["member_count"] == 1
+    reader_source = module._provenance.read_members.__globals__["__file__"]
+    assert Path(reader_source).resolve() == (REPO / "pcc/backend/ar.py").resolve()
+
+
+def test_hatch_target_stamp_uses_owned_host_abi_without_cc(tmp_path, monkeypatch):
+    module = _load_hatch_build(monkeypatch)
+    hook = _new_build_hook(module, tmp_path)
+
+    def unexpected_tool(*args, **kwargs):
+        raise AssertionError("target identification must not invoke cc")
+
+    monkeypatch.setattr(module.subprocess, "check_output", unexpected_tool)
+    assert hook._archive_target_id() == pipeline._runtime_archive_target_id()
 
 
 class _BuildApp:
@@ -572,6 +604,42 @@ def test_hatch_freshness_requires_an_adjacent_manifest(
     hook = _new_build_hook(hatch_module, root)
 
     assert hook._runtime_archive_inputs_newer(root, archive)
+
+
+@pytest.mark.parametrize("failed_phase", ["runtime", "compiler"])
+def test_hatch_self_build_failure_never_retries_an_external_backend(
+    tmp_path, monkeypatch, failed_phase,
+):
+    hatch_module = _load_hatch_build(monkeypatch)
+    root = tmp_path / "source"
+    archive = _write_valid_runtime_archive(root / "pcc" / "py_runtime")
+    hook = _new_build_hook(hatch_module, root)
+    attempts = []
+
+    def build_runtime(_runtime, _target, backend, **kwargs):
+        attempts.append(("runtime", backend))
+        return failed_phase != "runtime"
+
+    def build_compiler(_root, _output, backend):
+        attempts.append(("compiler", backend))
+        return False
+
+    monkeypatch.setattr(hook, "_discard_wrong_target_archives", lambda _root: None)
+    monkeypatch.setattr(hook, "_archive_target_id", lambda: "test-target")
+    monkeypatch.setattr(hook, "_run_make", build_runtime)
+    monkeypatch.setattr(hook, "_run_pcc_self_compile", build_compiler)
+    monkeypatch.setenv("PCC_BUILD_BACKEND", "self")
+    for name in ("PCC_BUILD_SKIP", "PCC_BUILD_PCC1", "PCC_BUILD_TARGET"):
+        monkeypatch.delenv(name, raising=False)
+    build_data = {}
+    with pytest.raises(RuntimeError):
+        hook.initialize("standard", build_data)
+    expected = [("runtime", "self")]
+    if failed_phase == "compiler":
+        expected.append(("compiler", "self"))
+    assert attempts == expected
+    assert "shared_scripts" not in build_data
+    assert archive.is_file()
 
 
 def test_hatch_freshness_rejects_invalid_but_accepts_valid_provenance(

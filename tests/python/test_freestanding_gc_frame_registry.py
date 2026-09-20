@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from pcc.py_frontend import pipeline
+from pcc.py_frontend.pipeline_targets import host_target_triple
 from pcc.py_frontend.codegen.runtime_abi import (
     FREESTANDING_GC_CROSS_OBJECT_SIGNATURES,
     FREESTANDING_GC_RUNTIME_GLOBALS,
@@ -53,6 +54,7 @@ TLS_STORAGE_SYMBOLS = {
     "pcc_gc_frame_node_pool_total",
 }
 RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
+    "pcc_gc_index_slot_size",
     "pcc_gc_cycle_requested_store_release",
     "pcc_gc_frame_index_find",
     "pcc_gc_frame_index_plan_capacity",
@@ -77,6 +79,7 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend3_frame_root_scan_slot",
     "pcc_gc_backend_selected",
     "pcc_gc_config_initialized",
+    "pcc_gc_explicit_collect_active",
     "pcc_gc_frame_head",
 }
 
@@ -93,6 +96,7 @@ def _compile_object(tmp_path: Path, emitter: str) -> Path:
         emit_llvm_only=True,
         libpython_mode="off",
         python_library=True,
+        target_triple=host_target_triple(),
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
     source = llvm_ir
@@ -261,7 +265,7 @@ def test_frame_registry_object_has_exact_raw_closure(tmp_path: Path, emitter: st
         if line.strip()
     }
     expected_undefined = RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
-    if sys.platform == "darwin" and emitter == "llvm":
+    if sys.platform == "darwin":
         expected_undefined = expected_undefined | {"tlv_bootstrap"}
     assert undefined == expected_undefined
 

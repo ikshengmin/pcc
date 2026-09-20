@@ -12,6 +12,8 @@ typedef struct {
     int binary;
 } PyFileObject;
 
+static PyFileObject *file_checked_open(PyObject *file);
+
 static PyObject *py_file_pin_current_vthread(const char *reason) {
     PyObject *vt = py_virtual_thread_current();
     if (vt == NULL || vt == py_None) {
@@ -123,9 +125,8 @@ PyObject *py_file_open(PyObject *path, PyObject *mode) {
 }
 
 PyObject *py_file_read_all(PyObject *file) {
-    if (file == NULL || py_type_of(file) != PY_TYPE_FILE) return NULL;
-    PyFileObject *f = (PyFileObject *)file;
-    if (f->closed || f->fp == NULL) return NULL;
+    PyFileObject *f = file_checked_open(file);
+    if (f == NULL) return NULL;
 
     char *buf = NULL;
     size_t len = 0;
@@ -167,9 +168,8 @@ PyObject *py_file_read_all(PyObject *file) {
 
 PyObject *py_file_read(PyObject *file, int64_t limit) {
     if (limit < 0) return py_file_read_all(file);
-    if (file == NULL || py_type_of(file) != PY_TYPE_FILE) return NULL;
-    PyFileObject *f = (PyFileObject *)file;
-    if (f->closed || f->fp == NULL) return NULL;
+    PyFileObject *f = file_checked_open(file);
+    if (f == NULL) return NULL;
 
     size_t cap = (size_t)limit;
     char *buf = NULL;
@@ -234,9 +234,9 @@ PyObject *py_file_write(PyObject *file, PyObject *text) {
     return py_int_from_i64((int64_t)wrote);
 }
 
-/* Shared open-file precondition for readline/seek/tell/flush: NULL /
- * non-file receivers return NULL silently (matching the older read/write
- * helpers); a closed file raises ValueError exactly like CPython. */
+/* Shared open-file precondition for reads, seek, tell and flush: NULL /
+ * non-file receivers return NULL silently; a closed file raises ValueError
+ * exactly like CPython. */
 static PyFileObject *file_checked_open(PyObject *file) {
     if (file == NULL || py_type_of(file) != PY_TYPE_FILE) return NULL;
     PyFileObject *f = (PyFileObject *)file;

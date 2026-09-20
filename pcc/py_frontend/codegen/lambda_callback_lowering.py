@@ -108,7 +108,7 @@ class LambdaCallbackLoweringMixin:
         idx = self._native_lambda_callback_counter
         self._native_lambda_callback_counter += 1
         sym_base = f"__native_lambda_callback_{idx}"
-        fn_name = f"user_{(self.ast_module.name or 'mod').replace('.', '_')}_{sym_base}"
+        fn_name = f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}_{sym_base}"
         adapter_ty = ir.FunctionType(_CSTR, [_CSTR, _CSTR])
         adapter = ir.Function(self.module, adapter_ty, name=fn_name)
         adapter.linkage = "internal"

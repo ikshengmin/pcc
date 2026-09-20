@@ -50,6 +50,55 @@ _RET = b"\xc0\x03\x5f\xd6"
 _BL_PLACEHOLDER = b"\x00\x00\x00\x94"
 
 
+@pytest.mark.parametrize("names", [[], ["_main"], ["abc", "defg"], ["_a", "_z", "_a"], ["é", "long_name"]])
+def test_string_table_preserves_encoded_offsets_and_padding(names):
+    from pcc.backend.macho_obj import _build_string_table
+
+    expected = bytearray(b"\0")
+    offsets = {}
+    for name in names:
+        offsets[name] = len(expected)
+        expected += name.encode() + b"\0"
+    while len(expected) % 8:
+        expected += b"\0"
+    assert _build_string_table(names) == (offsets, bytes(expected))
+
+
+def test_large_string_table_executes_natively(
+    tmp_path, monkeypatch, pcc_py_runtime_archive, python_program_compiler,
+):
+    import inspect
+    import os
+    from pcc.backend.macho_obj import _build_string_table
+
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    source = tmp_path / "strings.py"
+    source.write_text(inspect.getsource(_build_string_table) + '''
+def main():
+    names = ["_symbol_" + str(index) for index in range(40000)]
+    offsets, data = _build_string_table(names)
+    assert len(data) % 8 == 0
+    cursor = 1
+    for name in names:
+        encoded = name.encode() + b"\\0"
+        assert offsets[name] == cursor
+        assert data[cursor:cursor + len(encoded)] == encoded
+        cursor += len(encoded)
+    assert data[cursor:] == b"\\0" * (len(data) - cursor)
+    print(len(offsets), len(data))
+main()
+''')
+    binary = tmp_path / "strings"
+    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+                            runtime_archive=str(pcc_py_runtime_archive))
+    expected = str(len(_build_string_table(["_symbol_" + str(i) for i in range(40000)])[1]))
+    for backend in range(5):
+        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
+                                env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
+        assert result.returncode == 0, (backend, result.stdout, result.stderr)
+        assert result.stdout.strip() == "40000 " + expected
+
+
 @pytest.mark.parametrize("kind", ["native", "packed", "macho"])
 def test_merge_rebases_each_relocation_without_an_intermediate_copy(tmp_path, monkeypatch, kind):
     from pcc.backend import macho_link
@@ -87,6 +136,85 @@ def test_merge_rebases_each_relocation_without_an_intermediate_copy(tmp_path, mo
     binary.chmod(0o755)
     ran = subprocess.run([str(binary)], capture_output=True, timeout=10)
     assert ran.returncode == 42, ran.stderr
+
+
+@pytest.mark.parametrize("kind", ["native", "packed", "macho"])
+def test_section_rebases_do_not_rescan_symbol_relocations(tmp_path, monkeypatch, kind):
+    """A large symbol prefix must not be visited for every section target."""
+    from dataclasses import replace
+    from pcc.backend.macho_exec import link_prepared_executable
+
+    symbol_count, section_count = 1024, 128
+    prefix = NativeObject.from_sections([Section(
+        sectname="__data", segname="__DATA", flags=DATA_SECTION_FLAGS,
+        align_log2=3, data=b"\0" * 16,
+        symbols=(TextSymbol("_prefix", 0),),
+    )])
+    relocations = [Relocation(
+        offset=8 * index, symbol="", type=spec.ARM64_RELOC_UNSIGNED,
+        pcrel=False, length=3, section=("__DATA", "__data"),
+        target_offset=4 if index % 2 else 0,
+    ) for index in range(section_count)]
+    relocations.extend(Relocation(
+        offset=8 * (section_count + index), symbol="_dest",
+        type=spec.ARM64_RELOC_UNSIGNED, pcrel=False, length=3,
+    ) for index in range(symbol_count))
+    caller = NativeObject.from_sections([
+        Section(sectname="__text", segname="__TEXT", flags=TEXT_SECTION_FLAGS,
+                align_log2=2, data=b"\x40\x05\x80\x52" + _RET,
+                symbols=(TextSymbol("_main", 0),)),
+        Section(sectname="__data", segname="__DATA", flags=DATA_SECTION_FLAGS,
+                align_log2=3, data=b"\0" * 8, symbols=(TextSymbol("_dest", 0),)),
+        Section(sectname="__ptrs", segname="__DATA", flags=DATA_SECTION_FLAGS,
+                align_log2=3, data=b"\0" * (8 * len(relocations)),
+                relocations=tuple(relocations)),
+    ])
+    objects = [prefix, caller]
+    if kind == "packed":
+        objects = [decode_packed_native_object(encode_native_object(obj)) for obj in objects]
+    elif kind == "macho":
+        objects = [obj.to_macho() for obj in objects]
+    offset_reads = 0
+    original_getattribute = Relocation.__getattribute__
+
+    def count_offset_reads(self, name):
+        nonlocal offset_reads
+        if name == "offset":
+            offset_reads += 1
+        return original_getattribute(self, name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Relocation, "__getattribute__", count_offset_reads)
+        merged = link_relocatable_native(objects)
+    assert offset_reads < 40 * (symbol_count + section_count), offset_reads
+    pointers = next(section for section in merged.sections if section.sectname == "__ptrs")
+    assert [entry.offset for entry in pointers.relocations] == list(
+        range(8 * (len(relocations) - 1), -1, -8)
+    )
+    for entry in pointers.relocations:
+        if entry.offset < section_count * 8 and (entry.offset // 8) % 2:
+            assert entry.target_offset == 20
+            assert merged.sections[entry.target_section_index - 1].sectname == "__data"
+        else:
+            assert merged.symbols[entry.symbol_index].name == "_dest"
+    with pytest.raises(LinkError, match="normalized to a defined symbol"):
+        link_prepared_executable(merged)
+    # Defining the second destination makes the same relocation workload a
+    # supported executable. The anonymous form above remains relocatable-only.
+    sections, undefined = caller.to_sections()
+    sections = [replace(section, symbols=section.symbols + (TextSymbol("_anon", 4),))
+                if section.sectname == "__data" else section for section in sections]
+    executable_inputs = [prefix, NativeObject.from_sections(sections, undefined=undefined)]
+    if kind == "packed":
+        executable_inputs = [decode_packed_native_object(encode_native_object(obj))
+                             for obj in executable_inputs]
+    elif kind == "macho":
+        executable_inputs = [obj.to_macho() for obj in executable_inputs]
+    binary = tmp_path / "section-rebased"
+    binary.write_bytes(link_executable(executable_inputs))
+    binary.chmod(0o755)
+    run = subprocess.run([str(binary)], capture_output=True, timeout=10)
+    assert run.returncode == 42, run.stderr
 
 
 def test_worker_assembly_text_and_path_publish_identical_native_object(
@@ -204,6 +332,73 @@ def test_final_link_streams_relocation_rows_without_materializing_tables(monkeyp
     assert link_executable([caller, helper]) == expected
 
 
+def test_final_link_does_not_materialize_flat_native_payload(monkeypatch):
+    caller = NativeObject.from_sections(_caller_sections(), undefined=["_helper"])
+    helper = NativeObject.from_sections(_helper_sections())
+    expected = link_executable([caller, helper])
+
+    def forbidden(_self):
+        raise AssertionError("final linking must read section payloads directly")
+
+    monkeypatch.setattr(native_object_module.NativeObjectView, "data", property(forbidden))
+    assert link_executable([caller, helper]) == expected
+
+
+def test_native_view_payload_identity_and_legacy_flat_data():
+    payload = b"\0" * 32
+    native = NativeObject.from_sections([Section(
+        sectname="__data", segname="__DATA", flags=DATA_SECTION_FLAGS,
+        align_log2=3, data=payload, symbols=(TextSymbol("_value", 0),),
+    )])
+    view = native.link_view()
+    section = view.sections()[0]
+    assert view._data_cache is None
+    assert view.section_data(section) is payload
+    assert view.data == payload
+    view.data = b"x" * 32
+    assert view.section_data(section) == b"x" * 32
+
+
+def test_explicit_owned_inputs_retire_before_executable_layout(monkeypatch):
+    import weakref
+    from pcc.backend import macho_exec
+
+    inputs = [NativeObject.from_sections(_caller_sections(), undefined=["_helper"]),
+              NativeObject.from_sections(_helper_sections())]
+    expected = link_executable(inputs)
+    assert len(inputs) == 2
+    references = [weakref.ref(value) for value in inputs]
+    original = macho_exec._prepare_executable_image
+    checked = []
+
+    def check(*args, **kwargs):
+        assert inputs == []
+        assert all(reference() is None for reference in references)
+        checked.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(macho_exec, "_prepare_executable_image", check)
+    assert link_executable(inputs, _consume_inputs=True) == expected
+    assert checked == [True]
+
+
+def test_relocation_order_arena_closes_when_iteration_stops(monkeypatch):
+    original = native_object_module.CompilerIntArena
+    closed = []
+
+    class Arena(original):
+        def close(self):
+            closed.append(True)
+            super().close()
+
+    monkeypatch.setattr(native_object_module, "CompilerIntArena", Arena)
+    native = NativeObject.from_sections(_caller_sections(), undefined=["_helper"])
+    iterator = native_object_module._iter_raw_relocations(native.sections[0])
+    next(iterator)
+    iterator.close()
+    assert closed == [True]
+
+
 def test_native_validation_streams_without_full_source_projection(monkeypatch):
     def forbid_projection(_self):
         raise AssertionError("validation must not reconstruct the full source object graph")
@@ -236,6 +431,72 @@ def test_final_image_allocation_does_not_retain_prepared_object(monkeypatch):
     caller = NativeObject.from_sections(_caller_sections(), undefined=["_helper"])
     helper = NativeObject.from_sections(_helper_sections())
     assert link_executable([caller, helper])
+
+
+def test_signing_releases_output_region_owners(monkeypatch):
+    import weakref
+    from pcc.backend import macho_exec
+
+    materialize = macho_exec.materialize_output
+    sign = macho_exec.build_signature
+    references = []
+
+    def capture(size, regions):
+        references.extend(weakref.ref(region) for region in regions)
+        return materialize(size, regions)
+
+    def check(*args, **kwargs):
+        assert references and all(ref() is None for ref in references)
+        return sign(*args, **kwargs)
+
+    monkeypatch.setattr(macho_exec, "materialize_output", capture)
+    monkeypatch.setattr(macho_exec, "build_signature", check)
+    assert link_executable([NativeObject.from_sections(_helper_sections())], entry="_helper")
+
+
+def test_private_link_plan_retires_graph_before_image_allocation_natively(
+    tmp_path, monkeypatch, pcc_py_runtime_archive, python_program_compiler,
+):
+    import inspect
+    import os
+    from pcc.backend import macho_exec
+
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    source = tmp_path / "link_lifetime.py"
+    source.write_text('''import gc
+class LinkInput:
+    pass
+released = 0
+class Graph:
+    def __del__(self):
+        global released
+        released += 1
+def _validate_minos(value):
+    return value
+def prepare_executable_object(objects, *, archives, semantic_manifest, _consume_inputs):
+    return Graph()
+def _prepare_executable_image(merged, *, entry, minos, identifier):
+    return (b"prepared", identifier)
+def _finish_executable_image(plan, identifier, phase_callback):
+    gc.collect()
+    assert released == 1
+    assert plan[1] == identifier
+    return b"image"
+''' + inspect.getsource(macho_exec.link_executable) + "\n" +
+                      inspect.getsource(macho_exec._prepare_executable_inputs) + '''
+def main():
+    assert link_executable([], identifier=b"custom") == b"image"
+    print(released)
+main()
+''')
+    binary = tmp_path / "link_lifetime"
+    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+                            runtime_archive=str(pcc_py_runtime_archive))
+    for backend in range(5):
+        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
+                                env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
+        assert result.returncode == 0, (backend, result.stdout, result.stderr)
+        assert result.stdout.strip() == "1"
 
 
 def test_streamed_validation_matches_packed_decoder_on_byte_mutations():
@@ -575,6 +836,49 @@ def test_packed_and_materialized_native_inputs_produce_the_same_image() -> None:
     ])
 
     assert packed == materialized
+
+
+@pytest.mark.parametrize("kind", ["native", "packed", "macho"])
+def test_merge_keeps_unmodified_payload_immutable(tmp_path, monkeypatch, kind):
+    from pcc.backend import macho_link
+
+    text = b"\x40\x05\x80\x52" + _RET * 2047
+    source = NativeObject.from_sections([
+        Section(sectname="__text", segname="__TEXT", flags=TEXT_SECTION_FLAGS,
+                align_log2=2, data=text, symbols=(TextSymbol("_main", 0),)),
+        Section(sectname="__data", segname="__DATA", flags=DATA_SECTION_FLAGS,
+                align_log2=3, data=b"\0" * 8, symbols=(TextSymbol("_value", 0),)),
+        Section(sectname="__ptrs", segname="__DATA", flags=DATA_SECTION_FLAGS,
+                align_log2=3, data=b"\0" * 8,
+                relocations=(Relocation(0, "", spec.ARM64_RELOC_UNSIGNED, False,
+                                        length=3, section=("__DATA", "__data"),
+                                        target_offset=0),)),
+    ])
+    original = source.to_macho()
+    item = source
+    if kind == "packed":
+        item = decode_packed_native_object(encode_native_object(source))
+    elif kind == "macho":
+        item = original
+    allocations = []
+
+    class TrackedBytearray(bytearray):
+        def __init__(self, value=b""):
+            super().__init__(value)
+            allocations.append(len(self))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(macho_link, "bytearray", TrackedBytearray, raising=False)
+        merged = link_relocatable_native([item])
+    assert not any(size >= len(text) for size in allocations), allocations
+    assert any(size == 8 for size in allocations)  # Section-target writes still copy.
+    assert next(section.data for section in merged.sections if section.sectname == "__text") == text
+    assert source.to_macho() == original
+    output = tmp_path / "immutable-payload"
+    output.write_bytes(link_executable([merged]))
+    output.chmod(0o755)
+    run = subprocess.run([str(output)], capture_output=True, timeout=10)
+    assert run.returncode == 42, run.stderr
 
 
 def test_indexed_view_matches_macho_for_sections_symbols_and_relocations() -> None:

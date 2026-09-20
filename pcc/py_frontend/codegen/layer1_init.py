@@ -211,6 +211,9 @@ class Layer1InitMixin:
         self._str_pool: dict[str, ir.GlobalVariable] = {}
         self._str_obj_pool: dict[str, ir.GlobalVariable] = {}
         self._static_literal_init_fn = None
+        self._static_agg_counter = 0
+        self._static_dict_counter = 0
+        self._static_seq_counter = 0
         self._attr_pool: dict[str, ir.GlobalVariable] = {}
         self._cstr_pool: dict[str, ir.GlobalVariable] = {}
         self._str_counter = 0

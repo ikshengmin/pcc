@@ -447,6 +447,7 @@ typedef struct PyGcNode {
     struct PyGcNode *next;
 } PyGcNode;
 
+int64_t pcc_gc_index_slot_size(void);
 PyGcNode *py_gc_index_find(PyObject *obj);
 int64_t py_gc_index_insert(PyObject *obj, PyGcNode *node);
 PyGcNode *py_gc_index_remove(PyObject *obj);

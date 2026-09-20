@@ -418,7 +418,7 @@ class LambdaHelperLoweringMixin:
         idx = self._native_lambda_func_counter
         self._native_lambda_func_counter += 1
         fn_name = (
-            f"user_{(self.ast_module.name or 'mod').replace('.', '_')}"
+            f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
             f"__native_lambda_{idx}"
         )
         adapter_ty = ir.FunctionType(_CSTR, [_CSTR, _CSTR])
@@ -871,7 +871,7 @@ class LambdaHelperLoweringMixin:
         if not hasattr(self, "_lambda_counter"):
             setattr(self, "_lambda_counter", [])
         self._lambda_counter.append(sym_base)
-        fn_name = f"user_{(self.ast_module.name or 'mod').replace('.', '_')}_{sym_base}"
+        fn_name = f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}_{sym_base}"
         fnty = ir.FunctionType(_CSTR, [_CSTR] * arity)
         # Reuse an existing declaration if we've already laid this
         # lambda down (shouldn't happen in practice with the counter

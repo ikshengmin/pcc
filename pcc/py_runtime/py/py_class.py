@@ -143,6 +143,8 @@ py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
+py_func_call_kwargs = extern("py_func_call_kwargs", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_dict_subclass_getattr = extern("py_dict_subclass_getattr", (c_ptr, c_ptr), c_ptr)
 py_func_new_bound = extern(
     "py_func_new_bound", (c_ptr, c_ptr, c_ptr, c_ptr), c_ptr
@@ -2620,3 +2622,70 @@ def py_class_mark_dict_subclass(cls) -> None:
         return
     flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
     store_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET, flags | 4)
+
+
+@c_abi_export("py_instance_method_call_direct")
+def py_instance_method_call_direct(inst, name, full_args):
+    """Call ``inst``'s ``name`` method with ``full_args``, which already holds
+    ``inst`` at index 0.
+
+    The general protocol for ``self.foo(a, b)`` on a method some subclass
+    overrides costs one MRO walk for ``__getattribute__``, one for
+    ``__getattr__``, one field-index scan and one for ``foo`` itself, then
+    allocates a bound-method object with a two-element captures tuple; the
+    caller allocates an argument tuple; ``_instance_bound_method_entry``
+    allocates a *second* tuple to prepend ``self``; and all four objects are
+    then refcounted down again.  On pcc1 compiling a module that protocol is
+    about 40% of self time, with another 13% in the refcounting and
+    deallocation it creates.
+
+    This entry keeps the one lookup that is genuinely dynamic -- which class
+    the receiver actually is -- and drops the rest.  The caller must have
+    proved, over the closed-world class graph, that no class in the receiver's
+    subtree customises attribute access (``__getattribute__`` / ``__getattr__``
+    / ``__slots__`` descriptors) and that no field shadows ``name``; the
+    frontend does that with the same walk it already uses to decide whether a
+    direct call is sound.  Anything the fast path cannot prove *here* -- a
+    receiver that is not an instance, a name that does not resolve to a plain
+    function -- falls back to the general protocol rather than guessing.
+    """
+    if not _ptr_is_instance(inst):
+        return _instance_method_call_fallback(inst, name, full_args)
+    cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
+    if ptr_is_null(cls) != 0:
+        return _instance_method_call_fallback(inst, name, full_args)
+    func = _class_lookup_in_mro(cls, name)
+    if ptr_is_null(func) != 0:
+        return _instance_method_call_fallback(inst, name, full_args)
+    if load_i32(func, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
+        return _instance_method_call_fallback(inst, name, full_args)
+    return py_func_call_kwargs(func, full_args, null())
+
+
+def _instance_method_call_fallback(inst, name, full_args):
+    """The general attribute protocol, rebuilding the argument tuple.
+
+    ``full_args`` carries the receiver at index 0 because the fast path wants
+    it there; the bound method the general path produces supplies its own, so
+    the tail has to be copied out.  This runs only for receivers the fast path
+    could not resolve, so the extra tuple is not on any hot path.
+    """
+    n: int = py_tuple_len(full_args)
+    tail = py_tuple_new(n - 1)
+    if ptr_is_null(tail) != 0:
+        return null()
+    i: int = 1
+    while i < n:
+        item = py_tuple_get(full_args, i)
+        py_tuple_set_item(tail, i - 1, item)
+        if ptr_is_null(item) == 0:
+            py_decref(item)
+        i = i + 1
+    method = py_obj_getattr(inst, name)
+    if ptr_is_null(method) != 0:
+        py_decref(tail)
+        return null()
+    out = py_obj_call(method, tail, null())
+    py_decref(method)
+    py_decref(tail)
+    return out

@@ -167,6 +167,15 @@ PY_TYPE_PROPERTY = 101
 PY_TYPE_CLASSMETHOD = 102
 PY_TYPE_STATICMETHOD = 103
 PY_TYPE_USER_CLASS_START = 104
+# First type tag handed out by pcc_capi_register_cext_type
+# (py_capi_type_runtime.py).  Everything from PY_TYPE_USER_CLASS_START up to
+# here is a pcc user class, and the registry is the only authority above it.
+# The refcount guards used to spell this boundary as the literal 500, which
+# silently made py_incref/py_decref a no-op for every user class past the
+# ~440th one: pcc's own closure defines enough classes to cross it, so a
+# compiled pcc1 stopped refcounting some of its own instances while small
+# programs never reached the boundary.
+PY_TYPE_CEXT_TAG_BASE = 0x10000
 PY_TYPE_VALUEBOX = 200
 
 # --- header flags ---

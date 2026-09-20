@@ -8,10 +8,11 @@ pointer.  The only platform boundary is ``pcc.unsafe.page_alloc/page_free``.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_ptr
+from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     logical_shift_right_i64,
     atomic_cas_i64,
+    cstr,
     atomic_clear,
     atomic_load_i64,
     atomic_store_i64,
@@ -54,6 +55,14 @@ __pcc_freestanding__ = True
 GC_STATE_FREE = 5783538902897647427
 GC_STATE_LIVE = 5783538902897647428
 GC_STATE_RESERVED = 5783538902897647429
+# Written into an object cell's second word while the cell sits on a free
+# list, and cleared when the cell is popped.  The lifecycle word cannot
+# serve here: the carve path links fresh cells that already read FREE, and
+# the GC retires a granule to FREE before calling free() on it.  Every live
+# object overwrites this word with its own (tag, flags) pair, so a cell that
+# still carries the poison when free() is asked to release it is being
+# released a second time.
+FREE_LIST_POISON = 7017280452245743462
 
 # The 48-byte header ahead of every user pointer, addressed by negative offset
 # from it. BACKING holds the owning slab for a slab allocation and the mapping
@@ -649,6 +658,23 @@ define_global_i64("pcc_allocator_metadata_mapped", 0)
 define_global_i64("pcc_allocator_live_requested", 0)
 define_global_i64("pcc_allocator_live_usable", 0)
 define_global_i64("pcc_allocator_fully_free_slabs", 0)
+# A cell whose lifecycle word already reads FREE was handed to the object
+# free list twice.  Re-linking it puts one cell on the list twice, so a
+# later pair of allocations returns the same address and one of the two
+# owners writes through a pointer the other also owns -- the failure then
+# surfaces arbitrarily far away (a misaligned release store in
+# pcc_allocator_alloc_object, a type error in unrelated code).  Counting it
+# here names the second free instead.  PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES.
+define_global_i64("pcc_allocator_double_frees", 0)
+define_global_i32("pcc_allocator_double_free_reported", 0)
+
+# Reporting a double free needs a write and an abort, both freestanding
+# platform exports; the allocator itself stays free of any managed runtime
+# reference.
+pcc_platform_write = extern(
+    "pcc_platform_write", (c_int64, c_ptr, c_int64), c_int64
+)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 define_global_ptr_null("pcc_allocator_trim_queue")
 define_global_ptr_null("pcc_allocator_free_16")
 define_global_ptr_null("pcc_allocator_free_obj_16")
@@ -1450,55 +1476,66 @@ def pcc_allocator_take_small_object(usable: i64) -> c_ptr:
         head = global_load_ptr("pcc_allocator_free_obj_16")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_16", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 32:
         head = global_load_ptr("pcc_allocator_free_obj_32")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_32", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 64:
         head = global_load_ptr("pcc_allocator_free_obj_64")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_64", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 128:
         head = global_load_ptr("pcc_allocator_free_obj_128")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_128", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 256:
         head = global_load_ptr("pcc_allocator_free_obj_256")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_256", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 512:
         head = global_load_ptr("pcc_allocator_free_obj_512")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_512", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 1024:
         head = global_load_ptr("pcc_allocator_free_obj_1024")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_1024", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 2048:
         head = global_load_ptr("pcc_allocator_free_obj_2048")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_2048", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 4096:
         head = global_load_ptr("pcc_allocator_free_obj_4096")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_4096", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     if usable == 8192:
         head = global_load_ptr("pcc_allocator_free_obj_8192")
         if ptr_is_null(head) == 0:
             global_store_ptr("pcc_allocator_free_obj_8192", load_ptr(head, 0))
+            store_i64(head, 8, 0)
         return head
     head = global_load_ptr("pcc_allocator_free_obj_16384")
     if ptr_is_null(head) == 0:
         global_store_ptr("pcc_allocator_free_obj_16384", load_ptr(head, 0))
+        store_i64(head, 8, 0)
     return head
 
 
@@ -1508,6 +1545,7 @@ def pcc_allocator_put_small_object(ptr, usable: i64) -> None:
     # readers acquire-load this state, so none can observe overwritten object
     # bytes while the slot still advertises LIVE.
     atomic_store_i64(ptr, GRANULE_STATE_OFFSET, GC_STATE_FREE, "release")
+    store_i64(ptr, 8, FREE_LIST_POISON)
     if usable == 16:
         store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_16"))
         global_store_ptr("pcc_allocator_free_obj_16", ptr)
@@ -2085,6 +2123,48 @@ def pcc_free(ptr) -> None:
         if ptr_is_null(reclaim_span) == 0:
             reclaim_kind = load_i64(reclaim_span, 0)
         if reclaim_kind == 1:
+            # A cell on a free list carries FREE_LIST_POISON in its second
+            # word; the pop path clears it and every live object overwrites it.
+            # Still seeing it here means the cell is being freed a second time,
+            # and linking it again would put one cell on the list
+            # twice, so a later pair of allocations returns the same address to
+            # two owners and the failure surfaces arbitrarily far away -- a
+            # misaligned release store in pcc_allocator_alloc_object, or a type
+            # error in code that never touched the object.  Leak the cell
+            # instead: the heap stays self-consistent and the run reaches a
+            # diagnosable point.
+            if load_i64(ptr, 8) == FREE_LIST_POISON:
+                counter = global_addr("pcc_allocator_double_frees")
+                store_i64(counter, 0, load_i64(counter, 0) + 1)
+                # free() debited this cell on entry.  It is not going back on
+                # a list, so it stays live for the rest of the run: leaving
+                # the debit in place underflows live_requested/live_usable
+                # for every later reading and skews every heap-size-driven
+                # GC decision -- including under audit mode 2, which keeps
+                # running by design.  Re-credit here rather than moving the
+                # debit past this branch; free() has three exits and the
+                # mapping path can still fail inside page_free.
+                pcc_allocator_account_allocate(requested, usable, 0)
+                audit: i64 = load_i32(
+                    global_addr("pcc_gc_refcount_provenance_probe"), 0
+                )
+                if audit >= 2:
+                    reported = global_addr("pcc_allocator_double_free_reported")
+                    if load_i32(reported, 0) == 0:
+                        store_i32(reported, 0, 1)
+                        pcc_platform_write(
+                            2,
+                            cstr(
+                                "pcc runtime: object cell freed twice "
+                                "(PCC_GC_REFCOUNT_PROVENANCE_PROBE>=2)\n"
+                            ),
+                            75,
+                        )
+                        if audit == 3:
+                            pcc_allocator_lock_release()
+                            pcc_platform_abort()
+                pcc_allocator_lock_release()
+                return
             pcc_allocator_put_small_object(ptr, usable)
         else:
             pcc_allocator_put_small(ptr, usable)

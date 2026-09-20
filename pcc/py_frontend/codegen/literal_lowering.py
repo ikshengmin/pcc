@@ -81,7 +81,7 @@ class LiteralLoweringMixin:
         if fn is not None:
             return fn
         mod_name = self.ast_module.name or "mod"
-        sanitised = mod_name.replace(".", "_").replace("-", "_")
+        sanitised = self._module_symbol_suffix(mod_name)
         fn = ir.Function(
             self.module,
             ir.FunctionType(ir.VoidType(), []),
@@ -101,7 +101,7 @@ class LiteralLoweringMixin:
         if fn is None:
             return
         mod_name = self.ast_module.name or "mod"
-        sanitised = mod_name.replace(".", "_").replace("-", "_")
+        sanitised = self._module_symbol_suffix(mod_name)
         guard = ir.GlobalVariable(
             self.module, _I32, name=f".pcc.static.literals.init.{sanitised}"
         )

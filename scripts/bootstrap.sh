@@ -265,10 +265,22 @@ stage_exec_barrier() {
         --python-libpython "${BOOTSTRAP_PYTHON_LIBPYTHON}" \
         "${smoke_src}" -o "${smoke_out}" >/dev/null 2>"${smoke_err}"
     local smoke_returncode=$?
-    if [[ "${smoke_returncode}" == "0" && "${BOOTSTRAP_SMOKE_REFCOUNT_AUDIT}" != "0" ]] \
-        && grep -q "refcount operation on an unmanaged pointer" "${smoke_err}"; then
-        echo "stage smoke: refcount provenance audit failed (a refcount operation reached a non-managed pointer; rerun ${out_exe} with PCC_GC_REFCOUNT_PROVENANCE_PROBE=3 for the site)" >&2
-        smoke_returncode=97
+    if [[ "${BOOTSTRAP_SMOKE_REFCOUNT_AUDIT}" != "0" ]] \
+        && grep -qE "refcount operation on an unmanaged pointer|object cell freed twice" "${smoke_err}"; then
+        echo "stage smoke: ownership audit failed" >&2
+        sed -n "s/^pcc runtime: /  /p" "${smoke_err}" | sort -u >&2
+        echo "  rerun ${out_exe} with PCC_GC_REFCOUNT_PROVENANCE_PROBE=3 to abort at the site" >&2
+        # Only reclassify a smoke that otherwise passed.  One that already
+        # failed keeps its own code: a segfault or a link failure is a
+        # different class from an ownership audit, and stage gating and CI
+        # tell them apart by exit code.  The report above still prints.
+        if [[ "${smoke_returncode}" == "0" ]]; then
+            smoke_returncode=97
+        fi
+    fi
+    if [[ "${smoke_returncode}" != "0" && -s "${smoke_err}" ]]; then
+        echo "stage smoke stderr:" >&2
+        tail -n 20 "${smoke_err}" >&2
     fi
     rm -rf "${smoke_dir}"
     return "${smoke_returncode}"

@@ -67,19 +67,25 @@ class NativeFilesLoweringMixin:
         recv = self._emit_expr(attr.obj)
         if attr.name == "read":
             if not expr.args:
-                return self.builder.call(
+                result = self.builder.call(
                     self.runtime["py_file_read_all"],
                     [recv],
                     name=self._fresh("file.read"),
                 )
+                self._note_owned_object_value(result)
+                self._emit_post_call_err_check(getattr(expr, "span", None))
+                return result
             if len(expr.args) == 1:
                 limit_v = self._emit_expr(expr.args[0])
                 limit_i64 = self._to_int64(limit_v, expr.args[0].ty)
-                return self.builder.call(
+                result = self.builder.call(
                     self.runtime["py_file_read"],
                     [recv, limit_i64],
                     name=self._fresh("file.read"),
                 )
+                self._note_owned_object_value(result)
+                self._emit_post_call_err_check(getattr(expr, "span", None))
+                return result
         if attr.name == "write" and len(expr.args) == 1:
             text_v = self._emit_expr(expr.args[0])
             text_obj = self._emit_value_as_pcc_object_or_bridge(
@@ -104,6 +110,7 @@ class NativeFilesLoweringMixin:
                 name=self._fresh("file.readline"),
             )
             # Raises ValueError on a closed file.
+            self._note_owned_object_value(result)
             self._emit_post_call_err_check(getattr(expr, "span", None))
             return result
         if attr.name == "seek" and 1 <= len(expr.args) <= 2:

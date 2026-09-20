@@ -91,7 +91,11 @@ class AsyncWithLoweringMixin:
 
         if as_expr is not None:
             if not isinstance(as_expr, Name):
-                raise NotImplementedError("Layer 1 with: as-clause must be a bare name")
+                raise NotImplementedError(
+                    "Layer 1 with: as-clause must be a bare name"
+                    f" at {stmt.span.file}:{stmt.span.line}:{stmt.span.col}"
+                    f" (got {type(as_expr).__name__})"
+                )
             slot = self.env.get(as_expr.ident)
             if slot is None:
                 alloca = self._alloca_in_entry(
@@ -238,6 +242,8 @@ class AsyncWithLoweringMixin:
             if not isinstance(as_expr, Name):
                 raise NotImplementedError(
                     "Layer 1 contextmanager with: as-clause must be a bare name"
+                    f" at {stmt.span.file}:{stmt.span.line}:{stmt.span.col}"
+                    f" (got {type(as_expr).__name__})"
                 )
             self._store_value_at_name(as_expr, enter_val, as_expr.ty)
 
@@ -381,6 +387,8 @@ class AsyncWithLoweringMixin:
             if not isinstance(as_expr, Name):
                 raise NotImplementedError(
                     "Layer 1 native with: as-clause must be a bare name"
+                    f" at {stmt.span.file}:{stmt.span.line}:{stmt.span.col}"
+                    f" (got {type(as_expr).__name__})"
                 )
             self._store_unpack_target(as_expr, enter_val, as_expr.ty, value_is_owned=True)
         else:
@@ -522,6 +530,8 @@ class AsyncWithLoweringMixin:
             if not isinstance(as_expr, Name):
                 raise NotImplementedError(
                     "Layer 1 async with: as-clause must be a bare name"
+                    f" at {stmt.span.file}:{stmt.span.line}:{stmt.span.col}"
+                    f" (got {type(as_expr).__name__})"
                 )
             self._store_value_at_name(as_expr, enter_val, as_expr.ty)
 

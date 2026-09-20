@@ -1756,6 +1756,11 @@ def py_bytearray_from_obj(o):
 def py_bytes_from_obj(o):
     if ptr_is_null(o):
         return py_bytes_new(null(), 0)
+    if _type_of(o) == PY_TYPE_BYTES:
+        # Exact bytes are immutable. The caller still receives a new owner,
+        # so sharing storage must retain the existing object.
+        py_incref(o)
+        return o
     if _type_of(o) == PY_TYPE_INT or _type_of(o) == PY_TYPE_BOOL:
         return _bytes_from_integer_count(o, 0)
     if _type_of(o) == PY_TYPE_LIST or _type_of(o) == PY_TYPE_TUPLE:

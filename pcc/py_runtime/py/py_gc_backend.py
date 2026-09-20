@@ -74,6 +74,9 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_py_gc_defer_tripwire = extern(
     "pcc_py_gc_defer_tripwire", (c_ptr, c_ptr, c_int32), c_void
 )
+
+pcc_gc_index_slot_size = extern("pcc_gc_index_slot_size", (), c_int64)
+
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_index_plan_capacity = extern(
@@ -3824,7 +3827,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                     )
                 ):
                     free(prepared_slots)
-                    prepared_slots = malloc(required * 24)
+                    prepared_slots = malloc(required * pcc_gc_index_slot_size())
                     if ptr_is_null(prepared_slots) != 0:
                         free(prepared_node)
                         free(prepared_zpage_node)
@@ -3853,7 +3856,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
                         return
-                    memset(prepared_slots, 0, required * 24)
+                    memset(prepared_slots, 0, required * pcc_gc_index_slot_size())
                     prepared_cap = required
                 if (
                     need_zpage_node != 0
@@ -3896,7 +3899,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                     )
                 ):
                     free(prepared_zpage_slots)
-                    prepared_zpage_slots = malloc(zpage_required * 24)
+                    prepared_zpage_slots = malloc(zpage_required * pcc_gc_index_slot_size())
                     if ptr_is_null(prepared_zpage_slots) != 0:
                         free(prepared_node)
                         free(prepared_slots)
@@ -3925,7 +3928,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
                         return
-                    memset(prepared_zpage_slots, 0, zpage_required * 24)
+                    memset(prepared_zpage_slots, 0, zpage_required * pcc_gc_index_slot_size())
                     prepared_zpage_cap = zpage_required
                 if need_zpage_page != 0:
                     prepared_zpage = _backend4_zpage_track_page_prepare(

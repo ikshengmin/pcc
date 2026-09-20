@@ -88,3 +88,30 @@ silent wrong state.  Recorded so the next reader does not "fix" the symptom.
 `[CONFIRMED]` root cause and fix on the host side.  pcc1 confirmation: the
 class_gen worker must compile with the raising dyn subscript in place and the
 off/on full-cost A/B must run; see the evidence receipt.
+
+## Update — 2026-09-19: static literal counters were outside the contract
+
+The current fallback baseline failed the existing mixin-state guard for
+`LiteralLoweringMixin._static_agg_counter`, `_static_dict_counter` and
+`_static_seq_counter`. They are now declared in `L1_CODEGEN_HOST_ATTRS` and
+initialized to zero by `Layer1InitMixin`; lazy `getattr(..., 0)` is not a safe
+initialization contract for a fixed-layout compiled instance.
+
+`test_static_container_literals.py` executes repeated flat dictionaries,
+sequences and nested aggregates, checks that mutable children remain fresh,
+and checks IR for all three counter-driven static-data routes. Host checks
+pass. A fresh Stage1 built the corrected compiler in 595.12 s and passed its
+native compile/run smoke (42). That pcc1 independently compiled the static
+container program and its result passed GC0–GC4. Compiler SHA-256:
+`0373254d264bae2d461f481ed084124c6ccbdace262b15e8407511b4a5703ffe`; source:
+`81a16324935f9dc06d7320512d0fd69202a716c92db6d560598b26838a77cca4`.
+Evidence: `/private/tmp/pcc-stage2-owned-4jkk2xq4/counter-stage1/` and
+`static-native.stdout` beside it. This closes the three missing fields, not
+the full self-host chain; a later Stage2 worker exposed the separate
+[loop ownership defect](borrowed-local-owned-rebind-consumes-source.md).
+
+The same audit found `PCC_STATIC_AGGREGATE` missing from the frontend IR cache
+key. The behavioral key test first reused an identical key across on/off,
+then passed after adding this already-existing setting to the key. The full
+cache test file reports 10 passed. This registers a codegen dependency; it
+does not introduce a new environment switch.

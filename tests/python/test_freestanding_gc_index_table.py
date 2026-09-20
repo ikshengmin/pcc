@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from pcc.py_frontend import pipeline
+from pcc.py_frontend.pipeline_targets import host_target_triple
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +13,7 @@ INDEX_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_index_table.py"
 ORACLE_SOURCE = RUNTIME_DIR / "src" / "py_gc_index_table.c"
 
 PUBLIC_SYMBOLS = {
+    "pcc_gc_index_slot_size",
     "py_gc_index_find",
     "py_gc_index_insert",
     "py_gc_index_remove",
@@ -76,6 +78,7 @@ def _compile_ir(tmp_path: Path) -> Path:
         emit_llvm_only=True,
         libpython_mode="off",
         python_library=True,
+        target_triple=host_target_triple(),
     )
     return llvm_ir
 
@@ -108,6 +111,7 @@ def _harness_source() -> str:
 #include <stdio.h>
 #include <stdlib.h>
 
+int64_t pcc_gc_index_slot_size(void);
 void *py_gc_index_find(void *obj);
 int64_t py_gc_index_insert(void *obj, void *node);
 void *py_gc_index_remove(void *obj);
@@ -184,6 +188,7 @@ static void *key_for_bucket(
 }
 
 int main(void) {
+    if (pcc_gc_index_slot_size() != 16) return 150;
     uintptr_t nodes[640];
     void *keys[520];
     uint64_t cursor = 1;
@@ -233,7 +238,7 @@ int main(void) {
     {
         int64_t required = pcc_gc_object_index_plan_capacity(1);
         if (required != 16384) return 48;
-        void *plan = calloc((size_t)required, 24);
+        void *plan = calloc((size_t)required, (size_t)pcc_gc_index_slot_size());
         if (plan == 0) return 49;
         void *original_plan = plan;
         if (pcc_gc_object_index_plan_commit(&plan, required / 2, 1) != -1) {
@@ -286,7 +291,7 @@ int main(void) {
     {
         int64_t cap = pcc_gc_forwarding_plan_index_capacity(0, 1);
         if (cap != 256) return 110;
-        void *prepared = calloc((size_t)cap, 24);
+        void *prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 111;
         if (
             pcc_gc_forwarding_plan_index_commit(0, &prepared, cap, 1) != 1
@@ -310,7 +315,7 @@ int main(void) {
         }
         cap = pcc_gc_forwarding_plan_index_capacity(0, 1);
         if (cap <= 256) return 117;
-        prepared = calloc((size_t)(cap / 2), 24);
+        prepared = calloc((size_t)(cap / 2), (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 118;
         {
             void *undersized = prepared;
@@ -323,7 +328,7 @@ int main(void) {
             if (prepared != undersized) return 120;
             free(prepared);
         }
-        prepared = calloc((size_t)cap, 24);
+        prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 121;
         if (
             pcc_gc_forwarding_plan_index_commit(0, &prepared, cap, 1) != 1
@@ -346,7 +351,7 @@ int main(void) {
         for (i = 1; i <= 2; i++) {
             cap = pcc_gc_forwarding_plan_index_capacity(i, 1);
             if (cap != 256) return 127;
-            prepared = calloc((size_t)cap, 24);
+            prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
             if (prepared == 0) return 128;
             if (
                 pcc_gc_forwarding_plan_index_commit(
@@ -383,7 +388,7 @@ int main(void) {
     {
         int64_t cap = pcc_gc_frame_index_plan_capacity(1);
         if (cap != 256) return 132;
-        void *prepared = calloc((size_t)cap, 24);
+        void *prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 133;
         if (pcc_gc_frame_index_plan_commit(&prepared, cap, 1) != 1) return 134;
         if (prepared != 0) return 135;
@@ -395,7 +400,7 @@ int main(void) {
         }
         cap = pcc_gc_frame_index_plan_capacity(1);
         if (cap <= 256) return 137;
-        prepared = calloc((size_t)(cap / 2), 24);
+        prepared = calloc((size_t)(cap / 2), (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 138;
         {
             void *undersized = prepared;
@@ -407,7 +412,7 @@ int main(void) {
             if (prepared != undersized) return 140;
             free(prepared);
         }
-        prepared = calloc((size_t)cap, 24);
+        prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 141;
         if (pcc_gc_frame_index_plan_commit(&prepared, cap, 1) != 1) return 142;
         if (prepared == 0) return 143;
@@ -438,7 +443,7 @@ int main(void) {
         {
             int64_t cap = pcc_gc_zpage_owner_index_plan_capacity(1);
             if (cap != 256) return 147;
-            void *prepared = calloc((size_t)cap, 24);
+            void *prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
             if (prepared == 0) return 148;
             if (
                 pcc_gc_zpage_owner_index_plan_commit(

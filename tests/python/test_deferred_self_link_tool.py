@@ -112,14 +112,19 @@ def test_deferred_link_cli_stops_before_plan_when_compiler_fails(
     assert calls == [(["pcc1", "source.py"], {"check": False})]
 
 
+@pytest.mark.parametrize("native", [False, True], ids=["host-linker", "native-linker"])
 def test_frontend_codegen_plan_runs_worker_then_ordered_link(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    native: bool,
 ) -> None:
     tool = _load_tool()
     worker = tmp_path / "pcc1"
     worker.write_bytes(b"worker")
     worker.chmod(0o755)
+    native_linker = tmp_path / "native-linker"
+    native_linker.write_bytes(b"\xcf\xfa\xed\xfe" + b"test native linker")
+    native_linker.chmod(0o755)
     runtime = tmp_path / "runtime.a"
     runtime.write_bytes(b"archive")
     artifacts = tmp_path / "artifacts"
@@ -196,6 +201,12 @@ def test_frontend_codegen_plan_runs_worker_then_ordered_link(
 
     def fake_link(command, **kwargs):
         assert kwargs == {"check": False, "timeout": 40}
+        if native:
+            assert command[0] == str(native_linker)
+            assert "--profile-json" not in command
+        else:
+            assert command[:2] == [tool.sys.executable, str(TOOL.with_name("pcc_link_macho.py"))]
+            assert "--profile-json" in command
         output.write_bytes(b"executable")
         output.chmod(0o755)
         return subprocess.CompletedProcess(command, 0)
@@ -241,20 +252,26 @@ def test_frontend_codegen_plan_runs_worker_then_ordered_link(
     monkeypatch.setattr(tool.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(tool.subprocess, "run", fake_link)
 
-    receipt = tool.run_codegen_plan(plan, timeout_s=40)
+    receipt = tool.run_codegen_plan(
+        plan, timeout_s=40, native_linker=native_linker if native else None,
+    )
 
     assert receipt["worker_count"] == 2
+    assert receipt["link_execution_owner"] == ("native-linker" if native else "host-cpython")
+    assert bool(receipt["native_linker_sha256"]) is native
+    assert receipt["profile"] == ("" if native else str(profile))
     assert receipt["indexed_process_split"] is True
     assert inputs.read_text(encoding="utf-8").splitlines()[2:] == [
-        "ASM\t" + str(artifacts / "module_0.direct.s"),
+        ("PCO\t" if native else "ASM\t")
+        + str(artifacts / ("module_0.direct.pco" if native else "module_0.direct.s")),
         "PCO\t" + str(artifacts / "module_1.direct.pco"),
     ]
     assert receipt["schema"] == "pcc.frontend-codegen-result.v2"
-    assert receipt["lanes"]["serial"]["artifact_kind"] == "ASM"
+    assert receipt["lanes"]["serial"]["artifact_kind"] == ("PCO" if native else "ASM")
     assert receipt["lanes"]["small"]["artifact_kind"] == "PCO"
     assert receipt["indexed_phases"]["frontend"]["launched"] == 2
-    assert receipt["indexed_phases"]["asm_emit"]["launched"] == 1
-    assert receipt["indexed_phases"]["pco_emit"]["launched"] == 1
+    assert receipt["indexed_phases"]["asm_emit"]["launched"] == (0 if native else 1)
+    assert receipt["indexed_phases"]["pco_emit"]["launched"] == (2 if native else 1)
     assert output.is_file()
 
 
@@ -332,3 +349,5 @@ def test_frontend_codegen_v1_plan_keeps_the_legacy_single_process_mode(
     decoded = tool.read_codegen_plan(plan)
 
     assert decoded["indexed_process_split"] is False
+    with pytest.raises(tool.DeferredLinkError, match="indexed v2 codegen plan"):
+        tool.run_codegen_plan(plan, timeout_s=30, native_linker=worker)

@@ -57,6 +57,14 @@ enum {
     PY_TYPE_CLASSMETHOD = 102,
     PY_TYPE_STATICMETHOD = 103,
     PY_TYPE_USER_CLASS_START = 104,
+    /* First tag handed out by pcc_capi_register_cext_type.  Everything from
+     * PY_TYPE_USER_CLASS_START up to here is a pcc user class; only at or
+     * above it does the cext registry decide.  The refcount guards used to
+     * spell this as the literal 500, which silently turned py_incref and
+     * py_decref into no-ops for every user class past roughly the 440th --
+     * pcc's own closure defines enough classes to cross it, while small
+     * programs never reach it. */
+    PY_TYPE_CEXT_TAG_BASE = 0x10000,
     PY_TYPE_VALUEBOX = 200
 };
 
@@ -490,8 +498,12 @@ enum {
      * can legitimately reach a pre-move address and the probe is what makes
      * that a no-op.  The counter only moves in modes 1 and 2. */
     PCC_GC_COUNTER_UNMANAGED_REFCOUNT_OPS = 116,
-    /* Current PCC_GC_REFCOUNT_PROVENANCE_PROBE mode (0, 1 or 2). */
-    PCC_GC_COUNTER_REFCOUNT_PROVENANCE_PROBE = 117
+    /* Current PCC_GC_REFCOUNT_PROVENANCE_PROBE mode (0..3). */
+    PCC_GC_COUNTER_REFCOUNT_PROVENANCE_PROBE = 117,
+    /* Object cells handed to the free list while already free.  Non-zero means
+     * two owners share one address; the allocator leaks the cell rather than
+     * linking it twice, and under audit mode reports the second free. */
+    PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES = 118
 };
 
 int64_t   pcc_gc_backend(void);

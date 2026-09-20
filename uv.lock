@@ -209,10 +209,6 @@ wheels = [
 name = "python-cc"
 version = "0.1.7"
 source = { editable = "." }
-dependencies = [
-    { name = "black" },
-    { name = "llvmlite" },
-]
 
 [package.optional-dependencies]
 mlx = [
@@ -221,25 +217,29 @@ mlx = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "black" },
     { name = "click" },
+    { name = "llvmlite" },
     { name = "pytest" },
     { name = "pytest-xdist" },
 ]
+llvm-reference = [
+    { name = "llvmlite" },
+]
 
 [package.metadata]
-requires-dist = [
-    { name = "black", specifier = ">=26.3.1" },
-    { name = "llvmlite", specifier = "==0.47.0" },
-    { name = "mlx", marker = "extra == 'mlx'", specifier = ">=0.32.0" },
-]
+requires-dist = [{ name = "mlx", marker = "extra == 'mlx'", specifier = ">=0.32.0" }]
 provides-extras = ["mlx"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "black", specifier = ">=26.3.1" },
     { name = "click" },
+    { name = "llvmlite", specifier = "==0.47.0" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
 ]
+llvm-reference = [{ name = "llvmlite", specifier = "==0.47.0" }]
 
 [[package]]
 name = "pytokens"

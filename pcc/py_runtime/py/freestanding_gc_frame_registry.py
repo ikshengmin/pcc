@@ -28,6 +28,9 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+pcc_gc_index_slot_size = extern("pcc_gc_index_slot_size", (), c_int64)
+
+
 
 define_thread_local_ptr_null("pcc_gc_frame_node_pool_heads")
 define_thread_local_ptr_null("pcc_gc_frame_node_pool_counts")
@@ -291,11 +294,11 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
             pcc_py_gc_minor_graph_unlock()
             if ptr_is_null(prepared) == 0:
                 free(prepared)
-            prepared = malloc(required * 24)
+            prepared = malloc(required * pcc_gc_index_slot_size())
             if ptr_is_null(prepared) != 0:
                 pcc_gc_frame_node_release(node)
                 return
-            memset(prepared, 0, required * 24)
+            memset(prepared, 0, required * pcc_gc_index_slot_size())
             prepared_cap = required
             continue
         if required > 0:

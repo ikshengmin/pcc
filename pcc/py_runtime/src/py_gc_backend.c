@@ -8936,13 +8936,13 @@ static PccGcForwardingInstallPlan *pcc_gc_forwarding_install_plan_prepare(
     plan->forwarding_cap = forwarding_cap;
     plan->target_cap = target_cap;
     if (identity_cap > 0) {
-        plan->identity_slots = calloc((size_t)identity_cap, 24);
+        plan->identity_slots = calloc((size_t)identity_cap, (size_t)pcc_gc_index_slot_size());
     }
     if (forwarding_cap > 0) {
-        plan->forwarding_slots = calloc((size_t)forwarding_cap, 24);
+        plan->forwarding_slots = calloc((size_t)forwarding_cap, (size_t)pcc_gc_index_slot_size());
     }
     if (target_cap > 0) {
-        plan->target_slots = calloc((size_t)target_cap, 24);
+        plan->target_slots = calloc((size_t)target_cap, (size_t)pcc_gc_index_slot_size());
     }
     if (
         plan->from_identity == NULL
@@ -14849,7 +14849,7 @@ void pcc_gc_note_object_allocated_sized(PyObject *o, int64_t size) {
                     && (prepared_slots == NULL || prepared_cap < required)
                 ) {
                     free(prepared_slots);
-                    prepared_slots = calloc((size_t)required, 24);
+                    prepared_slots = calloc((size_t)required, (size_t)pcc_gc_index_slot_size());
                     if (prepared_slots == NULL) {
                         pcc_gc_pending_minor_block = NULL;
                         free(prepared_node);
@@ -14899,7 +14899,7 @@ void pcc_gc_note_object_allocated_sized(PyObject *o, int64_t size) {
                 ) {
                     free(prepared_zpage_slots);
                     prepared_zpage_slots = calloc(
-                        (size_t)zpage_required, 24
+                        (size_t)zpage_required, (size_t)pcc_gc_index_slot_size()
                     );
                     if (prepared_zpage_slots == NULL) {
                         pcc_gc_pending_minor_block = NULL;
@@ -16339,7 +16339,7 @@ void pcc_gc_note_frame_enter(const void *frame_map, PyObject **slots) {
         ) {
             pcc_gc_graph_unlock();
             free(prepared_slots);
-            prepared_slots = calloc((size_t)required, 24);
+            prepared_slots = calloc((size_t)required, (size_t)pcc_gc_index_slot_size());
             if (prepared_slots == NULL) {
                 pcc_gc_frame_node_release_unlocked(n);
                 return;

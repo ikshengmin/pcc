@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from typing import Optional
 
 from pcc.llvm_capi.compat import ir
@@ -27,6 +29,7 @@ from ..py_ast import (
     StrLit,
     StrType,
     Subscript,
+    TupleExpr,
     TupleType,
     Type,
 )
@@ -176,6 +179,113 @@ class MethodCallExpressionLoweringMixin:
             {},
         ).get((class_info.name, attr_name))
         return class_attr_state in ("live", "unknown", "deleted")
+
+    def _direct_virtual_dispatch_enabled(self) -> bool:
+        """Route an overridden ``self.foo(...)`` through one MRO lookup.
+
+        A method some subclass overrides cannot be called directly, so it took
+        the general attribute protocol: an MRO walk for ``__getattribute__``,
+        one for ``__getattr__``, a field-index scan and one for the name; then
+        a bound-method object with a two-element captures tuple; then the
+        caller's argument tuple; then a second tuple inside
+        ``_instance_bound_method_entry`` to prepend the receiver -- four
+        allocations and four MRO-shaped scans per call, all refcounted down
+        again afterwards.  Profiling pcc1 compiling a module puts roughly 40%
+        of self time in that protocol and another 13% in the refcount and
+        deallocation traffic it creates.
+
+        Only one thing there is genuinely dynamic: which class the receiver
+        turns out to be.  ``py_instance_method_call_direct`` keeps that lookup
+        and drops the rest, given an argument tuple that already holds the
+        receiver at index 0.
+
+        Off by default while it is being qualified.
+        """
+        value = str(
+            os.environ.get("PCC_DIRECT_VIRTUAL_METHOD_CALLS", "") or ""
+        ).strip().lower()
+        return value in ("1", "true", "yes", "on")
+
+    def _direct_virtual_dispatch_is_sound(self, attr_name: str) -> bool:
+        """True when the closed-world class graph cannot redirect ``attr_name``.
+
+        The runtime entry resolves the name straight out of the receiver's MRO,
+        which is what ``self.foo()`` means only while nothing intercepts
+        attribute access and no field shadows the name.  Both are closed-world
+        questions, and this is the same graph walk
+        ``method_overridden_by_subclass`` already uses -- so the check stays
+        with the compiler rather than costing a scan at every call.
+        """
+        class_lowering = getattr(self, "class_lowering", None)
+        if class_lowering is None:
+            return False
+        if attr_name.startswith("__") and attr_name.endswith("__"):
+            # Dunders reach the instance through their own protocols.
+            return False
+        for info in class_lowering.classes.values():
+            methods = getattr(info, "methods", {}) or {}
+            if "__getattribute__" in methods or "__getattr__" in methods:
+                return False
+            if "__slots__" in methods:
+                return False
+            if attr_name in (getattr(info, "field_names", ()) or ()):
+                return False
+        # A native extension class outside this closure could still intercept
+        # attribute access, so the receiver has to be a class this unit owns.
+        return not bool(getattr(self, "_native_module_exports", None))
+
+    def _emit_virtual_method_call(
+        self,
+        obj_expr: Expr,
+        attr_name: str,
+        args: tuple[Expr, ...],
+        span,
+    ) -> ir.Value:
+        """``self.foo(a, b)`` as one lookup-and-call on a receiver-first tuple."""
+        elems = (obj_expr,) + tuple(args)
+        full_args = self._emit_tuple_literal(TupleExpr(
+            span=span,
+            ty=TupleType(
+                name="tuple",
+                elems=tuple(getattr(e, "ty", None) for e in elems),
+            ),
+            elems=elems,
+        ))
+        receiver = self._emit_expr(obj_expr)
+        name_ptr = self._attr_name_ptr(attr_name)
+        result = self.builder.call(
+            self.runtime["py_instance_method_call_direct"],
+            [receiver, name_ptr, full_args],
+            name=self._fresh(f"virtual.{attr_name}"),
+        )
+        self._gc_release(full_args)
+        self._emit_post_call_err_check(span)
+        return result
+
+    def _emit_overridden_method_call(
+        self,
+        obj_expr: Expr,
+        attr_name: str,
+        args: tuple[Expr, ...],
+        kwargs: tuple,
+        span,
+    ) -> ir.Value:
+        """The override fallback: one MRO lookup when that is provably enough."""
+        if (
+            self._direct_virtual_dispatch_enabled()
+            and not kwargs
+            and not self._has_starred_unpack(args)
+            and _method_is_name(obj_expr)
+            and self._direct_virtual_dispatch_is_sound(attr_name)
+        ):
+            return self._emit_virtual_method_call(obj_expr, attr_name, args, span)
+        return self._emit_callable_attribute_call(
+            obj_expr,
+            attr_name,
+            args,
+            kwargs,
+            span,
+        )
 
     def _emit_callable_attribute_call(
         self,
@@ -1079,7 +1189,7 @@ class MethodCallExpressionLoweringMixin:
             method_info = self._resolve_method_mro(receiver_class_name, attr.name)
             if method_info is not None:
                 if attr.name not in method_info.methods:
-                    return self._emit_callable_attribute_call(
+                    return self._emit_overridden_method_call(
                         attr.obj,
                         attr.name,
                         expr.args,
@@ -1111,7 +1221,7 @@ class MethodCallExpressionLoweringMixin:
                     )
                     for root in override_roots
                 ):
-                    return self._emit_callable_attribute_call(
+                    return self._emit_overridden_method_call(
                         attr.obj,
                         attr.name,
                         expr.args,
@@ -1123,7 +1233,7 @@ class MethodCallExpressionLoweringMixin:
                         current_class.name, attr.name
                     )
                     if lexical_info is not method_info:
-                        return self._emit_callable_attribute_call(
+                        return self._emit_overridden_method_call(
                             attr.obj,
                             attr.name,
                             expr.args,

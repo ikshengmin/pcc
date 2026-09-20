@@ -73,6 +73,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - The accepted No.89 GC0/AArch64 Stage2 is 598.629 seconds against a 275.13
 - [pcc1-existing-meson-output-requires-host.md](pcc1-existing-meson-output-requires-host.md) — **existing pcc1 Meson output incorrectly requires host Python**
   - After the native file-open exception contract was repaired, the original
+- [pcc1-field-type-join-diverges-from-host.md](pcc1-field-type-join-diverges-from-host.md) — **pcc1 infers `NoneType` for a field the host compiler infers as sliceable**
+  - execution pass. Full Stage2/Stage3 remains open (2026-09-19).**
 - [pcc1-float-literal-bignum-scale-raw-int-trap.md](pcc1-float-literal-bignum-scale-raw-int-trap.md) — **pcc1 traps while scaling finite float literals through raw integers**
   - After the current compiler passed the typed aggregate regression, rebuilding the PCC-native Harness runtime stopped at `freestanding_libc...
 - [pcc1-float-repr-strtod-17-digit-defect.md](pcc1-float-repr-strtod-17-digit-defect.md) — **`2**52` does not round-trip through pcc1's float formatting or parsing**
@@ -948,6 +950,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - After repairing borrowed-local replacement, the owned native optimizer still
 - [native-stackmap-structural-scan-cost.md](native-stackmap-structural-scan-cost.md) — **native stack-map structural scans decode unused record fields**
   - Resolved locally on 2026-09-16. The optimization is retained after correctness
+- [native-stage2-link-asm-memory-budget.md](native-stage2-link-asm-memory-budget.md) — **native Stage2 link exceeds its budget while assembling inputs**
+  - Stopped at the user's one-repair-round limit — 2026-09-21, unsuccessful.
 - [native-subprocess-called-process-error-returncode.md](native-subprocess-called-process-error-returncode.md) — **native subprocess failures lose CalledProcessError fields**
   - Under the self backend with `--python-libpython=off`, native lowering for
 - [native-subprocess-provider-omitted-from-shallow-multi-file-closure.md](native-subprocess-provider-omitted-from-shallow-multi-file-closure.md) — **native subprocess provider omitted from shallow multi-file closure**

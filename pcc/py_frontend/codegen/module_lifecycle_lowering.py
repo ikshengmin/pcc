@@ -166,7 +166,7 @@ class ModuleLifecycleLoweringMixin:
         secondary module in a multi-file compile — the entry module's
         ``@main`` must call this before its own top-level body."""
         mod_name = self.ast_module.name or "mod"
-        sanitised = mod_name.replace(".", "_").replace("-", "_")
+        sanitised = self._module_symbol_suffix(mod_name)
         fnty = ir.FunctionType(_VOID, [])
         fn = ir.Function(
             self.module,
@@ -375,7 +375,7 @@ class ModuleLifecycleLoweringMixin:
 
         sibling_init_functions = []
         for sibling_mod in self._sibling_module_inits:
-            sanitised_sib = sibling_mod.replace(".", "_").replace("-", "_")
+            sanitised_sib = self._module_symbol_suffix(sibling_mod)
             sib_top = f"_pcc_py_module_top_{sanitised_sib}"
             existing = self.module.globals.get(sib_top)
             if existing is None:

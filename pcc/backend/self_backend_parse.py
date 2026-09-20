@@ -450,10 +450,13 @@ def decode_llvm_c_string(token: str) -> bytes:
                 raise BackendUnavailable(
                     f"self backend saw truncated LLVM string escape in {token!r}"
                 )
-            if i + 2 < len(body) and re.fullmatch(
-                r"[0-9A-Fa-f]{2}", body[i + 1 : i + 3]
-            ):
-                data.append(int(body[i + 1 : i + 3], 16))
+            # This runs once per escaped byte, including large static tables.
+            # A late regex misses the runtime's bounded pattern cache and is
+            # recompiled for every byte. Validate the fixed ASCII alphabet
+            # with one native string operation instead.
+            digits = body[i + 1 : i + 3]
+            if len(digits) == 2 and not digits.strip("0123456789abcdefABCDEF"):
+                data.append(int(digits, 16))
                 i += 3
                 continue
             data.append(ord(body[i + 1]))

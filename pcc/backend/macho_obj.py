@@ -39,6 +39,20 @@ from .precise_stackmap import (
 )
 
 
+def _build_string_table(names: list[str]) -> tuple[dict[str, int], bytes]:
+    """Encode ordered names once, retaining their exact byte offsets."""
+    offsets: dict[str, int] = {}
+    chunks: list[bytes] = [b"\0"]
+    size = 1
+    for name in names:
+        encoded = name.encode() + b"\0"
+        offsets[name] = size
+        chunks.append(encoded)
+        size += len(encoded)
+    chunks.append(b"\0" * ((-size) % 8))
+    return offsets, b"".join(chunks)
+
+
 class MachOEmitError(Exception):
     """The requested shape is outside what this writer proves.
 
@@ -165,7 +179,7 @@ class Section:
     align_log2: int = 3
     flags: int = DATA_SECTION_FLAGS
     symbols: tuple[TextSymbol, ...] = ()
-    relocations: tuple[Relocation, ...] = ()
+    relocations: tuple[Relocation, ...] | list[Relocation] = ()
     zerofill_size: int = 0
     data_in_code: tuple[DataInCodeRegion, ...] = ()
 
@@ -511,6 +525,34 @@ def _validate_section(sec: Section, *, relocations=None, relocation_count=None) 
             )
 
 
+def _relocation_offset_bitmap(data_size: int, count: int) -> bytearray:
+    """Use one bit per byte for dense relocation offsets, a set for sparse ones.
+
+    Offsets are range-checked before insertion. Cap the bitmap relative to
+    the record count so a huge section with a few relocations stays cheap.
+    """
+    size = (data_size + 7) // 8
+    if count and size <= max(64, count * 8):
+        return bytearray(size)
+    return bytearray()
+
+
+def _claim_relocation_offset(offset: int, bitmap: bytearray, sparse: set[int]) -> bool:
+    """Insert an already validated offset; False means an exact duplicate."""
+    if bitmap:
+        index = offset >> 3
+        mask = 1 << (offset & 7)
+        previous = bitmap[index]
+        if previous & mask:
+            return False
+        bitmap[index] = previous | mask
+    else:
+        if offset in sparse:
+            return False
+        sparse.add(offset)
+    return True
+
+
 def _validate_relocation(
     sec: Section,
     r: Relocation,
@@ -779,15 +821,15 @@ def emit_object(
     }
     for sec in sections:
         relocation_addresses: set[int] = set()
+        offset_bitmap = _relocation_offset_bitmap(len(sec.data), len(sec.relocations))
         for r in sec.relocations:
             _validate_relocation(sec, r, sym_index, section_by_name)
-            if r.offset in relocation_addresses:
+            if not _claim_relocation_offset(r.offset, offset_bitmap, relocation_addresses):
                 raise MachOEmitError(
                     f"multiple relocation requests at offset {r.offset} in "
                     f"{sec.segname},{sec.sectname}; use an atomic companion "
                     "shape instead"
                 )
-            relocation_addresses.add(r.offset)
 
     section_number = {
         (sec.segname, sec.sectname): i for i, sec in enumerate(sections, start=1)
@@ -889,13 +931,9 @@ def emit_object(
     str_off = sym_off + nsyms * spec.NLIST_64.size
 
     # String table: index 0 is traditionally a NUL so no real name gets n_strx 0.
-    strtab = bytearray(b"\0")
-    strx: dict[str, int] = {}
-    for name in [pair[0].name for pair in defined] + undef_ordered:
-        strx[name] = len(strtab)
-        strtab += name.encode() + b"\0"
-    while len(strtab) % 8 != 0:
-        strtab += b"\0"
+    strx, strtab = _build_string_table(
+        [pair[0].name for pair in defined] + undef_ordered,
+    )
 
     header = spec.MACH_HEADER_64.pack({
         "magic": spec.MH_MAGIC_64,

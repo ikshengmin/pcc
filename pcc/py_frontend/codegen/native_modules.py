@@ -1707,7 +1707,7 @@ class NativeModuleAliasMixin:
                 self._cross_module_func_defs.pop(local_name, None)
                 return True
             semantic_functions.pop(local_name, None)
-            sanitised = owning_module.replace(".", "_").replace("-", "_")
+            sanitised = self._module_symbol_suffix(owning_module)
             sym = f"user_{sanitised}_{export_name}"
             existing = self.module.globals.get(sym)
             if isinstance(existing, ir.Function):
@@ -1788,7 +1788,7 @@ class NativeModuleAliasMixin:
                 + "."
                 + export_name
             )
-        sanitised = owning_module.replace(".", "_").replace("-", "_")
+        sanitised = self._module_symbol_suffix(owning_module)
         local_name = "__pcc_native_default_" + sanitised + "_" + export_name
         self._bind_native_cross_module_export(
             local_name=local_name,
@@ -3010,7 +3010,7 @@ class NativeModuleAliasMixin:
         # First, try to find a class that exactly matches the expected global name.
         expected_global = (
             ".class."
-            + owning_module.replace(".", "_").replace("-", "_")
+            + self._module_symbol_suffix(owning_module)
             + "."
             + export_name
         )
@@ -3600,7 +3600,7 @@ class NativeModuleAliasMixin:
         function export, optionally binding it under ``bind_name``."""
         owning_module = info.get("owning_module", owning_module)
         func_name = info.get("export_name", func_name)
-        sanitised = owning_module.replace(".", "_").replace("-", "_")
+        sanitised = self._module_symbol_suffix(owning_module)
         sym = f"user_{sanitised}_{func_name}"
         existing = self.module.globals.get(sym)
         if isinstance(existing, ir.Function):

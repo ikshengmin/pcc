@@ -5,13 +5,16 @@ The compiled pcc1 writes a small, versioned plan after all direct artifacts
 are frozen.  ``bootstrap.sh`` then runs this host-side transition owner only
 after pcc1 has returned, so the coordinator's allocator high water cannot
 overlap the assembler/linker process tree.  The linked artifact is still
-produced by pcc's own ``pcc_link_macho.py``; this script is orchestration, not
-a system-link fallback.
+produced by pcc's own linker. Codegen plans can select a separately qualified
+native linker with ``--native-linker``; otherwise linking uses host Python.
+The receipt distinguishes those execution owners. This script remains a host
+orchestrator and does not by itself establish a host-free public CLI path.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -782,10 +785,24 @@ def _collect_codegen_artifacts(plan: dict[str, object]) -> None:
             stream.write(item[0] + "\t" + item[1] + "\n")
 
 
-def run_codegen_plan(plan_path: Path, *, timeout_s: int) -> dict[str, object]:
+def run_codegen_plan(
+    plan_path: Path, *, timeout_s: int, native_linker: Path | None = None,
+) -> dict[str, object]:
     if timeout_s <= 0:
         raise DeferredLinkError("frontend codegen timeout must be positive")
     plan = read_codegen_plan(plan_path)
+    native_linker_sha256 = ""
+    if native_linker is not None:
+        if not plan["indexed_process_split"]:
+            raise DeferredLinkError("native linker requires an indexed v2 codegen plan")
+        native_linker = native_linker.expanduser().resolve(strict=True)
+        if not os.access(native_linker, os.X_OK):
+            raise DeferredLinkError("native linker is not executable")
+        with native_linker.open("rb") as stream:
+            if stream.read(4) not in (b"\xcf\xfa\xed\xfe", b"\x7fELF", b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+                raise DeferredLinkError("native linker must be a native executable")
+            stream.seek(0)
+            native_linker_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
     worker = plan["worker"]
     lanes = _partition_codegen_lanes(plan)
     admission: dict[str, dict[str, object]] = {}
@@ -804,6 +821,13 @@ def run_codegen_plan(plan_path: Path, *, timeout_s: int) -> dict[str, object]:
         pco_manifests = list(lanes["small"])
         frontend_manifests = list(asm_manifests)
         frontend_manifests.extend(pco_manifests)
+        if native_linker is not None:
+            # The native linker consumes packed objects directly. Keeping the
+            # host linker's large-ASM lanes would make one native process retain
+            # their assembler state together with every previously read object.
+            # Fresh emit workers bound each module's allocation high water.
+            pco_manifests = list(frontend_manifests)
+            asm_manifests = []
         frontend_admission = _run_codegen_batches(
             worker,
             frontend_manifests,
@@ -897,13 +921,12 @@ def run_codegen_plan(plan_path: Path, *, timeout_s: int) -> dict[str, object]:
             )
     _collect_codegen_artifacts(plan)
     driver = Path(__file__).resolve().with_name("pcc_link_macho.py")
-    command = [
-        sys.executable,
-        str(driver),
+    command = (
+        [sys.executable, str(driver), "--profile-json", str(plan["profile"])]
+        if native_linker is None else [str(native_linker)]
+    ) + [
         "--out",
         str(plan["output"]),
-        "--profile-json",
-        str(plan["profile"]),
         "--internal-input-manifest",
         str(plan["inputs"]),
         "--archive",
@@ -929,7 +952,7 @@ def run_codegen_plan(plan_path: Path, *, timeout_s: int) -> dict[str, object]:
         lane_summary[name] = {"count": len(lanes[name])}
         if plan["indexed_process_split"]:
             lane_summary[name]["artifact_kind"] = (
-                "PCO" if name == "small" else "ASM"
+                "PCO" if native_linker is not None or name == "small" else "ASM"
             )
         else:
             lane_summary[name]["jobs"] = jobs
@@ -953,7 +976,9 @@ def run_codegen_plan(plan_path: Path, *, timeout_s: int) -> dict[str, object]:
             {} if plan["indexed_process_split"] else admission
         ),
         "output": str(output),
-        "profile": str(plan["profile"]),
+        "profile": str(plan["profile"]) if native_linker is None else "",
+        "link_execution_owner": "host-cpython" if native_linker is None else "native-linker",
+        "native_linker_sha256": native_linker_sha256,
         "command": command,
     }
     _persist(Path(str(plan_path) + ".result.json"), result)
@@ -1016,6 +1041,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--codegen-plan")
+    parser.add_argument("--native-linker", type=Path,
+                        help="native owned linker executable for --codegen-plan")
     parser.add_argument("plan")
     parser.add_argument(
         "command",
@@ -1027,6 +1054,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.native_linker is not None and not args.codegen_plan:
+        raise DeferredLinkError("--native-linker requires --codegen-plan")
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
@@ -1039,6 +1068,7 @@ def main(argv: list[str] | None = None) -> int:
             result = run_codegen_plan(
                 Path(args.codegen_plan).expanduser().resolve(),
                 timeout_s=args.timeout,
+                native_linker=args.native_linker,
             )
         except (DeferredLinkError, OSError, ValueError) as exc:
             print("deferred pcc codegen error: " + str(exc), file=sys.stderr)

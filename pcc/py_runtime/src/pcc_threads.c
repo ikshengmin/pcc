@@ -4306,7 +4306,7 @@ void pcc_debug_check_release(const char *name, void *obj) {
         h->refcount <= 0
         || !pcc_debug_type_tag_is_valid(h->type_tag)
         || (
-            h->type_tag > 500
+            h->type_tag >= PY_TYPE_CEXT_TAG_BASE
             && pcc_capi_is_cext_type_tag((int64_t)h->type_tag) == 0
         )
     ) {

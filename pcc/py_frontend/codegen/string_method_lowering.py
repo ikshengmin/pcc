@@ -229,6 +229,7 @@ class StringMethodLoweringMixin:
             [recv, items],
             name=self._fresh(prefix + ".join"),
         )
+        self._note_owned_object_value(result)
         self._gc_pin(result)
         self._gc_unpin(items)
         self._gc_release_if_owned(items, arg_expr)
@@ -249,6 +250,7 @@ class StringMethodLoweringMixin:
             [recv, items],
             name=self._fresh(prefix + ".join"),
         )
+        self._note_owned_object_value(result)
         self._gc_pin(result)
         self._gc_unpin(items)
         self._gc_release_if_owned(items, arg_expr)

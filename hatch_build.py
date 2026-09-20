@@ -13,8 +13,8 @@ The hook fires at wheel-build time (`python -m build`,
    the lazy first-run path), and the binary at ``.data/scripts/pcc1`` as the
    explicit native bootstrap helper.
 
-Prefer the ``self`` backend so the build doesn't shell out to clang.
-Fall back to ``--backend llvm`` (uses clang) if self fails.
+The default ``self`` backend owns native artifact construction. A failure is
+fatal; the hook never retries a different backend.
 
 Honours environment overrides:
 - PCC_BUILD_BACKEND={self|llvm}   override backend (default: self)
@@ -37,6 +37,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+from types import ModuleType
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -48,8 +49,9 @@ def _load_runtime_archive_provenance():
     Hatch imports custom hooks in an isolated build environment before the
     project is installed, so the checkout is not an import root.  Importing
     ``pcc.tools`` here would either fail or, worse, select an unrelated already
-    installed ``pcc``.  The verifier is deliberately stdlib-only; load that
-    exact in-tree file without changing ``sys.path`` or relying on PYTHONPATH.
+    installed ``pcc``. Load the verifier and its owned archive reader in a
+    private source package, without changing ``sys.path`` or importing the
+    public pcc package.
     """
 
     provenance_path = (
@@ -62,8 +64,28 @@ def _load_runtime_archive_provenance():
         raise RuntimeError(
             f"runtime archive provenance verifier is missing: {provenance_path}"
         )
+    source_package = provenance_path.parents[1]
+    archive_path = source_package / "backend" / "ar.py"
+    if not archive_path.is_file():
+        raise RuntimeError(f"runtime archive reader is missing: {archive_path}")
+    namespace = "_pcc_wheel_source_" + hashlib.sha256(
+        str(source_package).encode("utf-8")
+    ).hexdigest()[:16]
+    for suffix, directory in (("", source_package), (".backend", archive_path.parent),
+                              (".tools", provenance_path.parent)):
+        package = ModuleType(namespace + suffix)
+        package.__path__ = [str(directory)]
+        sys.modules[package.__name__] = package
+    archive_spec = importlib.util.spec_from_file_location(
+        namespace + ".backend.ar", archive_path
+    )
+    if archive_spec is None or archive_spec.loader is None:
+        raise RuntimeError(f"cannot load runtime archive reader: {archive_path}")
+    archive_reader = importlib.util.module_from_spec(archive_spec)
+    sys.modules[archive_spec.name] = archive_reader
+    archive_spec.loader.exec_module(archive_reader)
     provenance_spec = importlib.util.spec_from_file_location(
-        "_pcc_build_runtime_archive_provenance",
+        namespace + ".tools.runtime_archive_provenance",
         provenance_path,
     )
     if provenance_spec is None or provenance_spec.loader is None:
@@ -71,6 +93,7 @@ def _load_runtime_archive_provenance():
             f"cannot load runtime archive provenance verifier: {provenance_path}"
         )
     provenance = importlib.util.module_from_spec(provenance_spec)
+    sys.modules[provenance_spec.name] = provenance
     provenance_spec.loader.exec_module(provenance)
     return provenance
 
@@ -80,6 +103,19 @@ ProvenanceError = _provenance.ProvenanceError
 capi_inventory_path_for_archive = _provenance.capi_inventory_path_for_archive
 manifest_path_for_archive = _provenance.manifest_path_for_archive
 verify_runtime_archive_manifest = _provenance.verify_runtime_archive_manifest
+
+
+def _load_build_targets():
+    path = Path(__file__).resolve().parent / "pcc" / "py_frontend" / "pipeline_targets.py"
+    spec = importlib.util.spec_from_file_location("_pcc_build_targets", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load owned target definitions: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_build_targets = _load_build_targets()
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -121,7 +157,7 @@ class CustomBuildHook(BuildHookInterface):
         # mismatch. (docs/investigations/linux-x86-64-docker-harness-rot.md No.5)
         self._discard_wrong_target_archives(runtime_dir)
 
-        # ---- 1. runtime archive (soft-fail: lazy path can rebuild) ----
+        # ---- 1. runtime archive (required for the wheel) ----
         force_runtime_rebuild = self._runtime_archive_inputs_newer(root, archive)
         ok = self._run_make(
             runtime_dir,
@@ -129,17 +165,6 @@ class CustomBuildHook(BuildHookInterface):
             backend,
             force=force_runtime_rebuild,
         )
-        if not ok and backend != "llvm":
-            self.app.display_warning(
-                f"pcc runtime build with --backend={backend} failed; "
-                "retrying with --backend=llvm (clang will be invoked)"
-            )
-            ok = self._run_make(
-                runtime_dir,
-                target,
-                "llvm",
-                force=force_runtime_rebuild,
-            )
         if ok and archive.is_file():
             manifest = self._require_runtime_archive_manifest(archive)
             capi_inventory = capi_inventory_path_for_archive(archive)
@@ -183,15 +208,9 @@ class CustomBuildHook(BuildHookInterface):
             out_binary = runtime_dir / "_native" / "pcc1"
             bin_backend = backend
             ok = self._run_pcc_self_compile(root, out_binary, bin_backend)
-            if not ok and bin_backend != "llvm":
-                self.app.display_warning(
-                    f"pcc self-compile with --backend={bin_backend} failed; "
-                    "retrying with --backend=llvm (clang will be invoked)"
-                )
-                ok = self._run_pcc_self_compile(root, out_binary, "llvm")
             if not ok:
                 raise RuntimeError(
-                    "pcc self-compile failed under both self and llvm backends. "
+                    f"pcc self-compile failed under --backend={bin_backend}. "
                     "The published wheel requires a native `pcc1` helper. Inspect the warnings "
                     "above, or set PCC_BUILD_SKIP=1 for a dev iteration only."
                 )
@@ -217,31 +236,10 @@ class CustomBuildHook(BuildHookInterface):
         return process.returncode == 0 and "Usage: pcc" in process.stdout
 
     def _archive_target_id(self) -> str:
-        """Mirror pipeline._runtime_archive_target_id (kept import-free:
-        pulling pcc.py_frontend.pipeline into the build hook would drag
-        llvmlite into hatchling's isolated env). The two MUST stay
-        format-identical or hook-built and lazily-built archives would
-        invalidate each other."""
+        """Use the same owned host ABI as the compiler, including in isolation."""
         import platform
 
-        cc = str(os.environ.get("CC", "") or "").strip() or "cc"
-        try:
-            triple = str(
-                subprocess.check_output([cc, "-dumpmachine"], text=True).strip()
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            if sys.platform == "darwin":
-                machine = platform.machine().lower()
-                if machine == "aarch64":
-                    machine = "arm64"
-                triple = f"{machine}-apple-darwin{platform.release()}"
-            elif sys.platform.startswith("linux"):
-                machine = platform.machine().lower()
-                if machine in ("amd64", "x64"):
-                    machine = "x86_64"
-                triple = f"{machine}-unknown-linux-gnu"
-            else:
-                triple = "unknown-unknown-unknown"
+        triple = _build_targets.host_target_triple()
         machine = platform.machine().lower()
         if machine in ("amd64", "x64"):
             machine = "x86_64"
@@ -440,9 +438,8 @@ class CustomBuildHook(BuildHookInterface):
     ) -> bool:
         """Invoke the runtime Makefile under a chosen backend.
 
-        Returns True iff the make exits 0. We deliberately don't fail
-        the wheel build on a make error — the lazy first-run path in
-        pcc.py_frontend.pipeline handles a missing archive cleanly.
+        Returns True iff make exits 0. The caller reports failure without
+        switching the selected backend or publishing an incomplete wheel.
         """
         env = dict(os.environ)
         # Inject the backend flag directly into the PCC command so

@@ -127,6 +127,7 @@ from .exact_int_lowering import (
 from .builtin_exceptions import builtin_exc_tag_or_missing
 from .errors import L1CodegenError
 from .host_contract import L1_CODEGEN_HOST_ATTRS
+from .module_name_lowering import module_symbol_suffix
 from .runtime_abi import declare_runtime_global
 from .self_module_contracts import (
     L1_CODEGEN_HOST_ATTR_CONTRACT,
@@ -2922,7 +2923,7 @@ class ClassLowering:
 
     def _class_global_name(self, cname: str) -> str:
         mod = self.parent.ast_module.name or "mod"
-        sanitised_mod = mod.replace(".", "_").replace("-", "_")
+        sanitised_mod = module_symbol_suffix(mod)
         return f".class.{sanitised_mod}.{cname}"
 
     def _top_level_function_exists(self, name: str) -> bool:
@@ -2933,7 +2934,7 @@ class ClassLowering:
 
     def _method_symbol(self, class_name: str, method_name: str) -> str:
         mod = self.parent.ast_module.name or "mod"
-        sanitised_mod = mod.replace(".", "_").replace("-", "_")
+        sanitised_mod = module_symbol_suffix(mod)
         if self._top_level_function_exists(class_name + "_" + method_name):
             return f"user_{sanitised_mod}_{class_name}__method_{method_name}"
         return f"user_{sanitised_mod}_{class_name}_{method_name}"
@@ -3522,7 +3523,7 @@ class ClassLowering:
 
     def _class_attr_global_name(self, class_name: str, attr_name: str) -> str:
         mod = self.parent.ast_module.name or "mod"
-        sanitised_mod = mod.replace(".", "_").replace("-", "_")
+        sanitised_mod = module_symbol_suffix(mod)
         return f".classattr.{sanitised_mod}.{class_name}.{attr_name}"
 
     def mangle_private_attr_name(self, info: ClassInfo, attr_name: str) -> str:
@@ -3645,7 +3646,7 @@ class ClassLowering:
         placeholder for self/cls when kind != 'static'), ``return_ty``.
         """
         local = local_name or class_name
-        sanitised_mod = owning_module.replace(".", "_").replace("-", "_")
+        sanitised_mod = module_symbol_suffix(owning_module)
         g_name = f".class.{sanitised_mod}.{class_name}"
         qualified = f"{owning_module}.{class_name}"
 
@@ -4440,7 +4441,7 @@ class ClassLowering:
 
         module = self.parent.module
         mod_name = self.parent.module.name or "mod"
-        sanitised_mod = mod_name.replace(".", "_").replace("-", "_")
+        sanitised_mod = module_symbol_suffix(mod_name)
         fn_name = f"_pcc_py_module_init_{sanitised_mod}"
         existing = module.globals.get(fn_name)
         if isinstance(existing, ir.Function):
