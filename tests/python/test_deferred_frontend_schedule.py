@@ -7,13 +7,17 @@ from pcc.py_frontend import deferred_frontend_schedule as scheduler
 
 @pytest.mark.parametrize("budget_gib", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("cpus", [1, 2, 4, 12, 64])
-@pytest.mark.parametrize("phase", ["frontend", "pco"])
+@pytest.mark.parametrize("phase", ["frontend", "pco0", "pco1", "pco2", "pco3", "pco4"])
 def test_every_admitted_window_fits_the_budget(budget_gib, cpus, phase):
     sizes = [0, 30000, 200000, 1000000, 1900000, 3000000, 7000000, 14000000, 50000000]
     budget = budget_gib * 1073741824
-    group = scheduler.frontend_groups if phase == "frontend" else scheduler.pco_groups
-    floor = scheduler.indexed_frontend_floor_bytes if phase == "frontend" else scheduler.indexed_pco_floor_bytes
-    groups = group(sizes, budget, cpus)
+    if phase == "frontend":
+        floor = scheduler.indexed_frontend_floor_bytes
+        groups = scheduler.frontend_groups(sizes, budget, cpus)
+    else:
+        gc_backend = int(phase[-1])
+        floor = lambda size: scheduler.indexed_pco_floor_bytes(size, gc_backend)
+        groups = scheduler.pco_groups(sizes, budget, cpus, gc_backend)
     assert sorted(index for indices, _ in groups for index in indices) == list(range(len(sizes)))
     for indices, width in groups:
         assert 1 <= width <= min(cpus, 12)
@@ -32,7 +36,9 @@ def test_small_frontend_jobs_are_not_limited_by_combined_emit_estimates():
 
 def test_pco_phase_uses_its_own_budget_instead_of_serial_safe_lane():
     sizes = [60000000, 14000000, 1000000, 1000000]
-    assert scheduler.pco_groups(sizes, 6 * 1073741824, 12) == [([0], 1), ([1], 2), ([2, 3], 12)]
+    assert scheduler.pco_groups(sizes, 6 * 1073741824, 12) == [([0], 3), ([1], 8), ([2, 3], 12)]
+    for gc_backend in range(1, 5):
+        assert scheduler.pco_groups(sizes, 6 * 1073741824, 12, gc_backend) == [([0], 1), ([1], 2), ([2, 3], 12)]
     assert scheduler.pco_groups([1000000] * 30, 6 * 1073741824, 2) == [(list(range(30)), 2)]
 
 
@@ -48,7 +54,8 @@ def test_explicit_or_unbudgeted_calls_preserve_conservative_policy(monkeypatch, 
     assert calls == [(["a"], 1), (["b", "c"], 2)]
 
 
-def test_auto_pco_reads_all_sidecars_before_launch_and_preserves_command_ownership(tmp_path, monkeypatch):
+@pytest.mark.parametrize("gc_backend", ["0", "1", "2", "3", "4", "unknown"])
+def test_auto_pco_reads_all_sidecars_before_launch_and_preserves_command_ownership(tmp_path, monkeypatch, gc_backend):
     sidecars = []
     for index, size in enumerate([1000000, 60000000, 14000000, 1000000]):
         path = tmp_path / (str(index) + ".pidx")
@@ -57,17 +64,32 @@ def test_auto_pco_reads_all_sidecars_before_launch_and_preserves_command_ownersh
         sidecars.append(str(path))
     calls = []
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
+    monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * 1073741824))
     monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
     monkeypatch.setattr(scheduler, "run_worker_processes", lambda commands, width: calls.append((commands, width)))
     scheduler.run_pco_commands(["a", "b", "c", "d"], sidecars, 2, 1)
-    assert calls == [(["b"], 1), (["c"], 2), (["a", "d"], 12)]
+    assert calls == ([(["b"], 3), (["c"], 8), (["a", "d"], 12)] if gc_backend == "0"
+                     else [(["b"], 1), (["c"], 2), (["a", "d"], 12)])
     calls.clear()
     with pytest.raises(ValueError, match="inventory mismatch"):
         scheduler.run_pco_commands(["a"], sidecars, 0, 1)
     with pytest.raises(OSError):
         scheduler.run_pco_commands(["a", "b"], [sidecars[0], str(tmp_path / "missing")], 0, 1)
     assert not calls
+
+
+def test_gc0_reservations_cover_all_392_system_peak_measurements():
+    import json
+    from pathlib import Path
+
+    corpus = json.loads((Path(__file__).parents[1] / "data/pco_gc0_worker_peaks.json").read_text())
+    assert corpus["gc_backend"] == 0
+    assert len(corpus["workers"]) == 392
+    for row in corpus["workers"]:
+        peak = max(row["max_rss_bytes"], row["peak_footprint_bytes"])
+        required = (peak * 5 + 3) // 4 + 128 * 1048576
+        assert scheduler.indexed_pco_floor_bytes(row["input_bytes"]) >= required, row["index"]
 
 
 def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatch):
@@ -105,11 +127,13 @@ def test_pco_admission_executes_natively_under_all_collectors(
     for budget_gib in (1, 6, 8):
         for cpus in (1, 12, 64):
             budget = budget_gib * 1073741824
-            cases.append((budget, cpus, scheduler.pco_groups(sizes, budget, cpus)))
+            for gc_backend in range(5):
+                cases.append((budget, cpus, gc_backend, scheduler.pco_groups(sizes, budget, cpus, gc_backend)))
     source = tmp_path / "pco_admission.py"
     constants = "\n".join(
         name + " = " + repr(getattr(scheduler, name))
-        for name in ("_GIB", "_DRIVER_RESERVE", "_PCO_BASE", "_PCO_PER_SIDECAR_MB", "_PCO_CAP", "_MAX_WIDTH")
+        for name in ("_GIB", "_DRIVER_RESERVE", "_PCO_BASE", "_PCO_PER_SIDECAR_MB",
+                     "_PCO_LEGACY_BASE", "_PCO_LEGACY_PER_SIDECAR_MB", "_PCO_CAP", "_MAX_WIDTH")
     )
     source.write_text(constants + "\n\n" + "\n\n".join(
         inspect.getsource(function) for function in (
@@ -117,8 +141,8 @@ def test_pco_admission_executes_natively_under_all_collectors(
         )
     ) + "\nsizes = " + repr(sizes) + "\ncases = " + repr(cases) + '''
 def main():
-    for budget, cpus, expected in cases:
-        assert pco_groups(sizes, budget, cpus) == expected
+    for budget, cpus, gc_backend, expected in cases:
+        assert pco_groups(sizes, budget, cpus, gc_backend) == expected
     print("pco-admission-ok")
 main()
 ''')

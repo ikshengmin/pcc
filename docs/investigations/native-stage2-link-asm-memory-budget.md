@@ -1640,3 +1640,160 @@ empty. The exact failure also reproduces against the frozen control source
 case explicitly. This is not an all-green suite claim. No fresh full pcc1,
 Stage2/Stage3, installation or commit was performed. Serial PCO admission and
 frontend cost remain separate unfinished work.
+
+### 2026-09-22: native PCO scheduling connected; five-minute targets still open
+
+The maintainer's acceptance targets are now **complete Stage1 <= 300 seconds
+and complete Stage2 <= 300 seconds, measured separately, without losing
+capabilities or semantics**. Neither target is met by this experiment.
+
+`native_deferred._codegen` now calls `run_pco_commands` with the actual PIDX
+inventory. Auto mode with a valid existing tree budget groups workers using
+the host controller's PCO memory estimates and the shared native process pool.
+It no longer reuses the combined frontend/emitter's one/two-slot policy.
+Explicit counts and unknown budgets retain the previous policy. The host
+controller delegates its PCO estimate to the same implementation. No new
+environment variable or lower memory coefficient was introduced.
+
+Evidence root:
+`/private/var/folders/39/jsw8wb5x1pl86d3tdvzx1l1w0000gn/T/pcc-pco-admission-h5bq6m_p`.
+Source SHA256:
+`8b2cd9d7112b743267fe7736a65d0202960ac2679b4991b66b16d3188ba4b95c`.
+The source-frozen Stage1 includes this scheduler and the preceding fixed-layout
+decoder. Its compiler SHA256 is
+`a069d0c3c6e622a3efe3323d2274cecd3dca6a3f2cd342215509eb57a3a904a0`,
+retained at `stage1/pcc1`. The guarded build/checks completed in **648.696s**,
+peak **4,493,213,696 bytes**; compilation itself took **629.764s**. Configuration:
+two host frontend workers, two self-backend workers, owned self backend,
+no libpython, IR passes off, direct indexed emission, reused runtime. The
+5-GiB hard cap and 8-GiB host reserve passed the existing preflight.
+
+Scheduling-only A/B uses one native controller binary and the SAME retained
+pcc1 worker (`17012e...` from the preceding Stage2), on 12 frozen real PIDX
+inputs. A six-GiB launch was refused by swap preflight before workers started.
+Both arms then used a matching **4-GiB planner budget and hard cap**, preserving
+the 8-GiB reserve and the unchanged preflight. `run_cohort_4g.py` and each
+`a*-4g.json` / `b*-4g.json` retain exact commands and resource records:
+
+| Arm order | Wall seconds | Peak tree bytes |
+|---|---:|---:|
+| A1, previous serial policy | 11.702 | 74,629,120 |
+| B1, phase-specific admission | 4.345 | 360,775,680 |
+| B2 | 4.351 | 360,628,224 |
+| A2 | 11.721 | 75,235,328 |
+
+Mean speedup is **2.694x**. All 48 PCO outputs match the retained originals.
+
+Full PCO replay then used the NEW pcc1 on all **392** frozen old-source PIDX
+files, with GC0, a **5-GiB budget/cap**, 8-GiB reserve and fixed 1500s timeout.
+`run_full_phase.py` invokes the actual native scheduler and the compiler's
+`--pcc-self-backend-indexed-emit-worker`; no frontend recompile, host-Python
+compiler worker, external optimizer or assembler is selected. The target
+environment has `PATH=/nonexistent` and disabled host-Python selectors.
+Result: **1143.566s (19m04s)**, sampled peak **1,096,646,656 bytes**, maximum
+13 processes (controller plus 12 workers). All 392 PCOs, totaling 662,572,516
+bytes, decode successfully and are byte-identical to the originals. Input
+hashes and all output hashes were verified; `result.json` binds them.
+
+This is a historical improvement from the earlier 1938.264s PCO phase, not a
+paired attribution: that run used the old compiler and a 6-GiB budget, while
+this one includes both the decoder and scheduling changes. It is a complete
+PCO-phase replay of retained inputs, **not a fresh-source Stage2 or fixed point**.
+
+The remaining limitation is now measured: **33 large modules still execute
+serially for approximately 801.741s (70.1% of the phase)**; the parallel tail
+takes approximately 341.825s. The largest 58,691,834-byte PIDX is charged the
+old 6-GiB cap despite the complete replay's approximately 1.02-GiB sampled
+tree peak. Reusing old coefficients left the dominant serial work in place.
+Next work should recalibrate phase memory and admission from complete input
+coverage, retaining headroom and the hard watchdog; these samples do not
+justify setting every reservation to the observed peak. The original serial
+run sampled 373/392 emitter processes; 19 lack per-worker sampled peaks.
+For Stage1, the recorded profile assigns 452.012s to codegen worker commands,
+53.721s to export and 76.686s to linking; the two-worker default also needs
+evaluation against the new time target.
+
+Validation: **86** focused host checks; pcc0 and pcc1 each compile and execute
+the actual admission functions under all five collectors; **8** checks on
+the fresh pcc1 pass, including the real deferred two-module compile/run,
+five-GC native link entry, fixed-layout reader and admission regressions.
+The native-object encoding closed-world fallback check also passes.
+The broader baseline packet stops after ten passes at the existing missing
+`_direct_virtual_method_calls` host-contract field. Those constructor/contract
+files are unchanged by this round. Remaining fallback checks were not reached;
+the two bootstrap baseline tests inspect historical receipts, not a new
+Stage2/Stage3. No install, commit or whole-project qualification is claimed.
+
+End-of-run identity check: the frozen measured sources remain unchanged.
+The live worktree subsequently differs only by removal of five `DEFER-ROOTS`
+diagnostic lines in `pipeline_frontend_parallel.py`'s invalid-root branch.
+This diagnostic drift is preserved and is not included in the measured pcc1;
+`source-after.json` and `result.json` record the distinction.
+
+### 2026-09-22: complete PCO peak envelope and redundant stack-map sorting
+
+The maintainer requested one optimization round, then explicitly limited the
+round to repairing the identified problems and stopping. The Stage1/Stage2
+300-second targets remain unmet; no new complete bootstrap or installation is
+claimed here.
+
+Evidence root:
+`/private/var/folders/39/jsw8wb5x1pl86d3tdvzx1l1w0000gn/T/pcc-pco-envelope-xyzz55zj`.
+Control source is `5c749e891398a3ed65639be9df1aa4e688f0a3bd6086592cf48c2ce0cdda780e`;
+candidate is `e6942d0f50f76652cecd06bc0812fc038941da4cdeeb6b017a3a29d4a4813690`.
+Worker remains the prior native pcc1 `a069d0c3...`; its emitter implementation
+matches control (the source difference is the invalid-root diagnostic noted
+above). The 392 frozen PIDX files and expected PCO hashes are retained from
+the preceding round.
+
+`pcc_emit_rank.py` now supports the indexed PCO worker protocol, selected GC,
+system `/usr/bin/time -lp` peaks and reference output hashes. The calibration
+used three workers, GC0, a 5-GiB tree cap, unchanged 8-GiB reserve and a fixed
+900s watchdog. All **392** workers completed and their PCO hashes matched.
+Maximum per-worker RSS was approximately **1044.28 MiB**, maximum physical
+footprint **1024 MiB**; sampled aggregate peak was approximately **2.51 GiB**.
+The full records are `calibration/manifest.json`; the portable regression
+fixture is `tests/data/pco_gc0_worker_peaks.json`.
+
+The GC0 reservation is now **320 MiB + 21 MiB per decimal MB of PIDX**, retaining
+the existing 6-GiB cap. Every recorded worker is covered by **25% plus 128 MiB**
+over the larger of its system RSS/footprint peaks. Collectors 1–4 and unknown
+collector selections retain the previous estimate; no new environment knob
+was added. These are estimates with headroom, not guaranteed future maxima.
+The native and host deferred controllers share this selection.
+
+The maintainer also requested renewed CPU profiling to look for larger or
+simpler implementation mistakes. A complete `c_codegen` native replay yielded
+**50,252** samples (`native-full.folded`, matching actual executable symbols):
+71.7% inclusive in AArch64 transport/preparation, 21.9% in PIDX decoding, and
+6.2% in final native-object encoding. Nested costs include instance lookup,
+bound-method construction, tuples and reference traffic. The first live
+capture had only 367 tail samples and is not used for these whole-replay shares.
+
+CPython **3.15.0rc1** Tachyon cross-process sampling failed with macOS process
+memory Permission Error; `sudo -n` also required a password. It produced no
+valid profile. The existing in-process host sampler was then run under 3.15,
+with a separate cProfile call-count run. cProfile-instrumented wall time is not
+a compiler performance comparison. The plain sampled/audited host replay
+produced reference-identical PCO bytes and 1567 samples. Scalar-record dataclass
+constructors accounted for approximately 25% self samples via arena getters;
+stack-map sorting was 6.1% inclusive. Native PIDX restore visibly expands raw
+columns into lists and then freezes them back into arenas; its specific
+avoidable share remains unisolated. These further costs were not changed.
+
+The concrete sort audit found **619/619 groups, 140,033/140,033 records already
+strictly ordered** before the existing heapsort. The call-count run recorded
+1,436,614 swaps. `_sort_final_stack_map_records` now checks strict ordering
+linearly and returns when it already holds. The native check reads the arena
+through integer-address intrinsics; unordered/equal-key inputs retain the
+original heap algorithm and tie ordering. No validation, payload word or
+collector contract was removed.
+
+Validation: **198** focused host checks, **five** ordering checks, and **four**
+native regression cases pass. Both pcc0 and pcc1 compile the actual admission
+and sort functions; every emitted program runs on GC0–GC4, checking zero swaps
+for ordered input, real swaps for unordered/equal keys, and every payload word
+(including ids above 2**38). `native-regression.*` records these executions.
+The new whole compiler was not rebuilt and post-change full-phase throughput
+was not measured after the explicit stop instruction. Previous full-gate
+failures and the fresh-source Stage2/Stage3 requirement remain open.

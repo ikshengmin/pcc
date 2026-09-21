@@ -259,9 +259,13 @@ def test_worker_floor_tracks_ast_size_and_caps():
     assert 2 * tool._worker_floor_bytes(4_400_000) <= 7 * gib
 
 
+@pytest.mark.parametrize("gc_backend", [1, 2, 3, 4])
 def test_indexed_emit_floor_uses_exact_sidecar_bytes_and_covers_measured_peaks(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch, gc_backend,
 ):
+    # Retain the historical envelope for collectors without the new complete
+    # GC0 calibration. GC0's 392-worker corpus has its own stronger check.
+    monkeypatch.setenv("PCC_GC_BACKEND", str(gc_backend))
     tool = _load_tool()
     samples = (
         ("tiny", 17_038, False, 28_327_936),

@@ -279,11 +279,8 @@ _WORKER_FLOOR_BASE_BYTES = 9 * _GIB // 10
 _WORKER_FLOOR_PER_AST_MB_BYTES = 12 * _GIB // 10
 _WORKER_FLOOR_CAP_BYTES = 7 * _GIB // 2
 _INDEXED_ASM_EMIT_BASE_BYTES = 2 * _GIB // 5
-# The PCO coefficients are the upper envelope of all 195 source-frozen v57
-# PCO workers after packed instruction/relocation/stack-map publication.  Each
-# computed floor covers that worker's synchronized peak by at least 5% plus
-# 100 MB; the live-RSS ladder and external 8 GiB breaker remain independent
-# backstops.  Do not lower this from a subset or a single Stage2 wall result.
+# PCO admission shares the native controller's collector-specific envelope.
+# The live-RSS ladder and external tree breaker remain independent backstops.
 _INDEXED_ASM_PER_SIDECAR_MB_BYTES = 7 * _GIB // 100
 _INDEXED_EMIT_FLOOR_CAP_BYTES = 6 * _GIB
 
@@ -308,7 +305,8 @@ def _indexed_emit_floor_bytes(sidecar: Path, *, assembly_only: bool) -> int:
         ) // 1_000_000
     else:
         from pcc.py_frontend.deferred_frontend_schedule import indexed_pco_floor_bytes
-        return indexed_pco_floor_bytes(payload_bytes)
+        raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
+        return indexed_pco_floor_bytes(payload_bytes, 0 if raw_gc == "0" else -1)
     if floor > _INDEXED_EMIT_FLOOR_CAP_BYTES:
         return _INDEXED_EMIT_FLOOR_CAP_BYTES
     return floor

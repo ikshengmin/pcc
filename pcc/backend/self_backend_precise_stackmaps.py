@@ -5643,8 +5643,27 @@ def _sort_final_stack_map_records(records: CompilerIntArena) -> None:
     """
 
     count = len(records) // 4
+    if count < 2:
+        return
     native_address = records.native_address()
     if native_address != 0:
+        # Final PCs often already follow emission order. Avoid O(n log n)
+        # swaps in that case. Equal keys deliberately use the old heapsort,
+        # preserving its ordering even for records later rejected as invalid.
+        previous_pc = _record_load_i64(_record_int_to_ptr(native_address), 0)
+        previous_id = _record_load_i64(_record_int_to_ptr(native_address), 8)
+        ordered = 1
+        while ordered < count:
+            offset = ordered * 32
+            pc = _record_load_i64(_record_int_to_ptr(native_address), offset)
+            record_id = _record_load_i64(_record_int_to_ptr(native_address), offset + 8)
+            if pc < previous_pc or (pc == previous_pc and record_id <= previous_id):
+                break
+            previous_pc = pc
+            previous_id = record_id
+            ordered += 1
+        if ordered == count:
+            return
         start = count // 2 - 1
         while start >= 0:
             _sift_down_final_stack_map_records_native(native_address, start, count)
@@ -5654,6 +5673,11 @@ def _sort_final_stack_map_records(records: CompilerIntArena) -> None:
             _swap_final_stack_map_records_native(native_address, 0, end * 32)
             _sift_down_final_stack_map_records_native(native_address, 0, end)
             end -= 1
+        return
+    ordered = 1
+    while ordered < count and _final_stack_map_record_greater(records, ordered, ordered - 1):
+        ordered += 1
+    if ordered == count:
         return
     start = count // 2 - 1
     while start >= 0:

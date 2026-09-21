@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Rank frozen self-backend IR inputs by fresh pcc emit-worker cost."""
+"""Rank frozen LLVM-text or indexed PCO inputs by fresh native worker cost."""
 
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -174,34 +175,52 @@ def _run_item(
     output_dir: Path,
     item: dict,
     timeout_seconds: float,
+    input_format: str = "llvm-ir",
+    gc_backend: int = 0,
 ) -> dict:
     item_index = int(item["index"])
     prefix = output_dir / f"item_{item_index:03d}"
     result_path = prefix.with_suffix(".result")
-    assembly_path = prefix.with_suffix(".s")
+    assembly_path = prefix.with_suffix(".pco" if input_format == "indexed-pco" else ".s")
     time_path = prefix.with_suffix(".time")
     stdout_path = prefix.with_suffix(".stdout")
     stderr_path = prefix.with_suffix(".stderr")
+    worker_arguments = [
+        "--pcc-self-backend-emit-worker", str(item["absolute_path"]),
+        str(result_path), str(assembly_path), "",
+    ]
+    if input_format == "indexed-pco":
+        with open(item["absolute_path"], "rb") as stream:
+            if stream.read(11) != b"PCCIDXMOD1\n":
+                raise EmitRankError(f"item {item_index} is not an indexed module")
+        worker_arguments = [
+            "--pcc-self-backend-indexed-emit-worker", str(item["absolute_path"]),
+            str(assembly_path), "PCO",
+        ]
     command = [
         "/usr/bin/time",
         "-lp",
         "-o",
         str(time_path),
         str(compiler),
-        "--pcc-self-backend-emit-worker",
-        str(item["absolute_path"]),
-        str(result_path),
-        str(assembly_path),
-        "",
-    ]
+    ] + worker_arguments
     environment = os.environ.copy()
     environment.update(
         {
-            "PCC_GC_BACKEND": "0",
+            "PCC_GC_BACKEND": str(gc_backend),
             "PCC_PYTHON_IR_PASSES": "off",
             "PYTHONHASHSEED": "0",
         }
     )
+    if input_format == "indexed-pco":
+        environment.update(
+            PATH="/nonexistent", PCC_HOST_PYTHON="/usr/bin/false",
+            PCC_HOST_PCC="/usr/bin/false", PCC_RUNTIME_CC="/usr/bin/false",
+            PCC_DIRECT_INDEXED_KERNEL_CAPTURE="1", PCC_DIRECT_INDEXED_KERNEL_EMIT="1",
+            PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK="1",
+            PCC_DIRECT_INDEXED_KERNEL_FUSE_USES="1",
+            PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND="1",
+        )
     process = subprocess.Popen(
         command,
         cwd=REPO_ROOT,
@@ -228,18 +247,33 @@ def _run_item(
         raise EmitRankError(
             f"item {item_index} failed with rc={process.returncode}: {stderr.strip()}"
         )
-    result_lines = result_path.read_text(encoding="utf-8").splitlines()
-    if (
-        len(result_lines) < 2
-        or result_lines[0] != "self-aarch64-darwin-v0"
-        or Path(result_lines[1]).resolve() != assembly_path.resolve()
-    ):
-        raise EmitRankError(f"item {item_index} produced an invalid worker receipt")
+    if input_format == "indexed-pco":
+        with assembly_path.open("rb") as stream:
+            if stream.read(8) != b"PCCNOBJ\x01":
+                raise EmitRankError(f"item {item_index} produced invalid PCO framing")
+    else:
+        result_lines = result_path.read_text(encoding="utf-8").splitlines()
+        if (
+            len(result_lines) < 2
+            or result_lines[0] != "self-aarch64-darwin-v0"
+            or Path(result_lines[1]).resolve() != assembly_path.resolve()
+        ):
+            raise EmitRankError(f"item {item_index} produced an invalid worker receipt")
+    artifact_sha256 = _sha256(assembly_path)
+    expected = item.get("expected_artifact_sha256")
+    if expected is not None and artifact_sha256 != expected:
+        raise EmitRankError(f"item {item_index} output hash differs from the reference")
+    if _sha256(Path(item["absolute_path"])) != item["sha256"]:
+        raise EmitRankError(f"item {item_index} input changed during emission")
     metrics = _parse_darwin_time(time_path)
     return {
         **{key: value for key, value in item.items() if key != "absolute_path"},
         "assembly_path": assembly_path.name,
-        "assembly_sha256": _sha256(assembly_path),
+        "assembly_sha256": artifact_sha256,
+        "artifact_kind": "PCO" if input_format == "indexed-pco" else "ASM",
+        "artifact_path": assembly_path.name,
+        "artifact_sha256": artifact_sha256,
+        "command": command,
         "metrics": metrics,
     }
 
@@ -275,6 +309,8 @@ def run(args: argparse.Namespace) -> dict:
         "lane": args.lane,
         "requested_item_indices": sorted(set(args.item_index)),
         "jobs": args.jobs,
+        "input_format": args.input_format,
+        "gc_backend": args.gc_backend,
         "timeout_s": args.timeout,
         "selected_count": len(items),
         "completed_count": 0,
@@ -283,7 +319,7 @@ def run(args: argparse.Namespace) -> dict:
     _persist(manifest_path, manifest)
     started = time.monotonic()
     try:
-        with compile_ab._performance_lock():
+        with compile_ab._performance_lock() if args.performance_lock else nullcontext():
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=min(args.jobs, len(items))
             ) as executor:
@@ -294,6 +330,8 @@ def run(args: argparse.Namespace) -> dict:
                         output_dir,
                         item,
                         args.timeout,
+                        args.input_format,
+                        args.gc_backend,
                     ): item
                     for item in items
                 }
@@ -318,6 +356,8 @@ def run(args: argparse.Namespace) -> dict:
         manifest["items"],
         key=lambda item: (-float(item["metrics"]["wall_s"]), int(item["index"])),
     )
+    if _sha256(compiler) != manifest["compiler_sha256"] or _sha256(input_manifest) != manifest["input_manifest_sha256"]:
+        raise EmitRankError("compiler or input manifest changed during measurement")
     manifest["items"] = sorted(manifest["items"], key=lambda item: item["index"])
     manifest["ranking"] = [
         {
@@ -344,6 +384,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--input-manifest", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--input-format", choices=("llvm-ir", "indexed-pco"), default="llvm-ir")
+    parser.add_argument("--gc-backend", type=int, choices=range(5), default=0)
+    parser.add_argument("--performance-lock", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--lane",
         choices=("oversized", "medium", "small", "all"),

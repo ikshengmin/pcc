@@ -15,8 +15,10 @@ _GIB = 1073741824
 _DRIVER_RESERVE = _GIB
 _FRONTEND_BASE = 3 * _GIB // 4
 _FRONTEND_PER_AST_MB = 19 * _GIB // 100
-_PCO_BASE = _GIB // 4
-_PCO_PER_SIDECAR_MB = 13 * _GIB // 100
+_PCO_BASE = 320 * 1048576
+_PCO_PER_SIDECAR_MB = 21 * 1048576
+_PCO_LEGACY_BASE = _GIB // 4
+_PCO_LEGACY_PER_SIDECAR_MB = 13 * _GIB // 100
 _PCO_CAP = 6 * _GIB
 _MAX_WIDTH = 12
 
@@ -25,10 +27,14 @@ def indexed_frontend_floor_bytes(ast_bytes):
     return _FRONTEND_BASE + max(0, int(ast_bytes)) * _FRONTEND_PER_AST_MB // 1000000
 
 
-def indexed_pco_floor_bytes(sidecar_bytes):
-    # Same upper envelope as the host deferred controller's complete v57
-    # 195-worker sample. Do not lower this from a subset or one wall result.
-    return min(_PCO_CAP, _PCO_BASE + max(0, int(sidecar_bytes)) * _PCO_PER_SIDECAR_MB // 1000000)
+def indexed_pco_floor_bytes(sidecar_bytes, gc_backend=0):
+    # GC0: all 392 frozen compiler PIDX inputs, system-reported per-process
+    # RSS AND footprint maxima, each covered by 25% plus 128 MiB headroom.
+    # The regression fixture retains the complete envelope. Other collectors
+    # keep the previous v57 estimate until their own corpus is calibrated.
+    base = _PCO_BASE if gc_backend == 0 else _PCO_LEGACY_BASE
+    per_mb = _PCO_PER_SIDECAR_MB if gc_backend == 0 else _PCO_LEGACY_PER_SIDECAR_MB
+    return min(_PCO_CAP, base + max(0, int(sidecar_bytes)) * per_mb // 1000000)
 
 
 def _admission_groups(floors, tree_budget, cpu_budget):
@@ -55,9 +61,9 @@ def frontend_groups(ast_sizes, tree_budget, cpu_budget):
     )
 
 
-def pco_groups(sidecar_sizes, tree_budget, cpu_budget):
+def pco_groups(sidecar_sizes, tree_budget, cpu_budget, gc_backend=0):
     return _admission_groups(
-        [indexed_pco_floor_bytes(size) for size in sidecar_sizes], tree_budget, cpu_budget,
+        [indexed_pco_floor_bytes(size, gc_backend) for size in sidecar_sizes], tree_budget, cpu_budget,
     )
 
 
@@ -72,7 +78,9 @@ def run_pco_commands(commands, sidecars, oversized, safe_jobs):
         run_worker_processes(commands[oversized:], safe_jobs)
         return
     sizes = [os.path.getsize(path) for path in sidecars]
-    for indices, width in pco_groups(sizes, budget, parallel_cpu_budget()):
+    raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
+    gc_backend = 0 if raw_gc == "0" else -1
+    for indices, width in pco_groups(sizes, budget, parallel_cpu_budget(), gc_backend):
         run_worker_processes([commands[index] for index in indices], width)
 
 
