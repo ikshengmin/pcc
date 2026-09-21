@@ -44,8 +44,9 @@
 #   PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES=17179869184
 #   PCC_BOOTSTRAP_STAGE_TIMEOUT=600
 #
-# The Stage2+ auto default is a host-safety contract: it runs oversized modules
-# serially and caps the safe codegen pool at two workers.  A numeric override
+# The coordinator's Stage2+ auto default keeps the combined codegen pool at
+# two workers. After it exits, deferred frontend-only workers use their
+# indexed AST memory estimates within the same tree budget. A numeric override
 # above two requires PCC_BOOTSTRAP_UNSAFE_HIGH_MEMORY_JOBS=1; ordinary agents,
 # tests and performance runners must never set that escape hatch.
 
@@ -416,12 +417,40 @@ run_stage() {
         "PCC_MACHO_LINK_JOBS=${BOOTSTRAP_MACHO_LINK_JOBS}"
         "PCC_WORKER_TREE_BUDGET_BYTES=${BOOTSTRAP_MAX_TREE_RSS_BYTES}"
     )
+    if [[ "${BACKEND}" == "self" ]]; then
+        # Indexed emission owns the artifact root consumed by deferred
+        # codegen and avoids materializing the compiler's large assembly text.
+        local indexed_emit="${PCC_DIRECT_INDEXED_KERNEL_EMIT:-1}"
+        local indexed_capture="${PCC_DIRECT_INDEXED_KERNEL_CAPTURE:-1}"
+        if [[ -n "${codegen_plan}" ]]; then
+            local indexed_value
+            for indexed_value in "${indexed_emit}" "${indexed_capture}"; do
+                case "${indexed_value}" in
+                    1|true|True|TRUE|yes|Yes|YES|on|On|ON) ;;
+                    *) echo "native deferred codegen requires PCC_DIRECT_INDEXED_KERNEL_CAPTURE=1 and PCC_DIRECT_INDEXED_KERNEL_EMIT=1" >&2; return 2 ;;
+                esac
+            done
+        fi
+        full_cmd+=(
+            "PCC_DIRECT_INDEXED_KERNEL_CAPTURE=${indexed_capture}"
+            "PCC_DIRECT_INDEXED_KERNEL_EMIT=${indexed_emit}"
+            "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK=1"
+            "PCC_DIRECT_INDEXED_KERNEL_FUSE_USES=1"
+            "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND=1"
+        )
+    fi
     if [[ "${stage}" != "1" && "${BACKEND}" == "self" ]]; then
         if [[ "${BOOTSTRAP_IN_PROCESS_CODEGEN}" == "1" ]]; then
             full_cmd+=("PCC_PY_FRONTEND_IN_PROCESS_CODEGEN=1")
         fi
         if [[ -n "${codegen_plan}" ]]; then
+            local runtime_archive="${PCC_RUNTIME_ARCHIVE:-${REPO_ROOT}/pcc/py_runtime/libpy_runtime_pcc_py.a}"
+            if [[ ! -f "${runtime_archive}" ]]; then
+                echo "native deferred codegen requires a runtime archive before compilation; build stage1 or set PCC_RUNTIME_ARCHIVE to its runtime archive" >&2
+                return 2
+            fi
             full_cmd+=(
+                "PCC_RUNTIME_ARCHIVE=${runtime_archive}"
                 "PCC_DEFER_FRONTEND_CODEGEN_PLAN=${codegen_plan}"
                 "PCC_DEFER_FRONTEND_OUTPUT=${out_exe}"
             )
@@ -430,6 +459,9 @@ run_stage() {
             full_cmd+=("PCC_DEFER_SELF_LINK_PLAN=${deferred_plan}")
         fi
     fi
+    # The continuation and its workers must inherit the same effective pass,
+    # runtime and resource settings as the frontend coordinator.
+    local stage_environment=("${full_cmd[@]}")
     full_cmd+=("${cmd[@]}")
     if [[ -n "${BOOTSTRAP_PROFILE_DIR}" ]]; then
         full_cmd+=(--profile-json "${BOOTSTRAP_PROFILE_DIR}/stage${stage}.json")
@@ -462,24 +494,13 @@ run_stage() {
     local process_guard_stdout=""
     local process_guard_stderr=""
     local target_cmd=("${full_cmd[@]}")
-    if [[ -n "${deferred_plan}" ]]; then
-        local deferred_runner=()
-        if [[ -n "${PCC_HOST_PYTHON:-}" && -x "${PCC_HOST_PYTHON}" ]]; then
-            deferred_runner=("${PCC_HOST_PYTHON}")
-        elif command -v uv >/dev/null 2>&1; then
-            deferred_runner=(env -u LC_ALL uv run python)
-        else
-            deferred_runner=(python3)
-        fi
+    if [[ -n "${deferred_plan}" || -n "${codegen_plan}" ]]; then
         target_cmd=(
-            "${deferred_runner[@]}"
-            "${REPO_ROOT}/scripts/run_pcc_deferred_link.py"
-            --timeout "${BOOTSTRAP_STAGE_TIMEOUT}"
+            "${stage_environment[@]}"
+            /bin/bash "${REPO_ROOT}/scripts/run_pcc_native_deferred.sh"
+            "${cmd[0]}" "${codegen_plan}" "${deferred_plan}"
+            -- "${full_cmd[@]}"
         )
-        if [[ -n "${codegen_plan}" ]]; then
-            target_cmd+=(--codegen-plan "${codegen_plan}")
-        fi
-        target_cmd+=("${deferred_plan}" -- "${full_cmd[@]}")
     fi
     local execution_cmd=("${target_cmd[@]}")
     if [[ -n "${BOOTSTRAP_PROFILE_DIR}" ]]; then

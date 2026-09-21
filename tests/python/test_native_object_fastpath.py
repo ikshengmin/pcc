@@ -499,9 +499,25 @@ main()
         assert result.stdout.strip() == "1"
 
 
-def test_streamed_validation_matches_packed_decoder_on_byte_mutations():
+def _use_host_payload_loads(monkeypatch):
+    """Exercise the fixed layout with host implementations of scalar loads."""
+    monkeypatch.setattr(native_object_module, "_NATIVE_PAYLOAD_READS", True)
+    monkeypatch.setattr(native_object_module, "abi_constant", lambda _name: 0)
+    for name, width in (("load_i8", 1), ("load_i32", 4), ("load_i64", 8)):
+        def load(data, offset, width=width):
+            assert 0 <= offset <= len(data) - width
+            return int.from_bytes(data[offset:offset + width], "little", signed=True)
+        monkeypatch.setattr(native_object_module, name, load)
+
+
+@pytest.mark.parametrize("native_reads", [False, True])
+def test_streamed_validation_matches_packed_decoder_on_byte_mutations(
+    monkeypatch, native_reads,
+):
     import random
 
+    if native_reads:
+        _use_host_payload_loads(monkeypatch)
     encoded = encode_native_object(
         NativeObject.from_sections(_caller_sections(), undefined=["_helper"])
     )
@@ -519,6 +535,150 @@ def test_streamed_validation_matches_packed_decoder_on_byte_mutations():
             else:
                 accepted.append(True)
         assert accepted[0] == accepted[1], payload.hex()
+
+
+def test_fixed_relocation_reads_match_struct_for_all_integer_widths(monkeypatch):
+    import random
+
+    _use_host_payload_loads(monkeypatch)
+    rng = random.Random(20260921)
+    assert native_object_module._RELOCATION.size == 44
+    for index in range(1000):
+        fields = (
+            rng.getrandbits(64), rng.getrandbits(32), rng.getrandbits(32),
+            rng.getrandbits(8), rng.getrandbits(8),
+            rng.getrandbits(64) - (1 << 63),
+            rng.getrandbits(32), rng.getrandbits(32),
+            rng.getrandbits(64) - (1 << 63),
+        )
+        start = index % 8
+        record = bytearray(native_object_module._RELOCATION.pack(*fields))
+        # Padding is ignored by struct; it is not a reserved-zero field.
+        record[18:20] = b"\xff\x81"
+        payload = b"!" * start + bytes(record)
+        assert native_object_module._relocation_fields_at(payload, start) == fields
+        assert native_object_module._relocation_offset_at(payload, start) == fields[0]
+        with pytest.raises(NativeObjectError, match="truncated"):
+            native_object_module._relocation_fields_at(payload[:-1], start)
+    with pytest.raises(NativeObjectError, match="truncated"):
+        native_object_module._relocation_fields_at(bytes(44), -1)
+
+
+@pytest.mark.parametrize("offsets", [(), (0,), (0, 4, 8), (8, 4, 0), (4, 0, 8)])
+@pytest.mark.parametrize("native_reads", [False, True])
+def test_packed_relocation_order_preserves_all_fields(monkeypatch, offsets, native_reads):
+    if native_reads:
+        _use_host_payload_loads(monkeypatch)
+    section = Section(
+        sectname="__text", segname="__TEXT", data=_BL_PLACEHOLDER * 3,
+        align_log2=2, flags=TEXT_SECTION_FLAGS, symbols=(TextSymbol("_main", 0),),
+        relocations=tuple(Relocation(offset, "_helper", spec.ARM64_RELOC_BRANCH26, True)
+                          for offset in offsets),
+    )
+    encoded = encode_native_object_from_sections([section], undefined=["_helper"])
+    packed = decode_packed_native_object(encoded)
+    expected = [
+        (offset, 1, spec.ARM64_RELOC_BRANCH26, 1, 2, 0, 0xFFFFFFFF, 0xFFFFFFFF, -1)
+        for offset in sorted(offsets, reverse=True)
+    ]
+    assert list(packed.relocation_fields(0)) == expected
+    assert packed.relocation_target_indices == (frozenset({1}) if offsets else frozenset())
+
+
+def test_fixed_relocation_reads_execute_natively_under_all_collectors(
+    tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive,
+):
+    import inspect
+    import os
+
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    records = [
+        (0, 0, 0, 0, 0, 0, 0, 0, 0),
+        ((1 << 64) - 1, 0xFFFFFFFF, 0x80000000, 255, 128,
+         -(1 << 63), 0xFFFFFFFF, 0x80000000, -1),
+        (1 << 63, 0x80000000, 0xFFFFFFFF, 128, 255,
+         (1 << 63) - 1, 0x80000000, 0xFFFFFFFF, (1 << 63) - 1),
+    ]
+    payloads = [b"!" + native_object_module._RELOCATION.pack(*row) for row in records]
+    source = tmp_path / "fixed_pco_reads.py"
+    source.write_text('''import struct
+import gc
+from pcc.unsafe import abi_constant, load_i8, load_i32, load_i64, null, ptr_is_null
+class NativeObjectError(Exception):
+    pass
+_U64 = struct.Struct("<Q")
+_RELOCATION = struct.Struct("<QIIBB2xqIIq")
+''' + inspect.getsource(native_object_module._native_payload_reads_available) +
+        "\n_NATIVE_PAYLOAD_READS = _native_payload_reads_available()\n" +
+        inspect.getsource(native_object_module._relocation_offset_at) + "\n" +
+        inspect.getsource(native_object_module._relocation_fields_at) +
+        "\nrecords = " + repr(records) + "\npayloads = " + repr(payloads) + '''
+def main():
+    assert _NATIVE_PAYLOAD_READS
+    for repeat in range(200):
+        for index in range(len(records)):
+            payload = bytes(bytearray(payloads[index]))
+            gc.collect()
+            assert _relocation_fields_at(payload, 1) == records[index]
+            assert _relocation_offset_at(payload, 1) == records[index][0]
+            try:
+                _relocation_fields_at(payload[:-1], 1)
+            except NativeObjectError:
+                pass
+            else:
+                raise AssertionError("truncated record accepted")
+    print("fixed-pco-reads-ok")
+main()
+''')
+    binary = tmp_path / "fixed_pco_reads"
+    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+                            runtime_archive=str(pcc_py_runtime_archive))
+    for backend in range(5):
+        result = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+        )
+        assert result.returncode == 0, (backend, result.stdout, result.stderr)
+        assert result.stdout.strip() == "fixed-pco-reads-ok"
+
+
+@pytest.mark.integration
+def test_packed_relocation_native_link_executes_under_all_collectors(
+    tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive,
+):
+    import os
+    from pcc.backend import owned_link_driver
+
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    linker = tmp_path / "native-linker"
+    python_program_compiler(
+        str(Path(owned_link_driver.__file__)), str(linker), backend="self",
+        libpython_mode="off", runtime_archive=str(pcc_py_runtime_archive),
+    )
+    caller = tmp_path / "caller.pco"
+    helper = tmp_path / "helper.pco"
+    # Tail-call through a real external BRANCH26 relocation, preserving LR.
+    caller.write_bytes(assemble_asm_text_to_encoded(
+        ".section __TEXT,__text,regular,pure_instructions\n"
+        ".globl _main\n.p2align 2\n_main:\n b _helper\n"
+    ))
+    helper.write_bytes(assemble_asm_text_to_encoded(
+        ".section __TEXT,__text,regular,pure_instructions\n"
+        ".globl _helper\n.p2align 2\n_helper:\n movz w0, #42\n ret\n"
+    ))
+    assert decode_packed_native_object(caller.read_bytes()).sections[0].relocation_count == 1
+    for backend in range(5):
+        output = tmp_path / ("program-" + str(backend))
+        env = dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend),
+                   PCC_HOST_PYTHON="/usr/bin/false", PCC_HOST_PCC="/usr/bin/false")
+        linked = subprocess.run(
+            [str(linker), "--out", str(output), "--native-object", str(caller),
+             "--native-object", str(helper)],
+            env=env, capture_output=True, timeout=30,
+        )
+        assert linked.returncode == 0, (backend, linked.stdout, linked.stderr)
+        executed = subprocess.run([str(output)], env=env, capture_output=True, timeout=10)
+        assert executed.returncode == 42, (backend, executed.stdout, executed.stderr)
 
 
 def test_native_codec_stores_each_symbol_once_and_relocations_by_index() -> None:

@@ -684,7 +684,10 @@ typedef struct PccCapiGetSetDef {
 #define Py_tp_members 72
 #define Py_tp_getset 73
 
-#define PCC_CAPI_CEXT_TAG_BASE 0x10000
+/* The public header owns this boundary; the refcount guards read it as
+ * PY_TYPE_CEXT_TAG_BASE.  Two spellings of one ABI constant is how the
+ * literal 500 drifted from the real base in the first place. */
+#define PCC_CAPI_CEXT_TAG_BASE PY_TYPE_CEXT_TAG_BASE
 #define PCC_CAPI_CEXT_TAG_MAX 1024
 #if defined(PCC_PY_CAPI_TYPE_RUNTIME)
 /* The type tokens, the cext registry, and the type functions are owned by

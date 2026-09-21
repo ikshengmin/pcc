@@ -46,6 +46,7 @@ from .macho_parallel import (
     OutputRegion,
     ParallelLinkError,
     materialize_output,
+    materialize_output_buffer,
 )
 from .native_object import NativeObject, NativeObjectView, PackedNativeObject
 from .precise_stackmap import (
@@ -1355,20 +1356,30 @@ def _prepare_executable_image(
 
 
 def _finish_executable_image(plan, identifier, phase_callback) -> bytes:
+    """Materialise, sign and return the image in one buffer.
+
+    ``sig_size`` is predicted before layout is frozen -- the check below is
+    what proves it -- so the signature's own bytes can be reserved up front
+    and written in place.  The previous shape paid for the whole image twice:
+    once turning the output bytearray into ``bytes``, and again in
+    ``image + blob``, which allocates the full result and copies both halves.
+    On a 130 MiB-text Stage2 executable that is a few hundred MiB of peak at
+    the exact moment the link is already at its high-water mark.
+    """
     sig_off, regions, sig_size, text_filesize = plan
     try:
-        image = materialize_output(sig_off, regions)
+        image = materialize_output_buffer(sig_off, regions, reserve=sig_size)
     except ParallelLinkError as exc:
         raise LinkError(f"parallel Mach-O output failed: {exc}") from exc
-    # The immutable image owns the bytes now. Retire per-section copies before
-    # allocating hash pages, the signature, and the final signed image.
+    # The buffer owns the bytes now. Retire per-section copies before
+    # allocating hash pages and the signature.
     regions.clear()
 
     if phase_callback is not None:
         phase_callback("sign_begin")
     try:
         blob = build_signature(
-            image, identifier=identifier,
+            memoryview(image)[:sig_off], identifier=identifier,
             exec_seg_base=0, exec_seg_limit=text_filesize, exec_seg_flags=1,
         )
     finally:
@@ -1378,4 +1389,10 @@ def _finish_executable_image(plan, identifier, phase_callback) -> bytes:
         raise LinkError(
             f"signature size mismatch: predicted {sig_size}, built {len(blob)}"
         )
-    return image + blob
+    image[sig_off:] = blob
+    # One conversion, not two: the old shape paid `bytes(bytearray)` inside
+    # materialize_output and then `image + blob` here, each a full-size
+    # allocation plus copy at the link's high-water mark.  Returning bytes
+    # keeps the public contract -- parse_signature and spec.parse_object
+    # downstream both require it.
+    return bytes(image)

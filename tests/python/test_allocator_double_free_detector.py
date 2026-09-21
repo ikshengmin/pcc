@@ -303,3 +303,25 @@ def test_a_failing_smoke_keeps_its_own_exit_code(tmp_path) -> None:
 
 def test_a_clean_smoke_is_untouched(tmp_path) -> None:
     assert _run_audit_block(tmp_path, 0, "nothing interesting\n") == 0
+
+
+def test_the_double_free_report_length_matches_its_literal() -> None:
+    """The stderr write passes a literal byte count; nothing else checks it.
+
+    Editing one word of the message silently truncates the report or reads
+    past it, and the message assertions elsewhere in this file only look for
+    a substring.
+    """
+    import re
+
+    call = re.search(
+        r"pcc_platform_write\(\s*2,\s*cstr\(\s*(.*?)\s*\),\s*(\d+),",
+        ALLOCATOR,
+        re.S,
+    )
+    assert call, "double-free report call not found in the allocator"
+    literal = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', call.group(1)))
+    text = literal.encode("utf-8").decode("unicode_escape")
+    assert len(text.encode("utf-8")) == int(call.group(2)), (
+        text, call.group(2)
+    )

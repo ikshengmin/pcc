@@ -10,6 +10,23 @@ _VOID = ir.VoidType()
 
 
 def module_symbol_suffix(name: str) -> str:
+    """Map a module name to the identifier fragment its symbols are built on.
+
+    Not injective, and deliberately left that way for now: ``a.b``, ``a-b``,
+    ``a+b`` and ``a b`` all yield ``a_b``.  The suffix is the only namespace
+    separator in ``user_<mod>_<name>``, ``.class.<mod>.<Cls>``,
+    ``.classattr.<mod>.<Cls>.<attr>``, ``_pcc_py_module_init_<mod>`` and
+    ``__pcc_lru_cache_<mod>_<fn>``, so two modules in one multi-file compile
+    whose names differ only in punctuation emit the same class global and the
+    same module-init function.  ``class_gen`` then early-returns on the
+    existing ``ir.Function`` and the second module silently reuses the
+    first's.
+
+    Making it injective means appending a digest, which renames symbols for
+    every module whose name carries a path separator -- that is most of them
+    under a path-derived name -- and so changes runtime archive members and
+    compile-cache identity.  That is a deliberate migration, not a cleanup.
+    """
     name = name.replace(".", "_").replace("-", "_")
     alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
     if not name.strip(alphabet):

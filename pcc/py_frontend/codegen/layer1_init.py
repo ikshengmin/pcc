@@ -75,6 +75,14 @@ class Layer1InitMixin:
         self._codegen_current_expr_kind: str = ""
         self._codegen_current_module_name: str = module.name or "<module>"
         self._known_object_refcounts = str(os.environ.get("PCC_KNOWN_OBJECT_REFS", "1")).lower() in ("1", "true", "yes", "on")
+        # Resolved once: _direct_virtual_dispatch_enabled is asked at every
+        # overridden-method call site, which is hundreds of thousands of them
+        # on a self-host compile.  compile_cache already lists this name in
+        # _CODEGEN_ENV_NAMES, so it is build identity and cannot change under
+        # a running compile.
+        self._direct_virtual_method_calls = str(
+            os.environ.get("PCC_DIRECT_VIRTUAL_METHOD_CALLS", "") or ""
+        ).strip().lower() in ("1", "true", "yes", "on")
         self._debug_release_checks = bool(
             os.environ.get("PCC_DEBUG_RELEASES", "").strip()
             or os.environ.get("PCC_DEBUG_RUNTIME", "").strip()

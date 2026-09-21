@@ -63,7 +63,16 @@ enum {
      * spell this as the literal 500, which silently turned py_incref and
      * py_decref into no-ops for every user class past roughly the 440th --
      * pcc's own closure defines enough classes to cross it, while small
-     * programs never reach it. */
+     * programs never reach it.
+     *
+     * Known limit: the guards' other half, py_type_tag_is_valid, ends at
+     * `tag >= PY_TYPE_USER` with no upper bound, so every value in
+     * [PY_TYPE_USER, PY_TYPE_CEXT_TAG_BASE) now passes as a user class --
+     * a wider window than the old literal allowed.  Closing it needs the
+     * compiler to publish the highest tag it actually defined; the runtime
+     * has no such count today.  PCC_GC_REFCOUNT_PROVENANCE_PROBE and the
+     * allocator's double-free detector cover the same corruption from the
+     * other side in the meantime. */
     PY_TYPE_CEXT_TAG_BASE = 0x10000,
     PY_TYPE_VALUEBOX = 200
 };

@@ -14,18 +14,20 @@ from pcc.backend.native_object import NativeObject, decode_packed_native_object
 from pcc.backend.macho_internal_inputs import read_internal_input_manifest
 
 
-def main() -> None:
+def main(argv=None) -> None:
+    if argv is None:
+        argv = sys.argv
     output = ""
     entry = "_main"
     objects = []
     archives = []
     manifest = ""
     index = 1
-    while index < len(sys.argv):
-        option = sys.argv[index]
-        if index + 1 >= len(sys.argv):
+    while index < len(argv):
+        option = argv[index]
+        if index + 1 >= len(argv):
             raise ValueError("missing value for " + option)
-        value = sys.argv[index + 1]
+        value = argv[index + 1]
         index += 2
         if option == "--out":
             output = value

@@ -45,4 +45,4 @@ def test_bootstrap_default_stage_execution_is_memory_guarded():
     assert '--timeout' in script
     assert '"${BOOTSTRAP_STAGE_TIMEOUT}"' in script
     assert '"${target_cmd[@]}"' in script
-    assert 'run_pcc_deferred_link.py' in script
+    assert 'run_pcc_native_deferred.sh' in script

@@ -284,12 +284,8 @@ _INDEXED_ASM_EMIT_BASE_BYTES = 2 * _GIB // 5
 # computed floor covers that worker's synchronized peak by at least 5% plus
 # 100 MB; the live-RSS ladder and external 8 GiB breaker remain independent
 # backstops.  Do not lower this from a subset or a single Stage2 wall result.
-_INDEXED_PCO_EMIT_BASE_BYTES = _GIB // 4
 _INDEXED_ASM_PER_SIDECAR_MB_BYTES = 7 * _GIB // 100
-_INDEXED_PCO_PER_SIDECAR_MB_BYTES = 13 * _GIB // 100
 _INDEXED_EMIT_FLOOR_CAP_BYTES = 6 * _GIB
-_INDEXED_FRONTEND_BASE_BYTES = 3 * _GIB // 4
-_INDEXED_FRONTEND_PER_AST_MB_BYTES = 19 * _GIB // 100
 
 
 def _worker_floor_bytes(ast_bytes: int) -> int:
@@ -311,9 +307,8 @@ def _indexed_emit_floor_bytes(sidecar: Path, *, assembly_only: bool) -> int:
             payload_bytes * _INDEXED_ASM_PER_SIDECAR_MB_BYTES
         ) // 1_000_000
     else:
-        floor = _INDEXED_PCO_EMIT_BASE_BYTES + (
-            payload_bytes * _INDEXED_PCO_PER_SIDECAR_MB_BYTES
-        ) // 1_000_000
+        from pcc.py_frontend.deferred_frontend_schedule import indexed_pco_floor_bytes
+        return indexed_pco_floor_bytes(payload_bytes)
     if floor > _INDEXED_EMIT_FLOOR_CAP_BYTES:
         return _INDEXED_EMIT_FLOOR_CAP_BYTES
     return floor
@@ -332,10 +327,8 @@ def _indexed_emit_floors(
 
 def _indexed_frontend_floor_bytes(ast_bytes: int) -> int:
     """Bound the post-split frontend from the complete v48 226-worker sample."""
-
-    return _INDEXED_FRONTEND_BASE_BYTES + (
-        max(0, int(ast_bytes)) * _INDEXED_FRONTEND_PER_AST_MB_BYTES
-    ) // 1_000_000
+    from pcc.py_frontend.deferred_frontend_schedule import indexed_frontend_floor_bytes
+    return indexed_frontend_floor_bytes(ast_bytes)
 
 
 def _indexed_frontend_floors(manifests: list[Path]) -> list[int]:

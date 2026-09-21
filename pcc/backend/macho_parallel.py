@@ -401,6 +401,28 @@ def _write_output_chunks(
     )
 
 
+def materialize_output_buffer(
+    size: int,
+    regions: Sequence[OutputRegion],
+    *,
+    jobs: int | None = None,
+    reserve: int = 0,
+) -> bytearray:
+    """Write a frozen layout into one mutable buffer and hand it over.
+
+    ``reserve`` extends the buffer past ``size`` with zero bytes the caller
+    fills afterwards -- the code signature goes there.  Returning the buffer
+    instead of an immutable copy is what keeps a 200 MiB image from existing
+    twice at the moment it is finalized.
+    """
+
+    validated = _validated_regions(size, regions)
+    chunks = _output_chunks(validated)
+    image = bytearray(size + reserve)
+    _write_output_chunks(image, chunks, total_bytes=size, jobs=jobs)
+    return image
+
+
 def materialize_output(
     size: int,
     regions: Sequence[OutputRegion],
@@ -409,11 +431,7 @@ def materialize_output(
 ) -> bytes:
     """Write a frozen layout through deterministic, disjoint byte ownership."""
 
-    validated = _validated_regions(size, regions)
-    chunks = _output_chunks(validated)
-    image = bytearray(size)
-    _write_output_chunks(image, chunks, total_bytes=size, jobs=jobs)
-    return bytes(image)
+    return bytes(materialize_output_buffer(size, regions, jobs=jobs))
 
 
 def write_mmap_output(

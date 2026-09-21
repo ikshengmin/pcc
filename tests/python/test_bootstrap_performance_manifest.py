@@ -61,8 +61,9 @@ def test_bootstrap_defaults_to_safe_auto_lanes_and_rejects_wide_override() -> No
     assert 'PCC_PY_FRONTEND_IN_PROCESS_CODEGEN=1' in source
     assert 'PCC_DEFER_SELF_LINK_PLAN=${deferred_plan}' in source
     assert 'PCC_DEFER_FRONTEND_CODEGEN_PLAN=${codegen_plan}' in source
-    assert '--codegen-plan "${codegen_plan}"' in source
-    assert 'run_pcc_deferred_link.py' in source
+    assert 'PCC_RUNTIME_ARCHIVE=${runtime_archive}' in source
+    assert 'run_pcc_deferred_link.py' not in source
+    assert 'run_pcc_native_deferred.sh' in source
 
     environment = os.environ.copy()
     environment.pop("LC_ALL", None)

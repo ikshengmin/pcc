@@ -2,12 +2,19 @@
 
 ## Status
 
-Stopped at the user's one-repair-round limit — 2026-09-21, unsuccessful.
-The final source-v13 replay exceeded 8 GiB during image finalization after
+Active — 2026-09-21. The latest diagnostic Stage2 attempt timed out at
+3600 seconds during native link input decoding, after all 392 frontend
+modules and PCOs completed. No pcc2 was produced. Peak tree RSS was 2.83 GiB
+under a 6-GiB cap. This resource configuration forced serial PCO emission;
+see the final update for timings and sampled owners. The earlier 2400-second
+attempt stopped in emission with 18 PCOs and remains a separate failed run.
+Native bootstrap continuation also has a fresh Stage1 and small native
+CLI/five-GC link execution proof.
+The earlier full source-v13 link replay exceeded 8 GiB during image finalization after
 layout/relocations completed. No pcc2 was produced. The preparation-frame
 change released some memory but did not retire the large graph sufficiently;
 its focused native tests are not full-link qualification. All source, inputs,
-receipts and logs remain available. No further run was started.
+receipts and logs remain available. That replay remains unsuccessful.
 Related transport history:
 [native object worker memory](pcc1-small-lane-native-object-worker-memory.md).
 
@@ -1158,3 +1165,478 @@ for this round; fresh Stage2/Stage3; generic bytearray mutation/alias/buffer
 semantics; remaining frontend ownership and baseline/inventory boundaries.
 Current local patches and tests are retained uncommitted and unqualified for
 release. No commit, push, installation or observed quota reading occurred.
+
+### Root cause: comprehension tuple-unpack targets leak their elements
+
+The retained graph is not a linker lifetime problem. It is a pre-existing pcc
+codegen ownership defect, and `comprehension_lowering.py` is not among this
+batch's changed files.
+
+Minimal standalone reproducer, no linker and no inputs:
+
+```python
+values = build()                                   # 200k objects
+out = [value for offset, value in enumerate(values)]   # leaks all of values
+out = [value for value in values]                      # clean
+for offset, value in enumerate(values): out.append(value)   # clean
+```
+
+`[x for a, b in enumerate(seq)]` leaks about `seq`'s whole size per call,
+doubles on a second call, and survives frame exit and three collections.
+`[offset for offset, value in ...]` leaks the same amount although it discards
+`value`, so the leak is the binding, not the kept element.
+
+Mechanism: NOT established. The desugaring is real -- `for a, b in pairs`
+becomes `for comp_pair in pairs: a, b = comp_pair` (line ~214) and the
+instrumented build shows `unpack_stmt` non-None six times for the reproducer --
+but the first hypothesis, that the unpack's bound names hold unreleased
+`py_tuple_get` results, was tested and failed: a release emitted at the
+iteration join point found no object slot to release for any bound name (they
+are filtered out as absent from `env`, non-pointer, or exact-int), and the
+emitted binary was byte-identical. Two further attempts, routing
+`_emit_enumerate_loop_in_comp` and `_emit_comprehension_obj_indexed` through
+`_for_prepare_owned_object_target` / `_for_store_owned_target`, were also
+byte-identical: path instrumentation shows the reproducer reaches neither
+function. All three attempts were reverted.
+
+What the instrumentation did establish: the reproducer reaches
+`_emit_comprehension_after_bind` seven times and neither of the two raw-alloca
+generator paths, so it runs a path that already uses the owned-target protocol.
+The next round should identify that path by instrumenting the remaining
+generator emitters before changing any of them, and should verify the emitted
+binary's hash actually changes before reading any measurement -- three separate
+"fixes" here produced identical binaries and one earlier reading was compared
+against a different probe program's baseline, which made an ineffective change
+look like a 23% improvement.
+
+Measured on the retained 389 PCOs, 40 at a time, GC0, in returning frames:
+
+| stage | first call | second call |
+|---|---:|---:|
+| decode | +2.17 MiB | +0.01 MiB |
+| `_coerce_link_objects` | +86.72 MiB | +88.87 MiB |
+| `_validate_input_load_commands` | +0.15 MiB | +2.00 MiB |
+| `link_relocatable_native` | +254 MiB | +260 MiB |
+
+`_coerce_link_objects` does not copy its inputs -- `_coerce_link_object`
+returns a `PackedNativeObject` unchanged -- and leaks about their size because
+of `[(start_index + offset, value) for offset, value in enumerate(values)]`.
+
+Controls that could have falsified this and did not:
+
+- An ordinary 2M-record graph gives back 73-76% of its live bytes here, so the
+  metric reflects references. `pcc_os_heap_in_use_bytes` is
+  `pcc_allocator_live_requested_bytes`, not mapped pages.
+- `PCC_MACHO_LINK_JOBS=off` builds no threads at all and leaks identically, so
+  `ordered_parallel_map`'s workers are not the owner.
+- The leak survives the measuring frame's exit and doubles on a second call,
+  so it is not the caller-retains-temporaries semantics.
+- `sum(size_hint(v) for v in values)` is clean, so generator expressions are
+  not involved.
+
+Also measured: the watchdog's tree RSS tracks mapped capacity, which runs about
+1.56x live bytes. That is why 8,608,415,744 and 8,223 MiB peaks sat 1-31 MiB
+over an 8,192 MiB cap rather than far above it.
+
+Not done here: the fix, and the mechanism. The leak, its reproducer and the
+four controls above stand; the owner inside the comprehension lowering does
+not. `comprehension_lowering.py` is unchanged in the working tree.
+
+### Correction: the comprehension was never the owner
+
+Three rounds of the section above are wrong at the premise. The first
+reproducer happened to use a comprehension, and that was assumed rather than
+decomposed. Removing the comprehension takes four lines and shows the leak is
+in the call:
+
+```python
+def just_build():          # user function returning a list
+    xs = build()
+    return len(xs)                       # clean, +0.00 MiB on the second call
+
+def just_list_call():      # no comprehension anywhere
+    xs = build()
+    ys = list(xs)
+    return len(ys)                       # LEAKS +46.81 MiB per call
+
+def just_enumerate_call():
+    xs = build()
+    ys = list(enumerate(xs))
+    return len(ys)                       # LEAKS +86.07 MiB per call
+```
+
+`xs = build()` is released when the frame exits; `ys = list(xs)` is not. A
+plain `for p in list(xs)` loop and `[p for p in list(xs)]` leak the same
++38.81 MiB, so the loop form is irrelevant. What leaks is an owned temporary
+returned by a builtin call and bound to a local.
+
+Four fixes were attempted against the wrong premise and all four changed the
+emitted binary while leaving the measurement identical to the hundredth of a
+MiB:
+
+1. releasing the tuple-unpack target's bindings at the iteration join point;
+2. routing `_emit_enumerate_loop_in_comp`'s pair through
+   `_for_prepare_owned_object_target` / `_for_store_owned_target`;
+3. the same for `_emit_comprehension_obj_indexed`;
+4. adding `enumerate` to the owned-builtin allowlist in
+   `_expr_returns_owned_object` plus `_gc_release_if_owned(iter_val, iter_e)`
+   on the three comprehension dispatch arms that lacked it.
+
+(4) also produced a `refcount operation on an unmanaged pointer` audit report
+that the baseline does not, so `enumerate`'s result is not a managed object on
+every path and that allowlist entry is not safe as written. All four were
+reverted; `comprehension_lowering.py` and `ownership_lowering.py` are
+unmodified.
+
+Two method notes for the next round, both earned the hard way here:
+
+- Compare arms of the same program. An earlier "23% improvement" was one
+  probe's numbers against a different probe's baseline, and four builds that
+  shared one fix were compared against each other and read as "no change".
+  Verify the binary hash differs before reading any measurement, and keep a
+  genuine unfixed arm.
+- Decompose the reproducer before reading any code. The five-shape split that
+  cleared destructuring, and the three-shape split that cleared the
+  comprehension, each took minutes and each overturned a hypothesis that had
+  survived a full round of code reading.
+
+Still open: why a builtin call's owned result bound to a local is not released
+at frame exit while a user function's is. `_expr_returns_owned_object` lists
+`list` among the owned builtin constructors already, so the gap is elsewhere --
+most likely in whatever decides owned-local membership for the binding, not in
+the expression classifier.
+
+### 2026-09-21: list conversion iterator owners — native reproduction and scoped fix
+
+Evidence: `/private/tmp/pcc-list-owner-round-wgtk6s2d`. This round uses a
+copied, provenance-verified runtime and the current host frontend to emit and
+execute native programs. It does not rebuild pcc1 or run full Stage2.
+
+The previous hypothesis about local binding is corrected by the emitted IR:
+`ys = list(xs)` has an owned slot, stores `ys.owned = 1`, and releases it on
+exit. In the selected dynamic-iterable arm, however, `_emit_list_append_via_iter`
+obtains NEW references from `py_obj_iter` and `py_obj_next` and emits neither
+iterator release nor per-item release. The iterator retains the source, and
+every yielded owner remains in addition to the output list's append retain.
+The original native program shows source-list refcount 1 before construction,
+2 afterward and 2 after deleting the result. This is not a failure of the
+result local's owned flag.
+
+The same 20,000-object program, same runtime and options, gives zero Item
+finalizers in both list-copy shapes before the fix. The iterator/item fix
+restores source refcount 1 and removes the list-copy growth. Value-position
+`enumerate` also produces a known NEW managed list; ownership is now recorded
+at that actual emitter, rather than declaring all enumerate ASTs managed.
+`list` consumes that temporary source on success and errors. The source owner
+stays alive through iteration, including when `__iter__` returns an independent
+iterator; it is not dropped immediately after obtaining the iterator.
+
+Second-call retained requested bytes in the instrumented same-program probe:
+`list`: 2,910,944 -> 152; `list(enumerate(...))`: 5,559,448 -> 152.
+That debug probe itself reads an indexed Item through an unsafe call and
+retains that one observed element; it is not used to claim all finalizers ran.
+The separate clean regression does not include that instrumentation and proves
+all 2,000 objects are finalized after each call (4,000 total).
+
+`test_list_iterator_ownership.py`: five host-compiler cases pass, each emitted
+program runs on GC0–GC4. Shapes: borrowed input and identity, temporary input,
+enumerate value result, __iter__/__next__ errors with partial output, and the
+input object's lifetime across an independent iterator. Adjacent map/filter,
+sorted and dynamic-call ownership checks: 14 passed. The four-case packet and
+adjacent checks ran before the final source-lifetime refinement; all five new
+cases passed after it. Native pcc1 fixture variants remain unrun integration
+checks; this is not bootstrap or release qualification.
+
+A real-PCO `_coerce_link_objects` A/B attempt was **invalid**, not green. Its
+Boolean mode selected the decode arm twice; both native binaries had the same
+hash and printed the same mode. The hash assertion caught this, and the run
+exited nonzero. Also, a coordinator-only in-memory codegen substitution does
+not establish that worker processes used it. No real-link memory reduction is
+claimed from `coerce-ab.*`. It was not repeated while another Stage2 run was
+reported active. A later real-component A/B must use separate frozen source
+files, explicit entry functions, proof that both paths ran, and different
+emitted identities before interpreting counters.
+
+Read-only bootstrap check: the deferred guard reads PCC_RUNTIME_ARCHIVE
+straight from the environment before the normal late runtime resolver. The
+current bootstrap.sh sets plan/output variables but not the archive. The
+retained September6 v84 source has the same default deferred mode and guard;
+its successful receipt explicitly supplies the archive. Therefore a missing
+archive is a real default-launch defect but does not explain the earlier
+memory failures that already had one. Current bootstrap also omits
+--native-linker, so its deferred runner defaults to host-CPython linking.
+No bootstrap or running Stage2 input was edited in response to this finding.
+
+### 2026-09-21: native bootstrap continuation applied and exercised
+
+After the user confirmed that the other Stage2 had ended, the isolated patch
+was applied. `bootstrap.sh` now invokes `run_pcc_native_deferred.sh`, which
+checks and calls the same compiler's `--pcc-native-deferred-worker` entry.
+The compiled `native_deferred.py` consumes the frozen plan, uses the existing
+native worker pool for frontend/PIDX-to-PCO emission, and calls the owned
+linker directly. An old compiler fails preflight instead of using Python.
+The in-process native self-link boundary also rejects unsupported surfaces
+before resolving a host interpreter.
+
+Two launch gaps were corrected: the default archive is supplied before
+deferred frontend codegen, and the indexed capture/emit flags establish its
+artifact root. The effective stage environment now encloses the continuation
+as well as the initial compiler; a shell regression executes the real
+`run_stage` body and observes identical pass/worker/runtime/indexed settings
+in all three child invocations. Snapshot support includes the new shell
+launcher. Existing host deferred tooling remains an explicit diagnostic route.
+
+Evidence root:
+`/private/var/folders/39/jsw8wb5x1pl86d3tdvzx1l1w0000gn/T/pcc-native-entry-9hjlcat9`.
+Compiler source snapshot SHA256:
+`a6f24271e1a53aec43519cbd6e834b62b4afced7e82ebeab09df3971e31bca51`.
+Reused, verified runtime SHA256:
+`da9967aadbf41eef0f17447e74e97af5994d9c468dc12f38580d6952bf3acd72`.
+
+The first Stage1 attempt omitted the existing `--direct-indexed-emit` option.
+It emitted 1,119 assembly units totaling 2,150,492,952 bytes, then hit its
+900-second timeout without producing pcc1. `guard.json` reports wrapper rc1;
+`stage1/manifest.json` records the actual command timeout. This is a failed
+build, not successful compile timing. The timeout was not increased.
+
+A two-module indexed probe ran successfully and printed 42; its profile
+records two PCO modules, zero assembly modules and zero direct IR-text bytes.
+The same frozen compiler source/runtime then built with
+`run_pcc_stage1_build.py --direct-indexed-emit --python-ir-passes off --jobs 2
+--self-backend-jobs 2 --timeout 900`, guarded by an 8-GiB tree cap and the
+shared performance lock. It emitted 393 PCO modules. `stage1-direct` records
+618.35 seconds compilation wall time, 636.61 seconds including verification,
+and `direct-guard.json` records 4,455,858,176 bytes peak tree RSS. No speedup
+ratio is claimed against the incomplete first attempt.
+
+The produced pcc1 SHA256 is
+`1e8063e979fe341f8bdc677997e639c59632b8469ed7ccd09ea9d7610002dd56`.
+Its receipt is `stage1-direct/build-receipt.json`; linkage contains only
+`/usr/lib/libSystem.B.dylib`. Its native `--check` succeeds with empty PATH
+and a failing host-Python selector. The current shell launch/environment
+and snapshot-list fixes were made after freezing compiler inputs; the
+compiled Python implementation is the frozen one, and the shell regressions
+exercise the subsequently corrected launcher. Do not use the earlier frozen
+support-script snapshot as if it already included those later fixes.
+
+`test_pcc1_native_deferred_cli_compiles_and_executes_two_modules` passed in
+15.18 seconds using this fresh pcc1 for coordinator, frontend workers, indexed
+emit workers and final link. The output prints 42. PATH provides only
+`ls/mkdir/cp/rm/sh/cat`; Python/cc/LLVM are absent and host selectors point to
+`/usr/bin/false`. The same pcc1's link entry executed the emitted program
+under GC0–GC4: five tests passed. Receipts/logs are `native-cli-test.*` and
+`native-cli-gc.*`. The process watchdog/test runner is host-side measurement
+infrastructure; it does not implement the tested compiler phases.
+
+Focused launcher, protocol, snapshot and Stage1-tool tests: 72 passed;
+adjacent owned-link driver tests: two passed. Separate helper-recompilation
+integration variants were not rerun. No full Stage2, Stage3, new-source fixed
+point, full-GC bootstrap, release/fallback qualification or gateway run was
+performed. Runtime construction was not rebuilt. Host-side bootstrap cache
+identity/normalization and remaining runtime-construction boundaries still
+need ownership work; this result closes the tested deferred execution route,
+not the whole no-Python project goal. No commit or installation was made.
+
+### 2026-09-21: full native Stage2 times out before linking
+
+The user requested full Stage2. Evidence root:
+`/private/tmp/pcc-stage2-native-current-k1t37f49`.
+`launch.json` records the exact command, environment, frozen runtime bundle
+and source identity. The current source/support snapshot is
+`d0fae9f619c9d545d0411f53621e50c0bb5324ffaf826a671c9e252afb08d519`.
+All `pcc/` package source hashes match the successful Stage1 seed; only
+`scripts/bootstrap.sh` and the newly included native launcher differ from
+its older support-file snapshot. Seed pcc1 and runtime hashes are the ones
+recorded in the preceding section.
+
+The selected target was the current production native continuation script,
+with frontend jobs `auto`, backend jobs 2, native link jobs 8, indexed
+capture/emission enabled, Python IR passes `off` (the bootstrap setting),
+GC0, and both caches disabled. It invoked pcc1 on frozen `pcc/__main__.py`
+with `--backend self --python-libpython off --ir-scaffold on -o pcc2`.
+Target PATH contained only file utilities; host-Python/host-pcc selectors
+were `/usr/bin/false`. The outer process-tree sampler alone used host Python.
+Top-level bootstrap cache-identity/normalization/receipt utilities were not
+part of this compiler target. This is not an all-bootstrap-tooling ownership
+claim. The existing performance lock, 8-GiB cap and 2400-second watchdog
+were retained throughout; no timeout increase or Stage3 run followed.
+
+`process.json` reports **TIMEOUT**, rc -15, 2400.314 seconds, peak tree RSS
+2,564,276,224 bytes (2.39 GiB), and at most four target-tree processes.
+The coordinator profile reports 420.277 seconds. The versioned plan has
+391 modules, nine oversized serial lanes and two safe-worker slots. All
+391 frontend result rows say OK and all PIDX files were produced; the last
+frontend result's artifact timestamp is 1975.643 seconds after launch.
+Thus roughly 1555 seconds followed the coordinator before frontend workers
+finished. PCO emission then used the remaining roughly 425 seconds.
+
+At termination there were **18 PCOs**, all subsequently read and accepted
+by `decode_packed_native_object`; their sizes and SHA256 hashes are preserved
+in `result.json`. The native internal-input link manifest was not published,
+and pcc2 does not exist: **linking and signing never began**. stderr was
+empty, so there is no compiler diagnostic establishing a semantic failure.
+This run failed its time budget in frontend/PCO generation, not its memory
+cap or linker. It does not qualify the whole emitted compiler's correctness.
+
+After timeout, the three owned terminal PIDs were confirmed absent. Frozen
+source, seed executable and runtime hashes were rechecked unchanged.
+All plans, worker results, PIDX and PCO artifacts remain available. No source
+fix, larger-budget rerun, commit, install or gateway benchmark was performed.
+Next diagnosis should use the retained indexed inputs and the actual native
+frontend/emitter costs; repeating the full frontend or tuning the unentered
+linker would not address the measured failure stage.
+
+### 2026-09-21: frontend scheduling optimization measured separately
+
+The follow-up native scheduling change and its controlled measurements are
+recorded in [the worker-cost investigation](pcc1-worker-object-protocol-tax.md#update-2026-09-21--restore-phase-aware-native-frontend-admission).
+The same 391 frozen frontend inputs completed in 679.61s with all PIDX bytes
+unchanged, versus the retained approximately 1555s frontend interval. A new
+pcc1 containing the change was built and passed the real deferred CLI and
+five-GC link probes. PCO emission/linking and complete Stage2 have not been
+rerun; the timeout above remains the latest complete-chain attempt.
+
+### 2026-09-21: repeat Stage2 — serial emission and boxed PCO decoding dominate
+
+User requested another Stage2 and an assessment of what remains slow.
+Evidence root: `/private/tmp/pcc-stage2-frontopt-9719lk23`.
+`launch.json` records the exact cleared target environment and command;
+`result.json` binds validated artifacts, timings, source identities and
+profile summaries. Source SHA256 is
+`3a1c44e74291190b74a77165ab3055999b16d3d284571016a29d0efb7527e360`;
+seed pcc1 SHA256 is
+`17012e25163d20ea71ebb386a41b85e22cc8b62182301b9353d1a27a4a608401`;
+runtime remains `da9967aadbf41eef0f17447e74e97af5994d9c468dc12f38580d6952bf3acd72`.
+Every compiler/source input and the runtime were rehashed unchanged afterward.
+No implementation was edited during this run.
+
+The initial 8-GiB resource preflight refused current swap pressure. The run
+used a stricter 6-GiB tree cap AND a matching 6-GiB worker budget, retaining
+the 8-GiB host reserve and unchanged resource preflight. A 3600s diagnostic
+limit was set before launch to observe the previously unreached link phase;
+it was not increased during execution. These settings differ from the prior
+8-GiB/2400s run, so total wall is not a paired regression measurement.
+
+This choice had a concrete throughput consequence: the old compiled safe-job
+formula charges 3 GiB per worker plus a 1-GiB coordinator reserve, yielding
+floor((6-1)/3) = **one slot**. `pipeline_frontend_parallel` writes that value
+to the deferred plan and `native_deferred._run_lanes` reuses it for PCO emit,
+even though the combined frontend state has already exited. Actual plan:
+392 modules, nine oversized modules, safe_jobs=1. Export/summary work also
+had one safe worker. The frontend-only phase used the new AST-weighted
+scheduler, within its smaller budget. Choosing this configuration knowingly
+amplified serial cost; it must not be blamed on a compiler semantic error or
+treated as an equivalent performance comparison with 8 GiB.
+
+Terminal result: **TIMEOUT**, rc -15, 3600.256s, peak tree RSS
+3,042,410,496 bytes (2.83 GiB). No pcc2 or executable smoke result.
+All 392 frontend result rows say OK. All 392 PCOs (662,572,516 bytes total)
+were subsequently read, hashed and accepted by `decode_packed_native_object`.
+The ordered internal-input manifest was published and native linking started.
+All owned terminal PIDs were confirmed absent after watchdog cleanup.
+
+| Phase | Observed seconds | Boundary |
+|---|---:|---|
+| Coordinator | 517.533 | compiler profile total |
+| Frontend workers | approximately 898.812 | last result mtime minus coordinator interval |
+| PCO emission | approximately 1938.264 | frontend end to internal-input manifest publication |
+| Link before timeout | approximately 245.647 | manifest publication to watchdog stop |
+
+The emission tree's sampled peak was only 1,130,676,224 bytes (1.05 GiB).
+This does not certify arbitrary wider execution, but demonstrates that the
+3-GiB combined-worker charge is overly conservative on these completed inputs.
+Some slow completed serial output intervals, including worker startup:
+`pcc.codegen.c_codegen` 58.35s, `pcc.cli_bootstrap` 53.26s,
+`pcc.py_frontend.type_infer` 41.69s, `class_gen` 39.11s.
+
+Three diagnostic samples used the target process's actual executable/symbols:
+
+- Frontend worker: a short window produced 988 samples; instance getattr
+  appeared in 50.9% of stacks, `_strs_eq` had 18.2% self time. This corroborates
+  the prior attribute/MRO lookup owner, not an entire-phase CPU percentage.
+- `c_codegen` PCO emitter: 8s window, 6631 samples. 58.5% cumulative in
+  `encode_native_object_from_sections`; 41.4% in AArch64 transport completion.
+  Nested costs included `_validate_source_sections` 15.0%, packed decode
+  12.4%, and instruction encoding 34.4%. These nested percentages must not
+  be summed as disjoint costs. Source confirms input validation followed by
+  exact encoded-byte validation; deleting either check is not the proposed fix.
+- Link input reading: 8s window, 6725 samples. Packed-object decode appeared
+  in 98.4% of stacks; `struct._unpack_native_little` in 56.3%. Self samples
+  included GC pointer loads 9.3%, native struct unpack 7.7%, object equality
+  6.3%, incref 5.0%, integer boxing 4.7%, and decref 3.8%. This window shows
+  generic boxed unpack/validation cost before layout/signing, not whole-link
+  CPU attribution.
+
+Assessment: prioritize phase-specific native PCO admission, then fixed-format
+binary decoding/validation without repeated generic boxed tuple operations;
+retain exact byte/schema validation. Attribute/MRO lookup remains a separate
+frontend CPU optimization. Retained PCOs now permit link-only diagnosis, and
+retained PIDX permits emitter-only replay: another full frontend rerun is
+unnecessary to investigate these owners. No Stage3, commit, install, runtime
+rebuild or gate relaxation was performed.
+
+### 2026-09-21: fixed-layout PCO relocation decoding implemented
+
+The preceding profile's codec hotspot is now changed in
+`pcc/backend/native_object.py`. The order scan bounds-checks the complete
+relocation span and reads only each uint64 offset. Validation and linker
+consumption use fixed loads for the 44-byte relocation layout, avoiding the
+owned generic `struct` format loop and its intermediate list. Returned rows
+still contain Python integers; this does not eliminate all boxing. Host
+CPython retains its standard-library struct oracle. Native loads re-read the
+rooted bytes object across allocation safepoints and preserve unsigned values,
+signed fields, unaligned offsets and ignored padding. Both source validation
+and the encoder's final packed-byte validation remain mandatory.
+
+Evidence root:
+`/private/var/folders/39/jsw8wb5x1pl86d3tdvzx1l1w0000gn/T/pcc-pco-codec-zya8z3xh`.
+`result.json` records hashes, measurements and limits. Control source is
+`3a1c44e74291190b74a77165ab3055999b16d3d284571016a29d0efb7527e360`;
+candidate is
+`a3f6e2b15cd86a6d77ffa1cf5a933d9ad9ff5def4774c628a081f5105bbd96f9`.
+Only `native_object.py` differs in compiler sources. Both arms use the same
+frozen runtime `da9967aadbf41eef0f17447e74e97af5994d9c468dc12f38580d6952bf3acd72`.
+The 392 inputs, totaling 662,572,516 bytes, were rehashed against the preceding
+Stage2 receipt after measurement; all match.
+
+Host pcc built native helpers with `--backend self --python-libpython off`,
+`PCC_PYTHON_IR_PASSES=off`, indexed capture/emission and zero-fallback checks,
+with compiler caches disabled. Execution used `env -i PATH=/nonexistent`,
+GC 0 and disabled host-Python selectors. Helpers depend only on libSystem.
+The exact build/run argv, cwd, environment and RSS records are in each
+`control-*.json` / `candidate-*.json`. Runs used the shared performance lock,
+4-GiB build caps and 2-GiB execution caps. No runtime was rebuilt.
+
+| Measured boundary | Control seconds | Candidate seconds |
+|---|---:|---:|
+| Sum of decoding all 392 PCOs | 139.782 | 42.548 |
+| Same replay including reads/process lifetime | 144.228 | 46.471 |
+| `c_codegen` PIDX through complete PCO publication, one paired run | 71.791 | 54.069 |
+
+The decode improvement is 3.285x, with peak RSS approximately 35 MiB in both
+arms. This probe releases prior objects, unlike a full link retaining all
+inputs; it is not a whole-link timing. `run_emit_comparison.py` replays the
+production `emit_indexed_module_file(..., "PCO", optimize=False)` path on the
+retained `module_135.direct.pidx`. Both emitted files are byte-identical to
+the original 20,028,037-byte PCO, SHA256
+`3bd1c7d44e36a2122517a8d3a9aa6e60596d45c3c4cb736d92f0640dfb8f957a`.
+The single emitter pair must not be extrapolated to the whole 32-minute phase.
+
+Validation in `tests/python/test_native_object_fastpath.py`: 53 selected
+non-integration checks pass, covering malformed bytes, integer widths,
+truncation, padding, relocation ordering and linker differentials.
+`test_fixed_relocation_reads_execute_natively_under_all_collectors` passes
+with both pcc0 and the retained pcc1 compiling its actual helper functions;
+each emitted program executes under all five collectors.
+`test_packed_relocation_native_link_executes_under_all_collectors[pcc0]`
+builds the owned native linker, links a real cross-object BRANCH26, and runs
+each of five outputs with expected exit 42. Detailed logs are `tests.*` and
+`integration.*` in the evidence root.
+
+The broader file run stops at the existing
+`test_signing_releases_output_region_owners`: its captured region list is
+empty. The exact failure also reproduces against the frozen control source
+(`signing-baseline.stdout`); the subsequent 53-check selection excludes this
+case explicitly. This is not an all-green suite claim. No fresh full pcc1,
+Stage2/Stage3, installation or commit was performed. Serial PCO admission and
+frontend cost remain separate unfinished work.

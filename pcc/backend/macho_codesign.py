@@ -297,7 +297,13 @@ def build_signature(
 ) -> bytes:
     """Build the complete SuperBlob for a file whose signed range is
     `hashed_region` (offset 0 up to the signature's own file offset)."""
-    if not isinstance(hashed_region, bytes):
+    if isinstance(hashed_region, (bytearray, memoryview)):
+        # A memoryview over the output buffer lets the caller sign in place;
+        # the hashing below only reads.
+        hashed_region = bytes(hashed_region) if isinstance(
+            hashed_region, bytearray
+        ) else hashed_region
+    elif not isinstance(hashed_region, bytes):
         raise CodesignError("hashed_region must be bytes")
     _validate_identifier(identifier)
     _validate_u32("version", version)

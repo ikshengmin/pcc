@@ -54,6 +54,9 @@ def _write_build_evidence(
         (root / "AGENTS.md").write_text("# frozen\n", encoding="utf-8")
         (root / "pyproject.toml").write_text("[project]\nname='pcc'\n", encoding="utf-8")
         (root / "scripts" / "bootstrap.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        (root / "scripts" / "run_pcc_native_deferred.sh").write_text(
+            "#!/bin/sh\n", encoding="utf-8"
+        )
         (root / "scripts" / "run_pcc_deferred_link.py").write_text(
             "# deferred link\n", encoding="utf-8"
         )
@@ -385,6 +388,7 @@ def test_host_source_closure_contains_link_and_fake_libc_owners():
     assert {
         "AGENTS.md",
         "scripts/run_pcc_deferred_link.py",
+        "scripts/run_pcc_native_deferred.sh",
         "scripts/pcc_link_macho.py",
         "scripts/pcc_link_elf.py",
         "utils/fake_libc_include/Python.h",
@@ -1252,11 +1256,20 @@ def test_runtime_bundle_preserves_every_verified_codegen_identity(
     copied = {}
     verification = tool._seal_runtime_bundle(tmp_path, archive, copied)
     assert calls == [(archive, tmp_path)]
-    assert verification["codegen_checksum"] == (checksums[0] if len(checksums) == 1 else None)
-    if len(checksums) > 1:
+    # One compiler gets the singular key; several get the plural one and the
+    # singular key is absent.  It is never published as null: a reader that
+    # only knows "codegen_checksum" must fail to find it rather than read a
+    # null that looks like "not recorded" beside real checksums.
+    if len(checksums) == 1:
+        assert verification["codegen_checksum"] == checksums[0]
+        assert "codegen_checksums" not in verification
+    else:
+        assert "codegen_checksum" not in verification
         assert verification["codegen_checksums"] == checksums
     evidence = tool.runtime_bundle_evidence({"files": copied, "verification": verification})
+    assert evidence.get("codegen_checksum") == verification.get("codegen_checksum")
     assert evidence.get("codegen_checksums") == verification.get("codegen_checksums")
+    assert ("codegen_checksum" in evidence) == ("codegen_checksum" in verification)
     assert evidence["producer_claim"] == "binary-integrity-only; producer source closure not proven"
 
     for invalid in (None, "unknown", "f" * 63):

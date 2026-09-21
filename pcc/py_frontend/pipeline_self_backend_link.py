@@ -335,6 +335,11 @@ def run_link_command(
                 "owned in-process link produced no executable output"
             )
         return
+    if sys.implementation.name == "pcc":
+        raise SelfBackendLinkError(
+            "native self-link does not implement the requested link surface; "
+            "host Python fallback is forbidden"
+        )
     driver_name = "pcc_link_elf.py" if linux_elf else "pcc_link_macho.py"
     driver = os.path.join(repo_root_for_link(), "scripts", driver_name)
     if not os.path.isfile(driver):

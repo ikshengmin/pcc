@@ -11417,6 +11417,17 @@ def _bootstrap_cli_main_impl(
         else:
             _write_text(environment_info_text(), nl=False)
         return 0
+    if len(raw_argv) > 0 and raw_argv[0] == "--pcc-native-deferred-worker":
+        if len(raw_argv) != 2:
+            _write_text("Error: native deferred worker requires a plan path", err=True)
+            return 2
+        from pcc.py_frontend.native_deferred import run as deferred_run
+        if sys.implementation.name != "pcc":
+            _write_text("Error: native deferred execution requires pcc1", err=True)
+            return 2
+        if raw_argv[1] != "--check":
+            deferred_run(raw_argv[1])
+        return 0
     if len(raw_argv) > 0 and raw_argv[0] == "--pcc-python-multi-codegen-worker":
         if len(raw_argv) != 2:
             _write_text(

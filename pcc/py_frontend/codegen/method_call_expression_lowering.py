@@ -201,10 +201,7 @@ class MethodCallExpressionLoweringMixin:
 
         Off by default while it is being qualified.
         """
-        value = str(
-            os.environ.get("PCC_DIRECT_VIRTUAL_METHOD_CALLS", "") or ""
-        ).strip().lower()
-        return value in ("1", "true", "yes", "on")
+        return bool(getattr(self, "_direct_virtual_method_calls", False))
 
     def _direct_virtual_dispatch_is_sound(self, attr_name: str) -> bool:
         """True when the closed-world class graph cannot redirect ``attr_name``.
@@ -226,8 +223,10 @@ class MethodCallExpressionLoweringMixin:
             methods = getattr(info, "methods", {}) or {}
             if "__getattribute__" in methods or "__getattr__" in methods:
                 return False
-            if "__slots__" in methods:
-                return False
+            # __slots__ needs no check of its own: it is a class-body
+            # assignment, so it never appears in `methods`, and
+            # ClassLowering._declare_slots appends each slot to
+            # `field_names` -- which the next test already rejects.
             if attr_name in (getattr(info, "field_names", ()) or ()):
                 return False
         # A native extension class outside this closure could still intercept
@@ -251,6 +250,13 @@ class MethodCallExpressionLoweringMixin:
             ),
             elems=elems,
         ))
+        # The receiver is lowered a second time here: `elems[0]` above already
+        # emitted it inside the tuple.  `_method_is_name` gates this path, so
+        # the repeat is a plain Name load with no effects to duplicate -- but
+        # the two values carry independent ownership state, and a Name whose
+        # load ever produces a fresh object (an exact-int object lane, a
+        # valueclass box) would leave one of them unconsumed.  Emit it once
+        # and share it before this path is qualified.
         receiver = self._emit_expr(obj_expr)
         name_ptr = self._attr_name_ptr(attr_name)
         result = self.builder.call(
@@ -258,6 +264,10 @@ class MethodCallExpressionLoweringMixin:
             [receiver, name_ptr, full_args],
             name=self._fresh(f"virtual.{attr_name}"),
         )
+        # It tail-calls py_func_call_kwargs, so the result is a NEW reference,
+        # the same category every py_obj_call site records.  Without this the
+        # shape classifier guesses from the AST instead.
+        self._note_owned_dynamic_call_value(result)
         self._gc_release(full_args)
         self._emit_post_call_err_check(span)
         return result

@@ -410,6 +410,10 @@ class BuiltinTypeAttrLoweringMixin:
             [iter_obj, start_val],
             name=self._fresh("enumerate.list"),
         )
+        # This value-position runtime call returns a fresh managed list.
+        # Loop-normalized enumerate does not execute this emitter and may
+        # use raw state, so record ownership here rather than by AST name.
+        self._note_owned_dynamic_call_value(result)
         # py_obj_iter raises TypeError for non-iterables; iteration can
         # propagate pending exceptions.
         self._emit_post_call_err_check(getattr(expr, "span", None))

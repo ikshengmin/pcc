@@ -24,9 +24,14 @@ from dataclasses import dataclass
 
 from pcc.extern import c_int64, c_ptr, extern, c_obj
 from pcc.unsafe import (
+    abi_constant,
     free,
+    load_i8,
+    load_i32,
+    load_i64,
     malloc,
     memset,
+    null,
     ptr_is_null,
     store_i8,
     store_i32,
@@ -68,6 +73,7 @@ _MAX_NAME_BYTES = 1_048_576
 
 _HEADER = struct.Struct("<8sII")
 _U32 = struct.Struct("<I")
+_U64 = struct.Struct("<Q")
 _SYMBOL = struct.Struct("<IQI")
 _SECTION = struct.Struct("<IIQQII")
 _RELOCATION = struct.Struct("<QIIBB2xqIIq")
@@ -79,6 +85,59 @@ _UINT64_MAX = (1 << 64) - 1
 _RELOCATION_SCALAR_COUNT = 9
 
 _py_bytes_new: "extern" = extern("py_bytes_new", (c_ptr, c_int64), c_obj)
+
+
+def _native_payload_reads_available() -> bool:
+    # Match the owned struct provider: host Python uses the stdlib oracle;
+    # pcc lowers these intrinsics to direct loads from rooted bytes objects.
+    try:
+        return ptr_is_null(null()) != 0
+    except NotImplementedError:
+        return False
+
+
+_NATIVE_PAYLOAD_READS = _native_payload_reads_available()
+
+
+def _relocation_offset_at(data: bytes, start: int) -> int:
+    """Read only the sort key, after the whole relocation span was checked."""
+    if not _NATIVE_PAYLOAD_READS:
+        return _U64.unpack_from(data, start)[0]
+    if start < 0 or start > len(data) - 8:
+        raise NativeObjectError("truncated pcc-native relocation offset")
+    value = load_i64(data, abi_constant("object.bytes.data_offset") + start)
+    if value < 0:
+        return value + 0x10000000000000000
+    return value
+
+
+def _relocation_fields_at(data: bytes, start: int):
+    """Read the fixed 44-byte little-endian wire record without a format loop.
+
+    Keep the bytes object rooted and reload it at each intrinsic, including
+    across integer boxing safepoints. Never retain an interior payload pointer
+    across allocations. The two signed fields are deliberately unaligned;
+    the owned load intrinsics support these byte offsets.
+    """
+    if not _NATIVE_PAYLOAD_READS:
+        return _RELOCATION.unpack_from(data, start)
+    if start < 0 or start > len(data) - 44:
+        raise NativeObjectError("truncated pcc-native relocation")
+    cursor = abi_constant("object.bytes.data_offset") + start
+    offset = load_i64(data, cursor)
+    if offset < 0:
+        offset = offset + 0x10000000000000000
+    return (
+        offset,
+        load_i32(data, cursor + 8) & 0xFFFFFFFF,
+        load_i32(data, cursor + 12) & 0xFFFFFFFF,
+        load_i8(data, cursor + 16) & 0xFF,
+        load_i8(data, cursor + 17) & 0xFF,
+        load_i64(data, cursor + 20),
+        load_i32(data, cursor + 28) & 0xFFFFFFFF,
+        load_i32(data, cursor + 32) & 0xFFFFFFFF,
+        load_i64(data, cursor + 36),
+    )
 
 
 @dataclass(frozen=True)
@@ -396,14 +455,14 @@ class PackedNativeObject:
         else:
             indices = sorted(
                 range(count),
-                key=lambda index: _RELOCATION.unpack_from(
+                key=lambda index: _relocation_offset_at(
                     self.encoded,
                     section.relocation_offset + index * _RELOCATION.size,
-                )[0],
+                ),
                 reverse=True,
             )
         for index in indices:
-            yield _RELOCATION.unpack_from(
+            yield _relocation_fields_at(
                 self.encoded,
                 section.relocation_offset + index * _RELOCATION.size,
             )
@@ -1403,13 +1462,14 @@ def decode_packed_native_object(data: bytes) -> PackedNativeObject:
         _validate_count(relocation_count, "relocation", allow_zero=True)
         _validate_count(data_in_code_count, "data-in-code", allow_zero=True)
         data_offset = reader.skip(data_size)
-        relocation_offset = reader.offset
+        relocation_offset = reader.skip(relocation_count * _RELOCATION.size)
         previous_offset: int | None = None
         ascending = True
         descending = True
         for _relocation_index in range(relocation_count):
-            fields = reader.unpack(_RELOCATION)
-            relocation_offset_value = fields[0]
+            relocation_offset_value = _relocation_offset_at(
+                data, relocation_offset + _relocation_index * _RELOCATION.size,
+            )
             if previous_offset is not None:
                 ascending = ascending and previous_offset <= relocation_offset_value
                 descending = descending and previous_offset >= relocation_offset_value
@@ -1464,7 +1524,7 @@ def _packed_relocation_fields_at(
     section: PackedNativeSection,
     index: int,
 ):
-    return _RELOCATION.unpack_from(
+    return _relocation_fields_at(
         packed.encoded,
         section.relocation_offset + index * _RELOCATION.size,
     )

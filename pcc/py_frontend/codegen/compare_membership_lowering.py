@@ -28,6 +28,7 @@ from ..py_ast import (
     Name,
     NoneLit,
     NoneType,
+    StrLit,
     StrType,
     TupleExpr,
     TupleType,
@@ -1020,8 +1021,36 @@ class CompareMembershipLoweringMixin:
             self._gc_release(rhs_obj)
         return result
 
+    _MEMBERSHIP_CONSTANT_LITERALS = (IntLit, BoolLit, FloatLit, NoneLit, StrLit)
+
+    def _membership_tuple_literal_is_constant(self, rhs: TupleExpr) -> bool:
+        """True when unrolling ``x in (...)`` observes what Python observes.
+
+        ``x in (a, b, c)`` builds the tuple -- evaluating every element --
+        and then compares left to right, stopping at the first match.  The
+        unrolled or-chain also evaluates every element, but it compares all
+        of them, so the two differ only when a comparison is observable.
+        Against builtin literals it is not, and then the tuple never has to
+        exist: ``pcrel not in (0, 1)`` runs 7.3 million times in one Stage2
+        link, and routing it through py_obj_contains allocates, pins and
+        releases a tuple on every one of them.
+        """
+        for element in rhs.elems:
+            if not isinstance(element, self._MEMBERSHIP_CONSTANT_LITERALS):
+                return False
+        return True
+
     def _emit_membership(self, expr: Compare) -> ir.Value:
         """``in`` / ``not in`` over str / list / dict / set / tuple."""
+        if (
+            isinstance(expr.rhs, TupleExpr)
+            and self._membership_tuple_literal_is_constant(expr.rhs)
+        ):
+            return self._emit_membership_tuple_literal(
+                expr.lhs,
+                expr.rhs,
+                negate=(expr.op == "not in"),
+            )
         if self._is_os_environ_attr(expr.rhs):
             key = self._emit_membership_needle_object(
                 expr.lhs,

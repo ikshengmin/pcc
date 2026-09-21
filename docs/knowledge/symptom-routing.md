@@ -734,7 +734,7 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `PCC_HOST_PYTHON=/usr/bin/false` · `pipeline.py` · `pcc.backend.*` · `py_cpy_*` · `--backend self --python-libpython=off` · `list.sort`
 - [Investigation: native stack-map structural scans decode unused record fields](../investigations/native-stackmap-structural-scan-cost.md) — **Resolved locally on 2026-09-16. The optimization is retained after correctness**
   - `function_address_offsets` · `_scan_stack_map_payload` · `pcc/backend/precise_stackmap.py` · `profile/receipt.json` · `profile/environment.json` · `profile/cpu.folded`
-- [Investigation: native Stage2 link exceeds its budget while assembling inputs](../investigations/native-stage2-link-asm-memory-budget.md) — **Stopped at the user's one-repair-round limit — 2026-09-21, unsuccessful.**
+- [Investigation: native Stage2 link exceeds its budget while assembling inputs](../investigations/native-stage2-link-asm-memory-budget.md) — **Active — 2026-09-21. The latest diagnostic Stage2 attempt timed out at**
   - `owned_link_driver` · `arm64_asm_driver` · `loop-stage2/codegen-launch.json` · `loop-stage2-codegen.result.json` · `MEMORY_LIMIT` · `loop-stage2-link-active.folded`
 - [Investigation: native subprocess failures lose CalledProcessError fields](../investigations/native-subprocess-called-process-error-returncode.md) — **resolved**
   - `subprocess.run(..., check=True)` · `subprocess.check_call(...)` · `pcc/cli_bootstrap.py` · `subprocess.CalledProcessError` · `exc.returncode` · `AttributeError: returncode`

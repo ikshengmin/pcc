@@ -1,5 +1,9 @@
 # pcc1 deferred-worker object-protocol tax (nested_walk 78.7%)
 
+The title describes the historical profile. The 2026-09-21 update below
+records a new attribute-lookup profile and a measured native scheduling fix;
+do not reuse the older percentages as current attribution.
+
 ## Goal
 
 Reduce the per-module cost of a pcc1 deferred codegen worker (currently
@@ -375,3 +379,93 @@ batch/recycle denial stands; smaller batches are not a new mechanism.
 
 Evidence:
 `docs/goal/evidence/PERF-P0-PCC1-WORKER-OBJECT-PROTOCOL-TAX/003-bounded-tracking-pool-and-worker-batch-denial.md`.
+
+## Update 2026-09-21 — restore phase-aware native frontend admission
+
+The full native Stage2 timeout in `native-stage2-link-asm-memory-budget.md`
+spent approximately 1555 seconds in frontend workers after its coordinator
+exited. Its native continuation had replaced the existing host controller's
+indexed, memory-charged admission with nine serial jobs followed by width 2.
+That used the combined frontend/emitter's policy for frontend-only workers.
+The lost scheduling capability is a separate problem from per-worker CPU
+cost. It was introduced in the native continuation and is corrected here.
+
+Evidence: `/private/tmp/pcc-front-opt-vx6jdh3k`.
+
+First, a real `class_gen` worker was replayed from the retained Stage2 AST and
+export inputs, with indexed capture/sidecar emission, no libpython, no host
+Python selector, and the same native pcc1. It completed in 56.50 seconds
+under the watchdog; its PIDX exactly matches the retained baseline. A 12s
+CPU window, resolved against that executable's own image and symbols,
+contained 9992 samples. `py_instance_getattr` appeared in 58.4% of sampled
+stacks; `_strs_eq` had 21.3% self time and `_class_lookup_in_mro` 8.0% self
+time. This identifies remaining lookup cost in that window, not percentages
+for the entire 26-minute phase. No runtime lookup, GC or Python semantics
+change was made in this optimization.
+
+`deferred_frontend_schedule.py` now shares the existing indexed admission
+formula with the host diagnostic controller: 0.75 GiB plus 0.19 GiB per
+decimal MB of AST. With a 1-GiB coordinator reserve, each job is assigned the
+maximum width its estimate permits, capped by the existing CPU budget and
+12 slots. Equal-width groups run through the existing native sliding process
+pool. Every possible active window in a group fits the charged budget;
+group boundaries still wait for the prior group. No live host `ps`/Python
+scheduler is introduced. Estimates are not hard RSS guarantees: the existing
+external tree watchdog remains the backstop. Numeric overrides and missing
+budgets retain the conservative plan policy. PCO emission is unchanged.
+
+Two independently compiled native drivers compared the original width-2
+policy with this exact production scheduler on 12 frozen real modules.
+Order was A, B, B, A under one performance lock. Worker executable, AST,
+exports, runtime and compiler options were identical; all 48 PIDX outputs
+were byte-identical to their retained originals:
+
+| Arm | Wall seconds | Waited-tree CPU seconds | Peak tree bytes |
+|---|---:|---:|---:|
+| A1 | 51.03 | 97.67 | 580894720 |
+| B1 | 17.96 | 100.44 | 1777500160 |
+| B2 | 18.58 | 101.74 | 1789165568 |
+| A2 | 50.20 | 97.00 | 562429952 |
+
+Mean wall improves **2.77x**. CPU rises about 4%; this is parallel throughput
+recovery, not faster single-worker execution. The candidate admitted seven
+workers on this cohort, still below the 8-GiB envelope. An initial driver
+placed outside the pcc package failed to close internal imports; that failed
+setup is retained under `a1/invalid-import` and excluded from all timings.
+
+The whole preserved 391-module frontend was then replayed with the native
+candidate scheduler and the same old worker executable to isolate admission.
+All 391 result rows succeeded; all 391 PIDX files were compared byte for byte.
+Wall time was **679.61s**, watchdog elapsed 679.817s, peak tree RSS
+**2833039360 bytes (2.64 GiB)**. Relative to the retained original frontend
+interval of 1975.643 - 420.277 = **1555.366s**, this is an observed **2.29x**
+speedup / **56.3% wall reduction**. The full comparison is one candidate
+against retained baseline timing, supported by the adjacent ABBA cohort;
+it is not a paired full-Stage2 performance claim. The full replay used a
+stricter 5-GiB external cap; its scheduling budget remained 8 GiB.
+
+Implementation was also compiled into a fresh pcc1, SHA256
+`17012e25163d20ea71ebb386a41b85e22cc8b62182301b9353d1a27a4a608401`,
+source receipt `3a1c44e74291190b74a77165ab3055999b16d3d284571016a29d0efb7527e360`.
+Stage1 compilation took 629.24s; the guarded build/checks took 647.90s with
+4544872448 bytes peak. An initial 8-GiB launch was refused by swap preflight;
+the successful run used a tighter 5-GiB cap, retained the 8-GiB host reserve,
+and passed the unchanged preflight. Runtime was reused unchanged.
+
+65 focused checks passed. The fresh compiler's actual deferred CLI compiled
+and ran the two-module program with auto admission and an explicit memory
+budget; five-GC native link execution also passed (six integration cases).
+`optimization-result.json`, `comparison.json`, `full-candidate/verified.json`
+and `stage1/build-receipt.json` bind the measurements and artifacts.
+
+No complete Stage2/Stage3, fixed point, gateway rerun, installation or commit
+is claimed. Per-worker attribute lookup and the PCO emission phase remain
+performance work. The old 2400s Stage2 timeout is not retroactively a success.
+
+The additional bootstrap/fallback baseline invocation stopped after ten
+passes at `test_l1_codegen_host_contract_covers_constructor_state_fields`:
+`_direct_virtual_method_calls` is initialized but absent from
+`L1_CODEGEN_HOST_ATTRS`. Both implementation files are unchanged by this
+scheduling work. This is not a green baseline suite, and the remaining
+fallback/IR tests were not reached. The two bootstrap baseline checks refer
+to existing recorded artifacts, not a new pcc2/pcc3 fixed point.

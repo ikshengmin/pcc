@@ -210,7 +210,8 @@ class ListBuiltinLoweringMixin:
                 arg_ty,
             )
             return self._emit_list_append_via_iter(
-                new_list, src_obj, getattr(arg, "span", None)
+                new_list, src_obj, getattr(arg, "span", None),
+                source_owned=self._owned_release_needed(src_obj, arg),
             )
         if isinstance(arg_ty, TupleType):
             # Iterate source via py_obj_len + py_obj_getitem and
@@ -274,19 +275,34 @@ class ListBuiltinLoweringMixin:
             return new_list
         return None
 
-    def _emit_list_append_via_iter(self, new_list, src_obj, span):
+    def _emit_list_append_via_iter(self, new_list, src_obj, span, *, source_owned=False):
         """Append every item of an iterable to ``new_list`` via the iterator
         protocol (``py_obj_iter`` / ``py_obj_next``). Used for DynType sources
         such as generators that have no length / ``__getitem__``. Mirrors the
         statement for-loop and the comprehension obj-iterator path, clearing a
-        terminal StopIteration (tag 8) and propagating any other exception."""
+        terminal StopIteration (tag 8) and propagating any other exception.
+
+        The caller transfers a fresh output list. On success its owner is
+        returned; on error it is released with the owned iterator. Each next
+        result owns one reference in addition to the list's append retain.
+        """
         fn = self.current_function
+        self._gc_pin(new_list)
+        source_cleanup = ()
+        if source_owned:
+            self._gc_pin(src_obj)
+            source_cleanup = ((src_obj, True),)
         iterator = self.builder.call(
             self.runtime["py_obj_iter"],
             [src_obj],
             name=self._fresh("list.iter.obj"),
         )
-        self._emit_post_call_err_check(span)
+        self._emit_post_call_err_check(
+            span,
+            release_on_error=(iterator,),
+            pinned_release_on_error=((new_list, True),) + source_cleanup,
+        )
+        self._gc_pin(iterator)
         header_bb = fn.append_basic_block(name=self._fresh("list.iter.next"))
         body_bb = fn.append_basic_block(name=self._fresh("list.iter.body"))
         maybe_end_bb = fn.append_basic_block(name=self._fresh("list.iter.maybe_end"))
@@ -309,6 +325,11 @@ class ListBuiltinLoweringMixin:
         self.builder.cbranch(is_null, maybe_end_bb, body_bb)
         self.builder.position_at_end(body_bb)
         self.builder.call(self.runtime["py_list_append"], [new_list, item])
+        self._gc_release(item)
+        self._emit_post_call_err_check(
+            span,
+            pinned_release_on_error=((iterator, True), (new_list, True)) + source_cleanup,
+        )
         self.builder.branch(header_bb)
         self.builder.position_at_end(maybe_end_bb)
         current_exc = self.builder.call(
@@ -337,11 +358,24 @@ class ListBuiltinLoweringMixin:
         self.builder.call(self.runtime["py_clear_exception"], [])
         self.builder.branch(end_bb)
         self.builder.position_at_end(propagate_bb)
+        self._gc_unpin(iterator)
+        self._gc_release(iterator)
+        self._gc_unpin(new_list)
+        self._gc_release(new_list)
+        if source_owned:
+            self._gc_unpin(src_obj)
+            self._gc_release(src_obj)
         err_target = getattr(self, "_try_err_block", None)
         if err_target is None:
             err_target = self._ensure_fn_err_exit()
         self.builder.branch(err_target)
         self.builder.position_at_end(end_bb)
+        self._gc_unpin(iterator)
+        self._gc_release(iterator)
+        if source_owned:
+            self._gc_unpin(src_obj)
+            self._gc_release(src_obj)
+        self._gc_unpin(new_list)
         return new_list
 
     def _maybe_emit_list_from_map_filter(

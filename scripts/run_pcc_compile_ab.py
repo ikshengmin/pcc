@@ -133,6 +133,7 @@ BUILD_SOURCE_SUPPORT = (
     "AGENTS.md",
     "pyproject.toml",
     "scripts/bootstrap.sh",
+    "scripts/run_pcc_native_deferred.sh",
     "scripts/run_pcc_deferred_link.py",
     "scripts/pcc_link_macho.py",
     "scripts/pcc_link_elf.py",
@@ -849,13 +850,18 @@ def _seal_runtime_bundle(
         "manifest_member_count": member_count,
         "wheel_target": target_id,
         "object_emitter": emitters[0],
-        "codegen_checksum": checksums[0] if len(checksums) == 1 else None,
         "producer_claim": "binary-integrity-only; producer source closure not proven",
     }
-    if len(checksums) > 1:
+    if len(checksums) == 1:
+        verification["codegen_checksum"] = checksums[0]
+    else:
         # Incremental archives have a producer identity per member. The
         # verified, frozen manifest binds each member to its producer; never
         # collapse those identities into a claim of one current compiler.
+        # The singular key is omitted rather than published as null: null
+        # under the key that otherwise holds a sha256 is indistinguishable
+        # from "not recorded", and a reader that only knows the singular key
+        # then attributes a half-rebuilt archive to no compiler at all.
         verification["codegen_checksums"] = checksums
     return verification
 
@@ -999,11 +1005,12 @@ def runtime_bundle_evidence(bundle: dict[str, Any]) -> dict[str, Any]:
         "manifest_member_count": verification.get("manifest_member_count"),
         "wheel_target": verification.get("wheel_target"),
         "object_emitter": verification.get("object_emitter"),
-        "codegen_checksum": verification.get("codegen_checksum"),
         "producer_claim": verification.get("producer_claim"),
     }
-    if "codegen_checksums" in verification:
-        evidence["codegen_checksums"] = verification["codegen_checksums"]
+    # Exactly one of these is present, and neither is ever null.
+    for key in ("codegen_checksum", "codegen_checksums"):
+        if key in verification:
+            evidence[key] = verification[key]
     return evidence
 
 
