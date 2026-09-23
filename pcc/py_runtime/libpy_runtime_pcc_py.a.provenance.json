@@ -703,16 +703,16 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "e2fb941e41c44e5153d8f4ec0758327fbd48a53ec948e10b42c7d84f4d61d896",
-      "ir_sha256": "821bbea425bb8979f71bdffb71b4d78e8e677f3f0516203f18d58389ff25cd95",
+      "codegen_checksum": "c35697483978b68e7e2a3bdc98f75ade5d1d5fa1ac7cdee24b2ad6941951ddd7",
+      "ir_sha256": "591ae407b4992ca8444d59a9ad093839c0a01cd644ab8fe128e48bea91709d9e",
       "member": "py_process_timeout.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "5024391b92476996f677a4c5b0a99538798269d2b78dc7c4b84d9992a6d4211e",
+      "object_sha256": "648599314c90ec870438e750e3e3142c13697309121cd06d1db6018d5dee1148",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_process_timeout.py",
       "source_kind": "pcc-python",
-      "source_sha256": "8a8f19f05e62b0b8b310e23dd93fad229175e17215dfdaf674e0a72697a3bbc3",
+      "source_sha256": "bb2f41cde01ec38db4dbb7e1d051f5e021b124a56491c686ecee770b30c47689",
       "target_triple": "arm64-apple-darwin",
       "uses_host_cc": false
     },
@@ -1165,21 +1165,21 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "e2fb941e41c44e5153d8f4ec0758327fbd48a53ec948e10b42c7d84f4d61d896",
-      "ir_sha256": "facf616eaea334fb877654b348eff29a7b3e677549bcd3779f19fd844951d891",
+      "codegen_checksum": "c35697483978b68e7e2a3bdc98f75ade5d1d5fa1ac7cdee24b2ad6941951ddd7",
+      "ir_sha256": "3412241ccdeba50193de35d1fc152b62025fe8a80048b8b939fdd2d9cac4091c",
       "member": "py_class.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c2b7d2cb183ce6748f2d5a6e09c3a52a1f22830a154de890f7213097dfa14450",
+      "object_sha256": "a086277cbed57f6c6c00e187659a1505a6e60525fa57a36387458edebe3fce6c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_class.py",
       "source_kind": "pcc-python",
-      "source_sha256": "696426eff9ac64bf557a2f0b25de20492741f2136f6cd60d87e616720eafbbc2",
+      "source_sha256": "7aab75549263ae59f20a7e601ee07cf51b38247ef19f3636013a91a3d3d5449d",
       "target_triple": "arm64-apple-darwin",
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "e2fb941e41c44e5153d8f4ec0758327fbd48a53ec948e10b42c7d84f4d61d896",
+      "codegen_checksum": "c35697483978b68e7e2a3bdc98f75ade5d1d5fa1ac7cdee24b2ad6941951ddd7",
       "ir_sha256": "fed46330a9e33ecdd437f085c8426ac4ccaa413a7f7b1920c12ba64be4f31191",
       "member": "py_obj_ops_dispatch.o",
       "object_emitter": "pcc-self-backend-object-writer",
@@ -2845,7 +2845,7 @@
       "uses_host_cc": false
     }
   ],
-  "members_sha256": "48c3dd88bacf06e5e50cc97d2f0b147fdd5d2105279d14ff7c1f7fa38b6be5fc",
+  "members_sha256": "fb14112fb55197249ec9eeadec573a3f16e1b604ca89999cfd72b48b1d0e8834",
   "policy": "pcc-production-no-handwritten-c.v1",
   "schema": "pcc.runtime-archive-provenance.v2",
   "target_triple": "arm64-apple-darwin"

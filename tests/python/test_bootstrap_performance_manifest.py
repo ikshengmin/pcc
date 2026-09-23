@@ -184,6 +184,7 @@ def test_stage2_runner_uses_auto_oversized_lane_and_two_backend_workers() -> Non
         pair_index=7,
         arm="candidate",
         self_backend_jobs=2,
+        max_tree_rss_bytes=10 * 1024 * 1024 * 1024,
     )
 
     assert environment["PCC_BOOTSTRAP_PY_FRONTEND_JOBS"] == "auto"
@@ -191,6 +192,9 @@ def test_stage2_runner_uses_auto_oversized_lane_and_two_backend_workers() -> Non
     assert environment["PCC_SELF_BACKEND_JOBS"] == "2"
     assert environment["PCC_MACHO_LINK_JOBS"] == "8"
     assert environment["PCC_BOOTSTRAP_EXTERNAL_MEMORY_GUARD"] == "1"
+    assert environment["PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES"] == str(
+        10 * 1024 * 1024 * 1024
+    )
 
 
 def test_stage_failure_summary_names_largest_worker_manifest() -> None:

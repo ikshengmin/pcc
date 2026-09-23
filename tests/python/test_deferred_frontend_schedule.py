@@ -84,6 +84,13 @@ def test_small_frontend_jobs_are_not_limited_by_combined_emit_estimates():
     assert scheduler.frontend_groups([100000] * 30, 8 * 1073741824, 2) == [(list(range(30)), 2)]
 
 
+def test_other_collectors_keep_the_legacy_frontend_reservation():
+    size = 13_216_000
+    legacy = 3 * 1073741824 // 4 + size * (19 * 1073741824 // 100) // 1000000
+    for gc_backend in (1, 2, 3, 4, -1):
+        assert scheduler.indexed_frontend_floor_bytes(size, gc_backend) == legacy
+
+
 def test_pco_phase_uses_its_own_budget_instead_of_serial_safe_lane():
     sizes = [60000000, 14000000, 1000000, 1000000]
     assert scheduler.pco_groups(sizes, 6 * 1073741824, 12) == [([0], 3), ([1], 8), ([2, 3], 12)]
@@ -154,7 +161,22 @@ def test_gc0_reservations_cover_all_392_system_peak_measurements():
         assert scheduler.indexed_pco_floor_bytes(row["input_bytes"]) >= required, row["index"]
 
 
-def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatch):
+def test_gc0_frontend_reservations_cover_all_392_system_peak_measurements():
+    import json
+    from pathlib import Path
+
+    corpus = json.loads((Path(__file__).parents[1] / "data/frontend_gc0_worker_peaks.json").read_text())
+    assert corpus["gc_backend"] == 0
+    assert len(corpus["workers"]) == 392
+    assert [row["index"] for row in corpus["workers"]] == list(range(392))
+    for row in corpus["workers"]:
+        peak = max(row["max_rss_bytes"], row["peak_footprint_bytes"])
+        required = (peak * 5 + 3) // 4 + 128 * 1048576
+        assert scheduler.indexed_frontend_floor_bytes(row["input_bytes"]) >= required, row["index"]
+
+
+@pytest.mark.parametrize("gc_backend", ["0", "1", "2", "3", "4", "unknown"])
+def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatch, gc_backend):
     sizes = [14000000, 7000000, 100000, 100000]
     manifests = []
     for index, size in enumerate(sizes):
@@ -169,6 +191,7 @@ def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatc
         manifests.append(str(manifest))
     calls = []
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
+    monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "8589934592")
     monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
     monkeypatch.setattr(
@@ -180,13 +203,15 @@ def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatc
     scheduler.run_frontend_commands(["a", "b", "c", "d"], manifests, 2, 2)
     assert calls == [(
         ["a", "b", "c", "d"],
-        [scheduler.indexed_frontend_floor_bytes(size) for size in sizes],
+        [scheduler.indexed_frontend_floor_bytes(
+            size, 0 if gc_backend == "0" else -1,
+        ) for size in sizes],
         12,
         7 * 1073741824,
     )]
 
 
-def test_pco_admission_executes_natively_under_all_collectors(
+def test_frontend_and_pco_admission_execute_natively_under_all_collectors(
     tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive,
 ):
     import inspect
@@ -196,26 +221,36 @@ def test_pco_admission_executes_natively_under_all_collectors(
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     sizes = [0, 129227, 1000000, 6851869, 11263590, 14911544, 60000000]
     cases = []
+    frontend_cases = []
     for budget_gib in (1, 6, 8):
         for cpus in (1, 12, 64):
             budget = budget_gib * 1073741824
             for gc_backend in range(5):
                 cases.append((budget, cpus, gc_backend, scheduler.pco_groups(sizes, budget, cpus, gc_backend)))
+                frontend_cases.append((
+                    budget, cpus, gc_backend,
+                    scheduler.frontend_groups(sizes, budget, cpus, gc_backend),
+                ))
     source = tmp_path / "pco_admission.py"
     constants = "\n".join(
         name + " = " + repr(getattr(scheduler, name))
-        for name in ("_GIB", "_DRIVER_RESERVE", "_PCO_BASE", "_PCO_PER_SIDECAR_MB",
+        for name in ("_GIB", "_DRIVER_RESERVE", "_FRONTEND_BASE",
+                     "_FRONTEND_GC0_PER_AST_MB", "_FRONTEND_LEGACY_PER_AST_MB",
+                     "_PCO_BASE", "_PCO_PER_SIDECAR_MB",
                      "_PCO_LEGACY_BASE", "_PCO_LEGACY_PER_SIDECAR_MB", "_PCO_CAP", "_MAX_WIDTH")
     )
     source.write_text(constants + "\n\n" + "\n\n".join(
         inspect.getsource(function) for function in (
-            scheduler.indexed_pco_floor_bytes, scheduler._admission_groups, scheduler.pco_groups,
+            scheduler.indexed_frontend_floor_bytes, scheduler.indexed_pco_floor_bytes,
+            scheduler._admission_groups, scheduler.frontend_groups, scheduler.pco_groups,
         )
-    ) + "\nsizes = " + repr(sizes) + "\ncases = " + repr(cases) + '''
+    ) + "\nsizes = " + repr(sizes) + "\ncases = " + repr(cases) + "\nfrontend_cases = " + repr(frontend_cases) + '''
 def main():
     for budget, cpus, gc_backend, expected in cases:
         assert pco_groups(sizes, budget, cpus, gc_backend) == expected
-    print("pco-admission-ok")
+    for budget, cpus, gc_backend, expected in frontend_cases:
+        assert frontend_groups(sizes, budget, cpus, gc_backend) == expected
+    print("admission-ok")
 main()
 ''')
     binary = tmp_path / "pco_admission"
@@ -227,4 +262,4 @@ main()
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
         )
         assert result.returncode == 0, (backend, result.stdout, result.stderr)
-        assert result.stdout.strip() == "pco-admission-ok"
+        assert result.stdout.strip() == "admission-ok"

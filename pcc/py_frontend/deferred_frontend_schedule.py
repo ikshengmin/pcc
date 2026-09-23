@@ -19,7 +19,8 @@ from .worker_process_pool import (
 _GIB = 1073741824
 _DRIVER_RESERVE = _GIB
 _FRONTEND_BASE = 3 * _GIB // 4
-_FRONTEND_PER_AST_MB = 19 * _GIB // 100
+_FRONTEND_GC0_PER_AST_MB = _GIB // 10
+_FRONTEND_LEGACY_PER_AST_MB = 19 * _GIB // 100
 _PCO_BASE = 320 * 1048576
 _PCO_PER_SIDECAR_MB = 21 * 1048576
 _PCO_LEGACY_BASE = _GIB // 4
@@ -62,8 +63,15 @@ def _call_node_score(payload: bytes) -> int:
     return score
 
 
-def indexed_frontend_floor_bytes(ast_bytes):
-    return _FRONTEND_BASE + max(0, int(ast_bytes)) * _FRONTEND_PER_AST_MB // 1000000
+def indexed_frontend_floor_bytes(ast_bytes, gc_backend=0):
+    # GC0: all 392 frozen compiler workers, measured with system-reported RSS
+    # and footprint high watermarks. Reserve 25% plus 128 MiB over the larger
+    # observed peak. Other collectors retain the uncalibrated legacy floor.
+    per_mb = (
+        _FRONTEND_GC0_PER_AST_MB if gc_backend == 0
+        else _FRONTEND_LEGACY_PER_AST_MB
+    )
+    return _FRONTEND_BASE + max(0, int(ast_bytes)) * per_mb // 1000000
 
 
 def indexed_pco_floor_bytes(sidecar_bytes, gc_backend=0):
@@ -94,9 +102,10 @@ def _admission_groups(floors, tree_budget, cpu_budget):
     return [(items, width) for width, items in enumerate(groups) if items]
 
 
-def frontend_groups(ast_sizes, tree_budget, cpu_budget):
+def frontend_groups(ast_sizes, tree_budget, cpu_budget, gc_backend=0):
     return _admission_groups(
-        [indexed_frontend_floor_bytes(size) for size in ast_sizes], tree_budget, cpu_budget,
+        [indexed_frontend_floor_bytes(size, gc_backend) for size in ast_sizes],
+        tree_budget, cpu_budget,
     )
 
 
@@ -158,7 +167,9 @@ def run_frontend_commands(commands, manifests, oversized, safe_jobs):
         # Literal-heavy ASTs can be large but cheap to lower. Call nodes are
         # a better cheap first-work estimate for this independent module queue.
         scores.append(_call_node_score(payload))
-    floors = [indexed_frontend_floor_bytes(size) for size in sizes]
+    raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
+    gc_backend = 0 if raw_gc == "0" else -1
+    floors = [indexed_frontend_floor_bytes(size, gc_backend) for size in sizes]
     order = sorted(
         range(len(commands)),
         key=lambda index: (-scores[index], -floors[index], index),

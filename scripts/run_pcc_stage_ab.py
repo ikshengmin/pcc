@@ -176,6 +176,7 @@ def _stage2_environment_overrides(
     pair_index: int,
     arm: str,
     self_backend_jobs: int,
+    max_tree_rss_bytes: int,
 ) -> dict[str, str]:
     identity = "stage-ab-p" + str(pair_index) + "-" + arm
     return {
@@ -197,6 +198,9 @@ def _stage2_environment_overrides(
         "PCC_SELF_BACKEND_JOBS": str(self_backend_jobs),
         "PCC_MACHO_LINK_JOBS": "8",
         "PCC_BOOTSTRAP_EXTERNAL_MEMORY_GUARD": "1",
+        # The native admission scheduler and the external watchdog must use
+        # the same tree budget. Otherwise it can admit work the guard kills.
+        "PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES": str(max_tree_rss_bytes),
     }
 
 
@@ -487,6 +491,7 @@ def _run_stage2(
             pair_index=pair_index,
             arm=arm,
             self_backend_jobs=args.self_backend_jobs,
+            max_tree_rss_bytes=args.max_tree_rss_bytes,
         )
     )
     command = [
