@@ -14,7 +14,7 @@ from pcc.backend.native_object import NativeObject, decode_packed_native_object
 from pcc.backend.macho_internal_inputs import read_internal_input_manifest
 
 
-def main(argv=None) -> None:
+def main(argv=None, *, _direct_source_view: bool = True) -> None:
     if argv is None:
         argv = sys.argv
     output = ""
@@ -66,7 +66,10 @@ def main(argv=None) -> None:
                 objects.append(NativeObject.from_sections(sections, undefined=undefined))
     if not output or not objects:
         raise ValueError("native linker requires --out and object/assembly input")
-    image = link_executable(objects, archives=archives, entry=entry, _consume_inputs=True)
+    image = link_executable(
+        objects, archives=archives, entry=entry, _consume_inputs=True,
+        _direct_source_view=_direct_source_view,
+    )
     temporary = output + ".tmp"
     with open(temporary, "wb") as stream:
         stream.write(image)

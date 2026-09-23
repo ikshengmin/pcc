@@ -31,6 +31,13 @@ def _load_tool_module():
     return module
 
 
+def test_nested_session_cleanup_excludes_reused_pids_and_unrelated_sessions(monkeypatch):
+    tool = _load_tool_module()
+    live = {10: 10, 12: 11, 13: 11, 20: 99, 21: 20, 30: 30}
+    monkeypatch.setattr(tool.os, "getsid", lambda pid: live[pid])
+    assert tool._owned_session_pids(10, {10: 10, 11: 11, 12: 11, 20: 20}, live) == {12, 13}
+
+
 def test_process_tree_sampler_records_child_rss_and_completion(tmp_path: Path):
     result = tmp_path / "result.json"
     samples = tmp_path / "samples.tsv"
@@ -88,14 +95,16 @@ def test_process_tree_sampler_records_child_rss_and_completion(tmp_path: Path):
     )
 
 
-def test_parent_exit_cleans_an_orphaned_child_process_group(tmp_path: Path):
+@pytest.mark.parametrize("nested_session", [False, True])
+def test_parent_exit_cleans_an_orphaned_child_process_group(tmp_path: Path, nested_session):
     result = tmp_path / "result.json"
     stdout = tmp_path / "target.stdout"
     code = (
-        "import subprocess,sys; "
+        "import subprocess,sys,time; "
         "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'],"
-        "process_group=0,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
-        "print(p.pid,flush=True)"
+        + ("start_new_session=True," if nested_session else "process_group=0,")
+        + "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        "print(p.pid,flush=True); time.sleep(0.25)"
     )
     child_pid = 0
     try:
@@ -335,7 +344,7 @@ def test_safety_table_avoids_all_process_argv_and_queries_only_largest(monkeypat
     assert snapshot[0]["manifest_paths"] == ["/tmp/worker_17.manifest"]
 
 
-def test_safety_process_table_failure_does_not_take_slow_retry(monkeypatch):
+def test_safety_process_table_failure_uses_only_bounded_retries(monkeypatch):
     tool = _load_tool_module()
     observed = []
 
@@ -349,6 +358,7 @@ def test_safety_process_table_failure_does_not_take_slow_retry(monkeypatch):
         tool._process_table(timeouts_s=tool._SAFETY_PROCESS_TABLE_TIMEOUTS_S)
 
     assert observed == list(tool._SAFETY_PROCESS_TABLE_TIMEOUTS_S)
+    assert sum(observed) <= 4.0
     assert raised.value.retry_count == len(tool._SAFETY_PROCESS_TABLE_TIMEOUTS_S)
 
 

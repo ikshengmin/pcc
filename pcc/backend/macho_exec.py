@@ -30,6 +30,8 @@ import struct
 import sys
 from dataclasses import dataclass
 
+from pcc.unsafe import abi_constant, load_i8, load_i32, null, ptr_is_null, store_i32
+
 from . import macho_spec as spec
 from .macho_codesign import _CD_HEADER_SIZE as _CD_FIXED
 from .macho_codesign import _align8, build_signature
@@ -48,7 +50,12 @@ from .macho_parallel import (
     materialize_output,
     materialize_output_buffer,
 )
-from .native_object import NativeObject, NativeObjectView, PackedNativeObject
+from .native_object import (
+    NativeObject,
+    NativeObjectView,
+    OwnedMergedSourceView,
+    PackedNativeObject,
+)
 from .precise_stackmap import (
     ARCH_AARCH64,
     PreciseStackMapError,
@@ -80,6 +87,7 @@ _VENEER_SIZE = 12  # adrp x16, page ; add x16, x16, pageoff ; br x16
 # with room for the island tables themselves.
 _VENEER_ISLAND_SPAN = 96 * 1024 * 1024
 _MIN_CHAINED_FIXUPS_VERSION = (12, 0)
+_COMPACT_RELOCATION = struct.Struct("<IIBBBB")
 _PROVEN_INPUT_LOAD_COMMANDS = frozenset({
     spec.LC_SEGMENT_64,
     spec.LC_BUILD_VERSION,
@@ -88,6 +96,32 @@ _PROVEN_INPUT_LOAD_COMMANDS = frozenset({
     spec.LC_SYMTAB,
     spec.LC_DYSYMTAB,
 })
+
+
+def _native_patch_words_available() -> bool:
+    try:
+        return ptr_is_null(null()) != 0
+    except NotImplementedError:
+        return False
+
+
+_NATIVE_PATCH_WORDS = _native_patch_words_available()
+
+
+def _read_patch_word(data: bytearray, offset: int) -> int:
+    if not _NATIVE_PATCH_WORDS or offset < 0 or offset > len(data) - 4:
+        return struct.unpack_from("<I", data, offset)[0]
+    return load_i32(data, abi_constant("object.bytearray.data_offset") + offset) & 0xFFFFFFFF
+
+
+def _write_patch_word(data: bytearray, offset: int, value: int) -> None:
+    if (
+        not _NATIVE_PATCH_WORDS or offset < 0 or offset > len(data) - 4
+        or value < 0 or value > 0xFFFFFFFF
+    ):
+        struct.pack_into("<I", data, offset, value)
+        return
+    store_i32(data, abi_constant("object.bytearray.data_offset") + offset, value)
 
 
 def _align(value: int, alignment: int) -> int:
@@ -268,7 +302,8 @@ def prepare_executable_object(
     archives: list[bytes] = (),
     semantic_manifest=None,
     _consume_inputs: bool = False,
-) -> NativeObject:
+    _source_view: bool = False,
+):
     """Resolve a final link job into its reusable relocatable state.
 
     Archive selection belongs here: an incremental state must represent the
@@ -281,6 +316,9 @@ def prepare_executable_object(
     CLI uses it to retire decoded inputs after the merge; ordinary API calls
     borrow the list and preserve its contents.
     """
+
+    if _source_view and (not _consume_inputs or semantic_manifest is not None):
+        raise LinkError("source view requires an owned final link without semantic layout")
 
     # Archives are pools, not inputs: pull only the members that satisfy
     # something still undefined, repeatedly (see macho_archive).
@@ -317,7 +355,11 @@ def prepare_executable_object(
     # Even one input goes through the relocatable core: that is where CPU,
     # symbol-provenance, companion-relocation, and section-target contracts
     # are normalized and checked. A one-object fast path must not bypass them.
-    merged = link_relocatable_native(resolved_objects, _consume_inputs=_consume_inputs)
+    merged = link_relocatable_native(
+        resolved_objects,
+        _consume_inputs=_consume_inputs,
+        _source_view=_source_view,
+    )
     if semantic_manifest is not None:
         # Imported lazily so the ordinary linker path and compiled-stage
         # closure do not acquire semantic-layout policy or JSON machinery.
@@ -341,17 +383,20 @@ def link_executable(
     identifier: bytes = b"pcc-linked",
     semantic_manifest=None,
     _consume_inputs: bool = False,
+    _direct_source_view: bool = False,
 ) -> bytes:
     # Finish only after the preparation frame has returned. In a compiled
     # caller, temporary arguments may stay owned until that frame exits.
     plan = _prepare_executable_inputs(
-        objects, archives, entry, minos, identifier, semantic_manifest, _consume_inputs,
+        objects, archives, entry, minos, identifier, semantic_manifest,
+        _consume_inputs, _direct_source_view,
     )
     return _finish_executable_image(plan, identifier, None)
 
 
 def _prepare_executable_inputs(objects, archives, entry, minos, identifier,
-                               semantic_manifest, consume_inputs):
+                               semantic_manifest, consume_inputs,
+                               direct_source_view):
     # Preserve fail-closed option validation before parsing potentially large
     # inputs.  ``link_prepared_executable`` validates again for direct users.
     minos = _validate_minos(minos)
@@ -361,6 +406,7 @@ def _prepare_executable_inputs(objects, archives, entry, minos, identifier,
             archives=archives,
             semantic_manifest=semantic_manifest,
             _consume_inputs=consume_inputs,
+            _source_view=direct_source_view,
         ),
         entry=entry,
         minos=minos,
@@ -397,13 +443,24 @@ def _prepare_executable_image(
     """Resolve addresses into immutable output regions, without allocating an image."""
 
     minos = _validate_minos(minos)
-    if not isinstance(merged, NativeObject):
+    if not isinstance(merged, (NativeObject, OwnedMergedSourceView)):
         raise LinkError("prepared executable input must be a NativeObject")
-    obj = merged.link_view()
-    del merged
+    # The owned source view already implements the linker-facing interface.
+    # Keep the two concrete routes explicit for native codegen: a union-typed
+    # method call can otherwise bind NativeObject.link_view to the source view.
+    source_view = isinstance(merged, OwnedMergedSourceView)
+    if source_view:
+        obj = merged
+    else:
+        obj = merged.link_view()
+        del merged
 
-    sections = obj.sections()
-    symbols = obj.symbols()
+    if source_view:
+        sections = OwnedMergedSourceView.sections(obj)
+        symbols = OwnedMergedSourceView.symbols(obj)
+    else:
+        sections = obj.sections()
+        symbols = obj.symbols()
     defined = {
         s["name"]: s for s in symbols
         if (s["n_type"] & spec.N_TYPE) == spec.N_SECT
@@ -470,21 +527,44 @@ def _prepare_executable_image(
     imports_set = set(imports)
     for sec in sections:
         # Reference classification is set-based and does not depend on address order.
-        for r in obj.iter_relocations(sec, ordered=False):
-            if not r["r_extern"]:
+        if source_view:
+            rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
+            relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
+                obj, sec, ordered=False,
+            )
+        else:
+            relocations = obj.iter_relocations(sec, ordered=False)
+        for r in relocations:
+            if source_view:
+                start = r * 12  # _COMPACT_RELOCATION: <IIBBBB
+                if _NATIVE_PATCH_WORDS:
+                    cursor = abi_constant("object.bytes.data_offset") + start
+                    reloc_symbolnum = load_i32(rows, cursor + 4) & 0xFFFFFFFF
+                    reloc_extern = load_i8(rows, cursor + 10) & 0xFF
+                    reloc_type = load_i8(rows, cursor + 11) & 0xFF
+                else:
+                    (
+                        _address, reloc_symbolnum, _pcrel, _length,
+                        reloc_extern, reloc_type,
+                    ) = _COMPACT_RELOCATION.unpack_from(rows, start)
+            else:
+                reloc_symbolnum = r["r_symbolnum"]
+                reloc_extern = r["r_extern"]
+                reloc_type = r["r_type"]
+            if not reloc_extern:
                 continue
-            nm = names_all[r["r_symbolnum"]]
+            nm = names_all[reloc_symbolnum]
             if nm in imports_set:
                 relocated_imports.add(nm)
-            if r["r_type"] == spec.ARM64_RELOC_BRANCH26:
+            if reloc_type == spec.ARM64_RELOC_BRANCH26:
                 # Every call target is a candidate for a range-extension
                 # thunk; which ones need one is only known once addresses
                 # exist, and sizing the island from the candidates avoids a
                 # second layout pass (an unused slot is 12 zero bytes).
                 branch_targets_set.add(nm)
-            if r["r_type"] in (spec.ARM64_RELOC_BRANCH26,
-                               spec.ARM64_RELOC_GOT_LOAD_PAGE21,
-                               spec.ARM64_RELOC_GOT_LOAD_PAGEOFF12):
+            if reloc_type in (spec.ARM64_RELOC_BRANCH26,
+                              spec.ARM64_RELOC_GOT_LOAD_PAGE21,
+                              spec.ARM64_RELOC_GOT_LOAD_PAGEOFF12):
                 code_imports_set.add(nm)
     branch_targets = sorted(branch_targets_set)
     veneer_index = {name: i for i, name in enumerate(branch_targets)}
@@ -537,10 +617,14 @@ def _prepare_executable_image(
         # obj.data[0:size] for it would splice the mach header + __text into
         # __bss and the section's globals would read instruction bytes. It
         # occupies vm space only; dyld zeroes it.
+        if source_view:
+            payload = OwnedMergedSourceView.section_data(obj, sec)
+        else:
+            payload = obj.section_data(sec)
         out = _Out(
             segname, sectname, sec["flags"], sec["align"],
             bytearray() if is_zf
-            else bytearray(obj.section_data(sec)),
+            else bytearray(payload),
         )
         out.zerofill_size = sec["size"] if is_zf else 0
         if segname == "__TEXT":
@@ -804,12 +888,37 @@ def _prepare_executable_image(
             continue  # a dropped unwind section carries no live relocations
         out, sec_addr = mapping
         pending_addend = 0
-        for entry_r in obj.iter_relocations(sec):
-            if entry_r["r_type"] == spec.ARM64_RELOC_ADDEND:
-                pending_addend = entry_r["r_symbolnum"]
+        if source_view:
+            rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
+            relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
+                obj, sec,
+            )
+        else:
+            relocations = obj.iter_relocations(sec)
+        for entry_r in relocations:
+            if source_view:
+                start = entry_r * 12  # _COMPACT_RELOCATION: <IIBBBB
+                if _NATIVE_PATCH_WORDS:
+                    cursor = abi_constant("object.bytes.data_offset") + start
+                    reloc_address = load_i32(rows, cursor) & 0xFFFFFFFF
+                    reloc_symbolnum = load_i32(rows, cursor + 4) & 0xFFFFFFFF
+                    reloc_extern = load_i8(rows, cursor + 10) & 0xFF
+                    reloc_type = load_i8(rows, cursor + 11) & 0xFF
+                else:
+                    (
+                        reloc_address, reloc_symbolnum, _pcrel, _length,
+                        reloc_extern, reloc_type,
+                    ) = _COMPACT_RELOCATION.unpack_from(rows, start)
+            else:
+                reloc_address = entry_r["r_address"]
+                reloc_symbolnum = entry_r["r_symbolnum"]
+                reloc_extern = entry_r["r_extern"]
+                reloc_type = entry_r["r_type"]
+            if reloc_type == spec.ARM64_RELOC_ADDEND:
+                pending_addend = reloc_symbolnum
                 continue
-            if not entry_r["r_extern"]:
-                target_index = entry_r["r_symbolnum"]
+            if not reloc_extern:
+                target_index = reloc_symbolnum
                 if 1 <= target_index <= len(sections):
                     target_sec = sections[target_index - 1]
                     target_key = (
@@ -826,7 +935,7 @@ def _prepare_executable_image(
                     "section-target relocations must be normalized to a "
                     "defined symbol before executable linking"
                 )
-            symbol_index = entry_r["r_symbolnum"]
+            symbol_index = reloc_symbolnum
             if not 0 <= symbol_index < len(names_all):
                 raise LinkError(
                     f"relocation names symbol index {symbol_index}, but the "
@@ -834,9 +943,9 @@ def _prepare_executable_image(
                 )
             name = names_all[symbol_index]
             addend, pending_addend = pending_addend, 0
-            at_off = entry_r["r_address"]
+            at_off = reloc_address
             at = out.addr + at_off
-            rtype = entry_r["r_type"]
+            rtype = reloc_type
             if name in sym_addr:
                 target = sym_addr[name] + addend
             elif name in dropped_symbols:
@@ -851,7 +960,7 @@ def _prepare_executable_image(
 
             if rtype == spec.ARM64_RELOC_BRANCH26:
                 dest = stub_addr[name] if target is None else target
-                word, = struct.unpack_from("<I", out.data, at_off)
+                word = _read_patch_word(out.data, at_off)
                 delta = dest - at
                 if not -(1 << 27) <= delta < (1 << 27):
                     # Out of b/bl reach: branch to this symbol's thunk in the
@@ -863,8 +972,7 @@ def _prepare_executable_image(
                     if not -(1 << 27) <= delta < (1 << 27):
                         unreachable_veneers.append((name, at, thunk, delta))
                         continue
-                struct.pack_into("<I", out.data, at_off,
-                                 _branch26(word, delta))
+                _write_patch_word(out.data, at_off, _branch26(word, delta))
             elif rtype in (spec.ARM64_RELOC_PAGE21,
                            spec.ARM64_RELOC_GOT_LOAD_PAGE21):
                 # GOT relaxation: a GOT load of a DEFINED symbol needs no GOT
@@ -880,32 +988,33 @@ def _prepare_executable_image(
                     dest = target
                 if dest is None:
                     raise LinkError(f"{name!r} needs a GOT slot for PAGE21")
-                word, = struct.unpack_from("<I", out.data, at_off)
-                struct.pack_into("<I", out.data, at_off,
-                                 _adrp_imm(word, (dest >> 12) - (at >> 12)))
+                word = _read_patch_word(out.data, at_off)
+                _write_patch_word(
+                    out.data, at_off,
+                    _adrp_imm(word, (dest >> 12) - (at >> 12)),
+                )
             elif rtype == spec.ARM64_RELOC_PAGEOFF12:
                 if target is None:
                     raise LinkError(f"{name!r} needs a GOT slot for PAGEOFF12")
-                word, = struct.unpack_from("<I", out.data, at_off)
-                struct.pack_into(
-                    "<I", out.data, at_off,
-                    _pageoff12(word, target & 0xFFF),
-                )
+                word = _read_patch_word(out.data, at_off)
+                _write_patch_word(out.data, at_off, _pageoff12(word, target & 0xFFF))
             elif rtype == spec.ARM64_RELOC_GOT_LOAD_PAGEOFF12:
                 if target is not None:
                     # Relax: ldr xt,[xn,#imm]  ->  add xt,xn,#imm, so the
                     # value is the symbol's address directly, not loaded
                     # from a GOT slot. `ldr (unsigned) x` is 0xF94xxxxx;
                     # `add (imm) x` is 0x91000000 with the same Rt/Rn.
-                    word, = struct.unpack_from("<I", out.data, at_off)
+                    word = _read_patch_word(out.data, at_off)
                     rt = word & 0x1F
                     rn = (word >> 5) & 0x1F
                     add = 0x91000000 | ((target & 0xFFF) << 10) | (rn << 5) | rt
-                    struct.pack_into("<I", out.data, at_off, add)
+                    _write_patch_word(out.data, at_off, add)
                 else:
-                    word, = struct.unpack_from("<I", out.data, at_off)
-                    struct.pack_into("<I", out.data, at_off,
-                                     _ldr_uimm12(word, got_addr[name] & 0xFFF, 8))
+                    word = _read_patch_word(out.data, at_off)
+                    _write_patch_word(
+                        out.data, at_off,
+                        _ldr_uimm12(word, got_addr[name] & 0xFFF, 8),
+                    )
             elif rtype == spec.ARM64_RELOC_UNSIGNED:
                 in_tlv_desc = (sec["flags"] & spec.SECTION_TYPE) == _S_TLV_VARS
                 if target is None:
@@ -947,27 +1056,32 @@ def _prepare_executable_image(
                 # load. (`target` is the descriptor address.)
                 if target is None:
                     raise LinkError(f"TLV descriptor {name!r} is not defined")
-                word, = struct.unpack_from("<I", out.data, at_off)
-                struct.pack_into("<I", out.data, at_off,
-                                 _adrp_imm(word, (target >> 12) - (at >> 12)))
+                word = _read_patch_word(out.data, at_off)
+                _write_patch_word(
+                    out.data, at_off,
+                    _adrp_imm(word, (target >> 12) - (at >> 12)),
+                )
             elif rtype == spec.ARM64_RELOC_TLVP_LOAD_PAGEOFF12:
                 # Relax `ldr xt,[xn,#off]` to `add xt,xn,#off`: the value is
                 # the descriptor's address directly (ld does the same).
                 if target is None:
                     raise LinkError(f"TLV descriptor {name!r} is not defined")
-                word, = struct.unpack_from("<I", out.data, at_off)
+                word = _read_patch_word(out.data, at_off)
                 rt = word & 0x1F
                 rn = (word >> 5) & 0x1F
-                struct.pack_into("<I", out.data, at_off,
-                                 0x91000000 | ((target & 0xFFF) << 10)
-                                 | (rn << 5) | rt)
+                _write_patch_word(
+                    out.data, at_off,
+                    0x91000000 | ((target & 0xFFF) << 10) | (rn << 5) | rt,
+                )
             else:
                 raise LinkError(f"relocation type {rtype} not applied")
 
-    # All addresses now live in the output sections and fixup tables. Release
-    # the indexed input records and its contiguous view before allocating
-    # stack-map validation scratch, chained fixups and the final image.
-    del obj
+    # All addresses now live in the output sections and fixup tables. The
+    # indexed view is a separate owned object and can be retired here. The
+    # source view aliases the borrowed ``merged`` argument; its caller owns
+    # the release after this function returns.
+    if not source_view:
+        del obj
 
     # The relocatable linker rebuilds stack-map tables semantically.  Check
     # the resolved table once more after native address relocations, before

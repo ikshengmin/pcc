@@ -110,6 +110,8 @@ DATA_PLANE_CLASS_CONTRACT = {
     "self_backend_target_passes.py:SelfTargetPass": "target_control",
     "self_backend_target_passes.py:SelfTargetMemoryPass": "target_control",
     "self_backend_target_passes.py:StripTrailingWhitespacePass": "target_control",
+    "self_backend_target_passes.py:FoldFrameAddressPass": "target_control",
+    "self_backend_target_passes.py:FoldImmediatePass": "target_control",
     "self_backend_target_passes.py:VerifyPreparedModulePass": "target_control",
     "self_backend_kernel.py:IndexedFunctionSeed": "native_arena",
     "self_backend_kernel.py:IndexedFunctionKernel": "native_arena",

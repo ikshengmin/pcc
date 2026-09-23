@@ -2358,6 +2358,31 @@ class MethodCallExpressionLoweringMixin:
             )
             return result
         if isinstance(obj_ty, NoneType):
+            # Flow-insensitive inference can label a mutable module global by
+            # its initial ``None`` even after a guarded branch has installed a
+            # native instance.  The slot, not that stale expression type, owns
+            # the runtime value.  In a closed no-libpython build, dispatch it
+            # through the native object model; an actual None still raises
+            # AttributeError there.
+            if (
+                getattr(self, "_strict_no_libpython", False)
+                and isinstance(attr.obj, Name)
+                and attr.obj.ident in getattr(self, "_module_globals", {})
+                and not getattr(self, "_cpy_env_flags", {}).get(
+                    attr.obj.ident, False
+                )
+                and isinstance(
+                    self._module_globals[attr.obj.ident][0].value_type,
+                    ir.PointerType,
+                )
+            ):
+                return self._emit_callable_attribute_call(
+                    attr.obj,
+                    attr.name,
+                    expr.args,
+                    expr.kwargs,
+                    expr.span,
+                )
             # Flow-insensitive inference can leave a guarded Optional[str]
             # receiver as ``NoneType`` inside branches like
             # ``x.strip() if x is not None else None``. Marshal the

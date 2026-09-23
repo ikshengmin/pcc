@@ -110,6 +110,23 @@ BENCHMARKS: dict[str, str] = {
         "        i += 1\n"
         "    print(a.total)\n"
     ),
+    "overridden_method_call": (
+        "class Base:\n"
+        "    def step(self, value: int) -> int:\n"
+        "        return value\n"
+        "    def run(self) -> int:\n"
+        "        total = 0\n"
+        "        i = 0\n"
+        "        while i < N:\n"
+        "            total += self.step(i)\n"
+        "            i += 1\n"
+        "        return total\n"
+        "class Child(Base):\n"
+        "    def step(self, value: int) -> int:\n"
+        "        return value * 2\n"
+        "def main() -> None:\n"
+        "    print(Child().run())\n"
+    ),
     "dict_get_str": (
         "def main() -> None:\n"
         "    d = {}\n"

@@ -6,6 +6,8 @@ from .__doc__ import *
 
 SOCKET_TIMEOUT = 60
 UDP_LIMIT = 30
+ALIVE_PROBE = ('1.1.1.1', 443)
+ALIVE_PROBE_TIMEOUT = 3
 DUMMY = lambda s: s
 ACTIVE_CHANNEL_TASKS = []
 ACTIVE_CHANNEL_WRITERS = []
@@ -229,7 +231,7 @@ async def check_server_alive(interval, rserver, verbose):
             if type(remote) is ProxyDirect:
                 continue
             try:
-                _, writer = await remote.open_connection(None, None, None, None, timeout=3)
+                reader, writer = await remote.open_connection(None, None, None, None, timeout=ALIVE_PROBE_TIMEOUT)
             except asyncio.CancelledError as ex:
                 return
             except Exception as ex:
@@ -237,6 +239,26 @@ async def check_server_alive(interval, rserver, verbose):
                     verbose(f'{remote.rproto.name} {remote.bind} -> OFFLINE')
                     remote.alive = False
                 continue
+            # A completed TCP connect only proves the port still accepts. An upstream can
+            # accept and then stop answering the proxy handshake; with a TCP-only probe
+            # alive stays True and 'fa' never fails over to the next -r. Run the real
+            # handshake so that state is detected. ProxyBackward keeps the plain probe:
+            # its connections come from the queue, not from a handshake we can drive.
+            if not isinstance(remote, ProxyBackward):
+                try:
+                    await asyncio.wait_for(remote.prepare_connection(reader, writer, *ALIVE_PROBE),
+                                           timeout=ALIVE_PROBE_TIMEOUT)
+                except asyncio.CancelledError as ex:
+                    writer.close()
+                    return
+                except Exception as ex:
+                    # wait_for cancels mid-handshake without closing; leaking one socket per
+                    # probe is exactly the ratchet this check exists to catch.
+                    writer.close()
+                    if remote.alive:
+                        verbose(f'{remote.rproto.name} {remote.bind} -> OFFLINE ({type(ex).__name__} in handshake)')
+                        remote.alive = False
+                    continue
             if not remote.alive:
                 verbose(f'{remote.rproto.name} {remote.bind} -> ONLINE')
                 remote.alive = True

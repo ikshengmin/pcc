@@ -222,8 +222,13 @@ def _build_vthread_effect_summaries(
     subprocess.run(["mkdir", "-p", summary_dir], check=True)
     result_paths: list[str] = []
     commands: list[str] = []
+    assignments: list[list[int]] = []
     index = 0
     while index < len(module_names):
+        # Reuse process startup and the common export graph. The worker owns
+        # only one module AST at a time; cap the process lifetime at eight
+        # modules rather than retaining the complete source closure.
+        assigned = list(range(index, min(index + 8, len(module_names))))
         manifest_path = os.path.join(tmp, "summary_" + str(index) + ".manifest")
         result_path = os.path.join(tmp, "summary_" + str(index) + ".tsv")
         write_manifest(
@@ -234,7 +239,7 @@ def _build_vthread_effect_summaries(
             ast_dir,
             src_paths,
             module_names,
-            [index],
+            assigned,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
             libpython_mode=libpython_mode,
@@ -249,43 +254,44 @@ def _build_vthread_effect_summaries(
             worker_env_prefix() + " " + join_strings(command_parts, " ")
         )
         result_paths.append(result_path)
-        index += 1
+        assignments.append(assigned)
+        index += len(assigned)
     summary_parallel = _summary_worker_parallelism(max_parallel, worker_prefix)
     run_worker_commands(commands, max_parallel=summary_parallel)
     summary_by_index: list[Optional[str]] = [None for _name in module_names]
-    for result_path in result_paths:
+    for result_index, result_path in enumerate(result_paths):
         if not os.path.isfile(result_path):
             raise pipeline_error(
                 "frontend summary worker produced no result: " + result_path
             )
         with open(result_path, "r", encoding="utf-8") as stream:
             lines = stream.read().splitlines()
-        if len(lines) != 1:
+        if lines and lines[0].startswith("ERR\t"):
+            raise pipeline_error(lines[0].split("\t", 1)[1])
+        assigned = assignments[result_index]
+        if len(lines) != len(assigned):
             raise pipeline_error("invalid frontend summary worker result")
-        parts = lines[0].split("\t")
-        if parts and parts[0] == "ERR":
-            detail = parts[1] if len(parts) > 1 else "summary worker error"
-            raise pipeline_error(detail)
-        if len(parts) != 4 or parts[0] != "SUMMARY":
-            raise pipeline_error("invalid frontend summary worker result")
-        try:
-            index = int(parts[1])
-        except ValueError as exc:
-            raise pipeline_error("invalid frontend summary worker index") from exc
-        expected_path = os.path.join(
-            summary_dir,
-            "summary_" + str(index) + ".wire",
-        )
-        if (
-            index < 0
-            or index >= len(module_names)
-            or parts[2] != module_names[index]
-            or summary_by_index[index] is not None
-            or parts[3] != expected_path
-            or not os.path.isfile(parts[3])
-        ):
-            raise pipeline_error("frontend summary worker ownership mismatch")
-        summary_by_index[index] = parts[3]
+        for row_index, line in enumerate(lines):
+            parts = line.split("\t")
+            if len(parts) != 4 or parts[0] != "SUMMARY":
+                raise pipeline_error("invalid frontend summary worker result")
+            try:
+                index = int(parts[1])
+            except ValueError as exc:
+                raise pipeline_error("invalid frontend summary worker index") from exc
+            expected_path = os.path.join(
+                summary_dir,
+                "summary_" + str(index) + ".wire",
+            )
+            if (
+                index != assigned[row_index]
+                or parts[2] != module_names[index]
+                or summary_by_index[index] is not None
+                or parts[3] != expected_path
+                or not os.path.isfile(parts[3])
+            ):
+                raise pipeline_error("frontend summary worker ownership mismatch")
+            summary_by_index[index] = parts[3]
     summaries: list[str] = []
     for index, path in enumerate(summary_by_index):
         if path is None:

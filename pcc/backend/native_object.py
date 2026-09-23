@@ -26,6 +26,7 @@ from pcc.extern import c_int64, c_ptr, extern, c_obj
 from pcc.unsafe import (
     abi_constant,
     free,
+    int_to_ptr,
     load_i8,
     load_i32,
     load_i64,
@@ -57,6 +58,7 @@ from .macho_obj import (
     _relocation_offset_bitmap,
     _validate_relocation,
     _validate_section,
+    _append_final_link_relocation_fields,
     emit_object,
 )
 from .self_backend_value_arena import CompilerIntArena
@@ -77,12 +79,14 @@ _U64 = struct.Struct("<Q")
 _SYMBOL = struct.Struct("<IQI")
 _SECTION = struct.Struct("<IIQQII")
 _RELOCATION = struct.Struct("<QIIBB2xqIIq")
+_FINAL_LINK_RELOCATION = struct.Struct("<IIBBBB")
 _DATA_IN_CODE = struct.Struct("<QII")
 
 _SYMBOL_EXTERNAL = 1
 _SYMBOL_PRIVATE_EXTERNAL = 2
 _UINT64_MAX = (1 << 64) - 1
 _RELOCATION_SCALAR_COUNT = 9
+_FINAL_LINK_RELOCATION_SCALAR_COUNT = 6
 
 _py_bytes_new: "extern" = extern("py_bytes_new", (c_ptr, c_int64), c_obj)
 
@@ -453,14 +457,7 @@ class PackedNativeObject:
         elif section.relocation_order > 0:
             indices = range(count - 1, -1, -1)
         else:
-            indices = sorted(
-                range(count),
-                key=lambda index: _relocation_offset_at(
-                    self.encoded,
-                    section.relocation_offset + index * _RELOCATION.size,
-                ),
-                reverse=True,
-            )
+            indices = _packed_relocation_sort_indices(self, section)
         for index in indices:
             yield _relocation_fields_at(
                 self.encoded,
@@ -1121,6 +1118,50 @@ def _pack_native_relocation_records(records: CompilerIntArena) -> bytes:
     return result
 
 
+def _pack_final_link_relocation_rows(records: CompilerIntArena) -> bytes:
+    """Freeze validated final-link rows as 12-byte numeric records."""
+    if len(records) % _FINAL_LINK_RELOCATION_SCALAR_COUNT:
+        raise NativeObjectError("final-link relocation scalar count is malformed")
+    count = len(records) // _FINAL_LINK_RELOCATION_SCALAR_COUNT
+    total = count * _FINAL_LINK_RELOCATION.size
+    if not total:
+        return b""
+    if not records.uses_native_storage:
+        buffer = bytearray(total)
+        for index in range(count):
+            source = index * _FINAL_LINK_RELOCATION_SCALAR_COUNT
+            _FINAL_LINK_RELOCATION.pack_into(
+                buffer, index * _FINAL_LINK_RELOCATION.size,
+                records.get_unchecked(source),
+                records.get_unchecked(source + 1),
+                records.get_unchecked(source + 2),
+                records.get_unchecked(source + 3),
+                records.get_unchecked(source + 4),
+                records.get_unchecked(source + 5),
+            )
+        return bytes(buffer)
+
+    allocation = malloc(total)
+    if ptr_is_null(allocation):
+        raise MemoryError("final-link relocation allocation failed")
+    try:
+        for index in range(count):
+            source = index * _FINAL_LINK_RELOCATION_SCALAR_COUNT
+            target = index * _FINAL_LINK_RELOCATION.size
+            store_i32(allocation, target, records.get_unchecked(source))
+            store_i32(allocation, target + 4, records.get_unchecked(source + 1))
+            store_i8(allocation, target + 8, records.get_unchecked(source + 2))
+            store_i8(allocation, target + 9, records.get_unchecked(source + 3))
+            store_i8(allocation, target + 10, records.get_unchecked(source + 4))
+            store_i8(allocation, target + 11, records.get_unchecked(source + 5))
+        result = _py_bytes_new(allocation, total)
+        if ptr_is_null(result):
+            raise MemoryError("final-link relocation bytes allocation failed")
+        return result
+    finally:
+        free(allocation)
+
+
 def encode_native_object(obj: NativeObject) -> bytes:
     """Encode a validated object for cache/subprocess transport."""
     _validate_native_object(obj)
@@ -1181,6 +1222,269 @@ def _source_symbols_in_offset_order(section: Section):
             return sorted(section.symbols, key=lambda item: item.offset)
         previous_offset = symbol.offset
     return section.symbols
+
+
+class OwnedMergedSourceView:
+    """Final-link view over one validated, privately owned section merge.
+
+    The ordinary public ``NativeObject`` constructor still materializes and
+    validates indexed relocation records. The owned final link already has
+    validated authoring sections and never publishes a relocatable object, so
+    it can consume those sections directly instead of building a second
+    seven-million-record relocation graph before executable layout.
+    """
+
+    def __init__(self, sections, *, undefined=()) -> None:
+        source_sections = tuple(sections)
+        undefined_names = tuple(undefined)
+        _validate_source_sections(source_sections, undefined_names)
+        self._source_sections = source_sections
+        self._payloads = [section.data for section in source_sections]
+
+        addrs = []
+        vm_cursor = 0
+        section_index = {}
+        for index, section in enumerate(source_sections, start=1):
+            vm_cursor = _align_up(vm_cursor, section.align_log2)
+            addrs.append(vm_cursor)
+            vm_cursor += section.vm_size
+            section_index[(section.segname, section.sectname)] = index
+        self._section_index = section_index
+
+        # Match NativeObjectView's normalization of section-target payloads.
+        for source_index, section in enumerate(source_sections):
+            for relocation in section.relocations:
+                if relocation.section is None:
+                    continue
+                target_index = section_index[relocation.section] - 1
+                width = 1 << relocation.length
+                start = relocation.offset
+                stored = int.from_bytes(
+                    self._payloads[source_index][start:start + width], "little"
+                )
+                target_addr = addrs[target_index]
+                target_size = source_sections[target_index].vm_size
+                if relocation.target_offset is not None:
+                    if stored:
+                        raise NativeObjectError(
+                            "section-target relocation with target_offset "
+                            "must have a zero-filled field"
+                        )
+                    target_value = target_addr + relocation.target_offset
+                elif target_addr <= stored < target_addr + target_size:
+                    target_value = stored
+                elif 0 <= stored < target_size:
+                    target_value = target_addr + stored
+                else:
+                    raise NativeObjectError(
+                        f"section-target value {stored} is outside section "
+                        f"{target_index + 1}"
+                    )
+                if target_value >= 1 << (width * 8):
+                    raise NativeObjectError(
+                        "section-target value does not fit relocation width"
+                    )
+                if not isinstance(self._payloads[source_index], bytearray):
+                    self._payloads[source_index] = bytearray(
+                        self._payloads[source_index]
+                    )
+                self._payloads[source_index][start:start + width] = (
+                    target_value.to_bytes(width, "little")
+                )
+
+        self._sections = []
+        file_size = 0
+        for index, section in enumerate(source_sections):
+            if section.vm_size == section.zerofill_size and section.zerofill_size:
+                file_offset = 0
+            else:
+                file_offset = _align_up(file_size, section.align_log2)
+                file_size = file_offset + len(self._payloads[index])
+            count = len(section.relocations)
+            for relocation in section.relocations:
+                if relocation.addend:
+                    count += 1
+                if relocation.type == spec.ARM64_RELOC_SUBTRACTOR:
+                    count += 1
+            self._sections.append({
+                "segname_str": section.segname,
+                "sectname_str": section.sectname,
+                "flags": section.flags,
+                "align": section.align_log2,
+                "addr": addrs[index],
+                "offset": file_offset,
+                "size": section.vm_size,
+                "nreloc": count,
+                "_pcc_source_index": index,
+            })
+
+        self._symbols = []
+        for external in (False, True):
+            for index, section in enumerate(source_sections, start=1):
+                for symbol in _source_symbols_in_offset_order(section):
+                    if symbol.external != external:
+                        continue
+                    n_type = spec.N_SECT
+                    if symbol.external:
+                        n_type |= spec.N_EXT
+                    if symbol.private_external:
+                        n_type |= spec.N_PEXT
+                    self._symbols.append({
+                        "name": symbol.name,
+                        "n_type": n_type,
+                        "n_sect": index,
+                        "n_desc": 0,
+                        "n_value": addrs[index - 1] + symbol.offset,
+                    })
+        for name in sorted(undefined_names):
+            self._symbols.append({
+                "name": name,
+                "n_type": spec.N_UNDF | spec.N_EXT,
+                "n_sect": 0,
+                "n_desc": 0,
+                "n_value": 0,
+            })
+        self._symbol_index = {
+            symbol["name"]: index for index, symbol in enumerate(self._symbols)
+        }
+        if len(self._symbol_index) != len(self._symbols):
+            raise NativeObjectError("merged object has duplicate symbol names")
+
+        # Final executable linking consumes Mach-O relocation fields twice:
+        # once to classify imports/branches and once to apply them. Materialize
+        # those six scalar fields while the already-validated source records
+        # are still here, then retire their managed-object graph. The public
+        # NativeObject and relocatable-link representations are unchanged.
+        self._raw_relocations = []
+        for section_index, section in enumerate(source_sections):
+            records = CompilerIntArena(
+                self._sections[section_index]["nreloc"]
+                * _FINAL_LINK_RELOCATION_SCALAR_COUNT
+            )
+            try:
+                _append_final_link_relocation_fields(
+                    records, section.relocations,
+                    self._symbol_index, self._section_index,
+                )
+                if (
+                    len(records) // _FINAL_LINK_RELOCATION_SCALAR_COUNT
+                    != self._sections[section_index]["nreloc"]
+                ):
+                    raise NativeObjectError("merged relocation count changed")
+                self._raw_relocations.append(
+                    _pack_final_link_relocation_rows(records)
+                )
+            finally:
+                records.close()
+        self._source_sections = ()
+
+    def link_view(self):
+        return self
+
+    def sections(self):
+        return self._sections
+
+    def symbols(self):
+        return self._symbols
+
+    def section_data(self, section):
+        index = section.get("_pcc_source_index")
+        if not isinstance(index, int) or not 0 <= index < len(self._payloads):
+            raise NativeObjectError("section does not belong to this source view")
+        return self._payloads[index]
+
+    def iter_relocations(self, section, *, ordered=True):
+        index = section.get("_pcc_source_index")
+        if not isinstance(index, int) or not 0 <= index < len(self._raw_relocations):
+            raise NativeObjectError("section does not belong to this source view")
+        return self._iter_section_relocations(
+            self._raw_relocations[index], ordered, False,
+        )
+
+    def iter_compact_relocations(self, section, *, ordered=True):
+        """Final executable's four consumed fields, without dict projection."""
+        return self._iter_section_relocations(
+            self.compact_relocation_rows(section), ordered, True,
+        )
+
+    def compact_relocation_rows(self, section) -> bytes:
+        """Validated private 12-byte rows for the final executable consumer."""
+        index = section.get("_pcc_source_index")
+        if not isinstance(index, int) or not 0 <= index < len(self._raw_relocations):
+            raise NativeObjectError("section does not belong to this source view")
+        rows = self._raw_relocations[index]
+        if len(rows) % _FINAL_LINK_RELOCATION.size:
+            raise NativeObjectError("final-link relocation rows are truncated")
+        return rows
+
+    def iter_compact_relocation_indices(self, section, *, ordered=True):
+        """Final-link storage indices; the consumer reads fields in place."""
+        return self._iter_section_relocation_indices(
+            self.compact_relocation_rows(section), ordered,
+        )
+
+    def _iter_section_relocation_indices(self, rows: bytes, ordered: bool):
+        count = len(rows) // _FINAL_LINK_RELOCATION.size
+        _validate_count(count, "relocation", allow_zero=True)
+        if count > 8388608:
+            raise NativeObjectError("relocation ordering index exceeds 23 bits")
+        order_capacity = 0
+        if ordered:
+            order_capacity = count
+        order = CompilerIntArena(order_capacity)
+        try:
+            if ordered:
+                for index in range(count):
+                    start = index * _FINAL_LINK_RELOCATION.size
+                    if _NATIVE_PAYLOAD_READS:
+                        offset = load_i32(
+                            rows, abi_constant("object.bytes.data_offset") + start
+                        ) & 0xFFFFFFFF
+                    else:
+                        offset = _U32.unpack_from(rows, start)[0]
+                    if offset < 0 or offset > 0x7FFFFFFF:
+                        raise NativeObjectError(
+                            "relocation offset exceeds signed r_address range"
+                        )
+                    order.append((0x7FFFFFFF - offset) * 8388608 + index)
+                order.sort_nonnegative_radix()
+            for index in range(count):
+                yield order.get_unchecked(index) & 0x7FFFFF if ordered else index
+        finally:
+            order.close()
+
+    def _iter_section_relocations(
+        self,
+        rows: bytes,
+        ordered: bool,
+        compact: bool,
+    ):
+        for source_index in self._iter_section_relocation_indices(rows, ordered):
+            start = source_index * _FINAL_LINK_RELOCATION.size
+            if _NATIVE_PAYLOAD_READS:
+                cursor = abi_constant("object.bytes.data_offset") + start
+                address = load_i32(rows, cursor) & 0xFFFFFFFF
+                symbolnum = load_i32(rows, cursor + 4) & 0xFFFFFFFF
+                pcrel = load_i8(rows, cursor + 8) & 0xFF
+                length = load_i8(rows, cursor + 9) & 0xFF
+                external = load_i8(rows, cursor + 10) & 0xFF
+                relocation_type = load_i8(rows, cursor + 11) & 0xFF
+            else:
+                (
+                    address, symbolnum, pcrel, length,
+                    external, relocation_type,
+                ) = _FINAL_LINK_RELOCATION.unpack_from(rows, start)
+            if compact:
+                yield (address, symbolnum, external, relocation_type)
+            else:
+                yield {
+                    "r_address": address,
+                    "r_symbolnum": symbolnum,
+                    "r_pcrel": pcrel,
+                    "r_length": length,
+                    "r_extern": external,
+                    "r_type": relocation_type,
+                }
 
 
 def encode_native_object_from_sections(
@@ -1503,6 +1807,51 @@ def decode_packed_native_object(data: bytes) -> PackedNativeObject:
     return packed
 
 
+def _packed_relocation_sort_indices(packed: PackedNativeObject, section: PackedNativeSection):
+    """Stable descending order for the uncommon non-monotone wire table."""
+    return sorted(
+        range(section.relocation_count),
+        key=lambda index: _relocation_offset_at(
+            packed.encoded, section.relocation_offset + index * _RELOCATION.size,
+        ),
+        reverse=True,
+    )
+
+
+def _packed_section_target_relocations(packed: PackedNativeObject, section_index: int):
+    """Read full rows only for section targets; ordinary symbol rows need one u32."""
+    section = packed.sections[section_index]
+    data = packed.encoded
+    targets = []
+    count = section.relocation_count
+    if count > 0 and (
+        section.relocation_offset < 0
+        or count > (len(data) - section.relocation_offset) // _RELOCATION.size
+    ):
+        raise NativeObjectError("truncated pcc-native relocation")
+    for index in range(count):
+        start = section.relocation_offset + index * _RELOCATION.size
+        if _NATIVE_PAYLOAD_READS:
+            target = load_i32(data, abi_constant("object.bytes.data_offset") + start + 28) & 0xFFFFFFFF
+        else:
+            target, = _U32.unpack_from(data, start + 28)
+        if target != _NONE_INDEX:
+            fields = _relocation_fields_at(data, start)
+            targets.append((
+                fields[0], _decode_index(fields[1]), fields[2], bool(fields[3]),
+                fields[4], fields[5], _decode_index(fields[6]),
+                _decode_index(fields[7]), None if fields[8] == -1 else fields[8],
+            ))
+    # Match the public iterator's order, including its tie behavior. Only
+    # the selected rows need sorting for a non-monotone source table.
+    if section.relocation_order < 0:
+        return targets
+    if section.relocation_order > 0:
+        targets.reverse()
+        return targets
+    return sorted(targets, key=lambda row: row[0], reverse=True)
+
+
 def _packed_relocation_indices(fields):
     return (
         _decode_index(fields[1]),
@@ -1758,7 +2107,8 @@ def _validate_packed_relocations(
     seen_offsets: set[int] = set()
     offset_bitmap = _relocation_offset_bitmap(section.data_size, section.relocation_count)
     targeted_symbols: set[int] = set()
-    for fields in _packed_relocations_in_storage_order(packed, section):
+    for relocation_index in range(section.relocation_count):
+        fields = _packed_relocation_fields_at(packed, section, relocation_index)
         (
             offset,
             _symbol_raw,
@@ -1770,9 +2120,9 @@ def _validate_packed_relocations(
             _minuend_raw,
             target_offset_raw,
         ) = fields
-        symbol_index, target_section_index, minuend_index = (
-            _packed_relocation_indices(fields)
-        )
+        symbol_index = _decode_index(_symbol_raw)
+        target_section_index = _decode_index(_target_section_raw)
+        minuend_index = _decode_index(_minuend_raw)
         if pcrel not in (0, 1):
             raise NativeObjectError("relocation pcrel byte is not boolean")
         has_symbol = symbol_index is not None

@@ -17,8 +17,8 @@ Both modes read a tree from an Apple tool and fold it the same way:
     heap  malloc_history <pid> -callTree  -- allocated bytes by call path
     peak  malloc_history <pid> -callTree -highWaterMark  -- live at peak RSS
 
-`heap`/`peak` need the target launched with ``MallocStackLogging=1``; pcc's
-runtime allocates through malloc/calloc, so its allocations are captured.
+`heap`/`peak` need the target launched with ``MallocStackLogging=1``. They see
+system allocator buffers, often arena refills rather than individual pcc objects.
 
 Symbol handling is the same discipline as pcc_profile.py, for the same reason:
 symbols come from the sampled process's own executable, the slide is derived
@@ -30,6 +30,11 @@ Usage
     scripts/pcc_flamegraph.py cpu  <pid> [seconds] [-o out.svg] [--folded f.txt] [--exact-pid]
     scripts/pcc_flamegraph.py heap <pid> [-o out.svg]
     scripts/pcc_flamegraph.py peak <pid> [-o out.svg]
+    scripts/pcc_flamegraph.py report --input-folded run.folded --focus SYMBOL --report-json new.json
+
+Capture modes preserve raw evidence in a printed directory; select a new one
+with --evidence-dir. Reports describe captured weights, not whole-build wall
+time or correctness. See docs/knowledge/profiling-hotspots.md for guarded replay.
 """
 
 from __future__ import annotations
@@ -37,6 +42,8 @@ from __future__ import annotations
 import argparse
 import collections
 import html
+import hashlib
+import json
 import os
 import re
 import stat
@@ -56,6 +63,101 @@ from pcc_profile import (  # noqa: E402  (path set above)
     _symbols,
     _text_vmaddr,
 )
+
+
+def _read_folded(path: Path) -> collections.Counter:
+    folded = collections.Counter()
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        stack, separator, count = line.rpartition(" ")
+        if not separator or not stack or any(not f for f in stack.split(";")):
+            raise ValueError(f"{path}:{number}: invalid folded stack")
+        try:
+            weight = int(count)
+        except ValueError as exc:
+            raise ValueError(f"{path}:{number}: invalid weight") from exc
+        if weight < 0:
+            raise ValueError(f"{path}:{number}: negative weight")
+        folded[stack] += weight
+    if not sum(folded.values()):
+        raise ValueError(f"{path}: no positive samples")
+    return folded
+
+
+def _attribution(folded, focus=None, *, units="samples") -> dict:
+    """Attribute each sample once; recursive inclusive frames count once too."""
+    total = sum(folded.values())
+    inclusive = collections.Counter()
+    leaf = collections.Counter()
+    for stack, weight in folded.items():
+        frames = stack.split(";")
+        leaf[frames[-1]] += weight
+        for frame in set(frames):
+            inclusive[frame] += weight
+    resolved = None
+    if focus:
+        matches = [f for f in inclusive if f == focus]
+        if not matches:
+            matches = sorted(f for f in inclusive if focus in f)
+        if len(matches) != 1:
+            raise ValueError(f"focus {focus!r} needs one match, found {len(matches)}: {matches[:12]}")
+        resolved = matches[0]
+    children = collections.Counter()
+    callers = collections.Counter()
+    if resolved:
+        for stack, weight in folded.items():
+            frames = stack.split(";")
+            if resolved not in frames:
+                continue
+            index = frames.index(resolved)
+            children[frames[index + 1] if index + 1 < len(frames) else "[self]"] += weight
+            callers[frames[index - 1] if index else "[root]"] += weight
+    selected = inclusive[resolved] if resolved else total
+
+    def rows(counts, denominator):
+        return [{"symbol": symbol, "weight": count,
+                 "percent_total": 100.0 * count / total if total else 0.0,
+                 "percent_selected": 100.0 * count / denominator if denominator else 0.0}
+                for symbol, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))]
+
+    return {"schema": "pcc.hotspots.v1", "units": units, "total_weight": total,
+            "scope": "captured stacks only; not whole-build wall time",
+            "correctness": "NOT_CHECKED", "self": rows(leaf, total),
+            "inclusive": rows(inclusive, total), "inclusive_overlaps": True,
+            "focus": resolved, "selected_weight": selected,
+            "direct_children": rows(children, selected), "callers": rows(callers, selected),
+            "partition_rule": "first occurrence of focus per stack; children are disjoint"}
+
+
+def _write_summary(args, folded, *, units="samples", metadata=None):
+    report = _attribution(folded, args.focus, units=units)
+    report["capture"] = metadata or {}
+    if args.report_json:
+        with open(args.report_json, "x") as stream:
+            json.dump(report, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+    key = "direct_children" if report["focus"] else "self"
+    print("\n" + ("direct children of " + report["focus"] if report["focus"] else "aggregated self")
+          + " (captured " + units + "):")
+    for row in report[key][:args.top]:
+        print(f"{row['weight']:>9} {row['percent_total']:6.2f}% total "
+              f"{row['percent_selected']:6.2f}% selected  {row['symbol']}")
+    return report
+
+
+def _evidence_dir(args) -> Path:
+    if args.evidence_dir:
+        root = Path(args.evidence_dir)
+        root.mkdir(parents=True, exist_ok=False)
+    else:
+        root = Path(tempfile.mkdtemp(prefix="pcc-profile-"))
+    print(f"evidence {root}", flush=True)
+    return root
+
+
+def _capture_receipt(root, **fields):
+    (root / "capture.json").write_text(json.dumps(fields, indent=2, sort_keys=True) + "\n")
 
 # ``   +   ! :   | + 4468 ???  (in pcc1)  load address 0x... + 0x...``
 _ROW = re.compile(
@@ -367,7 +469,8 @@ def _host_main(args) -> int:
         raise SystemExit("host mode needs --argv <pcc command line>")
     import shutil
 
-    out_dir = tempfile.mkdtemp(prefix="pcc_flame_")
+    evidence = _evidence_dir(args)
+    out_dir = str(evidence)
     inject = tempfile.mkdtemp(prefix="pcc_flame_inject_")
     Path(inject, "sitecustomize.py").write_text(_SITECUSTOMIZE, encoding="utf-8")
     env = dict(os.environ)
@@ -390,12 +493,24 @@ def _host_main(args) -> int:
             command = argv
         else:
             command = [sys.executable, "-m", "pcc", *argv]
-        done = subprocess.run(
-            command, env=env, capture_output=True, text=True, timeout=7200,
-        )
+        _capture_receipt(evidence, command=command, status="RUNNING", correctness="NOT_CHECKED")
+        try:
+            done = subprocess.run(
+                command, env=env, capture_output=True, text=True, timeout=7200,
+            )
+        except subprocess.TimeoutExpired as exc:
+            for name, data in (("stdout", exc.stdout), ("stderr", exc.stderr)):
+                (evidence / name).write_bytes(data.encode() if isinstance(data, str) else data or b"")
+            _capture_receipt(evidence, command=command, status="TIMEOUT", correctness="NOT_CHECKED")
+            raise
+        (evidence / "stdout").write_text(done.stdout)
+        (evidence / "stderr").write_text(done.stderr)
+        metadata = {"command": command, "status": "EXITED" if done.returncode == 0 else "FAILED",
+                    "returncode": done.returncode, "correctness": "NOT_CHECKED"}
+        _capture_receipt(evidence, **metadata)
         if done.returncode != 0:
             print(done.stdout[-1500:] + done.stderr[-1500:])
-            raise SystemExit(f"host pcc failed (exit {done.returncode})")
+            print(f"host pcc failed (exit {done.returncode}); preserving partial profile", file=sys.stderr)
 
         folded: collections.Counter = collections.Counter()
         pattern = "mem-*.folded" if getattr(args, "memory", False) else "flame-*.folded"
@@ -411,7 +526,6 @@ def _host_main(args) -> int:
                 if path:
                     folded[path] += int(weight)
     finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
         shutil.rmtree(inject, ignore_errors=True)
 
     if not folded:
@@ -441,16 +555,25 @@ def _host_main(args) -> int:
         leaf = frames[-1]
         caller = frames[-2] if len(frames) > 1 else ""
         print(f"{weight:>7}  {100.0 * weight / total:5.1f}%  {leaf[:42]:<42} <- {caller[:30]}")
-    return 0
+    metadata["process_sample_files"] = [str(f) for f in files]
+    _write_summary(args, folded, units="bytes" if args.memory else "samples", metadata=metadata)
+    return 0 if done.returncode == 0 else 1
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("cpu", "heap", "peak", "host"))
+    parser.add_argument("mode", choices=("cpu", "heap", "peak", "host", "report"))
     parser.add_argument("pid", type=int, nargs="?", default=0)
     parser.add_argument("seconds", nargs="?", type=int, default=10)
     parser.add_argument("-o", "--out", default=None)
     parser.add_argument("--folded", default=None)
+    parser.add_argument("--input-folded", type=Path, help="report mode: re-analyze an existing capture")
+    parser.add_argument("--units", choices=("samples", "bytes"), default="samples",
+                        help="report mode: units of the supplied folded file")
+    parser.add_argument("--focus", help="exact symbol or unique substring; report disjoint direct children")
+    parser.add_argument("--report-json", help="new JSON file with full names and attribution denominators")
+    parser.add_argument("--evidence-dir", help="new directory for raw capture, stderr and receipt")
+    parser.add_argument("--top", type=int, default=15)
     parser.add_argument("--exact-pid", action="store_true",
                         help="profile the supplied native PID, including a coordinator, without following children")
     parser.add_argument("--cmd", action="store_true",
@@ -469,6 +592,27 @@ def main() -> int:
         args = parser.parse_args(raw)
         args.argv = []
 
+    if args.report_json and Path(args.report_json).exists():
+        parser.error("--report-json already exists; preserve prior evidence")
+    if args.mode == "report":
+        if args.input_folded is None or args.exact_pid:
+            parser.error("report requires --input-folded and does not accept --exact-pid")
+        try:
+            folded = _read_folded(args.input_folded)
+            _write_summary(args, folded, units=args.units, metadata={
+                "path": str(args.input_folded.resolve()),
+                "sha256": hashlib.sha256(args.input_folded.read_bytes()).hexdigest(),
+                "status": "OFFLINE", "workload_status": "UNKNOWN",
+            })
+        except ValueError as exc:
+            parser.error(str(exc))
+        if args.out:
+            with open(args.out, "x") as stream:
+                stream.write(_svg(folded, "pcc captured stacks", str(args.input_folded)))
+        return 0
+    if args.input_folded:
+        parser.error("--input-folded requires report mode")
+
     if args.mode == "host":
         if args.exact_pid:
             parser.error("--exact-pid requires a native cpu/heap/peak mode")
@@ -481,6 +625,12 @@ def main() -> int:
     if not binary.is_absolute():
         binary = (Path.cwd() / binary).resolve()
     binary_identity = _binary_identity(binary)
+    evidence = _evidence_dir(args)
+    metadata = {"mode": args.mode, "pid": pid, "requested_pid": args.pid,
+                "binary": str(binary), "binary_identity": binary_identity,
+                "requested_seconds": args.seconds, "status": "CAPTURING",
+                "workload_status": "UNKNOWN", "correctness": "NOT_CHECKED"}
+    _capture_receipt(evidence, **metadata)
     partial_capture = None
 
     if args.mode == "cpu":
@@ -502,6 +652,10 @@ def main() -> int:
                 check=False,
             )
             text = Path(path).read_text(errors="replace")
+            (evidence / "native.sample").write_text(text)
+            (evidence / "stderr").write_text(done.stderr)
+            metadata.update(status="CAPTURED_UNVALIDATED", capture_returncode=done.returncode)
+            _capture_receipt(evidence, **metadata)
         finally:
             os.unlink(path)
         if not text.strip():
@@ -524,6 +678,10 @@ def main() -> int:
         print(f"reading allocation stacks from pid {pid}", flush=True)
         done = subprocess.run(argv, capture_output=True, text=True, check=False)
         text = done.stdout
+        (evidence / "native.sample").write_text(text)
+        (evidence / "stderr").write_text(done.stderr)
+        metadata.update(status="CAPTURED_UNVALIDATED", capture_returncode=done.returncode)
+        _capture_receipt(evidence, **metadata)
         if "MallocStackLogging" in done.stderr or not text.strip():
             raise SystemExit(
                 "no allocation stacks: relaunch the target with "
@@ -568,6 +726,11 @@ def main() -> int:
     if not folded:
         raise SystemExit(f"no stacks collected from pid {pid}")
     total = sum(folded.values())
+    metadata.update(status="PARTIAL" if partial_capture else "CAPTURED", units=units,
+                    binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+    _capture_receipt(evidence, **metadata)
+    (evidence / "capture.folded").write_text("".join(f"{s} {w}\n" for s, w in folded.most_common()))
+    _write_summary(args, folded, units=units, metadata=metadata)
     if partial_capture is not None:
         print(
             "warning: partial CPU capture accepted because its image and "

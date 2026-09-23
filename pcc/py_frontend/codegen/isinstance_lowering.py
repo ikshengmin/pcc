@@ -132,7 +132,8 @@ def emit_builtin_runtime_isinstance_impl(
     if class_ident not in _BUILTIN_TYPE_TAGS:
         return None
     tag = _BUILTIN_TYPE_TAGS[class_ident]
-    if obj_val is None:
+    evaluated_operand = obj_val is None
+    if evaluated_operand:
         obj_val = host._emit_as_object(obj_expr)
     if class_ident == "type":
         cls_val = host.builder.call(
@@ -141,12 +142,18 @@ def emit_builtin_runtime_isinstance_impl(
         )
         raw = host.builder.call(host.runtime["py_obj_isinstance"], [obj_val, cls_val])
         host.builder.call(host.runtime["py_decref"], [cls_val])
+        if evaluated_operand:
+            host._gc_release_if_owned(obj_val, obj_expr)
         return host.builder.icmp_signed("!=", raw, ir.Constant(_I64, 0))
     actual = host.builder.call(
         host.runtime["py_obj_type_tag"],
         [obj_val],
         name=host._fresh("obj.type_tag"),
     )
+    # The runtime predicate borrows. An enclosing tuple check supplies its
+    # own operand and retires it after all members have inspected it.
+    if evaluated_operand:
+        host._gc_release_if_owned(obj_val, obj_expr)
     return host.builder.icmp_signed(
         "==",
         actual,
@@ -503,6 +510,8 @@ def emit_isinstance_call_impl(
                 )
             )
         assert acc is not None
+        if obj_val is not None:
+            host._gc_release_if_owned(obj_val, expr.args[0])
         return acc
 
     # ``mod.Class`` second-arg: use tail token as the class name.

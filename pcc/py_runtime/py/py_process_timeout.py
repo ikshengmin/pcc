@@ -7,9 +7,11 @@ from pcc.unsafe import (
     free,
     load_i32,
     load_i64,
+    load_i8,
     load_ptr,
     malloc,
     memcpy,
+    memset,
     null,
     ptr_is_null,
     store_i32,
@@ -23,6 +25,7 @@ from pcc.unsafe import (
 
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
+py_int_to_i64 = extern("py_int_to_i64", (c_ptr, c_ptr), c_int64)
 py_obj_getitem = extern("py_obj_getitem", (c_ptr, c_ptr), c_ptr)
 py_obj_len = extern("py_obj_len", (c_ptr,), c_int64)
 py_obj_str = extern("py_obj_str", (c_ptr,), c_ptr)
@@ -275,5 +278,153 @@ def pcc_worker_process_pool(specs, width: int) -> int:
                 platform_waitpid(pid, status, 0)
             slot += 1
     free(status)
+    free(slots)
+    return failure
+
+
+@c_abi_export("pcc_weighted_worker_process_pool")
+def pcc_weighted_worker_process_pool(
+    specs, weights, width: int, budget: int,
+) -> int:
+    """Run independent workers as memory reservations become available.
+
+    ``weights`` are conservative byte reservations, not live-RSS guesses.
+    A job larger than the budget runs alone under the caller's tree watchdog.
+    The return value uses the same packed failing-index/return-code ABI as the
+    fixed-width pool.
+    """
+    count = py_obj_len(specs)
+    if count <= 0:
+        return 0
+    if count > 1048576 or py_obj_len(weights) != count or budget <= 0:
+        return 4294967423
+    if width < 1:
+        width = 1
+    if width > count:
+        width = count
+    slots = malloc(width * 24)
+    reservations = malloc(count * 8)
+    started = malloc(count)
+    status = malloc(4)
+    overflow = malloc(4)
+    if (
+        ptr_is_null(slots) or ptr_is_null(reservations)
+        or ptr_is_null(started) or ptr_is_null(status)
+        or ptr_is_null(overflow)
+    ):
+        free(slots)
+        free(reservations)
+        free(started)
+        free(status)
+        free(overflow)
+        return 4294967423
+    memset(slots, 0, width * 24)
+    memset(started, 0, count)
+    failure = 0
+    index = 0
+    while index < count:
+        py_index = py_int_from_i64(index)
+        item = py_obj_getitem(weights, py_index)
+        py_decref(py_index)
+        store_i32(overflow, 0, 0)
+        value = py_int_to_i64(item, overflow)
+        py_decref(item)
+        if load_i32(overflow, 0) != 0 or value <= 0:
+            failure = ((index + 1) << 32) | 127
+            break
+        store_i64(reservations, index * 8, value)
+        index += 1
+    live = 0
+    completed = 0
+    available = budget
+    while failure == 0 and completed < count:
+        slot = 0
+        while slot < width:
+            pid = load_i64(slots, slot * 24)
+            if pid > 0:
+                waited = platform_waitpid(pid, status, 1)
+                if waited != 0:
+                    rc = 127
+                    if waited == pid:
+                        rc = normalize_wait_status(load_i32(status, 0))
+                    platform_kill(-pid, 9)
+                    available += load_i64(slots, slot * 24 + 16)
+                    store_i64(slots, slot * 24, 0)
+                    live -= 1
+                    completed += 1
+                    if rc != 0:
+                        failed_index = load_i64(slots, slot * 24 + 8)
+                        failure = ((failed_index + 1) << 32) | (rc & 4294967295)
+                        break
+            slot += 1
+        if failure != 0:
+            break
+        while live < width and completed + live < count:
+            selected = -1
+            index = 0
+            while index < count:
+                if load_i8(started, index) == 0:
+                    weight = load_i64(reservations, index * 8)
+                    if weight <= available or live == 0:
+                        selected = index
+                        break
+                index += 1
+            if selected < 0:
+                break
+            slot = 0
+            while load_i64(slots, slot * 24) != 0:
+                slot += 1
+            py_index = py_int_from_i64(selected)
+            spec = py_obj_getitem(specs, py_index)
+            py_decref(py_index)
+            zero = py_int_from_i64(0)
+            one = py_int_from_i64(1)
+            argv = py_obj_getitem(spec, zero)
+            env = py_obj_getitem(spec, one)
+            py_decref(zero)
+            py_decref(one)
+            argc = py_obj_len(argv)
+            envc = py_obj_len(env)
+            items = _build_exec_argv(argv)
+            envp = _build_exec_argv(env)
+            pid = -1
+            if ptr_is_null(items) == 0 and ptr_is_null(envp) == 0:
+                pid = platform_spawnp(items, envp, 0)
+            _free_exec_argv(items, argc)
+            _free_exec_argv(envp, envc)
+            py_decref(argv)
+            py_decref(env)
+            py_decref(spec)
+            if pid <= 0:
+                failure = ((selected + 1) << 32) | 127
+                break
+            store_i8(started, selected, 1)
+            store_i64(slots, slot * 24, pid)
+            store_i64(slots, slot * 24 + 8, selected)
+            weight = load_i64(reservations, selected * 8)
+            store_i64(slots, slot * 24 + 16, weight)
+            available -= weight
+            live += 1
+        if live > 0 and failure == 0:
+            platform_sleep_ns(10000000)
+    if failure != 0:
+        slot = 0
+        while slot < width:
+            pid = load_i64(slots, slot * 24)
+            if pid > 0:
+                platform_kill(-pid, 15)
+            slot += 1
+        platform_sleep_ns(200000000)
+        slot = 0
+        while slot < width:
+            pid = load_i64(slots, slot * 24)
+            if pid > 0:
+                platform_kill(-pid, 9)
+                platform_waitpid(pid, status, 0)
+            slot += 1
+    free(overflow)
+    free(status)
+    free(started)
+    free(reservations)
     free(slots)
     return failure

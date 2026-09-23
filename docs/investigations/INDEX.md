@@ -951,7 +951,7 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
 - [native-stackmap-structural-scan-cost.md](native-stackmap-structural-scan-cost.md) — **native stack-map structural scans decode unused record fields**
   - Resolved locally on 2026-09-16. The optimization is retained after correctness
 - [native-stage2-link-asm-memory-budget.md](native-stage2-link-asm-memory-budget.md) — **native Stage2 link exceeds its budget while assembling inputs**
-  - Active — 2026-09-21. The latest diagnostic Stage2 attempt timed out at
+  - Active — 2026-09-22 route correction and sorted-input repair: the owned native
 - [native-subprocess-called-process-error-returncode.md](native-subprocess-called-process-error-returncode.md) — **native subprocess failures lose CalledProcessError fields**
   - Under the self backend with `--python-libpython=off`, native lowering for
 - [native-subprocess-provider-omitted-from-shallow-multi-file-closure.md](native-subprocess-provider-omitted-from-shallow-multi-file-closure.md) — **native subprocess provider omitted from shallow multi-file closure**

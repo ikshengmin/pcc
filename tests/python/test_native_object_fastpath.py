@@ -382,6 +382,51 @@ def test_explicit_owned_inputs_retire_before_executable_layout(monkeypatch):
     assert checked == [True]
 
 
+def test_owned_merged_source_view_matches_indexed_object_link():
+    caller = NativeObject.from_sections(_caller_sections(), undefined=["_helper"])
+    helper = NativeObject.from_sections(_helper_sections())
+    expected = link_executable([caller, helper], _consume_inputs=True)
+    transferred = [caller, helper]
+    actual = link_executable(
+        transferred, _consume_inputs=True, _direct_source_view=True,
+    )
+    assert transferred == []
+    assert actual == expected
+
+
+def test_owned_merged_source_view_rebases_section_target_and_runs(tmp_path):
+    source = NativeObject.from_sections([
+        Section(
+            sectname="__text", segname="__TEXT", flags=TEXT_SECTION_FLAGS,
+            align_log2=2, data=b"\x40\x05\x80\x52" + _RET,
+            symbols=(TextSymbol("_main", 0),),
+        ),
+        Section(
+            sectname="__data", segname="__DATA", flags=DATA_SECTION_FLAGS,
+            align_log2=3, data=b"\0" * 8,
+            symbols=(TextSymbol("_value", 0),),
+        ),
+        Section(
+            sectname="__ptrs", segname="__DATA", flags=DATA_SECTION_FLAGS,
+            align_log2=3, data=b"\0" * 8,
+            relocations=(Relocation(
+                0, "", spec.ARM64_RELOC_UNSIGNED, False, length=3,
+                section=("__DATA", "__data"), target_offset=0,
+            ),),
+        ),
+    ])
+    expected = link_executable([source])
+    actual = link_executable(
+        [source], _consume_inputs=True, _direct_source_view=True,
+    )
+    assert actual == expected
+    executable = tmp_path / "owned_source_view"
+    executable.write_bytes(actual)
+    executable.chmod(0o755)
+    run = subprocess.run([str(executable)], capture_output=True, timeout=10)
+    assert run.returncode == 42, run.stderr
+
+
 def test_relocation_order_arena_closes_when_iteration_stops(monkeypatch):
     original = native_object_module.CompilerIntArena
     closed = []
@@ -437,19 +482,19 @@ def test_signing_releases_output_region_owners(monkeypatch):
     import weakref
     from pcc.backend import macho_exec
 
-    materialize = macho_exec.materialize_output
+    materialize = macho_exec.materialize_output_buffer
     sign = macho_exec.build_signature
     references = []
 
-    def capture(size, regions):
+    def capture(size, regions, **kwargs):
         references.extend(weakref.ref(region) for region in regions)
-        return materialize(size, regions)
+        return materialize(size, regions, **kwargs)
 
     def check(*args, **kwargs):
         assert references and all(ref() is None for ref in references)
         return sign(*args, **kwargs)
 
-    monkeypatch.setattr(macho_exec, "materialize_output", capture)
+    monkeypatch.setattr(macho_exec, "materialize_output_buffer", capture)
     monkeypatch.setattr(macho_exec, "build_signature", check)
     assert link_executable([NativeObject.from_sections(_helper_sections())], entry="_helper")
 
@@ -667,18 +712,49 @@ def test_packed_relocation_native_link_executes_under_all_collectors(
         ".globl _helper\n.p2align 2\n_helper:\n movz w0, #42\n ret\n"
     ))
     assert decode_packed_native_object(caller.read_bytes()).sections[0].relocation_count == 1
-    for backend in range(5):
-        output = tmp_path / ("program-" + str(backend))
-        env = dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend),
-                   PCC_HOST_PYTHON="/usr/bin/false", PCC_HOST_PCC="/usr/bin/false")
-        linked = subprocess.run(
-            [str(linker), "--out", str(output), "--native-object", str(caller),
-             "--native-object", str(helper)],
-            env=env, capture_output=True, timeout=30,
-        )
-        assert linked.returncode == 0, (backend, linked.stdout, linked.stderr)
-        executed = subprocess.run([str(output)], env=env, capture_output=True, timeout=10)
-        assert executed.returncode == 42, (backend, executed.stdout, executed.stderr)
+    pointer_caller = tmp_path / "pointer-caller.pco"
+    pointer_data = tmp_path / "pointer-data.pco"
+    pointer_caller.write_bytes(assemble_asm_text_to_encoded(
+        ".section __TEXT,__text,regular,pure_instructions\n"
+        ".globl _main\n.p2align 2\n_main:\n"
+        " adrp x9, _slot@PAGE\n add x9, x9, _slot@PAGEOFF\n"
+        " ldr x9, [x9]\n ldr w0, [x9]\n ret\n"
+    ))
+    pointer_data.write_bytes(encode_native_object_from_sections([Section(
+        sectname="__data", segname="__DATA", flags=DATA_SECTION_FLAGS,
+        align_log2=3, data=(42).to_bytes(8, "little") + b"\0" * 32,
+        symbols=(TextSymbol("_target", 0), TextSymbol("_slot", 8)),
+        # Non-monotone input, with section targets interleaved with a symbol
+        # target: both direct traversal and selected-row ordering must agree.
+        relocations=(
+            Relocation(8, "", spec.ARM64_RELOC_UNSIGNED, False, length=3,
+                       section=("__DATA", "__data"), target_offset=0),
+            Relocation(32, "_target", spec.ARM64_RELOC_UNSIGNED, False, length=3),
+            Relocation(24, "", spec.ARM64_RELOC_UNSIGNED, False, length=3,
+                       section=("__DATA", "__data"), target_offset=0),
+            Relocation(16, "", spec.ARM64_RELOC_UNSIGNED, False, length=3,
+                       section=("__DATA", "__data"), target_offset=0),
+        ),
+    )]))
+    for case, first, second in (("branch", caller, helper),
+                                ("section-target", pointer_caller, pointer_data)):
+        expected = link_executable([
+            decode_packed_native_object(first.read_bytes()),
+            decode_packed_native_object(second.read_bytes()),
+        ], _consume_inputs=True)
+        for backend in range(5):
+            output = tmp_path / (case + "-program-" + str(backend))
+            env = dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend),
+                       PCC_HOST_PYTHON="/usr/bin/false", PCC_HOST_PCC="/usr/bin/false")
+            linked = subprocess.run(
+                [str(linker), "--out", str(output), "--native-object", str(first),
+                 "--native-object", str(second)],
+                env=env, capture_output=True, timeout=30,
+            )
+            assert linked.returncode == 0, (case, backend, linked.stdout, linked.stderr)
+            assert output.read_bytes() == expected, (case, backend)
+            executed = subprocess.run([str(output)], env=env, capture_output=True, timeout=10)
+            assert executed.returncode == 42, (case, backend, executed.stdout, executed.stderr)
 
 
 def test_native_codec_stores_each_symbol_once_and_relocations_by_index() -> None:
@@ -1205,3 +1281,94 @@ def test_native_object_rejects_out_of_range_indices_and_bad_framing() -> None:
         decode_native_object(valid + b"unexpected")
     with pytest.raises(NativeObjectError, match="truncated"):
         decode_native_object(valid[:-1])
+
+
+@pytest.mark.parametrize("native_reads", [False, True])
+@pytest.mark.parametrize("order", [(0, 8, 16, 24), (24, 16, 8, 0), (16, 0, 24, 8)])
+def test_packed_payload_only_decodes_section_target_rows(monkeypatch, native_reads, order):
+    from pcc.backend import macho_link
+
+    if native_reads:
+        _use_host_payload_loads(monkeypatch)
+    source = NativeObject.from_sections([
+        Section(sectname="__prefix", segname="__DATA", flags=DATA_SECTION_FLAGS,
+                align_log2=3, data=b"\0" * 16, symbols=(TextSymbol("_prefix", 0),)),
+        Section(sectname="__data", segname="__DATA", flags=DATA_SECTION_FLAGS,
+                align_log2=3, data=b"\0" * 32, symbols=(TextSymbol("_dest", 0),),
+                relocations=tuple(
+                    Relocation(offset, "" if offset in (8, 24) else "_dest",
+                               spec.ARM64_RELOC_UNSIGNED, False, length=3,
+                               section=("__DATA", "__data") if offset in (8, 24) else None,
+                               target_offset=0 if offset in (8, 24) else None)
+                    for offset in order)),
+    ])
+    packed = decode_packed_native_object(encode_native_object(source))
+    addrs = macho_link._native_section_addrs(source)
+    expected = macho_link._native_section_payload(source, 2, addrs)
+    calls = []
+    original = native_object_module._relocation_fields_at
+
+    def read_fields(data, offset):
+        calls.append(offset)
+        return original(data, offset)
+
+    def forbid_normalized_generator(*_args):
+        raise AssertionError("payload scan decoded every relocation through the normalized generator")
+
+    monkeypatch.setattr(native_object_module, "_relocation_fields_at", read_fields)
+    monkeypatch.setattr(type(packed), "decoded_relocations", forbid_normalized_generator)
+    actual = macho_link._native_section_payload(packed, 2, addrs)
+    assert actual == expected
+    assert len(calls) == 2
+    assert int.from_bytes(actual[8:16], "little") == 16
+    assert int.from_bytes(actual[24:32], "little") == 16
+    assert bytes(packed.section_data(1)) == b"\0" * 32
+
+
+@pytest.mark.parametrize("native_reads", [False, True])
+@pytest.mark.parametrize("damage", ["negative_start", "truncated", "overlong_count"])
+def test_packed_payload_checks_span_before_raw_target_reads(monkeypatch, native_reads, damage):
+    from dataclasses import replace
+    from pcc.backend import macho_link
+
+    if native_reads:
+        _use_host_payload_loads(monkeypatch)
+    packed = decode_packed_native_object(encode_native_object(
+        NativeObject.from_sections(_caller_sections(), undefined=["_helper"]),
+    ))
+    section = packed.sections[0]
+    if damage == "negative_start":
+        section = replace(section, relocation_offset=-1)
+    elif damage == "truncated":
+        packed.encoded = packed.encoded[:-1]
+    else:
+        section = replace(section, relocation_count=section.relocation_count + 1)
+    packed.sections = (section,)
+    with pytest.raises(NativeObjectError, match="truncated pcc-native relocation"):
+        macho_link._native_section_payload(packed, 1, (0,))
+
+
+def test_packed_merge_resolves_shared_symbol_names_once_per_input(monkeypatch):
+    from pcc.backend import macho_link
+
+    source = NativeObject.from_sections([Section(
+        sectname="__data", segname="__DATA", flags=DATA_SECTION_FLAGS,
+        align_log2=3, data=b"\0" * 1024,
+        symbols=(TextSymbol("_same", 0, external=False),),
+        relocations=tuple(Relocation(index * 8, "_same", spec.ARM64_RELOC_UNSIGNED,
+                                     False, length=3) for index in range(128)),
+    )])
+    expected = link_relocatable_native([source, source])
+    objects = [decode_packed_native_object(encode_native_object(source)) for _ in range(2)]
+    resolve = macho_link._relocation_symbol_name
+    calls = []
+
+    def count_resolution(symbols, index, renames, *, context):
+        calls.append(index)
+        return resolve(symbols, index, renames, context=context)
+
+    monkeypatch.setattr(macho_link, "_relocation_symbol_name", count_resolution)
+    actual = link_relocatable_native(objects)
+    assert actual == expected
+    assert {symbol.name for symbol in actual.symbols} == {"_same", "_same$link1"}
+    assert len(calls) <= 2 * sum(len(obj.symbols) for obj in objects)

@@ -20,6 +20,7 @@ from ..py_ast import (
     Expr,
     FloatType,
     IntType,
+    Lambda,
     ListExpr,
     ListType,
     Name,
@@ -39,6 +40,42 @@ _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
 _I32 = ir.IntType(32)
 _CSTR = _I8.as_pointer()
+
+
+def prepare_rebound_object_parameters(host, fd, boxed_param_names) -> None:
+    """Give assigned object parameters a normal owned local from entry.
+
+    Incoming ABI arguments are borrowed. A parameter which can be rebound
+    needs an independent owner and a flag before any branch/error exit is
+    emitted, including paths which return before the first assignment.
+    Reuse the existing binding promotion used for borrowed for-targets;
+    it preserves the incoming value in a fresh traced slot and balances
+    both slots on every exit. Unassigned and raw-ABI parameters stay borrowed.
+    """
+    from .cpy_call_lowering import _name_is_stored_in
+    from .for_loop_lowering import _for_prepare_owned_object_target
+
+    if getattr(host, "_freestanding_module", False) or (
+        getattr(host, "_module_has_c_abi_export", False)
+        and getattr(host, "_module_uses_raw_int_scaffold", False)
+    ):
+        return
+    for name in sorted(host._current_param_names):
+        if name in boxed_param_names:
+            continue
+        slot = host.env.get(name)
+        if slot is None:
+            continue
+        _alloca, ir_ty, bind_ty = slot
+        if not isinstance(ir_ty, ir.PointerType) or not host._is_object(bind_ty):
+            continue
+        if not _name_is_stored_in(fd.body, name):
+            continue
+        _for_prepare_owned_object_target(host, name, bind_ty)
+        # This binding now follows ordinary local assignment/return rules.
+        # Lexical parameter shadowing was recorded separately before here.
+        host._current_param_names.discard(name)
+
 
 _UNSAFE_RAW_POINTER_RETURNS = frozenset(
     {
@@ -667,9 +704,12 @@ class OwnershipLoweringMixin:
         # runtime build.
         if (
             value is not None
-            and isinstance(value_ty, DynType)
+            and (isinstance(value_ty, DynType) or isinstance(expr, Lambda))
             and self._value_is_owned_object(value)
         ):
+            # Native lambda emitters prove a fresh function object even when
+            # inference gives it FunctionType. A keyword/container insertion
+            # retains it, so the original lambda owner must also be consumed.
             return True
         if self._expr_returns_owned_object(expr):
             return True

@@ -6,6 +6,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
+import pytest
 
 from pcc.py_frontend import pipeline
 from pcc.py_frontend import pipeline_frontend_parallel as parallel
@@ -181,9 +182,61 @@ def test_summary_worker_owns_exactly_one_ast_and_publishes_one_wire(tmp_path):
     )
 
 
-def test_summary_worker_rejects_multi_module_ownership(tmp_path):
+def test_summary_worker_batch_keeps_only_one_ast_alive(tmp_path):
+    import weakref
+
+    class Ast:
+        pass
+
+    ast_dir = tmp_path / "ast"
+    summary_dir = tmp_path / "summaries"
+    ast_dir.mkdir()
+    summary_dir.mkdir()
+    result_path = tmp_path / "result.tsv"
+    references = []
+    export_reads = []
+    names = ["pkg.first", "pkg.second", "pkg.third"]
+    exports = {name: {} for name in names}
+
+    def read_exports(path):
+        export_reads.append(path)
+        return exports, {}
+
+    def read_ast(path):
+        assert all(ref() is None for ref in references), "previous module AST remained live"
+        value = Ast()
+        references.append(weakref.ref(value))
+        return value
+
+    def build_summary(ast_module, module_name, native_exports):
+        assert native_exports is exports
+        assert references[-1]() is ast_module
+        return {"module_name": module_name}
+
+    def write_summary(path, summary):
+        Path(path).write_text(summary["module_name"])
+
     manifest = {
-        "assigned_indices": [0, 1],
+        "assigned_indices": [0, 1, 2], "module_names": names,
+        "ast_dir": str(ast_dir), "exports_path": "shared-exports",
+        "ir_dir": str(summary_dir), "result_path": str(result_path),
+    }
+    assert worker_execution.run_summary_worker(
+        manifest, read_native_exports_wire=read_exports, read_ast_wire=read_ast,
+        build_effect_summary=build_summary, write_effect_summary=write_summary,
+    ) == 0
+    assert export_reads == ["shared-exports"]
+    assert all(ref() is None for ref in references)
+    assert result_path.read_text().splitlines() == [
+        f"SUMMARY\t{index}\t{name}\t{summary_dir / ('summary_' + str(index) + '.wire')}"
+        for index, name in enumerate(names)
+    ]
+
+
+@pytest.mark.parametrize("indices", [[], [0, 0], [-1], [2]])
+def test_summary_worker_rejects_invalid_assignments(tmp_path, indices):
+    manifest = {
+        "assigned_indices": indices,
         "module_names": ["a", "b"],
     }
 
@@ -196,9 +249,55 @@ def test_summary_worker_rejects_multi_module_ownership(tmp_path):
             write_effect_summary=lambda *_args: None,
         )
     except ValueError as exc:
-        assert "exactly one module" in str(exc)
+        assert "summary worker" in str(exc)
     else:
-        raise AssertionError("summary worker accepted multiple AST owners")
+        raise AssertionError("summary worker accepted invalid module ownership")
+
+
+@pytest.mark.parametrize("corruption", [None, "index", "path", "missing"])
+def test_summary_coordinator_batches_and_checks_each_owned_result(tmp_path, corruption):
+    names = ["pkg.module_" + str(i) for i in range(17)]
+    manifests = {}
+    batches = []
+
+    def write_manifest(path, result, output, exports, ast, sources, modules, assigned, **kwargs):
+        assert kwargs["job_kind"] == "summary"
+        batches.append(list(assigned))
+        manifests[path] = (result, output, list(assigned))
+
+    def run_commands(commands, max_parallel):
+        assert max_parallel == 1
+        for command in commands:
+            result, output, assigned = manifests[command.split()[-1]]
+            lines = []
+            for index in assigned:
+                path = Path(output) / ("summary_" + str(index) + ".wire")
+                path.write_text(names[index])
+                reported_index = 0 if corruption == "index" and index == 8 else index
+                reported_path = str(path) + ".wrong" if corruption == "path" and index == 8 else str(path)
+                if corruption != "missing" or index != 8:
+                    lines.append(f"SUMMARY\t{reported_index}\t{names[index]}\t{reported_path}\n")
+            Path(result).write_text("".join(lines))
+
+    def execute():
+        return parallel._build_vthread_effect_summaries(
+            str(tmp_path), ["unused"] * len(names), names, ["python", "-m", "pcc"],
+            entry_module=names[0], sibling_inits=[], libpython_mode="off",
+            ir_scaffold_mode="on", verbose=False, max_parallel=1,
+            ast_dir="ast", exports_path="exports", write_manifest=write_manifest,
+            shell_quote_arg=lambda value: value, worker_arg="worker",
+            worker_env_prefix=lambda: "", join_strings=lambda values, separator: separator.join(values),
+            run_worker_commands=run_commands, pipeline_error=RuntimeError,
+        )
+
+    if corruption:
+        with pytest.raises(RuntimeError, match="summary worker"):
+            execute()
+    else:
+        paths, width = execute()
+        assert width == 1
+        assert [Path(path).read_text() for path in paths] == names
+    assert batches == [list(range(8)), list(range(8, 16)), [16]]
 
 
 def test_parallel_cache_hit_skips_frontend_worker_execution():
@@ -918,12 +1017,12 @@ def test_direct_pco_worker_releases_frontend_and_authoring_graphs_in_order():
         conditional_render,
     )
     structured_mode = source.index(
-        "structured_instructions=(",
+        "structured_instructions=True",
         structured_emit,
     )
     release_frontend = source.index("parsed_modules[index] = None")
     assemble_lines = source.index(
-        "sections, undefined = assemble_lines(",
+        "sections, undefined = direct_transport.assemble_sections()",
         release_frontend,
     )
     release_transport = source.index("del direct_transport", assemble_lines)

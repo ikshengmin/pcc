@@ -553,9 +553,15 @@ class BinaryOpLoweringMixin:
             rhs_obj = marshal.marshal_to_object(
                 self.builder, self.module, self.runtime, rhs, rhs_ty
             )
-            return self._emit_checked_set_binary_values(
+            result = self._emit_checked_set_binary_values(
                 op, lhs_obj, rhs_obj, None
             )
+            # Every set operator creates a fresh set. SetType expressions
+            # are not inferred as owned by the generic BinOp classifier.
+            # Publish the actual owner so assignments, nesting and discarded
+            # expressions consume it instead of retaining the entire set.
+            self._note_owned_object_value(result)
+            return result
 
         # Generic DynType `-` / `*`, mirroring the `+` (py_obj_add) and `/`
         # (py_obj_truediv) paths above. Placed AFTER the native-set block so set

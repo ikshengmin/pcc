@@ -64,6 +64,7 @@ from pcc.llvm_capi.ir import (
 
 from ..export_meta import decode_type
 from .class_override_index import build_export_method_overrides
+from .ownership_lowering import prepare_rebound_object_parameters
 from ..py_ast import (
     Arg,
     Assign,
@@ -4268,6 +4269,8 @@ class ClassLowering:
                 parent._current_global_names,
             )
             parent._lambda_lexical_shadow_names = set(parent._current_param_names)
+            if auto_root_borrowed_params:
+                prepare_rebound_object_parameters(parent, fd, boxed_param_names)
             parent._emit_thread_safepoint()
 
             # Emit statements via the parent's normal emitter. In debug mode,

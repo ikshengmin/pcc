@@ -404,6 +404,40 @@ def test_precise_stackmap_v1_round_trips_both_self_targets(arch: int):
     assert function_address_offsets(payload) == (HEADER_SIZE + 8,)
 
 
+def test_merge_stack_map_payloads_reuses_local_ranges_without_merging_distinct_counts():
+    values = []
+    for symbol in ("_merge_cache_a", "_merge_cache_b"):
+        value = _map(ARCH_AARCH64, symbol)
+        function = value.functions[0]
+        # The empty entry and two-location call both start at source table
+        # index zero, while the empty entry also repeats within this input.
+        empty = replace(function.records[0], locations=())
+        repeated = replace(
+            empty,
+            safepoint_id=safepoint_id(symbol, 99, SAFEPOINT_CALL),
+            instruction_offset=40,
+            kind=SAFEPOINT_CALL,
+        )
+        values.append(replace(value, functions=(replace(
+            function,
+            records=(empty,) + function.records[1:] + (repeated,),
+        ),)))
+    values.sort(key=lambda value: value.functions[0].function_id)
+    expected = PreciseStackMap(
+        arch=ARCH_AARCH64,
+        functions=tuple(value.functions[0] for value in values),
+    )
+
+    merged, address_offsets = wire_stackmaps.merge_stack_map_payloads(
+        tuple(encode_stack_map(value) for value in values)
+    )
+    assert merged == encode_stack_map(expected)
+    assert decode_stack_map(merged) == expected
+    assert tuple(offset for _function_id, offset in address_offsets) == (
+        function_address_offsets(merged)
+    )
+
+
 def test_precise_stackmap_rejects_truncation_trailing_and_wrong_target():
     payload = encode_stack_map(_map(ARCH_AARCH64, "probe"))
     with pytest.raises(PreciseStackMapError, match="truncated"):

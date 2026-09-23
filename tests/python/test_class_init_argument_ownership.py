@@ -106,3 +106,138 @@ main()
                              capture_output=True, text=True, timeout=15)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
         assert ran.stdout.strip() == "constructor-owners-ok"
+
+
+@pytest.mark.parametrize("arguments", [
+    "tuple(left), tuple(right)",
+    "left=tuple(left), right=tuple(right)",
+])
+def test_classmethod_constructor_consumes_temporary_tuples(
+    tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive, arguments,
+):
+    """The NativeObject.from_sections calling shape, including kwargs."""
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    source = tmp_path / "classmethod_owners.py"
+    source.write_text('''import gc
+from pcc.extern import extern, c_int64
+heap = extern("pcc_os_heap_in_use_bytes", (), c_int64)
+created = 0
+destroyed = 0
+class Item:
+    def __init__(self):
+        global created
+        self.payload = b"x" * 256
+        created += 1
+    def __del__(self):
+        global destroyed
+        destroyed += 1
+class Group:
+    def __init__(self, left: tuple, right: tuple):
+        self.left = left
+        self.right = right
+    @classmethod
+    def make(cls, left: list, right: list):
+        return cls(ARGUMENTS)
+def run():
+    left = [Item() for i in range(1000)]
+    right = [Item() for i in range(1000)]
+    result = Group.make(left, right)
+    assert len(result.left) == len(result.right) == 1000
+def main():
+    run()
+    gc.collect()
+    gc.collect()
+    assert destroyed == created == 2000
+    before = heap()
+    run()
+    gc.collect()
+    gc.collect()
+    assert destroyed == created == 4000
+    print(created, destroyed, heap() - before)
+main()
+'''.replace("ARGUMENTS", arguments))
+    binary = tmp_path / "classmethod_owners"
+    python_program_compiler(
+        str(source), str(binary), backend="self", libpython_mode="off",
+        runtime_archive=str(pcc_py_runtime_archive),
+    )
+    for backend in range(5):
+        ran = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=20,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+        )
+        assert ran.returncode == 0, (backend, ran.stdout, ran.stderr)
+        created, destroyed, growth = map(int, ran.stdout.split())
+        assert created == destroyed == 4000
+        if backend == 0:
+            assert growth < 16384, growth
+
+
+def test_classmethod_constructor_arguments_survive_rebind_and_unwind(
+    tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive,
+):
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    source = tmp_path / "classmethod_unwind.py"
+    source.write_text('''import gc
+events = []
+anchor = [7]
+class Item:
+    def __del__(self):
+        gc.collect()
+        events.append(1)
+class Box:
+    def __init__(self, left, right):
+        if right:
+            raise ValueError("init failed")
+        self.left = left
+    @classmethod
+    def failed_argument(cls):
+        return cls(Item(), fail())
+    @classmethod
+    def failed_init(cls):
+        return cls(Item(), 1)
+    @classmethod
+    def borrowed_source(cls):
+        return cls(anchor, rebind())
+def fail() -> int:
+    raise ValueError("argument failed")
+def rebind() -> int:
+    global anchor
+    anchor = [99]
+    gc.collect()
+    return 0
+def exercise():
+    try:
+        Box.failed_argument()
+    except ValueError as exc:
+        assert str(exc) == "argument failed"
+    else:
+        assert False
+    try:
+        Box.failed_init()
+    except ValueError as exc:
+        assert str(exc) == "init failed"
+    else:
+        assert False
+def main():
+    box = Box.borrowed_source()
+    assert box.left[0] == 7
+    assert anchor[0] == 99
+    exercise()
+    gc.collect()
+    assert len(events) == 2
+    print("classmethod-owners-ok")
+main()
+''')
+    binary = tmp_path / "classmethod_unwind"
+    python_program_compiler(
+        str(source), str(binary), backend="self", libpython_mode="off",
+        runtime_archive=str(pcc_py_runtime_archive),
+    )
+    for backend in range(5):
+        ran = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=20,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+        )
+        assert ran.returncode == 0, (backend, ran.stdout, ran.stderr)
+        assert ran.stdout.strip() == "classmethod-owners-ok"

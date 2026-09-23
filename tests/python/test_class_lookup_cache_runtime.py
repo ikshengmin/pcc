@@ -80,6 +80,10 @@ def test_class_lookup_uses_relocation_safe_linear_walk() -> None:
     assert "pcc_gc_note_relocation_read(" in c_source
     assert "while i < n_mro_i32:" in py_source
     assert "while j < n_methods_i32:" in py_source
+    assert "m->methods[j].name_hash == name_hash" in c_source
+    assert "stored_hash == name_hash" in py_source
+    assert "strcmp(method_name, name) == 0" in c_source
+    assert "_strs_eq(m_name, name) != 0" in py_source
     assert "pcc_gc_load_ptr(cls, ptr_add(mro, i * 8))" in py_source
     assert "pcc_gc_note_relocation_read(load_ptr(method_slot, 0))" in py_source
     assert "from_h->type_tag == PY_TYPE_CLASS" in c_gc_source
@@ -142,6 +146,13 @@ def test_class_lookup_preserves_shadowing_and_delete_epoch(
                 &py_class_attr_cache_epoch, __ATOMIC_ACQUIRE
             );
             if (after_delete == before_delete) return 13;
+            /* Equal FNV-1a length/hash; full-name comparison still decides. */
+            PyObject *collision_a = py_int_from_i64(66);
+            PyObject *collision_b = py_int_from_i64(77);
+            py_class_add_method(reuse, "jahaxiff", collision_a);
+            py_class_add_method(reuse, "vzekpekw", collision_b);
+            if (py_class_lookup(reuse, "jahaxiff") != collision_a) return 14;
+            if (py_class_lookup(reuse, "vzekpekw") != collision_b) return 15;
             return 0;
         }
         '''
@@ -161,6 +172,157 @@ def test_class_lookup_preserves_shadowing_and_delete_epoch(
                 f"backend={backend} runtime={runtime_name}: "
                 + result.stdout
                 + result.stderr
+            )
+
+
+def test_exposing_mutable_class_attrs_invalidates_field_cache_epoch(
+    tmp_path: Path, c_runtime_archive: Path, pcc_py_runtime_archive: Path,
+) -> None:
+    source = r'''
+        #include "py_internal.h"
+        #include <stdint.h>
+
+        extern int32_t py_class_attr_cache_epoch;
+
+        int main(void) {
+            if (pcc_gc_set_backend(CACHE_BACKEND) != 0) return 1;
+            PyClassObject *cls = py_class_new("Mutable", NULL, 0, NULL, 0);
+            if (cls == NULL) return 2;
+            if (py_class_attrs_dict(cls, 0) != NULL) return 3;
+            int32_t before = __atomic_load_n(
+                &py_class_attr_cache_epoch, __ATOMIC_ACQUIRE
+            );
+            PyObject *attrs = py_class_attrs_dict(cls, 1);
+            if (attrs == NULL) return 4;
+            int32_t exposed = __atomic_load_n(
+                &py_class_attr_cache_epoch, __ATOMIC_ACQUIRE
+            );
+            if (exposed != before + 1) return 5;
+            if (py_class_attrs_dict(cls, 1) != attrs) return 6;
+            if (__atomic_load_n(&py_class_attr_cache_epoch, __ATOMIC_ACQUIRE)
+                != exposed) return 7;
+            return 0;
+        }
+    '''
+    for backend in range(5):
+        for runtime_name, archive in (
+            ("c", c_runtime_archive),
+            ("pcc_py", pcc_py_runtime_archive),
+        ):
+            result = _compile_and_run(
+                tmp_path,
+                f"class_attrs_expose_backend{backend}_{runtime_name}",
+                source.replace("CACHE_BACKEND", str(backend)), archive,
+            )
+            assert result.returncode == 0, (
+                f"backend={backend} runtime={runtime_name}: "
+                + result.stdout + result.stderr
+            )
+
+
+def test_instance_field_cache_reloads_values_after_class_dict_exposure(
+    tmp_path: Path, c_runtime_archive: Path, pcc_py_runtime_archive: Path,
+) -> None:
+    source = r'''
+        #include "py_internal.h"
+        #include <stdint.h>
+
+        extern int32_t py_class_attr_cache_epoch;
+
+        int main(void) {
+            if (pcc_gc_set_backend(CACHE_BACKEND) != 0) return 1;
+            const char *fields[] = {"value"};
+            PyClassObject *cls = py_class_new("Item", NULL, 0, fields, 1);
+            if (cls == NULL) return 2;
+            PyInstanceObject *inst = py_instance_new(cls);
+            if (inst == NULL) return 3;
+            PyObject *first = py_int_from_i64(42);
+            py_instance_set_field(inst, 0, first);
+            py_decref(first);
+            PyObject *read = py_obj_getattr((PyObject *)inst, "value");
+            if (read == NULL || py_int_value_i64(read) != 42) return 4;
+            py_decref(read);
+            PyObject *second = py_int_from_i64(43);
+            py_instance_set_field(inst, 0, second);
+            py_decref(second);
+            read = py_obj_getattr((PyObject *)inst, "value");
+            if (read == NULL || py_int_value_i64(read) != 43) return 6;
+            py_decref(read);
+            int32_t cached_epoch = __atomic_load_n(
+                &py_class_attr_cache_epoch, __ATOMIC_ACQUIRE
+            );
+            if (py_class_attrs_dict(cls, 1) == NULL) return 7;
+            if (__atomic_load_n(&py_class_attr_cache_epoch, __ATOMIC_ACQUIRE)
+                != cached_epoch + 1) return 9;
+            read = py_obj_getattr((PyObject *)inst, "value");
+            if (read == NULL || py_int_value_i64(read) != 43) return 8;
+            py_decref(read);
+            return 0;
+        }
+    '''
+    for backend in range(5):
+        for runtime_name, archive in (
+            ("c", c_runtime_archive),
+            ("pcc_py", pcc_py_runtime_archive),
+        ):
+            result = _compile_and_run(
+                tmp_path,
+                f"callsite_field_backend{backend}_{runtime_name}",
+                source.replace("CACHE_BACKEND", str(backend)), archive,
+            )
+            assert result.returncode == 0, (
+                f"backend={backend} runtime={runtime_name}: "
+                + result.stdout + result.stderr
+            )
+
+
+def test_user_instance_getattr_keeps_field_and_class_attrs(
+    tmp_path: Path, c_runtime_archive: Path, pcc_py_runtime_archive: Path,
+) -> None:
+    source = r'''
+        #include "py_internal.h"
+
+        int main(void) {
+            if (pcc_gc_set_backend(CACHE_BACKEND) != 0) return 1;
+            const char *fields[] = {"value"};
+            PyClassObject *cls = py_class_new("Item", NULL, 0, fields, 1);
+            if (cls == NULL) return 2;
+            PyInstanceObject *inst = (PyInstanceObject *)py_instance_new(cls);
+            if (inst == NULL) return 3;
+            PyObject *value = py_int_from_i64(42);
+            py_instance_set_field(inst, 0, value);
+            py_decref(value);
+            for (int i = 0; i < 32; i++) {
+                PyObject *got = py_obj_getattr((PyObject *)inst, "value");
+                if (got == NULL || py_int_value_i64(got) != 42) return 4;
+                py_decref(got);
+            }
+            PyObject *extra = py_int_from_i64(77);
+            if (py_class_setattr(cls, "extra", extra) != 0) return 5;
+            py_decref(extra);
+            PyObject *got = py_obj_getattr((PyObject *)inst, "extra");
+            if (got == NULL || py_int_value_i64(got) != 77) return 6;
+            py_decref(got);
+            if (py_class_delattr(cls, "extra") != 0) return 7;
+            got = py_obj_getattr((PyObject *)inst, "value");
+            if (got == NULL || py_int_value_i64(got) != 42) return 8;
+            py_decref(got);
+            return 0;
+        }
+    '''
+    for backend in range(5):
+        for runtime_name, archive in (
+            ("c", c_runtime_archive),
+            ("pcc_py", pcc_py_runtime_archive),
+        ):
+            result = _compile_and_run(
+                tmp_path,
+                f"early_getattr_backend{backend}_{runtime_name}",
+                source.replace("CACHE_BACKEND", str(backend)), archive,
+            )
+            assert result.returncode == 0, (
+                f"backend={backend} runtime={runtime_name}: "
+                + result.stdout + result.stderr
             )
 
 

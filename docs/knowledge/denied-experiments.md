@@ -9,7 +9,7 @@ Search by symbol/symptom; inspect the matching experiment and its updates.
 Verify current code, source revision and artifacts before reusing a verdict.
 Do not repeat a matching failed experiment without identifying new evidence.
 
-655 verdicts across 141 investigations.
+664 verdicts across 142 investigations.
 
 ## [Investigation: retired raw span cache hides an object at a reused address](../investigations/allocator-span-cache-raw-address-reuse.md)
 
@@ -417,6 +417,18 @@ Do not repeat a matching failed experiment without identifying new evidence.
 ## [Investigation: native stack-map structural scans decode unused record fields](../investigations/native-stackmap-structural-scan-cost.md)
 
 - and host Python/compiler/runtime-cc helpers are denied. Every run must produce
+
+## [Investigation: native Stage2 link exceeds its budget while assembling inputs](../investigations/native-stage2-link-asm-memory-budget.md)
+
+- Further factors ruled out the size-hint generator, dynamic mapper, serial
+- measurement is therefore not the cause of the large retention.
+- [DENIED] An earlier attempt additionally adopted the raw value planes directly
+- Denied or deferred — [DENIED] Disabling the collector for the whole in-process link: CPU
+- [DENIED] Disabling the collector for the whole in-process link: CPU
+- [DENIED] The re-export fixed point (`_merge_closed_world_reexport_edges`,
+- [DENIED] `PCC_DIRECT_VIRTUAL_METHOD_CALLS=1` during the Stage1 compile
+- raw-class-address MRO cache was previously measured and denied; it is not the
+- but regressed a million-read program from 0.28 to 0.45 s and 5.63B to
 
 ## [Investigation: native subprocess provider omitted from shallow multi-file closure](../investigations/native-subprocess-provider-omitted-from-shallow-multi-file-closure.md)
 

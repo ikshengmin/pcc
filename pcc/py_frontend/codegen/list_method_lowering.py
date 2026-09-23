@@ -118,6 +118,7 @@ class ListMethodLoweringMixin:
         name = attr.name
 
         sort_key_spec = None
+        sort_key_expr = None
         sort_reverse_const = False
         if expr.kwargs:
             if name != "sort":
@@ -126,6 +127,7 @@ class ListMethodLoweringMixin:
                 if k == "reverse" and isinstance(v, BoolLit):
                     sort_reverse_const = bool(v.value)
                 elif k == "key":
+                    sort_key_expr = v
                     sort_key_spec = self._key_spec_from_callable(
                         v,
                         DynType(name="dyn"),
@@ -145,12 +147,11 @@ class ListMethodLoweringMixin:
         if name == "sort":
             if expr.args:
                 return None
-            working = self._begin_list_sort_transaction(recv)
             if sort_key_spec is not None:
-                self._emit_list_sort_by_key(working, sort_key_spec)
-                return self._finish_list_sort_transaction(
-                    recv, working, sort_reverse_const
+                return self._emit_list_sort_with_key_lifetime(
+                    recv, sort_key_spec, sort_key_expr, sort_reverse_const,
                 )
+            working = self._begin_list_sort_transaction(recv)
             sorted_list = self.builder.call(
                 self.runtime["py_obj_sorted"],
                 [working],
@@ -435,6 +436,7 @@ class ListMethodLoweringMixin:
         attr = expr.func
         assert isinstance(attr, Attr)
         sort_key_spec = None
+        sort_key_expr = None
         sort_reverse_const = False
         if expr.kwargs:
             if attr.name != "sort":
@@ -443,6 +445,7 @@ class ListMethodLoweringMixin:
                 if k == "reverse" and isinstance(v, BoolLit):
                     sort_reverse_const = bool(v.value)
                 elif k == "key":
+                    sort_key_expr = v
                     sort_key_spec = self._key_spec_from_callable(v, list_ty.elem)
                     if sort_key_spec is None:
                         sort_key_spec = ("callable", self._emit_as_object(v))
@@ -473,12 +476,11 @@ class ListMethodLoweringMixin:
             # sort(key=<supported inline callable>, reverse=<bool const>):
             # sort in place, then optionally reverse. Unsupported key callables
             # and non-constant reverse were already bounced by the kwargs guard.
-            working = self._begin_list_sort_transaction(recv)
             if sort_key_spec is not None:
-                self._emit_list_sort_by_key(working, sort_key_spec)
-                return self._finish_list_sort_transaction(
-                    recv, working, sort_reverse_const
+                return self._emit_list_sort_with_key_lifetime(
+                    recv, sort_key_spec, sort_key_expr, sort_reverse_const,
                 )
+            working = self._begin_list_sort_transaction(recv)
             elem_hint = None
             if isinstance(attr.obj, Name):
                 elem_hint = self.env_list_elem_class_hint.get(attr.obj.ident)
@@ -760,6 +762,47 @@ class ListMethodLoweringMixin:
             self._gc_release_if_owned(recv, attr.obj)
             return new_list
         return None
+
+    def _begin_sort_key_lifetime(self, key_spec, key_expr):
+        """Keep a callable key alive, and consume only its expression owner.
+
+        Structural inline keys do not materialize a callable. Named callbacks
+        are borrowed; a freshly emitted lambda or callable factory is owned.
+        Both need a traced root across callbacks which can collect or raise.
+        """
+        outer_error = self._current_try_err_block()
+        outer_cpy_error = getattr(self, "_cpy_operand_cleanup_block", None)
+        roots = ()
+        if key_spec is not None and key_spec[0] == "callable":
+            key = key_spec[1]
+            owned = self._owned_release_needed(key, key_expr)
+            root = self._enter_container_temp_root(key, self._fresh("sort.key"))
+            roots = ((root, owned),)
+            target = outer_error if outer_error is not None else self._ensure_fn_err_exit()
+            cleanup = self._make_cpy_operand_cleanup_block(
+                (), (), target, "sort.key.error", rooted_pcc_lifetimes=roots,
+            )
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+        return outer_error, outer_cpy_error, roots
+
+    def _end_sort_key_lifetime(self, state) -> None:
+        outer_error, outer_cpy_error, roots = state
+        self._try_err_block = outer_error
+        self._cpy_operand_cleanup_block = outer_cpy_error
+        self._release_rooted_pcc_lifetimes(roots)
+
+    def _emit_list_sort_with_key_lifetime(self, recv, key_spec, key_expr, reverse):
+        state = self._begin_sort_key_lifetime(key_spec, key_expr)
+        try:
+            working = self._begin_list_sort_transaction(recv)
+            self._emit_list_sort_by_key(working, key_spec)
+            result = self._finish_list_sort_transaction(recv, working, reverse)
+        finally:
+            # Retire the callback after publishing the sorted receiver: its
+            # captures can have finalizers which observe that receiver.
+            self._end_sort_key_lifetime(state)
+        return result
 
     def _begin_list_sort_transaction(self, recv: ir.Value) -> ir.Value:
         working = self.builder.call(
@@ -1169,22 +1212,79 @@ class ListMethodLoweringMixin:
         key_spec = self._key_spec_from_callable(key_lambda, elem_ty)
         if key_spec is None:
             key_spec = ("callable", self._emit_as_object(key_lambda))
-        src_obj = marshal.marshal_to_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            self._emit_expr(expr.args[0]),
-            expr.args[0].ty,
+        return self._emit_sorted_with_lifetimes(
+            expr, key_spec, key_lambda, reverse_const,
         )
-        new_list = self.builder.call(
-            self.runtime["py_list_new"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh("sorted.key.copy"),
-        )
-        self.builder.call(self.runtime["py_list_extend"], [new_list, src_obj])
-        self._emit_list_sort_by_key(new_list, key_spec)
-        if reverse_const:
-            self.builder.call(self.runtime["py_list_reverse"], [new_list])
+
+    def _emit_sorted_with_lifetimes(
+        self, expr, key_spec, key_expr, reverse_const, elem_hint=None,
+    ):
+        """Keep sorted's iterable/key live and consume their temporary owners."""
+        state = self._begin_sort_key_lifetime(key_spec, key_expr)
+        source_lifetimes = ()
+        new_list = None
+        try:
+            src_obj = marshal.marshal_to_object(
+                self.builder,
+                self.module,
+                self.runtime,
+                self._emit_expr(expr.args[0]),
+                expr.args[0].ty,
+            )
+            source_owned = self._owned_release_needed(src_obj, expr.args[0])
+            source_root = self._enter_container_temp_root(
+                src_obj, self._fresh("sorted.source"),
+            )
+            source_lifetimes = ((source_root, source_owned),)
+            source_error = self._make_cpy_operand_cleanup_block(
+                (), (), self._current_try_err_block() or self._ensure_fn_err_exit(),
+                "sorted.source.error", rooted_pcc_lifetimes=source_lifetimes,
+            )
+            self._try_err_block = source_error
+            self._cpy_operand_cleanup_block = source_error
+            if key_spec is None and elem_hint is None:
+                new_list = self.builder.call(
+                    self.runtime["py_obj_sorted"], [src_obj],
+                    name=self._fresh("sorted"),
+                )
+                self._emit_post_call_err_check(getattr(expr, "span", None))
+            else:
+                new_list = self.builder.call(
+                    self.runtime["py_list_new"],
+                    [ir.Constant(_I64, 0)],
+                    name=self._fresh("sorted.copy"),
+                )
+            # Source/key finalizers may collect after the sort. Keep the
+            # result stable until both operand lifetimes have ended.
+            self._gc_pin(new_list)
+            sort_error = self._make_cpy_operand_cleanup_block(
+                (), (), source_error, "sorted.result.error",
+                pinned_pcc=((new_list, True),),
+            )
+            self._try_err_block = sort_error
+            self._cpy_operand_cleanup_block = sort_error
+            if key_spec is not None or elem_hint is not None:
+                self.builder.call(self.runtime["py_list_extend"], [new_list, src_obj])
+                self._emit_post_call_err_check(getattr(expr, "span", None))
+                if key_spec is not None:
+                    self._emit_list_sort_by_key(new_list, key_spec)
+                else:
+                    elem_ty = (
+                        expr.args[0].ty.elem
+                        if isinstance(expr.args[0].ty, ListType)
+                        else DynType(name="dyn")
+                    )
+                    self._emit_list_sort_with_dunder_lt(new_list, elem_hint, elem_ty)
+            if reverse_const:
+                self.builder.call(self.runtime["py_list_reverse"], [new_list])
+        finally:
+            # sorted borrows its input, including an attribute/call result.
+            # Its temporary owner outlives callbacks but must not outlive the
+            # operation. Leave this root before the enclosing key root.
+            self._release_rooted_pcc_lifetimes(source_lifetimes)
+            self._end_sort_key_lifetime(state)
+            if new_list is not None:
+                self._gc_unpin(new_list)
         return new_list
 
     def _emit_list_sort_by_key(self, recv, key_spec):

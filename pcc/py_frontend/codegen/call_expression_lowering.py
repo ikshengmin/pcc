@@ -12,6 +12,7 @@ from ..py_ast import (
     BoolLit,
     BoolType,
     Call,
+    ClassType,
     DictExpr,
     DictType,
     DynType,
@@ -844,7 +845,33 @@ class CallExpressionLoweringMixin:
                 func_attr_name == "cast" and _call_name_ident(func_attr_obj) == "typing"
             )
         ) and len(expr.args) == 2:
-            return self._emit_expr(expr.args[1])
+            source = expr.args[1]
+            value = self._emit_expr(source)
+            if not getattr(self, "_freestanding_module", False):
+                # cast preserves the value, but its object result still needs
+                # the usual call-result owner. A borrowed alias cannot be
+                # transferred to a second owned local without retaining it.
+                # Type inference may leave cast(Class, dynamic_value) as Dyn.
+                # Its known class target still establishes an object domain;
+                # raw-scaffold Dyn alone must not erase this projection.
+                # Provenance below continues to reject explicit unsafe and
+                # CPython pointers, regardless of the target class hint.
+                projected_ty = expr.ty
+                if isinstance(projected_ty, DynType):
+                    class_hint = self._class_object_hint_for_expr(expr.args[0])
+                    if class_hint is not None:
+                        projected_ty = ClassType(
+                            name=class_hint, module=self.ast_module.name or "",
+                        )
+                provenance = _method_pointer_provenance(
+                    self, value, projected_ty, source_expr=source,
+                    newly_owned=self._owned_release_needed(value, source),
+                )
+                if provenance[1]:
+                    if not provenance[3]:
+                        value = self._gc_retain(value, name=self._fresh("cast.retain"))
+                    self._note_owned_object_value(value)
+            return value
 
         native_sys_exit_call = self._emit_native_sys_exit_call(expr)
         if native_sys_exit_call is not None:
@@ -1259,10 +1286,12 @@ class CallExpressionLoweringMixin:
                     )
                 else:
                     args = expr.args  # fallthrough to original
-            return self.class_lowering.emit_instantiate(
+            # Classmethod construction borrows its arguments just like a
+            # named class call. Materialize and retire temporary owners on
+            # both normal and exceptional exits through the shared path.
+            return self._emit_class_init_call(
                 self.current_class.name,
                 args,
-                self,
             )
         if name in ("min", "max") and not expr.kwargs and len(expr.args) == 2:
             return self._emit_min_max_builtin(expr, name)
@@ -1766,55 +1795,13 @@ class CallExpressionLoweringMixin:
                     elem_hint is not None
                     and self._resolve_method_mro(elem_hint, "__lt__") is not None
                 ):
-                    src_obj = marshal.marshal_to_object(
-                        self.builder,
-                        self.module,
-                        self.runtime,
-                        self._emit_expr(expr.args[0]),
-                        expr.args[0].ty,
+                    result = self._emit_sorted_with_lifetimes(
+                        expr, None, None, reverse_const, elem_hint,
                     )
-                    new_list = self.builder.call(
-                        self.runtime["py_list_new"],
-                        [ir.Constant(_I64, 0)],
-                        name=self._fresh("sorted.lt.copy"),
+                else:
+                    result = self._emit_sorted_with_lifetimes(
+                        expr, None, None, reverse_const,
                     )
-                    self.builder.call(
-                        self.runtime["py_list_extend"],
-                        [new_list, src_obj],
-                    )
-                    elem_ty = (
-                        expr.args[0].ty.elem
-                        if isinstance(expr.args[0].ty, ListType)
-                        else DynType(name="dyn")
-                    )
-                    self._emit_list_sort_with_dunder_lt(new_list, elem_hint, elem_ty)
-                    if reverse_const:
-                        self.builder.call(
-                            self.runtime["py_list_reverse"],
-                            [new_list],
-                        )
-                    self._note_owned_object_value(new_list)
-                    return new_list
-                src_val = self._emit_expr(expr.args[0])
-                src_obj = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    src_val,
-                    expr.args[0].ty,
-                )
-                result = self.builder.call(
-                    self.runtime["py_obj_sorted"],
-                    [src_obj],
-                    name=self._fresh("sorted"),
-                )
-                if reverse_const:
-                    self.builder.call(
-                        self.runtime["py_list_reverse"],
-                        [result],
-                    )
-                # sorted always returns a fresh list. Preserve that owner at
-                # raw-ABI and branch joins instead of inferring it from Call.
                 self._note_owned_object_value(result)
                 return result
         if name == "reversed" and len(expr.args) == 1 and not expr.kwargs:

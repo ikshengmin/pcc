@@ -384,6 +384,15 @@ def _source_import_discovery_line(
     return "".join(out), continued_quote
 
 
+# Closure discovery rescans each source about ten times across its passes
+# (2,505 scans of 256 files for pcc itself).  Both transforms below are pure
+# functions of the text, so memoize them; the bound keeps a long-lived
+# process that compiles many programs from growing without limit.
+_SCAN_CACHE_MAX_ENTRIES = 4096
+_DISCOVERY_TEXT_CACHE: dict = {}
+_WITHOUT_TYPE_CHECKING_CACHE: dict = {}
+
+
 def _source_import_discovery_text(source: str) -> str:
     """Mask strings/comments while preserving source layout.
 
@@ -391,6 +400,9 @@ def _source_import_discovery_text(source: str) -> str:
     Keeping newlines and indentation lets the caller distinguish module/class
     initialization from deferred function bodies.
     """
+    cached = _DISCOVERY_TEXT_CACHE.get(source)
+    if cached is not None:
+        return cached
     out: list[str] = []
     continued_quote = ""
     for raw_line in source.splitlines():
@@ -400,10 +412,25 @@ def _source_import_discovery_text(source: str) -> str:
         )
         out.append(masked_line)
         out.append("\n")
-    return "".join(out)
+    masked = "".join(out)
+    if len(_DISCOVERY_TEXT_CACHE) >= _SCAN_CACHE_MAX_ENTRIES:
+        _DISCOVERY_TEXT_CACHE.clear()
+    _DISCOVERY_TEXT_CACHE[source] = masked
+    return masked
 
 
 def _without_type_checking_imports(source: str) -> str:
+    cached = _WITHOUT_TYPE_CHECKING_CACHE.get(source)
+    if cached is not None:
+        return cached
+    masked = _without_type_checking_imports_uncached(source)
+    if len(_WITHOUT_TYPE_CHECKING_CACHE) >= _SCAN_CACHE_MAX_ENTRIES:
+        _WITHOUT_TYPE_CHECKING_CACHE.clear()
+    _WITHOUT_TYPE_CHECKING_CACHE[source] = masked
+    return masked
+
+
+def _without_type_checking_imports_uncached(source: str) -> str:
     """Mask imports guarded by ``typing.TYPE_CHECKING``.
 
     The code generator already folds these guards to ``False``.  Dependency

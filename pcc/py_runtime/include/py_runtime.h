@@ -1556,6 +1556,9 @@ PyObject *py_subprocess_check_output(PyObject *argv);
 int64_t py_process_normalize_wait_status(int64_t status);
 int64_t py_subprocess_run(PyObject *argv, int32_t capture_output);
 int64_t pcc_worker_process_pool(PyObject *specs, int64_t width);
+int64_t pcc_weighted_worker_process_pool(
+    PyObject *specs, PyObject *weights, int64_t width, int64_t budget
+);
 int64_t py_subprocess_run_timeout(
     PyObject *argv, int32_t capture_output, int64_t timeout_ms
 );

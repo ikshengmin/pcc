@@ -20,6 +20,7 @@ from pcc.unsafe import (
     int_to_ptr,
     load_i64,
     malloc,
+    memcpy,
     memset,
     ptr_add,
     ptr_is_null,
@@ -491,6 +492,85 @@ class CompilerIntArena:
                 changed = True
             index += 1
         return changed
+
+    def sort_nonnegative_radix(self) -> None:
+        """Sort nonnegative machine-range keys in linear passes over raw bytes.
+
+        The final Mach-O relocation order encodes (descending address,
+        original index) into one nonnegative i64. Heapsort performs random
+        loads O(N log N) on millions of those keys; an LSD radix pass keeps
+        the exact numeric/stable-tie order with sequential raw accesses.
+        """
+        if self._closed:
+            raise RuntimeError("compiler int arena is closed")
+        length = self._length
+        if length < 2:
+            return
+        if self._address == 0:
+            for value in self._values:
+                if value < 0:
+                    raise ValueError("radix sort requires nonnegative keys")
+            self._values.sort()
+            return
+
+        original = int_to_ptr(self._address)
+        maximum = 0
+        index = 0
+        while index < length:
+            value = load_i64(original, index * 8)
+            if value < 0:
+                raise ValueError("radix sort requires nonnegative keys")
+            if value > maximum:
+                maximum = value
+            index += 1
+        if maximum == 0:
+            return
+
+        scratch = malloc(length * 8)
+        counts = malloc(256 * 8)
+        if ptr_is_null(scratch) or ptr_is_null(counts):
+            free(scratch)
+            free(counts)
+            raise MemoryError("compiler radix sort allocation failed")
+        try:
+            source = original
+            destination = scratch
+            shift = 0
+            while (maximum >> shift) != 0:
+                memset(counts, 0, 256 * 8)
+                index = 0
+                while index < length:
+                    value = load_i64(source, index * 8)
+                    bucket = (value >> shift) & 255
+                    at = bucket * 8
+                    store_i64(counts, at, load_i64(counts, at) + 1)
+                    index += 1
+                offset = 0
+                bucket = 0
+                while bucket < 256:
+                    at = bucket * 8
+                    count = load_i64(counts, at)
+                    store_i64(counts, at, offset)
+                    offset += count
+                    bucket += 1
+                index = 0
+                while index < length:
+                    value = load_i64(source, index * 8)
+                    bucket = (value >> shift) & 255
+                    at = bucket * 8
+                    position = load_i64(counts, at)
+                    store_i64(destination, position * 8, value)
+                    store_i64(counts, at, position + 1)
+                    index += 1
+                previous = source
+                source = destination
+                destination = previous
+                shift += 8
+            if ptr_to_int(source) != self._address:
+                memcpy(original, source, length * 8)
+        finally:
+            free(counts)
+            free(scratch)
 
     def sort(self) -> None:
         """Sort the logical signed-i64 payload without object projection.

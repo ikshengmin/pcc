@@ -199,7 +199,9 @@ def _owned_macho_link_in_process(
                 archives.append(stream.read())
         before_link = time.monotonic()
         phases["decode_pco"] += (before_link - before_extras) * 1000.0
-        pending = [prepare_executable_object(objects, archives=archives)]
+        # These inputs are private to this link invocation. Transfer them so
+        # the merge can retire decoded graphs before constructing its result.
+        pending = [prepare_executable_object(objects, archives=archives, _consume_inputs=True)]
         objects.clear()
         archives.clear()
         sign_times = [0.0, 0.0]
@@ -217,8 +219,10 @@ def _owned_macho_link_in_process(
         signature = parse_signature(image)
         if signature.identifier != b"pcc-linked" or signature.dataoff + signature.datasize != len(image):
             raise SelfBackendLinkError("owned linker produced an invalid signature boundary")
+        # A slice of the finished image would copy all of it at the link's
+        # high-water mark; hashing only reads, so view it instead.
         expected_signature = build_signature(
-            image[:signature.dataoff], identifier=signature.identifier,
+            memoryview(image)[:signature.dataoff], identifier=signature.identifier,
             exec_seg_base=signature.exec_seg_base, exec_seg_limit=signature.exec_seg_limit,
             exec_seg_flags=signature.exec_seg_flags,
         )

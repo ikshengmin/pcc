@@ -12115,7 +12115,7 @@ def test_backend4_class_method_metadata_is_not_treated_as_gc_slots() -> None:
     # still have, so a layout change trips this test the way the old literal
     # assertions did.
     assert PYCLASSOBJECT_METHODS_OFFSET == 64
-    assert PYCLASSMETHOD_SIZE == 16
+    assert PYCLASSMETHOD_SIZE == 24
     assert PYCLASSMETHOD_FUNC_OFFSET == 8
     assert PYCLASSOBJECT_DEL_METHOD_OFFSET == 96
     assert 'load_ptr(o, abi_constant("object.class.methods_offset"))' in helper_body

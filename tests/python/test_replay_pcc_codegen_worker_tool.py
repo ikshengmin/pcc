@@ -19,8 +19,11 @@ def _load_tool():
     return module
 
 
-def test_prepare_replay_rewrites_only_owned_outputs_and_restores_stage_env(tmp_path):
+def test_prepare_replay_rewrites_only_owned_outputs_and_restores_stage_env(
+    tmp_path, monkeypatch,
+):
     tool = _load_tool()
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "default")
     compiler = tmp_path / "pcc1"
     compiler.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     compiler.chmod(0o755)
@@ -54,6 +57,9 @@ def test_prepare_replay_rewrites_only_owned_outputs_and_restores_stage_env(tmp_p
                     "PCC_RUNTIME_ARCHIVE": "/frozen/runtime.a",
                     "PCC_SOURCE_ROOT": "/frozen/source",
                     "PCC_PY_FRONTEND_JOBS": "auto",
+                    "PCC_BOOTSTRAP_PYTHON_IR_PASSES": "off",
+                    "PCC_BOOTSTRAP_RUNTIME_HIGH": "py",
+                    "PCC_BOOTSTRAP_RUNTIME_CC": "pcc",
                     "LC_ALL": "C",
                 }
             }
@@ -81,6 +87,12 @@ def test_prepare_replay_rewrites_only_owned_outputs_and_restores_stage_env(tmp_p
     assert environment["PCC_SOURCE_ROOT"] == "/frozen/source"
     assert environment["PCC_PY_FRONTEND_JOBS"] == "1"
     assert environment["PCC_DIRECT_INDEXED_NATIVE_OBJECT"] == "1"
+    assert environment["PCC_PYTHON_IR_PASSES"] == "off"
+    assert environment["PCC_RUNTIME_HIGH"] == "py"
+    assert environment["PCC_RUNTIME_CC"] == "pcc"
+    assert environment["PCC_DIRECT_INDEXED_KERNEL_CAPTURE"] == "1"
+    assert environment["PCC_DIRECT_INDEXED_KERNEL_EMIT"] == "1"
+    assert environment["PCC_DIRECT_INDEXED_SIDECAR"] == "1"
     assert "LC_ALL" not in environment
     assert command[-2:] == [
         "--pcc-python-multi-codegen-worker",
@@ -89,6 +101,7 @@ def test_prepare_replay_rewrites_only_owned_outputs_and_restores_stage_env(tmp_p
     receipt = json.loads((output / "replay.json").read_text(encoding="utf-8"))
     assert receipt["schema"] == tool.REPLAY_SCHEMA
     assert receipt["native_object"] == 1
+    assert receipt["effective_worker_environment"]["PCC_PYTHON_IR_PASSES"] == "off"
 
     with pytest.raises(tool.ReplayError, match="refusing existing"):
         tool.prepare_replay(

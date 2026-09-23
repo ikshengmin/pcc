@@ -30,13 +30,13 @@ Performance/build runs follow [validation-workflow.md](validation-workflow.md).
 | `scripts/pcc_emit_rank.py` | Rank frozen LLVM-text or `--input-format indexed-pco` inputs by native worker wall/CPU/instructions and system RSS/footprint maxima. Supports collector selection and reference output hashes; emits incremental per-item receipts. Use `--no-performance-lock` only inside an existing locked tree watchdog. |
 | `scripts/pcc_structured_instruction_inventory.py` | Decode frozen indexed-module sidecars and count every AArch64 instruction still using the text assembler. Holds the performance lock and persists source-hashed per-module progress, so packed-instruction migrations can require zero normal-path fallback without a Stage2 run. |
 | `scripts/pcc_preload_compare.py` | Compare the current complete class-preload index against two AST-extracted baseline functions on a retained native-exports wire. Requires semantic equality and insertion-order JSON byte equality, rejects input drift or an existing output, and writes source/wire/index hashes plus counts. Host correctness evidence only; not a speed or pcc1 claim. |
-| `scripts/replay_pcc_codegen_worker.py` | Replay one retained `codegen_worker.v4` Stage2 manifest with a chosen pcc1. It rewrites only result/artifact paths, restores the receipt-bound Stage2 environment, records identities, and `exec`s through `/usr/bin/time -lp`; wrap it in `run_process_tree_sample.py` for the performance lock, timeout and tree-RSS guard. |
+| `scripts/replay_pcc_codegen_worker.py` | Replay one retained `codegen_worker.v4` Stage2 manifest with a chosen pcc1. It rewrites only result/artifact paths, reconstructs the native child worker's effective pass/direct-indexed environment from the outer Stage2 receipt, records those values and identities in `replay.json`, and `exec`s through `/usr/bin/time -lp`; wrap it in `run_process_tree_sample.py` for the performance lock, timeout and tree-RSS guard. Compare the emitted PIDX hash with the original before accepting a timing. |
 | `scripts/run_pcc_deferred_link.py` | Consume a frontend/codegen plan after the native coordinator exits. `--codegen-plan PLAN --native-linker BINARY PLAN` selects a separately qualified native owned linker and records its hash; the default linker runs under host Python. The script remains host orchestration, so its success alone does not qualify a host-free public compiler command. |
 | `scripts/bootstrap_profile_report.py` | Turn `PCC_BOOTSTRAP_PROFILE_DIR` per-stage JSON into phase totals. Use before profiling to learn *which phase* to profile. |
 | `scripts/pcc_explain_cache.py` | Why a cache entry missed. First stop for "it rebuilt everything again". |
 | `scripts/pcc_explain_fallback.py` | Why a module needed the libpython fallback. |
 | `scripts/pcc_ir_diff.py` | Structural IR diff — use instead of `diff` when asking "did my change alter codegen?" |
-| `scripts/pcc_passes_explain.py` | What each backend pass did to a function. |
+| `scripts/pcc_passes_explain.py --telemetry PATH` | Read observed IR-pass JSONL in recorded order, preserving run/cache/skip/error status. Without a receipt reports UNKNOWN. Does not infer native ownership or useful IR changes from configuration or byte counts. |
 | `scripts/pcc_gc_viewer.py`, `scripts/pcc_trace_viewer.py` | GC state / runtime trace inspection. |
 | `scripts/probe_stage1_closure.py` | Is a module inside the no-libpython stage1 closure. |
 | `scripts/probe_stage1_closure_on_mode.py --module NAME --mode off\|on\|both --emit-ir-dir DIR` | Select exact tightened-closure modules for standalone fallback attribution. Writes source-hashed IR/error receipts with the existing action/plumbing/target classification; this is frontend IR evidence, not contextual or native execution proof. |
@@ -53,6 +53,12 @@ local link paths. Its semantic-review boundary is recorded in
 [`agents-migration-audit.md`](agents-migration-audit.md).
 
 ## Profiling checks
+
+For executable commands, report interpretation, failure preservation and bounded
+worker replay, use [Profiling and hotspot diagnosis](knowledge/profiling-hotspots.md).
+`pcc_flamegraph.py report --input-folded PATH --focus SYMBOL --report-json NEW.json`
+reuses captured stacks without rerunning the workload. Capture modes accept
+`--evidence-dir NEW_DIR` and preserve raw samples/child stderr even on failure.
 
 Resolve samples against the sampled executable's own symbols and image slide.
 Follow the working child process, not a shell/watchdog wrapper. Separate leaf

@@ -50,6 +50,7 @@ from .exact_int_lowering import (
     mixed_scalar_object_local_names,
 )
 from .expr_helper_lowering import emit_python_floordiv_i64_unchecked
+from .ownership_lowering import prepare_rebound_object_parameters
 from .runtime_abi import declare_runtime_global
 
 _I1 = ir.IntType(1)
@@ -1520,6 +1521,9 @@ class UserFunctionLoweringMixin:
                 if threading_elem_kind is not None:
                     self._threading_list_elem_flags[ast_arg.name] = threading_elem_kind
             _func_codegen_log(self, debug_codegen, fd.name, "params end")
+
+            if auto_root_borrowed_params:
+                prepare_rebound_object_parameters(self, fd, boxed_param_names)
 
             # Allocate every non-parameter exact-int local before emitting any
             # branch or loop.  The null value means "not assigned yet" only;

@@ -317,11 +317,27 @@ class ComprehensionLoweringMixin:
         saved_env_entries: dict[str, object] = {}
         saved_cpy_flags: dict[str, object] = {}
         saved_exact_flags: dict[str, object] = {}
+        saved_owned_flags = {}
+        saved_owned_flag_allocas = {}
+        ownership_sets = (
+            "_owned_local_names", "_owned_local_has_value",
+            "_gc_rooted_local_names", "_borrowed_gc_rooted_local_names",
+            "_for_target_owned_names",
+        )
+        saved_ownership_sets = {}
+        for attr in ownership_sets:
+            saved_ownership_sets[attr] = set(getattr(self, attr, set()))
+        saved_param_names = self._current_param_names
+        saved_global_names = self._current_global_names
+        self._current_param_names = saved_param_names.difference(comp_bound_names)
+        self._current_global_names = saved_global_names.difference(comp_bound_names)
         _MISSING = object()
         cpy_flags = getattr(self, "_cpy_env_flags", None)
         exact_flags = getattr(self, "_exact_int_env_flags", None)
         for nm in comp_bound_names:
             saved_env_entries[nm] = self.env.get(nm, _MISSING)
+            saved_owned_flags[nm] = self._owned_local_flag_slots.get(nm, _MISSING)
+            saved_owned_flag_allocas[nm] = getattr(self, "_owned_local_flag_allocas", {}).get(nm, _MISSING)
             if cpy_flags is not None:
                 saved_cpy_flags[nm] = cpy_flags.get(nm, _MISSING)
             else:
@@ -368,8 +384,9 @@ class ComprehensionLoweringMixin:
         outer_error = self._current_try_err_block()
         outer_cpy_error = getattr(self, "_cpy_operand_cleanup_block", None)
         error_target = outer_error if outer_error is not None else self._ensure_fn_err_exit()
+        scope_error = self.current_function.append_basic_block(self._fresh("comp.scope.error"))
         self._try_err_block = self._make_cpy_operand_cleanup_block(
-            (), (), error_target, "comp.result.error", ((container, True),),
+            (), (), scope_error, "comp.result.error", ((container, True),),
         )
         self._cpy_operand_cleanup_block = self._try_err_block
         try:
@@ -383,9 +400,18 @@ class ComprehensionLoweringMixin:
                 key_expr if kind == "dict" else None,
                 val_expr if kind == "dict" else None,
             )
+            success_block = self.builder._block
+            self.builder.position_at_end(scope_error)
+            self._clear_comprehension_owned_bindings(comp_bound_names)
+            self.builder.branch(error_target)
+            self.builder.position_at_end(success_block)
+            if not self._builder_block_is_terminated():
+                self._clear_comprehension_owned_bindings(comp_bound_names)
         finally:
             self._try_err_block = outer_error
             self._cpy_operand_cleanup_block = outer_cpy_error
+            self._current_param_names = saved_param_names
+            self._current_global_names = saved_global_names
             # Restore the enclosing scope's bindings for every comprehension
             # target name: delete names that did not exist before the
             # comprehension, and reinstate the prior slot/type for names that
@@ -414,6 +440,25 @@ class ComprehensionLoweringMixin:
                     self.env.pop(nm, None)
                 else:
                     self.env[nm] = prior
+                prior_owned_flag = saved_owned_flags[nm]
+                if prior_owned_flag is _MISSING:
+                    self._owned_local_flag_slots.pop(nm, None)
+                else:
+                    self._owned_local_flag_slots[nm] = prior_owned_flag
+                flag_allocas = getattr(self, "_owned_local_flag_allocas", None)
+                if flag_allocas is not None:
+                    prior_flag_alloca = saved_owned_flag_allocas[nm]
+                    if prior_flag_alloca is _MISSING:
+                        flag_allocas.pop(nm, None)
+                    else:
+                        flag_allocas[nm] = prior_flag_alloca
+                for attr in ownership_sets:
+                    members = getattr(self, attr, None)
+                    if members is not None:
+                        if nm in saved_ownership_sets[attr]:
+                            members.add(nm)
+                        else:
+                            members.discard(nm)
                 if cpy_flags is not None:
                     prior_flag = saved_cpy_flags.get(nm, _MISSING)
                     if prior_flag is _MISSING:
@@ -429,6 +474,32 @@ class ComprehensionLoweringMixin:
         self._gc_unpin(container)
         self._note_owned_object_value(container)
         return container
+
+    def _clear_comprehension_owned_bindings(self, names) -> None:
+        """Retire inner-scope owners before their bindings leave the environment.
+
+        The slots stay registered until function exit, so clear each slot as
+        part of releasing its owner. Outer bindings and their ownership flags
+        are restored separately; closures keep their own captured cell owners.
+        """
+        for name in sorted(names):
+            slot = self.env.get(name)
+            if slot is None or not self._ir_type_matches(slot[1], _CSTR):
+                continue
+            alloca = slot[0]
+            flag = self._owned_local_flag_for(name, alloca)
+            if flag is None:
+                continue
+            owned = self.builder.load(flag, name=self._fresh("comp.scope.owned"))
+            release = self.current_function.append_basic_block(self._fresh("comp.scope.release"))
+            done = self.current_function.append_basic_block(self._fresh("comp.scope.cleared"))
+            self.builder.cbranch(owned, release, done)
+            self.builder.position_at_end(release)
+            self.builder.call(self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(alloca), ir.Constant(_CSTR, None)])
+            self.builder.store(ir.Constant(_I1, 0), flag)
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+            self.builder.store(ir.Constant(_CSTR, None), alloca)
 
     def _collect_comprehension_target_names(self, target, out: set) -> None:
         """Collect plain-``Name`` identifiers bound by a comprehension loop
@@ -594,18 +665,23 @@ class ComprehensionLoweringMixin:
         ``target`` so the unpack sees the expected shape.
         """
         inner_val = self._emit_expr(inner_iter)
+        source_lifetimes = []
         if inner_val in getattr(self, "_cpy_values", ()):
             iter_obj = self.builder.call(
                 self.runtime["py_cpy_to_pcc_obj"],
                 [inner_val],
                 name=self._fresh("enum.cpy.bridge"),
             )
+            source_owned = True
         elif isinstance(inner_iter.ty, DictType):
+            original_root = self._enter_container_temp_root(inner_val, self._fresh("enum.dict.source"))
+            source_lifetimes.append((original_root, self._owned_release_needed(inner_val, inner_iter)))
             iter_obj = self.builder.call(
                 self.runtime["py_dict_keys"],
                 [inner_val],
                 name=self._fresh("enum.dict.keys"),
             )
+            source_owned = True
         else:
             iter_obj = marshal.marshal_to_object(
                 self.builder,
@@ -614,21 +690,23 @@ class ComprehensionLoweringMixin:
                 inner_val,
                 inner_iter.ty,
             )
+            source_owned = self._owned_release_needed(inner_val, inner_iter)
+        source_root = self._enter_container_temp_root(iter_obj, self._fresh("enum.source"))
+        source_lifetimes.append((source_root, source_owned))
+        outer_error = self._current_try_err_block()
+        outer_cpy_error = getattr(self, "_cpy_operand_cleanup_block", None)
+        cleanup_bb = self.current_function.append_basic_block(self._fresh("enum.error"))
+        self._try_err_block = cleanup_bb
+        self._cpy_operand_cleanup_block = cleanup_bb
+        target_slot = _for_prepare_owned_object_target(self, target.ident, DynType(name="dyn"))
+        target_alloca = target_slot[0]
+        self._emit_post_call_err_check(getattr(inner_iter, "span", None))
         n_val = self.builder.call(
             self.runtime["py_obj_len"],
             [iter_obj],
             name=self._fresh("enum.len"),
         )
-
-        target_alloca = self._alloca_in_entry(
-            _CSTR,
-            name=f"{target.ident}.addr",
-        )
-        self.env[target.ident] = (
-            target_alloca,
-            _CSTR,
-            DynType(name="dyn"),
-        )
+        self._emit_post_call_err_check(getattr(inner_iter, "span", None))
         idx_slot = self._alloca_in_entry(_I64, name="enum.idx.addr")
         self.builder.store(ir.Constant(_I64, 0), idx_slot)
 
@@ -650,30 +728,35 @@ class ComprehensionLoweringMixin:
         self.builder.cbranch(cond, body_bb, end_bb)
 
         self.builder.position_at_end(body_bb)
-        idx_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [cur],
-            name=self._fresh("enum.idx.box"),
-        )
-        elem_obj = self.builder.call(
-            self.runtime["py_obj_getitem"],
-            [iter_obj, idx_box],
-            name=self._fresh("enum.elem"),
-        )
         pair = self.builder.call(
             self.runtime["py_tuple_new"],
             [ir.Constant(_I64, 2)],
             name=self._fresh("enum.pair.new"),
         )
+        _for_store_owned_target(self, target.ident, target_slot, pair)
+        self._gc_pin(pair)
+        idx_box = self.builder.call(
+            self.runtime["py_int_from_i64"],
+            [cur],
+            name=self._fresh("enum.idx.box"),
+        )
         self.builder.call(
             self.runtime["py_tuple_set_item"],
             [pair, ir.Constant(_I64, 0), idx_box],
         )
+        self._gc_release(idx_box)
+        elem_obj = self.builder.call(
+            self.runtime["py_obj_getitem_i64"],
+            [iter_obj, cur],
+            name=self._fresh("enum.elem"),
+        )
+        self._gc_unpin(pair)
+        self._emit_post_call_err_check(getattr(inner_iter, "span", None))
         self.builder.call(
             self.runtime["py_tuple_set_item"],
             [pair, ir.Constant(_I64, 1), elem_obj],
         )
-        self.builder.store(pair, target_alloca)
+        self._gc_release(elem_obj)
         self._emit_comprehension_after_bind(
             kind,
             container,
@@ -696,7 +779,18 @@ class ComprehensionLoweringMixin:
         )
         self.builder.store(nxt, idx_slot)
         self.builder.branch(cond_bb)
+        self._try_err_block = outer_error
+        self._cpy_operand_cleanup_block = outer_cpy_error
+        self.builder.position_at_end(cleanup_bb)
+        self.builder.call(self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(target_alloca), ir.Constant(_CSTR, None)])
+        flag = self._ensure_owned_local_flag(target.ident, target_alloca)
+        self.builder.store(ir.Constant(_I1, 0), flag)
+        self._release_rooted_pcc_lifetimes(tuple(source_lifetimes))
+        self.builder.branch(outer_error if outer_error is not None else self._ensure_fn_err_exit())
         self.builder.position_at_end(end_bb)
+        self.builder.call(self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(target_alloca), ir.Constant(_CSTR, None)])
+        self.builder.store(ir.Constant(_I1, 0), flag)
+        self._release_rooted_pcc_lifetimes(tuple(source_lifetimes))
     def _emit_comprehension_indexed(
         self,
         target: Name,

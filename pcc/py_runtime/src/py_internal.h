@@ -779,6 +779,8 @@ extern PyObject *const py_set_dummy;
 typedef struct PyClassMethod {
     const char *name;
     PyObject   *func;       /* borrowed — points at a user_* LLVM function */
+    uint32_t    name_hash;  /* immutable name signature; strcmp resolves ties */
+    uint32_t    name_length;
 } PyClassMethod;
 
 /* Class object: describes a user-defined Python class.
@@ -848,11 +850,15 @@ PCC_ASSERT_CLASS_OFFSET(type_tag_alloc, 92);
 PCC_ASSERT_CLASS_OFFSET(del_method, 96);
 PCC_ASSERT_CLASS_OFFSET(attrs, 104);
 PCC_ASSERT_CLASS_OFFSET(metaclass, 112);
-_Static_assert(sizeof(PyClassMethod) == 16, "PyClassMethod size drift");
+_Static_assert(sizeof(PyClassMethod) == 24, "PyClassMethod size drift");
 _Static_assert(offsetof(PyClassMethod, name) == 0,
                "PyClassMethod.name offset drift");
 _Static_assert(offsetof(PyClassMethod, func) == 8,
                "PyClassMethod.func offset drift");
+_Static_assert(offsetof(PyClassMethod, name_hash) == 16,
+               "PyClassMethod.name_hash offset drift");
+_Static_assert(offsetof(PyClassMethod, name_length) == 20,
+               "PyClassMethod.name_length offset drift");
 
 #undef PCC_ASSERT_CLASS_OFFSET
 

@@ -4128,6 +4128,22 @@ def _native_managed_liveness(
                     block_id,
                     tracked_index.get_unchecked(phi.first),
                 )
+            # PHI edge uses do not change during the liveness fixed point.
+            # Seed each predecessor's live-out once instead of walking all
+            # incoming records for every successor on every iteration.
+            incoming_index = 0
+            while incoming_index < phi.fourth:
+                incoming: CompilerInt2 = kernel.phi_incoming(phi.third + incoming_index)
+                predecessor = incoming.second
+                if incoming.first >= 0 and predecessor >= 0 and predecessor < block_count:
+                    edge_position = 0
+                    edge_count = kernel.cfg_successor_count(predecessor)
+                    while edge_position < edge_count:
+                        if kernel.cfg_successor_id(predecessor, edge_position) == block_id:
+                            set_bit(live_out, predecessor, tracked_index.get_unchecked(incoming.first))
+                            break
+                        edge_position += 1
+                incoming_index += 1
             phi_index += 1
         instruction_index = 0
         while instruction_index < block.second:
@@ -4180,7 +4196,13 @@ def _native_managed_liveness(
         changed = False
         block_id = block_count - 1
         while block_id >= 0:
-            scratch.zero_prefix_unchecked(word_count)
+            # This backward union analysis is monotone: live-in/live-out can
+            # only grow from their initial seeds. Carrying the previous row
+            # preserves the PHI seeds and has the same least fixed point as
+            # rebuilding an empty row, with no extra dense matrix.
+            scratch.copy_prefix_from_unchecked(
+                live_out, block_id * word_count, word_count,
+            )
             successor_position = 0
             successor_count = kernel.cfg_successor_count(block_id)
             while successor_position < successor_count:
@@ -4195,26 +4217,6 @@ def _native_managed_liveness(
                     successor * word_count,
                     word_count,
                 )
-                phi_fact = kernel.block_phi_fact(successor)
-                phi_index = 0
-                while phi_index < phi_fact.second:
-                    phi = kernel.phi_record(phi_fact.first + phi_index)
-                    incoming_index = 0
-                    while incoming_index < phi.fourth:
-                        incoming = kernel.phi_incoming(
-                            phi.third + incoming_index
-                        )
-                        if incoming.second == block_id and incoming.first >= 0:
-                            tracked_id = tracked_index.get_unchecked(incoming.first)
-                            if tracked_id >= 0:
-                                word_offset = tracked_id // 30
-                                scratch.set_unchecked(
-                                    word_offset,
-                                    scratch.get_unchecked(word_offset)
-                                    | (1 << (tracked_id % 30)),
-                                )
-                        incoming_index += 1
-                    phi_index += 1
                 successor_position += 1
             if scratch.converge_liveness_row_unchecked(
                 uses,

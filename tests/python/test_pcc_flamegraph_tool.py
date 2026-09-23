@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import collections
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +12,64 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "pcc_flamegraph.py"
+
+
+def test_focus_partition_handles_recursion_and_aggregates_leaf():
+    tool = _load_tool()
+    report = tool._attribution(collections.Counter({
+        "root;decode;lookup;decref": 40,
+        "root;decode;call;decref": 20,
+        "root;decode;decode;lookup": 10,
+        "root;decode": 10,
+        "root;other": 20,
+    }), "decode")
+    assert report["selected_weight"] == 80
+    assert sum(r["weight"] for r in report["direct_children"]) == 80
+    assert report["direct_children"][0] == {
+        "symbol": "lookup", "weight": 40, "percent_total": 40.0, "percent_selected": 50.0,
+    }
+    assert report["self"][0]["weight"] == 60
+    assert next(r for r in report["inclusive"] if r["symbol"] == "decode")["weight"] == 80
+    assert report["correctness"] == "NOT_CHECKED"
+
+
+@pytest.mark.parametrize("focus", ["missing", "decode"])
+def test_focus_requires_unique_match(focus):
+    with pytest.raises(ValueError, match="needs one match"):
+        _load_tool()._attribution(collections.Counter({"decode_a": 1, "decode_b": 2}), focus)
+
+
+def test_offline_report_cli_and_refuse_overwrite(tmp_path):
+    folded = tmp_path / "input.folded"
+    folded.write_text("root;decode;lookup 8\nroot;decode 2\n")
+    report = tmp_path / "report.json"
+    command = [sys.executable, str(SCRIPT), "report", "--input-folded", str(folded),
+               "--focus", "decode", "--report-json", str(report)]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(report.read_text())
+    assert data["direct_children"][0]["percent_selected"] == 80
+    assert data["capture"]["workload_status"] == "UNKNOWN"
+    original = report.read_bytes()
+    again = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    assert again.returncode != 0
+    assert report.read_bytes() == original
+
+
+def test_failed_host_command_preserves_real_child_samples(tmp_path):
+    evidence = tmp_path / "capture"
+    report = tmp_path / "report.json"
+    result = subprocess.run([
+        sys.executable, str(SCRIPT), "host", "--cmd", "--evidence-dir", str(evidence),
+        "--report-json", str(report), "-o", str(tmp_path / "out.svg"),
+        "--argv", sys.executable, "-c",
+        "import time,sys; end=time.monotonic()+0.25\nwhile time.monotonic()<end: pass\nprint('diagnostic',file=sys.stderr);sys.exit(7)",
+    ], capture_output=True, text=True, timeout=15)
+    assert result.returncode != 0
+    assert "diagnostic" in (evidence / "stderr").read_text()
+    assert list(evidence.glob("flame-*.folded"))
+    assert json.loads((evidence / "capture.json").read_text())["returncode"] == 7
+    assert json.loads(report.read_text())["capture"]["status"] == "FAILED"
 
 
 def _sample_output(argv) -> Path:
@@ -174,6 +235,8 @@ def test_cpu_capture_rejects_binary_replacement_before_loading_symbols(
 ):
     tool = _load_tool()
     binary, _out, _folded = _configure_main(monkeypatch, tool, tmp_path)
+    evidence = tmp_path / "evidence"
+    tool.sys.argv.extend(["--evidence-dir", str(evidence)])
     symbol_calls = []
 
     def fake_sample(argv, **_kwargs):
@@ -191,6 +254,10 @@ def test_cpu_capture_rejects_binary_replacement_before_loading_symbols(
     with pytest.raises(SystemExit, match="executable changed while capturing"):
         tool.main()
     assert symbol_calls == []
+    assert (evidence / "native.sample").read_text() == "captured call tree"
+    receipt = json.loads((evidence / "capture.json").read_text())
+    assert receipt["status"] == "CAPTURED_UNVALIDATED"
+    assert receipt["correctness"] == "NOT_CHECKED"
 
 
 def test_cpu_partial_report_without_target_image_fails_before_symbols(

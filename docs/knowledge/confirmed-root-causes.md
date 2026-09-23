@@ -8,7 +8,7 @@ Extraction can include hypotheses, test status and superseded conclusions.
 Check the original experiment, revision and later updates against current
 code and matching execution before adopting a cause. Read only relevant hits.
 
-1598 confirmations across 481 investigations.
+1609 confirmations across 481 investigations.
 
 ## [Investigation: direct AArch64 instruction capture order and lifetime](../investigations/aarch64-direct-instruction-capture-order.md)
 
@@ -1548,6 +1548,17 @@ code and matching execution before adopting a cause. Read only relevant hits.
 - Round 1: materialized range ownership [CONFIRMED] — After the membership fix, ordinary relocation validation still accounted for
 - Round 2: int.from_bytes arguments [CONFIRMED] — The next reduction separated symbol-name reading from validation. Name reading
 - Round 3: dynamic equality narrowed an integer expression [CONFIRMED] — The new conversion test exposed a separate failure: a correctly decoded
+- Memory profile before editing [CONFIRMED] — Each explicit entry function decodes the same inputs, performs one operation
+- Negative real-component A/B [CONFIRMED] — The SAME probe source, input hashes, runtime, options and operation order were
+- Real retained-object profile before editing [CONFIRMED] — All experiments reuse the same 40 frozen PCOs and runtime as the preceding
+- [CONFIRMED] The native consuming merge retained a 4-MiB list backing array
+- [CONFIRMED] This round changes the packed relocation consumers, with a
+- [CONFIRMED] The profiling tools now retain failed-workload evidence and can
+- [CONFIRMED] A **separate integration gate remains red**:
+- [CONFIRMED] The two explicit per-module `gc.collect()` calls
+- [CONFIRMED] Export workers keep every lifted module alive until exit; their
+- [CONFIRMED] The coordinator's unlabelled pre-export window (~46–68 s wall,
+- [CONFIRMED] Link validation is >30% of a full link replay's CPU. Of it,
 
 ## [Investigation: native subprocess failures lose CalledProcessError fields](../investigations/native-subprocess-called-process-error-returncode.md)
 

@@ -4,8 +4,24 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 import subprocess
+import os
 
 from pcc.backend.self_backend_value_arena import CompilerInt2, CompilerIntArena, CompilerRecordSpanArena
+
+
+def test_nonnegative_radix_sort_preserves_machine_key_order_on_host():
+    keys = [5, (1 << 54) - 1, 0, 5, 1 << 40, 255, 256, 1]
+    arena = CompilerIntArena()
+    try:
+        for key in keys:
+            arena.append(key)
+        arena.sort_nonnegative_radix()
+        assert [arena.get_unchecked(index) for index in range(len(arena))] == sorted(keys)
+        arena.append(-1)
+        with pytest.raises(ValueError, match="nonnegative"):
+            arena.sort_nonnegative_radix()
+    finally:
+        arena.close()
 
 
 def test_record_spans_snapshot_append_extend_and_self_extend():
@@ -209,6 +225,15 @@ def run() -> None:
     print(total)
     print(count)
     print(pool.projection_count)
+    sorter = CompilerIntArena()
+    for key in (5, (1 << 54) - 1, 0, 5, 1 << 40, 255, 256, 1):
+        sorter.append(key)
+    assert sorter.uses_native_storage
+    sorter.sort_nonnegative_radix()
+    for index, expected in enumerate((0, 1, 5, 5, 255, 256, 1 << 40, (1 << 54) - 1)):
+        assert sorter.get_unchecked(index) == expected
+    print("radix-ok")
+    sorter.close()
     cursor.close()
     pool.close()
 
@@ -223,6 +248,11 @@ run()
         libpython_mode="off", ir_scaffold_mode="on", backend="self",
         recursive_stdlib=False, target_triple="arm64-apple-darwin23.6.0",
     )
-    result = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == "30\n4\n0\n"
+    for backend in range(5):
+        result = subprocess.run(
+            [str(output)], capture_output=True, text=True, timeout=10,
+            env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                     PCC_GC_REFCOUNT_PROVENANCE_PROBE="2", PATH="/nonexistent"),
+        )
+        assert result.returncode == 0, (backend, result.stdout, result.stderr)
+        assert result.stdout == "30\n4\n0\nradix-ok\n"

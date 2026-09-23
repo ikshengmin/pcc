@@ -41,6 +41,8 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
+from pcc.unsafe import abi_constant, load_i32, load_i64, null, ptr_is_null
+
 
 class PreciseStackMapError(Exception):
     """Malformed or semantically incomplete pcc stack-map metadata."""
@@ -112,6 +114,16 @@ _HEADER = struct.Struct("<8sHBBIII")
 _FUNCTION = struct.Struct("<QQIIII")
 _RECORD = struct.Struct("<QIIIHHBBHI")
 _LOCATION = struct.Struct("<BBHHhiI")
+
+
+def _native_record_reads_available() -> bool:
+    try:
+        return ptr_is_null(null()) != 0
+    except NotImplementedError:
+        return False
+
+
+_NATIVE_RECORD_READS = _native_record_reads_available()
 
 # Public numeric projection for freestanding consumers.  The struct codecs
 # above remain the authority; downstream ABI tables import these derived
@@ -917,13 +929,25 @@ def validate_stack_map_payload(
                 + str(MAX_RECORDS)
             )
         for _ in range(record_count):
-            record_fields, cursor = _take(
-                payload, cursor, _RECORD, "safepoint record"
-            )
-            location_count = record_fields[4]
-            reserved_count = record_fields[5]
-            reserved_short = record_fields[8]
-            location_index = record_fields[9]
+            if _NATIVE_RECORD_READS:
+                if cursor + RECORD_SIZE > len(payload):
+                    raise PreciseStackMapError("truncated safepoint record")
+                raw = abi_constant("object.bytes.data_offset") + cursor
+                counts = load_i32(payload, raw + 20) & 0xFFFFFFFF
+                kind_flags = load_i32(payload, raw + 24) & 0xFFFFFFFF
+                location_count = counts & 0xFFFF
+                reserved_count = counts >> 16
+                reserved_short = kind_flags >> 16
+                location_index = load_i32(payload, raw + 28) & 0xFFFFFFFF
+                cursor += RECORD_SIZE
+            else:
+                record_fields, cursor = _take(
+                    payload, cursor, _RECORD, "safepoint record"
+                )
+                location_count = record_fields[4]
+                reserved_count = record_fields[5]
+                reserved_short = record_fields[8]
+                location_index = record_fields[9]
             if reserved_count or reserved_short:
                 raise PreciseStackMapError("non-zero reserved stack-map field")
             total_locations += location_count
@@ -979,21 +1003,37 @@ def validate_stack_map_payload(
 
         previous_pc = -1
         for _ in range(record_count):
-            record_fields, cursor = _take(
-                payload, cursor, _RECORD, "safepoint record"
-            )
-            (
-                record_id,
-                instruction_offset,
-                exceptional_offset,
-                continuation_id,
-                location_count,
-                _reserved_count,
-                kind,
-                record_flags,
-                _reserved_short,
-                location_index,
-            ) = record_fields
+            if _NATIVE_RECORD_READS:
+                if cursor + RECORD_SIZE > table_start:
+                    raise PreciseStackMapError("truncated safepoint record")
+                raw = abi_constant("object.bytes.data_offset") + cursor
+                record_id = load_i64(payload, raw)
+                instruction_offset = load_i32(payload, raw + 8) & 0xFFFFFFFF
+                exceptional_offset = load_i32(payload, raw + 12) & 0xFFFFFFFF
+                continuation_id = load_i32(payload, raw + 16) & 0xFFFFFFFF
+                counts = load_i32(payload, raw + 20) & 0xFFFFFFFF
+                kind_flags = load_i32(payload, raw + 24) & 0xFFFFFFFF
+                location_count = counts & 0xFFFF
+                kind = kind_flags & 0xFF
+                record_flags = (kind_flags >> 8) & 0xFF
+                location_index = load_i32(payload, raw + 28) & 0xFFFFFFFF
+                cursor += RECORD_SIZE
+            else:
+                record_fields, cursor = _take(
+                    payload, cursor, _RECORD, "safepoint record"
+                )
+                (
+                    record_id,
+                    instruction_offset,
+                    exceptional_offset,
+                    continuation_id,
+                    location_count,
+                    _reserved_count,
+                    kind,
+                    record_flags,
+                    _reserved_short,
+                    location_index,
+                ) = record_fields
             if record_id == 0:
                 raise PreciseStackMapError("safepoint id is outside uint64")
             if record_id in seen_safepoints:
@@ -1033,18 +1073,33 @@ def validate_stack_map_payload(
             start = table_start + location_index * _LOCATION.size
             end = start + location_count * _LOCATION.size
             prior_flags: list[int] = []
-            for index, location_fields in enumerate(
-                _LOCATION.iter_unpack(table_view[start:end])
-            ):
-                (
-                    location_kind,
-                    location_flags,
-                    size,
-                    register,
-                    base_index,
-                    location_offset,
-                    extent,
-                ) = location_fields
+            for index in range(location_count):
+                if _NATIVE_RECORD_READS:
+                    raw = (
+                        abi_constant("object.bytes.data_offset")
+                        + start + index * LOCATION_SIZE
+                    )
+                    kind_flags_size = load_i32(payload, raw) & 0xFFFFFFFF
+                    register_base = load_i32(payload, raw + 4) & 0xFFFFFFFF
+                    location_kind = kind_flags_size & 0xFF
+                    location_flags = (kind_flags_size >> 8) & 0xFF
+                    size = kind_flags_size >> 16
+                    register = register_base & 0xFFFF
+                    base_index = register_base >> 16
+                    if base_index >= 0x8000:
+                        base_index -= 0x10000
+                    location_offset = load_i32(payload, raw + 8)
+                    extent = load_i32(payload, raw + 12) & 0xFFFFFFFF
+                else:
+                    (
+                        location_kind,
+                        location_flags,
+                        size,
+                        register,
+                        base_index,
+                        location_offset,
+                        extent,
+                    ) = _LOCATION.unpack_from(table_view, start + index * LOCATION_SIZE)
                 if location_kind not in LOCATION_KINDS:
                     raise PreciseStackMapError(
                         f"unknown location kind {location_kind}"
@@ -1278,6 +1333,11 @@ def merge_stack_map_payloads(
         source_table = payload[
             table_start:table_start + table_count * location_size
         ]
+        # The source table is immutable for this payload. A record's (index,
+        # count) therefore names the same byte range every time it occurs.
+        # Real compiler PCOs repeat these ranges at many safepoints; avoid
+        # rebuilding and hashing the same location bytes for each occurrence.
+        source_index_cache: dict[int, int] = {}
         for function_id, fn_start, fn_end in scanned:
             if function_id in seen_ids:
                 raise PreciseStackMapError(
@@ -1312,15 +1372,20 @@ def merge_stack_map_payloads(
                     | (blob[cursor + 30] << 16)
                     | (blob[cursor + 31] << 24)
                 )
-                start = index * location_size
-                key = bytes(source_table[start:start + count * location_size])
-                if key in table_index:
-                    merged_index = table_index[key]
+                source_key = (index << 16) | count
+                if source_key in source_index_cache:
+                    merged_index = source_index_cache[source_key]
                 else:
-                    merged_index = table_locations
-                    table_index[key] = merged_index
-                    table.append(key)
-                    table_locations += count
+                    start = index * location_size
+                    key = bytes(source_table[start:start + count * location_size])
+                    if key in table_index:
+                        merged_index = table_index[key]
+                    else:
+                        merged_index = table_locations
+                        table_index[key] = merged_index
+                        table.append(key)
+                        table_locations += count
+                    source_index_cache[source_key] = merged_index
                 blob[cursor + 28] = merged_index & 0xFF
                 blob[cursor + 29] = (merged_index >> 8) & 0xFF
                 blob[cursor + 30] = (merged_index >> 16) & 0xFF

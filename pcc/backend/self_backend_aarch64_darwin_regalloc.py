@@ -448,9 +448,10 @@ def _function_level_facts(
             )
             if not safe or metadata.first == PARSED_INSTRUCTION_KIND_CALL:
                 barriers.append(position)
-            destination = kernel.instruction_fact_by_id(
+            instruction_fact: CompilerInt4 = kernel.instruction_fact_by_id(
                 block_fact.first + instruction_index
-            ).first
+            )
+            destination = instruction_fact.first
             if destination >= 0:
                 defs_here.add(destination)
             use_index = 0

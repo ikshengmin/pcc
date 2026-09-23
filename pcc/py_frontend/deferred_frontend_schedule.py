@@ -7,8 +7,13 @@ describe these fresh-process phases.
 
 import os
 
+from pcc.unsafe import abi_constant, load_i8, null, ptr_is_null
+
 from .pipeline_pass_config import parallel_cpu_budget
-from .worker_process_pool import run_worker_processes
+from .worker_process_pool import (
+    run_weighted_worker_processes,
+    run_worker_processes,
+)
 
 
 _GIB = 1073741824
@@ -21,6 +26,40 @@ _PCO_LEGACY_BASE = _GIB // 4
 _PCO_LEGACY_PER_SIDECAR_MB = 13 * _GIB // 100
 _PCO_CAP = 6 * _GIB
 _MAX_WIDTH = 12
+
+
+def _native_ast_reads_available() -> bool:
+    try:
+        return ptr_is_null(null()) != 0
+    except NotImplementedError:
+        return False
+
+
+_NATIVE_AST_READS = _native_ast_reads_available()
+
+
+def _call_node_score(payload: bytes) -> int:
+    """Count the exact AST wire marker without a managed byte-slice per hit."""
+    if not _NATIVE_AST_READS:
+        return payload.count(b'"Call"')
+    size = len(payload)
+    base = abi_constant("object.bytes.data_offset")
+    index = 0
+    score = 0
+    while index + 6 <= size:
+        if load_i8(payload, base + index) == 34:
+            if (
+                load_i8(payload, base + index + 1) == 67
+                and load_i8(payload, base + index + 2) == 97
+                and load_i8(payload, base + index + 3) == 108
+                and load_i8(payload, base + index + 4) == 108
+                and load_i8(payload, base + index + 5) == 34
+            ):
+                score += 1
+                index += 6
+                continue
+        index += 1
+    return score
 
 
 def indexed_frontend_floor_bytes(ast_bytes):
@@ -80,8 +119,14 @@ def run_pco_commands(commands, sidecars, oversized, safe_jobs):
     sizes = [os.path.getsize(path) for path in sidecars]
     raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
     gc_backend = 0 if raw_gc == "0" else -1
-    for indices, width in pco_groups(sizes, budget, parallel_cpu_budget(), gc_backend):
-        run_worker_processes([commands[index] for index in indices], width)
+    floors = [indexed_pco_floor_bytes(size, gc_backend) for size in sizes]
+    order = sorted(range(len(commands)), key=lambda index: (-sizes[index], index))
+    run_weighted_worker_processes(
+        [commands[index] for index in order],
+        [floors[index] for index in order],
+        min(parallel_cpu_budget(), _MAX_WIDTH),
+        max(1, budget - _DRIVER_RESERVE),
+    )
 
 
 def run_frontend_commands(commands, manifests, oversized, safe_jobs):
@@ -97,6 +142,7 @@ def run_frontend_commands(commands, manifests, oversized, safe_jobs):
     if len(commands) != len(manifests):
         raise ValueError("frontend command/manifest inventory mismatch")
     sizes = []
+    scores = []
     for manifest in manifests:
         with open(manifest, "r", encoding="utf-8") as stream:
             lines = stream.read().splitlines()
@@ -106,6 +152,20 @@ def run_frontend_commands(commands, manifests, oversized, safe_jobs):
         if index < 0:
             raise ValueError("negative frontend module index")
         ast_path = os.path.join(lines[5], "module_" + str(index) + ".json")
-        sizes.append(os.path.getsize(ast_path))
-    for indices, width in frontend_groups(sizes, budget, parallel_cpu_budget()):
-        run_worker_processes([commands[index] for index in indices], width)
+        with open(ast_path, "rb") as stream:
+            payload = stream.read()
+        sizes.append(len(payload))
+        # Literal-heavy ASTs can be large but cheap to lower. Call nodes are
+        # a better cheap first-work estimate for this independent module queue.
+        scores.append(_call_node_score(payload))
+    floors = [indexed_frontend_floor_bytes(size) for size in sizes]
+    order = sorted(
+        range(len(commands)),
+        key=lambda index: (-scores[index], -floors[index], index),
+    )
+    run_weighted_worker_processes(
+        [commands[index] for index in order],
+        [floors[index] for index in order],
+        min(parallel_cpu_budget(), _MAX_WIDTH),
+        max(1, budget - _DRIVER_RESERVE),
+    )

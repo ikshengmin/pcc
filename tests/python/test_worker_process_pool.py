@@ -36,6 +36,31 @@ def test_pool_preserves_environment_prefix_and_empty_quoted_arguments(tmp_path):
     assert output.read_text() == "value with spaces|['', \"quote'word\"]"
 
 
+def test_weighted_pool_starts_a_fitting_worker_before_its_predecessor_exits(tmp_path):
+    from pcc.py_frontend.worker_process_pool import run_weighted_worker_processes
+
+    ready = tmp_path / "ready"
+    done = tmp_path / "done"
+    tail = tmp_path / "tail"
+    first = (
+        "import time;from pathlib import Path;"
+        f"ready=Path({str(ready)!r});done=Path({str(done)!r});"
+        "deadline=time.monotonic()+5\n"
+        "while not ready.exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
+        "assert ready.exists()\n"
+        "done.write_text('ok')\n"
+    )
+    second = f"from pathlib import Path;Path({str(ready)!r}).write_text('ok')"
+    third = (
+        f"from pathlib import Path;assert Path({str(ready)!r}).exists();"
+        f"Path({str(tail)!r}).write_text('ok')"
+    )
+    commands = [shlex.join([sys.executable, "-c", code])
+                for code in (first, second, third)]
+    run_weighted_worker_processes(commands, [7, 3, 3], 3, 10)
+    assert done.read_text() == tail.read_text() == "ok"
+
+
 def test_native_pool_runs_native_children_and_stops_on_failure(tmp_path, pcc_py_runtime_archive):
     from pathlib import Path
     from pcc.py_frontend.pipeline import compile_python, compile_python_multi
@@ -68,12 +93,16 @@ main()
     parent_source.write_text('''
 import sys
 import subprocess
-from pcc.py_frontend.worker_process_pool import run_worker_processes
+from pcc.py_frontend.worker_process_pool import run_worker_processes, run_weighted_worker_processes
 def main():
     child = sys.argv[1]
     commands = [child + " slow " + sys.argv[2], child + " fail", child + " later " + sys.argv[3]]
     try:
         run_worker_processes(commands, 2)
+    except subprocess.CalledProcessError as error:
+        print(error.returncode)
+    try:
+        run_weighted_worker_processes(commands, [7, 3, 3], 3, 10)
     except subprocess.CalledProcessError as error:
         print(error.returncode)
 main()
@@ -91,7 +120,7 @@ main()
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)),
                                 capture_output=True, text=True, timeout=5)
         assert result.returncode == 0, result.stderr
-        assert result.stdout == "7\n", result.stderr
+        assert result.stdout == "7\n7\n", result.stderr
         assert not marker.exists()
         assert pid_file.is_file()
         with pytest.raises(ProcessLookupError):

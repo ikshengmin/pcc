@@ -52,7 +52,57 @@ def _release_direct_frontend_state(codegen) -> None:
     gc.collect()
 
 
+def _freeze_worker_survivors() -> None:
+    """Exclude what outlives the module loop from later collections.
+
+    Exports for every module, the imported compiler and its caches survive
+    each module; re-traversing them in each per-module ``gc.collect()`` was a
+    quarter of a host worker's CPU.  Callers freeze only once no module-local
+    graph is referenced.  pcc's runtime records the call without changing
+    what it collects.
+    """
+    import gc
+
+    gc.freeze()
+
+
 def run_export_worker(
+    manifest,
+    *,
+    worker_timing_enabled,
+    build_closed_world_context,
+    write_ast_wire,
+    closed_world_reexport_edges,
+    closed_world_module_dependencies,
+    mark_function_object_exports,
+    write_native_exports_wire,
+    write_reexport_edges_wire,
+) -> int:
+    import gc
+
+    # Every lifted module stays alive until the worker exits, so automatic
+    # collections only re-traversed a growing, acyclic heap: 43% of a host
+    # worker's CPU, to reclaim a few hundred objects over 394 modules.
+    collector_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        return _run_export_worker(
+            manifest,
+            worker_timing_enabled=worker_timing_enabled,
+            build_closed_world_context=build_closed_world_context,
+            write_ast_wire=write_ast_wire,
+            closed_world_reexport_edges=closed_world_reexport_edges,
+            closed_world_module_dependencies=closed_world_module_dependencies,
+            mark_function_object_exports=mark_function_object_exports,
+            write_native_exports_wire=write_native_exports_wire,
+            write_reexport_edges_wire=write_reexport_edges_wire,
+        )
+    finally:
+        if collector_was_enabled:
+            gc.enable()
+
+
+def _run_export_worker(
     manifest,
     *,
     worker_timing_enabled,
@@ -159,6 +209,26 @@ def _note_worker_module(module_name) -> None:
         pass
 
 
+def _write_one_effect_summary(
+    index,
+    module_name,
+    ast_dir,
+    ir_dir,
+    native_exports,
+    read_ast_wire,
+    build_effect_summary,
+    write_effect_summary,
+):
+    # Keep AST and analysis temporaries within one invocation. A process can
+    # amortize imports/export decoding without owning a batch of live ASTs.
+    ast_path = os.path.join(ast_dir, "module_" + str(index) + ".json")
+    ast_module = read_ast_wire(ast_path)
+    summary = build_effect_summary(ast_module, module_name, native_exports)
+    summary_path = os.path.join(ir_dir, "summary_" + str(index) + ".wire")
+    write_effect_summary(summary_path, summary)
+    return "SUMMARY\t" + str(index) + "\t" + module_name + "\t" + summary_path + "\n"
+
+
 def run_summary_worker(
     manifest,
     *,
@@ -168,36 +238,26 @@ def run_summary_worker(
     write_effect_summary,
 ) -> int:
     assigned_indices = manifest["assigned_indices"]
-    if len(assigned_indices) != 1:
-        raise ValueError("frontend summary worker requires exactly one module")
-    index = assigned_indices[0]
     module_names = manifest["module_names"]
-    if index < 0 or index >= len(module_names):
-        raise ValueError("frontend summary worker index is out of range")
+    if not assigned_indices:
+        raise ValueError("frontend summary worker requires at least one module")
+    seen = set()
+    for index in assigned_indices:
+        if index < 0 or index >= len(module_names) or index in seen:
+            raise ValueError("frontend summary worker index is invalid or repeated")
+        seen.add(index)
     ast_dir = str(manifest.get("ast_dir", "") or "")
     exports_path = str(manifest.get("exports_path", "") or "")
     if not ast_dir or not exports_path:
         raise ValueError("frontend summary worker inputs are missing")
     native_exports, _derived = read_native_exports_wire(exports_path)
-    ast_path = os.path.join(ast_dir, "module_" + str(index) + ".json")
-    module_name = module_names[index]
-    ast_module = read_ast_wire(ast_path)
-    summary = build_effect_summary(ast_module, module_name, native_exports)
-    summary_path = os.path.join(
-        str(manifest["ir_dir"]),
-        "summary_" + str(index) + ".wire",
-    )
-    write_effect_summary(summary_path, summary)
+    ir_dir = str(manifest["ir_dir"])
     with open(str(manifest["result_path"]), "w", encoding="utf-8") as stream:
-        stream.write(
-            "SUMMARY\t"
-            + str(index)
-            + "\t"
-            + module_name
-            + "\t"
-            + summary_path
-            + "\n"
-        )
+        for index in assigned_indices:
+            stream.write(_write_one_effect_summary(
+                index, module_names[index], ast_dir, ir_dir, native_exports,
+                read_ast_wire, build_effect_summary, write_effect_summary,
+            ))
     return 0
 
 
@@ -258,6 +318,7 @@ def run_codegen_worker(
         worker_timing = worker_timing_enabled()
         unique_external_class_preload = None
         indexed_exports = False
+        lazy_ast_dir = ""
         if exports_path:
             if is_native_worker and len(assigned_indices) == 1:
                 root_module = module_names[assigned_indices[0]]
@@ -277,17 +338,9 @@ def run_codegen_worker(
             parsed_modules = [None for _source in src_paths]
             parse_ms_by_index = {}
             if ast_dir:
-                for index in assigned_indices:
-                    parse_started = time.monotonic() if worker_timing else 0.0
-                    ast_path = os.path.join(
-                        ast_dir,
-                        "module_" + str(index) + ".json",
-                    )
-                    parsed_modules[index] = read_ast_wire(ast_path)
-                    if worker_timing:
-                        parse_ms_by_index[index] = int(
-                            (time.monotonic() - parse_started) * 1000
-                        )
+                # Each module's AST is read when the loop reaches it: it must
+                # not be alive, or frozen, while other modules are processed.
+                lazy_ast_dir = ast_dir
             else:
                 from ..parse.py_lift import parse_and_lift
 
@@ -318,8 +371,19 @@ def run_codegen_worker(
             )
 
         result_lines: list[str] = []
+        if lazy_ast_dir:
+            _freeze_worker_survivors()
         for index in assigned_indices:
             module_name = module_names[index]
+            if lazy_ast_dir:
+                parse_started = time.monotonic() if worker_timing else 0.0
+                parsed_modules[index] = read_ast_wire(
+                    os.path.join(lazy_ast_dir, "module_" + str(index) + ".json")
+                )
+                if worker_timing:
+                    parse_ms_by_index[index] = int(
+                        (time.monotonic() - parse_started) * 1000
+                    )
             if worker_timing:
                 sys.stderr.write(
                     "pcc frontend worker start index="
@@ -626,6 +690,8 @@ def run_codegen_worker(
                             import gc
 
                             gc.collect()
+                            if lazy_ast_dir:
+                                _freeze_worker_survivors()
                         if worker_timing:
                             sys.stderr.write(
                                 "pcc direct indexed emit module="

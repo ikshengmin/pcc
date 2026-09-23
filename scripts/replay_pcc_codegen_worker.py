@@ -98,6 +98,30 @@ def prepare_replay(
     environment = os.environ.copy()
     environment.update(receipt_environment)
     environment.pop("LC_ALL", None)
+    # The Stage2 receipt records bootstrap's outer environment, while
+    # bootstrap.sh and native_deferred._command construct the actual worker
+    # environment later. In particular, replaying with an ambient default
+    # pass tier silently changes a PIDX-only worker into an LLVM-text worker.
+    for child, bootstrap in (
+        ("PCC_PYTHON_IR_PASSES", "PCC_BOOTSTRAP_PYTHON_IR_PASSES"),
+        ("PCC_RUNTIME_HIGH", "PCC_BOOTSTRAP_RUNTIME_HIGH"),
+        ("PCC_RUNTIME_CC", "PCC_BOOTSTRAP_RUNTIME_CC"),
+    ):
+        if bootstrap in receipt_environment:
+            environment[child] = receipt_environment[bootstrap]
+    if native_object == 1 and host_sources is None:
+        environment.update({
+            "PCC_DEFER_FRONTEND_CODEGEN_PLAN": "",
+            "PCC_DEFER_FRONTEND_OUTPUT": "",
+            "PCC_DEFER_SELF_LINK_PLAN": "",
+            "PCC_PY_FRONTEND_IN_PROCESS_CODEGEN": "0",
+            "PCC_DIRECT_INDEXED_KERNEL_CAPTURE": "1",
+            "PCC_DIRECT_INDEXED_KERNEL_EMIT": "1",
+            "PCC_DIRECT_INDEXED_KERNEL_FUSE_USES": "1",
+            "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND": "1",
+            "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK": "1",
+            "PCC_DIRECT_INDEXED_SIDECAR": "1",
+        })
     environment.update(
         {
             "HOME": str(private_root / "home"),
@@ -145,6 +169,20 @@ def prepare_replay(
         "result": str(result_path),
         "artifact_dir": str(artifact_dir),
         "command": command,
+        "effective_worker_environment": {
+            key: environment.get(key, "") for key in (
+                "PCC_PYTHON_IR_PASSES",
+                "PCC_RUNTIME_HIGH",
+                "PCC_RUNTIME_CC",
+                "PCC_DIRECT_INDEXED_KERNEL_CAPTURE",
+                "PCC_DIRECT_INDEXED_KERNEL_EMIT",
+                "PCC_DIRECT_INDEXED_KERNEL_FUSE_USES",
+                "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND",
+                "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK",
+                "PCC_DIRECT_INDEXED_NATIVE_OBJECT",
+                "PCC_DIRECT_INDEXED_SIDECAR",
+            )
+        },
     }
     (output_dir / "replay.json").write_text(
         json.dumps(replay_receipt, indent=2, sort_keys=True) + "\n",

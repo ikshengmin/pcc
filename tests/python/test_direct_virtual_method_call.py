@@ -102,6 +102,27 @@ INTERCEPTED = textwrap.dedent(
     '''
 )
 
+SHADOWED = textwrap.dedent(
+    '''
+    class Base:
+        def step(self) -> int:
+            return 1
+        def run(self) -> int:
+            return self.step()
+
+    class Child(Base):
+        def step(self) -> int:
+            return 2
+
+    def main() -> None:
+        child = Child()
+        child.step = lambda: 99
+        print(child.run())
+
+    main()
+    '''
+)
+
 
 def _compile(tmp_path: Path, name: str, source: str, *, enabled: bool) -> Path:
     from pcc.py_frontend.pipeline import compile_python
@@ -126,9 +147,9 @@ def _compile(tmp_path: Path, name: str, source: str, *, enabled: bool) -> Path:
     return exe
 
 
-def _run(exe: Path) -> str:
+def _run(exe: Path, backend: int = 0) -> str:
     env = dict(os.environ)
-    env["PCC_GC_BACKEND"] = "0"
+    env["PCC_GC_BACKEND"] = str(backend)
     env["PCC_GC_REFCOUNT_PROVENANCE_PROBE"] = "2"
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=120, env=env
@@ -174,6 +195,15 @@ def test_a_class_that_intercepts_attributes_keeps_the_general_protocol(tmp_path)
     # function is *declared* in each module, so look for a call.
     assert "call ptr (ptr, ptr, ptr) @py_instance_method_call_direct" not in ir
     assert "@py_obj_getattr" in ir
+
+
+def test_runtime_instance_shadow_falls_back_under_all_collectors(
+    tmp_path, monkeypatch, pcc_py_runtime_archive,
+):
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_py_runtime_archive))
+    exe = _compile(tmp_path, "shadowed_on", SHADOWED, enabled=True)
+    for backend in range(5):
+        assert _run(exe, backend) == "99"
 
 
 @pytest.mark.parametrize("enabled", [False, True])

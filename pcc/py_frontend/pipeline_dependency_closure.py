@@ -599,12 +599,33 @@ def _filter_ir_scaffold_closure(
     return out_srcs, out_mods
 
 
+_HOST_FIND_SPEC_ORIGIN_CACHE: dict = {}
+# Everything that can change what the probe interpreter resolves.
+_HOST_FIND_SPEC_ENV_KEYS = (
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSAFEPATH",
+    "PYTHONNOUSERSITE",
+    "PYTHONUSERBASE",
+)
+
+
 def _host_find_spec_origin(mod_name: str) -> str:
     if sys.implementation.name == "pcc":
         # Native discovery uses owned providers and configured source roots.
         # An unavailable provider must not be discovered by another Python.
         return ""
     py_cmd = str(os.environ.get("PCC_HOST_PYTHON", "") or "python3").strip()
+    # A Stage1 closure walk asked the same 32 names 2,125 times (`pcc` alone
+    # 1,366 times), each a new interpreter: 49 s of serial coordinator time.
+    key_parts = [py_cmd, os.getcwd()]
+    for env_key in _HOST_FIND_SPEC_ENV_KEYS:
+        key_parts.append(str(os.environ.get(env_key, "") or ""))
+    key_parts.append(mod_name)
+    cache_key = "\0".join(key_parts)
+    cached = _HOST_FIND_SPEC_ORIGIN_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     probe = (
         "import importlib.util,sys\n"
         "try:\n"
@@ -617,8 +638,11 @@ def _host_find_spec_origin(mod_name: str) -> str:
     try:
         out = subprocess.check_output([py_cmd, "-c", probe, mod_name], text=True)
     except Exception:
+        # Not cached: a transient spawn failure is retried as before.
         return ""
-    return out.strip()
+    origin = out.strip()
+    _HOST_FIND_SPEC_ORIGIN_CACHE[cache_key] = origin
+    return origin
 
 
 _HOST_STDLIB_ROOTS_CACHE: Optional[list[str]] = None

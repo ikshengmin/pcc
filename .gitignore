@@ -211,4 +211,4 @@ projects/mac_diff_app/pcc_gui_metal_render_bridge.m
 .playwright-mcp/
 .playwright-cli/
 projects/python-proxy/pproxy/diagnostic_log.py
-tests/data/
+pcc-cpu-flamegraph.svg

@@ -5,6 +5,56 @@ import pytest
 from pcc.py_frontend import deferred_frontend_schedule as scheduler
 
 
+def test_call_node_score_matches_wire_marker_count():
+    for payload in (
+        b"",
+        b'"Call"',
+        b'prefix"Call"middle"Call"suffix',
+        b'"Caller"\\"Call"\xff"Call"',
+    ):
+        assert scheduler._call_node_score(payload) == payload.count(b'"Call"')
+
+
+@pytest.mark.integration
+def test_call_node_score_executes_natively_under_all_collectors(
+    tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive,
+):
+    import inspect
+    import os
+    import subprocess
+
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    payloads = (
+        b"",
+        b'"Call"',
+        b'prefix"Call"middle"Call"suffix',
+        b'"Caller"\\"Call"\xff"Call"',
+    )
+    source = tmp_path / "ast_score.py"
+    cases = repr(tuple((payload, payload.count(b'"Call"')) for payload in payloads))
+    source.write_text(
+        "from pcc.unsafe import abi_constant, load_i8, null, ptr_is_null\n"
+        + inspect.getsource(scheduler._native_ast_reads_available)
+        + "\n_NATIVE_AST_READS = _native_ast_reads_available()\n"
+        + inspect.getsource(scheduler._call_node_score)
+        + "\nfor payload, expected in " + cases + ":\n"
+        + "    assert _call_node_score(payload) == expected\n"
+        + "print('ast-score-ok')\n"
+    )
+    binary = tmp_path / "ast_score"
+    python_program_compiler(
+        str(source), str(binary), backend="self", libpython_mode="off",
+        runtime_archive=str(pcc_py_runtime_archive),
+    )
+    for backend in range(5):
+        run = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=20,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+        )
+        assert run.returncode == 0, (backend, run.stdout, run.stderr)
+        assert run.stdout.strip() == "ast-score-ok"
+
+
 @pytest.mark.parametrize("budget_gib", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("cpus", [1, 2, 4, 12, 64])
 @pytest.mark.parametrize("phase", ["frontend", "pco0", "pco1", "pco2", "pco3", "pco4"])
@@ -56,8 +106,9 @@ def test_explicit_or_unbudgeted_calls_preserve_conservative_policy(monkeypatch, 
 
 @pytest.mark.parametrize("gc_backend", ["0", "1", "2", "3", "4", "unknown"])
 def test_auto_pco_reads_all_sidecars_before_launch_and_preserves_command_ownership(tmp_path, monkeypatch, gc_backend):
+    sizes = [1000000, 60000000, 14000000, 1000000]
     sidecars = []
-    for index, size in enumerate([1000000, 60000000, 14000000, 1000000]):
+    for index, size in enumerate(sizes):
         path = tmp_path / (str(index) + ".pidx")
         with path.open("wb") as stream:
             stream.truncate(size)
@@ -67,10 +118,21 @@ def test_auto_pco_reads_all_sidecars_before_launch_and_preserves_command_ownersh
     monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * 1073741824))
     monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
-    monkeypatch.setattr(scheduler, "run_worker_processes", lambda commands, width: calls.append((commands, width)))
+    monkeypatch.setattr(
+        scheduler, "run_weighted_worker_processes",
+        lambda commands, reservations, width, budget: calls.append(
+            (commands, reservations, width, budget)
+        ),
+    )
     scheduler.run_pco_commands(["a", "b", "c", "d"], sidecars, 2, 1)
-    assert calls == ([(["b"], 3), (["c"], 8), (["a", "d"], 12)] if gc_backend == "0"
-                     else [(["b"], 1), (["c"], 2), (["a", "d"], 12)])
+    selected_gc = 0 if gc_backend == "0" else -1
+    assert calls == [(
+        ["b", "c", "a", "d"],
+        [scheduler.indexed_pco_floor_bytes(sizes[index], selected_gc)
+         for index in (1, 2, 0, 3)],
+        12,
+        5 * 1073741824,
+    )]
     calls.clear()
     with pytest.raises(ValueError, match="inventory mismatch"):
         scheduler.run_pco_commands(["a"], sidecars, 0, 1)
@@ -109,9 +171,19 @@ def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatc
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "8589934592")
     monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
-    monkeypatch.setattr(scheduler, "run_worker_processes", lambda commands, width: calls.append((commands, width)))
+    monkeypatch.setattr(
+        scheduler, "run_weighted_worker_processes",
+        lambda commands, reservations, width, budget: calls.append(
+            (commands, reservations, width, budget)
+        ),
+    )
     scheduler.run_frontend_commands(["a", "b", "c", "d"], manifests, 2, 2)
-    assert calls == [(["a"], 2), (["b"], 3), (["c", "d"], 9)]
+    assert calls == [(
+        ["a", "b", "c", "d"],
+        [scheduler.indexed_frontend_floor_bytes(size) for size in sizes],
+        12,
+        7 * 1073741824,
+    )]
 
 
 def test_pco_admission_executes_natively_under_all_collectors(

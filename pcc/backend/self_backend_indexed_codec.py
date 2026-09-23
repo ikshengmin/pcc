@@ -580,9 +580,9 @@ def decode_indexed_module_file(path: str) -> ParsedModule:
                 else:
                     temporary_arenas[wire_name] = arena
                 arena_index += 1
-            value_scalars = temporary_arenas.get("value_scalars")
-            definition_positions = temporary_arenas.get("definition_positions")
-            used_value_ids = temporary_arenas.get("used_value_ids")
+            value_scalars: CompilerIntArena = cast(CompilerIntArena, temporary_arenas.get("value_scalars"))
+            definition_positions: CompilerIntArena = cast(CompilerIntArena, temporary_arenas.get("definition_positions"))
+            used_value_ids: CompilerIntArena = cast(CompilerIntArena, temporary_arenas.get("used_value_ids"))
             value_count = len(seed.value_names)
             if (
                 not isinstance(value_scalars, CompilerIntArena)

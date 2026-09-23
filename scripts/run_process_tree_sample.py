@@ -27,7 +27,10 @@ import run_pcc_compile_ab as compile_ab
 
 _INTERRUPT_REQUESTED = False
 _PROCESS_TABLE_TIMEOUTS_S = (5.0, 20.0)
-_SAFETY_PROCESS_TABLE_TIMEOUTS_S = (1.0,)
+# A native 12-worker phase can briefly delay Darwin's global `ps` snapshot.
+# Retry once with a bounded longer wait before killing a healthy, capped tree;
+# the RSS cap and process-group watchdog remain active on the next sample.
+_SAFETY_PROCESS_TABLE_TIMEOUTS_S = (1.0, 3.0)
 _GIB = 1024 * 1024 * 1024
 _MIN_PRESSURED_SWAP_FREE_BYTES = 4 * _GIB
 # On a large-RAM / small-swap host (e.g. 96 GiB RAM with a 4 GiB dynamic swap)
@@ -179,6 +182,25 @@ def _terminate_owned_processes(
             process.wait(timeout=2)
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
+
+
+def _owned_session_pids(root_pid, observed_sessions, current_pids):
+    """Find surviving children, including observed nested private sessions.
+
+    A nested build harness may call setsid() before launching its workers.
+    Keep a nested session only while a recorded PID still belongs to it;
+    reused PIDs in other sessions are not ownership evidence.
+    """
+    live_sessions = {}
+    for pid in current_pids:
+        with contextlib.suppress(ProcessLookupError):
+            live_sessions[pid] = os.getsid(pid)
+    owned_sessions = {root_pid}
+    for pid, session in observed_sessions.items():
+        if live_sessions.get(pid) == session:
+            owned_sessions.add(session)
+    return {pid for pid, session in live_sessions.items()
+            if pid != root_pid and session in owned_sessions}
 
 
 def _recorded_environment(environment: dict[str, str]) -> dict[str, str]:
@@ -427,6 +449,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     )
     samples: list[dict[str, object]] = []
     known_pids: set[int] = set()
+    observed_sessions: dict[int, int] = {}
     peak_tree_rss = 0
     peak_process_count = 0
     process_table_retry_count = 0
@@ -478,6 +501,9 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                     process_table_retry_count += retries
                     tree = _tree_rows(process.pid, table)
                     known_pids.update(tree)
+                    for pid in tree:
+                        with contextlib.suppress(ProcessLookupError):
+                            observed_sessions[pid] = os.getsid(pid)
                     tree_rss = sum(row[1] for row in tree.values())
                     process_count = len(tree)
                     peak_tree_rss = max(peak_tree_rss, tree_rss)
@@ -584,20 +610,16 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                     if returncode is not None:
                         # A wrapper can exit while one of its children keeps
                         # running in a different process group. Only select
-                        # recorded PIDs still in our private session; this
-                        # excludes reused PIDs and unrelated sessions.
+                        # recorded live sessions, including private sessions
+                        # created by nested build harnesses.
                         after_exit, retries = _process_table(
                             timeouts_s=process_table_timeouts,
                             include_command=False,
                         )
                         process_table_retry_count += retries
-                        remaining = set()
-                        for pid in after_exit:
-                            if pid == process.pid:
-                                continue
-                            with contextlib.suppress(ProcessLookupError):
-                                if os.getsid(pid) == process.pid:
-                                    remaining.add(pid)
+                        remaining = _owned_session_pids(
+                            process.pid, observed_sessions, after_exit,
+                        )
                         if remaining:
                             known_pids.update(remaining)
                             payload["post_exit_cleanup_pids"] = sorted(remaining)

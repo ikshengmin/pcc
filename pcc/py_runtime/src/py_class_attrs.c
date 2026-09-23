@@ -849,8 +849,12 @@ static PccClassAttrsNode *pcc_class_attrs_ensure(PyClassObject *cls) {
 PyObject *py_class_attrs_dict(PyClassObject *cls, int64_t create) {
     if (!pcc_class_attrs_is_class(cls)) return NULL;
     cls = (PyClassObject *)pcc_gc_note_relocation_read((PyObject *)cls);
+    int was_empty = cls->attrs == NULL;
     PccClassAttrsNode *n = create ? pcc_class_attrs_ensure(cls) : pcc_class_attrs_find(cls);
-    return pcc_class_attrs_sync(cls, n);
+    PyObject *attrs = pcc_class_attrs_sync(cls, n);
+    if (create && was_empty && attrs != NULL)
+        __atomic_add_fetch(&py_class_attr_cache_epoch, 1, __ATOMIC_RELEASE);
+    return attrs;
 }
 
 static PyObject *pcc_class_attr_lookup_in_mro(

@@ -462,14 +462,22 @@ class LambdaHelperLoweringMixin:
         # "self backend expected pointer value 'st.addr.N'").
         self._current_entry_block = entry
 
+        # Register the return root first so argument roots can leave in LIFO
+        # order while the result survives their finalizers/relocation.
+        return_slot = self._alloca_in_entry(
+            _CSTR, name=self._fresh("lambda.return.root"), init_null=True,
+        )
+        return_ptr = self._as_gc_ptr(return_slot)
+        self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), return_slot)
+        argument_roots = []
         for i, fv in enumerate(free_var_names):
             cap = self.builder.call(
                 self.runtime["py_tuple_get"],
                 [adapter.args[0], ir.Constant(_I64, i)],
                 name=self._fresh(f"{fv}.cap"),
             )
-            slot = self.builder.alloca(_CSTR, name=f"{fv}.cap.addr")
-            self.builder.store(cap, slot)
+            slot = self._enter_container_temp_root(cap, self._fresh(f"{fv}.cap"))
+            argument_roots.append((slot, True))
             self.env[fv] = (slot, _CSTR, DynType(name="dyn"))
 
         args_len = self.builder.call(
@@ -522,7 +530,20 @@ class LambdaHelperLoweringMixin:
                     name=self._fresh(f"{pname}.arg"),
                 )
                 self.builder.store(obj, slot)
-            self.env[pname] = (slot, _CSTR, DynType(name="dyn"))
+            # Both tuple-get arms return NEW references. Keep their common
+            # value traced across arbitrary callback bodies and retire it on
+            # normal return or exception, just like a named-function adapter.
+            obj = self.builder.load(slot, name=self._fresh(f"{pname}.bound"))
+            root = self._enter_container_temp_root(obj, self._fresh(f"{pname}.arg"))
+            argument_roots.append((root, True))
+            self.env[pname] = (root, _CSTR, DynType(name="dyn"))
+
+        argument_lifetimes = tuple(argument_roots)
+        self._try_err_block = self._make_cpy_operand_cleanup_block(
+            (), (), self._ensure_fn_err_exit(), "lambda.arguments.error",
+            rooted_pcc_lifetimes=((return_slot, False),) + argument_lifetimes,
+        )
+        self._cpy_operand_cleanup_block = self._try_err_block
 
         try:
             body_val = self._emit_expr(expr.body)
@@ -544,6 +565,18 @@ class LambdaHelperLoweringMixin:
                     body_val,
                     expr.body.ty,
                 )
+            result_owned = self._owned_release_needed(result_obj, expr.body) or (
+                self._container_store_temp_needs_release(
+                    expr.body, expr.body.ty, False, result_obj,
+                )
+            )
+            if not result_owned:
+                # ``lambda value: value`` returns a borrowed argument. Give
+                # the caller its reference before retiring the argument root.
+                self._gc_retain(result_obj)
+            self.builder.call(self.runtime["pcc_gc_store_root"], [return_ptr, result_obj])
+            self._release_rooted_pcc_lifetimes(argument_lifetimes)
+            result_obj = self._leave_return_cleanup_root(result_obj, return_slot, return_ptr)
             self.builder.ret(result_obj)
         except NotImplementedError:
             self.builder = saved_builder
@@ -629,6 +662,9 @@ class LambdaHelperLoweringMixin:
             name=self._fresh("lambda.native.func"),
         )
         self._gc_release(captures)
+        # py_func_new returns a NEW reference, including when the lambda is
+        # used directly as an argument rather than hoisted into a local def.
+        self._note_owned_object_value(fn_obj)
         return fn_obj
 
     def _capture_value_as_cpython(self, name: str) -> Optional[ir.Value]:

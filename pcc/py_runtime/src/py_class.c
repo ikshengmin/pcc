@@ -609,8 +609,26 @@ static PyClassObject *object_root(void) {
 /* `name` is a process-lifetime immutable borrowed C string.  Concurrent
  * readers may share an immutable table, but mutation of this realloc-backed
  * table is externally serialized and must not race with lookup. */
+static void class_method_name_signature(
+    const char *name, uint32_t *hash_out, uint32_t *length_out
+) {
+    uint32_t hash = 2166136261u;
+    uint32_t length = 0;
+    const unsigned char *cursor = (const unsigned char *)name;
+    while (*cursor != 0) {
+        hash = (hash ^ (uint32_t)*cursor) * 16777619u;
+        cursor++;
+        length++;
+    }
+    *hash_out = hash;
+    *length_out = length;
+}
+
 void py_class_add_method(PyClassObject *cls, const char *name, PyObject *func) {
     if (!class_pointer_is_class(cls) || !name) return;
+    uint32_t name_hash;
+    uint32_t name_length;
+    class_method_name_signature(name, &name_hash, &name_length);
     cls = (PyClassObject *)pcc_gc_note_relocation_read((PyObject *)cls);
     int32_t new_n = cls->n_methods + 1;
     PyClassMethod *old_methods = cls->methods;
@@ -619,6 +637,8 @@ void py_class_add_method(PyClassObject *cls, const char *name, PyObject *func) {
     if (!newarr) return;   /* best-effort: drop on OOM */
     newarr[cls->n_methods].name = name;
     newarr[cls->n_methods].func = func;
+    newarr[cls->n_methods].name_hash = name_hash;
+    newarr[cls->n_methods].name_length = name_length;
     cls->methods = newarr;
     cls->n_methods = new_n;
     int64_t payload_offset = -1;
@@ -685,6 +705,9 @@ PyObject *py_class_lookup(PyClassObject *cls, const char *name) {
             (PyObject **)&cls->bases[0]
         );
     }
+    uint32_t name_hash;
+    uint32_t name_length;
+    class_method_name_signature(name, &name_hash, &name_length);
     for (int32_t i = 0; i < cls->n_mro; i++) {
         PyClassObject *m = (PyClassObject *)pcc_gc_load_ptr(
             (PyObject *)cls,
@@ -693,7 +716,10 @@ PyObject *py_class_lookup(PyClassObject *cls, const char *name) {
         if (!m) continue;
         for (int32_t j = 0; j < m->n_methods; j++) {
             const char *method_name = m->methods[j].name;
-            if (method_name && (method_name == name || strcmp(method_name, name) == 0)) {
+            if (method_name
+                && m->methods[j].name_length == name_length
+                && m->methods[j].name_hash == name_hash
+                && (method_name == name || strcmp(method_name, name) == 0)) {
                 PyObject *func = pcc_gc_note_relocation_read(m->methods[j].func);
                 if (func != m->methods[j].func) {
                     m->methods[j].func = func;

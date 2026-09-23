@@ -14,6 +14,7 @@ from pcc.py_frontend import pipeline_self_link as link_contract
 def test_profiled_packed_native_link_executes_without_a_host_interpreter(tmp_path, monkeypatch, manifest_input, sync):
     import json
     import subprocess
+    from pcc.backend import macho_exec
     from pcc.backend.arm64_asm_driver import assemble_file
     from pcc.backend.native_object import encode_native_object_from_sections
 
@@ -27,7 +28,18 @@ def test_profiled_packed_native_link_executes_without_a_host_interpreter(tmp_pat
     def forbidden(*args, **kwargs):
         pytest.fail("profiled owned link attempted external delegation")
 
+    prepare = macho_exec.prepare_executable_object
+    transferred = []
+
+    def checked_prepare(objects, **kwargs):
+        assert kwargs.get("_consume_inputs") is True, "private CLI link kept the borrowed-input path"
+        result = prepare(objects, **kwargs)
+        assert objects == [], "transferred input list remained live after merge"
+        transferred.append(True)
+        return result
+
     with monkeypatch.context() as patch:
+        patch.setattr(macho_exec, "prepare_executable_object", checked_prepare)
         patch.setattr(self_link.subprocess, "run", forbidden)
         self_link.run_link_command(
             [], None, str(output), None, (), False,
@@ -48,6 +60,7 @@ def test_profiled_packed_native_link_executes_without_a_host_interpreter(tmp_pat
         )
     result = subprocess.run([str(final)], capture_output=True, timeout=10)
     assert result.returncode == 42, result.stderr
+    assert transferred == [True]
     receipt = json.loads(profile.read_text())
     assert receipt["inputs"] == {"asm": 0, "native_object": 1, "object": 0, "archive": 0}
     assert receipt["phases_ms"]["prepare_link"] > 0

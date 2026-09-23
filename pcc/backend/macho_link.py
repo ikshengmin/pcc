@@ -48,6 +48,7 @@ from .macho_parallel import (
 from .native_object import (
     NativeObject,
     NativeObjectError,
+    OwnedMergedSourceView,
     NativeSection,
     NativeSymbol,
     NativeObjectView,
@@ -55,6 +56,10 @@ from .native_object import (
     PackedNativeSection,
     PackedNativeSymbol,
     is_native_object_bytes,
+    _decode_index,
+    _packed_relocation_fields_at,
+    _packed_relocation_sort_indices,
+    _packed_section_target_relocations,
 )
 from .precise_stackmap import (
     ARCH_AARCH64,
@@ -227,11 +232,7 @@ def _native_section_payload(
 
     section = native.sections[section_index - 1]
     if isinstance(native, PackedNativeObject):
-        section_targets = tuple(
-            relocation
-            for relocation in native.decoded_relocations(section_index - 1)
-            if relocation[6] is not None
-        )
+        section_targets = _packed_section_target_relocations(native, section_index - 1)
         source_payload = native.section_data(section_index - 1)
     else:
         section_targets = tuple(
@@ -401,6 +402,7 @@ def _read_relocations(
     symbols,
     local_rename: dict[str, str],
     offset_bias: int = 0,
+    symbol_names=None,
 ) -> list[Relocation]:
     """Relocations with ADDEND/SUBTRACTOR companions folded atomically.
 
@@ -414,18 +416,38 @@ def _read_relocations(
     if isinstance(obj, PackedNativeObject):
         out: list[Relocation] = []
         section_index = obj.sections.index(section)
-        for entry in obj.decoded_relocations(section_index):
+        count = section.relocation_count
+        if symbol_names is None:
+            symbol_names = [
+                _relocation_symbol_name(symbols, index, local_rename, context="packed native relocation")
+                for index in range(len(symbols))
+            ]
+        order = section.relocation_order
+        sorted_indices = []
+        if order == 0:
+            sorted_indices = _packed_relocation_sort_indices(obj, section)
+        for ordinal in range(count):
+            storage_index = ordinal
+            if order > 0:
+                storage_index = count - 1 - ordinal
+            elif order == 0:
+                storage_index = sorted_indices[ordinal]
             (
                 offset,
-                symbol_index,
+                symbol_raw,
                 relocation_type,
-                pcrel,
+                pcrel_raw,
                 length,
                 addend,
-                target_section_index,
-                minuend_index,
-                target_offset,
-            ) = entry
+                target_section_raw,
+                minuend_raw,
+                target_offset_raw,
+            ) = _packed_relocation_fields_at(obj, section, storage_index)
+            symbol_index = _decode_index(symbol_raw)
+            target_section_index = _decode_index(target_section_raw)
+            minuend_index = _decode_index(minuend_raw)
+            pcrel = bool(pcrel_raw)
+            target_offset = None if target_offset_raw == -1 else target_offset_raw
             target_section = None
             symbol_name = ""
             if target_section_index is not None:
@@ -434,20 +456,20 @@ def _read_relocations(
                 )
             else:
                 assert symbol_index is not None
-                symbol_name = _relocation_symbol_name(
-                    symbols,
-                    symbol_index,
-                    local_rename,
-                    context="packed native relocation",
-                )
+                if 0 <= symbol_index < len(symbol_names):
+                    symbol_name = symbol_names[symbol_index]
+                else:
+                    symbol_name = _relocation_symbol_name(
+                        symbols, symbol_index, local_rename, context="packed native relocation",
+                    )
             minuend = None
             if minuend_index is not None:
-                minuend = _relocation_symbol_name(
-                    symbols,
-                    minuend_index,
-                    local_rename,
-                    context="packed native SUBTRACTOR minuend relocation",
-                )
+                if 0 <= minuend_index < len(symbol_names):
+                    minuend = symbol_names[minuend_index]
+                else:
+                    minuend = _relocation_symbol_name(
+                        symbols, minuend_index, local_rename, context="packed native SUBTRACTOR minuend relocation",
+                    )
             out.append(Relocation(
                 offset=offset + offset_bias,
                 symbol=symbol_name,
@@ -758,7 +780,8 @@ def _coerce_link_objects(
 
 def link_relocatable_native(
     objects: list[LinkInput], *, _consume_inputs: bool = False,
-) -> NativeObject:
+    _source_view: bool = False,
+):
     """Merge inputs into pcc's indexed object without a Mach-O round trip."""
     if not _consume_inputs:
         objects = list(objects)
@@ -816,6 +839,12 @@ def link_relocatable_native(
         sections = obj.sections if is_native else obj.sections()
         symbols = symbol_tables[index]
         local_rename = local_renames[index]
+        relocation_symbol_names = None
+        if isinstance(obj, PackedNativeObject):
+            relocation_symbol_names = [
+                _relocation_symbol_name(symbols, symbol_index, local_rename, context="packed native relocation")
+                for symbol_index in range(len(symbols))
+            ]
         section_addrs = inspected_inputs[index].section_addrs
 
         # LC_DATA_IN_CODE uses object-address offsets, not file offsets.
@@ -890,6 +919,7 @@ def link_relocatable_native(
                     raise LinkError(f"input stack-map section is malformed: {exc}") from exc
                 stack_relocations = _read_relocations(
                     obj, sec, symbols, local_rename,
+                    symbol_names=relocation_symbol_names,
                 )
                 relocation_by_offset = {
                     relocation.offset: relocation
@@ -1000,6 +1030,7 @@ def link_relocatable_native(
 
             for reloc in _read_relocations(
                 obj, sec, symbols, local_rename, offset_bias=base,
+                symbol_names=relocation_symbol_names,
             ):
                 if reloc.section is None:
                     target.relocations.append(reloc)
@@ -1208,6 +1239,8 @@ def link_relocatable_native(
             zerofill_size=zero,
         ))
     try:
+        if _source_view:
+            return OwnedMergedSourceView(out_sections, undefined=unresolved)
         return NativeObject.from_sections(
             out_sections, undefined=unresolved, _consume_relocations=True,
         )

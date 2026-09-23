@@ -23,6 +23,8 @@ from pcc.py_runtime.py.py_abi_constants import (
     DICTENTRY_SIZE,
     DICTENTRY_VALUE_OFFSET,
     PYCLASSMETHOD_FUNC_OFFSET,
+    PYCLASSMETHOD_NAME_HASH_OFFSET,
+    PYCLASSMETHOD_NAME_LENGTH_OFFSET,
     PYCLASSMETHOD_NAME_OFFSET,
     PYCLASSMETHOD_SIZE,
     PYCLASSMETHODOBJECT_FUNC_OFFSET,
@@ -100,6 +102,7 @@ from pcc.unsafe import (
     ptr_is_null,
     ptr_to_int,
     realloc,
+    stack_alloc,
     store_i32,
     store_i64,
     store_ptr,
@@ -426,6 +429,20 @@ def _strs_eq(a, b) -> int:
     return result
 
 
+def _method_name_signature(name, out) -> None:
+    """Write the hash and length without allocating a Python result tuple."""
+    value: int = 2166136261
+    length: int = 0
+    while True:
+        char: int = load_i8(name, length) & 0xFF
+        if char == 0:
+            store_i32(out, 0, value)
+            store_i32(out, 4, length & 0xFFFFFFFF)
+            return
+        value = ((value ^ char) * 16777619) & 0xFFFFFFFF
+        length = length + 1
+
+
 def _cstr_is_dunder_name(s) -> int:
     if strlen(s) != 8:
         return 0
@@ -515,6 +532,10 @@ def _cstr_is_dunder_dict(s) -> int:
 
 
 def _class_lookup_in_mro(cls, name):
+    signature = stack_alloc(8)
+    _method_name_signature(name, signature)
+    name_hash: int = load_i32(signature, 0) & 0xFFFFFFFF
+    name_length: int = load_i32(signature, 4)
     n_mro_i32: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
     mro = load_ptr(cls, PYCLASSOBJECT_MRO_OFFSET)
     i: int = 0
@@ -526,14 +547,19 @@ def _class_lookup_in_mro(cls, name):
             j: int = 0
             while j < n_methods_i32:
                 m_off: int = j * PYCLASSMETHOD_SIZE
-                m_name = load_ptr(methods, m_off + PYCLASSMETHOD_NAME_OFFSET)
-                if _strs_eq(m_name, name) != 0:
-                    method_slot = ptr_add(
-                        methods, m_off + PYCLASSMETHOD_FUNC_OFFSET
-                    )
-                    func = pcc_gc_note_relocation_read(load_ptr(method_slot, 0))
-                    store_ptr(method_slot, 0, func)
-                    return func
+                if load_i32(methods, m_off + PYCLASSMETHOD_NAME_LENGTH_OFFSET) == name_length:
+                    stored_hash: int = load_i32(
+                        methods, m_off + PYCLASSMETHOD_NAME_HASH_OFFSET
+                    ) & 0xFFFFFFFF
+                    if stored_hash == name_hash:
+                        m_name = load_ptr(methods, m_off + PYCLASSMETHOD_NAME_OFFSET)
+                        if _strs_eq(m_name, name) != 0:
+                            method_slot = ptr_add(
+                                methods, m_off + PYCLASSMETHOD_FUNC_OFFSET
+                            )
+                            func = pcc_gc_note_relocation_read(load_ptr(method_slot, 0))
+                            store_ptr(method_slot, 0, func)
+                            return func
                 j = j + 1
         i = i + 1
     return null()
@@ -583,6 +609,10 @@ def py_class_attrs_dict(cls, create: int):
         pcc_gc_store_ptr(cls, ptr_add(cls, PYCLASSOBJECT_ATTRS_OFFSET), created)
         py_decref(created)
         attrs = pcc_gc_load_ptr(cls, ptr_add(cls, PYCLASSOBJECT_ATTRS_OFFSET))
+        # Exposing this mutable dict can later install a descriptor without
+        # going through py_class_setattr_raw. Retire field-lookup proofs when
+        # the dict first becomes reachable, before a caller can mutate it.
+        _bump_class_attr_cache_epoch()
     return attrs
 
 
@@ -1568,6 +1598,10 @@ def py_class_add_method(cls, name, func) -> None:
         return
     if ptr_is_null(name) != 0:
         return
+    signature = stack_alloc(8)
+    _method_name_signature(name, signature)
+    name_hash: int = load_i32(signature, 0) & 0xFFFFFFFF
+    name_length: int = load_i32(signature, 4)
     cls = pcc_gc_note_relocation_read(cls)
     n_methods_i32: int = load_i32(cls, PYCLASSOBJECT_N_METHODS_OFFSET)
     new_n: int = n_methods_i32 + 1
@@ -1578,6 +1612,8 @@ def py_class_add_method(cls, name, func) -> None:
     method_off: int = n_methods_i32 * PYCLASSMETHOD_SIZE
     store_ptr(new_methods, method_off + PYCLASSMETHOD_NAME_OFFSET, name)
     store_ptr(new_methods, method_off + PYCLASSMETHOD_FUNC_OFFSET, func)
+    store_i32(new_methods, method_off + PYCLASSMETHOD_NAME_HASH_OFFSET, name_hash)
+    store_i32(new_methods, method_off + PYCLASSMETHOD_NAME_LENGTH_OFFSET, name_length)
     store_ptr(cls, PYCLASSOBJECT_METHODS_OFFSET, new_methods)
     store_i32(cls, PYCLASSOBJECT_N_METHODS_OFFSET, new_n)
     payload_offset: int = -1
@@ -1587,13 +1623,15 @@ def py_class_add_method(cls, name, func) -> None:
                 cls,
                 methods,
                 new_methods,
-                new_n * 16,
+                new_n * PYCLASSMETHOD_SIZE,
             )
     if payload_offset < 0:
         if ptr_is_null(methods) == 0:
             if ptr_eq(methods, new_methods) == 0:
                 pcc_gc_backend4_zpage_unregister_owner_payload_span(cls, methods)
-        pcc_gc_backend4_zpage_register_owner_payload_span(cls, new_methods, new_n * 16)
+        pcc_gc_backend4_zpage_register_owner_payload_span(
+            cls, new_methods, new_n * PYCLASSMETHOD_SIZE
+        )
     _class_note_borrowed_metadata_slot_store(
         cls,
         ptr_add(new_methods, method_off + 8),
@@ -2639,21 +2677,28 @@ def py_instance_method_call_direct(inst, name, full_args):
     about 40% of self time, with another 13% in the refcounting and
     deallocation it creates.
 
-    This entry keeps the one lookup that is genuinely dynamic -- which class
-    the receiver actually is -- and drops the rest.  The caller must have
-    proved, over the closed-world class graph, that no class in the receiver's
-    subtree customises attribute access (``__getattribute__`` / ``__getattr__``
-    / ``__slots__`` descriptors) and that no field shadows ``name``; the
-    frontend does that with the same walk it already uses to decide whether a
-    direct call is sound.  Anything the fast path cannot prove *here* -- a
-    receiver that is not an instance, a name that does not resolve to a plain
-    function -- falls back to the general protocol rather than guessing.
+    Only use the direct path when the *runtime* receiver still has ordinary
+    method lookup. Instance/class mutation can invalidate a compile-time
+    class-graph proof, so every uncertain shape uses the general protocol.
     """
     if not _ptr_is_instance(inst):
         return _instance_method_call_fallback(inst, name, full_args)
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
     if ptr_is_null(cls) != 0:
         return _instance_method_call_fallback(inst, name, full_args)
+    if ptr_is_null(_class_lookup_in_mro(cls, cstr("__getattribute__"))) == 0:
+        return _instance_method_call_fallback(inst, name, full_args)
+    class_attr = _class_attr_lookup_in_mro(cls, name)
+    if ptr_is_null(class_attr) == 0:
+        py_decref(class_attr)
+        return _instance_method_call_fallback(inst, name, full_args)
+    if _lookup_field_index(cls, name) >= 0:
+        return _instance_method_call_fallback(inst, name, full_args)
+    dyn_slot = _dynamic_attr_slot(inst)
+    if ptr_is_null(dyn_slot) == 0:
+        dyn = pcc_gc_load_ptr(inst, dyn_slot)
+        if ptr_is_null(dyn) == 0:
+            return _instance_method_call_fallback(inst, name, full_args)
     func = _class_lookup_in_mro(cls, name)
     if ptr_is_null(func) != 0:
         return _instance_method_call_fallback(inst, name, full_args)

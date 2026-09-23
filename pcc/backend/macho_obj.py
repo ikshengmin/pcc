@@ -29,8 +29,10 @@ knowledge of its own.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import cast
 
 from . import macho_spec as spec
+from .self_backend_value_arena import CompilerIntArena
 from .precise_stackmap import (
     ARCH_AARCH64,
     PreciseStackMapError,
@@ -114,6 +116,50 @@ class Relocation:
     section: tuple[str, str] | None = None
     minuend: str | None = None
     target_offset: int | None = None
+
+
+def _append_final_link_relocation_fields(
+    records: CompilerIntArena,
+    relocations: list[Relocation],
+    symbol_index: dict[str, int],
+    section_index: dict[tuple[str, str], int],
+) -> None:
+    """Project validated merge records into the executable link's scalar rows.
+
+    Keep this loop beside ``Relocation`` so self codegen knows its fixed field
+    layout; an imported class projected from another module takes the general
+    Python attribute protocol for every relocation.
+    """
+    for relocation in relocations:
+        relocation: Relocation = cast(Relocation, relocation)
+        if relocation.addend:
+            records.append4(
+                relocation.offset, relocation.addend, 0, relocation.length,
+            )
+            records.append2(0, spec.ARM64_RELOC_ADDEND)
+        if relocation.type == spec.ARM64_RELOC_SUBTRACTOR:
+            records.append4(
+                relocation.offset, symbol_index[relocation.symbol],
+                0, relocation.length,
+            )
+            records.append2(1, spec.ARM64_RELOC_SUBTRACTOR)
+            records.append4(
+                relocation.offset, symbol_index[relocation.minuend],
+                0, relocation.length,
+            )
+            records.append2(1, spec.ARM64_RELOC_UNSIGNED)
+        elif relocation.section is not None:
+            records.append4(
+                relocation.offset, section_index[relocation.section],
+                1 if relocation.pcrel else 0, relocation.length,
+            )
+            records.append2(0, relocation.type)
+        else:
+            records.append4(
+                relocation.offset, symbol_index[relocation.symbol],
+                1 if relocation.pcrel else 0, relocation.length,
+            )
+            records.append2(1, relocation.type)
 
 
 @dataclass(frozen=True)
