@@ -180,7 +180,6 @@ pcc_gc_note_relocation_read = extern(
 )
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
 pcc_gc_note_safepoint = extern("pcc_gc_note_safepoint", (), c_void)
-pcc_gc_note_pin = extern("pcc_gc_note_pin", (c_int32,), c_void)
 pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_note_frame_enter = extern(
@@ -1134,7 +1133,9 @@ def pcc_gc_pin(o) -> None:
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags | PY_FLAG_GC_PINNED)
-    pcc_gc_note_pin(1)
+    # pcc_gc_note_pin(1), inline: codegen pins around most calls.
+    pin_metric = global_addr("pcc_gc_metric_pin")
+    store_i32(pin_metric, 0, load_i32(pin_metric, 0) + 1)
     return
 
 
@@ -1146,7 +1147,9 @@ def pcc_gc_unpin(o) -> None:
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~PY_FLAG_GC_PINNED)
-    pcc_gc_note_pin(-1)
+    # pcc_gc_note_pin(-1), inline.
+    pin_metric = global_addr("pcc_gc_metric_pin")
+    store_i32(pin_metric, 0, load_i32(pin_metric, 0) - 1)
     return
 
 

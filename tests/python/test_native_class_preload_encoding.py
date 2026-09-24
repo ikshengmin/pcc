@@ -20,7 +20,7 @@ import pytest
 _PREFIX = '''
 import sys
 from pcc.py_frontend.py_ast import ClassType, IntType, Module
-from pcc.py_frontend.export_meta import encode_type
+from pcc.py_frontend.export_meta import encode_type, encode_type_memo
 
 class _InferCtx:
     def __init__(self, module: Module, external_exports):

@@ -40,23 +40,6 @@
 
 extern int32_t py_class_attr_cache_epoch;
 extern int32_t pcc_class_del_defined_count;
-/* Keep each cache entry coherent without sharing mutable state across threads. */
-static _Thread_local PyObject *py_inst_field_cache_cls0 = NULL;
-static _Thread_local PyObject *py_inst_field_cache_cls1 = NULL;
-static _Thread_local PyObject *py_inst_field_cache_cls2 = NULL;
-static _Thread_local PyObject *py_inst_field_cache_cls3 = NULL;
-static _Thread_local const char *py_inst_field_cache_name0 = NULL;
-static _Thread_local const char *py_inst_field_cache_name1 = NULL;
-static _Thread_local const char *py_inst_field_cache_name2 = NULL;
-static _Thread_local const char *py_inst_field_cache_name3 = NULL;
-static _Thread_local int32_t py_inst_field_cache_idx0 = -1;
-static _Thread_local int32_t py_inst_field_cache_idx1 = -1;
-static _Thread_local int32_t py_inst_field_cache_idx2 = -1;
-static _Thread_local int32_t py_inst_field_cache_idx3 = -1;
-static _Thread_local int32_t py_inst_field_cache_epoch0 = -1;
-static _Thread_local int32_t py_inst_field_cache_epoch1 = -1;
-static _Thread_local int32_t py_inst_field_cache_epoch2 = -1;
-static _Thread_local int32_t py_inst_field_cache_epoch3 = -1;
 
 static int32_t class_attr_cache_epoch_load(void) {
     return __atomic_load_n(&py_class_attr_cache_epoch, __ATOMIC_ACQUIRE);
@@ -678,6 +661,78 @@ void py_class_add_method(PyClassObject *cls, const char *name, PyObject *func) {
     __atomic_add_fetch(&py_class_attr_cache_epoch, 1, __ATOMIC_RELEASE);
 }
 
+/* Instance attribute resolution cache, one table per thread; mirror of
+ * py_class.py.  An entry records one proven (class, name) outcome.  The shared
+ * class epoch retires entries on class mutation, relocation and deallocation,
+ * and the name is copied into the entry so a hit never reads a caller buffer
+ * or a freed class-owned spelling. */
+#define PCC_ATTR_RES_ENTRIES 4096
+#define PCC_ATTR_RES_NAME_MAX 39
+#define PCC_ATTR_RES_FIELD 1
+#define PCC_ATTR_RES_METHOD 2
+#define PCC_ATTR_RES_NO_GETATTRIBUTE 3
+
+typedef struct {
+    PyClassObject *cls;
+    int32_t epoch;
+    int32_t kind;
+    int64_t payload;
+    char name[PCC_ATTR_RES_NAME_MAX + 1];
+} PccAttrResEntry;
+
+_Static_assert(sizeof(PccAttrResEntry) == 64, "attribute cache entry layout");
+
+static _Thread_local PccAttrResEntry *pcc_attr_res_table = NULL;
+
+static PccAttrResEntry *attr_res_slot(
+    PccAttrResEntry *table, PyClassObject *cls, const char *name
+) {
+    uintptr_t key = ((uintptr_t)cls >> 4) ^ ((uintptr_t)name >> 3);
+    return &table[key & (PCC_ATTR_RES_ENTRIES - 1)];
+}
+
+static PccAttrResEntry *attr_res_find(
+    PyClassObject *cls, const char *name, int32_t kind
+) {
+    PccAttrResEntry *table = pcc_attr_res_table;
+    if (table == NULL) return NULL;
+    PccAttrResEntry *entry = attr_res_slot(table, cls, name);
+    if (entry->cls != cls || entry->kind != kind) return NULL;
+    if (entry->epoch != class_attr_cache_epoch_load()) return NULL;
+    for (int32_t i = 0; i <= PCC_ATTR_RES_NAME_MAX; i++) {
+        if (entry->name[i] != name[i]) return NULL;
+        if (entry->name[i] == '\0') return entry;
+    }
+    return NULL;
+}
+
+/* `epoch` is sampled before the lookup that proved the outcome, so a class
+ * mutation during that lookup leaves the entry stale. */
+static void attr_res_store(
+    PyClassObject *cls, const char *name, int32_t kind, int64_t payload,
+    int32_t epoch
+) {
+    size_t length = strlen(name);
+    if (length > PCC_ATTR_RES_NAME_MAX) return;
+    if (pcc_attr_res_table == NULL) {
+        pcc_attr_res_table = calloc(PCC_ATTR_RES_ENTRIES, sizeof(PccAttrResEntry));
+        if (pcc_attr_res_table == NULL) return;
+    }
+    PccAttrResEntry *entry = attr_res_slot(pcc_attr_res_table, cls, name);
+    entry->kind = 0;
+    entry->cls = cls;
+    entry->epoch = epoch;
+    entry->payload = payload;
+    memcpy(entry->name, name, length + 1);
+    entry->kind = kind;
+}
+
+/* Methods are cached by address; the forwarding collectors can move them. */
+static int attr_res_method_cacheable(void) {
+    int64_t backend = pcc_gc_backend();
+    return backend != 3 && backend != 4;
+}
+
 /* Walk MRO and return the first method with the matching name. */
 PyObject *py_class_lookup(PyClassObject *cls, const char *name) {
     if (!class_pointer_is_class(cls) || !name) return NULL;
@@ -816,71 +871,7 @@ static int32_t lookup_field_index(PyClassObject *cls, const char *name) {
     return -1;
 }
 
-static int32_t field_cache_slot(PyClassObject *cls, const char *name) {
-    uintptr_t key = ((uintptr_t)cls >> 4) ^ ((uintptr_t)name >> 4);
-    return (int32_t)(key & 3u);
-}
 
-static int32_t field_cache_lookup(PyClassObject *cls, const char *name) {
-    int32_t epoch = class_attr_cache_epoch_load();
-    if (py_inst_field_cache_epoch0 == epoch
-        && py_inst_field_cache_cls0 == (PyObject *)cls
-        && py_inst_field_cache_name0 != NULL
-        && strcmp(py_inst_field_cache_name0, name) == 0) {
-        return (int32_t)py_inst_field_cache_idx0;
-    }
-    if (py_inst_field_cache_epoch1 == epoch
-        && py_inst_field_cache_cls1 == (PyObject *)cls
-        && py_inst_field_cache_name1 != NULL
-        && strcmp(py_inst_field_cache_name1, name) == 0) {
-        return (int32_t)py_inst_field_cache_idx1;
-    }
-    if (py_inst_field_cache_epoch2 == epoch
-        && py_inst_field_cache_cls2 == (PyObject *)cls
-        && py_inst_field_cache_name2 != NULL
-        && strcmp(py_inst_field_cache_name2, name) == 0) {
-        return (int32_t)py_inst_field_cache_idx2;
-    }
-    if (py_inst_field_cache_epoch3 == epoch
-        && py_inst_field_cache_cls3 == (PyObject *)cls
-        && py_inst_field_cache_name3 != NULL
-        && strcmp(py_inst_field_cache_name3, name) == 0) {
-        return (int32_t)py_inst_field_cache_idx3;
-    }
-    return -1;
-}
-
-static void field_cache_store(PyClassObject *cls, const char *name, int32_t idx) {
-    /* The caller buffer may change or die as soon as the lookup returns. */
-    name = cls->field_names[idx];
-    int32_t epoch = class_attr_cache_epoch_load();
-    switch (field_cache_slot(cls, name)) {
-        case 0:
-            py_inst_field_cache_cls0 = (PyObject *)cls;
-            py_inst_field_cache_name0 = name;
-            py_inst_field_cache_idx0 = idx;
-            py_inst_field_cache_epoch0 = epoch;
-            return;
-        case 1:
-            py_inst_field_cache_cls1 = (PyObject *)cls;
-            py_inst_field_cache_name1 = name;
-            py_inst_field_cache_idx1 = idx;
-            py_inst_field_cache_epoch1 = epoch;
-            return;
-        case 2:
-            py_inst_field_cache_cls2 = (PyObject *)cls;
-            py_inst_field_cache_name2 = name;
-            py_inst_field_cache_idx2 = idx;
-            py_inst_field_cache_epoch2 = epoch;
-            return;
-        default:
-            py_inst_field_cache_cls3 = (PyObject *)cls;
-            py_inst_field_cache_name3 = name;
-            py_inst_field_cache_idx3 = idx;
-            py_inst_field_cache_epoch3 = epoch;
-            return;
-    }
-}
 
 static PyObject **dynamic_attr_slot(PyInstanceObject *inst) {
     if (!instance_pointer_is_instance(inst)) return NULL;
@@ -989,10 +980,14 @@ static PyObject *descriptor_method(PyObject *descriptor, const char *name) {
     return py_class_lookup(desc_cls, name);
 }
 
-static int descriptor_is_data(PyObject *descriptor) {
-    if (descriptor != NULL
+static int class_attr_is_property(PyObject *descriptor) {
+    return descriptor != NULL
         && !PY_IS_TAGGED_INT(descriptor)
-        && py_type_of(descriptor) == PY_TYPE_PROPERTY) {
+        && py_type_of(descriptor) == PY_TYPE_PROPERTY;
+}
+
+static int descriptor_is_data(PyObject *descriptor) {
+    if (class_attr_is_property(descriptor)) {
         return 1;
     }
     return descriptor_method(descriptor, "__set__") != NULL
@@ -1099,6 +1094,29 @@ PyObject *py_instance_getattr_default(PyInstanceObject *inst, const char *name) 
         (PyObject *)inst,
         (PyObject **)&inst->cls
     );
+    /* `__class__` and `__dict__` return below before any outcome is
+     * recorded, so a cached entry can never answer for them. */
+    PccAttrResEntry *field_entry = attr_res_find(cls, name, PCC_ATTR_RES_FIELD);
+    if (field_entry != NULL) {
+        PyObject *v = pcc_gc_load_ptr(
+            (PyObject *)inst, &inst->fields[field_entry->payload]
+        );
+        if (v) py_incref(v);
+        return v;
+    }
+    PccAttrResEntry *method_entry = attr_res_find(cls, name, PCC_ATTR_RES_METHOD);
+    if (method_entry != NULL) {
+        PyObject **hit_dyn_slot = dynamic_attr_slot(inst);
+        if (hit_dyn_slot == NULL
+            || pcc_gc_load_ptr((PyObject *)inst, hit_dyn_slot) == NULL) {
+            return py_instance_bind_method(
+                (PyObject *)(intptr_t)method_entry->payload,
+                (PyObject *)inst,
+                name
+            );
+        }
+    }
+    int32_t outcome_epoch = class_attr_cache_epoch_load();
     if (strcmp(name, "__class__") == 0) {
         PyObject *cls_obj = (PyObject *)cls;
         py_incref(cls_obj);
@@ -1119,12 +1137,6 @@ PyObject *py_instance_getattr_default(PyInstanceObject *inst, const char *name) 
         py_incref(dyn_obj);
         return dyn_obj;
     }
-    int32_t cached_idx = field_cache_lookup(cls, name);
-    if (cached_idx >= 0) {
-        PyObject *v = pcc_gc_load_ptr((PyObject *)inst, &inst->fields[cached_idx]);
-        if (v) py_incref(v);
-        return v;
-    }
     PyObject *class_attr = class_attr_lookup_in_mro(cls, name);
     if (class_attr != NULL && descriptor_is_data(class_attr)) {
         PyObject *out = descriptor_call_get(class_attr, (PyObject *)inst, cls);
@@ -1133,7 +1145,8 @@ PyObject *py_instance_getattr_default(PyInstanceObject *inst, const char *name) 
     }
     int32_t idx = lookup_field_index(cls, name);
     if (idx >= 0) {
-        field_cache_store(cls, name, idx);
+        /* Reached only when no data descriptor shadows the field. */
+        attr_res_store(cls, name, PCC_ATTR_RES_FIELD, idx, outcome_epoch);
         /* Return a new reference so callers can uniformly py_decref. */
         PyObject *v = pcc_gc_load_ptr((PyObject *)inst, &inst->fields[idx]);
         if (v) py_incref(v);
@@ -1143,6 +1156,8 @@ PyObject *py_instance_getattr_default(PyInstanceObject *inst, const char *name) 
     PyObject *dyn_obj = dyn_slot
         ? pcc_gc_load_ptr((PyObject *)inst, dyn_slot)
         : NULL;
+    /* A method outcome holds only while the instance has no dynamic dict. */
+    int method_cacheable = dyn_obj == NULL && attr_res_method_cacheable();
     if (dyn_obj) {
         PyObject *key = py_str_new(name, (int64_t)strlen(name));
         PyObject *v = py_dict_get(dyn_obj, key);
@@ -1151,6 +1166,12 @@ PyObject *py_instance_getattr_default(PyInstanceObject *inst, const char *name) 
     }
     if (class_attr != NULL) {
         if (!PY_IS_TAGGED_INT(class_attr) && py_type_of(class_attr) == PY_TYPE_FUNC) {
+            if (method_cacheable) {
+                attr_res_store(
+                    cls, name, PCC_ATTR_RES_METHOD,
+                    (int64_t)(intptr_t)class_attr, outcome_epoch
+                );
+            }
             PyObject *bound = py_instance_bind_method(
                 class_attr,
                 (PyObject *)inst,
@@ -1170,6 +1191,15 @@ PyObject *py_instance_getattr_default(PyInstanceObject *inst, const char *name) 
      * that class-lookup results don't need refcounting. */
     PyObject *method = py_class_lookup(cls, name);
     if (method != NULL) {
+        /* Method tables may hold raw entry points; only function objects are
+         * recorded, so a cached method is always safe to call directly. */
+        if (method_cacheable && pointer_can_have_header(method)
+            && py_type_of(method) == PY_TYPE_FUNC) {
+            attr_res_store(
+                cls, name, PCC_ATTR_RES_METHOD, (int64_t)(intptr_t)method,
+                outcome_epoch
+            );
+        }
         return py_instance_bind_method(method, (PyObject *)inst, name);
     }
 
@@ -1199,7 +1229,17 @@ PyObject *py_instance_getattr(PyInstanceObject *inst, const char *name) {
         (PyObject *)inst,
         (PyObject **)&inst->cls
     );
-    PyObject *getattribute_method = py_class_lookup(cls, "__getattribute__");
+    static const char getattribute_name[] = "__getattribute__";
+    if (attr_res_find(cls, getattribute_name, PCC_ATTR_RES_NO_GETATTRIBUTE) != NULL) {
+        return py_instance_getattr_default(inst, name);
+    }
+    int32_t probe_epoch = class_attr_cache_epoch_load();
+    PyObject *getattribute_method = py_class_lookup(cls, getattribute_name);
+    if (getattribute_method == NULL) {
+        attr_res_store(
+            cls, getattribute_name, PCC_ATTR_RES_NO_GETATTRIBUTE, 0, probe_epoch
+        );
+    }
     if (getattribute_method != NULL) {
         PyObject *name_obj = py_str_new(name, (int64_t)strlen(name));
         if (name_obj == NULL) return NULL;
@@ -1235,6 +1275,55 @@ PyObject *py_instance_getattr(PyInstanceObject *inst, const char *name) {
     return py_instance_getattr_default(inst, name);
 }
 
+/* `obj.name` for an immediate positional call, without a bound object; mirror
+ * of py_class.py.  A cached plain class function that nothing on the instance
+ * shadows is returned with `obj` in `*out_self`; otherwise `*out_self` stays
+ * NULL and the ordinary attribute is returned.  Resolution happens before the
+ * caller evaluates arguments, exactly like the attribute load it replaces. */
+PyObject *py_obj_load_method(PyObject *obj, const char *name, PyObject **out_self) {
+    *out_self = NULL;
+    if (obj != NULL && !PY_IS_TAGGED_INT(obj)
+        && instance_pointer_is_instance((PyInstanceObject *)obj)) {
+        PyInstanceObject *inst = (PyInstanceObject *)obj;
+        PyClassObject *cls = (PyClassObject *)pcc_gc_load_ptr(
+            obj, (PyObject **)&inst->cls
+        );
+        /* A method entry is recorded only past the `__getattribute__` check,
+         * holds only verified function objects, and any class mutation
+         * retires it. */
+        PccAttrResEntry *entry = cls != NULL
+            ? attr_res_find(cls, name, PCC_ATTR_RES_METHOD)
+            : NULL;
+        if (entry != NULL) {
+            PyObject **dyn_slot = dynamic_attr_slot(inst);
+            if (dyn_slot == NULL || pcc_gc_load_ptr(obj, dyn_slot) == NULL) {
+                PyObject *func = (PyObject *)(intptr_t)entry->payload;
+                py_incref(func);
+                *out_self = obj;
+                return func;
+            }
+        }
+    }
+    return py_obj_getattr(obj, name);
+}
+
+/* Call what py_obj_load_method returned, with positional `args`. */
+PyObject *py_obj_call_method(PyObject *method, PyObject *self_obj, PyObject *args) {
+    if (self_obj == NULL) return py_obj_call(method, args, NULL);
+    int64_t n = args != NULL ? py_tuple_len(args) : 0;
+    PyObject *full_args = py_tuple_new(n + 1);
+    if (full_args == NULL) return NULL;
+    py_tuple_set_item(full_args, 0, self_obj);
+    for (int64_t i = 0; i < n; i++) {
+        PyObject *item = py_tuple_get(args, i);
+        py_tuple_set_item(full_args, i + 1, item);
+        if (item != NULL) py_decref(item);
+    }
+    PyObject *out = py_func_call_kwargs(method, full_args, NULL);
+    py_decref(full_args);
+    return out;
+}
+
 int64_t py_instance_setattr(PyInstanceObject *inst, const char *name, PyObject *value) {
     if (!instance_pointer_is_instance(inst) || !name) return -1;
     PyClassObject *cls = (PyClassObject *)pcc_gc_load_ptr(
@@ -1243,8 +1332,11 @@ int64_t py_instance_setattr(PyInstanceObject *inst, const char *name, PyObject *
     );
     PyObject *class_attr = class_attr_lookup_in_mro(cls, name);
     if (class_attr != NULL) {
-        PyObject *set_method = descriptor_method(class_attr, "__set__");
-        if (set_method != NULL) {
+        /* A property is a data descriptor whether or not it has a setter;
+         * descriptor_method only sees instance descriptors, so a property
+         * store used to land in the instance dict, unseen by its getter. */
+        if (class_attr_is_property(class_attr)
+            || descriptor_method(class_attr, "__set__") != NULL) {
             int64_t rc = descriptor_call_set(class_attr, (PyObject *)inst, value);
             py_decref(class_attr);
             return rc;
@@ -1281,8 +1373,8 @@ int64_t py_instance_delattr(PyInstanceObject *inst, const char *name) {
     );
     PyObject *class_attr = class_attr_lookup_in_mro(cls, name);
     if (class_attr != NULL) {
-        PyObject *delete_method = descriptor_method(class_attr, "__delete__");
-        if (delete_method != NULL) {
+        if (class_attr_is_property(class_attr)
+            || descriptor_method(class_attr, "__delete__") != NULL) {
             int64_t rc = descriptor_call_delete(class_attr, (PyObject *)inst);
             py_decref(class_attr);
             return rc;
@@ -1486,6 +1578,9 @@ void py_class_dealloc(PyObject *o) {
     free(c->mro);
     free(c->methods);
     free((void *)c->field_names);
+    /* Attribute outcomes are keyed by this address; retire them before a new
+     * class can be allocated there. */
+    __atomic_add_fetch(&py_class_attr_cache_epoch, 1, __ATOMIC_RELEASE);
     pcc_gc_free_object_memory(o);
 }
 

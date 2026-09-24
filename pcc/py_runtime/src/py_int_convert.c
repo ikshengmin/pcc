@@ -15,6 +15,10 @@ int64_t py_int_to_i64(PyObject *o, int *overflow) {
     if (PY_IS_TAGGED_INT(o)) {
         return py_untag_int(o);
     }
+    if (py_header(o)->type_tag == PY_TYPE_BOOL) {
+        /* bool is an int subclass: True is 1 and False 0. */
+        return o == py_True ? 1 : 0;
+    }
     if (py_header(o)->type_tag != PY_TYPE_INT) {
         if (overflow) *overflow = 1;
         return 0;

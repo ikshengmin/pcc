@@ -40,16 +40,15 @@ def test_compiled_light_widths_use_their_measured_memory_class(monkeypatch) -> N
     assert workers.compiled_native_export_jobs(10) == 2
     assert workers.compiled_native_summary_jobs(10) == 2
 
-    # The production envelope remains at the already-proven width two.
+    # Only bytes above the 3 GiB coordinator reserve go to 512 MiB light
+    # workers: the 8 GiB production envelope admits ten. Codegen keeps its
+    # independent width-two risk contract.
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(8 * gib))
-    assert workers.compiled_native_export_jobs(10) == 2
-    assert workers.compiled_native_summary_jobs(10) == 2
+    assert workers.compiled_native_export_jobs(10) == 10
+    assert workers.compiled_native_summary_jobs(10) == 10
     assert workers.compiled_native_auto_jobs(10) == 2
 
-    # A larger shared envelope spends only bytes above the 7 GiB
-    # coordinator/headroom reserve on 512 MiB export workers. Codegen keeps
-    # its independent width-two risk contract.
-    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(10 * gib))
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * gib))
     assert workers.compiled_native_export_jobs(10) == 6
     assert workers.compiled_native_summary_jobs(10) == 6
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(12 * gib))
@@ -59,7 +58,7 @@ def test_compiled_light_widths_use_their_measured_memory_class(monkeypatch) -> N
     assert workers.compiled_native_summary_jobs(5) == 5
     assert workers.compiled_native_auto_jobs(10) == 2
 
-    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(4 * gib))
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(3 * gib))
     assert workers.compiled_native_export_jobs(10) == 1
     assert workers.compiled_native_summary_jobs(10) == 1
 

@@ -6,23 +6,14 @@ This directory is a **navigable, diagram-first map of how pcc actually works** �
 
 ## What pcc is, in one diagram
 
-pcc is **two compilers and one runtime** in a single repo: a mature **C frontend** and an experimental **typed-Python frontend**, both lowering to LLVM IR, plus a **Python runtime** (C + pcc-Python mirror) with five pluggable GC backends and an LLVM-free "self" backend.
+pcc has C and Python frontends, a shared IR boundary, an owned self backend,
+and a Python runtime with five GC backends. The public backend default is
+`self`; external execution routes still present in the code are migration
+gaps, not the architecture target.
 
-```mermaid
-flowchart TD
-    CLI["CLI / API<br/>pcc.py · cli_core.py · api.py"] --> DISP{"input type?"}
-    DISP -->|".c / dir"| CFE["C frontend<br/>preprocess → parse → c_codegen"]
-    DISP -->|".py"| PFE["Python frontend<br/>lift → type_infer → L1CodeGen"]
-    CFE --> IR["LLVM IR (text)"]
-    PFE --> IR
-    IR --> BK{"backend"}
-    BK -->|"llvm / llvm_capi"| LLVM["LLVM<br/>(llvmlite or in-repo LLVM-C)"]
-    BK -->|"self"| SELF["self-backend<br/>LLVM-free asm emit"]
-    LLVM --> OUT["object / exe / JIT"]
-    SELF --> OUT
-    PFE -. links .-> RT["py_runtime archive<br/>objects · 5 GC backends · exceptions"]
-    OUT --> RT
-```
+[Open the interactive pyncd diagram](pcc-pyncd-architecture.html) · [How to read and regenerate it](pyncd-diagram.md)
+
+![pcc architecture as a pyncd circuit](pcc-pyncd-architecture.png)
 
 ## The single most important idea: **modes**
 

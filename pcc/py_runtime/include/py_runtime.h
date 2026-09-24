@@ -1090,6 +1090,8 @@ int64_t   py_weak_key_dict_set(PyObject *dict, PyObject *key, PyObject *value);
 int64_t   py_weak_key_dict_len(PyObject *dict);
 void      py_dealloc_weakref(PyObject *ref);
 PyObject *py_obj_getattr(PyObject *o, const char *name);
+PyObject *py_obj_load_method(PyObject *obj, const char *name, PyObject **out_self);
+PyObject *py_obj_call_method(PyObject *method, PyObject *self_obj, PyObject *args);
 PyObject *py_obj_getattr_default(PyObject *o, const char *name);
 PyObject *py_obj_getattr_maybe(PyObject *o, const char *name);
 PyObject *py_obj_vars(PyObject *o);
@@ -1182,6 +1184,7 @@ PyObject *py_user_str_dispatch(PyObject *o);
 PyObject *py_user_repr_dispatch(PyObject *o);
 int64_t   py_user_hash_dispatch(PyObject *o, int64_t *handled);
 int64_t   py_user_eq_dispatch(PyObject *a, PyObject *b);
+int64_t   py_user_order_dispatch(PyObject *a, PyObject *b, int64_t op);
 PyObject *py_user_iter_dispatch(PyObject *o);
 PyObject *py_user_next_dispatch(PyObject *o);
 PyObject *py_user_matmul_dispatch(PyObject *a, PyObject *b);
@@ -1558,6 +1561,11 @@ int64_t py_subprocess_run(PyObject *argv, int32_t capture_output);
 int64_t pcc_worker_process_pool(PyObject *specs, int64_t width);
 int64_t pcc_weighted_worker_process_pool(
     PyObject *specs, PyObject *weights, int64_t width, int64_t budget
+);
+int64_t pcc_chained_worker_process_pool(
+    PyObject *specs, PyObject *weights, PyObject *followups,
+    PyObject *followup_paths, PyObject *followup_floor,
+    int64_t width, int64_t budget
 );
 int64_t py_subprocess_run_timeout(
     PyObject *argv, int32_t capture_output, int64_t timeout_ms

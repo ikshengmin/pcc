@@ -313,6 +313,17 @@ def marshal_to_object(
                     + _ir_type_text(value_ty)
                     + " for int"
                 )
+        literal = getattr(v64, "value", None) if isinstance(v64, ir.Constant) else None
+        if (
+            type(literal) is int
+            and -4611686018427387904 <= literal <= 4611686018427387903
+        ):
+            # py_int_from_i64 tags this range as (v << 1) | 1; a literal
+            # operand of every `i * 8` or `n += 1` otherwise paid the call
+            # on each loop iteration.
+            return builder.inttoptr(
+                ir.Constant(_I64, (literal << 1) | 1), _PTR, name="m.int_tagged"
+            )
         return builder.call(runtime["py_int_from_i64"], [v64], name="m.int_box")
     if isinstance(ty, FloatType) or ty_name == "float":
         # If inference said float but the caller already has a

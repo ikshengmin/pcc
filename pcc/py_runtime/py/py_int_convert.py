@@ -22,6 +22,7 @@ from pcc.py_runtime.py.py_abi_constants import (
     PYINTOBJECT_SIGN_OFFSET,
     PYMEMORYVIEWOBJECT_BASE_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_INT,
@@ -29,12 +30,14 @@ from pcc.py_runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     cstr,
+    global_load_ptr,
     is_tagged_int,
     load_i8,
     load_i32,
     load_i64,
     null,
     ptr_add,
+    ptr_eq,
     ptr_is_null,
     store_i8,
     store_i32,
@@ -136,6 +139,14 @@ def py_int_to_i64(o, overflow) -> int:
     _set_overflow(overflow, 0)
     if ptr_is_null(o):
         _set_overflow(overflow, 1)
+        return 0
+    if load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BOOL:
+        # bool is an int subclass: True is 1 and False 0.  Treating it as a
+        # foreign number returned 0 with overflow set, so an int-typed slot
+        # that received a dynamic ``True`` read 0 -- pcc1 dropped the release
+        # of every owned receiver whose flag came through such a slot.
+        if ptr_eq(o, global_load_ptr("py_True")) != 0:
+            return 1
         return 0
     if load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_INT:
         # Not a pcc heap int. A C-extension number scalar (numpy int/bool)

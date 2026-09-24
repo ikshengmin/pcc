@@ -8,7 +8,7 @@ Extraction can include hypotheses, test status and superseded conclusions.
 Check the original experiment, revision and later updates against current
 code and matching execution before adopting a cause. Read only relevant hits.
 
-1609 confirmations across 481 investigations.
+1625 confirmations across 481 investigations.
 
 ## [Investigation: direct AArch64 instruction capture order and lifetime](../investigations/aarch64-direct-instruction-capture-order.md)
 
@@ -1559,6 +1559,22 @@ code and matching execution before adopting a cause. Read only relevant hits.
 - [CONFIRMED] Export workers keep every lifted module alive until exit; their
 - [CONFIRMED] The coordinator's unlabelled pre-export window (~46–68 s wall,
 - [CONFIRMED] Link validation is >30% of a full link replay's CPU. Of it,
+- Identity hash [CONFIRMED].** `py_user_hash_dispatch` returned 0 for every
+- Host and native frontends emit different IR [CONFIRMED, pre-existing, OPEN].**
+- `os.listdir` via `ls` [CONFIRMED, fixed].** pcc1 lists a directory with
+- Deferred driver AST scoring [CONFIRMED, fixed].** Before the first frontend
+- Export closure walk [CONFIRMED, fixed].** `_read_indexed_native_exports_wire`
+- Frontend admission [CONFIRMED over-reservation] — During r5's frontend phase only 4–9 workers ran and the whole tree peaked at
+- Static comparison dunders ignored subclass overrides [CONFIRMED, fixed].**
+- Scaffold `builder.call` / `builder.gep` dropped `name=` [CONFIRMED, fixed].**
+- `isinstance(x, self.KINDS)` folded to False [CONFIRMED, fixed].** Any
+- Property stores through `py_obj_setattr` bypassed the setter [CONFIRMED,
+- Tuple `isinstance` shadowed pcc's `NoneType` with the builtin [CONFIRMED,
+- A bool object unboxed to int as 0 [CONFIRMED, fixed].** Inference types
+- Scaffold optional int arguments arrived as tagged 0 [CONFIRMED, fixed].**
+- Host and native workers read different export views [CONFIRMED, fixed].**
+- An escaping closure read None for a name bound by an import [CONFIRMED,
+- `import helper` was a string in value position [CONFIRMED, fixed].** A
 
 ## [Investigation: native subprocess failures lose CalledProcessError fields](../investigations/native-subprocess-called-process-error-returncode.md)
 

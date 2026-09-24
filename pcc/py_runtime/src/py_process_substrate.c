@@ -526,6 +526,10 @@ void py_tempdir_cleanup(PyObject *path) {
         py_decref(path_str);
         return;
     }
+    if (rmdir(raw) == 0) {
+        py_decref(path_str);
+        return;
+    }
     char *cmd = NULL;
     int64_t len = 0;
     int64_t cap = 0;

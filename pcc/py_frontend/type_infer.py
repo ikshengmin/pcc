@@ -41,7 +41,7 @@ from .codegen.host_contract import (
     PROBE_POLICY_CONTEXTUAL_MIXIN,
     per_module_probe_policy,
 )
-from .export_meta import decode_type, encode_type
+from .export_meta import decode_type, encode_type, encode_type_memo
 from .py_ast import (
     Arg,
     Assign,
@@ -5035,6 +5035,8 @@ def build_unique_external_class_preload(external_exports):
     descriptors = []
     descriptor_ids = {}
     identity_ids = {}
+    # Nested class types repeat across these encodings; ctx keeps them alive.
+    encode_memo = {}
     key_rows = []
     for key, ty in ctx.class_types.items():
         identity = id(ty)
@@ -5042,7 +5044,7 @@ def build_unique_external_class_preload(external_exports):
         if cached is not None and cached[0] is ty:
             type_id = cached[1]
         else:
-            descriptor = encode_type(ty)
+            descriptor = encode_type_memo(ty, encode_memo)
             type_id = descriptor_ids.get(descriptor)
             if type_id is None:
                 type_id = len(descriptors)
@@ -5059,18 +5061,94 @@ def build_unique_external_class_preload(external_exports):
     }
 
 
-def build_unique_external_class_preload_index(external_exports):
-    """Build a common preload plus sparse exact per-root deltas."""
+def build_unique_external_class_preload_index(external_exports, root_deltas=None):
+    """Build a common preload plus sparse exact per-root deltas.
 
-    global_preload = build_unique_external_class_preload(external_exports)
+    ``root_deltas(roots, global_by_key)`` may compute the per-root deltas
+    elsewhere (worker processes): it returns ``{root: preload_root_delta(...)}``
+    for the given roots.  Type ids are assigned here, in root order, either
+    way, so the index is identical to the serial build.
+    """
+
+    global_preload, sensitive_roots, global_by_key = _preload_index_plan(
+        external_exports
+    )
+    if root_deltas is None:
+        deltas = {}
+        for root_module in sensitive_roots:
+            deltas[root_module] = preload_root_delta(
+                external_exports, root_module, global_by_key
+            )
+    else:
+        deltas = root_deltas(sensitive_roots, global_by_key)
+    return assemble_preload_index(
+        external_exports, global_preload, sensitive_roots, deltas
+    )
+
+
+def preload_global_by_key(global_preload):
+    global_by_key = {}
+    for key, type_id in global_preload["keys"]:
+        global_by_key[key] = global_preload["types"][type_id]
+    return global_by_key
+
+
+def preload_root_delta(external_exports, root_module, global_by_key):
+    """``(drop_keys, ((key, descriptor), ...))`` for one sensitive root."""
+    external_for_root = {}
+    for module_name, module_exports in external_exports.items():
+        if module_name != root_module:
+            external_for_root[module_name] = module_exports
+    preload = build_unique_external_class_preload(external_for_root)
+    root_by_key = {}
+    for key, local_type_id in preload["keys"]:
+        root_by_key[key] = preload["types"][local_type_id]
+    drop_keys = []
+    for key in global_by_key:
+        if key not in root_by_key:
+            drop_keys.append(key)
+    set_rows = []
+    for key, local_type_id in preload["keys"]:
+        descriptor = preload["types"][local_type_id]
+        if global_by_key.get(key) == descriptor:
+            continue
+        set_rows.append((key, descriptor))
+    return tuple(drop_keys), tuple(set_rows)
+
+
+def assemble_preload_index(external_exports, global_preload, sensitive_roots, deltas):
     descriptors = list(global_preload["types"])
     descriptor_ids = {}
     for type_id, descriptor in enumerate(descriptors):
         descriptor_ids[descriptor] = type_id
-    base_keys = tuple(global_preload["keys"])
-    global_by_key = {}
-    for key, type_id in base_keys:
-        global_by_key[key] = descriptors[type_id]
+    sensitive = set(sensitive_roots)
+    roots = {}
+    for root_module in external_exports:
+        if root_module not in sensitive:
+            roots[root_module] = ((), ())
+            continue
+        drop_keys, set_rows = deltas[root_module]
+        set_key_rows = []
+        for key, descriptor in set_rows:
+            type_id = descriptor_ids.get(descriptor)
+            if type_id is None:
+                type_id = len(descriptors)
+                descriptors.append(descriptor)
+                descriptor_ids[descriptor] = type_id
+            set_key_rows.append((key, type_id))
+        roots[root_module] = (tuple(drop_keys), tuple(set_key_rows))
+    return {
+        "types": tuple(descriptors),
+        "base_keys": tuple(global_preload["keys"]),
+        "roots": roots,
+    }
+
+
+def _preload_index_plan(external_exports):
+    """The global preload, the roots (in export order) whose preload may
+    differ from it, and its key -> descriptor map."""
+    global_preload = build_unique_external_class_preload(external_exports)
+    global_by_key = preload_global_by_key(global_preload)
 
     class_counts = {}
     module_class_counts = {}
@@ -5094,40 +5172,12 @@ def build_unique_external_class_preload_index(external_exports):
                     sensitive_modules.append(module_name)
                 break
 
-    roots = {}
+    sensitive = set(sensitive_modules)
+    sensitive_roots = []
     for root_module in external_exports:
-        if root_module not in sensitive_modules:
-            roots[root_module] = ((), ())
-            continue
-        external_for_root = {}
-        for module_name, module_exports in external_exports.items():
-            if module_name != root_module:
-                external_for_root[module_name] = module_exports
-        preload = build_unique_external_class_preload(external_for_root)
-        root_by_key = {}
-        for key, local_type_id in preload["keys"]:
-            root_by_key[key] = preload["types"][local_type_id]
-        drop_keys = []
-        for key in global_by_key:
-            if key not in root_by_key:
-                drop_keys.append(key)
-        set_key_rows = []
-        for key, local_type_id in preload["keys"]:
-            descriptor = preload["types"][local_type_id]
-            if global_by_key.get(key) == descriptor:
-                continue
-            type_id = descriptor_ids.get(descriptor)
-            if type_id is None:
-                type_id = len(descriptors)
-                descriptors.append(descriptor)
-                descriptor_ids[descriptor] = type_id
-            set_key_rows.append((key, type_id))
-        roots[root_module] = (tuple(drop_keys), tuple(set_key_rows))
-    return {
-        "types": tuple(descriptors),
-        "base_keys": base_keys,
-        "roots": roots,
-    }
+        if root_module in sensitive:
+            sensitive_roots.append(root_module)
+    return global_preload, sensitive_roots, global_by_key
 
 
 # ---------------------------------------------------------------------------

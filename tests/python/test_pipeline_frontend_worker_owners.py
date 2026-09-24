@@ -107,15 +107,25 @@ def test_summary_worker_parallelism_uses_host_width_and_native_memory_guard(
 ):
     monkeypatch.delenv("PCC_PY_FRONTEND_SUMMARY_JOBS", raising=False)
     monkeypatch.delenv("PCC_WORKER_TREE_BUDGET_BYTES", raising=False)
+    monkeypatch.delenv("PCC_PY_FRONTEND_JOBS", raising=False)
+    monkeypatch.setattr(parallel, "_parallel_cpu_budget", lambda: 12)
     assert parallel._summary_worker_parallelism(10, ["python", "-m", "pcc"]) == 10
     assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 2
     assert parallel._summary_worker_parallelism(1, ["python", "-m", "pcc"]) == 1
 
     gib = 1024**3
+    # Automatic native summaries request the CPU width; their 512 MiB class
+    # above the 3 GiB coordinator reserve admits ten in 8 GiB.
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(8 * gib))
-    assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 2
+    assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 10
+    assert parallel._summary_worker_parallelism(3, ["pcc1"]) == 10
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(5 * gib))
+    assert parallel._summary_worker_parallelism(3, ["pcc1"]) == 4
+    # An explicit frontend width keeps the requested light width.
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "7")
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(16 * gib))
     assert parallel._summary_worker_parallelism(7, ["pcc1"]) == 7
+    monkeypatch.delenv("PCC_PY_FRONTEND_JOBS", raising=False)
 
     monkeypatch.setenv("PCC_PY_FRONTEND_SUMMARY_JOBS", "7")
     assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 7

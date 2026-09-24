@@ -51,17 +51,18 @@ HOST_SOURCE_WORKER_AUTO_CAP = 10
 # Export workers parse/lift one module and summary workers decode one AST and
 # publish one compact effect wire.  They are short-lived one-module processes,
 # unlike codegen workers which retain inferred types, builder state and IR.
-# Same-source compiled checkpoint measurements put width-7 export+summary at
-# 7.49 GB tree peak versus 7.01 GB for width 2.  Keep 7 GiB unavailable to
-# these light lanes (the measured coordinator plus >1 GiB headroom), then
-# charge 512 MiB per worker.  At the production 8 GiB envelope both lanes stay
-# at the proven width 2; a larger shared envelope derives wider light lanes
-# without changing the 3 GiB codegen risk class.
+# All 392 compiler modules as singleton pcc1 export workers peaked at 310 MB
+# RSS (pcc.parse.c_parsetab); 512 MiB per worker covers that by 25% + 128 MiB.
+# The earlier 7 GiB reserve came from a coordinator that itself held ~6 GiB.
+# In the current 392-module Stage2 the pcc1 coordinator stayed <= 1.51 GiB
+# while export workers ran and <= 1.75 GiB during summaries (tree <= 2.50
+# GiB), so 3 GiB covers it by 70%.  The 8 GiB envelope now admits 10 light
+# workers without changing the 3 GiB codegen risk class.
 COMPILED_EXPORT_WORKER_PEAK_BYTES = 536870912
-COMPILED_EXPORT_COORDINATOR_RESERVE_BYTES = 7516192768
+COMPILED_EXPORT_COORDINATOR_RESERVE_BYTES = 3221225472
 COMPILED_EXPORT_AUTO_CAP = 10
 COMPILED_SUMMARY_WORKER_PEAK_BYTES = 536870912
-COMPILED_SUMMARY_COORDINATOR_RESERVE_BYTES = 7516192768
+COMPILED_SUMMARY_COORDINATOR_RESERVE_BYTES = 3221225472
 COMPILED_SUMMARY_AUTO_CAP = 10
 
 

@@ -116,5 +116,5 @@ def test_none_typed_module_global_method_uses_native_dispatch(tmp_path):
     body = match.group(1)
     assert "strict.nolib.stub" not in body
     assert "@py_cpy_" not in body
-    assert "@py_obj_getattr" in body
-    assert "@py_obj_call" in body
+    assert "@py_obj_load_method" in body
+    assert "@py_obj_call_method" in body

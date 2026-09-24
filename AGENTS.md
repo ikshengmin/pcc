@@ -27,7 +27,8 @@ over any procedure in this file, including its gates and checks.
    are not task queues. Preserve unfinished scope when handling a short subtask.
    Resume parent work after the subtask unless the user stops or replaces it.
    Record new actionable work in the relevant issue. Before a long pause,
-   leave a dated handoff with source identity, unfinished state and repro steps.
+   leave a dated handoff with source identity, unfinished state and repro steps
+   at `docs/knowledge/YYYY-MM-DD-<topic>-handoff.md`, not in a temp directory.
 
 ## Project contracts
 
@@ -167,6 +168,7 @@ gtimeout 1800s env -u LC_ALL uv run pytest -x -vv -m integration tests/python/gc
 | GC/ABI | `pcc/py_runtime/py/`, `src/`, `include/`, `tests/python/gc/`; verify layouts/barriers in code, consult relevant upstream reference |
 | Bootstrap/performance | `scripts/run_pcc_*`, current receipts and tests; [tool index](docs/development-tools.md) |
 | Investigation history | Search [INDEX](docs/investigations/INDEX.md); use [investigation workflow](docs/investigation-workflow.md) when recording an experiment |
+| Domain vocabulary | [CONTEXT.md](CONTEXT.md) is a glossary only; requirements stay in [Project Intent](docs/project-intent.md) and [compiler-contract.md](docs/compiler-contract.md) |
 | Review/certify a commit or claimed fix | The diff and its tests, not the message; execute each changed shape and read the result; list the shapes you did not execute |
 
 When editing an investigation, keep commands, source/artifact identities,

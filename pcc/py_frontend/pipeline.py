@@ -2907,10 +2907,96 @@ _run_python_frontend_worker_commands = (
 )
 
 
-def _build_unique_external_class_preload_index(native_exports):
-    from .type_infer import build_unique_external_class_preload_index
+_PRELOAD_DELTA_MIN_ROOTS = 16
 
-    return build_unique_external_class_preload_index(native_exports)
+
+def _build_unique_external_class_preload_index(native_exports, work_dir=""):
+    """The per-root preload deltas in worker processes when workers exist.
+
+    The serial build rebuilt the preload once per sensitive root in the
+    coordinator (258 rebuilds, ~22 s of native Stage2).  The deltas depend
+    only on the exports, and ids are assigned in root order afterwards, so
+    the index is the serial one.  Worker files live under ``work_dir`` (the
+    frontend state directory); without one, or with
+    PCC_PRELOAD_DELTA_JOBS=1, the build stays serial.
+    """
+    from .type_infer import (
+        build_unique_external_class_preload_index,
+        preload_root_delta,
+    )
+
+    prefix = _python_frontend_worker_command_prefix()
+    raw_jobs = str(os.environ.get("PCC_PRELOAD_DELTA_JOBS", "") or "").strip()
+    jobs = int(raw_jobs) if raw_jobs.isdigit() else min(_parallel_cpu_budget(), 6)
+    if not prefix or not work_dir or jobs <= 1:
+        return build_unique_external_class_preload_index(native_exports)
+
+    def root_deltas(roots, global_by_key):
+        if len(roots) < _PRELOAD_DELTA_MIN_ROOTS:
+            deltas = {}
+            for root in roots:
+                deltas[root] = preload_root_delta(native_exports, root, global_by_key)
+            return deltas
+        return _preload_deltas_in_workers(
+            native_exports, roots, prefix, jobs, work_dir,
+        )
+
+    return build_unique_external_class_preload_index(
+        native_exports, root_deltas=root_deltas,
+    )
+
+
+def _preload_deltas_in_workers(native_exports, roots, prefix, jobs, work_dir):
+    from .preload_delta_worker import WORKER_ARG, read_result
+
+    # pcc1 compiles tempfile and shutil as CPython modules, so a function
+    # calling them becomes a raising no-libpython stub there; os only.
+    state = os.path.join(work_dir, "preload_deltas")
+    os.makedirs(state, exist_ok=True)
+    created = []
+    try:
+        exports_path = os.path.join(state, "exports.json")
+        created.append(exports_path)
+        _write_native_exports_wire(exports_path, native_exports, {})
+        width = max(1, min(jobs, len(roots)))
+        commands = []
+        outputs = []
+        for index in range(width):
+            chunk = roots[index * len(roots) // width:(index + 1) * len(roots) // width]
+            if not chunk:
+                continue
+            roots_path = os.path.join(state, "roots_" + str(index) + ".txt")
+            out_path = os.path.join(state, "deltas_" + str(index) + ".json")
+            created.append(roots_path)
+            created.append(out_path)
+            created.append(out_path + ".partial")
+            with open(roots_path, "w", encoding="utf-8") as stream:
+                stream.write("\n".join(chunk) + "\n")
+            parts = [_shell_quote_arg(part) for part in prefix]
+            parts.append(_shell_quote_arg(WORKER_ARG))
+            parts.append(_shell_quote_arg(exports_path))
+            parts.append(_shell_quote_arg(roots_path))
+            parts.append(_shell_quote_arg(out_path))
+            commands.append(
+                _python_frontend_worker_env_prefix() + " " + _join_strings(parts, " ")
+            )
+            outputs.append(out_path)
+        _run_python_frontend_worker_commands(commands, max_parallel=width)
+        deltas = {}
+        for out_path in outputs:
+            deltas.update(read_result(out_path))
+        for root in roots:
+            if root not in deltas:
+                raise PyPipelineError("preload delta workers omitted root " + root)
+        return deltas
+    finally:
+        for path in created:
+            if os.path.isfile(path):
+                os.unlink(path)
+        try:
+            os.rmdir(state)
+        except OSError:
+            pass
 
 
 def _build_python_frontend_shared_exports_parallel(

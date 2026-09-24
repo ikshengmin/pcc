@@ -238,11 +238,11 @@ void py_tuple_set_item(PyObject *tuple, int64_t i, PyObject *item) {
     } else {
         pcc_gc_store_ptr(tuple, &t->items[i], item);
     }
-    if (py_tuple_item_can_participate_in_cycle(item)) {
-        int32_t flags = py_header(tuple)->flags;
-        if ((flags & PY_FLAG_GC_TRACKED) == 0) {
-            py_gc_track(tuple);
-        }
+    /* An already tracked tuple has nothing to decide; the participation
+     * test probes the item's provenance. */
+    if ((py_header(tuple)->flags & PY_FLAG_GC_TRACKED) == 0
+        && py_tuple_item_can_participate_in_cycle(item)) {
+        py_gc_track(tuple);
     }
     /* Only colored relocation waits for complete payload publication.
      * Keep the store/ownership/tracking work above for every collector. */

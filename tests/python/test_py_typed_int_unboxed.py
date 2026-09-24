@@ -529,7 +529,9 @@ def test_exact_int_huge_literal_power_is_not_folded_by_the_compiler(tmp_path):
     body = _fn_body(ir_text, "pcc_test_huge_pow")
     assert body is not None, ir_text
     assert "@py_int_pow" in body, body
-    assert "1000000000" in body, body
+    # The exponent reaches the runtime call either boxed at run time or as
+    # the tagged constant (1000000000 << 1) | 1.
+    assert "1000000000" in body or "2000000001" in body, body
 
 
 def test_exact_int_huge_literal_shift_is_not_folded_by_the_compiler(tmp_path):
@@ -550,7 +552,9 @@ def test_exact_int_huge_literal_shift_is_not_folded_by_the_compiler(tmp_path):
     body = _fn_body(ir_text, "pcc_test_huge_shift")
     assert body is not None, ir_text
     assert "@py_int_shl" in body, body
-    assert "1000000000" in body, body
+    # The exponent reaches the runtime call either boxed at run time or as
+    # the tagged constant (1000000000 << 1) | 1.
+    assert "1000000000" in body or "2000000001" in body, body
 
 
 def test_exact_int_chained_assignment_plans_each_name_as_one_object_slot(tmp_path):

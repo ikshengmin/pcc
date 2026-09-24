@@ -123,10 +123,12 @@ def test_native_codegen_orders_results_and_rejects_stale_artifacts(tmp_path, mon
         result = tmp_path / ("result" + str(index))
         manifest.write_text("\n".join([
             "pcc.py_frontend.codegen_worker.v4", str(result),
-            "", "", "", "", "", "", "", "", "1", str(index),
+            str(tmp_path), "", "", "", "", "", "", "", "1", str(index),
         ]) + "\n")
         result.write_text("stale result")
-        (tmp_path / ("module" + str(index) + ".pco")).write_bytes(b"stale pco")
+        stem = tmp_path / ("module_" + str(index) + ".direct")
+        stem.with_suffix(".pco").write_bytes(b"stale pco")
+        stem.with_suffix(".pidx").write_bytes(b"stale sidecar")
         manifests.append(str(manifest))
     runtime = tmp_path / "runtime.a"
     runtime.write_bytes(b"archive")
@@ -137,43 +139,91 @@ def test_native_codegen_orders_results_and_rejects_stale_artifacts(tmp_path, mon
     ] + manifests
     calls = []
 
-    def run_commands(commands, width):
+    def run_one(command):
         import shlex
+        arguments = shlex.split(command)
+        if "--pcc-python-multi-codegen-worker" in arguments:
+            path = arguments[-1]
+            index = int(Path(path).read_text().splitlines()[-1])
+            result = tmp_path / ("result" + str(index))
+            assert not result.exists()
+            sidecar = tmp_path / ("module_" + str(index) + ".direct.pidx")
+            assert not sidecar.exists()
+            sidecar.write_bytes(b"sidecar")
+            result.write_text("OK\t" + str(index) + "\tmodule\t0\t0\t0\tunused\tPIDX\t" + str(sidecar) + "\n")
+        else:
+            assert Path(arguments[-3]).read_bytes() == b"sidecar"
+            packed = Path(arguments[-2])
+            assert not packed.exists()
+            packed.write_bytes(b"packed")
+
+    def run_commands(commands, width):
         calls.append((len(commands), width))
         for command in commands:
-            arguments = shlex.split(command)
-            if "--pcc-python-multi-codegen-worker" in arguments:
-                path = arguments[-1]
-                index = int(Path(path).read_text().splitlines()[-1])
-                result = tmp_path / ("result" + str(index))
-                assert not result.exists()
-                sidecar = tmp_path / ("module" + str(index) + ".pidx")
-                sidecar.write_bytes(b"sidecar")
-                result.write_text("OK\t" + str(index) + "\tmodule\t0\t0\t0\tunused\tPIDX\t" + str(sidecar) + "\n")
-            else:
-                packed = Path(arguments[-2])
-                assert not packed.exists()
-                packed.write_bytes(b"packed")
+            run_one(command)
+
+    def run_chained(commands, reservations, followups, paths, floor, width, budget):
+        calls.append(("chained", len(commands), width))
+        for command, followup, path in zip(commands, followups, paths):
+            run_one(command)
+            assert Path(path).is_file()
+            run_one(followup)
 
     linked = []
     monkeypatch.setattr(driver, "_native_worker", lambda _path: None)
     from pcc.py_frontend import deferred_frontend_schedule
     monkeypatch.setattr(deferred_frontend_schedule, "run_worker_processes", run_commands)
+    monkeypatch.setattr(deferred_frontend_schedule, "run_chained_worker_processes", run_chained)
+    monkeypatch.setattr(
+        deferred_frontend_schedule, "_frontend_floors_and_order",
+        lambda commands, _manifests: ([1] * len(commands), list(range(len(commands)))),
+    )
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto" if auto_pco else "2")
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * 1073741824))
     monkeypatch.setattr(deferred_frontend_schedule, "parallel_cpu_budget", lambda: 12)
-    if auto_pco:
-        def run_frontend(commands, _manifests, oversized, jobs):
-            run_commands(commands[:oversized], 1)
-            run_commands(commands[oversized:], jobs)
-        monkeypatch.setattr(driver, "run_frontend_commands", run_frontend)
     monkeypatch.setattr(driver, "_link", lambda *args: linked.append(args))
     driver._codegen(plan)
-    assert calls == ([(1, 1), (1, 2), (2, 12)] if auto_pco else [(1, 1), (1, 2), (1, 1), (1, 2)])
+    assert calls == ([("chained", 2, 12)] if auto_pco else [(1, 1), (1, 2), (1, 1), (1, 2)])
     assert Path(linked[0][1]).read_text().splitlines()[2:] == [
-        "PCO\t" + str(tmp_path / "module0.pco"),
-        "PCO\t" + str(tmp_path / "module1.pco"),
+        "PCO\t" + str(tmp_path / "module_0.direct.pco"),
+        "PCO\t" + str(tmp_path / "module_1.direct.pco"),
     ]
+
+
+def test_native_codegen_rejects_a_sidecar_other_than_the_scheduled_one(tmp_path, monkeypatch):
+    manifest = tmp_path / "worker0"
+    result = tmp_path / "result0"
+    manifest.write_text("\n".join([
+        "pcc.py_frontend.codegen_worker.v4", str(result),
+        str(tmp_path), "", "", "", "", "", "", "", "1", "0",
+    ]) + "\n")
+    runtime = tmp_path / "runtime.a"
+    runtime.write_bytes(b"archive")
+    plan = [
+        "pcc.frontend-codegen-plan.v2", "/native/pcc1", str(tmp_path / "output"),
+        str(runtime), str(tmp_path / "profile"), str(tmp_path / "inputs"),
+        str(tmp_path), "1", "0", "1", "1", "pidx-pco-v1", str(manifest),
+    ]
+
+    def run_commands(commands, _width):
+        import shlex
+        for command in commands:
+            arguments = shlex.split(command)
+            if "--pcc-python-multi-codegen-worker" in arguments:
+                other = tmp_path / "elsewhere.pidx"
+                other.write_bytes(b"sidecar")
+                result.write_text("OK\t0\tmodule\t0\t0\t0\tunused\tPIDX\t" + str(other) + "\n")
+                (tmp_path / "module_0.direct.pidx").write_bytes(b"sidecar")
+            else:
+                Path(arguments[-2]).write_bytes(b"packed")
+
+    monkeypatch.setattr(driver, "_native_worker", lambda _path: None)
+    from pcc.py_frontend import deferred_frontend_schedule
+    monkeypatch.setattr(deferred_frontend_schedule, "run_worker_processes", run_commands)
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "1")
+    monkeypatch.setattr(driver, "_link", lambda *args: None)
+    with pytest.raises(ValueError, match="not the scheduled PCO input"):
+        driver._codegen(plan)
 
 
 def test_native_codegen_refuses_script_worker(tmp_path):

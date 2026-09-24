@@ -394,6 +394,17 @@ def test_owned_merged_source_view_matches_indexed_object_link():
     assert actual == expected
 
 
+def test_owned_source_view_unordered_indices_keep_iterator_contract():
+    caller = NativeObject.from_sections(_caller_sections(), undefined=["_helper"])
+    helper = NativeObject.from_sections(_helper_sections())
+    view = link_relocatable_native([caller, helper], _source_view=True)
+    iterator = view.iter_compact_relocation_indices(
+        view.sections()[0], ordered=False,
+    )
+    assert next(iterator) == 0
+    iterator.close()
+
+
 def test_owned_merged_source_view_rebases_section_target_and_runs(tmp_path):
     source = NativeObject.from_sections([
         Section(

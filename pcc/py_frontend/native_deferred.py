@@ -9,7 +9,7 @@ import os
 import sys
 
 from pcc.py_frontend.pipeline_frontend_workers import shell_quote_arg
-from pcc.py_frontend.deferred_frontend_schedule import run_frontend_commands, run_pco_commands
+from pcc.py_frontend.deferred_frontend_schedule import run_frontend_pco_commands
 from pcc.backend.owned_link_driver import main as link_main
 
 
@@ -92,6 +92,8 @@ def _codegen(lines):
     results = []
     indices = []
     commands = []
+    expected_sidecars = []
+    pco_commands = []
     seen = set()
     for path in manifests:
         row = _lines(_file(path, "worker manifest"))
@@ -108,9 +110,23 @@ def _codegen(lines):
             os.unlink(result)
         results.append(result)
         commands.append(_command(worker, ["--pcc-python-multi-codegen-worker", path]))
-    run_frontend_commands(commands, manifests, oversized, jobs)
-    commands = []
-    indexed_sidecars = []
+        # The worker writes its sidecar at this fixed name, so the module's PCO
+        # job is known now and can follow its frontend job in the same pool.
+        sidecar = os.path.join(
+            _absolute(row[2], "worker IR directory"),
+            "module_" + str(index) + ".direct.pidx",
+        )
+        if not os.path.realpath(sidecar).startswith(artifacts + os.sep):
+            raise ValueError("indexed sidecar is outside the artifact root")
+        packed = sidecar[:-5] + ".pco"
+        for stale in (sidecar, packed):
+            if os.path.isfile(stale):
+                os.unlink(stale)
+        expected_sidecars.append(sidecar)
+        pco_commands.append(_command(worker, ["--pcc-self-backend-indexed-emit-worker", sidecar, packed, "PCO"]))
+    run_frontend_pco_commands(
+        commands, manifests, pco_commands, expected_sidecars, oversized, jobs,
+    )
     ordered = [""] * count
     for position in range(count):
         rows = _lines(_file(results[position], "worker result"))
@@ -132,13 +148,9 @@ def _codegen(lines):
         sidecar = _file(sidecars[0], "indexed sidecar")
         if not sidecar.endswith(".pidx") or not os.path.realpath(sidecar).startswith(artifacts + os.sep):
             raise ValueError("indexed sidecar is outside the artifact root")
-        packed = sidecar[:-5] + ".pco"
-        if os.path.isfile(packed):
-            os.unlink(packed)
-        ordered[indices[position]] = packed
-        indexed_sidecars.append(sidecar)
-        commands.append(_command(worker, ["--pcc-self-backend-indexed-emit-worker", sidecar, packed, "PCO"]))
-    run_pco_commands(commands, indexed_sidecars, oversized, jobs)
+        if os.path.realpath(sidecar) != os.path.realpath(expected_sidecars[position]):
+            raise ValueError("native deferred sidecar is not the scheduled PCO input")
+        ordered[indices[position]] = sidecar[:-5] + ".pco"
     with open(manifest, "w", encoding="utf-8") as stream:
         stream.write("pcc.macho-internal-inputs.v1\n" + str(count) + "\n")
         for packed in ordered:

@@ -41,3 +41,27 @@ def test_pipeline_facade_reexports_package_discovery_helpers():
         pipeline._package_root_no_libpython_diagnostic
         is pipeline_packages.package_root_no_libpython_diagnostic
     )
+
+
+def test_native_extension_lookup_takes_first_sorted_candidate_file(
+    tmp_path, monkeypatch
+):
+    site = tmp_path / "site"
+    package = site / "pkg"
+    package.mkdir(parents=True)
+    # Sorted candidates: a directory named like an artifact, a CPython-ABI
+    # build, then the pcc-native file that must win; unrelated names and a
+    # later candidate are ignored.
+    (package / "mod.a.so").mkdir()
+    (package / "mod.b.cpython-313-darwin.so").write_bytes(b"cpython")
+    (package / "mod.c.so").write_bytes(b"native")
+    (package / "mod.d.so").write_bytes(b"later")
+    (package / "module.so").write_bytes(b"other module")
+    (package / "mod.txt").write_bytes(b"not an extension")
+    monkeypatch.setattr(
+        pipeline_packages, "package_site_roots", lambda: [str(site)]
+    )
+
+    assert pipeline_packages.resolve_pcc_native_extension_path("pkg.mod") == str(
+        package / "mod.c.so"
+    )

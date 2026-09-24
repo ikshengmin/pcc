@@ -599,6 +599,17 @@ int64_t py_obj_hash(PyObject *o) {
 static int both_sets(PyObject *a, PyObject *b) {
     return py_type_of(a) == PY_TYPE_SET && py_type_of(b) == PY_TYPE_SET;
 }
+/* A user instance on either side asks its ordering dunders first; -1 means
+ * none answered and the builtin ordering below applies. */
+static int64_t user_order(PyObject *a, PyObject *b, int64_t op) {
+    int32_t ta = py_type_of(a);
+    int32_t tb = py_type_of(b);
+    if (ta != PY_TYPE_INSTANCE && ta < PY_TYPE_USER_CLASS_START
+        && tb != PY_TYPE_INSTANCE && tb < PY_TYPE_USER_CLASS_START) {
+        return -1;
+    }
+    return py_user_order_dispatch(a, b, op);
+}
 int64_t py_obj_lt(PyObject *a, PyObject *b) {
     if (
         pcc_capi_is_cext_type_tag(py_type_of(a))
@@ -606,6 +617,8 @@ int64_t py_obj_lt(PyObject *a, PyObject *b) {
     ) {
         return pcc_capi_cext_richcompare_bool(a, b, 0) > 0 ? 1 : 0;
     }
+    int64_t user = user_order(a, b, 0);
+    if (user != -1) return user;
     if (both_sets(a, b)) {
         return py_set_issubset(a, b) && py_set_len(a) < py_set_len(b);
     }
@@ -618,6 +631,8 @@ int64_t py_obj_le(PyObject *a, PyObject *b) {
     ) {
         return pcc_capi_cext_richcompare_bool(a, b, 1) > 0 ? 1 : 0;
     }
+    int64_t user = user_order(a, b, 1);
+    if (user != -1) return user;
     if (both_sets(a, b)) return py_set_issubset(a, b);
     int comparison = py_obj_cmp_threeway(a, b);
     return comparison == -1 || comparison == 0;
@@ -629,6 +644,8 @@ int64_t py_obj_gt(PyObject *a, PyObject *b) {
     ) {
         return pcc_capi_cext_richcompare_bool(a, b, 4) > 0 ? 1 : 0;
     }
+    int64_t user = user_order(a, b, 4);
+    if (user != -1) return user;
     if (both_sets(a, b)) {
         return py_set_issuperset(a, b) && py_set_len(a) > py_set_len(b);
     }
@@ -641,6 +658,8 @@ int64_t py_obj_ge(PyObject *a, PyObject *b) {
     ) {
         return pcc_capi_cext_richcompare_bool(a, b, 5) > 0 ? 1 : 0;
     }
+    int64_t user = user_order(a, b, 5);
+    if (user != -1) return user;
     if (both_sets(a, b)) return py_set_issuperset(a, b);
     int comparison = py_obj_cmp_threeway(a, b);
     return comparison == 1 || comparison == 0;

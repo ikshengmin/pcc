@@ -730,6 +730,9 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("--manifest")
     verify.add_argument("--capi-inventory")
     verify.add_argument("--ar", default="ar")
+    stamp = subparsers.add_parser("stamp-target")
+    stamp.add_argument("--archive", required=True)
+    stamp.add_argument("--host-target-triple")
     args = parser.parse_args(argv)
     try:
         if args.command == "assemble":
@@ -743,7 +746,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 ar=args.ar,
             )
-        else:
+        elif args.command == "verify":
             verify_runtime_archive_manifest(
                 Path(args.archive),
                 runtime_root=Path(args.runtime_root),
@@ -752,6 +755,20 @@ def main(argv: list[str] | None = None) -> int:
                     Path(args.capi_inventory) if args.capi_inventory else None
                 ),
                 ar=args.ar,
+            )
+        else:
+            archive = Path(args.archive)
+            if not archive.is_file():
+                raise ProvenanceError("runtime archive is missing: " + str(archive))
+            from pcc.py_frontend.pipeline_runtime_archive import (
+                target_id,
+                write_target_stamp,
+            )
+            from pcc.py_frontend.pipeline_targets import host_target_triple
+
+            write_target_stamp(
+                str(archive),
+                target_id(args.host_target_triple or host_target_triple()),
             )
     except (OSError, ProvenanceError) as exc:
         parser.exit(1, f"runtime archive provenance: {exc}\n")

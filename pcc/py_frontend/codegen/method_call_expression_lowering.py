@@ -41,6 +41,7 @@ _I1 = ir.IntType(1)
 _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = ir.IntType(8).as_pointer()
+_PYOBJ = ir.IntType(8).as_pointer()
 _PY_EXC_RUNTIMEERROR = 7
 _DYN_LIST_METHOD_NATIVE = frozenset(
     {
@@ -307,6 +308,10 @@ class MethodCallExpressionLoweringMixin:
     ) -> ir.Value:
         obj_val = self._emit_expr(obj_expr)
         name_ptr = self._attr_name_ptr(attr_name)
+        if not kwargs and self._split_starstar_kwargs_unpack(args) is None:
+            return self._emit_loaded_method_call(
+                obj_val, name_ptr, attr_name, args, span
+            )
         callable_obj = self.builder.call(
             self.runtime["py_obj_getattr"],
             [obj_val, name_ptr],
@@ -334,6 +339,53 @@ class MethodCallExpressionLoweringMixin:
             self._gc_release(kwargs_obj)
         self._gc_release(callable_obj)
         self._emit_post_call_err_check(span)
+        return result
+
+    def _emit_loaded_method_call(
+        self,
+        obj_val: ir.Value,
+        name_ptr: ir.Value,
+        attr_name: str,
+        args: tuple[Expr, ...],
+        span,
+        *,
+        attribute_error_span=None,
+        dynamic_result: bool = False,
+    ) -> ir.Value:
+        """Positional ``obj.name(args)`` without allocating a bound method.
+
+        ``py_obj_load_method`` resolves ``obj.name`` before the arguments are
+        evaluated, as the attribute load did; for a plain class function it
+        returns the function and the receiver instead of a bound object.
+        """
+        self_slot = self._alloca_in_entry(
+            _PYOBJ, self._fresh(f"method.self.{attr_name}"), init_null=True
+        )
+        callable_obj = self.builder.call(
+            self.runtime["py_obj_load_method"],
+            [obj_val, name_ptr, self_slot],
+            name=self._fresh(f"callable.attr.{attr_name}"),
+        )
+        if attribute_error_span is not None:
+            self._emit_attribute_error_if_null(
+                callable_obj, attr_name, attribute_error_span
+            )
+        else:
+            self._emit_post_call_err_check(span)
+        args_tuple = self._emit_dynamic_call_args_tuple(args)
+        self_val = self.builder.load(
+            self_slot, name=self._fresh(f"method.self.{attr_name}.val")
+        )
+        result = self.builder.call(
+            self.runtime["py_obj_call_method"],
+            [callable_obj, self_val, args_tuple],
+            name=self._fresh(f"callable.attr.{attr_name}.call"),
+        )
+        self._gc_release(args_tuple)
+        self._gc_release(callable_obj)
+        self._emit_post_call_err_check(span)
+        if dynamic_result:
+            self._note_owned_dynamic_call_value(result)
         return result
 
     def _emit_method_call(self, expr: Call) -> ir.Value:
@@ -1953,6 +2005,16 @@ class MethodCallExpressionLoweringMixin:
                 self._emit_post_call_err_check(getattr(expr, "span", None))
                 return result
             recv_obj = self._emit_as_object(attr.obj)
+            if not expr.kwargs and self._split_starstar_kwargs_unpack(expr.args) is None:
+                return self._emit_loaded_method_call(
+                    recv_obj,
+                    self._attr_name_ptr(attr.name),
+                    attr.name,
+                    expr.args,
+                    expr.span,
+                    attribute_error_span=attr.span,
+                    dynamic_result=True,
+                )
             method_obj = self.builder.call(
                 self.runtime["py_obj_getattr"],
                 [recv_obj, self._attr_name_ptr(attr.name)],

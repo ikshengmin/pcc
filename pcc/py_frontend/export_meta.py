@@ -29,8 +29,35 @@ def _is_value_class_type(ty) -> bool:
 
 
 def encode_type(ty: Type | None):
+    return _encode_type(ty, None)
+
+
+def encode_type_memo(ty: Type | None, memo: dict):
+    """``encode_type`` sharing encodings of repeated subtypes via ``memo``.
+
+    A class encoding embeds its bases' and class-typed fields' encodings, so
+    one preload build re-encoded the same subtypes about 4 million times.
+    ``memo`` maps ``id(ty)`` to ``(ty, encoding)``; the identity check keeps a
+    reused address from matching.  Callers keep every memoized type alive for
+    the memo's lifetime.
+    """
+    return _encode_type(ty, memo)
+
+
+def _encode_type(ty, memo):
     if ty is None:
         return None
+    if memo is not None:
+        cached = memo.get(id(ty))
+        if cached is not None and cached[0] is ty:
+            return cached[1]
+        encoded = _encode_type_uncached(ty, memo)
+        memo[id(ty)] = (ty, encoded)
+        return encoded
+    return _encode_type_uncached(ty, memo)
+
+
+def _encode_type_uncached(ty, memo):
     if isinstance(ty, IntType):
         return ("int", ty.width, ty.signed)
     if isinstance(ty, FloatType):
@@ -50,27 +77,27 @@ def encode_type(ty: Type | None):
     if isinstance(ty, MemoryViewType):
         return ("memoryview",)
     if isinstance(ty, ListType):
-        return ("list", encode_type(ty.elem))
+        return ("list", _encode_type(ty.elem, memo))
     if isinstance(ty, SetType):
-        return (ty.name, encode_type(ty.elem))
+        return (ty.name, _encode_type(ty.elem, memo))
     if isinstance(ty, DictType):
-        return ("dict", encode_type(ty.key), encode_type(ty.value))
+        return ("dict", _encode_type(ty.key, memo), _encode_type(ty.value, memo))
     if isinstance(ty, TupleType):
-        return ("tuple", tuple(encode_type(t) for t in ty.elems))
+        return ("tuple", tuple(_encode_type(t, memo) for t in ty.elems))
     if isinstance(ty, FuncType):
         return (
             "func",
-            tuple(encode_type(t) for t in ty.params),
-            encode_type(ty.ret),
+            tuple(_encode_type(t, memo) for t in ty.params),
+            _encode_type(ty.ret, memo),
         )
     if _is_value_class_type(ty):
         return (
             "valueclass",
             ty.name,
             ty.module,
-            tuple((name, encode_type(field_ty)) for name, field_ty in ty.fields),
-            tuple(encode_type(base) for base in ty.bases),
-            tuple((name, encode_type(prop_ty)) for name, prop_ty in ty.properties),
+            tuple((name, _encode_type(field_ty, memo)) for name, field_ty in ty.fields),
+            tuple(_encode_type(base, memo) for base in ty.bases),
+            tuple((name, _encode_type(prop_ty, memo)) for name, prop_ty in ty.properties),
             bool(getattr(ty, "flattened", True)),
             bool(getattr(ty, "nullable_fields", False)),
         )
@@ -79,8 +106,8 @@ def encode_type(ty: Type | None):
             "class",
             ty.name,
             ty.module,
-            tuple((name, encode_type(field_ty)) for name, field_ty in ty.fields),
-            tuple(encode_type(base) for base in ty.bases),
+            tuple((name, _encode_type(field_ty, memo)) for name, field_ty in ty.fields),
+            tuple(_encode_type(base, memo) for base in ty.bases),
         )
     if isinstance(ty, DynType):
         return ("dyn",)

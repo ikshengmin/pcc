@@ -4,6 +4,7 @@ __pcc_runtime_port__ = True
 
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    close,
     free,
     load_i32,
     load_i64,
@@ -13,7 +14,9 @@ from pcc.unsafe import (
     memcpy,
     memset,
     null,
+    open_readonly,
     ptr_is_null,
+    seek_file,
     store_i32,
     store_i64,
     store_i8,
@@ -425,6 +428,242 @@ def pcc_weighted_worker_process_pool(
     free(overflow)
     free(status)
     free(started)
+    free(reservations)
+    free(slots)
+    return failure
+
+
+def _spawn_worker_spec(specs, index: int) -> int:
+    py_index = py_int_from_i64(index)
+    spec = py_obj_getitem(specs, py_index)
+    py_decref(py_index)
+    if ptr_is_null(spec) != 0:
+        return -1
+    zero = py_int_from_i64(0)
+    one = py_int_from_i64(1)
+    argv = py_obj_getitem(spec, zero)
+    env = py_obj_getitem(spec, one)
+    py_decref(zero)
+    py_decref(one)
+    argc = py_obj_len(argv)
+    envc = py_obj_len(env)
+    items = _build_exec_argv(argv)
+    envp = _build_exec_argv(env)
+    pid = -1
+    if ptr_is_null(items) == 0 and ptr_is_null(envp) == 0:
+        pid = platform_spawnp(items, envp, 0)
+    _free_exec_argv(items, argc)
+    _free_exec_argv(envp, envc)
+    py_decref(argv)
+    py_decref(env)
+    py_decref(spec)
+    return pid
+
+
+def _followup_file_size(paths, index: int) -> int:
+    py_index = py_int_from_i64(index)
+    item = py_obj_getitem(paths, py_index)
+    py_decref(py_index)
+    if ptr_is_null(item) != 0:
+        return -1
+    text = py_obj_str(item)
+    py_decref(item)
+    if ptr_is_null(text) != 0:
+        return -1
+    raw = py_str_utf8(text)
+    size = -1
+    if ptr_is_null(raw) == 0:
+        fd: int = open_readonly(raw)
+        if fd >= 0:
+            end: int = seek_file(fd, 0, 2)
+            if end >= 0:
+                size = end
+            close(fd)
+    py_decref(text)
+    return size
+
+
+@c_abi_export("pcc_chained_worker_process_pool")
+def pcc_chained_worker_process_pool(
+    specs, weights, followups, followup_paths, followup_floor,
+    width: int, budget: int,
+) -> int:
+    """A weighted pool whose job ``i`` has one follow-up ``count + i``.
+
+    The follow-up becomes ready when job ``i`` exits 0; its reservation is
+    known only then, from the size of ``followup_paths[i]`` that job ``i``
+    wrote: ``min(cap, base + size * per_mb // 1000000)``.  Primaries keep
+    priority; a ready follow-up takes a slot only when no remaining primary
+    fits, so follow-ups fill the primaries' ramp and tail instead of
+    displacing them.  Failure packing matches the other pools, follow-up
+    indices after the primaries.
+    """
+    count = py_obj_len(specs)
+    if count <= 0:
+        return 0
+    if (
+        count > 524288
+        or py_obj_len(weights) != count
+        or py_obj_len(followups) != count
+        or py_obj_len(followup_paths) != count
+        or py_obj_len(followup_floor) != 3
+        or budget <= 0
+    ):
+        return 4294967423
+    overflow = malloc(4)
+    floor_values = malloc(24)
+    if ptr_is_null(overflow) or ptr_is_null(floor_values):
+        free(overflow)
+        free(floor_values)
+        return 4294967423
+    index = 0
+    while index < 3:
+        py_index = py_int_from_i64(index)
+        item = py_obj_getitem(followup_floor, py_index)
+        py_decref(py_index)
+        store_i32(overflow, 0, 0)
+        value = py_int_to_i64(item, overflow)
+        py_decref(item)
+        if load_i32(overflow, 0) != 0 or value < 0:
+            free(overflow)
+            free(floor_values)
+            return 4294967423
+        store_i64(floor_values, index * 8, value)
+        index += 1
+    floor_base = load_i64(floor_values, 0)
+    floor_per_mb = load_i64(floor_values, 8)
+    floor_cap = load_i64(floor_values, 16)
+    free(floor_values)
+    total = count * 2
+    if width < 1:
+        width = 1
+    if width > total:
+        width = total
+    slots = malloc(width * 24)
+    reservations = malloc(total * 8)
+    # 0: waits for its primary, 1: ready, 2: started
+    state = malloc(total)
+    status = malloc(4)
+    if (
+        ptr_is_null(slots) or ptr_is_null(reservations)
+        or ptr_is_null(state) or ptr_is_null(status)
+    ):
+        free(slots)
+        free(reservations)
+        free(state)
+        free(status)
+        free(overflow)
+        return 4294967423
+    memset(slots, 0, width * 24)
+    memset(state, 0, total)
+    failure = 0
+    index = 0
+    while index < count:
+        py_index = py_int_from_i64(index)
+        item = py_obj_getitem(weights, py_index)
+        py_decref(py_index)
+        store_i32(overflow, 0, 0)
+        value = py_int_to_i64(item, overflow)
+        py_decref(item)
+        if load_i32(overflow, 0) != 0 or value <= 0:
+            failure = ((index + 1) << 32) | 127
+            break
+        store_i64(reservations, index * 8, value)
+        store_i8(state, index, 1)
+        index += 1
+    live = 0
+    completed = 0
+    available = budget
+    while failure == 0 and completed < total:
+        slot = 0
+        while slot < width:
+            pid = load_i64(slots, slot * 24)
+            if pid > 0:
+                waited = platform_waitpid(pid, status, 1)
+                if waited != 0:
+                    rc = 127
+                    if waited == pid:
+                        rc = normalize_wait_status(load_i32(status, 0))
+                    platform_kill(-pid, 9)
+                    available += load_i64(slots, slot * 24 + 16)
+                    store_i64(slots, slot * 24, 0)
+                    live -= 1
+                    completed += 1
+                    finished = load_i64(slots, slot * 24 + 8)
+                    if rc != 0:
+                        failure = ((finished + 1) << 32) | (rc & 4294967295)
+                        break
+                    if finished < count:
+                        size = _followup_file_size(followup_paths, finished)
+                        if size < 0:
+                            failure = ((count + finished + 1) << 32) | 127
+                            break
+                        reservation = floor_base + size * floor_per_mb // 1000000
+                        if reservation > floor_cap:
+                            reservation = floor_cap
+                        if reservation < 1:
+                            reservation = 1
+                        store_i64(reservations, (count + finished) * 8, reservation)
+                        store_i8(state, count + finished, 1)
+            slot += 1
+        if failure != 0:
+            break
+        while live < width:
+            selected = -1
+            index = 0
+            while index < count and selected < 0:
+                if load_i8(state, index) == 1:
+                    weight = load_i64(reservations, index * 8)
+                    if weight <= available or live == 0:
+                        selected = index
+                index += 1
+            index = count
+            while index < total and selected < 0:
+                if load_i8(state, index) == 1:
+                    weight = load_i64(reservations, index * 8)
+                    if weight <= available or live == 0:
+                        selected = index
+                index += 1
+            if selected < 0:
+                break
+            slot = 0
+            while load_i64(slots, slot * 24) != 0:
+                slot += 1
+            pid = -1
+            if selected < count:
+                pid = _spawn_worker_spec(specs, selected)
+            else:
+                pid = _spawn_worker_spec(followups, selected - count)
+            if pid <= 0:
+                failure = ((selected + 1) << 32) | 127
+                break
+            store_i8(state, selected, 2)
+            store_i64(slots, slot * 24, pid)
+            store_i64(slots, slot * 24 + 8, selected)
+            weight = load_i64(reservations, selected * 8)
+            store_i64(slots, slot * 24 + 16, weight)
+            available -= weight
+            live += 1
+        if live > 0 and failure == 0:
+            platform_sleep_ns(10000000)
+    if failure != 0:
+        slot = 0
+        while slot < width:
+            pid = load_i64(slots, slot * 24)
+            if pid > 0:
+                platform_kill(-pid, 15)
+            slot += 1
+        platform_sleep_ns(200000000)
+        slot = 0
+        while slot < width:
+            pid = load_i64(slots, slot * 24)
+            if pid > 0:
+                platform_kill(-pid, 9)
+                platform_waitpid(pid, status, 0)
+            slot += 1
+    free(overflow)
+    free(status)
+    free(state)
     free(reservations)
     free(slots)
     return failure

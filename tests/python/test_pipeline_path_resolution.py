@@ -129,3 +129,47 @@ def test_pipeline_facade_reexports_module_path_helpers():
     assert pipeline._module_name_from_src is pipeline_paths.module_name_from_src
     assert pipeline._module_root_from_src is pipeline_paths.module_root_from_src
     assert pipeline._resolve_module_src is pipeline_paths.resolve_module_src
+
+
+def test_directory_listing_is_reused_only_while_the_directory_is_unchanged(
+    tmp_path, monkeypatch
+):
+    import os
+    import time
+
+    import pytest
+
+    directory = tmp_path / "pkg"
+    directory.mkdir()
+    (directory / "a.py").write_text("", encoding="utf-8")
+    settled = time.time() - 60
+    os.utime(directory, (settled, settled))
+    listed: list[str] = []
+    real_listdir = os.listdir
+
+    def counting_listdir(path):
+        listed.append(path)
+        return real_listdir(path)
+
+    monkeypatch.setattr(pipeline_paths.os, "listdir", counting_listdir)
+    pipeline_paths._DIRECTORY_NAMES_CACHE.clear()
+
+    assert pipeline_paths.directory_entry_names(str(directory)) == ("a.py",)
+    assert pipeline_paths.directory_entry_names(str(directory)) == ("a.py",)
+    assert len(listed) == 1
+
+    # A new entry moves the directory mtime, so the next call lists again.
+    (directory / "b.py").write_text("", encoding="utf-8")
+    assert sorted(pipeline_paths.directory_entry_names(str(directory))) == [
+        "a.py",
+        "b.py",
+    ]
+    assert len(listed) == 2
+    # Changed moments ago: a same-tick change could hide behind an equal
+    # mtime, so the listing is not reused yet.
+    pipeline_paths.directory_entry_names(str(directory))
+    assert len(listed) == 3
+
+    with pytest.raises(OSError):
+        pipeline_paths.directory_entry_names(str(tmp_path / "missing"))
+    assert str(tmp_path / "missing") not in pipeline_paths._DIRECTORY_NAMES_CACHE

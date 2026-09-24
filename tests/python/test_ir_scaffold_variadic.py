@@ -107,6 +107,53 @@ def test_call_with_name_kwarg_still_lowers():
     assert "@user_pcc_llvm_capi_ir_IRBuilder_call1" in ir_text
 
 
+@pytest.mark.parametrize(
+    "case,call_text,extern",
+    [
+        ("kw", 'builder.call(fn, [a], name="resultname")', "call1"),
+        ("pos", 'builder.call(fn, [a], "resultname")', "call1"),
+        ("dyn", 'builder.call(fn, list(args), name="resultname")', "call_dyn"),
+    ],
+)
+def test_call_passes_the_ssa_name_to_the_native_builder(case, call_text, extern):
+    """The name reaches ``IRBuilder_call<N>``: pcc1 used to drop it, so every
+    call result it emitted was anonymous and its IR differed from the host
+    compiler's for the same module."""
+    program = textwrap.dedent(
+        f"""
+        def f(builder, fn, a, args):
+            return {call_text}
+        """
+    )
+    ir_text = _compile_to_ll(program, "v_call_name_" + case, mode="on")
+    body = _function_body(ir_text, "f")
+    assert body is not None, ir_text
+    call_line = next(
+        line for line in body.splitlines()
+        if "@user_pcc_llvm_capi_ir_IRBuilder_" + extern + "(" in line
+    )
+    # Static str objects hold their bytes hex-escaped.
+    escaped = "".join("\\%02X" % byte for byte in b"resultname")
+    name_global = re.search(
+        r"@(\.pystr\.obj\.\d+)\s*=[^\n]*c\"" + re.escape(escaped) + r"\\00\"",
+        ir_text,
+    )
+    assert name_global is not None, ir_text
+    name_handle = call_line.rsplit("ptr ", 1)[1].rstrip(")").strip()
+    handle_def = next(
+        line for line in body.splitlines()
+        if line.strip().startswith(name_handle + " = ")
+    )
+    assert "@" + name_global.group(1) in handle_def, (call_line, handle_def)
+    # builder, fn, one argument (or the dynamic list), name
+    arity = 4
+    decl = re.search(
+        r"declare[^\n]*@user_pcc_llvm_capi_ir_IRBuilder_" + extern + r"\(([^)]*)\)",
+        ir_text,
+    )
+    assert decl is not None and len(decl.group(1).split(",")) == arity, ir_text
+
+
 def test_call_dynamic_args_list_uses_dyn_fallback():
     """Non-literal args list lowers via the ``call_dyn`` fallback —
     the dispatch is still static (extern call), but the args list
@@ -142,6 +189,50 @@ def test_gep_two_indices():
     assert "@user_pcc_llvm_capi_ir_IRBuilder_gep2" in ir_text
     body = _function_body(ir_text, "f")
     assert body is not None and "py_cpy_" not in body
+
+
+@pytest.mark.parametrize(
+    "case,gep_text,extern,arity",
+    [
+        ("lit", 'builder.gep(ptr, [i0, i1], inbounds=True, name="gepname")',
+         "gep2_inbounds", 5),
+        ("dyn", 'builder.gep(ptr, list(indices), name="gepname")', "gep_dyn", 4),
+    ],
+)
+def test_gep_passes_the_ssa_name_to_the_native_builder(case, gep_text, extern, arity):
+    """Like ``builder.call``: pcc1 dropped ``name=`` and emitted every GEP
+    anonymous (``%.130``) where the host compiler named it."""
+    program = textwrap.dedent(
+        f"""
+        def f(builder, ptr, i0, i1, indices):
+            return {gep_text}
+        """
+    )
+    ir_text = _compile_to_ll(program, "v_gep_name_" + case, mode="on")
+    body = _function_body(ir_text, "f")
+    assert body is not None, ir_text
+    gep_line = next(
+        line for line in body.splitlines()
+        if "@user_pcc_llvm_capi_ir_IRBuilder_" + extern + "(" in line
+    )
+    escaped = "".join("\\%02X" % byte for byte in b"gepname")
+    name_global = re.search(
+        r"@(\.pystr\.obj\.\d+)\s*=[^\n]*c\"" + re.escape(escaped) + r"\\00\"",
+        ir_text,
+    )
+    assert name_global is not None, ir_text
+    name_handle = gep_line.rsplit("ptr ", 1)[1].rstrip(")").strip()
+    handle_def = next(
+        line for line in body.splitlines()
+        if line.strip().startswith(name_handle + " = ")
+    )
+    assert "@" + name_global.group(1) in handle_def, (gep_line, handle_def)
+    # builder, ptr, indices (or the dynamic list), name
+    decl = re.search(
+        r"declare[^\n]*@user_pcc_llvm_capi_ir_IRBuilder_" + extern + r"\(([^)]*)\)",
+        ir_text,
+    )
+    assert decl is not None and len(decl.group(1).split(",")) == arity, ir_text
 
 
 def test_gep_zero_indices():
@@ -329,3 +420,35 @@ def test_landingpad_one_arg():
     assert "@user_pcc_llvm_capi_ir_IRBuilder_landingpad" in ir_text
     body = _function_body(ir_text, "f")
     assert body is not None and "py_cpy_" not in body
+
+
+@pytest.mark.parametrize(
+    "case,call_text,extern",
+    [
+        ("load", 'builder.load(ptr, name="x", align=1)', "load"),
+        ("store", "builder.store(value, ptr, align=1)", "store"),
+    ],
+)
+def test_int_optional_params_reach_the_native_builder_boxed(case, call_text, extern):
+    """``align=1`` is a Python int to the native IRBuilder; the bit-preserving
+    ``inttoptr 1`` handle read as the tagged int 0 there, so pcc1 emitted no
+    ``, align 1`` where the host compiler did."""
+    program = textwrap.dedent(
+        f"""
+        def f(builder, ptr, value):
+            return {call_text}
+        """
+    )
+    ir_text = _compile_to_ll(program, "v_align_" + case, mode="on")
+    body = _function_body(ir_text, "f")
+    assert body is not None, ir_text
+    call_line = next(
+        line for line in body.splitlines()
+        if "@user_pcc_llvm_capi_ir_IRBuilder_" + extern + "(" in line
+    )
+    align_handle = call_line.rsplit("ptr ", 1)[1].rstrip(")").strip()
+    handle_def = next(
+        line for line in body.splitlines()
+        if line.strip().startswith(align_handle + " = ")
+    )
+    assert "@py_int_from_i64(i64 1)" in handle_def, (call_line, handle_def)

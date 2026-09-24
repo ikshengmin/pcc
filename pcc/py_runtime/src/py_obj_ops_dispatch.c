@@ -1287,6 +1287,16 @@ PyObject *py_obj_getattr(PyObject *o, const char *name) {
     int32_t tag = py_header(o)->type_tag;
     pcc_runtime_log_event_code(7, 5, tag, 0, o);
 
+    /* A pcc instance is never a C-API type object, list, lock or str, so the
+     * hooks below cannot answer for it; C-extension objects carry tags from
+     * 0x10000 up and keep the full walk. */
+    if (tag == PY_TYPE_INSTANCE
+        || (tag >= PY_TYPE_USER_CLASS_START && tag < 0x10000)) {
+        PyObject *result = py_instance_getattr((PyInstanceObject *)o, name);
+        if (result != NULL || py_err_occurred()) return result;
+        return py_obj_missing_attr(name);
+    }
+
     if (tag == PY_TYPE_STATICMETHOD
         && (strcmp(name, "__func__") == 0 || strcmp(name, "__wrapped__") == 0)) {
         PyObject *func = pcc_gc_load_ptr(o, &((PyStaticMethodObject *)o)->func);

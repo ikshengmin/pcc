@@ -193,10 +193,13 @@ def test_simple_method_off_routes_dyn_dispatch(method, arg_count, _ret):
     body = _function_body(ir_text, "use_method")
     assert body is not None, ir_text
     # Either libpython fallback (py_cpy_*) or pcc-native dyn dispatch
-    # (py_obj_getattr / py_obj_call) is acceptable; both are
+    # (py_obj_getattr / py_obj_call, or the positional-call pair
+    # py_obj_load_method / py_obj_call_method) is acceptable; all are
     # non-scaffold dispatch shapes.
-    has_dyn_dispatch = "py_cpy_" in body or (
-        "py_obj_getattr" in body and "py_obj_call" in body
+    has_dyn_dispatch = (
+        "py_cpy_" in body
+        or ("py_obj_getattr" in body and "py_obj_call" in body)
+        or ("py_obj_load_method" in body and "py_obj_call_method" in body)
     )
     assert has_dyn_dispatch, (
         f"OFF mode use_method body for {method} must dispatch "

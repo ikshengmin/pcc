@@ -33,6 +33,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_eq,
     ptr_is_null,
+    ptr_to_int,
     store_i8,
     store_i32,
     store_i64,
@@ -67,6 +68,7 @@ pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 strlen = extern("strlen", (c_ptr,), c_int64)
 pcc_runtime_log_event_code = extern("pcc_runtime_log_event_code", (c_int32, c_int32, c_int64, c_int64, c_ptr), c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_gc_object_id = extern("pcc_gc_object_id", (c_ptr,), c_int64)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 py_tls_exc_set = extern("py_tls_exc_set", (c_ptr,), c_void)
 
@@ -531,6 +533,20 @@ def py_user_repr_dispatch(o):
     return _call_user_unary_method(func, o)
 
 
+def _identity_hash(o) -> int:
+    # object.__hash__: identity.  The forwarding collectors move objects, so
+    # they hash the stable object id instead of the address.
+    backend: int = pcc_gc_backend()
+    h: int = 0
+    if backend == 3 or backend == 4:
+        h = pcc_gc_object_id(o)
+    else:
+        h = ptr_to_int(o) >> 4
+    if h == -1:
+        return -2
+    return h
+
+
 @c_abi_export("py_user_hash_dispatch")
 def py_user_hash_dispatch(o, handled) -> int:
     if ptr_is_null(handled) == 0:
@@ -547,7 +563,15 @@ def py_user_hash_dispatch(o, handled) -> int:
         return 0
     func = py_class_lookup(cls, cstr("__hash__"))
     if ptr_is_null(func):
-        return 0
+        # No __hash__ in the MRO.  Without a user __eq__, equality is
+        # identity, so hash by identity like CPython; every such instance
+        # used to hash to 0, which put all of them in one probe chain of a
+        # set or dict.  A class with __eq__ but no __hash__ keeps 0.
+        if ptr_is_null(py_class_lookup(cls, cstr("__eq__"))) == 0:
+            return 0
+        if ptr_is_null(handled) == 0:
+            store_i64(handled, 0, 1)
+        return _identity_hash(o)
     if ptr_eq(func, global_load_ptr("py_None")) != 0:
         if ptr_is_null(handled) == 0:
             store_i64(handled, 0, 1)

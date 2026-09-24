@@ -485,7 +485,13 @@ def _validate_source_sections(
     *,
     relocation_source=None,
     relocation_counts=None,
+    proven_relocations=None,
 ) -> None:
+    # ``proven_relocations[i]`` leading records of section i were validated
+    # at packed decode against their input section, and the merge that
+    # shifted them proved they stay in range and on the instruction grid
+    # (see ``link_relocatable_native``).  Those records are only bounds
+    # checked and claimed here; every other record is validated in full.
     try:
         if not sections:
             raise MachOEmitError("at least one section is required")
@@ -547,6 +553,40 @@ def _validate_source_sections(
                 section.relocations if relocation_source is None
                 else relocation_source(section_index)
             )
+            proven = 0
+            if proven_relocations is not None and relocation_source is None:
+                proven = proven_relocations[section_index]
+                if not 0 <= proven <= count:
+                    raise MachOEmitError(
+                        "proven relocation prefix exceeds the records of "
+                        f"{section.segname},{section.sectname}"
+                    )
+            if proven:
+                data_size = len(section.data)
+                for index in range(count):
+                    relocation = relocations[index]
+                    if index < proven:
+                        if not (
+                            0 <= relocation.offset
+                            <= data_size - (1 << relocation.length)
+                        ):
+                            raise MachOEmitError(
+                                f"relocation offset {relocation.offset} "
+                                f"outside {section.sectname}"
+                            )
+                    else:
+                        _validate_relocation(
+                            section, relocation, known, section_by_name,
+                        )
+                    if not _claim_relocation_offset(
+                        relocation.offset, offset_bitmap, relocation_offsets,
+                    ):
+                        raise MachOEmitError(
+                            "multiple relocation requests at offset "
+                            f"{relocation.offset} in {section.segname},"
+                            f"{section.sectname}"
+                        )
+                continue
             for relocation in relocations:
                 _validate_relocation(
                     section, relocation, known, section_by_name,
@@ -1234,10 +1274,13 @@ class OwnedMergedSourceView:
     seven-million-record relocation graph before executable layout.
     """
 
-    def __init__(self, sections, *, undefined=()) -> None:
+    def __init__(self, sections, *, undefined=(), proven_relocations=None) -> None:
         source_sections = tuple(sections)
         undefined_names = tuple(undefined)
-        _validate_source_sections(source_sections, undefined_names)
+        _validate_source_sections(
+            source_sections, undefined_names,
+            proven_relocations=proven_relocations,
+        )
         self._source_sections = source_sections
         self._payloads = [section.data for section in source_sections]
 

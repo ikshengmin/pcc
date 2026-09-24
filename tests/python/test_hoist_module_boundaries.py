@@ -99,7 +99,9 @@ def test_hoist_pass_keeps_analysis_and_boxing_out_of_orchestrator():
         len((_CODEGEN / name).read_text(encoding="utf-8").splitlines())
         for name in split_files
     )
-    assert combined_lines <= 4400
+    # +35 over the post-split 4400: boxing now rewrites import bindings of
+    # captured names into cell stores (``_box_import``).
+    assert combined_lines <= 4435
 
 
 def test_hoist_exception_handlers_use_stage_safe_field_access():

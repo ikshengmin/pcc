@@ -365,6 +365,56 @@ int64_t py_user_eq_dispatch(PyObject *a, PyObject *b) {
     return truth ? 1 : 0;
 }
 
+static int64_t order_call(PyObject *method, PyObject *self, PyObject *other) {
+    if (method == NULL) return -1;
+    PyObject *result = call_binary(method, self, other);
+    if (result == NULL) return 0;
+    if (result == py_NotImplemented) {
+        py_decref(result);
+        return -1;
+    }
+    int64_t truth = py_obj_truthy(result);
+    py_decref(result);
+    return truth ? 1 : 0;
+}
+
+/* ``a < b`` (op 0), ``<=`` (1), ``>`` (4), ``>=`` (5) through user dunders
+ * in CPython's order: the rhs's reflected method first when its class is a
+ * proper subclass of the lhs class, then the lhs method, then the reflected
+ * one.  -1 when no user method answered, so the caller keeps its builtin
+ * ordering; a raising method returns 0 with the error set. */
+int64_t py_user_order_dispatch(PyObject *a, PyObject *b, int64_t op) {
+    const char *name = "__lt__";
+    const char *rname = "__gt__";
+    if (op == 1) {
+        name = "__le__";
+        rname = "__ge__";
+    } else if (op == 4) {
+        name = "__gt__";
+        rname = "__lt__";
+    } else if (op == 5) {
+        name = "__ge__";
+        rname = "__le__";
+    }
+    PyClassObject *a_cls = is_user_instance(a)
+        ? ((PyInstanceObject *)a)->cls : NULL;
+    PyClassObject *b_cls = is_user_instance(b)
+        ? ((PyInstanceObject *)b)->cls : NULL;
+    if (a_cls == NULL && b_cls == NULL) return -1;
+    int reflected_done = 0;
+    int64_t verdict;
+    if (a_cls != NULL && b_cls != NULL && a_cls != b_cls
+        && py_obj_issubclass((PyObject *)b_cls, (PyObject *)a_cls) > 0) {
+        reflected_done = 1;
+        verdict = order_call(lookup_dunder(b, rname), b, a);
+        if (verdict != -1) return verdict;
+    }
+    verdict = order_call(lookup_dunder(a, name), a, b);
+    if (verdict != -1) return verdict;
+    if (!reflected_done) verdict = order_call(lookup_dunder(b, rname), b, a);
+    return verdict;
+}
+
 PyObject *py_user_getitem_dispatch(PyObject *o, PyObject *key) {
     PyObject *method = lookup_dunder(o, "__getitem__");
     if (method == NULL) {
@@ -408,17 +458,37 @@ PyObject *py_user_binop_dispatch(
     const char *rname,
     const char *type_err_msg
 ) {
+    /* CPython's order: the reflected method belongs to an rhs of another
+     * type only, and runs first when that type is a subclass of the lhs
+     * type that overrides it. */
+    PyClassObject *a_cls = is_user_instance(a)
+        ? ((PyInstanceObject *)a)->cls : NULL;
+    PyClassObject *b_cls = is_user_instance(b)
+        ? ((PyInstanceObject *)b)->cls : NULL;
+    int reflected_ok = !(a_cls != NULL && a_cls == b_cls);
+    if (reflected_ok && a_cls != NULL && b_cls != NULL) {
+        PyObject *first = py_class_lookup(b_cls, rname);
+        if (first != NULL && first != py_class_lookup(a_cls, rname)
+            && py_obj_issubclass((PyObject *)b_cls, (PyObject *)a_cls) > 0) {
+            PyObject *result = call_binary(first, b, a);
+            if (result != py_NotImplemented) return result;
+            py_decref(result);
+            reflected_ok = 0;
+        }
+    }
     PyObject *method = lookup_dunder(a, name);
     if (method != NULL) {
         PyObject *result = call_binary(method, a, b);
         if (result != py_NotImplemented) return result;
         py_decref(result);
     }
-    method = lookup_dunder(b, rname);
-    if (method != NULL) {
-        PyObject *result = call_binary(method, b, a);
-        if (result != py_NotImplemented) return result;
-        py_decref(result);
+    if (reflected_ok) {
+        method = lookup_dunder(b, rname);
+        if (method != NULL) {
+            PyObject *result = call_binary(method, b, a);
+            if (result != py_NotImplemented) return result;
+            py_decref(result);
+        }
     }
     py_raise_owned(py_exc_new(PY_EXC_TYPEERROR, type_err_msg));
     return NULL;

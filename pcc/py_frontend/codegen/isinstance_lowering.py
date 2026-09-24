@@ -437,7 +437,33 @@ def emit_isinstance_call_impl(
             assert nm is not None
             nm = host._resolve_class_alias(nm)
             ir_symbol = ir_class_names[idx]
-            if ir_symbol is not None:
+            element = class_arg.elems[idx]
+            if (
+                ir_symbol is None
+                and isinstance(element, Name)
+                and nm in host.class_lowering.classes
+                and (
+                    nm in _BUILTIN_TYPE_TAGS
+                    or nm in _BUILTIN_EXC_TAG
+                    or nm == "slice"
+                    or nm == "CodeType"
+                )
+                and (
+                    element.ident in host.env
+                    or element.ident in getattr(host, "_module_globals", {})
+                    or _name_is_imported_into_module(host, element.ident)
+                )
+            ):
+                # The single-classinfo shadowing rule below, per element: an
+                # imported ``NoneType`` class is that class, not the builtin
+                # None check.  ``isinstance(expr_ty, (NoneType, BoolType,
+                # IntType, FloatType))`` in the ownership classifier answered
+                # False for a ``NoneType()`` descriptor, so pcc1 released the
+                # ``None`` of every ``lst.append(x)`` statement.
+                if obj_val is None:
+                    obj_val = host._emit_as_object(expr.args[0])
+                ct = host.class_lowering.emit_isinstance(obj_val, nm)
+            elif ir_symbol is not None:
                 if obj_val is None:
                     obj_val = host._emit_as_object(expr.args[0])
                 ct = host._emit_ir_scaffold_isinstance(
@@ -497,6 +523,15 @@ def emit_isinstance_call_impl(
                         host,
                         expr.args[0],
                         obj_val,
+                    )
+                elif isinstance(class_arg.elems[idx], Attr):
+                    # An attribute naming no known class is a value -- see the
+                    # single-classinfo fallback below.
+                    if obj_val is None:
+                        obj_val = host._emit_as_object(expr.args[0])
+                    ct = emit_dynamic_classinfo_isinstance(
+                        obj_val,
+                        class_arg.elems[idx],
                     )
                 else:
                     ct = ir.Constant(_I1, 0)
@@ -652,6 +687,15 @@ def emit_isinstance_call_impl(
                 ir.Constant(_I64, 0),
                 name=host._fresh("obj.isinstance.i1"),
             )
+        if isinstance(class_arg, Attr):
+            # ``isinstance(e, self._KINDS)`` reads a class attribute holding
+            # a class or a tuple of classes; its tail names no class, so it is
+            # a value, not a ``module.Class`` chain.  This used to fold to
+            # False: pcc1 compiled ``_membership_tuple_literal_is_constant``
+            # that way and emitted a runtime tuple for every ``x in ("a",
+            # "b")`` the host compiler unrolls.
+            obj_val = host._emit_as_object(expr.args[0])
+            return emit_dynamic_classinfo_isinstance(obj_val, class_arg)
         host._emit_as_object(expr.args[0])
         return ir.Constant(_I1, 0)
     obj_val = host._emit_as_object(expr.args[0])

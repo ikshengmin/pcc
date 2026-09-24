@@ -751,36 +751,52 @@ class IrScaffoldLoweringMixin:
         module) named ``IRBuilder_call<N>`` / ``IRBuilder_call_dyn``;
         these are introduced when Task 24 lands the multi-file pull.
         """
-        for key, _ in expr.kwargs:
-            if key not in self._SCAFFOLD_IGNORABLE_KWARGS:
-                raise ScaffoldUnsupportedError(
-                    f"builder.call(...) scaffold accepts only "
-                    f"{sorted(self._SCAFFOLD_IGNORABLE_KWARGS)} kwargs; "
-                    f"got {key!r}"
-                )
         # llvmlite's signature is ``call(fn, args, name='', cconv=None,
         # tail=False, ...)``, so the SSA name hint may arrive as the third
         # positional -- ``self.builder.call(intrinsic, [lhs, rhs],
-        # "ubsan.ovf")`` in c_codegen.  The scaffold discards the hint in
-        # either spelling (see ``_SCAFFOLD_IGNORABLE_KWARGS``), so drop it
-        # here instead of refusing the call.  Only the name is dropped: a
-        # fourth positional would be ``cconv``, which is not ignorable.
+        # "ubsan.ovf")`` in c_codegen -- or as ``name=``.  It is passed to
+        # the native ``IRBuilder_call<N>`` / ``IRBuilder_call_dyn``: dropping
+        # it made every call result pcc1 emits anonymous, so pcc1's IR
+        # differed from the host compiler's for the same module.  The other
+        # llvmlite hints stay ignorable; a fourth positional would be
+        # ``cconv``, which is not.
         pos_args = list(expr.args)
+        name_expr: Expr | None = None
         if len(pos_args) == 3:
+            name_expr = pos_args[2]
             pos_args = pos_args[:2]
         if len(pos_args) != 2:
             raise ScaffoldUnsupportedError(
                 f"builder.call expects (fn, args[, name]); got "
                 f"{len(expr.args)}"
             )
+        for key, val in expr.kwargs:
+            if key == "name":
+                if name_expr is not None:
+                    raise ScaffoldUnsupportedError(
+                        "builder.call got multiple values for 'name'"
+                    )
+                name_expr = val
+                continue
+            if key not in self._SCAFFOLD_IGNORABLE_KWARGS:
+                raise ScaffoldUnsupportedError(
+                    f"builder.call(...) scaffold accepts only "
+                    f"{sorted(self._SCAFFOLD_IGNORABLE_KWARGS)} kwargs; "
+                    f"got {key!r}"
+                )
         receiver = self._scaffold_to_handle(expr.func.obj)
         fn_handle = self._scaffold_to_handle(pos_args[0])
         args_expr = pos_args[1]
         if _is_scaffold_list_or_tuple(args_expr):
             arg_handles = [self._scaffold_to_handle(a) for a in args_expr.elems]
+            name_h = (
+                self._emit_literal_str("")
+                if name_expr is None
+                else self._scaffold_to_handle(name_expr)
+            )
             n = len(arg_handles)
             extern_name = f"{self._IR_BUILDER_SYMBOL_PREFIX}call{n}"
-            param_tys = [_CSTR, _CSTR] + [_CSTR] * n
+            param_tys = [_CSTR, _CSTR] + [_CSTR] * n + [_CSTR]
             fn = self._declare_external_function(
                 extern_name,
                 _CSTR,
@@ -788,7 +804,7 @@ class IrScaffoldLoweringMixin:
             )
             return self.builder.call(
                 fn,
-                [receiver, fn_handle] + arg_handles,
+                [receiver, fn_handle] + arg_handles + [name_h],
                 name=self._fresh("scaffold.call"),
             )
         # Non-literal args: dynamic-list extern. Args list still
@@ -796,14 +812,19 @@ class IrScaffoldLoweringMixin:
         # but better than full py_cpy_call dispatch on the call site
         # itself.
         list_handle = self._scaffold_to_handle(args_expr)
+        name_h = (
+            self._emit_literal_str("")
+            if name_expr is None
+            else self._scaffold_to_handle(name_expr)
+        )
         fn = self._declare_external_function(
             f"{self._IR_BUILDER_SYMBOL_PREFIX}call_dyn",
             _CSTR,
-            [_CSTR, _CSTR, _CSTR],
+            [_CSTR, _CSTR, _CSTR, _CSTR],
         )
         return self.builder.call(
             fn,
-            [receiver, fn_handle, list_handle],
+            [receiver, fn_handle, list_handle, name_h],
             name=self._fresh("scaffold.call_dyn"),
         )
 
@@ -912,7 +933,13 @@ class IrScaffoldLoweringMixin:
         Non-literal → ``gep_dyn[_inbounds]``.
         """
         inbounds = False
+        name_expr: Expr | None = None
         for key, val in expr.kwargs:
+            if key == "name":
+                # Passed on like builder.call's: a dropped hint left every
+                # pcc1 GEP anonymous where the host compiler names it.
+                name_expr = val
+                continue
             if key in self._SCAFFOLD_IGNORABLE_KWARGS:
                 continue
             if key == "inbounds":
@@ -937,9 +964,14 @@ class IrScaffoldLoweringMixin:
         suffix = "_inbounds" if inbounds else ""
         if _is_scaffold_list_or_tuple(idx_expr):
             idx_handles = [self._scaffold_to_handle(a) for a in idx_expr.elems]
+            name_h = (
+                self._emit_literal_str("")
+                if name_expr is None
+                else self._scaffold_to_handle(name_expr)
+            )
             n = len(idx_handles)
             extern_name = f"{self._IR_BUILDER_SYMBOL_PREFIX}gep{n}{suffix}"
-            param_tys = [_CSTR, _CSTR] + [_CSTR] * n
+            param_tys = [_CSTR, _CSTR] + [_CSTR] * n + [_CSTR]
             fn = self._declare_external_function(
                 extern_name,
                 _CSTR,
@@ -947,19 +979,24 @@ class IrScaffoldLoweringMixin:
             )
             return self.builder.call(
                 fn,
-                [receiver, ptr_handle] + idx_handles,
+                [receiver, ptr_handle] + idx_handles + [name_h],
                 name=self._fresh("scaffold.gep"),
             )
         list_handle = self._scaffold_to_handle(idx_expr)
+        name_h = (
+            self._emit_literal_str("")
+            if name_expr is None
+            else self._scaffold_to_handle(name_expr)
+        )
         extern_name = f"{self._IR_BUILDER_SYMBOL_PREFIX}gep_dyn{suffix}"
         fn = self._declare_external_function(
             extern_name,
             _CSTR,
-            [_CSTR, _CSTR, _CSTR],
+            [_CSTR, _CSTR, _CSTR, _CSTR],
         )
         return self.builder.call(
             fn,
-            [receiver, ptr_handle, list_handle],
+            [receiver, ptr_handle, list_handle, name_h],
             name=self._fresh("scaffold.gep_dyn"),
         )
 
@@ -1353,6 +1390,20 @@ class IrScaffoldLoweringMixin:
                 raise ScaffoldUnsupportedError(
                     f"builder.{method} has no scaffold default for " f"{param!r}"
                 )
+            if isinstance(val, IntLit) or isinstance(getattr(val, "ty", None), IntType):
+                # ``align=1`` is a Python int to the native IRBuilder.  The
+                # bit-preserving handle ``inttoptr 1`` reads there as the
+                # tagged int 0, so pcc1 dropped every ``, align 1`` the host
+                # compiler emits for unaligned loads and stores.
+                lowered_args.append(
+                    self.builder.call(
+                        self.runtime["py_int_from_i64"],
+                        [self._emit_expr_as_i64(val)],
+                        name=self._fresh("scaffold.int.box"),
+                    )
+                )
+                param_tys.append(_CSTR)
+                continue
             lowered_args.append(self._scaffold_to_handle(val))
             param_tys.append(_CSTR)
 

@@ -33,10 +33,7 @@ def test_call_node_score_executes_natively_under_all_collectors(
     source = tmp_path / "ast_score.py"
     cases = repr(tuple((payload, payload.count(b'"Call"')) for payload in payloads))
     source.write_text(
-        "from pcc.unsafe import abi_constant, load_i8, null, ptr_is_null\n"
-        + inspect.getsource(scheduler._native_ast_reads_available)
-        + "\n_NATIVE_AST_READS = _native_ast_reads_available()\n"
-        + inspect.getsource(scheduler._call_node_score)
+        inspect.getsource(scheduler._call_node_score)
         + "\nfor payload, expected in " + cases + ":\n"
         + "    assert _call_node_score(payload) == expected\n"
         + "print('ast-score-ok')\n"
@@ -175,6 +172,110 @@ def test_gc0_frontend_reservations_cover_all_392_system_peak_measurements():
         assert scheduler.indexed_frontend_floor_bytes(row["input_bytes"]) >= required, row["index"]
 
 
+def test_gc0_closure_reservations_cover_all_392_system_peak_measurements():
+    import json
+    from pathlib import Path
+
+    data = Path(__file__).parents[1] / "data"
+    corpus = json.loads((data / "frontend_gc0_worker_peaks.json").read_text())
+    closures = json.loads((data / "frontend_gc0_worker_closures.json").read_text())["modules"]
+    assert len(closures) == 392
+    for row in corpus["workers"]:
+        peak = max(row["max_rss_bytes"], row["peak_footprint_bytes"])
+        required = (peak * 5 + 3) // 4 + 128 * 1048576
+        floor = scheduler.indexed_frontend_floor_bytes(
+            row["input_bytes"], 0, closures[row["module"]],
+        )
+        assert floor >= required, row["index"]
+        # The closure term only ever tightens the AST-only reservation's
+        # 768 MiB base; it is not a second budget.
+        assert floor <= scheduler.indexed_frontend_floor_bytes(row["input_bytes"]) * 2
+
+
+def test_closure_floor_applies_to_gc0_only():
+    assert scheduler.indexed_frontend_floor_bytes(1000000, 0, 0) == (
+        482 * 1048576 + 125 * 1048576
+    )
+    for gc_backend in (1, 2, 3, 4, -1):
+        assert scheduler.indexed_frontend_floor_bytes(1000000, gc_backend, 0) == (
+            scheduler.indexed_frontend_floor_bytes(1000000, gc_backend)
+        )
+
+
+def _write_indexed_exports(path, payloads, dependencies):
+    import json
+
+    from pcc.py_frontend import pipeline_exports
+
+    rows = [pipeline_exports._NATIVE_EXPORT_INDEXED_SCHEMA]
+    for name, payload in payloads.items():
+        rows.append("M\t" + name + "\t" + payload)
+        rows.append("U\t" + name + "\t[[], []]")
+    rows.append("P\t" + json.dumps(pipeline_exports._native_export_to_wire(dependencies)))
+    for tag, value in (("D", {}), ("F", ()), ("T", ()), ("G", ())):
+        rows.append(tag + "\t" + json.dumps(pipeline_exports._native_export_to_wire(value)))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def test_export_closure_bytes_follow_dependency_closure(tmp_path):
+    exports = tmp_path / "native_exports.json"
+    _write_indexed_exports(
+        exports,
+        {"a": "x" * 10, "b": "y" * 100, "c": "z" * 1000, "d": "w" * 5},
+        {"a": ("b",), "b": ("c",), "c": (), "d": ("a", "c")},
+    )
+    assert scheduler.export_closure_bytes(str(exports), ["a", "b", "c", "d"]) == [
+        1110, 1100, 1000, 1115,
+    ]
+    assert scheduler.export_closure_bytes(str(exports), ["missing"]) is None
+    assert scheduler.export_closure_bytes(str(tmp_path / "absent"), ["a"]) is None
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text("{}\n", encoding="utf-8")
+    assert scheduler.export_closure_bytes(str(legacy), ["a"]) is None
+
+
+@pytest.mark.parametrize("gc_backend", ["0", "3"])
+def test_auto_uses_closure_floors_from_manifest_exports(tmp_path, monkeypatch, gc_backend):
+    exports = tmp_path / "native_exports.json"
+    names = ["root", "leaf"]
+    _write_indexed_exports(
+        exports, {"root": "r" * 3000000, "leaf": "l" * 2000000},
+        {"root": ("leaf",), "leaf": ()},
+    )
+    sizes = [100000, 200000]
+    manifests = []
+    for index, size in enumerate(sizes):
+        ast = tmp_path / ("module_" + str(index) + ".json")
+        with ast.open("wb") as stream:
+            stream.truncate(size)
+        manifest = tmp_path / (str(index) + ".manifest")
+        manifest.write_text("\n".join(
+            ["pcc.py_frontend.codegen_worker.v4", "result", "out", str(exports),
+             "codegen", str(tmp_path), "root", "off", "on", "0", "0", str(len(names))]
+            + [str(i) + "\t" + name + "\tsrc.py" for i, name in enumerate(names)]
+            + ["1", str(index)]
+        ) + "\n")
+        manifests.append(str(manifest))
+    calls = []
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
+    monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "8589934592")
+    monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
+    monkeypatch.setattr(
+        scheduler, "run_weighted_worker_processes",
+        lambda commands, reservations, width, budget: calls.append(reservations),
+    )
+    scheduler.run_frontend_commands(["a", "b"], manifests, 0, 2)
+    if gc_backend == "0":
+        expected = [
+            scheduler.indexed_frontend_floor_bytes(sizes[0], 0, 5000000),
+            scheduler.indexed_frontend_floor_bytes(sizes[1], 0, 2000000),
+        ]
+    else:
+        expected = [scheduler.indexed_frontend_floor_bytes(size, -1) for size in sizes]
+    assert sorted(calls[0]) == sorted(expected)
+
+
 @pytest.mark.parametrize("gc_backend", ["0", "1", "2", "3", "4", "unknown"])
 def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatch, gc_backend):
     sizes = [14000000, 7000000, 100000, 100000]
@@ -234,8 +335,10 @@ def test_frontend_and_pco_admission_execute_natively_under_all_collectors(
     source = tmp_path / "pco_admission.py"
     constants = "\n".join(
         name + " = " + repr(getattr(scheduler, name))
-        for name in ("_GIB", "_DRIVER_RESERVE", "_FRONTEND_BASE",
+        for name in ("_GIB", "_MIB", "_DRIVER_RESERVE", "_FRONTEND_BASE",
                      "_FRONTEND_GC0_PER_AST_MB", "_FRONTEND_LEGACY_PER_AST_MB",
+                     "_FRONTEND_GC0_CLOSURE_BASE", "_FRONTEND_GC0_CLOSURE_PER_AST_MB",
+                     "_FRONTEND_GC0_PER_CLOSURE_MB",
                      "_PCO_BASE", "_PCO_PER_SIDECAR_MB",
                      "_PCO_LEGACY_BASE", "_PCO_LEGACY_PER_SIDECAR_MB", "_PCO_CAP", "_MAX_WIDTH")
     )
@@ -263,3 +366,77 @@ main()
         )
         assert result.returncode == 0, (backend, result.stdout, result.stderr)
         assert result.stdout.strip() == "admission-ok"
+
+
+@pytest.mark.parametrize("gc_backend", ["0", "3"])
+def test_auto_chains_each_pco_job_after_its_own_frontend_job(tmp_path, monkeypatch, gc_backend):
+    """Frontend -> PCO pipelining: module i's PCO follows module i's frontend
+    in one pool, in the frontend's priority order, with the PCO floor of the
+    collector in use; nothing waits for the last frontend job."""
+    sizes = [100000, 14000000, 7000000]
+    manifests = []
+    for index, size in enumerate(sizes):
+        ast = tmp_path / ("module_" + str(index) + ".json")
+        with ast.open("wb") as stream:
+            stream.truncate(size)
+        manifest = tmp_path / (str(index) + ".manifest")
+        manifest.write_text("\n".join([
+            "pcc.py_frontend.codegen_worker.v4", "result", "out", "exports", "",
+            str(tmp_path), "", "", "", "", "1", str(index),
+        ]) + "\n")
+        manifests.append(str(manifest))
+    calls = []
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
+    monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "8589934592")
+    monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
+    monkeypatch.setattr(
+        scheduler, "run_chained_worker_processes",
+        lambda *args: calls.append(args),
+    )
+    scheduler.run_frontend_pco_commands(
+        ["f0", "f1", "f2"], manifests, ["p0", "p1", "p2"],
+        ["s0.pidx", "s1.pidx", "s2.pidx"], 0, 2,
+    )
+    floors, order = scheduler._frontend_floors_and_order(["f0", "f1", "f2"], manifests)
+    if gc_backend == "0":
+        pco_floor = (scheduler._PCO_BASE, scheduler._PCO_PER_SIDECAR_MB, scheduler._PCO_CAP)
+    else:
+        pco_floor = (
+            scheduler._PCO_LEGACY_BASE, scheduler._PCO_LEGACY_PER_SIDECAR_MB, scheduler._PCO_CAP,
+        )
+    assert calls == [(
+        ["f" + str(i) for i in order],
+        [floors[i] for i in order],
+        ["p" + str(i) for i in order],
+        ["s" + str(i) + ".pidx" for i in order],
+        pco_floor,
+        12,
+        7 * 1073741824,
+    )]
+
+
+def test_unbudgeted_chained_call_keeps_the_two_phases_in_order(monkeypatch):
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "2")
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "8589934592")
+    calls = []
+    monkeypatch.setattr(scheduler, "run_worker_processes", lambda commands, width: calls.append((commands, width)))
+    scheduler.run_frontend_pco_commands(
+        ["f0", "f1"], ["unused"] * 2, ["p0", "p1"], ["s0", "s1"], 1, 2,
+    )
+    assert calls == [(["f0"], 1), (["f1"], 2), (["p0"], 1), (["p1"], 2)]
+
+
+def test_chain_switch_off_keeps_the_phases_sequential(monkeypatch):
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "8589934592")
+    monkeypatch.setenv("PCC_FRONTEND_PCO_CHAIN", "0")
+    calls = []
+    monkeypatch.setattr(scheduler, "run_frontend_commands", lambda *a: calls.append(("frontend", a[0])))
+    monkeypatch.setattr(scheduler, "run_pco_commands", lambda *a: calls.append(("pco", a[0])))
+    monkeypatch.setattr(
+        scheduler, "run_chained_worker_processes",
+        lambda *a: pytest.fail("chaining ran with PCC_FRONTEND_PCO_CHAIN=0"),
+    )
+    scheduler.run_frontend_pco_commands(["f"], ["m"], ["p"], ["s"], 0, 2)
+    assert calls == [("frontend", ["f"]), ("pco", ["p"])]

@@ -1210,15 +1210,22 @@ def _native_export_from_wire(value):
 
 
 def _native_export_wire_module_references(value, known_modules, out) -> None:
-    """Collect conservative module-name references from one decoded shard."""
+    """Collect conservative module-name references from one decoded shard.
 
+    ``known_modules`` should be a set: every dict key and string in the shard
+    is tested against it, and a list made that test linear in the module
+    count (about 10 s of the entry module's native frontend worker).
+    """
+
+    seen = set(out)
     pending = [value]
     while pending:
         current = pending.pop()
         if isinstance(current, dict):
             for key, item in current.items():
                 if isinstance(key, str) and key in known_modules:
-                    if key not in out:
+                    if key not in seen:
+                        seen.add(key)
                         out.append(key)
                 pending.append(item)
             continue
@@ -1227,7 +1234,8 @@ def _native_export_wire_module_references(value, known_modules, out) -> None:
                 pending.append(item)
             continue
         if isinstance(current, str) and current in known_modules:
-            if current not in out:
+            if current not in seen:
+                seen.add(current)
                 out.append(current)
 
 
@@ -1252,7 +1260,7 @@ def _write_indexed_native_exports_wire(
     """Write one dependency-indexed file without a per-module file graph."""
 
     dependencies = {}
-    known_modules = list(native_exports)
+    known_modules = set(native_exports)
     for module_name in native_exports:
         clean_name = _native_export_indexed_module_name(module_name)
         clean_dependencies = []
@@ -1408,15 +1416,17 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
     ):
         raise ValueError("invalid indexed frontend native export metadata")
 
+    # Membership sets: the closure walk below tests every dependency and
+    # every referenced name against these.
     if not root_module:
-        selected = list(module_order)
+        selected = set(module_order)
     else:
         root_module = _native_export_indexed_module_name(root_module)
         if root_module not in module_payloads:
             raise ValueError(
                 "indexed frontend native exports missing root module"
             )
-        selected = []
+        selected = set()
 
     contextual_host_exports = {}
     if root_module and root_module in contextual_modules:
@@ -1431,7 +1441,7 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
         pending.append(root_module)
 
     decoded = {}
-    known_modules = list(module_order)
+    known_modules = set(module_order)
     while pending:
         module_name = pending.pop()
         if module_name in selected:
@@ -1454,7 +1464,7 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
                 "invalid indexed frontend native export module payload"
             )
         decoded[module_name] = module_exports
-        selected.append(module_name)
+        selected.add(module_name)
         dependencies = module_dependencies.get(module_name, ())
         if not isinstance(dependencies, tuple):
             raise ValueError(

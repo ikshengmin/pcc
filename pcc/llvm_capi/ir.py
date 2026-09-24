@@ -3528,14 +3528,15 @@ def _irbuilder_call_direct_exact_fixed(
     arg_count: int,
     arg0=None,
     arg1=None,
+    name: str = "",
 ) -> Value:
     """Write an exact arity-0/1/2 call without transient argument lists."""
     if _debug_ir_call_trace_enabled():
         if arg_count == 0:
-            return _irbuilder_call_from_args_list(builder, fn, [])
+            return _irbuilder_call_from_args_list(builder, fn, [], name)
         if arg_count == 1:
-            return _irbuilder_call_from_args_list(builder, fn, [arg0])
-        return _irbuilder_call_from_args_list(builder, fn, [arg0, arg1])
+            return _irbuilder_call_from_args_list(builder, fn, [arg0], name)
+        return _irbuilder_call_from_args_list(builder, fn, [arg0, arg1], name)
 
     function_type = fn.ftype
     ret_ty = function_type.return_type
@@ -3547,7 +3548,7 @@ def _irbuilder_call_direct_exact_fixed(
         result = None
         rec = builder._emit_direct("call")
     else:
-        result = builder._next("", ret_ty)
+        result = builder._next(name, ret_ty)
         rec = builder._emit_direct("call")
 
     record_id = publish_exact_call_fixed(
@@ -3965,49 +3966,55 @@ def LiteralStructType___init__7(arg0, arg1, arg2, arg3, arg4, arg5, arg6):
     return LiteralStructType((arg0, arg1, arg2, arg3, arg4, arg5, arg6))
 
 
-def IRBuilder_call0(builder, fn):
+def IRBuilder_call0(builder, fn, name=""):
+    # ``name`` is the SSA hint of ``builder.call(fn, [], name=...)``; scaffold
+    # lowering passes it (or "") so pcc1 names call results like CPython.
     if builder._direct_indexed_no_text and _is_exact_function(fn):
-        return _irbuilder_call_direct_exact_fixed(builder, fn, 0)
-    return _irbuilder_call_from_args_list(builder, fn, [])
+        return _irbuilder_call_direct_exact_fixed(builder, fn, 0, None, None, name)
+    return _irbuilder_call_from_args_list(builder, fn, [], name)
 
 
-def IRBuilder_call1(builder, fn, arg0):
+def IRBuilder_call1(builder, fn, arg0, name=""):
     if builder._direct_indexed_no_text and _is_exact_function(fn):
-        return _irbuilder_call_direct_exact_fixed(builder, fn, 1, arg0)
-    return _irbuilder_call_from_args_list(builder, fn, [arg0])
+        return _irbuilder_call_direct_exact_fixed(builder, fn, 1, arg0, None, name)
+    return _irbuilder_call_from_args_list(builder, fn, [arg0], name)
 
 
-def IRBuilder_call2(builder, fn, arg0, arg1):
+def IRBuilder_call2(builder, fn, arg0, arg1, name=""):
     if builder._direct_indexed_no_text and _is_exact_function(fn):
-        return _irbuilder_call_direct_exact_fixed(builder, fn, 2, arg0, arg1)
-    return _irbuilder_call_from_args_list(builder, fn, [arg0, arg1])
+        return _irbuilder_call_direct_exact_fixed(builder, fn, 2, arg0, arg1, name)
+    return _irbuilder_call_from_args_list(builder, fn, [arg0, arg1], name)
 
 
-def IRBuilder_call3(builder, fn, arg0, arg1, arg2):
-    return _irbuilder_call_from_args_list(builder, fn, [arg0, arg1, arg2])
+def IRBuilder_call3(builder, fn, arg0, arg1, arg2, name=""):
+    return _irbuilder_call_from_args_list(builder, fn, [arg0, arg1, arg2], name)
 
 
-def IRBuilder_call4(builder, fn, arg0, arg1, arg2, arg3):
-    return _irbuilder_call_from_args_list(builder, fn, [arg0, arg1, arg2, arg3])
+def IRBuilder_call4(builder, fn, arg0, arg1, arg2, arg3, name=""):
+    return _irbuilder_call_from_args_list(
+        builder, fn, [arg0, arg1, arg2, arg3], name
+    )
 
 
 def IRBuilder_call4_i32(builder, fn, arg0, arg1, arg2, arg3: int):
     return IRBuilder.call4_i32(builder, fn, arg0, arg1, arg2, arg3)
 
 
-def IRBuilder_call5(builder, fn, arg0, arg1, arg2, arg3, arg4):
-    return _irbuilder_call_from_args_list(builder, fn, [arg0, arg1, arg2, arg3, arg4])
-
-
-def IRBuilder_call6(builder, fn, arg0, arg1, arg2, arg3, arg4, arg5):
+def IRBuilder_call5(builder, fn, arg0, arg1, arg2, arg3, arg4, name=""):
     return _irbuilder_call_from_args_list(
-        builder, fn, [arg0, arg1, arg2, arg3, arg4, arg5]
+        builder, fn, [arg0, arg1, arg2, arg3, arg4], name
     )
 
 
-def IRBuilder_call7(builder, fn, arg0, arg1, arg2, arg3, arg4, arg5, arg6):
+def IRBuilder_call6(builder, fn, arg0, arg1, arg2, arg3, arg4, arg5, name=""):
     return _irbuilder_call_from_args_list(
-        builder, fn, [arg0, arg1, arg2, arg3, arg4, arg5, arg6]
+        builder, fn, [arg0, arg1, arg2, arg3, arg4, arg5], name
+    )
+
+
+def IRBuilder_call7(builder, fn, arg0, arg1, arg2, arg3, arg4, arg5, arg6, name=""):
+    return _irbuilder_call_from_args_list(
+        builder, fn, [arg0, arg1, arg2, arg3, arg4, arg5, arg6], name
     )
 
 
@@ -4022,11 +4029,13 @@ def IRBuilder_call8(
     arg5,
     arg6,
     arg7,
+    name="",
 ):
     return _irbuilder_call_from_args_list(
         builder,
         fn,
         [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7],
+        name,
     )
 
 
@@ -4038,8 +4047,8 @@ def LiteralStructType_dyn(elements):
     return LiteralStructType(tuple(elements))
 
 
-def IRBuilder_call_dyn(builder, fn, args):
-    return IRBuilder.call(builder, fn, args)
+def IRBuilder_call_dyn(builder, fn, args, name=""):
+    return IRBuilder.call(builder, fn, args, name)
 
 
 def IRBuilder_emit_raw(builder, line: str):
@@ -4145,40 +4154,43 @@ def IRBuilder_declare_inline_error_landing(builder, block, slot) -> bool:
     return True
 
 
-def IRBuilder_gep0(builder, ptr):
+# The trailing ``name`` is the SSA name hint of ``builder.gep(..., name=)``;
+# the scaffold lowering passes it (``""`` when absent) so pcc1 names results
+# exactly as the host compiler does.
+def IRBuilder_gep0(builder, ptr, name=""):
     return ptr
 
 
-def IRBuilder_gep1(builder, ptr, idx0):
-    return IRBuilder.gep(builder, ptr, (idx0,))
+def IRBuilder_gep1(builder, ptr, idx0, name=""):
+    return IRBuilder.gep(builder, ptr, (idx0,), False, name)
 
 
-def IRBuilder_gep1_inbounds(builder, ptr, idx0):
-    return IRBuilder.gep(builder, ptr, (idx0,), inbounds=True)
+def IRBuilder_gep1_inbounds(builder, ptr, idx0, name=""):
+    return IRBuilder.gep(builder, ptr, (idx0,), True, name)
 
 
-def IRBuilder_gep2(builder, ptr, idx0, idx1):
-    return IRBuilder.gep(builder, ptr, (idx0, idx1))
+def IRBuilder_gep2(builder, ptr, idx0, idx1, name=""):
+    return IRBuilder.gep(builder, ptr, (idx0, idx1), False, name)
 
 
-def IRBuilder_gep2_inbounds(builder, ptr, idx0, idx1):
-    return IRBuilder.gep(builder, ptr, (idx0, idx1), inbounds=True)
+def IRBuilder_gep2_inbounds(builder, ptr, idx0, idx1, name=""):
+    return IRBuilder.gep(builder, ptr, (idx0, idx1), True, name)
 
 
-def IRBuilder_gep3(builder, ptr, idx0, idx1, idx2):
-    return IRBuilder.gep(builder, ptr, (idx0, idx1, idx2))
+def IRBuilder_gep3(builder, ptr, idx0, idx1, idx2, name=""):
+    return IRBuilder.gep(builder, ptr, (idx0, idx1, idx2), False, name)
 
 
-def IRBuilder_gep3_inbounds(builder, ptr, idx0, idx1, idx2):
-    return IRBuilder.gep(builder, ptr, (idx0, idx1, idx2), inbounds=True)
+def IRBuilder_gep3_inbounds(builder, ptr, idx0, idx1, idx2, name=""):
+    return IRBuilder.gep(builder, ptr, (idx0, idx1, idx2), True, name)
 
 
-def IRBuilder_gep_dyn(builder, ptr, indices):
-    return IRBuilder.gep(builder, ptr, indices)
+def IRBuilder_gep_dyn(builder, ptr, indices, name=""):
+    return IRBuilder.gep(builder, ptr, indices, False, name)
 
 
-def IRBuilder_gep_dyn_inbounds(builder, ptr, indices):
-    return IRBuilder.gep(builder, ptr, indices, inbounds=True)
+def IRBuilder_gep_dyn_inbounds(builder, ptr, indices, name=""):
+    return IRBuilder.gep(builder, ptr, indices, True, name)
 
 
 def _phi_add_incoming_canonical(

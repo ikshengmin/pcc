@@ -9,7 +9,7 @@ from ..package_environment import (
     package_environment_fingerprint as environment_fingerprint,
 )
 from ..package_environment import package_site_roots as environment_site_roots
-from .pipeline_paths import resolve_module_src
+from .pipeline_paths import directory_entry_names, resolve_module_src
 
 NATIVE_EXTENSION_SUFFIXES = (".so", ".dylib", ".pyd", ".dll")
 
@@ -18,8 +18,9 @@ NATIVE_EXTENSION_SUFFIXES = (".so", ".dylib", ".pyd", ".dll")
 # resolve_pcc_native_extension_path once per import edge, and every call was
 # re-running the 13-env-var resolution plus an environment.json open/read/
 # parse: 34% of a profiled stage2 coordinator window).  Filesystem PROBES
-# (isdir here, isfile/listdir below) deliberately stay per-call so packages
-# installed mid-process are still found.
+# (isdir here, isfile below) deliberately stay per-call so packages installed
+# mid-process are still found; directory listings are reused only while the
+# directory's mtime is unchanged (``directory_entry_names``).
 _SITE_ROOTS_CACHE: dict = {}
 
 
@@ -68,18 +69,25 @@ def resolve_pcc_native_extension_path(module_name: str) -> Optional[str]:
         if not parent or not os.path.isdir(parent):
             continue
         try:
-            names = sorted(os.listdir(parent))
+            names = directory_entry_names(parent)
         except OSError:
-            names = []
+            names = ()
+        # Filter by name before sorting and probing, so only candidate
+        # artifacts are sorted and stat'ed; the first candidate in sorted
+        # order that is a file wins, as before.
+        prefix = leaf + "."
+        candidates: list[str] = []
         for name in names:
-            full = str(os.path.join(parent, name))
-            if not os.path.isfile(full):
-                continue
-            if not name.startswith(leaf + "."):
+            if not name.startswith(prefix):
                 continue
             if not name.lower().endswith(NATIVE_EXTENSION_SUFFIXES):
                 continue
             if native_extension_name_uses_cpython_abi(name):
+                continue
+            candidates.append(name)
+        for name in sorted(candidates):
+            full = str(os.path.join(parent, name))
+            if not os.path.isfile(full):
                 continue
             return str(os.path.abspath(full))
     return None

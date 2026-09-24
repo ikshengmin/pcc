@@ -6,16 +6,21 @@ import os
 import json
 import subprocess
 import tempfile
+import time
 from typing import Optional
 
 from . import module_action_dag as _module_action_dag
 from .pipeline_frontend_workers import (
     SOURCE_WORKER_AUTO_SAFE_JOBS as _SOURCE_WORKER_AUTO_SAFE_JOBS,
+    WORKER_TREE_BUDGET_ENV as _WORKER_TREE_BUDGET_ENV,
     compiled_native_auto_jobs as _compiled_native_auto_jobs,
     compiled_native_export_jobs as _compiled_native_export_jobs,
     compiled_native_summary_jobs as _compiled_native_summary_jobs,
+    numeric_jobs_override as _numeric_jobs_override,
     split_codegen_chunks_by_source_size as _split_codegen_chunks_by_source_size,
+    worker_tree_budget_bytes as _worker_tree_budget_bytes,
 )
+from .pipeline_pass_config import parallel_cpu_budget as _parallel_cpu_budget
 
 
 _MODULE_IR_ARTIFACT_SCHEMA = "pcc.python-module-ir-action.v1"
@@ -323,7 +328,12 @@ def _summary_worker_parallelism(max_parallel: int, worker_prefix) -> int:
     # memory class; codegen workers keep the independent width-two risk cap.
     if len(worker_prefix) > 1:
         return max_parallel
-    return _compiled_native_summary_jobs(max_parallel)
+    requested = max_parallel
+    if not _numeric_jobs_override(
+        str(os.environ.get("PCC_PY_FRONTEND_JOBS", "") or "")
+    ):
+        requested = max(max_parallel, _parallel_cpu_budget())
+    return _compiled_native_summary_jobs(requested)
 
 
 def build_shared_exports(
@@ -619,8 +629,14 @@ def build_shared_exports(
             raise pipeline_error(
                 "indexed native exports require a class preload builder"
             )
+        preload_started = time.monotonic()
         unique_class_preload_index = build_unique_class_preload_index(
-            native_exports
+            native_exports, tmp
+        )
+        profile_counter(
+            profile,
+            "multi_frontend_unique_class_preload_ms",
+            int((time.monotonic() - preload_started) * 1000),
         )
         if (
             contextual_host_for_module is None
@@ -877,7 +893,18 @@ def compile_parallel_uncached(
         )
         export_chunks = export_oversized + export_safe
         export_oversized_chunk_count = len(export_oversized)
-        export_safe_jobs = _compiled_native_export_jobs(jobs)
+        # Light one-module export workers take their width from their own
+        # memory class and the CPU budget, not the codegen pool's `jobs`.
+        export_safe_jobs = _compiled_native_export_jobs(
+            max(jobs, _parallel_cpu_budget())
+        )
+        if _worker_tree_budget_bytes(
+            os.environ.get(_WORKER_TREE_BUDGET_ENV, "")
+        ) > 0:
+            # The source-size "oversized" band is a codegen memory class; as
+            # export workers those modules peaked at 310 MB.  Keep them first
+            # in the same budgeted pool instead of a serial prefix.
+            export_oversized_chunk_count = 0
     if not chunks or not export_chunks:
         return None
     profile_counter(profile, "multi_frontend_chunks", len(chunks))

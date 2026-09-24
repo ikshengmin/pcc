@@ -686,6 +686,13 @@ def _runtime_signatures_part_11():
     # ---- Generic object ops ---------------------------------------
     "py_obj_call": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_method1": (_PYOBJ, [_PYOBJ, _CSTR, _PYOBJ], False),
+    # a <op> b on user-class operands: a.__op__(b), then b.__rop__(a) on
+    # absence or NotImplemented, else TypeError(message).
+    "py_user_binop_dispatch": (
+        _PYOBJ,
+        [_PYOBJ, _PYOBJ, _CSTR, _CSTR, _CSTR],
+        False,
+    ),
     # self.foo(a, b) where a subclass overrides foo: the receiver class is
     # the only dynamic part, so the caller hands over a complete argument
     # tuple (receiver at index 0) and this resolves and calls in one step,
@@ -713,6 +720,8 @@ def _runtime_signatures_part_11():
     "py_weak_key_dict_set": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_weak_key_dict_len": (_I64, [_PYOBJ], False),
     "py_obj_getattr": (_PYOBJ, [_PYOBJ, _CSTR], False),
+    "py_obj_load_method": (_PYOBJ, [_PYOBJ, _CSTR, _CSTR_PTR], False),
+    "py_obj_call_method": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_getattr_default": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_getattr_maybe": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_vars": (_PYOBJ, [_PYOBJ], False),

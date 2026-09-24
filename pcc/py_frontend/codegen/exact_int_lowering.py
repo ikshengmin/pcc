@@ -779,9 +779,10 @@ class ExactIntLoweringMixin:
                 isinstance(rhs.type, ir.PointerType)
                 and rhs not in getattr(self, "_cpy_values", ())
             )
-            inline_capable = self._int_exprs_are_boxed() and expr.op in (
-                "+", "-", "*", "&", "|", "^",
-            )
+            # Both operands are exact-int objects here whether or not the
+            # enclosing function boxes every int local, so the tagged fast
+            # path applies to planned exact-int locals in plain functions too.
+            inline_capable = expr.op in ("+", "-", "*", "&", "|", "^")
             # With an inline fast path, pins are deferred into the slow block;
             # otherwise the runtime call is unconditional and pins wrap it.
             slow_pins: tuple[ir.Value, ...] = ()

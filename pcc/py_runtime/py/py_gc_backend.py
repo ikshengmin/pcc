@@ -5083,7 +5083,8 @@ def pcc_gc_note_safepoint() -> None:
 
 @c_abi_export("pcc_gc_note_pin")
 def pcc_gc_note_pin(delta: int) -> None:
-    _counter_inc(4, delta)
+    slot = global_addr("pcc_gc_metric_pin")
+    store_i32(slot, 0, load_i32(slot, 0) + delta)
 
 
 def _scheduler_root_node_alloc(slot):

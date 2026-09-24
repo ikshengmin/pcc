@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 from typing import Optional
 
 from .pipeline_paths import join_strings
@@ -373,53 +374,100 @@ def write_target_stamp(archive: str, expected_target_id: str) -> None:
         pass
 
 
+def _runtime_lock_owner_alive(owner_pid: int) -> bool:
+    if owner_pid <= 0:
+        return False
+    try:
+        os.kill(owner_pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _remove_runtime_build_lock(lock_dir: str, owner_path: str) -> None:
+    try:
+        os.unlink(owner_path)
+    except OSError:
+        pass
+    try:
+        os.rmdir(lock_dir)
+    except OSError:
+        pass
+
+
+def _acquire_runtime_build_lock(lock_dir: str) -> None:
+    owner_path = os.path.join(lock_dir, "owner")
+    waited = 0
+    ownerless_waited = 0
+    while True:
+        try:
+            os.mkdir(lock_dir)
+        except FileExistsError:
+            owner_pid = 0
+            try:
+                with open(owner_path, "r", encoding="ascii") as stream:
+                    raw_owner = stream.read().strip()
+                if raw_owner.isdigit():
+                    owner_pid = int(raw_owner)
+            except (OSError, ValueError):
+                pass
+            owner_alive = _runtime_lock_owner_alive(owner_pid)
+            stale = (
+                (owner_pid > 0 and not owner_alive)
+                or (owner_pid <= 0 and ownerless_waited >= 50)
+            )
+            if stale:
+                _remove_runtime_build_lock(lock_dir, owner_path)
+                if not os.path.isdir(lock_dir):
+                    ownerless_waited = 0
+                    continue
+            if owner_pid <= 0:
+                ownerless_waited += 1
+            else:
+                ownerless_waited = 0
+            waited += 1
+            if waited >= 3000:
+                raise RuntimeArchiveError(
+                    "timed out waiting for pcc runtime build lock: " + lock_dir
+                )
+            time.sleep(0.1)
+            continue
+        except OSError as exc:
+            raise RuntimeArchiveError(
+                "failed to create pcc runtime build lock: " + lock_dir
+            ) from exc
+        try:
+            with open(owner_path, "w", encoding="ascii") as stream:
+                stream.write(str(os.getpid()) + "\n")
+        except OSError as exc:
+            _remove_runtime_build_lock(lock_dir, owner_path)
+            raise RuntimeArchiveError(
+                "failed to publish pcc runtime build lock owner: " + lock_dir
+            ) from exc
+        return
+
+
 def run_runtime_make(runtime_dir: str, make_cmd, *, verbose: bool) -> None:
     del verbose
     lock_dir = os.path.join(runtime_dir, ".pcc-runtime-build.lock")
-    lock_script = (
-        'lock="$1"; shift; owner="$lock/owner"; '
-        'waited=0; ownerless_waited=0; '
-        'while :; do '
-        'if mkdir "$lock" 2>/dev/null; then '
-        'if ! printf "%s\\n" "$$" > "$owner"; then '
-        'rm -f "$owner"; rmdir "$lock" 2>/dev/null || :; exit 1; fi; '
-        'break; fi; '
-        'owner_pid=; if [ -r "$owner" ]; then '
-        'IFS= read -r owner_pid < "$owner" || owner_pid=; fi; '
-        'owner_valid=0; owner_alive=0; '
-        'case "$owner_pid" in ""|*[!0-9]*) ;; '
-        '*) owner_valid=1; kill -0 "$owner_pid" 2>/dev/null '
-        '&& owner_alive=1 || : ;; esac; '
-        'if [ "$owner_valid" -eq 1 ] && [ "$owner_alive" -eq 0 ]; then '
-        'rm -f "$owner"; if rmdir "$lock" 2>/dev/null; then '
-        'ownerless_waited=0; continue; fi; '
-        'elif [ "$owner_valid" -eq 0 ]; then '
-        'ownerless_waited=$((ownerless_waited + 1)); '
-        'if [ "$ownerless_waited" -ge 50 ]; then '
-        'rm -f "$owner"; if rmdir "$lock" 2>/dev/null; then '
-        'ownerless_waited=0; continue; fi; fi; '
-        'else ownerless_waited=0; fi; '
-        'waited=$((waited + 1)); '
-        'if [ "$waited" -ge 3000 ]; then '
-        'echo "timed out waiting for pcc runtime build lock: $lock" >&2; '
-        'exit 124; fi; sleep 0.1; done; '
-        'cleanup_runtime_build_lock() { '
-        'rm -f "$owner"; rmdir "$lock" 2>/dev/null || :; }; '
-        "trap cleanup_runtime_build_lock EXIT; "
-        "trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; "
-        '"$@"'
-    )
+    owner_path = os.path.join(lock_dir, "owner")
+    _acquire_runtime_build_lock(lock_dir)
     # The runtime archive is a build dependency, not the user's program: a
     # `-g` on the command line must not make the runtime ports compile with
     # debug info, which changes the archive every user build toggles the flag.
     build_env = dict(os.environ)
     build_env.pop("PCC_PY_DEBUG_INFO", None)
-    subprocess.run(
-        ["sh", "-c", lock_script, "sh", lock_dir, *make_cmd],
-        check=True,
-        capture_output=False,
-        env=build_env,
-    )
+    try:
+        subprocess.run(
+            make_cmd,
+            check=True,
+            capture_output=False,
+            env=build_env,
+        )
+    finally:
+        _remove_runtime_build_lock(lock_dir, owner_path)
 
 
 def cc_mode(raw: str) -> str:

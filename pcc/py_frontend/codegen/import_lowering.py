@@ -843,14 +843,27 @@ class ImportLoweringMixin:
                 # ``a.b.X`` against the leaf's export table.  Keeping the root
                 # binding also means a later ``import a.b`` cannot erase
                 # exports already available as ``a.X``.
-                if mod_name in getattr(self, "_sibling_module_inits", ()):
-                    self._emit_compiled_module_ensure_initialized(mod_name)
+                sibling_inits = getattr(self, "_sibling_module_inits", ())
                 local_name = as_name or mod_name.split(".")[0]
                 alias_module = mod_name
                 if as_name is None and "." in mod_name:
                     top_module = mod_name.split(".")[0]
                     if top_module in native_table:
                         alias_module = top_module
+                binds_alias_object = alias_module in sibling_inits and (
+                    as_name is not None
+                    or alias_module == mod_name.split(".")[0]
+                )
+                if mod_name in sibling_inits and not (
+                    binds_alias_object and alias_module == mod_name
+                ):
+                    self._emit_compiled_module_ensure_initialized(mod_name)
+                if binds_alias_object:
+                    # Like ``from pkg import sub``: keep the real module object
+                    # as the binding next to the static alias.  A value use
+                    # (``m = helper``, an escaping closure's capture) read the
+                    # module-name placeholder string instead.
+                    self._emit_compiled_module_import(alias_module, local_name)
                 self._register_native_module_alias(local_name, alias_module)
                 continue
             if mod_name in getattr(self, "_sibling_module_inits", ()):

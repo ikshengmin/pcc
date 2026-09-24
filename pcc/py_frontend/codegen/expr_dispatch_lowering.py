@@ -41,6 +41,15 @@ _I64 = ir.IntType(64)
 _DOUBLE = ir.DoubleType()
 _NATIVE_DEFAULT_FUNC_SENTINEL = "__pcc_native_default_func_ref__"
 _NATIVE_DEFAULT_GLOBAL_SENTINEL = "__pcc_native_default_global_ref__"
+_BINARY_OP_DUNDERS = {
+    "+": ("__add__", "__radd__"),
+    "-": ("__sub__", "__rsub__"),
+    "*": ("__mul__", "__rmul__"),
+    "/": ("__truediv__", "__rtruediv__"),
+    "//": ("__floordiv__", "__rfloordiv__"),
+    "%": ("__mod__", "__rmod__"),
+    "**": ("__pow__", "__rpow__"),
+}
 
 
 def _is_class_type_for_expr_dispatch(ty) -> bool:
@@ -282,21 +291,72 @@ class ExprDispatchLoweringMixin:
     def _emit_dynamic_binary_dunder_call(
         self,
         lhs_expr: Expr,
-        dunder_name: str,
+        op: str,
         rhs_expr: Expr,
     ) -> ir.Value:
-        recv_obj = self._emit_as_object(lhs_expr)
-        rhs_obj = self._emit_as_object(rhs_expr)
-        result = self.builder.call(
-            self.runtime["py_obj_call_method1"],
-            [recv_obj, self._attr_name_ptr(dunder_name), rhs_obj],
-            name=self._fresh(f"dyn.dunder.{dunder_name}.call"),
+        """``lhs <op> rhs`` through the runtime's binary dunder protocol.
+
+        ``py_user_binop_dispatch`` calls ``__op__`` from the lhs class and,
+        when it is missing or returns NotImplemented, ``__rop__`` from the rhs
+        class, operands in source order.  The former route fetched the dunder
+        with getattr -- which binds ``self`` on a pcc instance -- and passed
+        the receiver again, so every call failed with "too many positional
+        arguments".  ``%`` goes through ``py_obj_mod``: a str or bytes lhs
+        formats the instance, as ``str.__mod__`` does, before any dunder.
+        """
+        forward, reflected = _BINARY_OP_DUNDERS[op]
+        span = getattr(lhs_expr, "span", None)
+        lhs = self._emit_as_object(lhs_expr)
+        lhs_owned = self._pcc_pointer_source_is_owned(lhs_expr)
+        # The rhs may allocate or raise: keep the lhs in place meanwhile and
+        # let the rhs error edge unpin (and release) it.
+        self._gc_pin(lhs)
+        rhs = self._emit_expr_with_cpy_operand_cleanup(
+            rhs_expr,
+            (),
+            (),
+            ((lhs, lhs_owned),),
+            as_object=True,
         )
-        self._emit_attribute_error_if_null(
-            result,
-            dunder_name,
-            getattr(lhs_expr, "span", None),
+        rhs_owned = self._pcc_pointer_source_is_owned(rhs_expr)
+        self._gc_pin(rhs)
+        if op == "%":
+            result = self.builder.call(
+                self.runtime["py_obj_mod"],
+                [lhs, rhs],
+                name=self._fresh(f"dyn.dunder.{forward}.call"),
+            )
+        else:
+            message_gv, _ = self._cstr_literal(
+                f"unsupported operand type(s) for {op}"
+            )
+            result = self.builder.call(
+                self.runtime["py_user_binop_dispatch"],
+                [
+                    lhs,
+                    rhs,
+                    self._attr_name_ptr(forward),
+                    self._attr_name_ptr(reflected),
+                    self._ptr_to_cstr(message_gv),
+                ],
+                name=self._fresh(f"dyn.dunder.{forward}.call"),
+            )
+        self._emit_post_call_err_check(
+            span,
+            pinned_release_on_error=((lhs, lhs_owned), (rhs, rhs_owned)),
         )
+        # Releasing an owned operand can run a finalizer or a collection.
+        result_pin = lhs_owned or rhs_owned
+        if result_pin:
+            self._gc_pin(result)
+        self._gc_unpin(lhs)
+        if lhs_owned:
+            self._gc_release(lhs)
+        self._gc_unpin(rhs)
+        if rhs_owned:
+            self._gc_release(rhs)
+        if result_pin:
+            self._gc_unpin(result)
         return result
 
     def _emit_expr_impl(self, expr: Expr) -> ir.Value:
@@ -421,7 +481,7 @@ class ExprDispatchLoweringMixin:
                 if _is_class_type_for_expr_dispatch(expr.lhs.ty):
                     return self._emit_dynamic_binary_dunder_call(
                         expr.lhs,
-                        arith_dunder,
+                        expr.op,
                         expr.rhs,
                     )
                 reflected_dunder = {
@@ -446,9 +506,9 @@ class ExprDispatchLoweringMixin:
                     # user __rmod__, and the reflected receiver path would
                     # materialize an identity instance.
                     return self._emit_dynamic_binary_dunder_call(
-                        expr.rhs,
-                        reflected_dunder,
                         expr.lhs,
+                        expr.op,
+                        expr.rhs,
                     )
                 # ``/`` on a DynType operand (e.g. ``obj.attr / n``) is handled
                 # generically by py_obj_truediv in _emit_binop_value below: a

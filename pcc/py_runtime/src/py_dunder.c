@@ -350,10 +350,31 @@ PyObject *py_user_repr_dispatch(PyObject *o) {
     return pcc_call_user_unary_method(func, o);
 }
 
+/* object.__hash__: identity.  The forwarding collectors move objects, so
+ * they hash the stable object id instead of the address. */
+static int64_t user_identity_hash(PyObject *o) {
+    int64_t backend = pcc_gc_backend();
+    int64_t h = (backend == 3 || backend == 4)
+        ? pcc_gc_object_id(o)
+        : (int64_t)((uintptr_t)o >> 4);
+    return h == -1 ? -2 : h;
+}
+
 int64_t py_user_hash_dispatch(PyObject *o, int64_t *handled) {
     if (handled != NULL) *handled = 0;
     PyObject *func = pcc_user_dunder_lookup(o, "__hash__");
-    if (func == NULL) return 0;
+    if (func == NULL) {
+        /* No __hash__ in the MRO.  Without a user __eq__, equality is
+         * identity, so hash by identity like CPython; every such instance
+         * used to hash to 0, which put all of them in one probe chain of a
+         * set or dict.  A class with __eq__ but no __hash__ keeps 0. */
+        if (pcc_dunder_is_user_instance(o)
+            && pcc_user_dunder_lookup(o, "__eq__") == NULL) {
+            if (handled != NULL) *handled = 1;
+            return user_identity_hash(o);
+        }
+        return 0;
+    }
     if (func == py_None) {
         if (handled != NULL) *handled = 1;
         py_raise_owned(py_exc_new(PY_EXC_TYPEERROR, "unhashable type"));

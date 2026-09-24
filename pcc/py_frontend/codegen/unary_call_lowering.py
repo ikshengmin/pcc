@@ -741,6 +741,17 @@ class UnaryCallLoweringMixin:
         info = self._resolve_method_mro(hint, dunder_name)
         if info is None:
             return None
+        # The hint names a compatible class, not the receiver's runtime class.
+        # A subclass that overrides the dunder must win -- `value.type ==
+        # _CSTR` on an ``ir.Type`` hint statically called ``Type.__eq__``
+        # (type and text only) for a ``PointerType`` receiver, so pcc1 took
+        # every pointer type as ``i8*``.  Leave such receivers, and hints the
+        # class graph cannot vouch for, to the dynamic protocol.
+        hint_info = self.class_lowering.classes.get(hint)
+        if hint_info is None or self.class_lowering.method_overridden_by_subclass(
+            hint_info, dunder_name
+        ):
+            return None
         obj_val = self._emit_expr(receiver_expr)
         method_fn = info.methods[dunder_name]
         return self._emit_direct_method_call(

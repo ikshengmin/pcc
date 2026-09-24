@@ -184,6 +184,41 @@ def _box_expr(expr, boxed):
     return go(expr)
 
 
+def _box_import(stmt, boxed):
+    """Bind a boxed import target through a temporary, then store the cell.
+
+    Imports count as scope bindings, so a captured import name is boxed; left
+    alone, the statement never wrote the cell and closures read None.  An
+    unaliased ``import a.b`` binds package ``a``, whose object a non-native
+    package ``__init__`` cannot provide; it keeps the old binding.
+    """
+    is_import = isinstance(stmt, Import)
+    span = stmt.span
+    # One temporary per statement: import bindings are static, so two imports
+    # of one boxed name (if/else branches) must not share it.
+    suffix = ("_" + str(_dataclass_field_value(span, "line", 0))
+              + "_" + str(_dataclass_field_value(span, "col", 0)))
+    names, stores = [], []
+    for source, asname in stmt.names:
+        bound = asname or (source.split(".", 1)[0] if is_import else source)
+        dotted = is_import and asname is None and "." in source
+        if source == "*" or dotted or not name_in(boxed, bound):
+            names.append((source, asname))
+            continue
+        stores.append((bound, "__pcc_boxed_import_" + bound + suffix))
+        names.append((source, stores[-1][1]))
+    if not stores:
+        return (stmt,)
+    cells = tuple(
+        Assign(span=span, targets=(Subscript(
+            span=span, ty=_DYN, obj=Name(span=span, ty=_DYN, ident=bound),
+            idx=IntLit(span=span, ty=IntType(name="int"), value=0)),),
+            value=Name(span=span, ty=_DYN, ident=temp))
+        for bound, temp in stores
+    )
+    return (_replace(stmt, names=tuple(names)),) + cells
+
+
 def _box_stmts(stmts, boxed, boxed_function_defs=None):
     """Rewrite reads and writes of boxed names through their cell list."""
     int_ty = IntType(name="int")
@@ -291,6 +326,9 @@ def _box_stmts(stmts, boxed, boxed_function_defs=None):
                 out.append(stmt)
             else:
                 out.append(_replace(stmt, value=_box_expr(stmt.value, boxed)))
+            continue
+        if isinstance(stmt, Import) or _is_import_from_stmt(stmt):
+            out.extend(_box_import(stmt, boxed))
             continue
         if isinstance(stmt, FuncDef):
             # A child binding shadows this scope's cell. Its own cells are

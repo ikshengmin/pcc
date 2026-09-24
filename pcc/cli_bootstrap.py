@@ -11436,6 +11436,15 @@ def _bootstrap_cli_main_impl(
             )
             return 2
         return _run_python_multi_codegen_worker(raw_argv[1])
+    if len(raw_argv) > 0 and raw_argv[0] == "--pcc-preload-delta-worker":
+        if len(raw_argv) != 4:
+            _write_text(
+                "Error: --pcc-preload-delta-worker requires exports, roots and output paths",
+                err=True,
+            )
+            return 2
+        from pcc.py_frontend.preload_delta_worker import run as preload_delta_run
+        return preload_delta_run(raw_argv[1], raw_argv[2], raw_argv[3])
     if len(raw_argv) > 0 and raw_argv[0] == "--pcc-self-backend-emit-worker":
         if len(raw_argv) not in (3, 5):
             _write_text(

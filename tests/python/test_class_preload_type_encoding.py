@@ -10,14 +10,14 @@ def test_real_preload_serializes_local_and_qualified_alias_once(monkeypatch):
         "field_names": ("value",),
         "field_types": (("value", ("int", 64, True)),),
     }}}
-    original = type_infer.encode_type
+    original = type_infer.encode_type_memo
     calls = []
 
-    def observe(ty):
+    def observe(ty, memo):
         calls.append(ty)
-        return original(ty)
+        return original(ty, memo)
 
-    monkeypatch.setattr(type_infer, "encode_type", observe)
+    monkeypatch.setattr(type_infer, "encode_type_memo", observe)
     result = type_infer.build_unique_external_class_preload(exports)
     assert result["keys"] == (("Record", 0), ("provider.Record", 0))
     assert len(result["types"]) == 1
@@ -28,21 +28,21 @@ def test_identity_reuse_preserves_distinct_equal_types_and_key_order(monkeypatch
     first = ClassType(name="Record", module="provider", fields=(), bases=())
     equal = ClassType(name="Record", module="provider", fields=(), bases=())
     assert first is not equal
-    original = type_infer.encode_type
+    original = type_infer.encode_type_memo
     calls = []
 
     def preload(ctx):
         ctx.class_types.update({"first": first, "alias": first, "equal": equal})
 
-    def observe(ty):
+    def observe(ty, memo):
         calls.append(ty)
-        return original(ty)
+        return original(ty, memo)
 
     monkeypatch.setattr(type_infer, "_preload_unique_external_classes", preload)
-    monkeypatch.setattr(type_infer, "encode_type", observe)
+    monkeypatch.setattr(type_infer, "encode_type_memo", observe)
     result = type_infer.build_unique_external_class_preload({})
     assert result == {
-        "types": (original(first),),
+        "types": (type_infer.encode_type(first),),
         "keys": (("first", 0), ("alias", 0), ("equal", 0)),
         "dependencies": (),
     }

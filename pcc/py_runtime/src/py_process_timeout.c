@@ -395,3 +395,189 @@ int64_t pcc_weighted_worker_process_pool(
     free(status); free(started); free(reservations); free(slots);
     return failure;
 }
+
+static pid_t spawn_worker_spec(PyObject *specs, int64_t index) {
+    PyObject *key = py_int_from_i64(index);
+    PyObject *spec = py_obj_getitem(specs, key);
+    py_decref(key);
+    if (spec == NULL) return -1;
+    PyObject *zero = py_int_from_i64(0), *one = py_int_from_i64(1);
+    PyObject *argv = py_obj_getitem(spec, zero);
+    PyObject *env = py_obj_getitem(spec, one);
+    py_decref(zero); py_decref(one);
+    int64_t argc = 0, envc = 0;
+    char **items = argv ? build_exec_argv(argv, &argc) : NULL;
+    char **envp = env ? build_exec_argv(env, &envc) : NULL;
+    pid_t pid = -1;
+    if (items && envp) {
+        posix_spawnattr_t attr;
+        if (posix_spawnattr_init(&attr) == 0) {
+            int rc = posix_spawnattr_setpgroup(&attr, 0);
+            if (rc == 0) rc = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+            if (rc == 0) rc = posix_spawnp(&pid, items[0], NULL, &attr, items, envp);
+            if (rc != 0) pid = -1;
+            posix_spawnattr_destroy(&attr);
+        }
+    }
+    free_exec_argv(items, argc); free_exec_argv(envp, envc);
+    py_decref(argv); py_decref(env); py_decref(spec);
+    return pid;
+}
+
+static int64_t followup_file_size(PyObject *paths, int64_t index) {
+    PyObject *key = py_int_from_i64(index);
+    PyObject *item = py_obj_getitem(paths, key);
+    py_decref(key);
+    if (item == NULL) return -1;
+    PyObject *text = py_obj_str(item);
+    py_decref(item);
+    if (text == NULL) return -1;
+    const char *raw = py_str_utf8(text);
+    int64_t size = -1;
+    if (raw != NULL) {
+        int fd = open(raw, O_RDONLY);
+        if (fd >= 0) {
+            off_t end = lseek(fd, 0, SEEK_END);
+            if (end >= 0) size = (int64_t)end;
+            close(fd);
+        }
+    }
+    py_decref(text);
+    return size;
+}
+
+/* A weighted pool whose job ``i`` has one follow-up job ``count + i`` that
+ * becomes ready when ``i`` exits 0.  The follow-up's reservation is known
+ * only then: ``min(cap, base + size * per_mb / 1000000)`` over the size of
+ * ``followup_paths[i]``, which job ``i`` wrote.  Primaries keep priority;
+ * a ready follow-up takes a slot only when no remaining primary fits, so the
+ * follow-ups fill the primaries' ramp and tail instead of displacing them
+ * (follow-up-first stretched Stage2's frontend phase: 514 s vs 446 s
+ * sequential).  Failure packing matches the other pools, with follow-up
+ * indices after the primaries. */
+int64_t pcc_chained_worker_process_pool(
+    PyObject *specs, PyObject *weights, PyObject *followups,
+    PyObject *followup_paths, PyObject *followup_floor,
+    int64_t width, int64_t budget
+) {
+    int64_t count = py_obj_len(specs);
+    if (count <= 0) return 0;
+    if (count > 524288 || py_obj_len(weights) != count
+        || py_obj_len(followups) != count
+        || py_obj_len(followup_paths) != count
+        || py_obj_len(followup_floor) != 3 || budget <= 0)
+        return INT64_C(4294967423);
+    int64_t floor_values[3];
+    for (int64_t i = 0; i < 3; i++) {
+        PyObject *key = py_int_from_i64(i);
+        PyObject *item = py_obj_getitem(followup_floor, key);
+        py_decref(key);
+        int overflow = 0;
+        floor_values[i] = item ? py_int_to_i64(item, &overflow) : -1;
+        py_decref(item);
+        if (overflow || floor_values[i] < 0) return INT64_C(4294967423);
+    }
+    int64_t total = count * 2;
+    if (width < 1) width = 1;
+    if (width > total) width = total;
+    struct ChainedSlot { pid_t pid; int64_t index; int64_t weight; };
+    struct ChainedSlot *slots = calloc((size_t)width, sizeof(*slots));
+    int64_t *reservations = malloc((size_t)total * sizeof(*reservations));
+    /* 0: waits for its primary, 1: ready, 2: started */
+    uint8_t *state = calloc((size_t)total, sizeof(*state));
+    int *status = malloc(sizeof(*status));
+    if (!slots || !reservations || !state || !status) {
+        free(slots); free(reservations); free(state); free(status);
+        return INT64_C(4294967423);
+    }
+    int64_t failure = 0;
+    for (int64_t index = 0; index < count; index++) {
+        PyObject *key = py_int_from_i64(index);
+        PyObject *item = py_obj_getitem(weights, key);
+        py_decref(key);
+        int overflow = 0;
+        int64_t value = item ? py_int_to_i64(item, &overflow) : 0;
+        py_decref(item);
+        if (overflow || value <= 0) {
+            failure = ((index + 1) << 32) | 127;
+            break;
+        }
+        reservations[index] = value;
+        state[index] = 1;
+    }
+    int64_t live = 0, completed = 0, available = budget;
+    while (!failure && completed < total) {
+        for (int64_t slot = 0; slot < width; slot++) {
+            pid_t pid = slots[slot].pid;
+            if (pid <= 0) continue;
+            int waited = runtime_waitpid(pid, status, WNOHANG);
+            if (waited == 0) continue;
+            int64_t rc = waited == pid ? py_process_normalize_wait_status(*status) : 127;
+            runtime_kill(-pid, SIGKILL);
+            available += slots[slot].weight;
+            slots[slot].pid = 0;
+            live--;
+            completed++;
+            int64_t index = slots[slot].index;
+            if (rc != 0) {
+                failure = ((index + 1) << 32) | (rc & INT64_C(4294967295));
+                break;
+            }
+            if (index < count) {
+                int64_t size = followup_file_size(followup_paths, index);
+                if (size < 0) {
+                    failure = ((count + index + 1) << 32) | 127;
+                    break;
+                }
+                int64_t reservation =
+                    floor_values[0] + size * floor_values[1] / 1000000;
+                if (reservation > floor_values[2]) reservation = floor_values[2];
+                if (reservation < 1) reservation = 1;
+                reservations[count + index] = reservation;
+                state[count + index] = 1;
+            }
+        }
+        if (failure) break;
+        while (live < width) {
+            int64_t selected = -1;
+            for (int64_t index = 0; index < count && selected < 0; index++) {
+                if (state[index] == 1 && (reservations[index] <= available || live == 0))
+                    selected = index;
+            }
+            for (int64_t index = count; index < total && selected < 0; index++) {
+                if (state[index] == 1 && (reservations[index] <= available || live == 0))
+                    selected = index;
+            }
+            if (selected < 0) break;
+            int64_t slot = 0;
+            while (slots[slot].pid > 0) slot++;
+            pid_t pid = selected < count
+                ? spawn_worker_spec(specs, selected)
+                : spawn_worker_spec(followups, selected - count);
+            if (pid <= 0) {
+                failure = ((selected + 1) << 32) | 127;
+                break;
+            }
+            state[selected] = 2;
+            slots[slot].pid = pid;
+            slots[slot].index = selected;
+            slots[slot].weight = reservations[selected];
+            available -= reservations[selected];
+            live++;
+        }
+        if (live && !failure) pcc_runtime_sleep_ns(PCC_TIMEOUT_POLL_NS);
+    }
+    if (failure) {
+        for (int64_t slot = 0; slot < width; slot++)
+            if (slots[slot].pid > 0) runtime_kill(-slots[slot].pid, SIGTERM);
+        pcc_runtime_sleep_ns(INT64_C(200000000));
+        for (int64_t slot = 0; slot < width; slot++) {
+            if (slots[slot].pid > 0) {
+                runtime_kill(-slots[slot].pid, SIGKILL);
+                runtime_waitpid(slots[slot].pid, status, 0);
+            }
+        }
+    }
+    free(status); free(state); free(reservations); free(slots);
+    return failure;
+}

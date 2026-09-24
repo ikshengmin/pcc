@@ -3147,3 +3147,430 @@ shell `rm` in the runtime-build lock cleanup; whether that exact route owns
 this observed diagnostic still needs a process-boundary trace. The ownership
 claim for this separate CLI path is therefore open; successful output alone
 does not prove no external helper was attempted.
+
+### 2026-09-24 (round 3): Stage2 runtime, coordinator and scheduler — measured owners
+
+Stage timings on this machine (12 cores, shared; wall under varying external
+load, so CPU and instruction counts are the comparison metric):
+
+```
+run  change set                                         Stage1    Stage2   Stage2 user CPU
+r4   export/summary widening, attribute cache (rt-v2)   186.65 s  1053.6 s  4448 s
+r5   + identity hash, LOAD_METHOD codegen, listing       204.05 s   880.9 s  3597 s
+       cache, getattr/dunder/tuple runtime micro (rt-v6)
+r6   + get_field fast path, pin counter (rt-v7),          192.34 s   835.9 s   3642 s
+       export-closure set walk, bytes.count scoring,
+       closure-aware frontend admission
+r7   + exact-int inline path in plain functions,          203.34 s*  770.4 s   3487 s
+       tagged int literals (rt-v8)
+r8   + encode_type memo in the preload index (rt-v9)      195.75 s   764.9 s   3442 s
+```
+
+\* The first r7 Stage1 read 221.18 s / 1231 s user under external load
+(load average 16–19); a quiet rerun of the same snapshot read 203.34 s /
+1048.93 s user against r6's 1044.33 s, so the extra fast-path IR costs
+Stage1 no material CPU.  A host frontend worker A/B on the same inputs agrees:
+module 53 79.78 G -> 79.75 G instructions, module 1 100.9 G -> 102.5 G.
+
+Phase ends from artifact timestamps (s after the coordinator started):
+
+```
+run  coordinator  last PIDX  last PCO  pcc2 (link = pcc2 - last PCO)
+r5   112          399        620       881  (261)
+r6   109          333        546       836  (290, host tests ran during it)
+r7   107          325        541       771  (230)
+r8   103          327        535       766  (230)
+```
+
+Each pcc2 (r5, r6, r7) compiled a function program and an object/method/set
+program; both printed the CPython output under GC0–GC4, including an instance
+attribute that shadows a cached class method.  All pcc2 link only libSystem.
+
+#### Runtime owners, one frontend worker (module 53, identical PIDX throughout)
+
+```
+runtime                                         instructions
+baseline (codex state 4446 PCOs)                614.4 G
++ instance attribute outcome cache               459.6 G   -25.2%
+  (+ class-lookup cache variant: 453.4 G, removed -- see below)
++ identity hash for __hash__/__eq__-free classes 382.7 G   -16.7%
++ dunder prefix, getattr instance route,         367.7 G    -3.9%
+  tracked-tuple skip (route alone: 1.7%)
+r5 objects (LOAD_METHOD codegen) on rt-v6        295.6 G   -19.6%
++ get_field non-moving fast path, pin counter    281.5 G    -4.7%
+```
+
+PCO worker (module 135, output identical to Stage2): 875.7 G -> 807.2 G
+(-7.8%) for rt-v6 -> rt-v7 on the same pcc2 objects.
+
+* **Identity hash [CONFIRMED].** `py_user_hash_dispatch` returned 0 for every
+  instance whose class has no `__hash__`, so a set or dict of such objects
+  kept all of them in one probe chain; every lookup compared the key with
+  every entry, each comparison looking up `__eq__` through the MRO.  One
+  `value in self._owned_dynamic_call_values` check was 12.8% of a native
+  frontend worker.  Classes with neither `__hash__` nor `__eq__` now hash by
+  identity (address >> 4 on GC0–2, the stable object id on the forwarding
+  collectors); a class with `__eq__` but no `__hash__` keeps 0, so value
+  equality is never split across buckets.  Mirrored in C; five-GC test
+  `test_identity_hash_default.py`.
+* **Class-lookup cache variant [DENIED].** Caching `py_class_lookup` outcomes
+  on top of the instance cache gave 1.35% on the same worker -- under the 3%
+  floor and the direct-mapped raw-address shape Update No.43 already denied.
+  Removed from both runtimes.
+* **getattr instance route.** Codex measured it at 0.75% and removed it; with
+  the cheaper instance path it is 1.7% (373.9 G -> 367.7 G, identical output).
+  Kept inside the measured bundle, below the single-change floor.
+* **Host and native frontends emit different IR [CONFIRMED, pre-existing, OPEN].**
+  With identical manifests, AST, exports and environment, the host (CPython)
+  frontend worker emits 52.5 MB of PIDX for `pcc.py_frontend.type_infer`
+  and pcc1 emits 42.9 MB: 139 of 277 functions differ, 202,525 vs 165,394
+  instructions (`_infer_expr` 40,470 vs 29,984); small functions differ by a
+  few instructions with identical call sets (`_make_list_type` 24 vs 20).
+  Codex's retained baseline shows the same split (host 52.4 MB vs native
+  42.8 MB), so it predates this round.  Consequently pcc2 is not built from
+  the IR Stage1 would produce: the same PCO job takes 702.2 G / 1.09 GB in
+  host-built pcc1 and 875.7 G / 1.85 GB in pcc1-built pcc2, identical output.
+  Stage2 is not a fixed point; the owner (which IR-builder decision diverges
+  under pcc1) is not yet identified.
+
+#### Coordinator and deferred driver: serial owners
+
+* **`os.listdir` via `ls` [CONFIRMED, fixed].** pcc1 lists a directory with
+  `popen("ls -1A ...")`.  Import resolution made 7,200 calls over 20
+  directories; 57% of the coordinator's first 70 s was blocked reading those
+  pipes.  `directory_entry_names` reuses a listing while the directory's mtime
+  is unchanged (listed afresh within 2 s of a change).  Closure phases
+  66 s -> 21.9 s.
+* **Unique external class preload index [PARTLY fixed].** In the real
+  (budgeted) configuration the coordinator runs alone for ~39 s after the
+  summary workers, 96.5% in
+  `type_infer.build_unique_external_class_preload_index`: each of 258
+  "sensitive" roots rebuilds the whole preload over the other 391 modules
+  (0.03 s each under CPython).  `encode_type` was 37% of that window because a
+  class encoding embeds its bases' and class-typed fields' encodings --
+  3,979,989 calls for one index.  `encode_type_memo` shares encodings by
+  identity within one preload build: host index 5.60 s -> 2.87 s, identical
+  result on the r7 exports.  The per-root rebuild itself remains; its type
+  resolution reads the class registry in iteration order, so reuse across
+  roots would need per-class lookup tracking.
+* **Deferred driver AST scoring [CONFIRMED, fixed].** Before the first frontend
+  worker, the native deferred driver ran alone for 27 s scoring all 427 MB of
+  AST byte by byte (`_call_node_score`), advancing a boxed exact-int index per
+  byte.  pcc1 lowers `bytes.count` to the runtime's raw scan; the function now
+  uses it (native five-GC test kept).
+* **Export closure walk [CONFIRMED, fixed].** `_read_indexed_native_exports_wire`
+  tested every dict key and string of every decoded shard against a *list* of
+  392 module names.  The entry module's worker spent ~10 of 11.2 s there.
+  Membership now uses sets; output order unchanged.
+
+#### Frontend admission [CONFIRMED over-reservation]
+
+During r5's frontend phase only 4–9 workers ran and the whole tree peaked at
+3.3 GB of the 8 GiB budget.  The calibrated floor (768 MiB + 0.1 GiB per AST
+MB) reserves a median 847 MB against a median measured peak of 193 MB (sum
+354 GB vs 97 GB): one straight line must cover small modules whose peaks come
+from their import closure (pcc.py_frontend.pipeline: 2.9 MB AST, 700 MiB).
+With the module's export-dependency closure (sum of indexed export payloads
+over its `P` closure, 0.02 s for all modules), 482 MiB + 125 MiB/AST-MB +
+17 MiB/closure-MB meets the same 1.25 × peak + 128 MiB envelope for all 392
+measurements (`frontend_gc0_worker_closures.json`) and admits 269 modules at
+width 12 instead of none.  Without a readable indexed exports file the old
+floor applies.
+
+#### Native link, full replay (266.6 s, byte-identical pcc2)
+
+```
+decode_packed_native_object         12.5%   (packed validation 11.0%)
+link_relocatable_native             43.5%
+  OwnedMergedSourceView.__init__    21.6%   (relocation revalidation 13.7%)
+  _read_relocations                  8.5%
+_prepare_executable_image           35.8%
+  _iter_section_relocation_indices  11.4%   (radix sort 4.7%)
+  validate_stack_map_payload         6.8%
+```
+
+Validation is about 31% of the serial link.  Removing or relocating it is a
+fail-closed policy decision and was not done.
+
+#### Exact-int arithmetic in plain functions
+
+The inline tagged fast path (`_emit_inline_tagged_int_binop_or_call`) was
+enabled only when a function boxes every int local (methods); planned
+exact-int locals in module-level functions -- the linker's hot loops --
+called `py_int_add`/`py_int_mul` with pins, an error check and a GC-root
+store on every operation, and boxed each int literal with `py_int_from_i64`.
+Both operands are exact-int objects on that path, so the fast path now
+applies there too, and tagged-range int literals are emitted as tagged
+constants.  CPython-identical output on GC0–GC4 across tagged/bignum
+boundaries.  The r7 native link fell from 261 s (r5) to 230 s; Stage1 CPU
+was unchanged (above).  Two IR-text tests that looked for the decimal
+exponent now also accept its tagged form.
+
+#### Remaining serial budget (r7) and what would move it
+
+```
+coordinator  107 s  closure 21.9 s, exports ~34 s, preload index ~39 s (open)
+frontend     218 s  12-wide after the admission change
+PCO          217 s
+link         230 s  validation ~31% (policy), no threads in pcc1
+```
+
+Stage2 is 765 s against a 190–205 s Stage1; the link alone exceeds Stage1.
+Candidates in measured order: validation placement in the link, per-root
+preload index in workers, frontend→PCO pipelining (one weighted pool with
+follow-up jobs; needs a runtime pool entry), and the pcc1/pcc2 backend code
+difference.
+
+### 2026-09-24 (round 4): host vs pcc1 IR — the fixed-point defects
+
+pcc1 is built by host CPython running pcc; pcc2 is built by pcc1.  For the
+same frontend job (one module, one exports state, one environment) the two
+compilers must emit the same IR.  They did not: module 53 was 20.6 MB of IR
+from the host compiler and 14.9 MB from pcc1 (r8).  Each class below is a
+place where pcc compiled its own source differently from what CPython
+executes, located by diffing the two outputs per function with SSA numbering
+and parameter names normalized (`irdiff/fn_diff2.py`), reducing the first
+differing function to a small program, and running that program under both
+compilers with the same CLI (`python -m pcc --emit-llvm` from the snapshot
+vs `pcc1 --emit-llvm`).
+
+```
+run  host bytes   pcc1 bytes   differing functions   fixed in that run
+r8   20,556,948   14,913,488   most                  --
+r9   20,551,483   20,614,140   140 / 277             dunder override, call names
+r10  20,551,483   20,551,991    23 / 277             isinstance attr, property store, gep names
+r11  20,551,483   20,548,600     2 / 277             tuple isinstance NoneType
+r12  20,551,483   20,551,483     0 / 277             bool unbox (module 53 identical)
+```
+
+Module 53 alone understated the problem, so r12 and r13 swept 13 modules
+(the coordinator entry, `type_infer`, `llvm_capi.ir`, `native_object`,
+`macho_link`, `class_gen` and seven codegen mixin modules).  r12 left 9 of 13
+different; r13 (export view and scaffold int fixes below) is byte-identical
+for all 13.
+
+* **Static comparison dunders ignored subclass overrides [CONFIRMED, fixed].**
+  `_try_dispatch_dunder_unary` called the hinted class's dunder directly.
+  `value.type == _CSTR` on an `ir.Type` hint ran `Type.__eq__` (type and
+  text) for a `PointerType` receiver, so pcc1 took every pointer as `i8*` and
+  skipped casts.  A hint whose dunder a subclass overrides now takes the
+  runtime protocol.  That protocol had its own defects, found by the new
+  regression: the binary path passed `self` twice (`py_obj_call_method1` on a
+  bound method, "too many positional arguments"), `py_user_binop_dispatch`
+  retried the reflected method for operands of one type and never let an
+  overriding subclass go first, and `py_obj_lt/le/gt/ge` never consulted user
+  dunders at all (two instances always compared equal).  The binary path now
+  calls `py_user_binop_dispatch` (`py_obj_mod` for `%`), both runtimes follow
+  CPython's reflected order, and ordering compares ask `py_user_order_dispatch`
+  first, falling back to the builtin order only when no dunder answers.
+* **Scaffold `builder.call` / `builder.gep` dropped `name=` [CONFIRMED, fixed].**
+  Every call result and GEP pcc1 emitted was anonymous; the name now reaches
+  `IRBuilder_call<N>` / `IRBuilder_gep<N>[_inbounds]` / `_dyn`.
+* **`isinstance(x, self.KINDS)` folded to False [CONFIRMED, fixed].**  Any
+  `a.b` classinfo was read as a `module.Class` chain; a class attribute
+  holding a class or tuple names no class, so the check was constant False
+  (tuple form too).  pcc1's `_membership_tuple_literal_is_constant` asks
+  exactly this and built a runtime tuple for every `x in ("a", "b")` the host
+  compiler unrolls.  An attribute naming no known class is now evaluated and
+  passed to `py_obj_isinstance`.
+* **Property stores through `py_obj_setattr` bypassed the setter [CONFIRMED,
+  fixed].**  `py_instance_setattr` asked `_descriptor_method(attr,
+  "__set__")`, which answers only for instance descriptors, so
+  `ir_arg.name = ast_arg.name` (an untyped receiver) parked the value in the
+  instance dict and `Argument._ref` stayed `%.1`: every parameter pcc1 emitted
+  was anonymous.  `del obj.prop` had the same gap.  Both runtimes now route
+  properties to `_descriptor_call_set` / `_descriptor_call_delete`.
+* **Tuple `isinstance` shadowed pcc's `NoneType` with the builtin [CONFIRMED,
+  fixed].**  In `isinstance(ty, (NoneType, BoolType, IntType, FloatType))` the
+  tuple form looked `NoneType` up in the builtin tag table before the class
+  table, so it matched the `None` object and not a `NoneType()` descriptor.
+  The ownership classifier asks exactly that, so pcc1 released the `None` of
+  every `lst.append(x)` statement.  The single-classinfo form already had
+  the shadowing rule; the tuple form now applies it per element for names
+  that collide with a builtin table.
+* **A bool object unboxed to int as 0 [CONFIRMED, fixed].**  Inference types
+  `False if recv_borrowed else self._owned_release_needed(...)` as int (the
+  arithmetic `common_type(bool, bool)`), and the method is called
+  dynamically, so its `True` result went through `py_int_to_i64`, which read
+  any non-`PY_TYPE_INT` object as a foreign number: 0 with overflow set.  An
+  env-gated trace in an instrumented pcc1 showed `direct=True:bool` for the
+  call and `recv_owned=0:int` for the conditional on the same line; pcc1 then
+  dropped the release of every owned receiver decided that way.  bool is an
+  int subclass; both runtimes now unbox it to 1/0.  Module 53 is byte-identical
+  under both compilers after this (r12).
+* **Scaffold optional int arguments arrived as tagged 0 [CONFIRMED, fixed].**
+  `builder.load(ptr, align=1)` passed `align` through the bit-preserving
+  handle `inttoptr 1`, which the native `IRBuilder.load` reads as the tagged
+  int 0, so pcc1 emitted no `, align 1` for unsafe unaligned loads and stores.
+  Optional int arguments are now boxed like required ones.
+
+Sweep of 13 modules on r12 (host vs pcc1, same job): identical for
+`pipeline`, `type_infer` and `macho_link`; the remaining classes are the
+contextual-host surface for codegen mixin modules and `class_gen` (the host
+compiler types `self` there as the composed `L1CodeGen`, pcc1 does not: ~160
+KB per module), the `align` class above (`native_object`) and one isinstance
+narrowing difference in `llvm_capi.ir` (`Constant._format`).
+* **Host and native workers read different export views [CONFIRMED, fixed].**
+  `run_codegen_worker` loaded the root module's dependency closure (plus its
+  contextual host surface) only when running natively; a host worker read
+  the whole 392-module graph.  A trace of `_read_indexed_native_exports_wire`
+  showed `root=` (all 392 modules, no contextual merge) under CPython and
+  `root=pcc.py_frontend.codegen.set_lowering` (22 modules, 2 contextual)
+  under pcc1.  With the whole graph the host typed a codegen mixin's `self`
+  against every composed class and dispatched `self._maybe_emit_set_method`
+  dynamically, declaring ~90 class globals; pcc1 called it directly.  Both
+  are correct -- the closure walk already pulls in every module the derived
+  class map names -- but they are different compilers for the same input.
+  Singleton workers now use the closure view under either interpreter, which
+  also spares every host Stage1 worker the full-graph decode.
+* **An escaping closure read None for a name bound by an import [CONFIRMED,
+  fixed].**  r17's pcc2 -- and its pcc1 -- failed to compile the objects smoke
+  program ("'NoneType' object is not callable"); the host compiler running
+  the same source compiled it.  The item 2 coordinator code passes a nested
+  `root_deltas` function as a value, and it calls `preload_root_delta`, which
+  the enclosing function binds with `from .type_infer import (...)`.  With
+  fewer than 16 sensitive roots (any small program with a class) that call
+  runs, and pcc1 called None.  A captured name is boxed into a one-element
+  list cell (`hoist_boxing`); `collect_scope_bindings` counts import targets
+  as bindings, so the name was boxed, but `_box_stmts` rewrote assignments,
+  loop targets and defs into cell stores and never the import, so the cell
+  kept its initial None.  A direct call of the nested function was unaffected
+  (captures pass as arguments), which is why r17's Stage2 coordinator -- 258
+  roots, worker path -- worked.  A boxed import now binds a per-statement
+  temporary and stores it into the cell.  An unaliased `import a.b` keeps its
+  old lowering: it binds package `a`, whose object a package `__init__`
+  outside the native set cannot provide (the statement would raise
+  ImportError instead).  `test_native_import_binding_values.py`.
+* **`import helper` was a string in value position [CONFIRMED, fixed].**  A
+  native sibling bound by `import helper` registered only a static alias, so
+  `m = helper` (or a closure capture) read the module-name placeholder
+  string; `from pkg import sub` already bound the real module object.  Both
+  now do.  A module-level `import helper` read inside a function still gets
+  the placeholder: function bodies are emitted before module top-level code,
+  so the binding is not registered yet (open).
+
+#### Link: validate each relocation once (item 1)
+
+`decode_packed_native_object` validates every relocation of every input
+against its own section.  The owned final link then shifted the same records
+into merged sections and `OwnedMergedSourceView` ran the full
+`_validate_relocation` over all of them again (13.7% of the replayed link).
+`link_relocatable_native` now records, per merged section, the prefix of
+records copied from packed inputs while three merge-level facts hold: the
+input's payload ends by 2 GiB after its base (signed `r_address`), a code
+input's base is 4-aligned (instruction grid), and no data input merged into
+what attributes later make a code section.  The view bounds-checks and claims
+those offsets (duplicates still fail) and validates everything else in full:
+rebased section targets, stack-map records, records after the first input
+that is not a packed object.  `test_owned_link_proven_relocations.py`.
+
+#### Frontend -> PCO pipelining (item 3)
+
+The deferred driver ran every frontend job, then every PCO job.  r8's samples
+show 0-5 workers for ~20 s between the phases and a PCO ramp of ~5 workers
+while the large-first PCO floors drained.  A module's sidecar has a fixed
+name (`<ir_dir>/module_<i>.direct.pidx`), so its PCO command is known before
+its frontend runs.  `pcc_chained_worker_process_pool` (pcc-Python runtime and
+C mirror) runs frontend job i and, when it exits 0, makes PCO job i ready with
+the reservation `min(cap, base + size * per_mb / 10^6)` computed from the
+sidecar it wrote.  The first policy started ready PCO jobs before further
+frontend jobs; a replay of r13's plan with the same pcc1 measured it at 514.5
+s against 445.7 s sequential (`PCC_FRONTEND_PCO_CHAIN=0`): PCO floors took the
+memory budget, frontend concurrency fell to ~10 and the last large frontend
+ended at 490 s.  Frontend jobs now keep priority and a ready PCO job takes a
+slot only when no frontend job fits.  Without a budgeted auto width, or with
+`PCC_FRONTEND_PCO_CHAIN=0`, the phases stay sequential.  The driver still checks
+every result and that each result names the scheduled sidecar.
+`test_chained_worker_pool.py`, `test_native_deferred.py`,
+`test_deferred_frontend_schedule.py`.
+
+#### Preload index: per-root deltas in workers (item 2)
+
+After the summary workers the Stage2 coordinator ran alone in
+`build_unique_external_class_preload_index`: 258 sensitive roots, each
+rebuilding the unique-class preload over the other modules (~22 s of r13's
+91.7 s coordinator, the process tree otherwise idle).  A root's delta -- the
+keys it drops and the `(key, descriptor)` rows it sets -- depends only on the
+exports, and the index assigns type ids to new descriptors afterwards, in
+export order.  The coordinator now writes the exports wire once under the
+frontend state directory, gives contiguous slices of the roots to
+`--pcc-preload-delta-worker` processes (`min(cpu budget, 6)`, the frontend
+worker executable), and assembles the index from their results exactly as
+the serial build does.  A missing root or a failed worker fails the build;
+`PCC_PRELOAD_DELTA_JOBS=1`, no worker executable, or fewer than 16 sensitive
+roots keep it in the coordinator.
+
+The first native run (r16) died 60 s into Stage2: the worker path used
+`tempfile.mkdtemp` and `shutil.rmtree`, which pcc1 links as CPython modules,
+so Stage1 compiled the function to a stub raising "no-libpython function
+unavailable".  Stage1 does not fail on such stubs.  The path now uses `os`
+primitives only; `strings pcc1 | grep "no-libpython function unavailable"`
+lists the same 108 stubs as r13's pcc1.
+
+r17: the preload takes 8.2 s -- 2.8 s alone (global preload, wire write),
+then 6 workers for 5.7 s at ~0.68 GB each, a 6.18 GB tree peak inside the
+8 GiB budget -- and the coordinator 76.5 s against r13's 91.7 s.  The index
+pcc1 published in r17's `native_exports.json` is byte-identical to a serial
+CPython rebuild from the same exports (795 types, 1255 base keys, 393 roots,
+171 non-empty).  `test_preload_delta_workers.py` checks byte equality with
+the serial index (including the ids of descriptors only a root adds), the
+fail-closed path, cleanup, the worker CLI, and that the worker path names
+neither `tempfile` nor `shutil`.
+
+#### r13: fixed point verified, and what correctness cost
+
+pcc1 and pcc2 of r13 emit byte-identical IR for modules 53, 120, 240 and 260
+(same job, same environment), equal to the host compiler's output for the
+same modules: host = pcc1 = pcc2 on the sample.  pcc2 passes the function and
+object programs under GC0-GC4.
+
+```
+                         r8 (pre-fix)   r13 (fixed point)
+Stage2 wall              764.9 s        768.6 s   (load 6-14 from other users)
+Stage2 user CPU          3442 s         3737 s
+coordinator              102.8 s        91.7 s
+last PCO                 534.5 s        554.6 s   (PCO chained after frontends)
+link                     230 s          214 s
+frontend job, module 53  274.9 G insn   299.3 G insn  (+8.9%, same inputs)
+```
+
+The extra frontend work is what the fixes restore: r8's pcc1 skipped work the
+host compiler does (every pointer bitcast behind `value.type == _CSTR`, the
+unrolled literal membership, argument names), so its module 53 output was
+14.9 MB of text IR against the correct 20.6 MB.  The sampled profiles of the
+two frontend jobs have the same shape; no new hotspot.
+
+Link A/B on identical inputs (r13's PCOs, byte-identical pcc2 both ways):
+r9's pcc1 (before the proven prefix) 4.070 T instructions / 240.7 s, r13's
+pcc1 3.714 T / 219.8 s: -8.7% of the link.
+
+#### r18: all four items, fixed point re-verified
+
+r18 is r17 plus the two import-binding fixes above (rt-v18: the runtime IR is
+unchanged apart from its build path).
+
+```
+                         r13          r17          r18
+Stage1 wall              216.5 s      212.9 s      193.1 s
+Stage2 wall              768.6 s      676.3 s      667.8 s
+Stage2 user CPU          3737 s       3304 s       3365 s
+coordinator              91.7 s       76.5 s       76.5 s
+  class preload index    ~22 s        8.2 s        8.3 s
+last PCO                 554.6 s      468.7 s      459.5 s
+link                     214 s        207.6 s      208.2 s
+Stage2 tree peak         5.78 GB      6.21 GB      6.18 GB
+```
+
+Wall and CPU are from a shared host (load 6-14 during r13, 4-18 during r17,
+3-9 during r18); treat differences under ~10 s as noise.  The coordinator
+saving is the preload index (item 2).  The frontend+PCO span after it
+(last PCO minus coordinator) fell from 462.9 s to 383.0 s, in line with the
+chained-pool replay A/B (item 3).  The link was already on the proven prefix
+(item 1) in r13.
+
+Correctness, all with r18's compilers: the host compiler and pcc1 emit
+byte-identical text IR for 13 modules (entry, `type_infer`, `llvm_capi.ir`,
+`native_object`, `macho_link`, `class_gen`, seven codegen mixins); pcc1 and
+pcc2 emit byte-identical indexed sidecars for modules 53, 120, 240 and 260
+(6.2, 1.3, 18.6 and 3.1 MB); pcc2 compiles and runs the function and object
+programs under GC0-GC4.  Stage2 is still 3.5 times Stage1.

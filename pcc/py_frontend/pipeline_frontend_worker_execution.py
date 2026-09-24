@@ -295,7 +295,6 @@ def run_codegen_worker(
             return run_summary_worker_callback(manifest)
         from .type_infer import infer_module
         from .codegen.layer1 import L1CodeGen
-        is_native_worker = bool(native_worker_executable())
 
         src_paths = manifest["src_paths"]
         module_names = manifest["module_names"]
@@ -320,7 +319,13 @@ def run_codegen_worker(
         indexed_exports = False
         lazy_ast_dir = ""
         if exports_path:
-            if is_native_worker and len(assigned_indices) == 1:
+            # One view of the exports whichever interpreter runs the worker:
+            # the root's dependency closure plus its contextual host surface.
+            # Host workers used to read the whole graph, so for one module and
+            # one exports file the host compiler and pcc1 inferred different
+            # things (a codegen mixin's ``self`` method call was dynamic under
+            # the host and direct under pcc1) and emitted different IR.
+            if len(assigned_indices) == 1:
                 root_module = module_names[assigned_indices[0]]
                 (
                     native_exports,

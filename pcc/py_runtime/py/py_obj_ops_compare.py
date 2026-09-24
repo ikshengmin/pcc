@@ -134,6 +134,7 @@ py_obj_getitem       = extern("py_obj_getitem",       (c_ptr, c_ptr),           
 py_user_hash_dispatch = extern("py_user_hash_dispatch", (c_ptr, c_ptr),            c_int64)
 py_user_contains_dispatch = extern("py_user_contains_dispatch", (c_ptr, c_ptr, c_ptr), c_int64)
 py_user_eq_dispatch = extern("py_user_eq_dispatch", (c_ptr, c_ptr),               c_int64)
+py_user_order_dispatch = extern("py_user_order_dispatch", (c_ptr, c_ptr, c_int64), c_int64)
 
 pcc_gc_load_ptr      = extern("pcc_gc_load_ptr",      (c_ptr, c_ptr),              c_ptr)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
@@ -955,6 +956,21 @@ def _both_sets(a, b) -> int:
     return 0
 
 
+# A user instance on either side asks its ordering dunders first; -1 means
+# none answered and the builtin ordering applies.
+def _user_order(a, b, op: int) -> int:
+    ta: int = _type_of(a)
+    tb: int = _type_of(b)
+    if (
+        ta != PY_TYPE_INSTANCE
+        and ta < PY_TYPE_USER_CLASS_START
+        and tb != PY_TYPE_INSTANCE
+        and tb < PY_TYPE_USER_CLASS_START
+    ):
+        return -1
+    return py_user_order_dispatch(a, b, op)
+
+
 @c_abi_export("py_obj_lt")
 def py_obj_lt(a, b) -> int:
     if (
@@ -964,6 +980,9 @@ def py_obj_lt(a, b) -> int:
         if pcc_capi_cext_richcompare_bool(a, b, 0) > 0:
             return 1
         return 0
+    user: int = _user_order(a, b, 0)
+    if user != -1:
+        return user
     if _both_sets(a, b) != 0:
         if py_set_issubset(a, b) != 0 and py_set_len(a) < py_set_len(b):
             return 1
@@ -982,6 +1001,9 @@ def py_obj_le(a, b) -> int:
         if pcc_capi_cext_richcompare_bool(a, b, 1) > 0:
             return 1
         return 0
+    user: int = _user_order(a, b, 1)
+    if user != -1:
+        return user
     if _both_sets(a, b) != 0:
         return py_set_issubset(a, b)
     comparison: int = _cmp_threeway(a, b)
@@ -999,6 +1021,9 @@ def py_obj_gt(a, b) -> int:
         if pcc_capi_cext_richcompare_bool(a, b, 4) > 0:
             return 1
         return 0
+    user: int = _user_order(a, b, 4)
+    if user != -1:
+        return user
     if _both_sets(a, b) != 0:
         if py_set_issuperset(a, b) != 0 and py_set_len(a) > py_set_len(b):
             return 1
@@ -1017,6 +1042,9 @@ def py_obj_ge(a, b) -> int:
         if pcc_capi_cext_richcompare_bool(a, b, 5) > 0:
             return 1
         return 0
+    user: int = _user_order(a, b, 5)
+    if user != -1:
+        return user
     if _both_sets(a, b) != 0:
         return py_set_issuperset(a, b)
     comparison: int = _cmp_threeway(a, b)

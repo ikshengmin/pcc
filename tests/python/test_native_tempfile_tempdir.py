@@ -1,6 +1,7 @@
 """``tempfile.TemporaryDirectory(prefix=...)`` native with-lowering."""
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import textwrap
@@ -90,6 +91,8 @@ def test_native_tempdir_runtime_creates_and_cleans(tmp_path):
         capture_output=True,
         text=True,
         timeout=20,
+        env=dict(os.environ, PATH="/nonexistent"),
     )
     assert run.returncode == 0, run.stderr
+    assert run.stderr == ""
     assert run.stdout == "True\nFalse\n"

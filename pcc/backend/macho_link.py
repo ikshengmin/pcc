@@ -141,6 +141,13 @@ class _MergedSection:
     relocations: list[Relocation] = field(default_factory=list)
     data_in_code: list[DataInCodeRegion] = field(default_factory=list)
     zerofill_size: int = 0
+    # The leading ``proven_relocations`` records came from packed inputs whose
+    # decode already validated every record against the input section, and
+    # the merge kept each record in range and on its instruction grid.  The
+    # prefix closes at the first input that is not such a source.
+    proven_relocations: int = 0
+    proven_prefix_open: bool = True
+    proven_includes_data: bool = False
 
 
 @dataclass(frozen=True)
@@ -991,6 +998,8 @@ def link_relocatable_native(
             # section TYPE (low byte) must still agree.
             target.flags |= sec_flags & spec.SECTION_ATTRIBUTES
             target.align_log2 = max(target.align_log2, sec_align)
+            input_is_code = bool(sec_flags & spec.S_ATTR_PURE_INSTRUCTIONS)
+            relocations_proven = isinstance(obj, PackedNativeObject)
             if _is_zerofill(sec):
                 # No file payload: only the size accumulates. Symbols still
                 # need an offset, so the running vm size is the base.
@@ -1017,6 +1026,16 @@ def link_relocatable_native(
                 )
                 target.data_parts.append(payload)
                 target.data_size = base + len(payload)
+                # Decode checked each record against this payload: shifted by
+                # base it stays inside the merged payload, inside the signed
+                # r_address range while the payload ends by 2 GiB, and on the
+                # instruction grid while a code base is 4-aligned.
+                relocations_proven = relocations_proven and (
+                    base + len(payload) <= 0x80000000
+                    and (not input_is_code or base % 4 == 0)
+                )
+            if not input_is_code:
+                target.proven_includes_data = True
             bases[sec_index] = base
             input_section_addr[key] = (sec_addr, base)
             target.data_in_code.extend(
@@ -1044,6 +1063,10 @@ def link_relocatable_native(
                     rebases.append((
                         target, reloc, input_section_addr,
                     ))
+            if relocations_proven and target.proven_prefix_open:
+                target.proven_relocations = len(target.relocations)
+            else:
+                target.proven_prefix_open = False
 
         for symbol_index, sym in enumerate(symbols):
             name = _symbol_name(sym)
@@ -1222,8 +1245,15 @@ def link_relocatable_native(
         sec = None
 
     out_sections = []
+    proven_relocations = []
     for key in order:
         m = merged[key]
+        # A data input's records were not held to the instruction grid at
+        # decode; once attributes make the merged section code, they are.
+        if m.proven_includes_data and m.flags & spec.S_ATTR_PURE_INSTRUCTIONS:
+            proven_relocations.append(0)
+        else:
+            proven_relocations.append(m.proven_relocations)
         zero = m.zerofill_size if not m.data else 0
         out_sections.append(Section(
             sectname=m.sectname, segname=m.segname,
@@ -1240,7 +1270,10 @@ def link_relocatable_native(
         ))
     try:
         if _source_view:
-            return OwnedMergedSourceView(out_sections, undefined=unresolved)
+            return OwnedMergedSourceView(
+                out_sections, undefined=unresolved,
+                proven_relocations=tuple(proven_relocations),
+            )
         return NativeObject.from_sections(
             out_sections, undefined=unresolved, _consume_relocations=True,
         )

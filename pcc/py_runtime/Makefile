@@ -458,6 +458,7 @@ $(LIB_PCC_PY): $(PCC_PY_OBJECTS) $(PCC_PY_RECEIPTS)
 	mv -f "$@.tmp" "$@"; \
 	mv -f "$@.capi_syms.tmp" "$@.capi_syms"; \
 	mv -f "$@.provenance.json.tmp" "$@.provenance.json"
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.tools.runtime_archive_provenance stamp-target --archive "$@"
 endif
 
 # Compatibility fallback archive for bootstrap builds that still emit

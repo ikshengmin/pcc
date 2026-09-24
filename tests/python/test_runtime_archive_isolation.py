@@ -8,6 +8,21 @@ import sys
 import pytest
 
 
+
+def test_runtime_archive_provenance_stamp_target_cli(tmp_path):
+    from pcc.tools.runtime_archive_provenance import main
+
+    archive = tmp_path / "libpy_runtime_pcc_py.a"
+    archive.write_bytes(b"archive")
+    assert main([
+        "stamp-target",
+        "--archive", str(archive),
+        "--host-target-triple", "arm64-apple-darwin",
+    ]) == 0
+    assert Path(str(archive) + ".target").read_text(encoding="ascii") == (
+        "darwin:arm64:arm64-apple-darwin\n"
+    )
+
 def _write_completed_c_runtime_bundle(archive: Path) -> Path:
     source = archive.with_suffix(".c")
     object_path = archive.with_suffix(".o")
@@ -189,6 +204,18 @@ def test_runtime_make_reclaims_dead_owner_lock(tmp_path: Path):
     )
 
     assert not lock.exists()
+
+
+def test_runtime_make_does_not_require_PATH_tools(tmp_path, monkeypatch, capfd):
+    from pcc.py_frontend.pipeline_runtime_archive import run_runtime_make
+
+    monkeypatch.setenv("PATH", "/nonexistent")
+    run_runtime_make(
+        str(tmp_path), [sys.executable, "-c", "pass"], verbose=False,
+    )
+
+    assert not (tmp_path / ".pcc-runtime-build.lock").exists()
+    assert "command not found" not in capfd.readouterr().err
 
 
 def test_runtime_build_failure_is_reported_before_link(

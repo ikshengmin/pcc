@@ -315,11 +315,11 @@ define_global_struct_words(
 
 
 def _cstr_is_dunder_class(s) -> int:
-    if strlen(s) != 9:
-        return 0
     if load_i8(s, 0) != 95:
         return 0
     if load_i8(s, 1) != 95:
+        return 0
+    if strlen(s) != 9:
         return 0
     if load_i8(s, 2) != 99:
         return 0
@@ -347,11 +347,11 @@ def _cstr_is_dunder_dict(s) -> int:
 
 
 def _cstr_is_dunder_name(s) -> int:
-    if strlen(s) != 8:
-        return 0
     if load_i8(s, 0) != 95:
         return 0
     if load_i8(s, 1) != 95:
+        return 0
+    if strlen(s) != 8:
         return 0
     if load_i8(s, 2) != 110:
         return 0
@@ -369,11 +369,11 @@ def _cstr_is_dunder_name(s) -> int:
 
 
 def _cstr_is_dunder_qualname(s) -> int:
-    if strlen(s) != 12:
-        return 0
     if load_i8(s, 0) != 95:
         return 0
     if load_i8(s, 1) != 95:
+        return 0
+    if strlen(s) != 12:
         return 0
     if load_i8(s, 2) != 113:
         return 0
@@ -399,11 +399,11 @@ def _cstr_is_dunder_qualname(s) -> int:
 
 
 def _cstr_is_dunder_doc(s) -> int:
-    if strlen(s) != 7:
-        return 0
     if load_i8(s, 0) != 95:
         return 0
     if load_i8(s, 1) != 95:
+        return 0
+    if strlen(s) != 7:
         return 0
     if load_i8(s, 2) != 100:
         return 0
@@ -419,11 +419,11 @@ def _cstr_is_dunder_doc(s) -> int:
 
 
 def _cstr_is_dunder_code(s) -> int:
-    if strlen(s) != 8:
-        return 0
     if load_i8(s, 0) != 95:
         return 0
     if load_i8(s, 1) != 95:
+        return 0
+    if strlen(s) != 8:
         return 0
     if load_i8(s, 2) != 99:
         return 0
@@ -459,11 +459,11 @@ def _cstr_is_dunder_defaults(s) -> int:
 
 
 def _cstr_is_dunder_self(s) -> int:
-    if strlen(s) != 8:
-        return 0
     if load_i8(s, 0) != 95:
         return 0
     if load_i8(s, 1) != 95:
+        return 0
+    if strlen(s) != 8:
         return 0
     if load_i8(s, 2) != 115:
         return 0
@@ -481,11 +481,11 @@ def _cstr_is_dunder_self(s) -> int:
 
 
 def _cstr_is_dunder_cause(s) -> int:
-    if strlen(s) != 9:
-        return 0
     if load_i8(s, 0) != 95:
         return 0
     if load_i8(s, 1) != 95:
+        return 0
+    if strlen(s) != 9:
         return 0
     if load_i8(s, 2) != 99:
         return 0
@@ -505,11 +505,11 @@ def _cstr_is_dunder_cause(s) -> int:
 
 
 def _cstr_is_dunder_context(s) -> int:
-    if strlen(s) != 11:
-        return 0
     if load_i8(s, 0) != 95:
         return 0
     if load_i8(s, 1) != 95:
+        return 0
+    if strlen(s) != 11:
         return 0
     if load_i8(s, 2) != 99:
         return 0
@@ -2218,6 +2218,19 @@ def py_obj_getattr(o, name):
 
     tag: int = load_i32(o, 8)
     pcc_runtime_log_event_code(7, 5, tag, 0, o)
+
+    # A pcc instance is never a C-API type object, list, lock or str, so the
+    # hooks below cannot answer for it; C-extension objects carry tags from
+    # 0x10000 up and keep the full walk.
+    if tag == PY_TYPE_INSTANCE or (
+        tag >= PY_TYPE_USER_CLASS_START and tag < 0x10000
+    ):
+        result = py_instance_getattr(o, name)
+        if ptr_is_null(result) == 0:
+            return result
+        if py_err_occurred() != 0:
+            return result
+        return _raise_attribute_error(o, name)
 
     if tag == PY_TYPE_STATICMETHOD:
         if strcmp(name, cstr("__func__")) == 0 or strcmp(name, cstr("__wrapped__")) == 0:

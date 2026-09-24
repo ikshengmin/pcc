@@ -77,6 +77,7 @@ py_obj_sub = extern("py_obj_sub", (c_ptr, c_ptr), c_ptr)
 py_obj_mul = extern("py_obj_mul", (c_ptr, c_ptr), c_ptr)
 py_obj_truediv = extern("py_obj_truediv", (c_ptr, c_ptr), c_ptr)
 py_obj_mod = extern("py_obj_mod", (c_ptr, c_ptr), c_ptr)
+py_obj_issubclass = extern("py_obj_issubclass", (c_ptr, c_ptr), c_int64)
 py_dict_new = extern("py_dict_new", (), c_ptr)
 py_dict_len = extern("py_dict_len", (c_ptr,), c_int64)
 py_dict_contains = extern("py_dict_contains", (c_ptr, c_ptr), c_int64)
@@ -531,6 +532,65 @@ def py_user_eq_dispatch(a, b) -> int:
     return 0
 
 
+def _order_call(method, self_obj, other) -> int:
+    if ptr_is_null(method) != 0:
+        return -1
+    result = _call_binary(method, self_obj, other)
+    if ptr_is_null(result) != 0:
+        return 0
+    if ptr_eq(result, global_load_ptr("py_NotImplemented")) != 0:
+        py_decref(result)
+        return -1
+    truth: int = py_obj_truthy(result)
+    py_decref(result)
+    if truth != 0:
+        return 1
+    return 0
+
+
+@c_abi_export("py_user_order_dispatch")
+def py_user_order_dispatch(a, b, op: int) -> int:
+    # ``a < b`` (op 0), ``<=`` (1), ``>`` (4), ``>=`` (5) through user
+    # dunders in CPython's order: the rhs's reflected method first when its
+    # class is a proper subclass of the lhs class, then the lhs method, then
+    # the reflected one.  -1 when no user method answered, so the caller
+    # keeps its builtin ordering; a raising method returns 0 with the error
+    # set.
+    name = cstr("__lt__")
+    rname = cstr("__gt__")
+    if op == 1:
+        name = cstr("__le__")
+        rname = cstr("__ge__")
+    elif op == 4:
+        name = cstr("__gt__")
+        rname = cstr("__lt__")
+    elif op == 5:
+        name = cstr("__ge__")
+        rname = cstr("__le__")
+    a_cls = _instance_class(a)
+    b_cls = _instance_class(b)
+    if ptr_is_null(a_cls) != 0 and ptr_is_null(b_cls) != 0:
+        return -1
+    reflected_done: int = 0
+    verdict: int = -1
+    if (
+        ptr_is_null(a_cls) == 0
+        and ptr_is_null(b_cls) == 0
+        and ptr_eq(a_cls, b_cls) == 0
+        and py_obj_issubclass(b_cls, a_cls) > 0
+    ):
+        reflected_done = 1
+        verdict = _order_call(_lookup_dunder(b, rname), b, a)
+        if verdict != -1:
+            return verdict
+    verdict = _order_call(_lookup_dunder(a, name), a, b)
+    if verdict != -1:
+        return verdict
+    if reflected_done == 0:
+        verdict = _order_call(_lookup_dunder(b, rname), b, a)
+    return verdict
+
+
 @c_abi_export("py_user_getitem_dispatch")
 def py_user_getitem_dispatch(obj, key):
     method = _lookup_dunder(obj, cstr("__getitem__"))
@@ -561,18 +621,39 @@ def py_user_matmul_dispatch(a, b):
 
 @c_abi_export("py_user_binop_dispatch")
 def py_user_binop_dispatch(a, b, name, rname, type_err_msg):
+    # CPython's order: the reflected method belongs to an rhs of another
+    # type only, and runs first when that type is a subclass of the lhs type
+    # that overrides it.
+    a_cls = _instance_class(a)
+    b_cls = _instance_class(b)
+    reflected_ok: int = 1
+    if ptr_is_null(a_cls) == 0 and ptr_eq(a_cls, b_cls) != 0:
+        reflected_ok = 0
+    if reflected_ok != 0 and ptr_is_null(a_cls) == 0 and ptr_is_null(b_cls) == 0:
+        first = py_class_lookup(b_cls, rname)
+        if (
+            ptr_is_null(first) == 0
+            and ptr_eq(first, py_class_lookup(a_cls, rname)) == 0
+            and py_obj_issubclass(b_cls, a_cls) > 0
+        ):
+            result = _call_binary(first, b, a)
+            if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
+                return result
+            py_decref(result)
+            reflected_ok = 0
     method = _lookup_dunder(a, name)
     if ptr_is_null(method) == 0:
         result = _call_binary(method, a, b)
         if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
             return result
         py_decref(result)
-    method = _lookup_dunder(b, rname)
-    if ptr_is_null(method) == 0:
-        result = _call_binary(method, b, a)
-        if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-            return result
-        py_decref(result)
+    if reflected_ok != 0:
+        method = _lookup_dunder(b, rname)
+        if ptr_is_null(method) == 0:
+            result = _call_binary(method, b, a)
+            if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
+                return result
+            py_decref(result)
     py_raise_owned(py_exc_new(3, type_err_msg))
     return null()
 

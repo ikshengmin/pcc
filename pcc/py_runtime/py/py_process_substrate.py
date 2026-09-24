@@ -1,10 +1,9 @@
 """pcc-Python port of py_process_substrate.c.
 
-This preserves the existing bootstrap helper behavior, including the current
-shell-backed subprocess/listdir/tempdir cleanup paths. The point of this port
-is to remove the last runtime C object from libpy_runtime_pcc_py.a; replacing
-those shell fallbacks with stronger platform intrinsics is a separate semantic
-cleanup.
+This preserves the existing bootstrap helper behavior. Empty temp-directory
+cleanup uses the owned ``unlinkat`` primitive; the remaining shell-backed
+subprocess/listdir and nonempty-tree cleanup paths remain an explicit semantic
+cleanup item.
 """
 
 __pcc_runtime_port__ = True
@@ -37,6 +36,7 @@ from pcc.unsafe import (
     store_i64,
     store_ptr,
     strlen,
+    unlinkat,
 )
 
 fgetc = extern("fgetc", (c_ptr,), c_int32)
@@ -810,6 +810,11 @@ def py_tempdir_cleanup(path) -> None:
     if ptr_is_null(raw) or load_i8(raw, 0) == 0:
         py_decref(path_str)
         return
+    if unlinkat(raw, 1) == 0:
+        py_decref(path_str)
+        return
+    # Nonempty compiler temp directories retain the existing tracked fallback
+    # until the platform directory reader replaces the remaining shell listdir.
     st = _buf_new()
     if not ptr_is_null(st):
         if _buf_append(st, cstr("rm -rf "), 7) == 0:

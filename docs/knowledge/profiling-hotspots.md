@@ -49,6 +49,22 @@ temporary harness for an operation already covered there.
    proposed mechanism. Do not optimize a ubiquitous leaf solely because it
    ranks first globally.
 
+## Read stage time before choosing an optimization
+
+For deferred Stage2, record the coordinator end, last PIDX, last PCO, pcc2
+publication and final barrier as timestamps since launch. Subtract adjacent
+timestamps to obtain phase durations: a last-PIDX timestamp of 600 s after a
+200-s coordinator means 400 s of deferred frontend work, not 600 s. Profile
+phase totals can overlap, so do not add them to reconstruct wall time.
+
+Compute effective CPU use as `(user_s + system_s) / compile_wall_s`; a worker
+count is not CPU utilization. Before changing an admission floor, compare the
+current stage with both `total_tree_cpu_s / available_cores` and its longest
+serial segment. If either lower bound already exceeds the target, scheduling
+alone cannot meet it. Report a component's saved seconds as a component result
+until a full source-frozen stage measures the end-to-end result. A single run
+against a different source or resource cap is an observation, not an A/B win.
+
 ## Large mechanisms can be spread over small sites
 
 Prioritize total attributable cost, not patch size or the largest single
@@ -89,6 +105,16 @@ Use the existing `run_pcc_compile_ab.py`, `run_pcc_link_ab.py` or
 `run_pcc_stage_ab.py` for their supported scope. Separate instrumented diagnosis
 from uninstrumented alternating measurements. A component's sample share is not
 its whole-Stage2 share or a whole-build Amdahl bound.
+
+The GC0 worker envelopes in `tests/data/` are dated calibration corpora. Their
+tests prove that today's floor covers those recorded RSS/footprint peaks with
+the stated margin; they cannot bound a changed compiler, source closure, GC or
+runtime, and they prove no Stage2 speedup. Before refreshing an envelope, bind
+the compiler, source, runtime, input hashes and effective options to a retained
+receipt; replay every frozen worker with the existing worker tools, require
+byte-identical outputs, and keep the system high-water measurements. Record the
+replay command and receipt location beside the experiment so another agent can
+regenerate the fixture rather than copying unexplained numbers.
 
 ## Pass and memory diagnostics
 

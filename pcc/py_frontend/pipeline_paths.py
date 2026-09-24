@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from typing import Optional
 
 
@@ -99,6 +100,38 @@ def package_parts_for_module(src_path: str, module_name: str) -> list[str]:
     return parts[:-1]
 
 
+# Import resolution lists the same few package directories thousands of times
+# per compile: 7,200 ``os.listdir`` calls over 20 directories for the pcc
+# compiler's own closure.  pcc1 lists a directory by spawning ``ls``, so those
+# calls were about 40 s of the native Stage2 coordinator.  A listing is reused
+# only while its directory's mtime is unchanged; adding, removing or renaming
+# an entry updates that mtime, so a package installed mid-process is still
+# found.  A directory changed within the last two seconds is listed afresh
+# every time: a second change inside one timestamp tick (whole seconds on
+# HFS+) would leave the mtime equal.
+_DIRECTORY_NAMES_CACHE: dict = {}
+_DIRECTORY_NAMES_CACHE_MAX_ENTRIES = 4096
+_DIRECTORY_NAMES_QUIET_SECONDS = 2.0
+
+
+def directory_entry_names(directory: str) -> tuple:
+    """Return ``os.listdir(directory)`` as a tuple, reused while unchanged.
+
+    Raises ``OSError`` exactly like ``os.listdir``; a failure is not cached.
+    """
+    stamp = os.path.getmtime(directory)
+    cached = _DIRECTORY_NAMES_CACHE.get(directory)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    names = tuple(os.listdir(directory))
+    if time.time() - stamp < _DIRECTORY_NAMES_QUIET_SECONDS:
+        return names
+    if len(_DIRECTORY_NAMES_CACHE) >= _DIRECTORY_NAMES_CACHE_MAX_ENTRIES:
+        _DIRECTORY_NAMES_CACHE.clear()
+    _DIRECTORY_NAMES_CACHE[directory] = (stamp, names)
+    return names
+
+
 def path_component_matches_case(path: str, expected_name: str) -> bool:
     """Return whether *path*'s last component really is ``expected_name``.
 
@@ -114,7 +147,7 @@ def path_component_matches_case(path: str, expected_name: str) -> bool:
     if not directory:
         directory = "."
     try:
-        names = os.listdir(directory)
+        names = directory_entry_names(directory)
     except OSError:
         return True
     for name in names:
