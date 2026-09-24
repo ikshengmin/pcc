@@ -9,7 +9,7 @@ Search by symbol/symptom; inspect the matching experiment and its updates.
 Verify current code, source revision and artifacts before reusing a verdict.
 Do not repeat a matching failed experiment without identifying new evidence.
 
-666 verdicts across 142 investigations.
+667 verdicts across 142 investigations.
 
 ## [Investigation: retired raw span cache hides an object at a reused address](../investigations/allocator-span-cache-raw-address-reuse.md)
 
@@ -431,6 +431,7 @@ Do not repeat a matching failed experiment without identifying new evidence.
 - but regressed a million-read program from 0.28 to 0.45 s and 5.63B to
 - Class-lookup cache variant [DENIED].** Caching `py_class_lookup` outcomes
 - floor and the direct-mapped raw-address shape Update No.43 already denied.
+- Inlining `self.field` reads [DENIED].** Correct under GC0-GC4, but ~25
 
 ## [Investigation: native subprocess provider omitted from shallow multi-file closure](../investigations/native-subprocess-provider-omitted-from-shallow-multi-file-closure.md)
 

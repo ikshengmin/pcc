@@ -48,6 +48,11 @@ define_global_i64("pcc_gc_unmanaged_refcount_ops", 0)
 # Starts at 1 so a refcount that runs before pcc_gc_config_ensure has read
 # PCC_GC_REFCOUNT_PROVENANCE_PROBE keeps the historical check.
 define_global_i32("pcc_gc_refcount_provenance_probe", 1)
+# 1 while py_incref/py_decref may update an ordinary object's count in place:
+# backend 0, no provenance probe and the single-threaded kernel (a plain
+# load/store instead of the kernel call).  Set wherever the backend or the
+# probe is chosen; 0 before configuration keeps every call on the full path.
+define_global_i32("pcc_gc_refcount_fast", 0)
 define_global_i32("pcc_gc_refcount_provenance_probe_reported", 0)
 define_global_i32("pcc_gc_metric_alloc", 0)
 define_global_i32("pcc_gc_metric_store", 0)

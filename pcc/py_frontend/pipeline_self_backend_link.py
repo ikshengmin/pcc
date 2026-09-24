@@ -531,6 +531,13 @@ def link_ir_texts_run(
         if needs_libpython:
             append_libpython_link_flags(cmd)
         log(verbose, "self link: " + join_strings(cmd, " "))
+        # Emit workers assemble owned-link modules into packed native objects
+        # (``.pco``); the in-process fallback still hands over assembly.
+        owned_objects_packed = bool(obj_paths)
+        for obj_path in obj_paths:
+            if not obj_path.endswith(".pco"):
+                owned_objects_packed = False
+                break
         try:
             total_started = profile_begin(profile)
             started = profile_begin(profile)
@@ -544,7 +551,16 @@ def link_ir_texts_run(
                 extra_link_args=extra_link_args,
                 needs_libpython=needs_libpython,
                 needs_native_extension_exports=export_pcc_capi,
-                pcc_asm_inputs=tuple(obj_paths) if signature_owned_by_pcc else (),
+                pcc_asm_inputs=(
+                    tuple(obj_paths)
+                    if signature_owned_by_pcc and not owned_objects_packed
+                    else ()
+                ),
+                pcc_native_object_inputs=(
+                    tuple(obj_paths)
+                    if signature_owned_by_pcc and owned_objects_packed
+                    else ()
+                ),
                 semantic_layout_policy=semantic_layout_policy,
             )
             profile_end(profile, link_profile + "_driver", started)

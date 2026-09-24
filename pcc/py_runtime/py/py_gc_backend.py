@@ -2278,6 +2278,14 @@ def pcc_gc_set_backend(backend: int) -> int:
         store_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0, 1)
     if backend != 3 and backend != 4:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 0)
+    refcount_fast: int = 0
+    if (
+        backend == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        and pcc_threads_enabled() == 0
+    ):
+        refcount_fast = 1
+    store_i32(global_addr("pcc_gc_refcount_fast"), 0, refcount_fast)
     store_i32(global_addr("pcc_gc_debt_bytes"), 0, 0)
     store_i32(global_addr("pcc_gc_last_alloc_bytes"), 0, 0)
     if backend == 0:

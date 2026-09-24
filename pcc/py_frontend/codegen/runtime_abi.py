@@ -722,6 +722,7 @@ def _runtime_signatures_part_11():
     "py_obj_getattr": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_load_method": (_PYOBJ, [_PYOBJ, _CSTR, _CSTR_PTR], False),
     "py_obj_call_method": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_obj_call_method_kwargs": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_getattr_default": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_getattr_maybe": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_vars": (_PYOBJ, [_PYOBJ], False),
@@ -1404,6 +1405,9 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_allocator_double_free_reported',
         'pcc_gc_refcount_provenance_probe',
         'pcc_gc_refcount_provenance_probe_reported',
+        # py_incref/py_decref's in-place update gate (backend 0, no probe,
+        # single-threaded kernel), written with the backend and the probe.
+        'pcc_gc_refcount_fast',
         'pcc_gc_cms_mutator_assists',
         'pcc_gc_cms_queue_pushes',
         'pcc_gc_cms_wb_flushes',

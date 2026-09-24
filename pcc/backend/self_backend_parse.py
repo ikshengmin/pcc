@@ -1712,6 +1712,7 @@ def _parse_functions(ir_text: str) -> list[ParsedFunction]:
                 indexed_seed=indexed_seed,
                 indexed_slot_projection=False,
                 aarch64_tail_call_ids=[],
+                aarch64_callee_saved=[],
             )
         # Freeze/adopt the complete function plane at the parser boundary.
         # Downstream consumers never need the construction seed or a block

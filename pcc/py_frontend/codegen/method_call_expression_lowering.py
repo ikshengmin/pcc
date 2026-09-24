@@ -312,9 +312,15 @@ class MethodCallExpressionLoweringMixin:
             return self._emit_loaded_method_call(
                 obj_val, name_ptr, attr_name, args, span
             )
+        # Keywords too take the loaded-method route: binding a method object
+        # (captures tuple plus a copied signature) for a single call was most
+        # of `builder.call(..., name=...)` in a native frontend worker.
+        self_slot = self._alloca_in_entry(
+            _PYOBJ, self._fresh(f"method.self.{attr_name}"), init_null=True
+        )
         callable_obj = self.builder.call(
-            self.runtime["py_obj_getattr"],
-            [obj_val, name_ptr],
+            self.runtime["py_obj_load_method"],
+            [obj_val, name_ptr, self_slot],
             name=self._fresh(f"callable.attr.{attr_name}"),
         )
         self._emit_post_call_err_check(span)
@@ -329,9 +335,12 @@ class MethodCallExpressionLoweringMixin:
             kwargs_expr,
             span,
         )
+        self_val = self.builder.load(
+            self_slot, name=self._fresh(f"method.self.{attr_name}.val")
+        )
         result = self.builder.call(
-            self.runtime["py_obj_call"],
-            [callable_obj, args_tuple, kwargs_obj],
+            self.runtime["py_obj_call_method_kwargs"],
+            [callable_obj, self_val, args_tuple, kwargs_obj],
             name=self._fresh(f"callable.attr.{attr_name}.call"),
         )
         self._gc_release(args_tuple)

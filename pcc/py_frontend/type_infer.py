@@ -5524,20 +5524,53 @@ def _record_self_method_call_arg_types(
     out: dict[str, dict[int, Type]],
     method_name: str,
     args: tuple[Expr, ...],
+    kwargs: tuple = (),
+    param_names: tuple[str, ...] = (),
 ) -> None:
+    """Join one ``self.method(...)`` call's argument types into ``out``.
+
+    Every observation joins: a ``DynType`` argument (the value may be
+    anything) widens the parameter to dyn rather than being ignored, and a
+    starred argument or a keyword that names no known parameter poisons the
+    whole method (slot ``-1``).  Only when every call agrees on one static
+    type may the parameter be typed; skipping unknowns let one typed caller
+    type a parameter that a recursive call feeds a tuple, and
+    ``isinstance(node, tuple)`` then folded to False.
+    """
     method_slots = out.setdefault(method_name, {})
     for arg_index, arg in enumerate(args):
         if _is_starred_arg_expr(arg):
-            continue
-        arg_ty = ctx.resolve_type_refs(arg.ty)
-        if isinstance(arg_ty, DynType):
-            continue
-        param_index = arg_index + 1  # bound ``self.method(...)`` skips self.
-        existing = method_slots.get(param_index)
-        if existing is None:
-            method_slots[param_index] = arg_ty
-        elif not type_eq(existing, arg_ty):
-            method_slots[param_index] = TYPE_DYN
+            method_slots[-1] = TYPE_DYN
+            return
+        _join_self_method_arg_slot(
+            method_slots, arg_index + 1, ctx.resolve_type_refs(arg.ty)
+        )
+    for kw_name, value in kwargs:
+        param_index = -1
+        position = 0
+        while position < len(param_names):
+            if param_names[position] == kw_name:
+                param_index = position
+                break
+            position += 1
+        if kw_name is None or param_index < 0:
+            method_slots[-1] = TYPE_DYN
+            return
+        _join_self_method_arg_slot(
+            method_slots, param_index, ctx.resolve_type_refs(value.ty)
+        )
+
+
+def _join_self_method_arg_slot(
+    method_slots: dict[int, Type], param_index: int, arg_ty: Type
+) -> None:
+    existing = method_slots.get(param_index)
+    if existing is None:
+        method_slots[param_index] = arg_ty
+    elif isinstance(existing, DynType):
+        return
+    elif isinstance(arg_ty, DynType) or not type_eq(existing, arg_ty):
+        method_slots[param_index] = TYPE_DYN
 
 
 def _literal_self_method_dict(expr: Expr) -> tuple[str, ...]:
@@ -5561,6 +5594,7 @@ def _collect_self_method_arg_types_expr(
     expr: Expr,
     method_dicts: dict[str, tuple[str, ...]],
     out: dict[str, dict[int, Type]],
+    param_names: dict[str, tuple[str, ...]],
 ) -> None:
     if isinstance(expr, Call):
         if (
@@ -5568,64 +5602,70 @@ def _collect_self_method_arg_types_expr(
             and isinstance(expr.func.obj, Name)
             and _name_ident(expr.func.obj) == "self"
         ):
-            _record_self_method_call_arg_types(ctx, out, expr.func.name, expr.args)
+            _record_self_method_call_arg_types(
+                ctx, out, expr.func.name, expr.args, expr.kwargs,
+                param_names.get(expr.func.name, ()),
+            )
         elif isinstance(expr.func, Subscript) and isinstance(expr.func.obj, Name):
             dispatch_name = _name_ident(expr.func.obj)
             for method_name in method_dicts.get(dispatch_name or "", ()):
-                _record_self_method_call_arg_types(ctx, out, method_name, expr.args)
-        _collect_self_method_arg_types_expr(ctx, expr.func, method_dicts, out)
+                _record_self_method_call_arg_types(
+                    ctx, out, method_name, expr.args, expr.kwargs,
+                    param_names.get(method_name, ()),
+                )
+        _collect_self_method_arg_types_expr(ctx, expr.func, method_dicts, out, param_names)
         for arg in expr.args:
-            _collect_self_method_arg_types_expr(ctx, arg, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, arg, method_dicts, out, param_names)
         for _name, value in expr.kwargs:
-            _collect_self_method_arg_types_expr(ctx, value, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, value, method_dicts, out, param_names)
         return
     if isinstance(expr, Attr):
-        _collect_self_method_arg_types_expr(ctx, expr.obj, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, expr.obj, method_dicts, out, param_names)
         return
     if isinstance(expr, BinOp):
-        _collect_self_method_arg_types_expr(ctx, expr.lhs, method_dicts, out)
-        _collect_self_method_arg_types_expr(ctx, expr.rhs, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, expr.lhs, method_dicts, out, param_names)
+        _collect_self_method_arg_types_expr(ctx, expr.rhs, method_dicts, out, param_names)
         return
     if isinstance(expr, UnaryOp):
-        _collect_self_method_arg_types_expr(ctx, expr.operand, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, expr.operand, method_dicts, out, param_names)
         return
     if isinstance(expr, Compare):
-        _collect_self_method_arg_types_expr(ctx, expr.lhs, method_dicts, out)
-        _collect_self_method_arg_types_expr(ctx, expr.rhs, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, expr.lhs, method_dicts, out, param_names)
+        _collect_self_method_arg_types_expr(ctx, expr.rhs, method_dicts, out, param_names)
         return
     if isinstance(expr, BoolExpr):
-        _collect_self_method_arg_types_expr(ctx, expr.left, method_dicts, out)
-        _collect_self_method_arg_types_expr(ctx, expr.right, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, expr.left, method_dicts, out, param_names)
+        _collect_self_method_arg_types_expr(ctx, expr.right, method_dicts, out, param_names)
         return
     if isinstance(expr, Subscript):
-        _collect_self_method_arg_types_expr(ctx, expr.obj, method_dicts, out)
-        _collect_self_method_arg_types_expr(ctx, expr.idx, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, expr.obj, method_dicts, out, param_names)
+        _collect_self_method_arg_types_expr(ctx, expr.idx, method_dicts, out, param_names)
         return
     if isinstance(expr, Slice):
         for part in (expr.lo, expr.hi, expr.step):
             if part is not None:
-                _collect_self_method_arg_types_expr(ctx, part, method_dicts, out)
+                _collect_self_method_arg_types_expr(ctx, part, method_dicts, out, param_names)
         return
     if isinstance(expr, ListExpr):
         for item in expr.elems:
-            _collect_self_method_arg_types_expr(ctx, item, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, item, method_dicts, out, param_names)
         return
     if isinstance(expr, TupleExpr):
         for item in expr.elems:
-            _collect_self_method_arg_types_expr(ctx, item, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, item, method_dicts, out, param_names)
         return
     if isinstance(expr, DictExpr):
         for key, value in expr.pairs:
-            _collect_self_method_arg_types_expr(ctx, key, method_dicts, out)
-            _collect_self_method_arg_types_expr(ctx, value, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, key, method_dicts, out, param_names)
+            _collect_self_method_arg_types_expr(ctx, value, method_dicts, out, param_names)
         return
     if isinstance(expr, IfExpr):
-        _collect_self_method_arg_types_expr(ctx, expr.cond, method_dicts, out)
-        _collect_self_method_arg_types_expr(ctx, expr.then_e, method_dicts, out)
-        _collect_self_method_arg_types_expr(ctx, expr.else_e, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, expr.cond, method_dicts, out, param_names)
+        _collect_self_method_arg_types_expr(ctx, expr.then_e, method_dicts, out, param_names)
+        _collect_self_method_arg_types_expr(ctx, expr.else_e, method_dicts, out, param_names)
         return
     if isinstance(expr, Lambda):
-        _collect_self_method_arg_types_expr(ctx, expr.body, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, expr.body, method_dicts, out, param_names)
         return
 
 
@@ -5634,6 +5674,7 @@ def _collect_self_method_arg_types_stmt(
     stmt: Stmt,
     method_dicts: dict[str, tuple[str, ...]],
     out: dict[str, dict[int, Type]],
+    param_names: dict[str, tuple[str, ...]],
 ) -> None:
     if isinstance(stmt, Assign):
         for target in stmt.targets:
@@ -5642,124 +5683,127 @@ def _collect_self_method_arg_types_stmt(
                 target_name = _name_ident(target)
                 if target_name is not None and methods:
                     method_dicts[target_name] = methods
-        _collect_self_method_arg_types_expr(ctx, stmt.value, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, stmt.value, method_dicts, out, param_names)
         for target in stmt.targets:
-            _collect_self_method_arg_types_expr(ctx, target, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, target, method_dicts, out, param_names)
         return
     if isinstance(stmt, AugAssign):
-        _collect_self_method_arg_types_expr(ctx, stmt.target, method_dicts, out)
-        _collect_self_method_arg_types_expr(ctx, stmt.value, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, stmt.target, method_dicts, out, param_names)
+        _collect_self_method_arg_types_expr(ctx, stmt.value, method_dicts, out, param_names)
         return
     if isinstance(stmt, ExprStmt):
-        _collect_self_method_arg_types_expr(ctx, stmt.expr, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, stmt.expr, method_dicts, out, param_names)
         return
     if isinstance(stmt, Return):
         if stmt.value is not None:
-            _collect_self_method_arg_types_expr(ctx, stmt.value, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, stmt.value, method_dicts, out, param_names)
         return
     if isinstance(stmt, Raise):
         if stmt.exc is not None:
-            _collect_self_method_arg_types_expr(ctx, stmt.exc, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, stmt.exc, method_dicts, out, param_names)
         if stmt.cause is not None:
-            _collect_self_method_arg_types_expr(ctx, stmt.cause, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, stmt.cause, method_dicts, out, param_names)
         return
     if isinstance(stmt, Delete):
         for target in stmt.targets:
-            _collect_self_method_arg_types_expr(ctx, target, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, target, method_dicts, out, param_names)
         return
     if isinstance(stmt, If):
-        _collect_self_method_arg_types_expr(ctx, stmt.cond, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, stmt.cond, method_dicts, out, param_names)
         for item in stmt.body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         for item in stmt.else_body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         return
     if isinstance(stmt, While):
-        _collect_self_method_arg_types_expr(ctx, stmt.cond, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, stmt.cond, method_dicts, out, param_names)
         for item in stmt.body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         for item in stmt.else_body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         return
     if isinstance(stmt, For):
-        _collect_self_method_arg_types_expr(ctx, stmt.target, method_dicts, out)
-        _collect_self_method_arg_types_expr(ctx, stmt.iter, method_dicts, out)
+        _collect_self_method_arg_types_expr(ctx, stmt.target, method_dicts, out, param_names)
+        _collect_self_method_arg_types_expr(ctx, stmt.iter, method_dicts, out, param_names)
         for item in stmt.body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         for item in stmt.else_body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         return
     if isinstance(stmt, With):
         for ctx_expr, as_var in stmt.items:
-            _collect_self_method_arg_types_expr(ctx, ctx_expr, method_dicts, out)
+            _collect_self_method_arg_types_expr(ctx, ctx_expr, method_dicts, out, param_names)
             if as_var is not None:
-                _collect_self_method_arg_types_expr(ctx, as_var, method_dicts, out)
+                _collect_self_method_arg_types_expr(ctx, as_var, method_dicts, out, param_names)
         for item in stmt.body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         return
     if isinstance(stmt, Try):
         for item in stmt.body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         for item in stmt.else_body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         for item in stmt.finally_body:
-            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+            _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         for handler in stmt.handlers:
             if handler.exc_type is not None:
                 _collect_self_method_arg_types_expr(
-                    ctx, handler.exc_type, method_dicts, out
+                    ctx, handler.exc_type, method_dicts, out, param_names
                 )
             for item in handler.body:
-                _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out)
+                _collect_self_method_arg_types_stmt(ctx, item, dict(method_dicts), out, param_names)
         return
 
 
 def _collect_self_method_arg_overrides(
     ctx: _InferCtx, class_body: tuple[Stmt, ...]
 ) -> dict[str, dict[int, Type]]:
+    """Joined argument types of every ``self.method(...)`` call in the class.
+
+    Dyn slots (and the ``-1`` poison slot) are kept: the merge needs them to
+    widen an override, and a later round must not re-narrow it.
+    """
+    param_names: dict[str, tuple[str, ...]] = {}
+    for stmt in class_body:
+        if isinstance(stmt, FuncDef):
+            param_names[stmt.name] = tuple(a.name for a in stmt.args)
     out: dict[str, dict[int, Type]] = {}
     for stmt in class_body:
         if not isinstance(stmt, FuncDef):
             continue
         method_dicts: dict[str, tuple[str, ...]] = {}
         for body_stmt in stmt.body:
-            _collect_self_method_arg_types_stmt(ctx, body_stmt, method_dicts, out)
-    return {
-        method_name: {
-            index: ty for index, ty in slots.items() if not isinstance(ty, DynType)
-        }
-        for method_name, slots in out.items()
-    }
+            _collect_self_method_arg_types_stmt(
+                ctx, body_stmt, method_dicts, out, param_names
+            )
+    return out
 
 
 def _merge_method_arg_overrides(
     old: dict[str, dict[int, Type]],
     new: dict[str, dict[int, Type]],
 ) -> tuple[dict[str, dict[int, Type]], bool]:
+    """Monotone join of per-round observations into the class's overrides.
+
+    A slot only ever moves from absent to a type to dyn.  Dyn entries stay in
+    the result so a widening survives into the next round; ``_infer_funcdef``
+    types a parameter only from a non-dyn slot of an unpoisoned method.
+    """
     merged = {name: dict(slots) for name, slots in old.items()}
     changed = False
     for method_name, slots in new.items():
         dst = merged.setdefault(method_name, {})
         for index, ty in slots.items():
-            if isinstance(ty, DynType):
-                continue
             existing = dst.get(index)
             if existing is None:
                 dst[index] = ty
                 changed = True
-            elif not type_eq(existing, ty):
-                if not isinstance(existing, DynType):
-                    dst[index] = TYPE_DYN
-                    changed = True
-    return (
-        {
-            name: {
-                index: ty for index, ty in slots.items() if not isinstance(ty, DynType)
-            }
-            for name, slots in merged.items()
-        },
-        changed,
-    )
+            elif isinstance(existing, DynType):
+                continue
+            elif isinstance(ty, DynType) or not type_eq(existing, ty):
+                dst[index] = TYPE_DYN
+                changed = True
+    return merged, changed
 
 
 def _infer_funcdef(
@@ -5806,6 +5850,8 @@ def _infer_funcdef(
             arg_overrides is not None
             and a.annotation is None
             and index in arg_overrides
+            and -1 not in arg_overrides
+            and not isinstance(arg_overrides[index], DynType)
         ):
             ty = ctx.resolve_type_refs(arg_overrides[index])
         default = (

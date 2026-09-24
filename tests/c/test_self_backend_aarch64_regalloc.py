@@ -18,6 +18,17 @@ from pcc.backend.self_backend_ir import (
 from pcc.backend.self_backend_kernel import get_indexed_function_kernel
 from pcc.backend.self_backend_prepare import prepare_module_for_target
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _block_local_allocator(monkeypatch):
+    # These cases pin the block-local x1-x8 allocator's exact shapes; the
+    # default callee-saved allocator is covered by
+    # tests/c/test_self_backend_aarch64_callee_saved.py.
+    monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "0")
+
+
 
 _TRIPLE = 'target triple = "arm64-apple-darwin25.5.0"\n'
 

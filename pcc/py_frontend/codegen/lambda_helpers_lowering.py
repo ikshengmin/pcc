@@ -442,6 +442,12 @@ class LambdaHelperLoweringMixin:
             "_cpy_operand_cleanup_block",
             None,
         )
+        # The lambda body is a separate function: its parameters must not
+        # overwrite the enclosing function's per-local ownership flags.  A
+        # ``lambda value=value: value`` inside ``for value in ...`` replaced
+        # the loop variable's flag, so the enclosing exit cleanup found a
+        # fresh never-set flag and leaked the last element.
+        saved_ownership_state = _swap_in_fresh_ownership_state(self)
 
         entry = adapter.append_basic_block(name="entry")
         self.builder = ir.IRBuilder(entry)
@@ -592,6 +598,7 @@ class LambdaHelperLoweringMixin:
             self._current_entry_block = saved_entry_block
             self._try_err_block = saved_try_err_block
             self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block
+            _restore_ownership_state(self, saved_ownership_state)
             return None
 
         self.builder = saved_builder
@@ -607,6 +614,7 @@ class LambdaHelperLoweringMixin:
         self._current_entry_block = saved_entry_block
         self._try_err_block = saved_try_err_block
         self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block
+        _restore_ownership_state(self, saved_ownership_state)
 
         captures = self.builder.call(
             self.runtime["py_tuple_new"],
@@ -1103,3 +1111,44 @@ class LambdaHelperLoweringMixin:
             name=self._fresh(f"cpy.{sym_base}"),
         )
         return self._mark_owned_cpy_value(result)
+
+
+_PER_FUNCTION_OWNERSHIP_DICTS = (
+    "_owned_local_flag_slots",
+    "_owned_local_flag_allocas",
+)
+_PER_FUNCTION_OWNERSHIP_SETS = (
+    "_owned_local_names",
+    "_owned_local_has_value",
+    "_gc_rooted_local_names",
+    "_borrowed_gc_rooted_local_names",
+    "_for_target_owned_names",
+)
+
+
+def _swap_in_fresh_ownership_state(host) -> list:
+    """Give a nested function body empty per-local ownership tables.
+
+    Returns the enclosing function's tables (attribute name, object or None
+    when absent) for ``_restore_ownership_state``.
+    """
+    saved: list = []
+    for attr in _PER_FUNCTION_OWNERSHIP_DICTS:
+        saved.append((attr, getattr(host, attr, None)))
+        setattr(host, attr, {})
+    for attr in _PER_FUNCTION_OWNERSHIP_SETS:
+        saved.append((attr, getattr(host, attr, None)))
+        setattr(host, attr, set())
+    return saved
+
+
+def _restore_ownership_state(host, saved: list) -> None:
+    # An absent table reads as empty everywhere (``getattr(host, attr, {})``),
+    # so restoring it as an empty container is equivalent and avoids delattr.
+    for attr, value in saved:
+        if value is not None:
+            setattr(host, attr, value)
+        elif attr in _PER_FUNCTION_OWNERSHIP_DICTS:
+            setattr(host, attr, {})
+        else:
+            setattr(host, attr, set())

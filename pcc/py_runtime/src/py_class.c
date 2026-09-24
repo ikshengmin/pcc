@@ -1324,6 +1324,26 @@ PyObject *py_obj_call_method(PyObject *method, PyObject *self_obj, PyObject *arg
     return out;
 }
 
+/* py_obj_call_method with a keywords dict (or NULL): obj.name(a, key=b)
+ * without binding a method object for one call. */
+PyObject *py_obj_call_method_kwargs(
+    PyObject *method, PyObject *self_obj, PyObject *args, PyObject *kwargs
+) {
+    if (self_obj == NULL) return py_obj_call(method, args, kwargs);
+    int64_t n = args != NULL ? py_tuple_len(args) : 0;
+    PyObject *full_args = py_tuple_new(n + 1);
+    if (full_args == NULL) return NULL;
+    py_tuple_set_item(full_args, 0, self_obj);
+    for (int64_t i = 0; i < n; i++) {
+        PyObject *item = py_tuple_get(args, i);
+        py_tuple_set_item(full_args, i + 1, item);
+        if (item != NULL) py_decref(item);
+    }
+    PyObject *out = py_func_call_kwargs(method, full_args, kwargs);
+    py_decref(full_args);
+    return out;
+}
+
 int64_t py_instance_setattr(PyInstanceObject *inst, const char *name, PyObject *value) {
     if (!instance_pointer_is_instance(inst) || !name) return -1;
     PyClassObject *cls = (PyClassObject *)pcc_gc_load_ptr(

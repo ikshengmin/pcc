@@ -529,7 +529,8 @@ class Graph:
         released += 1
 def _validate_minos(value):
     return value
-def prepare_executable_object(objects, *, archives, semantic_manifest, _consume_inputs):
+def prepare_executable_object(objects, *, archives, semantic_manifest, _consume_inputs,
+                              _source_view=False):
     return Graph()
 def _prepare_executable_image(merged, *, entry, minos, identifier):
     return (b"prepared", identifier)

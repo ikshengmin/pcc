@@ -8,7 +8,7 @@ Extraction can include hypotheses, test status and superseded conclusions.
 Check the original experiment, revision and later updates against current
 code and matching execution before adopting a cause. Read only relevant hits.
 
-1625 confirmations across 481 investigations.
+1627 confirmations across 481 investigations.
 
 ## [Investigation: direct AArch64 instruction capture order and lifetime](../investigations/aarch64-direct-instruction-capture-order.md)
 
@@ -1575,6 +1575,8 @@ code and matching execution before adopting a cause. Read only relevant hits.
 - Host and native workers read different export views [CONFIRMED, fixed].**
 - An escaping closure read None for a name bound by an import [CONFIRMED,
 - `import helper` was a string in value position [CONFIRMED, fixed].** A
+- Failed attribute lookups walked the MRO twice [CONFIRMED, fixed].**
+- Keyword method calls bound a method object per call [CONFIRMED, fixed].**
 
 ## [Investigation: native subprocess failures lose CalledProcessError fields](../investigations/native-subprocess-called-process-error-returncode.md)
 

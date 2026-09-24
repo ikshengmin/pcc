@@ -144,8 +144,11 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     tmp_path: Path, emitter: str
 ):
     expected = _state_definitions(STATE_SOURCE)
-    # Recycled GC-tracking nodes add one pointer plus one bounded-pool count.
-    assert len(expected) == 190
+    # Recycled GC-tracking nodes add one pointer plus one bounded-pool count;
+    # the refcount provenance probe adds its mode, first-miss report flag and
+    # unmanaged-operation counter, and the in-place refcount gate
+    # (pcc_gc_refcount_fast) one more.
+    assert len(expected) == 194
     assert expected["pcc_gc_backend4_deferred_recycle_pages"] == (
         "define_global_i64",
         0,

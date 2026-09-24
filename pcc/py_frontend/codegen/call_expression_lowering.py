@@ -936,6 +936,11 @@ class CallExpressionLoweringMixin:
             self._gc_release(args_tuple)
             if expr.kwargs:
                 self._gc_release(kwargs_obj)
+            # ``functions[0]()`` / ``make()()`` call a temporary callable: the
+            # subscript or call returned a new reference that nothing else
+            # owns.  Dropping it leaked the function object and, through its
+            # defaults and closure cells, everything it captured.
+            self._gc_release_if_owned(fn_val, func_expr)
             self._emit_post_call_err_check(self._expr_span_or_none(expr))
             return result
         name = func_name

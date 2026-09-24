@@ -1575,25 +1575,18 @@ def _value_ref(value) -> str:
     """
     if isinstance(value, Function):
         return "@" + str(value.name)
-    try:
-        name = value.name
-        value.ftype
-        if name:
-            return "@" + str(name)
-    except AttributeError:
-        pass
-    try:
-        ref = value._ref
-        if ref:
-            return ref
-    except AttributeError:
-        pass
-    try:
-        index = value.index
-        if index is not None:
-            return "%." + str(index + 1)
-    except AttributeError:
-        pass
+    # Probe without raising: most operands have no ``ftype``, and a caught
+    # AttributeError per rendered operand was a measurable share of a native
+    # frontend worker (exception object, message, clear).
+    name = getattr(value, "name", None)
+    if name and hasattr(value, "ftype"):
+        return "@" + str(name)
+    ref = getattr(value, "_ref", None)
+    if ref:
+        return ref
+    index = getattr(value, "index", None)
+    if index is not None:
+        return "%." + str(index + 1)
     return str(value)
 
 

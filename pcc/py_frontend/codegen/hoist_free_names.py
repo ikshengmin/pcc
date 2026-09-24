@@ -57,7 +57,7 @@ def compute_free_names(
     outer_scope_names,
     module_scope_names_base,
     existing_top_or_hoisted_names,
-    cache,
+    cache: dict,
     profile_enabled,
     stats,
 ):

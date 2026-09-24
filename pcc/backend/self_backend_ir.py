@@ -1337,6 +1337,9 @@ class ParsedFunction:
     indexed_slot_projection: bool = False
     # Target-owned finite sibling-call plan; never serialized as an IR promise.
     aarch64_tail_call_ids: list[int] = field(default_factory=list)
+    # Callee-saved registers (x19-x28 indices) the AArch64 allocator assigned;
+    # the prologue saves and every epilogue restores exactly these.
+    aarch64_callee_saved: list[int] = field(default_factory=list)
 
 
 def parsed_module_instruction_arena_profile(module: ParsedModule) -> dict[str, int]:

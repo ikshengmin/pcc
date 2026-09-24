@@ -2490,6 +2490,14 @@ def py_obj_getattr_maybe(o, name):
     tag: int = load_i32(o, 8)
     pcc_runtime_log_event_code(7, 5, tag, 2, o)
 
+    # As in py_obj_getattr: a pcc instance is never a C-API type object or a
+    # builtin the hooks below answer for.  `getattr(node, field, None)` over
+    # AST nodes reaches here millions of times per native frontend worker.
+    if tag == PY_TYPE_INSTANCE or (
+        tag >= PY_TYPE_USER_CLASS_START and tag < 0x10000
+    ):
+        return py_instance_getattr(o, name)
+
     type_attr = pcc_capi_type_object_getattr(o, name)
     if ptr_is_null(type_attr) == 0 or py_err_occurred() != 0:
         return type_attr

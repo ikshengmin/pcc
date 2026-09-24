@@ -1261,123 +1261,256 @@ class NumericBuiltinLoweringMixin:
         self.builder.position_at_end(end_bb)
         return self.builder.load(acc_slot, name=self._fresh(f"{name}.lt.result"))
 
-    def _emit_min_max_by_key_fold(self, expr, name, key_spec):
-        """``min(xs, key=k)`` / ``max(xs, key=k)`` for a simple attr/index key
-        (key_spec from _sorted_key_spec_from_lambda, the sorted() #56 helper),
-        returning the extreme ELEMENT. Materialises any iterable to a list,
-        then a linear scan with an object accumulator comparing inline-extracted
-        keys via py_obj_lt (correct for int/str/float keys). Strict ``<`` keeps
-        the FIRST extreme element, matching CPython. ``default=`` seeds empty."""
-        default_obj = None
+    def _emit_min_max_by_key_fold(self, expr, name, key_spec, key_expr):
+        """``min(xs, key=k)`` / ``max(xs, key=k)``, returning the extreme ELEMENT.
+
+        As in CPython the key runs once per element, the first extreme element
+        wins (strict ``<`` / ``>`` against the best key so far), and an empty
+        input returns ``default=`` or raises ValueError.  Elements and keys are
+        held by two pinned lists and the scan keeps only an index, so a key or
+        comparison that allocates, collects, relocates or raises sees stable
+        owned state; what a step holds across such a call is pinned too.
+        """
+        span = getattr(expr, "span", None)
+        default_expr = None
         for k, v in expr.kwargs or ():
             if k == "default":
-                default_obj = self._emit_as_object(v)
-        arg = expr.args[0]
-        raw_obj = marshal.marshal_to_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            self._emit_expr(arg),
-            arg.ty,
-        )
-        _CSTR = ir.IntType(8).as_pointer()
-        fn = self.current_function
-        # Materialise any iterable (list / tuple / generator / range) to a list
-        # so py_list_len / py_list_get index cleanly.
-        src_obj = self.builder.call(
-            self.runtime["py_list_new"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh(f"{name}.key.list"),
-        )
-        self._emit_list_append_via_iter(
-            src_obj, raw_obj, getattr(arg, "span", None)
-        )
-        n_val = self.builder.call(
-            self.runtime["py_list_len"],
-            [src_obj],
-            name=self._fresh(f"{name}.key.len"),
-        )
-        acc_slot = self._alloca_in_entry(_CSTR, name=f"{name}.key.acc.addr")
-        idx_slot = self._alloca_in_entry(_I64, name=f"{name}.key.idx.addr")
-        is_empty = self.builder.icmp_signed(
-            "==",
-            n_val,
-            ir.Constant(_I64, 0),
-            name=self._fresh(f"{name}.key.is_empty"),
-        )
-        empty_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.empty"))
-        seed_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.seed"))
-        end_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.end"))
-        self.builder.cbranch(is_empty, empty_bb, seed_bb)
+                default_expr = v
+        state = self._begin_sort_key_lifetime(key_spec, key_expr)
+        lifetimes = ()
+        items = None
+        result = None
+        try:
+            arg = expr.args[0]
+            src_obj = marshal.marshal_to_object(
+                self.builder,
+                self.module,
+                self.runtime,
+                self._emit_expr(arg),
+                arg.ty,
+            )
+            source_root = self._enter_container_temp_root(
+                src_obj, self._fresh(f"{name}.key.source")
+            )
+            lifetimes = ((source_root, self._owned_release_needed(src_obj, arg)),)
+            # Each root gets its unwind edge before anything else can raise:
+            # evaluating ``default=`` must not exit with the source rooted.
+            operand_error = self._make_cpy_operand_cleanup_block(
+                (), (), self._current_try_err_block() or self._ensure_fn_err_exit(),
+                f"{name}.key.source.error", rooted_pcc_lifetimes=lifetimes,
+            )
+            self._try_err_block = operand_error
+            self._cpy_operand_cleanup_block = operand_error
+            default_obj = None
+            if default_expr is not None:
+                default_obj = self._emit_as_object(default_expr)
+                default_root = self._enter_container_temp_root(
+                    default_obj, self._fresh(f"{name}.key.default")
+                )
+                default_lifetime = (
+                    (default_root, self._owned_release_needed(default_obj, default_expr)),
+                )
+                lifetimes = lifetimes + default_lifetime
+                operand_error = self._make_cpy_operand_cleanup_block(
+                    (), (), operand_error, f"{name}.key.default.error",
+                    rooted_pcc_lifetimes=default_lifetime,
+                )
+                self._try_err_block = operand_error
+                self._cpy_operand_cleanup_block = operand_error
+            items = self.builder.call(
+                self.runtime["py_list_new"],
+                [ir.Constant(_I64, 0)],
+                name=self._fresh(f"{name}.key.items"),
+            )
+            # The iteration helper releases the fresh list on its own error
+            # edge; once it returns, the list is this fold's to pin and drop.
+            self._emit_list_append_via_iter(items, src_obj, getattr(arg, "span", None))
+            self._gc_pin(items)
+            items_error = self._make_cpy_operand_cleanup_block(
+                (), (), operand_error, f"{name}.key.items.error",
+                pinned_pcc=((items, True),),
+            )
+            self._try_err_block = items_error
+            self._cpy_operand_cleanup_block = items_error
+            fn = self.current_function
+            n_val = self.builder.call(
+                self.runtime["py_list_len"],
+                [items],
+                name=self._fresh(f"{name}.key.len"),
+            )
+            is_empty = self.builder.icmp_signed(
+                "==", n_val, ir.Constant(_I64, 0), name=self._fresh(f"{name}.key.is_empty")
+            )
+            empty_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.empty"))
+            nonempty_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.nonempty"))
+            done_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.done"))
+            self.builder.cbranch(is_empty, empty_bb, nonempty_bb)
 
-        self.builder.position_at_end(empty_bb)
-        self.builder.store(
-            default_obj if default_obj is not None else self._emit_none_literal(),
-            acc_slot,
-        )
-        self.builder.branch(end_bb)
+            self.builder.position_at_end(empty_bb)
+            empty_result = None
+            if default_obj is not None:
+                empty_result = default_obj
+                self._gc_retain(empty_result)
+                empty_exit = self.builder.block
+                self.builder.branch(done_bb)
+            else:
+                message = self._ptr_to_cstr(self._cstr_global(
+                    f"{name}() iterable argument is empty", f".{name}.key.empty.msg"
+                ))
+                exc = self.builder.call(
+                    self.runtime["py_exc_new"],
+                    [ir.Constant(_I64, 2), message],
+                    name=self._fresh(f"{name}.key.empty.exc"),
+                )
+                self.builder.call(self.runtime["py_raise"], [exc])
+                self.builder.branch(items_error)
 
-        self.builder.position_at_end(seed_bb)
-        first = self.builder.call(
-            self.runtime["py_list_get"],
-            [src_obj, ir.Constant(_I64, 0)],
-            name=self._fresh(f"{name}.key.first"),
-        )
-        self.builder.store(first, acc_slot)
-        self.builder.store(ir.Constant(_I64, 1), idx_slot)
-        cond_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.cond"))
-        body_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.body"))
-        step_bb = fn.append_basic_block(name=self._fresh(f"{name}.key.step"))
-        self.builder.branch(cond_bb)
+            self.builder.position_at_end(nonempty_bb)
+            # Capacity n: appending a key never reallocates mid-build.
+            keys = self.builder.call(
+                self.runtime["py_list_new"],
+                [n_val],
+                name=self._fresh(f"{name}.key.keys"),
+            )
+            self._gc_pin(keys)
+            keys_error = self._make_cpy_operand_cleanup_block(
+                (), (), items_error, f"{name}.key.keys.error",
+                pinned_pcc=((keys, True),),
+            )
+            self._try_err_block = keys_error
+            self._cpy_operand_cleanup_block = keys_error
+            idx_slot = self._alloca_in_entry(_I64, name=f"{name}.key.idx.addr")
+            best_slot = self._alloca_in_entry(_I64, name=f"{name}.key.best.addr")
 
-        self.builder.position_at_end(cond_bb)
-        cur = self.builder.load(idx_slot, name=self._fresh(f"{name}.key.idx"))
-        cond = self.builder.icmp_signed(
-            "<", cur, n_val, name=self._fresh(f"{name}.key.cond.i1")
-        )
-        self.builder.cbranch(cond, body_bb, end_bb)
+            # keys[i] = key(items[i]), one call per element.
+            self.builder.store(ir.Constant(_I64, 0), idx_slot)
+            build_cond = fn.append_basic_block(name=self._fresh(f"{name}.key.build.cond"))
+            build_body = fn.append_basic_block(name=self._fresh(f"{name}.key.build.body"))
+            build_done = fn.append_basic_block(name=self._fresh(f"{name}.key.build.done"))
+            self.builder.branch(build_cond)
+            self.builder.position_at_end(build_cond)
+            cur = self.builder.load(idx_slot, name=self._fresh(f"{name}.key.build.idx"))
+            self.builder.cbranch(
+                self.builder.icmp_signed("<", cur, n_val, name=self._fresh(f"{name}.key.build.more")),
+                build_body,
+                build_done,
+            )
+            self.builder.position_at_end(build_body)
+            elem = self.builder.call(
+                self.runtime["py_list_get"],
+                [items, cur],
+                name=self._fresh(f"{name}.key.elem"),
+            )
+            self._gc_pin(elem)
+            self._try_err_block = self._make_cpy_operand_cleanup_block(
+                (), (), keys_error, f"{name}.key.elem.error",
+                pinned_pcc=((elem, True),),
+            )
+            self._cpy_operand_cleanup_block = self._try_err_block
+            key_val = self._emit_key_of(elem, key_spec)
+            self._try_err_block = keys_error
+            self._cpy_operand_cleanup_block = keys_error
+            self._gc_unpin(elem)
+            self._gc_release(elem)
+            self.builder.call(self.runtime["py_list_append"], [keys, key_val])
+            self._gc_release(key_val)
+            self.builder.store(
+                self.builder.add(cur, ir.Constant(_I64, 1), name=self._fresh(f"{name}.key.build.next")),
+                idx_slot,
+            )
+            self.builder.branch(build_cond)
 
-        self.builder.position_at_end(body_bb)
-        elem = self.builder.call(
-            self.runtime["py_list_get"],
-            [src_obj, cur],
-            name=self._fresh(f"{name}.key.elem"),
-        )
-        acc_cur = self.builder.load(acc_slot, name=self._fresh(f"{name}.key.acc"))
-        # min keeps the smaller: replace when key(elem) < key(acc).
-        # max keeps the larger:  replace when key(acc) < key(elem).
-        if name == "min":
-            lhs, rhs = elem, acc_cur
-        else:
-            lhs, rhs = acc_cur, elem
-        key_lhs = self._emit_key_of(lhs, key_spec)
-        key_rhs = self._emit_key_of(rhs, key_spec)
-        less_i64 = self.builder.call(
-            self.runtime["py_obj_lt"],
-            [key_lhs, key_rhs],
-            name=self._fresh(f"{name}.key.lt"),
-        )
-        less = self.builder.icmp_signed(
-            "!=",
-            less_i64,
-            ir.Constant(less_i64.type, 0),
-            name=self._fresh(f"{name}.key.lt.i1"),
-        )
-        new_acc = self.builder.select(
-            less, elem, acc_cur, name=self._fresh(f"{name}.key.pick")
-        )
-        self.builder.store(new_acc, acc_slot)
-        self.builder.branch(step_bb)
+            # Scan: replace the best index only on a strict improvement.
+            self.builder.position_at_end(build_done)
+            self.builder.store(ir.Constant(_I64, 0), best_slot)
+            self.builder.store(ir.Constant(_I64, 1), idx_slot)
+            scan_cond = fn.append_basic_block(name=self._fresh(f"{name}.key.scan.cond"))
+            scan_body = fn.append_basic_block(name=self._fresh(f"{name}.key.scan.body"))
+            scan_done = fn.append_basic_block(name=self._fresh(f"{name}.key.scan.done"))
+            self.builder.branch(scan_cond)
+            self.builder.position_at_end(scan_cond)
+            cur = self.builder.load(idx_slot, name=self._fresh(f"{name}.key.scan.idx"))
+            self.builder.cbranch(
+                self.builder.icmp_signed("<", cur, n_val, name=self._fresh(f"{name}.key.scan.more")),
+                scan_body,
+                scan_done,
+            )
+            self.builder.position_at_end(scan_body)
+            best = self.builder.load(best_slot, name=self._fresh(f"{name}.key.best"))
+            candidate_key = self.builder.call(
+                self.runtime["py_list_get"],
+                [keys, cur],
+                name=self._fresh(f"{name}.key.candidate"),
+            )
+            best_key = self.builder.call(
+                self.runtime["py_list_get"],
+                [keys, best],
+                name=self._fresh(f"{name}.key.best.key"),
+            )
+            self._gc_pin(candidate_key)
+            self._gc_pin(best_key)
+            self._try_err_block = self._make_cpy_operand_cleanup_block(
+                (), (), keys_error, f"{name}.key.compare.error",
+                pinned_pcc=((candidate_key, True), (best_key, True)),
+            )
+            self._cpy_operand_cleanup_block = self._try_err_block
+            better_i64 = self.builder.call(
+                self.runtime["py_obj_gt" if name == "max" else "py_obj_lt"],
+                [candidate_key, best_key],
+                name=self._fresh(f"{name}.key.better"),
+            )
+            self._emit_post_call_err_check(span)
+            self._try_err_block = keys_error
+            self._cpy_operand_cleanup_block = keys_error
+            self._gc_unpin(best_key)
+            self._gc_release(best_key)
+            self._gc_unpin(candidate_key)
+            self._gc_release(candidate_key)
+            better = self.builder.icmp_signed(
+                "!=", better_i64, ir.Constant(better_i64.type, 0), name=self._fresh(f"{name}.key.better.i1")
+            )
+            self.builder.store(
+                self.builder.select(better, cur, best, name=self._fresh(f"{name}.key.pick")),
+                best_slot,
+            )
+            self.builder.store(
+                self.builder.add(cur, ir.Constant(_I64, 1), name=self._fresh(f"{name}.key.scan.next")),
+                idx_slot,
+            )
+            self.builder.branch(scan_cond)
 
-        self.builder.position_at_end(step_bb)
-        nxt = self.builder.add(
-            cur, ir.Constant(_I64, 1), name=self._fresh(f"{name}.key.next")
-        )
-        self.builder.store(nxt, idx_slot)
-        self.builder.branch(cond_bb)
+            self.builder.position_at_end(scan_done)
+            nonempty_result = self.builder.call(
+                self.runtime["py_list_get"],
+                [items, self.builder.load(best_slot, name=self._fresh(f"{name}.key.best.final"))],
+                name=self._fresh(f"{name}.key.winner"),
+            )
+            self._try_err_block = items_error
+            self._cpy_operand_cleanup_block = items_error
+            self._gc_unpin(keys)
+            self._gc_release(keys)
+            nonempty_exit = self.builder.block
+            self.builder.branch(done_bb)
 
-        self.builder.position_at_end(end_bb)
-        return self.builder.load(acc_slot, name=self._fresh(f"{name}.key.result"))
+            self.builder.position_at_end(done_bb)
+            if empty_result is not None:
+                result = self.builder.phi(_CSTR, name=self._fresh(f"{name}.key.result"))
+                result.add_incoming(empty_result, empty_exit)
+                result.add_incoming(nonempty_result, nonempty_exit)
+            else:
+                result = nonempty_result
+            # Operand and key finalizers may collect; keep the result still.
+            self._gc_pin(result)
+        finally:
+            if items is not None:
+                self._gc_unpin(items)
+                self._gc_release(items)
+            self._release_rooted_pcc_lifetimes(lifetimes)
+            self._end_sort_key_lifetime(state)
+            if result is not None:
+                self._gc_unpin(result)
+        self._note_owned_object_value(result)
+        return result
 
     def _maybe_emit_min_max_iter(
         self,
@@ -1410,8 +1543,14 @@ class NumericBuiltinLoweringMixin:
                     arg_ty.elem if isinstance(arg_ty, ListType) else None
                 )
                 key_spec = self._key_spec_from_callable(key_expr, elem_ty)
-                if key_spec is not None:
-                    return self._emit_min_max_by_key_fold(expr, name, key_spec)
+                if key_spec is None:
+                    # Any other key runs through py_obj_call, like the
+                    # list.sort(key=...) path; there is no builtin to fall
+                    # back to without libpython.
+                    key_spec = ("callable", self._emit_as_object(key_expr))
+                return self._emit_min_max_by_key_fold(
+                    expr, name, key_spec, key_expr
+                )
             return None
         # A list whose element class defines a user __lt__: the i64-accumulator
         # fold below reads instance pointers as integers (comparing addresses),

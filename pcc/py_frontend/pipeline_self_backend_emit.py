@@ -105,7 +105,22 @@ def run_emit_worker(
             )
         target_id, asm_text = native_result
         result_payload = asm_text
-        if obj_path:
+        if obj_path and not cc and obj_path.endswith(".pco"):
+            # Owned link: assemble here, in parallel with the other emit
+            # workers, and hand the linker a packed native object.  The link
+            # used to assemble every module's text serially in one process;
+            # under pcc1 that was most of a multi-module compile.
+            from pcc.backend.arm64_asm_driver import assemble_file
+            from pcc.backend.native_object import encode_native_object_from_sections
+
+            sections, undefined = assemble_file(asm_text)
+            asm_text = ""
+            with open(obj_path, "wb") as stream:
+                stream.write(
+                    encode_native_object_from_sections(sections, undefined=undefined)
+                )
+            result_payload = obj_path
+        elif obj_path:
             asm_path = obj_path if not cc else result_path + ".s"
             with open(asm_path, "w", encoding="utf-8") as stream:
                 stream.write(asm_text)
@@ -583,7 +598,7 @@ def emit_objects_many_in_process(
         worker_input_bytes: list[int] = []
         for index, worker_input in enumerate(worker_inputs):
             ir_path, input_bytes = worker_input
-            artifact_suffix = ".s" if internal_link else ".o"
+            artifact_suffix = ".pco" if internal_link else ".o"
             obj_path = str(os.path.join(
                 tmp_dir,
                 f"self_backend_native_{index}{artifact_suffix}",
@@ -598,7 +613,7 @@ def emit_objects_many_in_process(
         cache_plan = plan_cache(
             worker_items,
             "self-aarch64-darwin-v0",
-            "pcc-native-asm-v1" if internal_link else cc,
+            "pcc-native-pco-v1" if internal_link else cc,
             tmp_dir,
         )
         profile_end(profile, "link_self_native_object_cache_plan", cache_plan_t)

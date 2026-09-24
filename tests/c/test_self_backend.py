@@ -7109,7 +7109,9 @@ def test_self_backend_emits_i32_arg_arithmetic_and_call(tmp_path):
 
     asm_text = asm_path.read_text(encoding="utf-8")
     assert "_add:" in asm_text
-    assert re.search(r"add w\d+, w9, w10", asm_text)
+    # Operands come from scratch registers, or straight from their allocated
+    # (x19-x28) registers under the default callee-saved allocator.
+    assert re.search(r"add w\d+, w\d+, w\d+", asm_text)
     assert "bl _add" in asm_text
 
     run = _assemble_and_run(asm_path, tmp_path)
@@ -8528,7 +8530,10 @@ no:
     assert any(line.startswith("  b.ge ") for line in lines)
 
 
-def test_self_backend_aarch64_forwards_one_intervening_stack_store_load():
+def test_self_backend_aarch64_forwards_one_intervening_stack_store_load(monkeypatch):
+    # The anchor case needs the call result spilled to its slot, which only the
+    # block-local allocator does; the default keeps it in a register.
+    monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "0")
     assert _forward_one_intervening_stack_store_load(
         [
             "  stur x0, [x29, #-24]",

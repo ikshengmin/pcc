@@ -135,7 +135,13 @@ from .hoist_analysis import (
     update_name_map,
     write_hoist_profile,
 )
-from .hoist_boxing import box_outer_body, collect_scope_bindings, function_boxed_names, scope_declared_names
+from .hoist_boxing import (
+    box_outer_body,
+    collect_scope_bindings,
+    function_boxed_names,
+    late_bound_lambda_captures,
+    scope_declared_names,
+)
 from .hoist_free_names import compute_free_names as analyze_free_names
 from .hoist_predicates import (
     body_has_yield,
@@ -444,6 +450,7 @@ class _HoistLoweringPass:
                 boxed,
                 collect_first_class_closure_captures(body),
             )
+            extend_names_once(boxed, late_bound_lambda_captures(body))
             return tuple(boxed)
 
         def body_reads_free_names(fd, excluded):

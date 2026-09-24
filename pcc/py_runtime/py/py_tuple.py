@@ -375,10 +375,10 @@ def py_tuple_set_item(tuple_ptr, i: int, item) -> None:
         return
     slot_offset: int = PYTUPLEOBJECT_ITEMS_OFFSET + i * 8
     slot = ptr_add(tuple_ptr, slot_offset)
-    if (
-        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-    ):
+    backend: int = -1
+    if load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0:
+        backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if backend == 0:
         py_incref(item)
         store_ptr(slot, 0, item)
     else:
@@ -390,8 +390,11 @@ def py_tuple_set_item(tuple_ptr, i: int, item) -> None:
         if _tuple_item_can_participate_in_cycle(item) != 0:
             py_gc_track(tuple_ptr)
     # Only colored relocation waits for complete payload publication.
-    # Keep the store/ownership/tracking work above for every collector.
-    if pcc_gc_backend() != 4:
+    # Keep the store/ownership/tracking work above for every collector.  The
+    # backend read above answers without a call once configuration ran.
+    if backend < 0:
+        backend = pcc_gc_backend()
+    if backend != 4:
         return
     complete: int = 1
     slot_index: int = 0

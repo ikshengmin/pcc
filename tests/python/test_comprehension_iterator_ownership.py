@@ -9,14 +9,7 @@ import pytest
 @pytest.mark.parametrize("shape", [
     "typed", "dynamic", "temporary", "filtered", "raising", "shadow",
     "parameter_shadow", "nested", "dict_lifetime", "tuple", "collect",
-    pytest.param("closure_default", marks=pytest.mark.xfail(
-        strict=True,
-        reason="Existing lambda-default owner leak; untyped pre/post probes both retain all captures",
-    )),
-    pytest.param("closure", marks=pytest.mark.xfail(
-        strict=True,
-        reason="Existing comprehension lambda late-binding bug; reproduced with pre-fix compiler",
-    )),
+    "closure_default", "closure",
 ])
 def test_comprehension_owners_leave_scope(
     tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive, shape,

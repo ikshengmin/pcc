@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import BackendUnavailable
+from .arm64_encode import EncodeError, _logical_imm
 from .self_backend_aarch64_darwin_abi import (
     aggregate_fits_reg_abi,
     reg_name,
@@ -46,6 +47,7 @@ from .self_backend_aarch64_darwin_ops import (
 from .self_backend_aarch64_darwin_regs import emit_add_offset, emit_const_to_reg
 from .self_backend_aarch64_darwin_regalloc import (
     allocated_scalar_register_indexed,
+    callee_saved_registers_enabled,
     commit_allocated_scalar_result,
     commit_allocated_scalar_result_indexed,
 )
@@ -116,6 +118,34 @@ from .self_backend_kernel import (
     TYPE_KIND_PTR,
     IndexedFunctionKernel,
 )
+
+
+def _binop_immediate_line(
+    op: str, width: int, result: str, lhs: str, rhs: str,
+) -> str:
+    """One immediate-form instruction for ``lhs op literal``, or ``""``.
+
+    ``and`` takes an encodable bitmask immediate (the only logical immediate
+    in the assembler's proven subset); shifts take an amount below the width
+    (a larger LLVM amount is poison, and the register form already defines
+    some result for it, so it is left to that form).
+    """
+    constant = const_int_from_value(rhs)
+    if constant is None:
+        return ""
+    if op == "and":
+        try:
+            _logical_imm(constant, width == 64)
+        except EncodeError:
+            return ""
+        mask = (1 << width) - 1
+        return "  and " + result + ", " + lhs + ", #" + str(constant & mask)
+    if op == "shl" or op == "lshr" or op == "ashr":
+        if constant < 0 or constant >= width:
+            return ""
+        mnemonic = "lsl" if op == "shl" else ("lsr" if op == "lshr" else "asr")
+        return "  " + mnemonic + " " + result + ", " + lhs + ", #" + str(constant)
+    return ""
 
 
 def _commit_or_spill_scalar_result(
@@ -1114,6 +1144,28 @@ def emit_compute_instruction_by_id(
                             func, indexed_kernel, indexed_dest_id, value_type_id, result_name,
                         ))
                         return lines
+                if (
+                    select_registers
+                    and binop_record.fourth < 0
+                    and callee_saved_registers_enabled()
+                ):
+                    immediate_line = _binop_immediate_line(
+                        op,
+                        value_type_header.second,
+                        reg_name_indexed(indexed_kernel, value_type_id, result_register),
+                        reg_name_indexed(indexed_kernel, value_type_id, lhs_register),
+                        rhs,
+                    )
+                    if immediate_line:
+                        lines.append(immediate_line)
+                        lines.extend(_commit_or_spill_scalar_result_indexed(
+                            func,
+                            indexed_kernel,
+                            indexed_dest_id,
+                            value_type_id,
+                            reg_name_indexed(indexed_kernel, value_type_id, result_register),
+                        ))
+                        return lines
                 lines.extend(
                     materialize_scalar_value_indexed(
                         func,
@@ -1277,50 +1329,92 @@ def emit_compute_instruction_by_id(
             if value_type_header.first in (TYPE_KIND_INT, TYPE_KIND_PTR):
                 if not indexed_dest_has_slot:
                     return []
+                # 32/64-bit and pointer compares need no in-place sign
+                # extension, so an operand already in its allocated register
+                # is compared there, and a small non-negative literal becomes
+                # the add/sub immediate field instead of a materialized x10.
+                lhs_register = 9
+                rhs_register = 10
+                rhs_immediate = -1
+                if callee_saved_registers_enabled() and (
+                    value_type_header.first == TYPE_KIND_PTR
+                    or value_type_header.second in (32, 64)
+                ):
+                    selected = allocated_scalar_register_indexed(
+                        indexed_kernel, icmp_record.third, value_type_id,
+                    )
+                    if selected >= 0:
+                        lhs_register = selected
+                    if icmp_record.fourth < 0:
+                        constant = (
+                            0 if rhs == "null" else const_int_from_value(rhs)
+                        )
+                        if constant is not None and 0 <= constant <= 4095:
+                            rhs_immediate = constant
+                    else:
+                        selected = allocated_scalar_register_indexed(
+                            indexed_kernel, icmp_record.fourth, value_type_id,
+                        )
+                        if selected >= 0:
+                            rhs_register = selected
                 lines = materialize_scalar_value_indexed(
                     func,
                     indexed_kernel,
                     lhs,
                     value_type_id,
-                    9,
+                    lhs_register,
                     module_symbols,
                     value_id=icmp_record.third,
                 )
-                lines.extend(
-                    materialize_scalar_value_indexed(
-                        func,
-                        indexed_kernel,
-                        rhs,
-                        value_type_id,
-                        10,
-                        module_symbols,
-                        value_id=icmp_record.fourth,
+                if rhs_immediate < 0:
+                    lines.extend(
+                        materialize_scalar_value_indexed(
+                            func,
+                            indexed_kernel,
+                            rhs,
+                            value_type_id,
+                            rhs_register,
+                            module_symbols,
+                            value_id=icmp_record.fourth,
+                        )
                     )
-                )
                 if (
                     value_type_header.first == TYPE_KIND_INT
                     and cond in {"slt", "sle", "sgt", "sge"}
                 ):
+                    # Only narrower-than-32-bit types extend here, and those
+                    # always use the scratch registers above.
                     lines.extend(
                         sign_extend_int_reg_indexed(
                             indexed_kernel,
                             value_type_id,
-                            reg_name_indexed(indexed_kernel, value_type_id, 9),
+                            reg_name_indexed(indexed_kernel, value_type_id, lhs_register),
                         )
                     )
-                    lines.extend(
-                        sign_extend_int_reg_indexed(
-                            indexed_kernel,
-                            value_type_id,
-                            reg_name_indexed(indexed_kernel, value_type_id, 10),
+                    if rhs_immediate < 0:
+                        lines.extend(
+                            sign_extend_int_reg_indexed(
+                                indexed_kernel,
+                                value_type_id,
+                                reg_name_indexed(
+                                    indexed_kernel, value_type_id, rhs_register
+                                ),
+                            )
+                        )
+                if rhs_immediate >= 0:
+                    lines.append(
+                        emitted_compare_immediate_line(
+                            reg_name_indexed(indexed_kernel, value_type_id, lhs_register),
+                            rhs_immediate,
                         )
                     )
-                lines.append(
-                    emitted_compare_register_line(
-                        reg_name_indexed(indexed_kernel, value_type_id, 9),
-                        reg_name_indexed(indexed_kernel, value_type_id, 10),
+                else:
+                    lines.append(
+                        emitted_compare_register_line(
+                            reg_name_indexed(indexed_kernel, value_type_id, lhs_register),
+                            reg_name_indexed(indexed_kernel, value_type_id, rhs_register),
+                        )
                     )
-                )
                 lines.append(emitted_cset_line("w11", aarch64_cc(cond)))
                 result_type_id = indexed_kernel.value_type_id(indexed_dest_id)
                 lines.extend(
@@ -1405,12 +1499,33 @@ def emit_compute_instruction_by_id(
             ):
                 if not indexed_dest_has_slot:
                     return []
+                # An allocated source is read in place (it holds the same
+                # zero-extended bits a scratch copy would), and a 32/64-bit or
+                # pointer result is written straight into its allocated
+                # register; narrower results keep the masking commit.
+                src_index = 9
+                dst_index = 10
+                if callee_saved_registers_enabled():
+                    selected = allocated_scalar_register_indexed(
+                        indexed_kernel, cast_record.third, src_type_id,
+                    )
+                    if selected >= 0:
+                        src_index = selected
+                    if dst_header.first == TYPE_KIND_PTR or (
+                        dst_header.first == TYPE_KIND_INT
+                        and dst_header.second in (32, 64)
+                    ):
+                        selected = allocated_scalar_register_indexed(
+                            indexed_kernel, indexed_dest_id, dst_type_id,
+                        )
+                        if selected >= 0:
+                            dst_index = selected
                 lines = materialize_scalar_value_indexed(
                     func,
                     indexed_kernel,
                     value,
                     src_type_id,
-                    9,
+                    src_index,
                     module_symbols,
                     value_id=cast_record.third,
                 )
@@ -1420,6 +1535,8 @@ def emit_compute_instruction_by_id(
                         op,
                         src_type_id,
                         dst_type_id,
+                        src_index,
+                        dst_index,
                     )
                 )
                 lines.extend(
@@ -1428,7 +1545,7 @@ def emit_compute_instruction_by_id(
                         indexed_kernel,
                         indexed_dest_id,
                         dst_type_id,
-                        reg_name_indexed(indexed_kernel, dst_type_id, 10),
+                        reg_name_indexed(indexed_kernel, dst_type_id, dst_index),
                     )
                 )
                 return lines

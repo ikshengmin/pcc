@@ -3,6 +3,7 @@ from __future__ import annotations
 from .self_backend_aarch64_darwin_abi import (
     aggregate_passed_indirect,
     assign_abi_arg_regs,
+    reg_name_indexed,
     stack_arg_offsets,
 )
 from .self_backend_aarch64_darwin_branch_protection import (
@@ -14,7 +15,12 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_frame_pair_line,
     emitted_move_register_line,
 )
-from .self_backend_aarch64_darwin_regalloc import allocate_aarch64_block_registers
+from .self_backend_aarch64_darwin_regalloc import (
+    allocate_aarch64_block_registers,
+    callee_saved_area_size,
+    commit_allocated_scalar_result_indexed,
+    emit_callee_saved_stores,
+)
 from .self_backend_aarch64_darwin_regs import emit_stack_adjust
 from .self_backend_aarch64_darwin_slots import (
     copy_address_to_value_slot,
@@ -65,8 +71,11 @@ def emit_function_prologue(
             emitted_move_register_line("x29", "sp"),
         ]
     )
-    if func.frame_size:
-        lines.extend(emit_stack_adjust(-func.frame_size))
+    total_frame = func.frame_size + callee_saved_area_size(func)
+    if total_frame:
+        lines.extend(emit_stack_adjust(-total_frame))
+    # Save before any argument is committed into a callee-saved register.
+    lines.extend(emit_callee_saved_stores(func))
     kernel = get_indexed_function_kernel(func)
     if func.indexed_slot_projection and kernel.hidden_sret_slot_id >= 0:
         hidden_slot_id = kernel.hidden_sret_slot_id
@@ -102,6 +111,15 @@ def emit_function_prologue(
                 TYPE_KIND_FP,
                 TYPE_KIND_PTR,
             ):
+                allocated_lines = commit_allocated_scalar_result_indexed(
+                    func,
+                    arg_value_id,
+                    arg_type_id,
+                    reg_name_indexed(kernel, arg_type_id, int(regs[0][1:])),
+                )
+                if allocated_lines is not None:
+                    lines.extend(allocated_lines)
+                    continue
                 lines.extend(
                     store_scalar_reg_to_value_slot_indexed(
                         func,

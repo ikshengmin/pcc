@@ -1,6 +1,8 @@
 """Basic statement and expression control-flow lowering for L1CodeGen."""
 from __future__ import annotations
 
+import os
+
 from pcc.llvm_capi.compat import ir
 from pcc.python_target import PYTHON_TARGET_VERSION_INFO
 
@@ -11,6 +13,14 @@ from .method_call_lowering import _method_pointer_provenance
 
 _CSTR = ir.IntType(8).as_pointer()
 _TARGET_SYS_VERSION_INFO = PYTHON_TARGET_VERSION_INFO
+
+
+def _jumping_conditions_enabled() -> bool:
+    """Lower ``and``/``or`` in if/while tests as jumps (see
+    ``_emit_condition_exits``).  On by default; ``PCC_JUMPING_CONDITIONS=0``
+    restores the ``cond.end`` phi lowering."""
+    value = str(os.environ.get("PCC_JUMPING_CONDITIONS", "") or "").strip().lower()
+    return value not in ("0", "false", "no", "off")
 
 
 class ControlFlowLoweringMixin:
@@ -130,6 +140,72 @@ class ControlFlowLoweringMixin:
         self._gc_release(value)
         return result
 
+    def _emit_condition_exits(
+        self,
+        cond_expr,
+        exit_blocks: list,
+        exit_values: list,
+        exit_true: list,
+        exit_false: list,
+    ) -> None:
+        """Evaluate a truth test as jumps instead of an ``i1`` phi.
+
+        ``a and b`` / ``a or b`` in a branch condition used to materialize the
+        short-circuit result through a ``cond.end`` phi that the branch then
+        tested; the native backend keeps such a phi in a stack byte.  Here each
+        leaf's value ends its own block with a conditional branch whose targets
+        are the next operand's block or the whole condition's successors.  A
+        ``None`` target is the condition's true (in ``exit_true``) or false
+        (in ``exit_false``) successor, bound by ``_bind_condition_exits`` once
+        the caller has created those blocks.  Leaves go through
+        ``_emit_condition_value`` exactly as before.
+        """
+        if isinstance(cond_expr, BoolExpr):
+            start = len(exit_blocks)
+            self._emit_condition_exits(
+                cond_expr.left, exit_blocks, exit_values, exit_true, exit_false,
+            )
+            right_bb = self.current_function.append_basic_block(self._fresh("cond.right"))
+            index = start
+            while index < len(exit_blocks):
+                if cond_expr.op == "and":
+                    if exit_true[index] is None:
+                        exit_true[index] = right_bb
+                elif exit_false[index] is None:
+                    exit_false[index] = right_bb
+                index += 1
+            self.builder.position_at_end(right_bb)
+            self._emit_condition_exits(
+                cond_expr.right, exit_blocks, exit_values, exit_true, exit_false,
+            )
+            return
+        value = self._emit_condition_value(cond_expr)
+        exit_blocks.append(self.builder.block)
+        exit_values.append(value)
+        exit_true.append(None)
+        exit_false.append(None)
+
+    def _bind_condition_exits(
+        self,
+        exit_blocks: list,
+        exit_values: list,
+        exit_true: list,
+        exit_false: list,
+        true_bb,
+        false_bb,
+    ) -> None:
+        index = 0
+        while index < len(exit_blocks):
+            true_target = exit_true[index]
+            false_target = exit_false[index]
+            self.builder.position_at_end(exit_blocks[index])
+            self.builder.cbranch(
+                exit_values[index],
+                true_bb if true_target is None else true_target,
+                false_bb if false_target is None else false_target,
+            )
+            index += 1
+
     def _emit_if(self, stmt: If) -> None:
         static_cond = self._static_bool_condition(stmt.cond)
         if static_cond is not None:
@@ -139,7 +215,17 @@ class ControlFlowLoweringMixin:
                 self._emit_stmts(stmt.else_body)
             return
 
-        cond_i1 = self._emit_condition_value(stmt.cond)
+        exit_blocks: list = []
+        exit_values: list = []
+        exit_true: list = []
+        exit_false: list = []
+        cond_i1 = None
+        if isinstance(stmt.cond, BoolExpr) and _jumping_conditions_enabled():
+            self._emit_condition_exits(
+                stmt.cond, exit_blocks, exit_values, exit_true, exit_false,
+            )
+        else:
+            cond_i1 = self._emit_condition_value(stmt.cond)
         class_attr_state_before = dict(
             getattr(self, "_class_attr_runtime_state", {})
         )
@@ -149,7 +235,12 @@ class ControlFlowLoweringMixin:
         else_bb = fn.append_basic_block(name=self._fresh("if.else"))
         merge_bb = fn.append_basic_block(name=self._fresh("if.end"))
 
-        self.builder.cbranch(cond_i1, then_bb, else_bb)
+        if cond_i1 is None:
+            self._bind_condition_exits(
+                exit_blocks, exit_values, exit_true, exit_false, then_bb, else_bb,
+            )
+        else:
+            self.builder.cbranch(cond_i1, then_bb, else_bb)
 
         self.builder.position_at_end(then_bb)
         self._emit_stmts(stmt.body)
@@ -510,8 +601,20 @@ class ControlFlowLoweringMixin:
 
         self.builder.branch(cond_bb)
         self.builder.position_at_end(cond_bb)
-        cond_i1 = self._emit_condition_value(stmt.cond)
-        self.builder.cbranch(cond_i1, body_bb, end_bb)
+        if isinstance(stmt.cond, BoolExpr) and _jumping_conditions_enabled():
+            exit_blocks: list = []
+            exit_values: list = []
+            exit_true: list = []
+            exit_false: list = []
+            self._emit_condition_exits(
+                stmt.cond, exit_blocks, exit_values, exit_true, exit_false,
+            )
+            self._bind_condition_exits(
+                exit_blocks, exit_values, exit_true, exit_false, body_bb, end_bb,
+            )
+        else:
+            cond_i1 = self._emit_condition_value(stmt.cond)
+            self.builder.cbranch(cond_i1, body_bb, end_bb)
 
         self.loop_stack.append((latch_bb, end_bb, self._loop_finally_base()))
         self.builder.position_at_end(body_bb)

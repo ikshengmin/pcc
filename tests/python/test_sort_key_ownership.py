@@ -9,15 +9,7 @@ import pytest
 
 @pytest.mark.parametrize("shape", [
     "typed", "dynamic", "sorted", "borrowed", "factory", "callable",
-    "empty", "raising", "collect", "identity",
-    pytest.param("capture_return", marks=pytest.mark.xfail(
-        strict=True,
-        reason="Pre-existing captured-list return retains all Items before and after this patch",
-    )),
-    pytest.param("default", marks=pytest.mark.xfail(
-        strict=True,
-        reason="Pre-existing default capture retains one Item per invocation (299/300 finalized)",
-    )),
+    "empty", "raising", "collect", "identity", "capture_return", "default",
 ])
 def test_native_sort_key_and_lambda_owners(
     tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive, shape,

@@ -282,16 +282,29 @@ def emit_cast(op: str, src_type: TypeDesc, dst_type: TypeDesc) -> list[str]:
     raise BackendUnavailable(f"self backend does not support cast op {op!r}")
 
 
+def _cast_move(destination: str, source: str) -> list[str]:
+    # A coalesced no-op cast shares its source's register; nothing to move.
+    if destination == source:
+        return []
+    return [emitted_move_register_line(destination, source)]
+
+
 def emit_cast_indexed(
     kernel: IndexedFunctionKernel,
     op: str,
     src_type_id: int,
     dst_type_id: int,
+    src_index: int = 9,
+    dst_index: int = 10,
 ) -> list[str]:
     src: CompilerInt4 = kernel.type_header(src_type_id)
     dst: CompilerInt4 = kernel.type_header(dst_type_id)
-    src9 = reg_name_indexed(kernel, src_type_id, 9)
-    dst10 = reg_name_indexed(kernel, dst_type_id, 10)
+    src9 = reg_name_indexed(kernel, src_type_id, src_index)
+    dst10 = reg_name_indexed(kernel, dst_type_id, dst_index)
+    src_x = "x" + str(src_index)
+    src_w = "w" + str(src_index)
+    dst_x = "x" + str(dst_index)
+    dst_w = "w" + str(dst_index)
     src_layout: CompilerInt4 = kernel.type_layout(src_type_id)
     dst_layout: CompilerInt4 = kernel.type_layout(dst_type_id)
     src_bits = src_layout.third
@@ -307,7 +320,7 @@ def emit_cast_indexed(
             or (src.first == TYPE_KIND_INT and dst.first == TYPE_KIND_FP)
         ):
             return [f"  fmov {dst10}, {src9}"]
-        return [emitted_move_register_line(dst10, src9)]
+        return _cast_move(dst10, src9)
     if op == "fpext" or op == "fptrunc":
         if src.first != TYPE_KIND_FP or dst.first != TYPE_KIND_FP:
             raise BackendUnavailable(f"self backend {op} type mismatch")
@@ -315,21 +328,14 @@ def emit_cast_indexed(
     if op == "ptrtoint":
         if src.first != TYPE_KIND_PTR or dst.first != TYPE_KIND_INT:
             raise BackendUnavailable("self backend ptrtoint type mismatch")
-        return [
-            emitted_move_register_line(
-                dst10,
-                "x9" if dst.second > 32 else "w9",
-            )
-        ]
+        return _cast_move(dst10, src_x if dst.second > 32 else src_w)
     if op == "inttoptr":
         if src.first != TYPE_KIND_INT or dst.first != TYPE_KIND_PTR:
             raise BackendUnavailable("self backend inttoptr type mismatch")
-        return [
-            emitted_move_register_line(
-                "x10" if src.second > 32 else "w10",
-                "x9" if src.second > 32 else "w9",
-            )
-        ]
+        return _cast_move(
+            dst_x if src.second > 32 else dst_w,
+            src_x if src.second > 32 else src_w,
+        )
     if op == "trunc":
         if src.first != TYPE_KIND_INT or dst.first != TYPE_KIND_INT:
             raise BackendUnavailable("self backend trunc type mismatch")
@@ -338,38 +344,42 @@ def emit_cast_indexed(
         return [
             emitted_move_register_line(
                 dst10,
-                "w9" if dst.second <= 32 else "x9",
+                src_w if dst.second <= 32 else src_x,
             )
         ]
     if op == "zext":
         if src.first != TYPE_KIND_INT or dst.first != TYPE_KIND_INT:
             raise BackendUnavailable("self backend zext type mismatch")
         if src.second == 1:
-            return ["  and w10, w9, #1"]
+            return ["  and " + dst_w + ", " + src_w + ", #1"]
         if src.second <= 32 and dst.second > 32:
-            return [emitted_move_register_line("w10", "w9")]
-        return [emitted_move_register_line(dst10, src9)]
+            return [emitted_move_register_line(dst_w, src_w)]
+        return _cast_move(dst10, src9)
     if op == "sext":
         if src.first != TYPE_KIND_INT or dst.first != TYPE_KIND_INT:
             raise BackendUnavailable("self backend sext type mismatch")
         if src.second == 8:
-            return ["  sxtb x10, w9" if dst.second > 32 else "  sxtb w10, w9"]
+            return [
+                "  sxtb " + (dst_x if dst.second > 32 else dst_w) + ", " + src_w
+            ]
         if src.second == 16:
-            return ["  sxth x10, w9" if dst.second > 32 else "  sxth w10, w9"]
+            return [
+                "  sxth " + (dst_x if dst.second > 32 else dst_w) + ", " + src_w
+            ]
         if src.second == 32 and dst.second > 32:
-            return ["  sxtw x10, w9"]
+            return ["  sxtw " + dst_x + ", " + src_w]
         if src.second == 1:
             return (
-                ["  and w10, w9, #1", "  neg w10, w10"]
+                ["  and " + dst_w + ", " + src_w + ", #1", "  neg " + dst_w + ", " + dst_w]
                 if dst.second <= 32
-                else ["  and w10, w9, #1", "  neg x10, x10"]
+                else ["  and " + dst_w + ", " + src_w + ", #1", "  neg " + dst_x + ", " + dst_x]
             )
-        return [emitted_move_register_line(dst10, src9)]
+        return _cast_move(dst10, src9)
     if op == "sitofp" or op == "uitofp":
         if src.first != TYPE_KIND_INT or dst.first != TYPE_KIND_FP:
             raise BackendUnavailable(f"self backend {op} type mismatch")
         mnemonic = "scvtf" if op == "sitofp" else "ucvtf"
-        return [f"  {mnemonic} {dst10}, {'x9' if src.second > 32 else 'w9'}"]
+        return [f"  {mnemonic} {dst10}, {src_x if src.second > 32 else src_w}"]
     if op == "fptosi" or op == "fptoui":
         if src.first != TYPE_KIND_FP or dst.first != TYPE_KIND_INT:
             raise BackendUnavailable(f"self backend {op} type mismatch")

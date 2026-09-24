@@ -21,6 +21,15 @@ import pytest
 
 from pcc.backend.self_backend_dispatch import emit_self_asm
 
+
+@pytest.fixture(autouse=True)
+def _block_local_allocator(monkeypatch):
+    # These cases pin the block-local x1-x8 allocator's exact shapes; the
+    # default callee-saved allocator is covered by
+    # tests/c/test_self_backend_aarch64_callee_saved.py.
+    monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "0")
+
+
 TRIPLE = "arm64-apple-macosx"
 
 _LOOP = '''

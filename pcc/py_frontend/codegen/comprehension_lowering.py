@@ -33,6 +33,7 @@ from . import marshal
 from .builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
 from .errors import L1CodegenError
 from .for_loop_lowering import _for_prepare_owned_object_target, _for_store_owned_target
+from .hoist_boxing import COMPREHENSION_CELL_PREFIX
 from .layer1_support import _dataclass_field_names, _dataclass_field_value
 
 
@@ -307,12 +308,21 @@ class ComprehensionLoweringMixin:
         # targets' fresh comprehension bindings are exactly what Python
         # scoping requires them to see.
         if generators:
-            tgt0, iter0, ifs0, async0 = generators[0]
+            # Leading comprehension-cell clauses iterate a constant; the
+            # source's outermost iterable is the clause after them.
+            first = 0
+            while (
+                first + 1 < len(generators)
+                and isinstance(generators[first][0], Name)
+                and generators[first][0].ident.startswith(COMPREHENSION_CELL_PREFIX)
+            ):
+                first += 1
+            tgt0, iter0, ifs0, async0 = generators[first]
             iter0_safe = self._prehoist_outermost_comp_iter(
                 iter0, comp_bound_names
             )
             if iter0_safe is not iter0:
-                generators[0] = (tgt0, iter0_safe, ifs0, async0)
+                generators[first] = (tgt0, iter0_safe, ifs0, async0)
 
         saved_env_entries: dict[str, object] = {}
         saved_cpy_flags: dict[str, object] = {}

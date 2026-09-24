@@ -15,6 +15,10 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_fixed_instruction_line,
     emitted_frame_pair_line,
 )
+from .self_backend_aarch64_darwin_regalloc import (
+    callee_saved_area_size,
+    emit_callee_saved_loads,
+)
 from .self_backend_aarch64_darwin_regs import (
     emit_const_to_reg,
     emit_const_to_reg_bits,
@@ -28,9 +32,10 @@ from .self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntAre
 
 
 def emit_epilogue(func: ParsedFunction) -> list[str]:
-    lines: list[str] = []
-    if func.frame_size:
-        lines.extend(emit_stack_adjust(func.frame_size))
+    lines = emit_callee_saved_loads(func)
+    total_frame = func.frame_size + callee_saved_area_size(func)
+    if total_frame:
+        lines.extend(emit_stack_adjust(total_frame))
     lines.append(emitted_frame_pair_line(True))
     # Reverse-edge protection: authenticate the signed LR before returning. When
     # branch protection is on this emits ``autiasp`` + ``ret`` (SP is the same
@@ -45,9 +50,10 @@ def emit_epilogue(func: ParsedFunction) -> list[str]:
 
 def emit_tail_epilogue(func: ParsedFunction, target: str) -> list[str]:
     """Restore the caller's frame/return address before a direct sibling jump."""
-    lines: list[str] = []
-    if func.frame_size:
-        lines.extend(emit_stack_adjust(func.frame_size))
+    lines = emit_callee_saved_loads(func)
+    total_frame = func.frame_size + callee_saved_area_size(func)
+    if total_frame:
+        lines.extend(emit_stack_adjust(total_frame))
     lines.append(emitted_frame_pair_line(True))
     if branch_protection_enabled():
         lines.append(emitted_fixed_instruction_line("autiasp"))

@@ -975,6 +975,16 @@ def materialize_scalar_value_indexed(
             bits = 64
         return emit_const_to_reg_bits(bits, reg, const_value)
     indexed_value_id = kernel.value_id(value)
+    if indexed_value_id >= 0 and func.indexed_slot_projection:
+        # A direct-kernel operand recorded by name (a constructor call's
+        # arguments, for one) is the same SSA value as its id: when the
+        # allocator put it in a register its slot was never written.
+        allocated_index = kernel.value_register(indexed_value_id)
+        if allocated_index is not None:
+            allocated_reg = reg_name_indexed(kernel, type_id, allocated_index)
+            if allocated_reg == reg:
+                return []
+            return [emitted_move_register_line(reg, allocated_reg)]
     slot_id = (
         -1 if indexed_value_id < 0 else kernel.value_slot_id(indexed_value_id)
     )

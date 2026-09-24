@@ -83,6 +83,16 @@ gain. Three low-ceiling candidates against a large gap require reassessing the
 owner, as specified in AGENTS.md. Current reports do not automatically infer
 these semantic categories or prove which runtime work is removable.
 
+Self-hosting makes code size part of execution cost: pcc1 runs the compiler
+while compiling the source of the next compiler. A runtime fast path or
+call-site specialization may remove calls yet make every compiler module emit
+more IR. Compare the same frozen AST/exports and options under host pcc and
+pcc1; require the expected output equality, then inspect IR bytes, retired
+instructions and whole-stage CPU. Where only the runtime changes, relink the
+same compiler objects to isolate it. The 2026-09-24 [Stage2 investigation](../investigations/native-stage2-link-asm-memory-budget.md)
+rejected `self.field` inlining after it grew one hot module's IR by 12% and
+its native worker instructions by 3%, despite removing runtime calls.
+
 ## Evidence and acceptance
 
 Capture modes print an evidence directory. Native modes retain `native.sample`,

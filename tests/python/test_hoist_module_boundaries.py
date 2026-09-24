@@ -101,7 +101,11 @@ def test_hoist_pass_keeps_analysis_and_boxing_out_of_orchestrator():
     )
     # +35 over the post-split 4400: boxing now rewrites import bindings of
     # captured names into cell stores (``_box_import``).
-    assert combined_lines <= 4435
+    # +750: boxing binds for/with/except targets through temporaries,
+    # rewrites raise/del/def-default/class-header reads, respects lambda and
+    # comprehension scopes, boxes names a lambda sees rebound (the late-binding
+    # scan), and gives lambda-captured comprehension targets per-run cells.
+    assert combined_lines <= 5185
 
 
 def test_hoist_exception_handlers_use_stage_safe_field_access():

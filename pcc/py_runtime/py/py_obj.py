@@ -1282,6 +1282,25 @@ def pcc_gc_retain_plan_finish(plan) -> None:
 def py_incref(o) -> None:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return
+    # Backend 0, no probe, one thread, no logging: an ordinary object that is
+    # neither immortal nor dying takes a plain increment -- what the path
+    # below does for it after its configuration loads, a dozen tag compares
+    # and the kernel call.  Everything else falls through unchanged.
+    if (
+        load_i32(global_addr("pcc_gc_refcount_fast"), 0) != 0
+        and load_i32(global_addr("pcc_runtime_log_fast_state"), 0) == 0
+    ):
+        fast_tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        if (
+            (fast_tag >= PY_TYPE_NONE and fast_tag < PY_TYPE_CONTINUATION)
+            or fast_tag == PY_TYPE_CPY_HANDLE
+            or (fast_tag >= PY_TYPE_USER and fast_tag < 0x10000)
+        ):
+            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
+                fast_rc: int = load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET)
+                if fast_rc >= 0:
+                    store_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, fast_rc + 1)
+                    return
     # Standalone GC0 operations need no prepare record on the nonterminal
     # path. Keep provenance/type checks and share terminal finish with plans.
     if _gc_backend_fast() != 0:
@@ -1435,6 +1454,23 @@ def _py_decref_finish(prepared) -> None:
 def py_decref(o) -> None:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return
+    # As in py_incref; a count that would reach zero keeps the full path, so
+    # deallocation, weakrefs and resurrection are untouched.
+    if (
+        load_i32(global_addr("pcc_gc_refcount_fast"), 0) != 0
+        and load_i32(global_addr("pcc_runtime_log_fast_state"), 0) == 0
+    ):
+        fast_tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        if (
+            (fast_tag >= PY_TYPE_NONE and fast_tag < PY_TYPE_CONTINUATION)
+            or fast_tag == PY_TYPE_CPY_HANDLE
+            or (fast_tag >= PY_TYPE_USER and fast_tag < 0x10000)
+        ):
+            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
+                fast_rc: int = load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET)
+                if fast_rc > 1:
+                    store_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, fast_rc - 1)
+                    return
     # Standalone GC0 operations need no prepare record on the nonterminal
     # path. Keep provenance/type checks and share terminal finish with plans.
     if _gc_backend_fast() != 0:

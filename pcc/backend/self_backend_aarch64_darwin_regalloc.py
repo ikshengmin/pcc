@@ -19,6 +19,14 @@ in a PHI block may still use this register projection.
 This is a deliberately finite block-local subset of LLVM 20.1.8's
 ``RegAllocFast.cpp`` model: every value keeps its preassigned spill slot, and a
 mapping is installed only when the whole interval is proven safe for x1-x8.
+
+``PCC_SELF_CALLEE_SAVED_REGISTERS`` adds a second pool, ``x19``-``x28``, which
+AAPCS64 makes callee-saved and which no emitter touches.  A value in that pool
+survives calls, so intervals that cross a call, end at a call operand, or
+belong to a scalar function argument may be allocated there; the prologue saves
+exactly the pool registers the function uses and every epilogue restores them.
+Intervals are function-wide (see ``_function_level_facts``) and PHI values and
+PHI inputs still stay spilled.
 """
 
 import os
@@ -27,8 +35,15 @@ from .self_backend_analysis import (
     collect_block_local_last_uses,  # compatibility seam; indexed path never calls it
     is_local_value_ref,
 )
-from .self_backend_aarch64_darwin_abi import reg_name_indexed
-from .self_backend_aarch64_darwin_mem import emitted_move_register_line
+from .self_backend_aarch64_darwin_abi import (
+    aggregate_passed_indirect,
+    assign_abi_arg_regs,
+    reg_name_indexed,
+)
+from .self_backend_aarch64_darwin_mem import (
+    emitted_memory_instruction_line,
+    emitted_move_register_line,
+)
 from .self_backend_kernel import (
     IndexedFunctionKernel,
     TYPE_KIND_INT,
@@ -70,6 +85,11 @@ from .self_backend_value_arena import CompilerInt4
 
 
 _REGISTER_POOL = (1, 2, 3, 4, 5, 6, 7, 8)
+# Callee-saved by AAPCS64 (x18 is the Darwin platform register and x29/x30 are
+# the frame record), so a value here survives every call.  No emitter uses
+# these as scratch; the prologue saves the ones a function is assigned.
+_CALLEE_SAVED_POOL = (19, 20, 21, 22, 23, 24, 25, 26, 27, 28)
+_ASSIGNABLE_REGISTERS = _REGISTER_POOL + _CALLEE_SAVED_POOL
 
 # Every instruction in an allocated block must be known not to clobber x1-x8.
 # Non-candidate floating/vector/aggregate and atomic values still use their
@@ -225,10 +245,20 @@ def _interval_touches_call(
     # A value used as a call operand ends at the call position and must remain
     # spilled: ABI argument setup may overwrite x1-x8 before every operand has
     # been copied.  Strictly pre-call and strictly post-call intervals are safe.
-    for call_position in call_positions:
-        if start <= call_position <= end:
-            return True
-    return False
+    #
+    # Positions are generated in increasing order, so the first position at or
+    # after ``start`` decides.  A linear scan here made function-wide
+    # allocation quadratic (every interval against every call) on the largest
+    # functions.
+    low = 0
+    high = len(call_positions)
+    while low < high:
+        middle = (low + high) // 2
+        if call_positions[middle] < start:
+            low = middle + 1
+        else:
+            high = middle
+    return low < len(call_positions) and call_positions[low] <= end
 
 
 def _extend_aarch64_madd_operand_liveness(
@@ -371,6 +401,20 @@ def call_result_registers_enabled() -> bool:
     return value in ("1", "true", "yes", "on")
 
 
+_CALLEE_SAVED_ENV = "PCC_SELF_CALLEE_SAVED_REGISTERS"
+
+
+def callee_saved_registers_enabled() -> bool:
+    """Allocate function-wide intervals over x1-x8 and callee-saved x19-x28.
+
+    On by default.  ``PCC_SELF_CALLEE_SAVED_REGISTERS=0`` restores the
+    block-local x1-x8 allocator selected by the two flags above, byte for
+    byte (the emitter's operand selection keyed on this mode is off too).
+    """
+    value = str(os.environ.get(_CALLEE_SAVED_ENV, "") or "").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
 def function_live_intervals_enabled() -> bool:
     """Widen live intervals from one block to the whole function.
 
@@ -391,15 +435,29 @@ def function_live_intervals_enabled() -> bool:
     return value in ("1", "true", "yes", "on")
 
 
+def _note_use_block(use_blocks: dict[int, list[int]], value_id: int, block_id: int) -> None:
+    blocks = use_blocks.get(value_id)
+    if blocks is None:
+        use_blocks[value_id] = [block_id]
+    elif blocks[len(blocks) - 1] != block_id:
+        blocks.append(block_id)
+
+
 def _function_level_facts(
     kernel,
-) -> tuple[list[int], dict[int, int], list[int], list[bool]]:
+) -> tuple[
+    list[int], dict[int, int], list[int], list[bool], list[int], list[int],
+    dict[int, int],
+]:
     """Global positions, function-wide last uses and barriers.
 
     Each block owns ``count + 1`` positions: its instructions, then its
     terminator.  A block the block-local scan would skip (an unclassified or
     rejected instruction kind) contributes every one of its positions as a
-    barrier, so no interval may span it.
+    barrier, so no interval may span it.  Besides the merged barrier list, the
+    call positions and those unsafe-block ("hard") positions are returned
+    separately: a callee-saved register survives a call but not an
+    unclassified instruction.
 
     The last use is *not* the last textual use.  A value defined before a loop
     and used inside it is live at every point of the loop, including positions
@@ -418,14 +476,19 @@ def _function_level_facts(
     block_end: list[int] = []
     last_use: dict[int, int] = {}
     barriers: list[int] = []
+    call_positions: list[int] = []
+    hard_barriers: list[int] = []
     block_safe: list[bool] = []
-    block_defs: list[set[int]] = []
-    block_uses: list[set[int]] = []
+    # SSA: each value has one defining block, so liveness is computed per
+    # value by walking back from its uses (below) rather than as per-block
+    # live sets.  Per-block sets held every value live across every block --
+    # O(blocks x values) -- which pushed a Stage2 emit worker past its memory
+    # share on the module initializers, the largest functions pcc emits.
+    def_block: dict[int, int] = {}
+    use_blocks: dict[int, list[int]] = {}
     position = 0
     block_id = 0
     while block_id < len(kernel.block_names):
-        defs_here: set[int] = set()
-        uses_here: set[int] = set()
         block_fact: CompilerInt4 = kernel.block_fact(block_id)
         block_base.append(position)
         safe = True
@@ -448,32 +511,35 @@ def _function_level_facts(
             )
             if not safe or metadata.first == PARSED_INSTRUCTION_KIND_CALL:
                 barriers.append(position)
+                if not safe:
+                    hard_barriers.append(position)
+                else:
+                    call_positions.append(position)
             instruction_fact: CompilerInt4 = kernel.instruction_fact_by_id(
                 block_fact.first + instruction_index
             )
             destination = instruction_fact.first
             if destination >= 0:
-                defs_here.add(destination)
+                def_block[destination] = block_id
             use_index = 0
             use_count = kernel.instruction_use_count(block_id, instruction_index)
             while use_index < use_count:
                 used = kernel.instruction_use_id(block_id, instruction_index, use_index)
                 last_use[used] = position
-                uses_here.add(used)
+                _note_use_block(use_blocks, used, block_id)
                 use_index += 1
             position += 1
             instruction_index += 1
         if not safe:
             barriers.append(position)
+            hard_barriers.append(position)
         try:
             used = kernel.terminator_use_id(block_id, 0)
             last_use[used] = position
-            uses_here.add(used)
+            _note_use_block(use_blocks, used, block_id)
         except IndexError:
             pass
         block_end.append(position)
-        block_defs.append(defs_here)
-        block_uses.append(uses_here)
         position += 1
         block_id += 1
 
@@ -495,42 +561,75 @@ def _function_level_facts(
             if case.second >= 0:
                 targets.append(case.second)
             case_index += 1
+        # An inline error edge leaves the block mid-way to its error target.
+        # Treating the target as a block successor over-approximates the
+        # values live at the edge, which can only lengthen intervals.
+        error_span = kernel.inline_error_edge_span(block_id)
+        error_index = 0
+        while error_index < error_span.second:
+            error_target = kernel.inline_error_edge_target(
+                error_span.first + error_index
+            )
+            if error_target >= 0:
+                targets.append(error_target)
+            error_index += 1
         successors.append(targets)
         block_id += 1
 
-    # Backward liveness to a fixpoint.  Upward-exposed uses are the uses of
-    # values the block does not itself define (SSA: a block-local definition
-    # always precedes its uses in that block).
-    live_in: list[set[int]] = [set() for _ in block_defs]
-    live_out: list[set[int]] = [set() for _ in block_defs]
-    changed = True
-    while changed:
-        changed = False
-        block_id = len(block_defs) - 1
-        while block_id >= 0:
-            out_set: set[int] = set()
-            for target in successors[block_id]:
-                if 0 <= target < len(live_in):
-                    out_set |= live_in[target]
-            in_set = (block_uses[block_id] - block_defs[block_id]) | (
-                out_set - block_defs[block_id]
-            )
-            if out_set != live_out[block_id] or in_set != live_in[block_id]:
-                live_out[block_id] = out_set
-                live_in[block_id] = in_set
-                changed = True
-            block_id -= 1
-
-    # A value live out of a block is live through that block's last position;
-    # for a loop latch that is what extends the range across the back edge.
+    predecessors: list[list[int]] = [[] for _ in successors]
     block_id = 0
-    while block_id < len(block_defs):
-        for value_id in live_out[block_id]:
-            end = block_end[block_id]
-            if last_use.get(value_id, -1) < end:
-                last_use[value_id] = end
+    while block_id < len(successors):
+        for target in successors[block_id]:
+            if 0 <= target < len(predecessors):
+                predecessors[target].append(block_id)
         block_id += 1
-    return block_base, last_use, barriers, block_safe
+
+    # Backward liveness per value.  A use outside the defining block makes the
+    # value live into that block (SSA: a use in the defining block follows the
+    # definition); a block the value is live into makes it live out of every
+    # predecessor, and live into each predecessor that is not the defining
+    # block.  This is the fixpoint ``live_in = upward_exposed |
+    # (live_out - defs)``, ``live_out = union of successors' live_in``, solved
+    # one value at a time.  A value live out of a block is live through that
+    # block's last position (for a loop latch that extends the range across
+    # the back edge); a value live into a block is live from its first
+    # position -- layout order need not follow dominance, so such a block may
+    # precede the definition.
+    first_live: dict[int, int] = {}
+    visited: list[int] = [-1] * len(successors)
+    pending: list[int] = []
+    for value_id in use_blocks:
+        home = def_block.get(value_id, -1)
+        lowest = -1
+        highest = last_use[value_id]
+        for block_id in use_blocks[value_id]:
+            if block_id != home and visited[block_id] != value_id:
+                visited[block_id] = value_id
+                pending.append(block_id)
+        while pending:
+            block_id = pending.pop()
+            base = block_base[block_id]
+            if lowest < 0 or base < lowest:
+                lowest = base
+            for predecessor in predecessors[block_id]:
+                end = block_end[predecessor]
+                if end > highest:
+                    highest = end
+                if predecessor != home and visited[predecessor] != value_id:
+                    visited[predecessor] = value_id
+                    pending.append(predecessor)
+        last_use[value_id] = highest
+        if lowest >= 0:
+            first_live[value_id] = lowest
+    return (
+        block_base,
+        last_use,
+        barriers,
+        block_safe,
+        call_positions,
+        hard_barriers,
+        first_live,
+    )
 
 
 def _linear_scan_assign(kernel, intervals: list[tuple[int, int, int]]) -> None:
@@ -577,17 +676,258 @@ def _linear_scan_assign(kernel, intervals: list[tuple[int, int, int]]) -> None:
         active.append((end, value_id, register_index))
 
 
+def _linear_scan_assign_pools(
+    kernel, intervals: list[tuple[int, int, int, bool]]
+) -> list[int]:
+    """Two-pool linear scan; return the callee-saved registers it assigned.
+
+    An interval flagged ``needs_callee_saved`` (it crosses a call, ends at a
+    call operand, or is a function argument) may only take x19-x28.  Every
+    other interval prefers x1-x8, which cost nothing to preserve, and falls
+    back to x19-x28.  Eviction follows ``_linear_scan_assign``: the
+    furthest-ending active interval holding a register this interval may use
+    is displaced to its stack slot when it outlives this one.
+    """
+
+    intervals.sort(key=lambda interval: (interval[0], interval[1], interval[2]))
+    active: list[tuple[int, int, int]] = []
+    free_caller = list(_REGISTER_POOL)
+    free_callee = list(_CALLEE_SAVED_POOL)
+    for start, end, value_id, needs_callee_saved in intervals:
+        still_active: list[tuple[int, int, int]] = []
+        for active_end, active_id, register_index in active:
+            # Uses are materialized before the current definition is
+            # committed, so an interval ending at this instruction can
+            # safely donate its register to the new result.
+            if active_end <= start:
+                if register_index >= _CALLEE_SAVED_POOL[0]:
+                    free_callee.append(register_index)
+                else:
+                    free_caller.append(register_index)
+            else:
+                still_active.append((active_end, active_id, register_index))
+        active = still_active
+        free_caller.sort()
+        free_callee.sort()
+
+        register_index = -1
+        if not needs_callee_saved and free_caller:
+            register_index = free_caller.pop(0)
+        elif free_callee:
+            register_index = free_callee.pop(0)
+        else:
+            spill_index = -1
+            index = 0
+            while index < len(active):
+                if (
+                    not needs_callee_saved
+                    or active[index][2] >= _CALLEE_SAVED_POOL[0]
+                ) and (
+                    spill_index < 0 or active[index][0] > active[spill_index][0]
+                ):
+                    spill_index = index
+                index += 1
+            if spill_index >= 0 and active[spill_index][0] > end:
+                # As in ``_linear_scan_assign``: the displaced value takes the
+                # stack-slot path for its definition and every use.
+                spill_end, spill_id, spill_register = active.pop(spill_index)
+                kernel.clear_value_register(spill_id)
+                register_index = spill_register
+        if register_index < 0:
+            continue
+        kernel.set_value_register(value_id, register_index)
+        active.append((end, value_id, register_index))
+
+    used = [False] * len(_CALLEE_SAVED_POOL)
+    for _start, _end, value_id, _needs in intervals:
+        register_index = kernel.value_register(value_id)
+        if register_index is not None and register_index >= _CALLEE_SAVED_POOL[0]:
+            used[register_index - _CALLEE_SAVED_POOL[0]] = True
+    return [
+        _CALLEE_SAVED_POOL[index]
+        for index in range(len(_CALLEE_SAVED_POOL))
+        if used[index]
+    ]
+
+
+def _is_noop_word_cast(kernel, cast_record: CompilerInt4) -> bool:
+    """A cast whose 64-bit result has exactly its source's bits."""
+
+    op = kernel.call_texts[cast_record.first]
+    if op != "ptrtoint" and op != "inttoptr" and op != "bitcast":
+        return False
+    for type_id in (cast_record.second, cast_record.fourth):
+        header: CompilerInt4 = kernel.type_header(type_id)
+        if header.first == TYPE_KIND_PTR:
+            continue
+        if header.first == TYPE_KIND_INT and header.second == 64:
+            continue
+        return False
+    return True
+
+
+def _alias_root(parent: dict[int, int], value_id: int) -> int:
+    root = value_id
+    while parent.get(root, root) != root:
+        root = parent[root]
+    return root
+
+
+def _merge_alias_groups(
+    intervals: list[tuple[int, int, int, bool]],
+    alias_pairs: list[tuple[int, int]],
+) -> tuple[list[tuple[int, int, int, bool]], dict[int, list[int]]]:
+    """Coalesce no-op casts with their sources into one register group.
+
+    SSA values are never modified, and a no-op word cast's result holds its
+    source's bits, so the pair may share one register for the union of their
+    intervals.  Each group is keyed by its smallest value id; only candidates
+    (values with an interval) are merged.
+    """
+
+    has_interval: set[int] = set()
+    for _start, _end, value_id, _needs in intervals:
+        has_interval.add(value_id)
+    parent: dict[int, int] = {}
+    for dest_id, source_id in alias_pairs:
+        if dest_id not in has_interval or source_id not in has_interval:
+            continue
+        dest_root = _alias_root(parent, dest_id)
+        source_root = _alias_root(parent, source_id)
+        if dest_root == source_root:
+            continue
+        if dest_root < source_root:
+            parent[source_root] = dest_root
+        else:
+            parent[dest_root] = source_root
+
+    group_start: dict[int, int] = {}
+    group_end: dict[int, int] = {}
+    group_needs: dict[int, bool] = {}
+    members: dict[int, list[int]] = {}
+    order: list[int] = []
+    for start, end, value_id, needs in intervals:
+        root = _alias_root(parent, value_id)
+        if root not in members:
+            members[root] = []
+            order.append(root)
+            group_start[root] = start
+            group_end[root] = end
+            group_needs[root] = needs
+        else:
+            if start < group_start[root]:
+                group_start[root] = start
+            if end > group_end[root]:
+                group_end[root] = end
+            if needs:
+                group_needs[root] = True
+        members[root].append(value_id)
+    merged: list[tuple[int, int, int, bool]] = []
+    for root in order:
+        merged.append((group_start[root], group_end[root], root, group_needs[root]))
+    return merged, members
+
+
+def _publish_group_registers(
+    kernel,
+    group_intervals: list[tuple[int, int, int, bool]],
+    members: dict[int, list[int]],
+) -> list[int]:
+    """Give every group member its root's register; return used x19-x28."""
+
+    used = [False] * len(_CALLEE_SAVED_POOL)
+    for _start, _end, root, _needs in group_intervals:
+        register_index = kernel.value_register(root)
+        for value_id in members[root]:
+            if register_index is None:
+                kernel.clear_value_register(value_id)
+            else:
+                kernel.set_value_register(value_id, register_index)
+        if register_index is not None and register_index >= _CALLEE_SAVED_POOL[0]:
+            used[register_index - _CALLEE_SAVED_POOL[0]] = True
+    return [
+        _CALLEE_SAVED_POOL[index]
+        for index in range(len(_CALLEE_SAVED_POOL))
+        if used[index]
+    ]
+
+
+def _append_argument_intervals(
+    func: ParsedFunction,
+    kernel,
+    phi_input_ids: set[int],
+    global_last_use: dict[int, int],
+    hard_barriers: list[int],
+    intervals: list[tuple[int, int, int, bool]],
+) -> None:
+    """Add register-passed scalar arguments as callee-saved candidates.
+
+    An argument is defined on entry (position -1) and is committed by the
+    prologue.  It is restricted to x19-x28 so that the commit can never
+    overwrite another incoming argument register that the prologue has yet
+    to read.
+    """
+
+    arg_types = [arg.type for arg in func.args]
+    arg_regs = assign_abi_arg_regs(arg_types)
+    arg_index = 0
+    while arg_index < len(func.args):
+        arg = func.args[arg_index]
+        regs = arg_regs[arg_index]
+        arg_index += 1
+        if len(regs) != 1 or regs[0][0] not in ("x", "w"):
+            continue
+        if aggregate_passed_indirect(arg.type):
+            continue
+        value_id = kernel.value_id(arg.name)
+        if value_id < 0 or value_id in phi_input_ids:
+            continue
+        if kernel.alloca_offset(value_id) >= 0:
+            continue
+        type_id = kernel.value_type_id(value_id)
+        if type_id < 0:
+            continue
+        header: CompilerInt4 = kernel.type_header(type_id)
+        if header.first != TYPE_KIND_PTR and not (
+            header.first == TYPE_KIND_INT
+            and header.second in (1, 8, 16, 32, 64)
+        ):
+            continue
+        if kernel.value_slot_offset(value_id) < 0:
+            continue
+        last_use = global_last_use.get(value_id)
+        if last_use is None or last_use < 0:
+            continue
+        if _interval_touches_call(0, last_use, hard_barriers):
+            continue
+        intervals.append((-1, last_use, value_id, True))
+
+
 def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     """Populate the indexed kernel with conservative linear-scan picks."""
 
     kernel = get_indexed_function_kernel(func)
     kernel.clear_value_registers()
+    func.aarch64_callee_saved = []
     if func.is_vararg:
         return
     function_level = function_live_intervals_enabled()
     call_results = call_result_registers_enabled() and bool(
         getattr(func, "indexed_slot_projection", False)
     )
+    # The callee-saved mode needs whole-function intervals (a value that
+    # survives a call almost always spans blocks) and call results.
+    callee_saved = callee_saved_registers_enabled() and bool(
+        getattr(func, "indexed_slot_projection", False)
+    )
+    if callee_saved:
+        function_level = True
+        call_results = True
+    pool_intervals: list[tuple[int, int, int, bool]] = []
+    alias_pairs: list[tuple[int, int]] = []
+    call_barriers: list[int] = []
+    hard_barriers: list[int] = []
+    first_live: dict[int, int] = {}
     phi_input_ids: set[int] = set()
     block_id = 0
     while block_id < len(kernel.block_names):
@@ -610,9 +950,15 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     block_safe: list[bool] = []
     function_intervals: list[tuple[int, int, int]] = []
     if function_level:
-        block_base, global_last_use, global_barriers, block_safe = (
-            _function_level_facts(kernel)
-        )
+        (
+            block_base,
+            global_last_use,
+            global_barriers,
+            block_safe,
+            call_barriers,
+            hard_barriers,
+            first_live,
+        ) = _function_level_facts(kernel)
 
     for block_id in range(len(kernel.block_names)):
         block_name = kernel.block_names[block_id]
@@ -687,6 +1033,14 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                     position += 1
                     continue
                 call_header: CompilerInt4 = kernel.call_header(call_id)
+                if not (call_header.third & 1) and kernel.call_texts[
+                    call_header.second
+                ].startswith("llvm."):
+                    # Intrinsics are lowered inline by emitters that store
+                    # their result to its slot themselves; only the generic
+                    # call path commits through the allocator.
+                    position += 1
+                    continue
                 ret_header: CompilerInt4 = kernel.type_header(call_header.first)
                 if not (
                     ret_header.first == TYPE_KIND_PTR
@@ -784,11 +1138,44 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
             # starts one position later.  The interval still begins at the
             # call so no other value may hold the register across it.
             barrier_start = start + 1 if is_call_result else start
-            if function_level:
+            live_start = start
+            if function_level and first_live.get(dest_id, start) < start:
+                # A block the value is live into is laid out before its
+                # definition.  Such a value is live *before* the position its
+                # interval would start at, which the scan's register donation
+                # at an interval boundary does not model; keep it in its slot.
+                position += 1
+                continue
+            if callee_saved:
+                # Nothing survives an unclassified instruction.  A call (or a
+                # use as a call operand, which ends at the call) only rules
+                # out the caller-saved pool.
+                if _interval_touches_call(barrier_start, last_use, hard_barriers):
+                    position += 1
+                    continue
+                pool_intervals.append(
+                    (
+                        live_start,
+                        last_use,
+                        dest_id,
+                        _interval_touches_call(
+                            barrier_start, last_use, call_barriers
+                        ),
+                    )
+                )
+                if kind_id == PARSED_INSTRUCTION_KIND_CAST:
+                    cast_record: CompilerInt4 = kernel.instruction_record(
+                        metadata.second
+                    )
+                    if cast_record.third >= 0 and _is_noop_word_cast(
+                        kernel, cast_record
+                    ):
+                        alias_pairs.append((dest_id, cast_record.third))
+            elif function_level:
                 if _interval_touches_call(barrier_start, last_use, global_barriers):
                     position += 1
                     continue
-                function_intervals.append((start, last_use, dest_id))
+                function_intervals.append((live_start, last_use, dest_id))
             else:
                 if _interval_touches_call(
                     position + 1 if is_call_result else position,
@@ -803,7 +1190,19 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         if not function_level:
             _linear_scan_assign(kernel, intervals)
 
-    if function_level:
+    if callee_saved:
+        _append_argument_intervals(
+            func, kernel, phi_input_ids, global_last_use, hard_barriers,
+            pool_intervals,
+        )
+        group_intervals, group_members = _merge_alias_groups(
+            pool_intervals, alias_pairs
+        )
+        _linear_scan_assign_pools(kernel, group_intervals)
+        func.aarch64_callee_saved = _publish_group_registers(
+            kernel, group_intervals, group_members
+        )
+    elif function_level:
         _linear_scan_assign(kernel, function_intervals)
 
     # Stack slots were assigned before this target combine was planned.  When
@@ -814,6 +1213,50 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         for fusion in func.aarch64_madd_fusions
         if _aarch64_madd_fusion_storage_is_safe(func, fusion)
     ]
+
+
+def callee_saved_area_size(func: ParsedFunction) -> int:
+    """Bytes below the slot frame that hold the saved callee-saved registers.
+
+    The area sits at ``[sp, #0]`` upward once the prologue has lowered sp by
+    ``frame_size`` plus this size.  Slot offsets are x29-relative and are not
+    moved, so nothing that addresses a slot changes.  (Compact unwind keeps
+    describing a plain frame; nothing in pcc restores registers by unwinding.)
+    """
+    count = len(func.aarch64_callee_saved)
+    return (count * 8 + 15) // 16 * 16
+
+
+def emit_callee_saved_stores(func: ParsedFunction) -> list[str]:
+    lines: list[str] = []
+    index = 0
+    while index < len(func.aarch64_callee_saved):
+        lines.append(
+            emitted_memory_instruction_line(
+                "str",
+                "x" + str(func.aarch64_callee_saved[index]),
+                "sp",
+                index * 8,
+            )
+        )
+        index += 1
+    return lines
+
+
+def emit_callee_saved_loads(func: ParsedFunction) -> list[str]:
+    lines: list[str] = []
+    index = 0
+    while index < len(func.aarch64_callee_saved):
+        lines.append(
+            emitted_memory_instruction_line(
+                "ldr",
+                "x" + str(func.aarch64_callee_saved[index]),
+                "sp",
+                index * 8,
+            )
+        )
+        index += 1
+    return lines
 
 
 def allocated_scalar_register_indexed(
@@ -828,7 +1271,7 @@ def allocated_scalar_register_indexed(
     ):
         return -1
     register_index = kernel.value_register(value_id)
-    if register_index is None or register_index not in _REGISTER_POOL:
+    if register_index is None or register_index not in _ASSIGNABLE_REGISTERS:
         return -1
     recorded_type_id = kernel.value_type_id(value_id)
     if recorded_type_id < 0 or not _register_type_ids_match(kernel, recorded_type_id, type_id):
@@ -848,7 +1291,7 @@ def allocated_register_name(
     register_index = (
         None if value_id < 0 else kernel.value_register(value_id)
     )
-    if register_index is None or register_index not in _REGISTER_POOL:
+    if register_index is None or register_index not in _ASSIGNABLE_REGISTERS:
         return None
     recorded_type_id = kernel.value_type_id(value_id)
     expected_type_id = kernel.intern_type(value_type)
@@ -891,7 +1334,7 @@ def commit_allocated_scalar_result_indexed(
 ) -> list[str] | None:
     kernel = get_indexed_function_kernel(func)
     register_index = kernel.value_register(value_id)
-    if register_index is None or register_index not in _REGISTER_POOL:
+    if register_index is None or register_index not in _ASSIGNABLE_REGISTERS:
         return None
     recorded_type_id = kernel.value_type_id(value_id)
     if recorded_type_id < 0 or not _register_type_ids_match(

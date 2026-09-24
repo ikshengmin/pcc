@@ -1017,12 +1017,21 @@ def py_instance_bind_method(method, self_obj, name):
 # caller buffer or a freed class-owned spelling.
 #   +0 class  +8 epoch  +12 kind  +16 payload  +24 name bytes (NUL-terminated)
 define_thread_local_ptr_null("py_attr_resolution_table")
-_ATTR_RES_ENTRIES = 4096
+_ATTR_RES_ENTRIES = 16384
 _ATTR_RES_ENTRY_SIZE = 64
 _ATTR_RES_NAME_MAX = 39
 _ATTR_RES_FIELD = 1
 _ATTR_RES_METHOD = 2
-_ATTR_RES_NO_GETATTRIBUTE = 3
+# The class resolves `name` to nothing: no class attribute, field or method in
+# the MRO, no `__getattr__`, and not a dict subclass.  Only the instance's own
+# dict can still answer.  Generic AST walks probe every node for dozens of
+# field names it lacks -- 28% of the lookups in a native Stage2 frontend
+# worker -- and each miss walked the MRO twice with a fresh str key.
+_ATTR_RES_ABSENT = 4
+# A data descriptor (a property, or an object with `__set__`/`__delete__`)
+# answers for (class, name); payload is the borrowed descriptor, held by the
+# class dict, so it is cached only where methods are (non-moving collectors).
+_ATTR_RES_DATA_DESCRIPTOR = 5
 
 
 def _attr_res_slot(table, cls, name):
@@ -1033,13 +1042,25 @@ def _attr_res_slot(table, cls, name):
 
 
 def _attr_res_find(cls, name, kind: int):
+    entry = _attr_res_find_any(cls, name)
+    if ptr_is_null(entry) != 0:
+        return null()
+    if load_i32(entry, 12) != kind:
+        return null()
+    return entry
+
+
+def _attr_res_find_any(cls, name):
+    """The live entry for (cls, name) whatever its kind: every kind of one
+    (class, name) lands in the same slot, so a caller that accepts several
+    kinds compares the name once."""
     table = global_load_ptr("py_attr_resolution_table")
     if ptr_is_null(table) != 0:
         return null()
     entry = _attr_res_slot(table, cls, name)
     if ptr_eq(load_ptr(entry, 0), cls) == 0:
         return null()
-    if load_i32(entry, 12) != kind:
+    if load_i32(entry, 12) == 0:
         return null()
     if load_i32(entry, 8) != _class_attr_cache_epoch():
         return null()
@@ -1053,6 +1074,43 @@ def _attr_res_find(cls, name, kind: int):
             return entry
         i = i + 1
     return null()
+
+
+# `__getattribute__` absence, keyed by the class alone.  Every instance
+# attribute read asks this first; answering it from the name-keyed table cost
+# a 17-byte name compare per access.  Entry: +0 class  +8 epoch.
+define_thread_local_ptr_null("py_attr_no_getattribute_table")
+_NO_GETATTRIBUTE_ENTRIES = 1024
+
+
+def _no_getattribute_known(cls) -> int:
+    table = global_load_ptr("py_attr_no_getattribute_table")
+    if ptr_is_null(table) != 0:
+        return 0
+    entry = ptr_add(
+        table, ((ptr_to_int(cls) >> 4) & (_NO_GETATTRIBUTE_ENTRIES - 1)) * 16
+    )
+    if ptr_eq(load_ptr(entry, 0), cls) == 0:
+        return 0
+    if load_i32(entry, 8) != _class_attr_cache_epoch():
+        return 0
+    return 1
+
+
+def _no_getattribute_store(cls, epoch: int) -> None:
+    table = global_load_ptr("py_attr_no_getattribute_table")
+    if ptr_is_null(table) != 0:
+        table = malloc(_NO_GETATTRIBUTE_ENTRIES * 16)
+        if ptr_is_null(table) != 0:
+            return
+        memset(table, 0, _NO_GETATTRIBUTE_ENTRIES * 16)
+        global_store_ptr("py_attr_no_getattribute_table", table)
+    entry = ptr_add(
+        table, ((ptr_to_int(cls) >> 4) & (_NO_GETATTRIBUTE_ENTRIES - 1)) * 16
+    )
+    store_ptr(entry, 0, null())
+    store_i32(entry, 8, epoch)
+    store_ptr(entry, 0, cls)
 
 
 def _attr_res_store(cls, name, kind: int, payload: int, epoch: int) -> None:
@@ -1101,6 +1159,34 @@ def _dynamic_attr_slot(inst):
     return ptr_add(
         inst, PYINSTANCEOBJECT_FIELDS_OFFSET + n_fields * C_POINTER_SIZE
     )
+
+
+def _instance_dict_of(inst, cls):
+    """The instance dict of a validated instance of `cls` (borrowed), or NULL:
+    `_dynamic_attr_slot` without validating `inst` a second time."""
+    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) != 0:
+        return null()
+    n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
+    if n_fields < 0:
+        n_fields = 0
+    return pcc_gc_load_ptr(
+        inst,
+        ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + n_fields * C_POINTER_SIZE),
+    )
+
+
+def _instance_dict_attr(inst, cls, name):
+    """`name` from the instance's own dict (a new reference), or NULL, for an
+    ABSENT outcome: the class already answered nothing."""
+    dyn = _instance_dict_of(inst, cls)
+    if ptr_is_null(dyn) != 0:
+        return null()
+    key = py_str_new(name, strlen(name))
+    if ptr_is_null(key) != 0:
+        return null()
+    got = py_dict_get(dyn, key)
+    py_decref(key)
+    return got
 
 
 @c_abi_export("py_instance_vars")
@@ -1788,24 +1874,36 @@ def py_instance_getattr_default(inst, name):
     if ptr_is_null(name) != 0:
         return null()
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
+    return _instance_getattr_default(inst, cls, name)
+
+
+def _instance_getattr_default(inst, cls, name):
+    """`py_instance_getattr_default` for an instance the caller validated,
+    with its class `cls` and a non-NULL `name`."""
     # `__class__` and `__dict__` return below before any outcome is recorded,
     # so a cached entry can never answer for them.
-    field_entry = _attr_res_find(cls, name, _ATTR_RES_FIELD)
-    if ptr_is_null(field_entry) == 0:
-        fields_base_hit = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-        field_hit = pcc_gc_load_ptr(
-            inst, ptr_add(fields_base_hit, load_i64(field_entry, 16) * C_POINTER_SIZE)
-        )
-        if ptr_is_null(field_hit) == 0:
-            py_incref(field_hit)
-        return field_hit
-    method_entry = _attr_res_find(cls, name, _ATTR_RES_METHOD)
-    if ptr_is_null(method_entry) == 0:
-        hit_dyn_slot = _dynamic_attr_slot(inst)
-        if ptr_is_null(hit_dyn_slot) != 0 or ptr_is_null(
-            pcc_gc_load_ptr(inst, hit_dyn_slot)
-        ) != 0:
-            return py_instance_bind_method(load_ptr(method_entry, 16), inst, name)
+    entry = _attr_res_find_any(cls, name)
+    if ptr_is_null(entry) == 0:
+        kind: int = load_i32(entry, 12)
+        if kind == _ATTR_RES_FIELD:
+            fields_base_hit = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
+            field_hit = pcc_gc_load_ptr(
+                inst, ptr_add(fields_base_hit, load_i64(entry, 16) * C_POINTER_SIZE)
+            )
+            if ptr_is_null(field_hit) == 0:
+                py_incref(field_hit)
+            return field_hit
+        if kind == _ATTR_RES_METHOD:
+            if ptr_is_null(_instance_dict_of(inst, cls)) != 0:
+                return py_instance_bind_method(load_ptr(entry, 16), inst, name)
+        if kind == _ATTR_RES_ABSENT:
+            return _instance_dict_attr(inst, cls, name)
+        if kind == _ATTR_RES_DATA_DESCRIPTOR:
+            got_hit = _descriptor_call_get(load_ptr(entry, 16), inst, cls)
+            if ptr_is_null(got_hit) == 0:
+                return got_hit
+            if py_err_occurred() != 0:
+                return null()
     outcome_epoch: int = _class_attr_cache_epoch()
     if _cstr_is_dunder_class(name) != 0:
         if ptr_is_null(cls) == 0:
@@ -1827,6 +1925,11 @@ def py_instance_getattr_default(inst, name):
     class_attr = _class_attr_lookup_in_mro(cls, name)
     if ptr_is_null(class_attr) == 0:
         if _descriptor_is_data(class_attr):
+            if _attr_res_method_cacheable() != 0:
+                _attr_res_store(
+                    cls, name, _ATTR_RES_DATA_DESCRIPTOR,
+                    ptr_to_int(class_attr), outcome_epoch,
+                )
             got = _descriptor_call_get(class_attr, inst, cls)
             py_decref(class_attr)
             if ptr_is_null(got) == 0:
@@ -1900,6 +2003,10 @@ def py_instance_getattr_default(inst, name):
             return null()
     getattr_method = _class_lookup_in_mro(cls, cstr("__getattr__"))
     if ptr_is_null(getattr_method) != 0:
+        if (ds_flags & 4) == 0:
+            # No class attribute, field or method answered and the instance
+            # dict (checked above) did not either.
+            _attr_res_store(cls, name, _ATTR_RES_ABSENT, 0, outcome_epoch)
         return null()
     key = py_str_new(name, strlen(name))
     if ptr_is_null(key) != 0:
@@ -1949,17 +2056,13 @@ def py_instance_getattr(inst, name):
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
     if ptr_is_null(cls) != 0:
         return null()
+    if _no_getattribute_known(cls) != 0:
+        return _instance_getattr_default(inst, cls, name)
     getattribute_name = cstr("__getattribute__")
-    if ptr_is_null(
-        _attr_res_find(cls, getattribute_name, _ATTR_RES_NO_GETATTRIBUTE)
-    ) == 0:
-        return py_instance_getattr_default(inst, name)
     probe_epoch: int = _class_attr_cache_epoch()
     getattribute_method = _class_lookup_in_mro(cls, getattribute_name)
     if ptr_is_null(getattribute_method) != 0:
-        _attr_res_store(
-            cls, getattribute_name, _ATTR_RES_NO_GETATTRIBUTE, 0, probe_epoch
-        )
+        _no_getattribute_store(cls, probe_epoch)
     if ptr_is_null(getattribute_method) == 0:
         key = py_str_new(name, strlen(name))
         if ptr_is_null(key) != 0:
@@ -1991,7 +2094,7 @@ def py_instance_getattr(inst, name):
                         return fallback
         py_decref(key)
         return null()
-    return py_instance_getattr_default(inst, name)
+    return _instance_getattr_default(inst, cls, name)
 
 
 @c_abi_export("py_instance_setattr")
@@ -2001,6 +2104,20 @@ def py_instance_setattr(inst, name, value) -> int:
     if ptr_is_null(name) != 0:
         return -1
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
+    # A FIELD outcome proves no data descriptor shadows the field, so the
+    # store goes straight to its slot, as the full walk below would decide.
+    entry = _attr_res_find_any(cls, name)
+    if ptr_is_null(entry) == 0 and load_i32(entry, 12) == _ATTR_RES_FIELD:
+        pcc_gc_store_ptr(
+            inst,
+            ptr_add(
+                inst,
+                PYINSTANCEOBJECT_FIELDS_OFFSET + load_i64(entry, 16) * C_POINTER_SIZE,
+            ),
+            value,
+        )
+        return 0
+    outcome_epoch: int = _class_attr_cache_epoch()
     class_attr = _class_attr_lookup_in_mro(cls, name)
     if ptr_is_null(class_attr) == 0:
         # A property is a data descriptor whether or not it has a setter;
@@ -2018,6 +2135,10 @@ def py_instance_setattr(inst, name, value) -> int:
         n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
         if idx >= n_fields:
             return -1
+        if ptr_is_null(class_attr) != 0:
+            # No class attribute at all, so no data descriptor: the same
+            # outcome the read path records for this field.
+            _attr_res_store(cls, name, _ATTR_RES_FIELD, idx, outcome_epoch)
         fields_base = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
         pcc_gc_store_ptr(
             inst,
@@ -2131,17 +2252,26 @@ def py_class_apply_namespace_dict(cls, ns) -> int:
 def py_isinstance(obj, cls) -> int:
     obj = pcc_gc_note_relocation_read(obj)
     cls = pcc_gc_note_relocation_read(cls)
-    if _ptr_can_have_header(obj):
-        if load_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_EXC:
-            # Exception instances match through their exception-class MRO.
-            if py_exc_matches(obj, cls) != 0:
-                return 1
-            return 0
-    if not _ptr_is_instance(obj):
+    # One provenance probe, for `obj`.  `cls` is only compared by address with
+    # the validated class of `obj` and its MRO entries, all real classes, so
+    # an argument that is not a class never matches -- the answer the former
+    # `_ptr_is_class(cls)` probe gave up front.  `_ptr_is_instance` probed
+    # `obj` a second time.
+    if not _ptr_can_have_header(obj):
         return 0
-    if not _ptr_is_class(cls):
+    tag: int = load_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    if tag == PY_TYPE_EXC:
+        # Exception instances match through their exception-class MRO.
+        if py_exc_matches(obj, cls) != 0:
+            return 1
+        return 0
+    if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
         return 0
     obj_cls = pcc_gc_load_ptr(obj, ptr_add(obj, PYINSTANCEOBJECT_CLS_OFFSET))
+    if ptr_is_null(obj_cls) != 0:
+        return 0
+    if not _ptr_is_class_of_validated_instance(obj_cls):
+        return 0
     if ptr_eq(obj_cls, cls) != 0:
         return 1
     n_mro: int = load_i32(obj_cls, PYCLASSOBJECT_N_MRO_OFFSET)
@@ -2841,6 +2971,38 @@ def py_obj_call_method(method, self_obj, args):
             py_decref(item)
         i = i + 1
     out = py_func_call_kwargs(method, full_args, null())
+    py_decref(full_args)
+    return out
+
+
+@c_abi_export("py_obj_call_method_kwargs")
+def py_obj_call_method_kwargs(method, self_obj, args, kwargs):
+    """`py_obj_call_method` with a keywords dict (or NULL).
+
+    `obj.name(a, key=b)` used to bind a method object -- a fresh captures
+    tuple and a copied signature per call -- only to call it once.
+    """
+    if ptr_is_null(self_obj) != 0:
+        return py_obj_call(method, args, kwargs)
+    n: int = 0
+    if ptr_is_null(args) == 0:
+        n = py_tuple_len(args)
+    full_args = py_tuple_new(n + 1)
+    if ptr_is_null(full_args) != 0:
+        return _class_require_result(
+            null(),
+            cstr("py_tuple_new"),
+            cstr("method call argument tuple allocation failed"),
+        )
+    py_tuple_set_item(full_args, 0, self_obj)
+    i: int = 0
+    while i < n:
+        item = py_tuple_get(args, i)
+        py_tuple_set_item(full_args, i + 1, item)
+        if ptr_is_null(item) == 0:
+            py_decref(item)
+        i = i + 1
+    out = py_func_call_kwargs(method, full_args, kwargs)
     py_decref(full_args)
     return out
 

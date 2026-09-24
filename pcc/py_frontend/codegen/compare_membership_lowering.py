@@ -995,6 +995,13 @@ class CompareMembershipLoweringMixin:
         def identity_temp_needs_release(src: Expr, raw: ir.Value) -> bool:
             if not isinstance(raw.type, ir.PointerType):
                 return False
+            if raw in getattr(self, "_cpy_values", ()):
+                return False
+            # An emitter-recorded owner (a dynamic ``functions[0](x)`` call
+            # result, say) is owned whatever the AST shape suggests; leaving
+            # it out leaked the operand of every such identity test.
+            if self._value_is_owned_object(raw):
+                return True
             if self._expr_returns_owned_object(src):
                 return True
             return isinstance(src, (IntLit, FloatLit, BoolLit))

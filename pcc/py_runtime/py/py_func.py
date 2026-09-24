@@ -158,97 +158,27 @@ def _signature_valid(sig) -> int:
     sig_len: int = py_tuple_len(sig)
     if sig_len < 5:
         return 0
-    # ``magic`` is released on every exit below, so obtain the owned reference
-    # promised by py_tuple_get instead of borrowing the tuple slot directly.
-    magic = py_tuple_get(sig, 0)
+    # Every native call checks this.  ``sig`` is a tuple of at least five
+    # items, so its first slot is read borrowed, and the 25-byte spelling
+    # "__pcc_func_signature_v1__" (the str payload starts at offset 40) is
+    # compared as three aligned words and a final byte rather than 25 bytes.
+    magic = _tuple_borrow_known(sig, 0)
     if ptr_is_null(magic):
         return 0
     if is_tagged_int(magic) != 0:
-        py_decref(magic)
         return 0
     if load_i32(magic, 8) != PY_TYPE_STR:
-        py_decref(magic)
         return 0
-    magic_len: int = load_i64(magic, 16)
-    if magic_len != 25:
-        py_decref(magic)
+    if load_i64(magic, 16) != 25:
         return 0
-    if load_i8(magic, 40) != 95:
-        py_decref(magic)
+    if load_i64(magic, 40) != 0x75665F6363705F5F:  # "__pcc_fu"
         return 0
-    if load_i8(magic, 41) != 95:
-        py_decref(magic)
+    if load_i64(magic, 48) != 0x616E6769735F636E:  # "nc_signa"
         return 0
-    if load_i8(magic, 42) != 112:
-        py_decref(magic)
+    if load_i64(magic, 56) != 0x5F31765F65727574:  # "ture_v1_"
         return 0
-    if load_i8(magic, 43) != 99:
-        py_decref(magic)
+    if load_i8(magic, 64) != 95:  # "_"
         return 0
-    if load_i8(magic, 44) != 99:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 45) != 95:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 46) != 102:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 47) != 117:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 48) != 110:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 49) != 99:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 50) != 95:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 51) != 115:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 52) != 105:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 53) != 103:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 54) != 110:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 55) != 97:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 56) != 116:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 57) != 117:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 58) != 114:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 59) != 101:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 60) != 95:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 61) != 118:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 62) != 49:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 63) != 95:
-        py_decref(magic)
-        return 0
-    if load_i8(magic, 64) != 95:
-        py_decref(magic)
-        return 0
-    py_decref(magic)
     return 1
 
 

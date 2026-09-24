@@ -1092,6 +1092,7 @@ void      py_dealloc_weakref(PyObject *ref);
 PyObject *py_obj_getattr(PyObject *o, const char *name);
 PyObject *py_obj_load_method(PyObject *obj, const char *name, PyObject **out_self);
 PyObject *py_obj_call_method(PyObject *method, PyObject *self_obj, PyObject *args);
+PyObject *py_obj_call_method_kwargs(PyObject *method, PyObject *self_obj, PyObject *args, PyObject *kwargs);
 PyObject *py_obj_getattr_default(PyObject *o, const char *name);
 PyObject *py_obj_getattr_maybe(PyObject *o, const char *name);
 PyObject *py_obj_vars(PyObject *o);

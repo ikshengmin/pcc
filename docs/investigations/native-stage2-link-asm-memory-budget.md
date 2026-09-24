@@ -3574,3 +3574,76 @@ byte-identical text IR for 13 modules (entry, `type_infer`, `llvm_capi.ir`,
 pcc2 emit byte-identical indexed sidecars for modules 53, 120, 240 and 260
 (6.2, 1.3, 18.6 and 3.1 MB); pcc2 compiles and runs the function and object
 programs under GC0-GC4.  Stage2 is still 3.5 times Stage1.
+
+### 2026-09-24 (round 5): pcc1 executes the compiler slower than CPython
+
+Stage1 and Stage2 run the same compiler source over the same modules; only
+the executor differs.  r18: Stage1 1002 CPU-s, Stage2 3413 CPU-s.  The same
+frontend job (module 53, identical output) retires 73.8 G instructions under
+host CPython 3.15 and 298.6 G under pcc1 (4.05x; module 240: 3.6x).
+Scheduling cannot close that: r18's Stage2 CPU over 12 cores is 284 s and its
+serial link alone 208 s, both above Stage1's 180 s.
+
+A folded profile of pcc1 on that job put ~94% of self time in runtime
+mechanisms -- allocation and object lifecycle 32.5%, GC protocol calls 25.8%,
+out-of-line refcounting 20.0%, dynamic attribute/dict lookup 14.7% -- and
+~5% in the compiler's own code.  Measured with the runtime-only relink A/B
+(`rtab/relink_rt.py`, `rtab/nw5.py`; byte-identical job output throughout)
+unless noted:
+
+```
+m53 frontend job (G instructions)                          pcc1     vs r18
+r18 pcc1                                                  298.6
+failed-lookup (ABSENT) cache, getattr_maybe instance path   279.3    -6.3%
++ per-class __getattribute__ table, data-descriptor cache,
+  setattr field fast path, one validation per chain        263.8   -11.5%
++ 16384-entry resolution table (64K: -0.5% more, 4 MB)     258.3   -13.4%
++ one provenance probe per isinstance                      255.2   -14.4%
++ kwargs method calls load, _value_ref without raising
+  (codegen; r19 Stage1 pcc1)                               248.1   -16.8%
++ GC0 in-place incref/decref                               243.1   -18.5%
++ signature magic as words                                 242.7   -18.6%
++ tuple stores read the backend once                       241.7   -18.9%
+host CPython                                                73.8
+```
+
+* **Failed attribute lookups walked the MRO twice [CONFIRMED, fixed].**
+  28% of instance attribute lookups found nothing: generic AST scans
+  (`_CPY_SCAN_FIELDS`, 37 field names) probe every node with
+  `getattr(node, field, None)`.  Each miss allocated a str key, walked the
+  class dicts, the field names, the method tables and `__getattr__`'s
+  lookup.  An ABSENT outcome per (class, name) leaves only the instance dict
+  to check.
+* **Keyword method calls bound a method object per call [CONFIRMED, fixed].**
+  `builder.call(..., name=...)` took `py_obj_getattr` + `py_obj_call`: a
+  bound method, a captures tuple and a copied signature for one call.  They
+  now load the method (`py_obj_load_method`) and call
+  `py_obj_call_method_kwargs` (new, both runtimes).
+* **`_value_ref` raised and caught an AttributeError per operand [fixed].**
+* **Inlining `self.field` reads [DENIED].**  Correct under GC0-GC4, but ~25
+  IR lines per site grew module 53's IR 12% and the job's instructions to
+  251.0 G (+3%): in self-host the compiler compiles what it emits.  Reverted.
+
+The table's last rows are measured on r19's objects relinked; r21 (all of
+the above, Stage1 pcc1): 240.5 G, 15.5 s wall against r18's 19.5 s.  Output
+of the job is byte-identical across the runtime rows; the host compiler and
+r21's pcc1 emit byte-identical text IR for modules 53, 120 and 240, pcc1 and
+pcc2 byte-identical sidecars for 53 and 240, and pcc2 runs the function and
+object programs under GC0-GC4.  Code size is unchanged (pcc2 +0.04%).
+
+```
+                         r18          r19          r21
+Stage1 wall / CPU        193 / 1002   209 / 1082   211 / 1077 s   (host load)
+Stage2 wall              667.8 s      631.0 s      637.0 s
+Stage2 user CPU          3365 s       3016 s       2936 s
+last PCO                 459.5 s      429.7 s      431.5 s
+link                     208.2 s      201.2 s      205.4 s
+```
+
+Stage2 CPU fell 12.7% and wall ~5% (r19/r21 differ within host-load noise).
+pcc1 still retires 3.3x CPython's instructions on the module 53 job.  The
+remaining cost is structural: every dynamic call allocates an argument tuple
+(and a keywords dict), GC tracking is a lock plus an open-addressed hash
+insert/remove per container, and allocation zeroes and registers every object;
+each runtime fast path left is worth under 2%.
+
