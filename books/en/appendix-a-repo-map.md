@@ -75,14 +75,10 @@ Organized by subsystem; paths are relative to the repository root.
 
 ## GUI and application execution (Chapter 20)
 
-| Path | Role |
-|---|---|
-| [pcc/py_runtime/gui_declarative_contract_v1.json](../../pcc/py_runtime/gui_declarative_contract_v1.json) | Declarative GUI v1 records, state machines, capacities, and error ABI |
-| [pcc/py_runtime/py/pcc_gui_kit.py](../../pcc/py_runtime/py/pcc_gui_kit.py) | Canonical reclaimable composition-tree kernel, layout, clipping, hit paths, and render walk |
-| `pcc/py_runtime/py/pcc_gui_{components,scheduler,events}.py` | Keyed atomic commit, state lanes, listeners, and effect lifecycle |
-| `pcc/py_runtime/py/pcc_gui_{style,commands,app_lifecycle}.py` | Utility compiler/cache, managed command resolution, and webview-free run lifecycle |
-| [projects/mac_diff_app/](../../projects/mac_diff_app) | Declarative dual-pane diff canary and AppKit/Metal boundary |
-| [docs/design/gui-declarative-absorption.md](../../docs/design/gui-declarative-absorption.md) | React/Tailwind/Tauri mechanism-absorption boundary, nonclaims, and task route |
+The GUI framework, its v1 contract, the `mac_diff_app` canary, the Metal/AppKit
+bridge and their tests moved to
+[allstoalls/pcc-gui](https://github.com/allstoalls/pcc-gui) on 2026-09-06.
+Core commit `977ad074` is the last one that contains them.
 
 ## Methodology documents (Chapter 18)
 

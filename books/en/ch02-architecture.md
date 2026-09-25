@@ -264,7 +264,7 @@ The authoritative full table is the Repository Map in [AGENTS.md](../../AGENTS.m
 | [pcc/parse/py_parse.py](../../pcc/parse/py_parse.py), `py_lift.py`, [pcc/py_frontend/](../../pcc/py_frontend) | Python parsing/lifting, type inference, lowering (Chapters 5, 6) |
 | [pcc/py_frontend/pipeline.py](../../pcc/py_frontend/pipeline.py) | Python pipeline conductor: closure, fallback decision, linking, publication |
 | [pcc/py_runtime/](../../pcc/py_runtime) | Runtime: semantic/freestanding pcc-Python production owners + C oracles + five GCs (Chapters 7–11, 14) |
-| `pcc/py_runtime/py/pcc_gui_*.py`, [projects/mac_diff_app/](../../projects/mac_diff_app) | Declarative GUI kernel, components/scheduler/events/style/commands/lifecycle, and product canary (Chapter 20) |
+| GUI framework | Declarative GUI kernel and product canary (Chapter 20); moved to [allstoalls/pcc-gui](https://github.com/allstoalls/pcc-gui) on 2026-09-06 |
 | [pcc/llvm_capi/](../../pcc/llvm_capi), [pcc/backend/](../../pcc/backend) | LLVM-C construction layer (Chapter 12) and the self backend (Chapter 13) |
 | [pcc/extern/](../../pcc/extern), [pcc/unsafe/](../../pcc/unsafe) | The two tools for writing low-level code in pcc-Python (Chapter 14) |
 | [utils/fake_libc_include/](../../utils/fake_libc_include) | Fake libc headers (Chapter 3) |

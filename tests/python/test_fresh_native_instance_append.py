@@ -183,7 +183,10 @@ def test_trusted_append_keeps_all_gc_barriers_and_borrowed_item_accounting():
     assert "py_incref(o)" in py_incref
     assert "pcc_refcount_incref(o)" in py_incref
     assert "PY_TYPE_USER_CLASS_START" in py_incref
-    assert "tag > 500" in py_incref
+    # User class tags run up to PY_TYPE_CEXT_TAG_BASE; the old ``tag > 500``
+    # bound skipped refcounting past roughly the 440th class.
+    assert "tag >= (0x10000)" in py_incref
+    assert "tag > 500" not in py_incref
     assert "backend == 1 or backend == 2" in py_incref
     assert "backend == 3" in py_incref
     assert "backend == 4" in py_incref

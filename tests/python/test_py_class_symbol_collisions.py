@@ -80,7 +80,11 @@ def test_extern_class_method_symbol_preserves_wrapper_collision(tmp_path):
 
     assert "@user_lib_Builder__method_call4_i32(" in ir_text
     assert "@user_lib_Builder_call4_i32(" in ir_text
-    assert "call ptr @user_lib_Builder__method_call4_i32" in ir_text
+    # The wrapper calls the method symbol, not itself; the printer may spell
+    # the callee's function type (``call ptr (ptr) @...``).
+    assert re.search(
+        r"call ptr (?:\([^)]*\) )?@user_lib_Builder__method_call4_i32\(", ir_text
+    )
 
 
 def test_extern_subclass_preserves_untyped_inherited_slot_order(tmp_path):

@@ -11,8 +11,8 @@ from pcc.py_frontend.pipeline import compile_python
 
 
 REPO = Path(__file__).resolve().parents[2]
-CONTEXTUAL_PCC_GUI_FIXTURE = (
-    REPO / "tests" / "fixtures" / "contextual_pcc_gui_class_method_failure.py"
+CONTEXTUAL_METHOD_FIXTURE = (
+    REPO / "tests" / "fixtures" / "contextual_class_method_extern_args.py"
 )
 
 
@@ -158,9 +158,9 @@ def test_class_self_call_argument_types_run_no_libpython(tmp_path):
     assert run.stdout == "42\n"
 
 
-def _contextual_pcc_gui_method_source() -> str:
-    """Load the immutable, executable full-context failure source."""
-    return CONTEXTUAL_PCC_GUI_FIXTURE.read_text(encoding="utf-8")
+def _contextual_method_source() -> str:
+    """Load the executable full-module contextual-argument source."""
+    return CONTEXTUAL_METHOD_FIXTURE.read_text(encoding="utf-8")
 
 
 def _method_argument_provenance_source() -> str:
@@ -183,12 +183,12 @@ def _method_argument_provenance_source() -> str:
     ).lstrip()
 
 
-def test_full_pcc_gui_context_method_ints_follow_emitted_abi(
+def test_full_context_method_ints_follow_emitted_abi(
     tmp_path,
 ):
-    src = tmp_path / "contextual_pcc_gui_method.py"
-    ll = tmp_path / "contextual_pcc_gui_method.ll"
-    src.write_text(_contextual_pcc_gui_method_source(), encoding="utf-8")
+    src = tmp_path / "contextual_method.py"
+    ll = tmp_path / "contextual_method.ll"
+    src.write_text(_contextual_method_source(), encoding="utf-8")
     compile_python(
         str(src),
         str(ll),
@@ -198,49 +198,42 @@ def test_full_pcc_gui_context_method_ints_follow_emitted_abi(
         emit_llvm_only=True,
     )
     ir_text = ll.read_text(encoding="utf-8")
-    body = _function_body(
-        ir_text,
-        "ContextualAnimApp_anim_start",
-    )
-    extern_call = next(
-        line for line in body.splitlines() if "@pcc_gui_anim_start" in line
-    )
+    body = _function_body(ir_text, "ContextualFillApp_fill")
+    extern_call = next(line for line in body.splitlines() if "@memset" in line)
 
     # The emitted method ABI itself is the scalar projection, so the three
     # business values never become tagged pointers and need no box/unbox
-    # round-trip before the extern call.  Passing pointer bits as i64 is the
-    # historical 0x4000000000 leak.
+    # round-trip before the extern call.  Passing pointer bits as integers is
+    # the historical 0x4000000000 leak.
     assert body.count("@py_int_to_i64") == 0
-    assert "call i32 @pcc_gui_anim_start" in extern_call
     assert re.search(
-        r"@pcc_gui_anim_start\([^,]+,\s+i64\s+[^,]+,\s+"
-        r"i64\s+[^,]+,\s+i64\s+[^)]+\)",
+        r"@memset\(ptr\s+[^,]+,\s+i32\s+[^,]+,\s+i64\s+[^)]+\)",
         extern_call,
     ), extern_call
 
-    caller = _function_body(ir_text, "ContextualAnimApp_exercise")
+    caller = _function_body(ir_text, "ContextualFillApp_exercise")
     method_call = next(
         line
         for line in caller.splitlines()
-        if "ContextualAnimApp_anim_start" in line and "call" in line
+        if "ContextualFillApp_fill" in line and "call" in line
     )
     assert re.search(
-        r"ContextualAnimApp_anim_start\(ptr\s+[^,]+,\s*"
+        r"ContextualFillApp_fill\(ptr\s+[^,]+,\s*"
         r"i64\s+[^,]+,\s*i64\s+[^,]+,\s*i64\s+[^)]+\)",
         method_call,
     ), method_call
 
 
 @pytest.mark.parametrize("backend", ["llvm", "self"])
-def test_saved_full_context_class_method_never_exposes_boxed_int_tag(
+def test_full_context_class_method_never_exposes_boxed_int_tag(
     backend,
     tmp_path,
     monkeypatch,
     pcc_py_runtime_archive,
 ):
-    src = tmp_path / f"contextual_pcc_gui_method_{backend}.py"
-    exe = tmp_path / f"contextual_pcc_gui_method_{backend}.out"
-    src.write_text(_contextual_pcc_gui_method_source(), encoding="utf-8")
+    src = tmp_path / f"contextual_method_{backend}.py"
+    exe = tmp_path / f"contextual_method_{backend}.out"
+    src.write_text(_contextual_method_source(), encoding="utf-8")
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_py_runtime_archive))
 
     compile_python(
@@ -253,7 +246,8 @@ def test_saved_full_context_class_method_never_exposes_boxed_int_tag(
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
 
     assert run.returncode == 0, run.stderr
-    assert run.stdout == "0\n0\n100\n2000\n0\n1\n"
+    # Twelve 0x07 bytes from offset 8: 0x0707070707070707, then 0x07070707.
+    assert run.stdout == "12\n0\n506381209866536711\n117901063\n0\n0\n12\n"
 
 
 def test_method_argument_provenance_pins_managed_but_not_raw_pointer(tmp_path):
@@ -270,10 +264,12 @@ def test_method_argument_provenance_pins_managed_but_not_raw_pointer(tmp_path):
         emit_llvm_only=True,
     )
     body = _function_body(ll.read_text(encoding="utf-8"), "ProvenanceProbe_run")
+    # Outside runtime-port mode ``stack_alloc`` is typed ``int`` (a raw
+    # address), so it crosses the call as i64 and can never enter the GC.
     call_match = re.search(
         r"call\s+(?:void|ptr)\s+@[^(\n]*ProvenanceProbe_record\("
         r"ptr\s+(?P<receiver>%[^, ]+),\s*"
-        r"ptr\s+(?P<raw>%[^, ]+),\s*"
+        r"(?:ptr|i64)\s+(?P<raw>%[^, ]+),\s*"
         r"ptr\s+(?P<boxed>%[^, ]+),\s*"
         r"ptr\s+(?P<allocating>%[^) ]+)\)",
         body,

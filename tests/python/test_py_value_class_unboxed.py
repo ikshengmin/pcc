@@ -1604,7 +1604,11 @@ def test_valueclass_constructor_subscript_store_key_projection_boxes_valuebox():
     )
 
     assert re.search(r"\bcall\b[^\n]*@py_dict_set\b", main_ir)
-    assert re.search(r"\bcall\b[^\n]*@py_obj_setitem\b", put_ir)
+    # A dynamic receiver stores through py_obj_assign_subscript, which
+    # wraps py_obj_setitem with the unsupported-assignment TypeError.
+    assert re.search(
+        r"\bcall\b[^\n]*@py_obj_(?:setitem|assign_subscript)\b", put_ir
+    )
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_new\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_set_field\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_new\b", put_ir)
@@ -1738,7 +1742,7 @@ def test_valueclass_constructor_compare_operand_projection_boxes_valuebox():
     ir_text = _generate_ir(source)
     main_ir = ir_text[ir_text.index("define i32 @main") :]
 
-    assert re.search(r"\bcall\b[^\n]*@py_obj_eq\b", main_ir)
+    assert re.search(r"\bcall\b[^\n]*@py_obj_eq(?:_value)?\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_new\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_set_field\b", main_ir)
     assert not re.search(r"\bcall\b[^\n]*@user_value_mod_Segment___init__\b", main_ir)
@@ -1768,7 +1772,7 @@ def test_valueclass_constructor_exception_arg_projection_boxes_valuebox():
     ir_text = _generate_ir(source)
     main_ir = ir_text[ir_text.index("define i32 @main") :]
 
-    assert re.search(r"\bcall\b[^\n]*@py_exc_new\b", main_ir)
+    assert re.search(r"\bcall\b[^\n]*@py_exc_new(?:_with_value)?\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_new\b", main_ir)
     assert not re.search(r"\bcall\b[^\n]*@user_value_mod_Segment___init__\b", main_ir)
     assert not re.search(r"\bcall\b[^\n]*@user_value_mod_Point___init__\b", main_ir)

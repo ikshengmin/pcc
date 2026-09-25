@@ -451,11 +451,11 @@
   "member_count": 171,
   "members": [
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "42dbdb2fe4b34c750749c02f52fd71edec89c6c7a3ee013a3c762c6481ca3d50",
       "member": "py_tuple.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "7ec77d756331b53f1c0d23ff79c3068ebad4f20faa084939f8bdfa2630de9b00",
+      "object_sha256": "0f8162282dc8c8bd682c47ff0661cf3c9cdd58076eaf36ede7e7c0a636fdce05",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_tuple.py",
@@ -465,11 +465,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "88c8f8a04a6e0c36f4037f64f90d2f4d00bf05c636d180faa74449ff093417c8",
       "member": "py_tuple_slice.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "4accb9a2372a5ee5bebf9bdd737035f04d97189c8b5ade820f63dd4d632084f3",
+      "object_sha256": "c06fae2f13ed54fa10fe3070bc6cb539cd64b1bd26e35b006ac7aaf30600847b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_tuple_slice.py",
@@ -479,11 +479,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "140772e1c9ff2244b0b34e480c4b2d81437b2e91ac6c9e736c4608fd91a28c9f",
       "member": "py_obj_stubs.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "5cb6d9f5e59dfcb1e2102c6c0ff77f4026645fd168e778f7ba8ec89f8be01255",
+      "object_sha256": "5ed1534eb7bb5ce55d7f64870c4f88954a2154fed8f846d77c0b4c3d37e33152",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj_stubs.py",
@@ -493,11 +493,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "d0fe7026eb572a39d22c0981f56504619249b7600845e2f850930693350ff6c8",
       "member": "py_exc_tls.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "4f7e299a10cff56657437ea965adf56570a790f1af5e81204cf2e0d4d4b46eec",
+      "object_sha256": "0b1dfe0b4eed9e1b198f37c78bcf40dda68749be9a909413bd0018a7654e9881",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_exc_tls.py",
@@ -507,11 +507,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "6228a782cc45fa8cb7b0006e44e6376df3568c4d872d967adaddca3103b1320f",
       "member": "py_exc_objects.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "d0cd50d4674015a7236b9cbf076a7b993421fe92f51f16152869d2727b98b01a",
+      "object_sha256": "94376662d95d0dff0e693ec5e5fd9f79b83c6d84089b34029021d312513fb4d4",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_exc_objects.py",
@@ -521,11 +521,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "51b8fda369bf28077fa25f0cab0cc2c6aa38e0eb0c5afde4105f6724d91beb01",
       "member": "py_exc_match.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "b4754414d54cfa6b0e9da655a759ead7d78bdabb45767fd778824c2dec07e211",
+      "object_sha256": "bbca22cc91fa097a32650450f9134e1c2ca94911d21e6a90959a0a920ea944ee",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_exc_match.py",
@@ -535,11 +535,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "6fb8272c02529a6dbc506aef340c248e76997787b3049c1f847e9cca32d41fc2",
       "member": "py_exc_table.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "0b8acd6cc14eeaa2180b0414051ce6ec138a341d1ca1d6c404098412c8254c3a",
+      "object_sha256": "8dfe9f9dec629ff3d676f77c39035b7c310d207d77e1d556dfd27cdd1adeb666",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_exc_table.py",
@@ -549,11 +549,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "6a1259f8b220c21dabcc269eb0c0b784876651f0f11b6d5291d2a7fccd6ed2a9",
       "member": "py_exc_traceback.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "3231a67734a247a723589f946598994b650fe229a25fd1752c8494449362b1fe",
+      "object_sha256": "71ba1604d92bfb1ed3457a5d185b1f276ee7480d6f62e011a45a45cb5fd463c5",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_exc_traceback.py",
@@ -563,11 +563,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "344d93da40560276da916b10f1ed0f49504d4e74c0df2ece52e85cf648b32266",
       "member": "py_obj_gc.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "fac07303c7fc10c09c77c9154bcaa1d8182fe8a38eb625e68808d66885f2996d",
+      "object_sha256": "07790e61d3bc70676a1906a25f9a49812a1388066a7a46a4954b37a1fead498d",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj_gc.py",
@@ -577,7 +577,7 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "c8f5d257e4f8a8f4c4ccb57d5c556e81f72f0dbb90611dd408464774741810dd",
       "member": "py_gc_telemetry.o",
       "object_emitter": "pcc-self-backend-object-writer",
@@ -591,11 +591,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "3ec92c838413f4ab07547d36d65ffd3b7e0b0f89eebc669447023c13c3d2b399",
       "member": "py_gc_backend.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "7604f79719a5accdbddf65b14504a09e6121784d8e88069cb05561715d3cf381",
+      "object_sha256": "0f59d3ffe29e1c349f082024347a2e81502b3ae25142f67c3b6ad7367007048c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_gc_backend.py",
@@ -605,11 +605,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "1ba57b6df540e819a59039f4fd7cc584a18fe2513fa4ad6aca462ac735861b9f",
       "member": "py_set.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "37c90fff54ba3bbfcc8429c46c227d905cfaf5c654080989de07eed6e6f910dd",
+      "object_sha256": "3ee97082e7fa156a965f86a37625a9d9e147b4f83b94fb11689f1b063be9bda9",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_set.py",
@@ -619,11 +619,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "320024d1233365bc595f148137d4149c39ed6fd4ca4020c058506bddbe39b2d3",
       "member": "py_os_env.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "1b4b4665a3631823a52c956521aac5686f9d512a25bac876858a0836f2a34383",
+      "object_sha256": "1e2d0e1047fb692d1c197b4fa54e4089feec152f2b2397bf1150fe1c2d7cac16",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_os_env.py",
@@ -633,11 +633,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "1dba0c4967a883e23a26ec2b4030d22d720923644bf18dad6c768a077bfe1167",
       "member": "py_os_system.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "edc2a01f8ddb018c62094f0bb4150cba2884130f0b7cc3922ccdb93099ce6d7f",
+      "object_sha256": "a9c2477b5a9ee1a48a5ad144d2cbd7c205e85ad782bf22b39cd86916c4417629",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_os_system.py",
@@ -647,11 +647,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "b8711d1b7bb76567c756808f5ce6e6c2ea5c225f15bc22c01af5e6c2834423da",
       "member": "py_os_path.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "d2f9df80d1255561e569d967a19116c7c8ee862a120d8598930ff023a6a2c5a2",
+      "object_sha256": "1b6e5b020c9e32fb2b69b8025be5d7f0af14dd409fb2b05c14b6aefbbd2ffa2a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_os_path.py",
@@ -661,11 +661,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "1688030a776a447be6d897921caa679ffe7e6893e2cd958e6d29852998b02411",
       "member": "py_os_substrate.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "7d307ba8508fe22e609dabdcf20971af21fb914c8e111faa62c1967c5f76243d",
+      "object_sha256": "871a0096c8fb5d9dec52673a597dccaeec50acf9aaf8b3e1e7288c02c329b81c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_os_substrate.py",
@@ -675,11 +675,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "7ae7beb65155cb4a621ab2bd0febe908f8cdd7b354665d6a746ed5bcbc6137ef",
       "member": "py_process.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "63c3bdf2ebea9a57db0460ab7dda1c90b4f9f4bb1db4da66d95702857bdb50e9",
+      "object_sha256": "be10f90feaefb76da09522189161d417a244b3f9ae6a1bc6519f85cad4bf8274",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_process.py",
@@ -689,11 +689,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "3139554c871dca7d6cb9e33d361fbdf3e5c3523e950f429c5d03145417faa175",
       "member": "py_process_substrate.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "28a3b0f5ecfa07fb4ea1053bfb6302833e4a892f8bf74d6952ec3b0b77ea6555",
+      "object_sha256": "2114450a5b5c21d00cca034d1925675a4c4198a03aa9afc444740ce65468b3c2",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_process_substrate.py",
@@ -703,11 +703,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "afb6c383834bf95bf451241542f5f71220058f3b5ffe6cc2d0814eae853dadef",
       "member": "py_process_timeout.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "6b5822797ad0f33e3e0b5d6327ba99dbebae42f75ff6bcc36c851237d41d719b",
+      "object_sha256": "f3c125447308fae3ca90b3267d2954f014e6f74a45985a09cbe660e4f434152f",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_process_timeout.py",
@@ -717,11 +717,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "5d59fbeb9b5edefe36b4dd595d6d2d5871221a7f689d3692ce5b9d2b45b577f0",
       "member": "py_print_sys.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "f6167819bca36f91440122438a0f200528151b7d5e1dd669e3cdf388f4388361",
+      "object_sha256": "de02ca20e27753bb0136f3b17161525c21a12745ab44e16a532da32865b1a49b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_print_sys.py",
@@ -731,11 +731,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "46bf856d479729c102c5061ba5ad23920e459f3f0644c06d2bfb6d5170208c76",
       "member": "py_print_fmt.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "0686c6ccf6814ba18e30986cb3ff45fde1f39d523c2dd52527f52fed024348db",
+      "object_sha256": "0ab97421a4865e43212475109835f1f566d129387e8748f88ec58e81acdbd135",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_print_fmt.py",
@@ -745,11 +745,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "ebd88f1fc50e8d4410a167b4aa720d2044f4cc2b738ba1725e95949440224d49",
       "member": "py_format_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "bcf563a396b1e19f5ba099634eb3decece408a1f94b58c1d357aa0a8c907a63a",
+      "object_sha256": "6aa6b2eec1069402ade2ab32445834352e1b1f20b25f4910d3a6245670941f9a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_format_runtime.py",
@@ -759,11 +759,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "fa7accab6aadfc349980aeea3cbb4967784e0006ab323b8b5259ebd96ef3883e",
       "member": "py_obj.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "f4032ee0a43651a2fed6481fcddfff51e0635ec3bb1ddb84ed340b919a691187",
+      "object_sha256": "97c2abe13da82a52895f1d2c2376d1ec5644dd087f5fd5ea030920c250b6ce5d",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj.py",
@@ -773,11 +773,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "f3e5f9bbf9a84b6efe49b14a647cfc6a1efc929b14ea487a192bb55d83fdfecb",
       "member": "py_obj_dealloc.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "86853e0494769b4c1895562a80fb1de251b17c43508e2bd071712cc33bb732a4",
+      "object_sha256": "a38ac132a6b40fdfd968fdb8d52e21a5b998d68673af660fccabc99a2e81edd0",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj_dealloc.py",
@@ -787,11 +787,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9610ec715aa0c527d185fe4b178c19e6fffdfe91ddf41c53cedc67cccaf998d1",
       "member": "py_dict.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "b8c33942f7555048a5daeb9a6d7a1ed21877ba1ef5edb7eee8d0079e9b694cd4",
+      "object_sha256": "c91679b9c831c384574d8b6436fe20635becd8a6003a775ff9676378e4c73cff",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_dict.py",
@@ -801,11 +801,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "dd2c270285834a17c7a4f30742764096189e56a883fd890b8062a545269530e9",
       "member": "py_list.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "6618f9a69402954f2b230d01141120ac3bc924aa9be94e390c925afdb9cabe04",
+      "object_sha256": "9d262c5ce608aa098435fe0f47114b932e6961875518164d4e1dcddfc34af361",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_list.py",
@@ -815,11 +815,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "f673358df0a81c444ad35e2464e1294d3e0b475168ef915258d5be820cc343c0",
       "member": "py_list_set_slice.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "ff1644f9bf5954d23626fcd49d9e4fe485f3dfb830e3e0454e2de5d17741e093",
+      "object_sha256": "32c502dba965f131ba429c4f25adbbac6011131c6fc14b2caf0d635393d25a2c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_list_set_slice.py",
@@ -829,11 +829,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "8ce428009eef180f1f62c7c17e85562b520cfba1d6fd35e7b6418655d07c8445",
       "member": "py_iter.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "17f71109f725032204a5b48aeef8d85727f78717e61795a8e274b7d425202c60",
+      "object_sha256": "67613be5b9321fa985ce6f930a9db54c120cef4feeb6f00dceb2993fd744ed95",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_iter.py",
@@ -843,11 +843,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "ed640a57d45fae2d0b7615124a680f706412322fc0b34574e820cb2b92816a94",
       "member": "py_gen.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "0b9e2e457ddc590f5d9edaee1314138325eebd558fd522d567c7b28e9985ead4",
+      "object_sha256": "a50b9b65541e60d8d6141e65123bd56fcec6a5e85d7361c65afa38139a98dbcf",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_gen.py",
@@ -857,11 +857,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "c1815a0a748e67e1180aac010e9ff3bc4c7f883fe0d95f082bef8a87d74beec7",
       "member": "py_coroutine.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "fd76451ba2ce70ec40837d6d2fdb5476f15f8095f7aeef7e8e099d64551a8509",
+      "object_sha256": "068329cf4a5f84b2d362202dcf94565bcda0ce837e98b9cf49012da18f3c6107",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_coroutine.py",
@@ -871,11 +871,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9480eed5fb89c91e249f0de32529b83e52d9752e8abc500aaa164bd3fedd0893",
       "member": "py_context_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "78080cd0307c1b474ada6b3544226a841ccc0d409fd186bd6409fb6b890862e9",
+      "object_sha256": "3ae08dcb83f03d34c7df0dda549f1895d39bebaf6b2615ef36df0684981ff35f",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_context_runtime.py",
@@ -885,11 +885,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "74e0f524e6c43f527630a4aecea8d44c82c0481e6c50a3ce6a2be5b0bc6706b1",
       "member": "py_call_splat_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "e9224e6aa726dd703b15cc51f054d8fd67d847bdab5da8132da4a1c5363b0640",
+      "object_sha256": "e0d166cf668eb687a496501daa91c87440725a9524b9a07a765b0b83729dd331",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_call_splat_runtime.py",
@@ -899,11 +899,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9b3fc7a25a74e46ff5fd1294f15802f103b32a3016ac5b3b924c158b661ed535",
       "member": "py_module_attrs_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "2ad6bcef243ae65f0bd547af01cfbdf8df834dd08e49f140846e4d96863af639",
+      "object_sha256": "bf3b850d2670e82e7194453acf9d3395933fda841e3f2fc3235fecc7094bda1e",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_module_attrs_runtime.py",
@@ -913,11 +913,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "059f0ff61e7d4db85b2bdb85c5dcb474442f07e7c078578d4a3329d49ca20088",
       "member": "py_compiled_module_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "b8e78bb3f20457aa5c0f4d8d9bb568c41b464c0144594805ac04890e953ef894",
+      "object_sha256": "2a7190b2485a4cdd051bc72d7147e6d170a69a95f0d0329c2616c06f8d01ec79",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_compiled_module_runtime.py",
@@ -927,11 +927,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "50e4a4b5a532dfe6d2cdee9951c3e3da8ba292877f0708289c91e815722397c6",
       "member": "py_dlpack_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "254a716aa5ac1af6dcd360797622f95ae3105a36432ef9e7b60f2816e157c8e5",
+      "object_sha256": "bbe25bcc50865831c8dea68e2a3c3cea36a6543bda5078f62385d2485a63de5f",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_dlpack_runtime.py",
@@ -941,11 +941,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "1916aa20ff1abaa38b317af3f7921da69788e344392b3670beb2eafb4c05e706",
       "member": "py_runtime_log.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c1366a8587f207272c5ed5c3f5c039434bca960df543c2a0da7ef8ca2f72483b",
+      "object_sha256": "897d9b722e67a134d95b2f7f65c6f9dd0efb09240adfaee957546b2e526c9259",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_runtime_log.py",
@@ -955,11 +955,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9764b35b82f1f47539fcc0f4dd3946fbd5dc5f595062c175e6b031bd6f115ebc",
       "member": "py_json_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "882a3621854b8cfc28795ed36fbcf75df9545caf5ca0aece70d8b7cbd2f1dba4",
+      "object_sha256": "829f2a3289ef7973ca2d897c9abcaff76c9ed76f41478aba62db850af9bd4029",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_json_runtime.py",
@@ -969,11 +969,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "579dbc6c707abac66fce567119e744283fa47552b287d519520c19060bc06d11",
       "member": "py_pickle_copy_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "763fc3ac7132c69329933be017401c5345394acbaeeb7a33ee5bb2cc44ef727b",
+      "object_sha256": "64068756bbb85afb80c6c37d3a5696b11ac3964213f61ca04050784a83739d38",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_pickle_copy_runtime.py",
@@ -983,11 +983,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "faab543fdd6546b1f6d94d508c86d2eef6de8e630909e63e0ce8bd3a1397da76",
       "member": "py_protocol_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "886b55ee10fa451296e193382dd164ba8e0d9d580ba6c2dfa1f9483d0a1d2668",
+      "object_sha256": "36d825936a3d0a8894660b78523ca9dd30d9931f77ba79053b71a6d9f080a69c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_protocol_runtime.py",
@@ -997,11 +997,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "c2c27fc9a61553fa68c580f759091d7bfd9e396edc3afbc030f7f0eb8ed66ef2",
       "member": "py_extension_loader_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "a2b1e0f470d682da8721d13e5aa7b9698209e9e80c69b64201e99991eb055e1a",
+      "object_sha256": "dd4071d884a6c2a5730a976cc031074178c7199b39d57f64cc80654c15d6095f",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_extension_loader_runtime.py",
@@ -1011,11 +1011,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "524633591b4463dbcad3e5a5dc58461220462b76eef8485b50fcbf1ab509b3b5",
       "member": "py_hash_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "d1d41d5e99d403a28fb45046b7ca750c845bbec0374913394be6e7d363acc281",
+      "object_sha256": "cc107c773ba79dbf05a87428e6b0a70d1d4779670ee5fdb78de337180f6cd1d7",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_hash_runtime.py",
@@ -1025,11 +1025,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "d2273602a9d0df6827d8cd652e36f254f3cc55916b9e0701e3fac485b680d873",
       "member": "py_http_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "7e31ffb40e13afb5778771c8f4d63ca0e1126902edabd5ace043a5c194c39422",
+      "object_sha256": "1d94eecddc7068e2c274efb728ac9a177031a9e2596711255ed515b902464e7b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_http_runtime.py",
@@ -1039,11 +1039,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "f183dbac41b1cdef45c0130944fe12b849a7c3188ba23eca18a399bc48a5a121",
       "member": "py_asyncio_io_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "084c017a975722851afcf319ed1f2bb222b0907e0015833b6a965f5d9ea88fc4",
+      "object_sha256": "b46fc8f32f05d8502871e9192e836aa9d1276680550cdde9e7c3c33711caade2",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_asyncio_io_runtime.py",
@@ -1053,11 +1053,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "c48573287ed0c6da338aaace8a3cedd6a066653e1b996e25332b7351dc9ef581",
       "member": "py_re_engine_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "bcc9ad8f66690814e954196d5b500439b5b303f0316c9483f6127a0884693f57",
+      "object_sha256": "a967c84fd950459af07190086fc6f6f5289b344dc78ff50c3b90833c911caa51",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_re_engine_runtime.py",
@@ -1067,11 +1067,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "97bda3b5a52e8b1d6fcc708b7ab7cc1190f907df6260ed092b3014b9081293fd",
       "member": "freestanding_io_waitset.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "4f89806e89708786eda90ebaa154db85eed8b40aaca927bfe9a6c6f2b23ee6b7",
+      "object_sha256": "bf59610d366f43487067a2c6336e41d84d21c19781a22767b0f8debab05aba13",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_io_waitset.py",
@@ -1081,11 +1081,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "0a8f9088b468dfea0289820867086136de780ff956551b04022d92deb6dbd607",
       "member": "py_func.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "8cacea0e69cdf9e424df534ee9e4f8b65667bd36795836c1f9d2b65981df38ef",
+      "object_sha256": "b7d1d9b8cacf190dfcc1df1c476c3d4fce9f6f3d694ba76e79f824ab86a0d6f8",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_func.py",
@@ -1095,11 +1095,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "673388bf6d0b40a46ec4e2c36834878802f84b4fbb6062c4317b48241d084968",
       "member": "py_re.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "15237ed87ba8b1e5a70cc13892ae64dcdff7adfdc6b44d053333dc8c584caff7",
+      "object_sha256": "01f458b861742cd1a4a24e035811138755f8e823bef00020aff6aed894a52c61",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_re.py",
@@ -1109,11 +1109,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "bc2e0d8d66ab2f77629ef2648002b6a989f72be69247e27f9aeb41808c0c6270",
       "member": "py_dunder.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "53a66a0bb05edc5a1511ac80eb902765fa21de839e265e1e0ec7e8ab9b11defa",
+      "object_sha256": "42f1e06c5ccf754d752f3f27d73fb214677b4e5017591375fb66c4f8b7252c15",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_dunder.py",
@@ -1123,11 +1123,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "cc5ee70ca5b72d5eab7be5bb6f94bc498da12b4640734280b7b976720468d359",
       "member": "py_weakref.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "7daccffb56b8a711b57736b1f3e6c3c6724d71674c8236f94c25d68280b5d177",
+      "object_sha256": "28e18f9b989dbaa14a7335ca6a2c9453d6e9e1c9a71382bbefb938d56d0ec325",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_weakref.py",
@@ -1137,11 +1137,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "8b6aa683881ebe12023b5812c2c20dd7b64c67b5df43a77b9c4777ef9e2bac89",
       "member": "py_file.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "a18d12f3abb13e5fffe2dbd8d8056bd631714d06c6e6e902eac86e47ad0de772",
+      "object_sha256": "180478619b25fecdbeed300a2d75beaf3b9f76647c5dd15c739c1948140b4013",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_file.py",
@@ -1151,11 +1151,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "e600f3107bc4bf2fe995b0f2d7708e215735412c63d51d831cbf51b84cb306e3",
       "member": "py_threading.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "aabe8a1eafb1496c17a7ca00f3686518f4d305c1398f347105387611b53f3b45",
+      "object_sha256": "aea3bd1d88ebb1f68218a76478c2fddbae005ad54a4b3d0f1ae75a7eee159dc5",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_threading.py",
@@ -1165,11 +1165,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "5ae081285276648eb59a036ebbe4c3aa215a34345de0056f2fa2b68f7903f809",
       "member": "py_class.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "ec87ccd349c7e2b6591152229288458d54d03005ed4ffad091cedf68668e077f",
+      "object_sha256": "a709f9146e9afed1030de2f8f9ff91bf920650a706d96d80c1a762789d334734",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_class.py",
@@ -1179,11 +1179,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "70af7e7b8237af665db6c21372386347d3ad4381535dd6393611ba7a3608ac5d",
       "member": "py_obj_ops_dispatch.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "478a60436d5e0fbd9413cb80fbf688f0138bb3bfda431d200943999baf2b6560",
+      "object_sha256": "86bfcae6670300ed6af652ab3576c5865cc63056a6626cda2afb429d840a7cea",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj_ops_dispatch.py",
@@ -1193,11 +1193,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "f26e53c2af5b2d23dbc4f94baadf039fd86bbe7fdca379079f7eed568b23c854",
       "member": "py_obj_ops_slice.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "769537e732922654bd876b3784bc3dff7884207fe6baec09a1a30d097627e3fc",
+      "object_sha256": "6992ede491c5fb5c3b4e5ca34e4eb4a6d454b9665e6067b581dafa780eaafd66",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj_ops_slice.py",
@@ -1207,11 +1207,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "dc04f5ddd57591bdd609b067a788f673941f06af5c906bc13f9f334855d1f2cd",
       "member": "py_obj_ops_set_slice.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "0d27d8c34be475c5287240410683a89ecaf4d3d50466ec24c61f376705dcdcf0",
+      "object_sha256": "cb71524fc1a81467c045f2667a3b15eeb66a0ce6d746015d56ed110d4312f142",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj_ops_set_slice.py",
@@ -1221,11 +1221,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "cc1b94dda855d3db99a7b034203ce97b11b152f43d743e6782a88cd70f4273d6",
       "member": "py_obj_ops_mod.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "6cbeee39f2f765591776739f8c6459a84cf8a4bf2619601fd65cd9513b296b18",
+      "object_sha256": "cf6bd9bd2b84e5900c9aef71e3f5218d5098238cabe5576557089e4b5cdf50cc",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj_ops_mod.py",
@@ -1235,11 +1235,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "df3cc884795aa8da392b8bed8a117cbca43ba852f66ec4056454cf05d3a6e40b",
       "member": "py_obj_ops_compare.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "9d0cdb755554d1108705524b99575ac99e9aca4d9d82dcec51cd275d8476b9c3",
+      "object_sha256": "f8481c377a78203becfec40e0e475e15fab4f54cbe27e12212f035b7397aba93",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_obj_ops_compare.py",
@@ -1249,11 +1249,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "908f361ca61833b31f02a057b0299de93cf77ed7313b615cd5137a7a94dadafd",
       "member": "py_str.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "fa0872b9c662394b6282f834ef6021e26c0075e0ed1bfabb4cbe69336586a264",
+      "object_sha256": "165a5ed851a88725368710c281ae03a440b2f02a85c533d8c415aecdc6b6c66b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_str.py",
@@ -1263,11 +1263,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "45b7d998909963a649172e0da26cce669c22ce4d0fdd7ff4d544cee8c0fe9623",
       "member": "py_str_accessors.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "abed5b66df55be5badcc773ad694a2ca8c733e07459e45a0e6dd1aee639f4ac1",
+      "object_sha256": "139d334185b44155a6654a08853bc83c1e3dce3d75617593cdeecab931be2896",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_str_accessors.py",
@@ -1277,11 +1277,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "2ae0e6fb84fa0d7a7501f0c37ff2cd9d6db9687d01d6941023ce50c640fddf53",
       "member": "py_str_slice.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "30f498163cbbbcb32850b1579eec672a7af69283ff421683641356d664febbde",
+      "object_sha256": "c5f4383069412c514b6ac9695a3913fc5589375b6aeb563a0e5f688ebfe9c1f3",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_str_slice.py",
@@ -1291,11 +1291,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "ac9c91a2aa875b89e8a33aa054f27c1f6ed0eb936571926c1d3a664b6f857f18",
       "member": "py_int_core.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "8fa19b109867595e0521646ed8b285d3b75d5ed046e19ee21b7003346f865a3b",
+      "object_sha256": "3b61cef42d12878a90c2808b3d3d8a06663cd197646e5808089c500d010975d2",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_core.py",
@@ -1305,11 +1305,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "3fcae905ecf21999607a6221e1200cd2f1c00cf1380babb2a4ad3f02bb4d7266",
       "member": "py_int_decimal.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "140a19ec37ca5e2267d9ccf13abec1d82c5e1c4f098eb35ca7b7b600ac745a9c",
+      "object_sha256": "5f8064857f47ed8ee2fc9beab8f9e46fdcde5dce6e2b697665e97ec0a2f48919",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_decimal.py",
@@ -1319,11 +1319,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "3e4afca259631133c67697084027d8d52ccaeb6971d2713ea4f8656ca8423436",
       "member": "py_int_shift.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "8395359936a2c4e9fe00cdb596b35dd06c5a66cff6740a7dde9a80b33e7a1af8",
+      "object_sha256": "13756c6ac64125367f6bf721330914ffc18516b4ddc1db857232151a71c7434a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_shift.py",
@@ -1333,11 +1333,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "28a5ee8354453e12a77e136940372100cd89fa01582711500f9354c66dcdd415",
       "member": "py_int_bitwise.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c62ecc30478fbb961dba72caf81ce40106cf7302e1bf13ba0dd57eeb44c58577",
+      "object_sha256": "0a88a93975c2c1170f165e60a80d9720fc3fac23d7d2f5331478a245b80bf4f2",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_bitwise.py",
@@ -1347,11 +1347,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "016fdf5037acda41474787da75786d8fe2004eb41edb521a8033eb2249b99d84",
       "member": "py_int_addsub.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "94138a0a8dc5f86694b5d5b0644fa4835725bd1e81af881942dd023a0f644e47",
+      "object_sha256": "3fd3baa1b706c115e867d199f05e8586ea3ffd822eb1079ad21846fdee6177ad",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_addsub.py",
@@ -1361,11 +1361,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "729a2ddd8d949da7065973dbe0d56ca99b8a98396e1bb0534448915b8f01eefc",
       "member": "py_int_mul.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c74f2185eac484dfe3047a8e957445d24b04c2a409a859203017d5095db1f321",
+      "object_sha256": "5189f0754345f754f567c7f98df2faec5a30c6bcb59af9cbd1f6e069e94c6690",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_mul.py",
@@ -1375,11 +1375,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "6006e5cf81a64e2bb03ec6573924c3258c4183154ca8437cd5f79548a9e833ab",
       "member": "py_int_bigint_pow.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "9ba6aa6a72396166d4c8899d496c98cab3a95c521098d1479d32ddd137062861",
+      "object_sha256": "2512e272dac1aed44389f35a2265fed9088a82ec46feeeb3de8b6e93825efdde",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_bigint_pow.py",
@@ -1389,11 +1389,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "8b43dfebb61a510f4951db841d800c21c0fd1949af5585234909d23a68f4bff7",
       "member": "py_int_ops.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "25adb11b67c11476a7fad2307e7d9cb995d269cf4efd8171395b41b6f9db9526",
+      "object_sha256": "9cefeed5147a3c40aa4eefeee85d80f153d031157d157beb7bed9fd30727d816",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_ops.py",
@@ -1403,11 +1403,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "f5198544ac3103268c0d2a22c89d42cd7161ba304736f3da8937455443339687",
       "member": "py_int.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "1917a7a2d965870e59be58d0cc469f98dda02b0da8df04a4e1eddc62e2505dce",
+      "object_sha256": "9604690f133c1fbd486d64cde1153a29d7852b654ce1b77db1d5454db4e1c935",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int.py",
@@ -1417,11 +1417,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "abaf8e1c170ed34699c103250592e4840beae38d5bbbacf7bc029e059d97477e",
       "member": "py_int_parse.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "256fea426d63534e46398fbe4aad034b2b8ddece630ada915fa8042f5c9399ee",
+      "object_sha256": "fa908fb4fb2ebfe9077cf70957835ba585e5f6c372e58c82037adc20f6325489",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_parse.py",
@@ -1431,11 +1431,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "0abdc44a6b525b2b15478878ae53f8210cb6052ffecae9d98faa6681986f7e17",
       "member": "py_int_convert.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "2c4881004388123e40b94984b1d0d71d58950944ef3284f065cc9778b285e0d6",
+      "object_sha256": "feb28fcea0c81b5946c4903e00ba51de55073d65f47ef5eec30dda9ca1b591ac",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_convert.py",
@@ -1445,11 +1445,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "2a65156ce0a688637459f663599522d04250240a95dceb04f36772098263dd3b",
       "member": "py_int_bigint_convert.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "5c87e3a15564761fa6757703b39808a3e29a109031dfa1c770da7e14b2688352",
+      "object_sha256": "351c810f750ab65cfdd8792ce5a7bcb3130758fbc3f818fa3c6b8022575f490d",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_int_bigint_convert.py",
@@ -1459,11 +1459,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "956ea4a57e8b39a67b08401df4817a621c3e3de560fdfe7b9f8f67a4f70c9212",
       "member": "py_substrate.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "b169eec404f96d405c8f144d9074a99456dfcc87b4e66128fd0ed0219518c6b1",
+      "object_sha256": "889c1450e9022f35ec98ec6fae1536032d785e745c5851e8592873f4c6c09731",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_substrate.py",
@@ -1473,11 +1473,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "d9dea6e46f3b6b19bee013209bb02b322bb19b190ca8b32a77bbdb918432b1ea",
       "member": "py_virtual_thread_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c2a198df0779b163c918694148791e2a13691100aa0e929ef6967ce19ab4932d",
+      "object_sha256": "b5f39b1d5bd2cf7f336c2d13b2eaf5bae7447c42041d886081285fafd34b495e",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_virtual_thread_runtime.py",
@@ -1487,11 +1487,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "a8b0bb64cbd33e8f0b749e76fa06c64b34086da0a00f16192d7854eb5a8a438c",
       "member": "freestanding_runtime_debug.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "e76103ea7cdaa3647679d2d08d79c300dc975eb7c1a077ed094e67a6a07a04c2",
+      "object_sha256": "bd8dcf021b76908198685b912e5a7842056ac465f967b16d22068f436e85a86d",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_runtime_debug.py",
@@ -1501,11 +1501,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "52eeb3aabb818ab6875294c2e5ff6b43df402c5c384a7dc1a4e64a7616795c24",
       "member": "py_capi_core_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "db4881cb89db222993132bff18f230201506156cdf48a46277eda2c0d588b271",
+      "object_sha256": "334c82b491391b71cac1e5e495f3e28fa842538a540a297ec01851e90d4d4688",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_core_runtime.py",
@@ -1515,11 +1515,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "819ec73ba7f19507ab67fecf86fd2dca46d06300dd6d727e6eca20d343343a34",
       "member": "py_capi_memory_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c2a4ed9f968bb187ad0b95589d89e6e074d6da3d020407a8e84e05f5298bb9b7",
+      "object_sha256": "e8e529a29213d198040d2b399e652b83de1940f86eff4c96ac3a7255c88631b2",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_memory_runtime.py",
@@ -1529,11 +1529,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "69a8e8bac6c9998d0d5051efdd2466c3b074b334578646d7ffde2084fc10b44a",
       "member": "py_capi_stdio_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c000e0cf254143213f9aaeede8b4230a7b99094b2743612f788b4fc8394f80f7",
+      "object_sha256": "bdd6d909a4cb056fe22bbe4d1e1d9f1ca9db6c687a1b1bf724f84580b6b709f3",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_stdio_runtime.py",
@@ -1543,11 +1543,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9c201f04ff454e4df42f121c26af4a42c083924c0cd8d49b6737730b8b57d453",
       "member": "py_capi_numeric_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "e2acbec7868ffc73016ca598e80782b0b5c7d613fa7a46cf979eb35302d71d3f",
+      "object_sha256": "ed7f8a6b3877ef455e876f499982a7c72a3a8e18b1f3c91120882faa689ad29c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_numeric_runtime.py",
@@ -1557,11 +1557,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "745e6bffdb350d3650710ec310a72aada000942af00bfd1efcd9dd915b6d10d1",
       "member": "py_capi_collections_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "61c45bf347cf6c3418c3d2e34dfbfa3b1392fa63595869e78ca80336af5c8d84",
+      "object_sha256": "acadce8ba9be839374ea6926c0610d8d9a21fdab14397443f0e3a14ec04f6ba4",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_collections_runtime.py",
@@ -1571,11 +1571,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "d4333fcfb883e2a87af39e4e482023dc1cd1ed23cde2762c65f925df683e4f48",
       "member": "py_capi_exc_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "7d99b17f774745622498f4946d22b1ebebb9ffcc698f7560437adcc89fefeb51",
+      "object_sha256": "177bad1f498b223251458d15ae9f6ab7875d57b5911f13c89a3370871c8b9391",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_exc_runtime.py",
@@ -1585,11 +1585,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "39db3278884f44cf2069344ca235f571731312a78b6f96fef4814fca5a620612",
       "member": "py_capi_dict_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "868683015d01405d6c2e11f592cb02eb403fe3c30376f9dde68b0f06484ea2f0",
+      "object_sha256": "9c9c97c3b6b1c99d9effbc2f11606cce751d79e7570be0523a601bd5dfb69608",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_dict_runtime.py",
@@ -1599,11 +1599,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9180465c0eebbc1bb47449e851108225fdc10c494ed25a96483281babf68a611",
       "member": "py_capi_object_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "d658bb445962a0e0a28ed82b6ca4ff72fed42097408705cd4ff28a4250a3dc54",
+      "object_sha256": "6581219f59af2ca34ea09b0eaf030784625fda48658c232ae5dbd93d6749135a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_object_runtime.py",
@@ -1613,11 +1613,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "73592ccb7921bd7a96c50d1b64a05e7da7df6d7649d5725f000667d36b1d7c54",
       "member": "py_capi_type_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "cd74066ee2f624e3e974edb4858605888857190484e66e0efce1e18af297c68c",
+      "object_sha256": "cec214065681f5806cf201dc67467321358e5c8d917aeb6770f13e8298cebed3",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_type_runtime.py",
@@ -1627,11 +1627,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "7c111ef568ee2b5dd71b775e57ecca62fdd183afe43a248412d2c6e04133d6f9",
       "member": "py_capi_unicode_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "90a37343d652fcb815e38660688b6f323d5a6312d86adb50f194af633d58c719",
+      "object_sha256": "5b0582c109d44b19f81cae7283ff09d7f3d0cece0d26ed14388f54863f3bc2a9",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_unicode_runtime.py",
@@ -1641,11 +1641,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "2df643a7179096c772a52c1a6e6c57be7e09601bc6d626a1a213f1352c3cc65e",
       "member": "py_capi_capsule_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "9c9dafe48c641430cf048f451147f122e18d3d1887fbc3440baa31d7b38574fd",
+      "object_sha256": "4e939e0229d068449df965dd38978f5c49b24b119770ce1184f5ceb543b37c31",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_capsule_runtime.py",
@@ -1655,11 +1655,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "1eb1363e7ac8846fa329f29e94d66fde69534d424e4875f0967bee5efa843d14",
       "member": "py_capi_set_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "3f91e3e607650f51cab84bfab6cbe6f7f8f3893f245d74d84b57a3dd7b9bccd8",
+      "object_sha256": "571916be25d85d10d9b997b67cd21c8f55e3cb11012ffc5edbda5e719fdd5995",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_set_runtime.py",
@@ -1669,11 +1669,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "35bfe611ff7eb53bd00de4751185c7fac93db0b7f6246193dba171682b9fcc15",
       "member": "py_capi_misc_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "6d0f4d47790365bb0c175edfa3fbc76b8c98c5117ea79fed0964cbdb5cde9180",
+      "object_sha256": "a9a5a35b8bb4ba1502cbead97f6b908a7f8a5518f0113120d0f38bd549fdcd30",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_misc_runtime.py",
@@ -1683,11 +1683,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "68958e871d648416d721c082d05374f96c2ecc9f08648c55191e94410b75c477",
       "member": "py_capi_cfunction_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "3a0e3f2bd6df1bd80d72ac9bc8feeceb242321038157a0fbe8ec8ad26ad55953",
+      "object_sha256": "d06f1980a29ade60f3203fdf2d4c777321368ed49783693e6a7873adbe33090b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_cfunction_runtime.py",
@@ -1697,11 +1697,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "450de624d34cb5aafd75a8742d8f855c33534369f997a4b02c2b232703f47eee",
       "member": "py_capi_object_call_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "9021eedcecd3f2e90200624484ad420e5ad837de712c219495a3345be26d938a",
+      "object_sha256": "e8c1ddeb29b2c35dd086d322e5565f17a02115138f7cebe41c196a1b44fcbccb",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_object_call_runtime.py",
@@ -1711,11 +1711,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9148de5c522f900db27206e3c76041221b96b22d2f4c746ab21420b908bd255a",
       "member": "py_capi_method_bridge_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "ebabf70c249c7bbac36512dc6c4d0265225cba6bca110253bea24415e7cef40d",
+      "object_sha256": "394e29ec7dee7276f9aced352e2fb17cf7d33409edffb4ecbceff74e57a9395a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_method_bridge_runtime.py",
@@ -1725,11 +1725,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "7a761e9bc2b5ebf8c6fc366e18c21c037b3d5c14ad9ed9a8f9e1ca24bcc0ee23",
       "member": "py_capi_object_attr_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "4e34048b56684959edae7b23576b4382086a2a8ed655c6db82c82d5bfd1c5a9f",
+      "object_sha256": "1679fd03126def2da908b341594777c62eec7174500cc81726798ee5649b76b6",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_object_attr_runtime.py",
@@ -1739,11 +1739,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "11fba67e6d29623a3ca0db9b8f018a567d5bc9220a9031f32354cf2ee1dc8997",
       "member": "py_capi_number_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "12a44200861889a48dba4fb16e9d34691c70dd94a0b1738aae1bc9e806bbb075",
+      "object_sha256": "b625564eba2ff012b280982d3c2a09c2eed0d2af76dd221a3ae8bcdd11ab4b79",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_number_runtime.py",
@@ -1753,11 +1753,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "6cea1bd83a1c23b1c759dfcecc9e8293ac5ccd3071d7ba29ece4eee42deef048",
       "member": "py_capi_sequence_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "72899a9767844deb1be526fb6c52c60b8d963bcfbe57a5ce94bd685ff81a2627",
+      "object_sha256": "5dfb01c30eee668041a8b56de6153eea2f800f9069d909958bbfa3eba2b4f4d2",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_sequence_runtime.py",
@@ -1767,11 +1767,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "94f191e35156743c2d7c46a3347fb7e0e80e17115dc5511f49ef5485d111e0ba",
       "member": "py_capi_mapping_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "a4f834ab4582fa30e105c851cbd6ff60020def2f8a7e1fd31f591b1014433bda",
+      "object_sha256": "65cbadd70efddd8e33a30e7b2289b7026c5e1ee757c26e2272fb900e88a05550",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_mapping_runtime.py",
@@ -1781,11 +1781,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "ad1fdc7a4aec9069f8ed391e890700726f94ac08a4e99e39003f7ac15d7e3ccc",
       "member": "py_capi_import_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "aa7909c5122a74951522cd2657cd5716cb117744dc6d6e6874e682eeb35f6f55",
+      "object_sha256": "176f4c3977c813facf8e0ea220d8611780e074288004010ae5419a79686fab44",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_import_runtime.py",
@@ -1795,11 +1795,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9869f2073efb17e38fb98ce25b1125f45a8ce6a8e2452edd2c946e9ca0ea9828",
       "member": "py_capi_unicode_search_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "4daff111ceb1fc6f453c3310c6660f81134e940fb18b72106e72b3b539dbf845",
+      "object_sha256": "57bb54f9b83f7ffdaca64e4427c6938e3eb7b3c6a5a12915b06aa45238f46b23",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_unicode_search_runtime.py",
@@ -1809,11 +1809,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "40eb2e036ae02b00e502776bdca7f107a2a2d09c818abc118548eb197963f21c",
       "member": "py_capi_unicode_writer_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "bbd31ec215faa2666e6e0000b3f94500cc7d68f842afbce5385bc870824b702b",
+      "object_sha256": "4e47bdd800424e88c0761882e0c816bf2bf70f4c204f81846339a0b350b38417",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_unicode_writer_runtime.py",
@@ -1823,11 +1823,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "f91cae86d04d62f72895fc4a7ed07ba3e7004735c438a451f4bcad96720c25c5",
       "member": "py_capi_buffer_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "a323fe15356dd6f07513b1b79b9f8bee300f803525ffe6ccef423fac13afbdfd",
+      "object_sha256": "9aabcac606fb22638e30f11abba8da1065c6abfe1055a6d4bcf12ef4fcd05a90",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_buffer_runtime.py",
@@ -1837,11 +1837,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "282a83b941dbfd41b35b9e67923a7e21f92e0bcdf97c4e06ebe47643bb60444d",
       "member": "py_capi_module_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "41473c4b52b001ae7d4ee3aca85883f74da3f81b006024a267e21941e1be485c",
+      "object_sha256": "c39243c17c1659c01995a9426e5d1469c3f9e9df617c751fe30a9d763e8a1aa1",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_module_runtime.py",
@@ -1851,11 +1851,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "b645f65515565e5f875529a3379aeaea591aac071df18891411c364bb317e96f",
       "member": "py_capi_cext_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "f628fd005d5a7e1c2294e39cabb261f760bd5eaccadc308e51c27124544eaf6c",
+      "object_sha256": "4d3b1cc6d02caa289be30e96875e393d060e5fb6c6f1d4458465fcdffff02859",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_cext_runtime.py",
@@ -1865,11 +1865,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "346b76837e7df4f187b83c5837f890b58f07c19065e0b32af50088ae643d662c",
       "member": "py_capi_module_state_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "f2a110c4c84b4258b50b30fafc507321b924e898d26e58c57515e6aab23cc4fe",
+      "object_sha256": "2ad4779b790478ccfdcc1b5adc92ad84ce4b6c2e7aa37b84bd5a60e4349e0817",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_module_state_runtime.py",
@@ -1879,11 +1879,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "c8ac5dd619043964ffd11c3dfbd7d5049143785cd59dcd20b1391a9c3f52ff85",
       "member": "py_capi_private_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "8f44c12d8149a2425ac24a9a7b5a119d5245c94d6a417babd3755f8bd51a725f",
+      "object_sha256": "6b1e0938d04246b2c54f0540c99ab86df8f8a58996b3e10f90ac723d3d98b6a8",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_private_runtime.py",
@@ -1893,11 +1893,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "0416651c5ea6ce7d46200a686aa291e47469079a05acdfb7de6b65826cb02de9",
       "member": "py_capi_slice_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "56c8ec8bc03220e8d0d5578a2d95364c9741aa26fe763f88437b35346ddd3dd1",
+      "object_sha256": "9c66ad38ee6933912b15ef5413f0ebeef5e9e444dfbb86916205e6fda67a5592",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_slice_runtime.py",
@@ -1907,11 +1907,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "7ac0cc2bc1672ad4438f9d7fd1cc77d70a41b62691bfbe19c3e4c66bf48abd0b",
       "member": "py_capi_seqiter_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "df12ce55807bfd58a7533d9ebc416355eb288c651f1bfcc2573fd8676e6e3847",
+      "object_sha256": "394437cedf63e2c2d95f4c66a89dc848d00491ea7bcafe8dfc93e43143a7296c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_seqiter_runtime.py",
@@ -1921,11 +1921,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "26b20a7adcc78c7e56ae4b9ffc3d8bb6d1a9bc86777a44d3627f04928f1f7930",
       "member": "py_capi_contextvar_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "3fbf3b10fb74844c1619b5e0c19b6e37f2b53d3572e40d61709829c9728b5cf6",
+      "object_sha256": "643fbff6a2386caea3b232a7b107d19c8b590bdbf86b45056141de0a006bb56b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_contextvar_runtime.py",
@@ -1935,11 +1935,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "ffeb057d993813b39ed15298096459fb80dbb49ff636ab11c4949a77921bcb13",
       "member": "py_capi_call_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "7c6fc8afb20a2960eef90dbe3840362285c9617eb523508811e70b0c774c3c84",
+      "object_sha256": "8285ad045cab51044f59dd06ead1871d39b8278fb9404c5648151db24f35f60a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_call_runtime.py",
@@ -1949,11 +1949,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "1e5e503f414590728e915ecbe20281b660182a3abe8038166897ecd1a4c277ab",
       "member": "py_capi_arg_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c2ed6118750fe5a89e80545536b5f997d6e77be5e2ff7fdbf263baaa561c477b",
+      "object_sha256": "8dc1557eb139d6295ba500dae4990a7e2d91febc56ad0615984ed0adf31081d3",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_arg_runtime.py",
@@ -1963,11 +1963,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "41ea36cdca3999c0367242aa09d1194b21b1f86380ff6c11b81d97f56de50c0b",
       "member": "py_capi_str_conv_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "679b0cecc240d68376e304591e18932774defbc548904e4ffae036f057b3f76d",
+      "object_sha256": "e58d38f04a7a95f76d015ac4421b2a59bf61af49a2400eb62899bbec116cd377",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_str_conv_runtime.py",
@@ -1977,11 +1977,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "a430ac9bd918fccb7c3ed087174dc09169c5b39f67e4cab5db26f2572d9fdbf7",
       "member": "py_capi_buildvalue_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "592b9f7080ee8426b22e17b3a8d00c2c066bf13df6303140802a3ff3797f067f",
+      "object_sha256": "9efe9400bc7620c47ac3717b88b0029aad96e3335e8445afa2113ba645d31789",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_buildvalue_runtime.py",
@@ -1991,11 +1991,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "30c8ea3ea693e8946401f7758b70719ed15c70bb7c2fd0479efd970d2eca7ec8",
       "member": "py_capi_type_descriptor_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "d93bafd6af0c5cf83cc59051f5256125347568c64b9987017d193fd3b5a1bd83",
+      "object_sha256": "1aaa00b7d072671904071a8b8377a8e1bcb316e5a16b02dff076a59402a27902",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_type_descriptor_runtime.py",
@@ -2005,11 +2005,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "eff533faa56b17012072836d1956db708d1cf4a518f89ec7cc061f9f738152ac",
       "member": "py_capi_visit_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "9ca763176e0a54051d672578484ca6a3bb7bdfce201343685917ce1fb51e4fda",
+      "object_sha256": "b7cc163db8e6a647c38308c65f15bd7d46c684712c1dae1661ce56b191b7e8b1",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/py_capi_visit_runtime.py",
@@ -2019,11 +2019,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "5732eef2c809ecbc1e6d600e0a5fb41eb1c654896b867099b70fea79f4248828",
       "member": "freestanding_mem_str.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "5b059601c621d9b84a22a15fe2c11a3976c5232afee64fc8d14d81347d4b4473",
+      "object_sha256": "378efbecd34d9523ee838c8f3145dd87b56aabcbaa5cb16ba2fcc93ddaac4863",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_mem_str.py",
@@ -2033,11 +2033,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "ae23986ec81cde6d2c0b52ce9c2e28dba570a28f4a4a17a202dc3690239eec64",
       "member": "freestanding_lfq_spsc.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "2bbf8b8bd7e7ce59bb36c7d4143c9a4553b7c6ae004c4800d112e53c76884f26",
+      "object_sha256": "2120ab6978feb9870bd98a035a179203ada843a58356cafe875b5f7a13612f20",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_lfq_spsc.py",
@@ -2047,11 +2047,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "42adb72c97ca51ff1dadaf9f3a4a7202c88770cdc511dc22029ed48298f1a1cf",
       "member": "freestanding_iobuf_pool.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "2c52d458d6322eefd85838f03d3b43ce8e5cc84d36216089704daa7ac5331818",
+      "object_sha256": "cefa78b1332eed5805d38b3d899591405b045353789e3df85a0a22d8aad2d259",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_iobuf_pool.py",
@@ -2061,11 +2061,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "d6fa3429577706cbd3a8935cbfc0320e96d70ce24358a4f34eff9ed5384b9fba",
       "member": "freestanding_uring.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "1cb644cec35d8e6b45e814ee7455278c496bc49b40e29e8cb799e634434199f3",
+      "object_sha256": "a446e308438125924ed235d339eae278cae109186f9602c0a9fff7e27a5fbc34",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_uring.py",
@@ -2075,11 +2075,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "3b9ea24541db0d8843ea3b86e1285cf54acb8daee3fd31c8402152212bd218b4",
       "member": "freestanding_libc_numeric.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "ab7b4df38992e59119f330d4bfb371069ef491af71622c5d9e86a4f7bb9039ee",
+      "object_sha256": "7363acdd397e4dde2577d27f0fedef062a740f7f2f87ab326007a3279d716a15",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_libc_numeric.py",
@@ -2089,11 +2089,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "b36e93de34b0640f7b00e2ffce71b7fd016e35eb897c39c4dee2fe47498e8847",
       "member": "freestanding_strtoint.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "b35943c90c6c5734020c3bbc09f688729ba729196546046228008f076683c5d0",
+      "object_sha256": "0a7fcd8b1ff797a87deb66bc34d288436d69748deb95294cbca50c45bf39b42f",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_strtoint.py",
@@ -2103,11 +2103,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "955ce84325d09514ebb55aa7c6059cda4974dabe6295757f0cdb71c9a5bfdacf",
       "member": "freestanding_re_engine.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "bee75cd49931915c01be1fdf128bec3d68144b235a9bccef0989c792d9912fed",
+      "object_sha256": "41f32fbc52cd569f7878a2048ea2b81aca7d2299bca35f20f84c0aa93bcb4a08",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_re_engine.py",
@@ -2117,25 +2117,25 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
-      "ir_sha256": "b837ffd33f51341f6f9503317c631a489075a3445e8d86b79e65896381859fe9",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
+      "ir_sha256": "f03909cb048326264d3f04fc2f8ce94ba57201181efea4cfce0dd2e0edb23328",
       "member": "freestanding_allocator.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "d538c3730deb8ff04ffd802cec023f0d82ac69893428c4dc659e8c04466bf243",
+      "object_sha256": "bce32a459251ae2c766a1a969d646038e2559209c36683bfde59f6d6506daca6",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_allocator.py",
       "source_kind": "pcc-python",
-      "source_sha256": "54d7b3d42b20bb63bff6c2389f003567cd122a67acd406c39b0e208faec06214",
+      "source_sha256": "08927f71c0ad1b2a7d10aa8fa12905b534d9314cd5ed95d29164a2594f042805",
       "target_triple": "arm64-apple-darwin",
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "3fca76ef6da87560698bc2787027080fc359f8b1833ef6ef5660e9c3982ec132",
       "member": "freestanding_timer_heap.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "86df63b89f9fd14facb83bd00095340594de38949da1dbb21d9fb3e9d4ace147",
+      "object_sha256": "0e4ab6182412a4d16d97e13daa9eb0af28482a51c500a59bc145e4b2f17a350f",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_timer_heap.py",
@@ -2145,11 +2145,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "60102b946aec8156c0d5c6d93e6d48c7c50226d878927ca9cd4d6ba484e27a78",
       "member": "freestanding_runtime_high_substrate.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "1a1113d9a0d6a56710c5242d3e9604b9c769dd16242a4a5ca40906b91b836cdf",
+      "object_sha256": "b75c2fa6c1dc7a4dc28d2c1f70c199aace023afa3bb13a67fd36f6021bc08fb9",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_runtime_high_substrate.py",
@@ -2159,25 +2159,25 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
-      "ir_sha256": "d2cf224fc8caa07f0770bd6856da29522007f5dd89f406fc1566827f5652d735",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
+      "ir_sha256": "8c3d25ce3d3c5b6d4de2298c3c20a9e5a380c42b64c518279544996db8c29561",
       "member": "freestanding_gc_index_table.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "c5f32bb0c8b406c992c21fc16f480016359a2a16d5ad92f240ff73ce9e7bd4d4",
+      "object_sha256": "b9ec186ee31589b327d6c32a619fab4e2ad091828df9f6d373ff544577236532",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_index_table.py",
       "source_kind": "pcc-python",
-      "source_sha256": "9568f014646585f81b6b8d0508489e28c50efc203053cbb44dea9933d319868e",
+      "source_sha256": "edb3e9df033a72bae3ea5026c4d02c5cf8d6a005c18d6356381cad9a79cf7383",
       "target_triple": "arm64-apple-darwin",
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "33003fbbb245ad4ca196609ce4fc164a6a3a5177253bb2109594cf3057938a11",
       "member": "freestanding_gc_external_resource.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "9c9f9c60c9ccfb6b68dcc5448f4a2ba79e45b6840cb8a3139a23bb34dd4152af",
+      "object_sha256": "1b667aaa781a0b2cb7f0e5bdfb604a815c5dc27ca7118bd22fb4a576c847955c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_external_resource.py",
@@ -2187,7 +2187,7 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "3fd09d28d179011ba2bd3e57f97e3d0ac81e10740afd9f64128f9ca6a8b41bfc",
       "member": "freestanding_gc_state.o",
       "object_emitter": "pcc-self-backend-object-writer",
@@ -2201,11 +2201,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "78918808ce8257c987dc31e99d4883e24f8d47da77025a69f0827e86ae7287a7",
       "member": "freestanding_gc_control.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "74bfe3b9cb22843d412d590b13e75f04e704d21ea9f99040788ce812026997b7",
+      "object_sha256": "c5e4da9a226eb6ba63c0ed7ff6eaa02a45f025f8a5c5612ab789330fa9b7f991",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_control.py",
@@ -2215,25 +2215,25 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
-      "ir_sha256": "17e7b1f403610bdfc88d3b81926f81f9c76ef4e2129a417d4b02b159c27f0f4a",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
+      "ir_sha256": "778688e125780772f0f856ce50daf374cb4c0da73a65ea04a9708a100ba27bba",
       "member": "freestanding_gc_tracking.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "f46b8082a3624b3a802d29cc1491658cce41ccacd335f36e8a0d2043b2f7702d",
+      "object_sha256": "f1c0771298a22d76ec95c45001309ccee4079d753ac2900273df63278b1b753b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_tracking.py",
       "source_kind": "pcc-python",
-      "source_sha256": "ce4b62428c86419dff09c216a811cf8763595285f7e09aca59f3ed0fb1f3090f",
+      "source_sha256": "7809f508887c4e5ef5dc288c12aae099071c842f81d3da77d3d2d11637c85aaf",
       "target_triple": "arm64-apple-darwin",
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "7593e57ec042ad11d9b9c9aec16dbab74284a65c9210303c20997430ad8dd0f4",
       "member": "freestanding_gc_root_registry.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "56c87b8cfb5ce18af7eda8024e162ec988d603493d46f5802a5c33d4c15e08e2",
+      "object_sha256": "57469369b5fa998e78d098e6e04deff4471614d33ef5dddcd992cc83003b924a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_root_registry.py",
@@ -2243,11 +2243,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "104af02630e6fd3b24835261a16287c8ab935ca61dfd9368a981bb18b2ae3cb1",
       "member": "freestanding_gc_frame_registry.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "808d5f4b67eec375f817786c3a4b4182199fc279469537527c6a6ff977f06371",
+      "object_sha256": "7c93bddc2d447d670fac9b3c4374cb2d57cb8365b29ed23a053443f682215ef8",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_frame_registry.py",
@@ -2257,11 +2257,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "adc35d9ae62ea8ef671f67f37810bc40924ccc1c59268f4575988d58e5caa5bf",
       "member": "freestanding_gc_root_operations.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "ad5237289a23fbf6ca77d88fe76c239731c26b94e1af392b61c3f593434a63a9",
+      "object_sha256": "e8057b5847ddf1d863a12fa30365675c9eab8d6e622e9ea7b947dcb4c20621ef",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_root_operations.py",
@@ -2271,11 +2271,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "bface472e1c8d30736ca4d35cff1605093c271f6f063d30c312955cd23d2f76e",
       "member": "freestanding_gc_mapped_roots.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "021db34a30b8ea7ce8eb835a9e16f686402f067a0388ccf05a9540e761691781",
+      "object_sha256": "f7e4e1912963e9ebd2640128022ba19280e43b0f543c6e9f55216c340cc4cc22",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_mapped_roots.py",
@@ -2285,11 +2285,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "fd254fca66edf9d7fd5f7625f0f43529681e0096e52d13d9e5a7438669ec6f86",
       "member": "freestanding_gc_object_root_seeding.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "dfc3032a8c54bcec9a3e6922dbaac13b0ac45da25a02e4b8c629fc33fca37368",
+      "object_sha256": "80393250ab7cb702b421d649b362d59325a275ac19d46647460933bd7e8faf8e",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_object_root_seeding.py",
@@ -2299,11 +2299,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9fb5c2b515f31d7af62635718cb70366c7305777e4e760bc226f6228831a0805",
       "member": "freestanding_gc_refcount_roots.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "1e1db7452a608216e0af44db73e240e2701aefe958ea096949f7308dadd5e935",
+      "object_sha256": "244f3aecd79a403c5138cf8e9ea8af23c565ae18b64139fad540a5b2d8cb6689",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_refcount_roots.py",
@@ -2313,11 +2313,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "96b2a1088a2237bf62d07b3a9e6cb03b33dd29f57aaad94490db148ca7406051",
       "member": "freestanding_gc_object_slots.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "3192cf0363c22fa3f76b73efc6d16c5ef694e74e53f07d5c04e22b9a1ce7965f",
+      "object_sha256": "96129f28f0c21d1a05de12a2537743dd8efd0f07e7ce7ab7232214ddd1db2f3a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_object_slots.py",
@@ -2327,11 +2327,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "8d3f78530146f706d39120d99d30f296fe287e7d50dfc7342465e669794074b7",
       "member": "freestanding_gc_common_mark_cycle.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "bd9f608697526295f14f0647f605af8eab88b850f01f03fa90c752974596a265",
+      "object_sha256": "a389f598cd6b6ddeeae80633c842fc694e7a31e60123a817d492c9bc21b5191a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_common_mark_cycle.py",
@@ -2341,11 +2341,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "c070d8566deab51b923759bcbb7e2fd96c8d186fcc278a5048f96418bb79f353",
       "member": "freestanding_gc_backend0_slots.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "bdc94991c8b503a3adf3161d1abddd11df305029debafd26288dafea58d79d48",
+      "object_sha256": "897979cf8b67d8a0b017f21ac4d6a442c945d0c450ba8d36df421c2dbda36305",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_backend0_slots.py",
@@ -2355,11 +2355,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "6e867d185d028d63b94375dc874642bc4f3c73cf333577029ad62200bd0ae4c8",
       "member": "freestanding_gc_sweep_slots.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "98c1cb7fa157a43d53b130b4585206cd085df3001bfbc25efb95208b6c087b47",
+      "object_sha256": "81e936fbd672b713117ae9bf8172d433b71f168d0a46e078610b42b9246e0536",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_sweep_slots.py",
@@ -2369,11 +2369,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "42bccacce1211ef562eea187baf5415fd6e009d9d8adbc56d98698ee59694e31",
       "member": "freestanding_gc_tracing_sweep_collector.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "24f941b6474debc97f131adb02fe227c23bbdfbc83a5503a05668fda5b2ccf68",
+      "object_sha256": "1386af1e9c50a2ed2369414c4999febcc3e0d9ae39306b68ddfc36106cd1ab69",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_tracing_sweep_collector.py",
@@ -2383,11 +2383,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9a8c081b8a2d31cb60076f6a73ab88d07a76f2abbaa5297e661b5bbab5a8f5f3",
       "member": "freestanding_gc_public_collection.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "15817d6c84856da7202ae1b34deab0b1b399a4d9bff6293daebc8a4ef20a70ae",
+      "object_sha256": "f3bca2ca3b1b7f34ee3745b1aece4e518d9f9802d2451561b770c7d71e9ba021",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_public_collection.py",
@@ -2397,11 +2397,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "0de39f35a1eda2ad6820a49c7ef1f67ed06c023368c4fff0f21e1e88ec5a33a4",
       "member": "freestanding_gc_incremental_concurrent_scheduler.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "f4ee39b47ce60a76f00cac2b9029a0f85d323f262aed975cd165e9e7f5714c45",
+      "object_sha256": "cd179afd25837b2648124a5c07545853f764f506da776771eea71d80303ba324",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_incremental_concurrent_scheduler.py",
@@ -2411,11 +2411,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "80e52f1c9f6fdf47c14e75b898bad7dba51f2741e579298ffd2649fc6dcca453",
       "member": "freestanding_gc_forwarding_identity.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "e1b0235a6b17064e6eb36bd888602797fae3d6c2417d347ea64d2d2cb2ca8639",
+      "object_sha256": "e0fc412189b7cd86f981b97fea5f257083b1bc91cee9b2fff177f838e27b67c3",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_forwarding_identity.py",
@@ -2425,11 +2425,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "95d141c387443c6a06656633383da8aba8d1084934b0ac31934dcb5372455c16",
       "member": "freestanding_gc_object_nodes.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "22c0e8e2462aad37b79b568265b3116574e8b5d7dd8e7f8b1feec61380706cfd",
+      "object_sha256": "9c7d4752a7e55c89281480a78191d75585c9faf16f1cf9a282d24ceb41cd9dca",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_object_nodes.py",
@@ -2439,11 +2439,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "bfdec8910b9d9b16e984cd844a1344c2c34a10c316380d5f7ac564aa2bb341ab",
       "member": "freestanding_gc_generational_oldification.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "47777edf9b677e03b7b1ff36780417770799eb3e936b245bf22865fd6c4db8b0",
+      "object_sha256": "71e2a16b70c80cefe3da2a3be9eb85322e7def671b495555537224de9186ca43",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_generational_oldification.py",
@@ -2453,11 +2453,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "fc2e237b9fdfb1fd2971fcf1b09dae0058f950835cd6f2353071902cc634b39b",
       "member": "freestanding_gc_generational_remembered_owners.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "59618d4a93b6c3618150f56eec3827bb7ec6a9169b56001fd4a90094ee9dd417",
+      "object_sha256": "facb3f9371ca44628ff881a7124b3d668a742b52708690d82d76499256ddacaa",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_generational_remembered_owners.py",
@@ -2467,11 +2467,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "e98d182b6bc10d100bfc02129f32ca4a9d74a7147f00aae34037700b49883f5d",
       "member": "freestanding_gc_generational_promotion.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "3396c157946cd3d4d88448b06f2b15807237b3a90505382f6bb4f6a7da10a4c2",
+      "object_sha256": "9bc81bae96ab411b83478282d5c6f895a75c31945f92f345e49f413c1bdbec66",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_generational_promotion.py",
@@ -2481,11 +2481,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "35e0b2ec9d9ccecbf3b4396f917ed9a2c1e8e8861860440b47710e20cb1797f4",
       "member": "freestanding_gc_generational_scheduler.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "da24597c58c5d90c76dd1808a513e1074f93ebdd7d2978934242261014e6b9b5",
+      "object_sha256": "c8e3255f30d8e219be9f19d443c2fb712d87754154e851b565465005bbed9249",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_generational_scheduler.py",
@@ -2495,11 +2495,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "dc93647103cc8f6733cc91a1c9dfa2829ba035d740381ed41e5ef3c426c7c763",
       "member": "freestanding_gc_relocation_remap.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "b3682479821c2ffc5f33df90c34495eda982c7c9920081ac8b4eb4d5da224c0c",
+      "object_sha256": "b750ccdbad9fc415962ece3bdf5508e0b12c53c9c98e26ee6d2ba3ccc22f7d59",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_relocation_remap.py",
@@ -2509,11 +2509,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "401c230fab53243d039837b360aa789425f1210e76806bf620cf9816e230d269",
       "member": "freestanding_gc_relocation_payload.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "47fa9f24ee8e2165adffc5950d3d8788386d3094b4e459aebc51dc7dbf5ed6e6",
+      "object_sha256": "2100e4c66cb5ca20fed602587a133029ff7729e5cb67b4f118e602aefb88af89",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_relocation_payload.py",
@@ -2523,11 +2523,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "caebdc96d75442b573c3cb433b46dd8345d9f3e2b70605181b2467fe9db8d4b6",
       "member": "freestanding_gc_relocation_copy.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "922a0e87c9338956d7c152d4e236438c4c08a6c1b31cb2e4b7358001463b21a6",
+      "object_sha256": "258698863aceea40e7fc9e139f6479fe5da89a5ee9fc281451c17ada6841b315",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_relocation_copy.py",
@@ -2537,11 +2537,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "5683a6b430e4985189eff601199549c3113bedba03563b87e33e9edbc78cd5c8",
       "member": "freestanding_gc_relocation_selector.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "4ddcd28b04310b59bee0dc6ed9e8520a19149449237126914a6132f06792024b",
+      "object_sha256": "5b106370218dd6c9f3323ec2e9d2d3c23eb09b40a64eaee897d5535dbfc39a9b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_relocation_selector.py",
@@ -2551,11 +2551,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "fda285be95adb12dade0950a6a007fcda6753ed2c8e11ad27a82841ea87267d0",
       "member": "freestanding_gc_relocation_drain.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "373a17cefc0935b17ce5bc3b8e65aa06ad3dd28d0471f002d52e17e705a7f0ef",
+      "object_sha256": "6afac903707d5c91cdc697cf7de4b206cca54fcdeb2c386d800fe17342fa2362",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_relocation_drain.py",
@@ -2565,11 +2565,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "e03ffe6f6e309cf553d80368dca4186af46bfb88e620a231086f90e4d5bbf16e",
       "member": "freestanding_gc_zpage_mechanics.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "09316934251d5be18222dc7f27be135611a9cc0d011b496c0638c2b16973ef75",
+      "object_sha256": "94b4ff94e700c932a53bb6326e77ac220844682a422fadb04e3c687dc848fd1c",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_zpage_mechanics.py",
@@ -2579,11 +2579,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "372f02299e0ea376da2dd043d6e2b3a3be53fea90dbb690f7e2d62d08b8803ff",
       "member": "freestanding_gc_zpage_lifecycle.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "aae9ca86c5e23e20fbea57a81eaabcbc50e9cb1cfdcf23d615a254948ee7103b",
+      "object_sha256": "e8980714e926b3825862a4692324059eea3b0f60850fffb2274fc368e1c5adc0",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_zpage_lifecycle.py",
@@ -2593,11 +2593,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "74517c7d19809554c91fc2f23d54ad5bb431ed32844aa72987413eec84de6821",
       "member": "freestanding_gc_forwarding_retirement.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "6a9fb546cef6a210a78e9dd5093444759fab7f913eda07ae23fd7a3f10888102",
+      "object_sha256": "dd1d455a875ea65fdfcc297c6de024527e84dc41a409f1431408fb200cdd1262",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_forwarding_retirement.py",
@@ -2607,11 +2607,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "3527e536f576be405408c8730e81e854789f5290790ce9b605c61bf6a528c14a",
       "member": "freestanding_gc_barrier_dispatcher.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "ff639a58816dc7d113d8dd5c860b81b7369a12cae7a4455967c443a4917ebc01",
+      "object_sha256": "4090fa4d754debd4c5de38a7a43db105d7f80946b25006124cc3860df0426b1a",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_barrier_dispatcher.py",
@@ -2621,11 +2621,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "b6a2644941f579d934312cb0cabfa422576a0bd90b827e9ac1e2a3fbd7e87ab9",
       "member": "freestanding_gc_zpage_allocation.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "ecdafa26258a5b3adf7a82146dd8b7f381f21b3dd03eca530881db08fdc42950",
+      "object_sha256": "acbe83cc08e2e0991a3c807e0de7954e1ba70ebe659e92d60edc41533c0bd57f",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_zpage_allocation.py",
@@ -2635,11 +2635,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "7005e7d54c429a9d26010b01ebf04f1a89119d764144f02d49a300cc12a485a1",
       "member": "freestanding_gc_backend0_collector.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "5cd8c79a2eb3f8889d22efb5315bed0df928e96dfaa0fb9d080fba8007a44846",
+      "object_sha256": "22a105ca189abd8c415a8d6fdd4b2b651ecc473ab6f98628087ceb9fefdd2d5b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_backend0_collector.py",
@@ -2649,11 +2649,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "9981d73bc186cc11ec6a47f0fb8da0d7204decd5d12a2ee577c25deb1ff162a3",
       "member": "freestanding_gc_root_introspection.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "a422f3fe790981a3b69c50d09803462639ce6870a5b761a59dd90186cae72289",
+      "object_sha256": "911c6e0e5b3204f6cb13d90601ddf012d92d6b90dffa0c863b7b45a3229230e0",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gc_root_introspection.py",
@@ -2663,7 +2663,7 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "c6eaef3a162a4b3bec35a6d89a343bddbf4e1449dc0aed6c644bcd01659b9050",
       "member": "freestanding_platform_io.o",
       "object_emitter": "pcc-self-backend-object-writer",
@@ -2677,11 +2677,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "2358464306bd580cd7820a24ca6db68da93460509454563f055674c644e1f3ac",
       "member": "freestanding_platform_fs.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "3fefe7646f94498e67f212dd00e60ab1fa8c3d440241b354b5db45eb12ba9649",
+      "object_sha256": "df5fd4c32fa9e671c58d46e2805ab595c4b96f7ff7fe9cf17fd3837787a1818b",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_platform_fs.py",
@@ -2691,11 +2691,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "f96f8e14cb371b188f95264b28e7ade7b4cf55fc67b5b1da615c180e9ac8b888",
       "member": "freestanding_platform_env.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "fb34582f675f80f71b4de9fdf5bbf981199b506635c6da0382954efe742de92d",
+      "object_sha256": "7380e76f72f9ced02b52d796ccdabfb6bf18439575241af8d53f5aed2ea80a2e",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_platform_env.py",
@@ -2705,7 +2705,7 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "6fd3292cf1ddd25d2c8f3dd78840058abb797d2fe4f4719b47bd691f6f1dbecf",
       "member": "freestanding_platform_system.o",
       "object_emitter": "pcc-self-backend-object-writer",
@@ -2719,11 +2719,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "ab8553af696b9a3066f1331e01f946d35b4dd198316855fee312fe9ac908b794",
       "member": "freestanding_platform_time.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "2b4cc02ded7576df53632d1ffe4d51d0439ef94a8245b406e420db6903a1e0ff",
+      "object_sha256": "fd6fffa2215303b02aab9434ea596f05f72694ebe8c9f9107a6ffc2a7457f437",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_platform_time.py",
@@ -2733,11 +2733,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "78335851e6a7c611b996610e64346ff86d43d2313029ccf2727bded21563a0bd",
       "member": "freestanding_platform_process.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "61a6998f35ded34edb1bf59bdadc0f248cedd0f64105080bf0633dc7a31b6d2b",
+      "object_sha256": "76f31b738dc0c157f9849626b079b8c90f56b8fe5a110aa55cdb497f297ccfc8",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_platform_process.py",
@@ -2747,11 +2747,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "44c9ab862d2918fd7ff8847fafa833ceb82fa882467296393ab3759b0a1a930c",
       "member": "freestanding_platform_socket.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "470970ce0e5b05c77f44fa8913b69f2b742385d4f2ad6698e0ddb4de36f920a3",
+      "object_sha256": "cbdfacd62d4152841f513b1eccb785c0c956f58b25269c6973399c52c00792cd",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_platform_socket.py",
@@ -2761,11 +2761,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "62891034cbdfb62789a337ce9ba738baaffc8bd855f63e0a3607d1e303c8e8ce",
       "member": "freestanding_platform_rss.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "1f13827971a56c60370cd39849e3264b99cce8182d3c69344368c9f437599b8f",
+      "object_sha256": "2afe512b7516a24bb14e42fca84035e1d92f6963238cf8240e14273808e6f840",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_platform_rss.py",
@@ -2775,11 +2775,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "34365a25a6518ce55be9881181f08fd9db930e9799138458154b0d18a18a496d",
       "member": "freestanding_errno.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "d973eff7cf59dc35a19dacf1e926873f0f7a861d8b4901a04da21e1fb689e310",
+      "object_sha256": "f87a4fb76a4836713d31049b7282fe18a2de21a3739cf786d0b39dbea7744584",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_errno.py",
@@ -2789,11 +2789,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "67735162d0aac76f00d58e25993655a11eef3f44bc4a0f87385c211f0cd63a69",
       "member": "freestanding_metal_runtime.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "b114b51a3e8453c977a56ac9ae68b657cd8ff0bbdd6e3bfa94b46635d2bcc182",
+      "object_sha256": "4f241bab82e4a28189a9944eebeca701839af0cd0874c9712825116a79e1fc60",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_metal_runtime.py",
@@ -2803,11 +2803,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "bf25d1fd19d221f135a907b0dd49e2134e042e9b9d63690c22285b2abfe6a850",
       "member": "freestanding_stdio.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "21d34aa3fbdb2f54afa5ad12a928acc14eb8f9d6357d6727e650acabd4040618",
+      "object_sha256": "fe164f2c2244bd4436542ab6f577a644bda9475a4fa01cd75bebab08b4a12697",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_stdio.py",
@@ -2817,11 +2817,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "4e9ac054f2a8ad5eb63582199c5b5192490263cc79aa909dd561f6b2fb82a7a9",
       "member": "freestanding_gateway_control.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "d27c433151ec6433160669e0d4ae29b1b3f402b9ff707f1549e99908ed74145d",
+      "object_sha256": "54c79b3b96490503ef5fce83cf6dae6478f748bd01cdbea5a4cc8993115f70c4",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_gateway_control.py",
@@ -2831,11 +2831,11 @@
       "uses_host_cc": false
     },
     {
-      "codegen_checksum": "1a59b804dfc3d9c005922530ff7fd4c46cea68ee1f90cc7a40102b6d3806d583",
+      "codegen_checksum": "52770edf7053af0bbe47325e07137a82e5de1272a49460761ca9f10fcd07bc65",
       "ir_sha256": "11b1379841259cd4673f01c59afbbd311c543d8770f98a2e216cac30e41af82a",
       "member": "freestanding_thread_kernel.o",
       "object_emitter": "pcc-self-backend-object-writer",
-      "object_sha256": "97102049e1944a5a6b11c299c39934bd6c11fb1cbe1c0bb410c73a826a4a6a68",
+      "object_sha256": "19aaa4b2e996dae14f4fd670067913f56c565f0b1b386096d26214827ec72818",
       "producer_kind": "pcc-python-library-ir-to-obj",
       "schema": "pcc.runtime-object-provenance.v1",
       "source": "pcc/py_runtime/py/freestanding_thread_kernel.py",
@@ -2845,7 +2845,7 @@
       "uses_host_cc": false
     }
   ],
-  "members_sha256": "72094e2d992ccb432813c3540917b8f53afd73008d3117af6415af199f8e1902",
+  "members_sha256": "c40e872f52b7e719a3b74ac134d4e2cfca31e38dad9f4b6b33b389713a11ce6d",
   "policy": "pcc-production-no-handwritten-c.v1",
   "schema": "pcc.runtime-archive-provenance.v2",
   "target_triple": "arm64-apple-darwin"

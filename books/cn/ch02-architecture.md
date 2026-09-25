@@ -253,7 +253,7 @@ pcc/py_frontend/pipeline.py :: compile_python
 | [pcc/parse/py_parse.py](../../pcc/parse/py_parse.py)、`py_lift.py`、[pcc/py_frontend/](../../pcc/py_frontend) | Python 解析/提升、类型推断、低层化(第 5、6 章) |
 | [pcc/py_frontend/pipeline.py](../../pcc/py_frontend/pipeline.py) | Python 流水线总指挥:闭包、回退判定、链接、发布 |
 | [pcc/py_runtime/](../../pcc/py_runtime) | 运行时:semantic/freestanding pcc-Python 生产 owners + C oracle + 五 GC(第 7–11、14 章) |
-| `pcc/py_runtime/py/pcc_gui_*.py`、[projects/mac_diff_app/](../../projects/mac_diff_app) | 声明式 GUI kernel、组件/调度/事件/样式/命令/lifecycle 与产品 canary(第 20 章) |
+| GUI 框架 | 声明式 GUI kernel 与产品 canary(第 20 章);2026-09-06 迁至 [allstoalls/pcc-gui](https://github.com/allstoalls/pcc-gui) |
 | [pcc/llvm_capi/](../../pcc/llvm_capi)、[pcc/backend/](../../pcc/backend) | LLVM-C 构建层(第 12 章)与 self 后端(第 13 章) |
 | [pcc/extern/](../../pcc/extern)、[pcc/unsafe/](../../pcc/unsafe) | pcc-Python 写底层的两件工具(第 14 章) |
 | [utils/fake_libc_include/](../../utils/fake_libc_include) | 伪 libc 头(第 3 章) |

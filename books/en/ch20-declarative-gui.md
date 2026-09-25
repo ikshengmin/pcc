@@ -1,5 +1,10 @@
 # Chapter 20: Declarative GUI — Components, Scheduling, and a Webview-Free Application Boundary
 
+> The GUI framework and its canary moved to
+> [allstoalls/pcc-gui](https://github.com/allstoalls/pcc-gui) on 2026-09-06; the
+> core repository has no GUI code. Paths below describe the design as it stood
+> at core commit `977ad074`, the last one that contains it.
+
 pcc's GUI is neither a browser embedded in a native window nor a copy of the React, Tailwind, or Tauri APIs in Python. Its objective is to let pcc-compiled Python own the path from state to drawing commands: bounded component records produce descriptors; keyed reconciliation produces effects; an atomic commit updates a reclaimable composition tree; event paths enter state queues; priority scheduling triggers local rerendering; class strings compile into cached typed operations; and commands and lifecycle use explicit request/result/error state machines to connect the application to the native window. This chapter records two kinds of fact at once: the pcc-Python GUI source and canary that are present in the repository, and the formal acceptance surface that the structured task board has not yet marked `DONE_STRONG`. Source presence does not mean every gate has passed, and conceptual absorption does not mean upstream API compatibility.
 
 ## 20.1 The Problem and Design Space: Why GUI Belongs to Execution Ownership

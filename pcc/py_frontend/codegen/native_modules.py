@@ -33,6 +33,7 @@ from ..py_ast import (
     With,
 )
 from . import marshal
+from .errors import L1CodegenError
 from .generator_lowering import emit_generator_may_park_call
 from .vthread_effect_analysis import (
     vthread_proven_suspension_module_alias,

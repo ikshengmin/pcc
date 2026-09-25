@@ -1,5 +1,9 @@
 # 第 20 章 声明式 GUI：组件、调度与无 WebView 应用边界
 
+> GUI 框架及其 canary 已于 2026-09-06 迁至
+> [allstoalls/pcc-gui](https://github.com/allstoalls/pcc-gui)，核心仓库不再包含 GUI
+> 代码。下文路径描述的是核心提交 `977ad074`(最后一个包含它的版本)时的设计。
+
 pcc 的 GUI 不是把浏览器嵌进原生窗口，也不是把 React、Tailwind 或 Tauri 的 API 复制进 Python。它的目标是让 pcc 编译的 Python 程序拥有从状态到像素命令的执行链：有界组件记录产生描述符，keyed reconcile 生成效果，原子 commit 更新一棵可回收的组合树，事件路径进入状态队列，优先级调度触发局部重渲染，样式字符串编译成缓存的定型操作，命令与生命周期通过明确的 request/result/error 状态机连接应用和原生窗口。本章同时写两类事实：仓库当前已有的 pcc-Python GUI 源码与 canary；以及尚未被结构化任务板标成 `DONE_STRONG` 的正式接受面。源码存在不等于所有闸门已经通过，设计吸收也不等于上游 API 兼容。
 
 ## 20.1 问题与设计空间：为什么 GUI 属于执行所有权

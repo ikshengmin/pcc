@@ -850,8 +850,74 @@ class CompareMembershipLoweringMixin:
             name=self._fresh(name),
         )
 
-    def _emit_owned_string_predicate(self, expr: Compare, contains: bool, object_compare: bool = False) -> ir.Value:
-        """Consume transient strings and preserve the LHS through RHS effects."""
+    def _emit_str_tag_fast_compare(
+        self,
+        expr: Compare,
+        lhs: ir.Value,
+        rhs: ir.Value,
+        dynamic: ir.Value,
+        cleanup,
+    ) -> ir.Value:
+        """``==``/``!=`` between a str and a dynamic object.
+
+        A dynamic operand whose exact tag is ``str`` compares by value with
+        ``py_str_eq``, which neither raises nor runs user code.  Anything
+        else (a str subclass, an object defining ``__eq__``) takes the
+        generic runtime comparison with its raising edge.
+        """
+        tag = self.builder.call(
+            self.runtime["py_obj_type_tag"], [dynamic],
+            name=self._fresh("str.predicate.tag"),
+        )
+        is_str = self.builder.icmp_signed(
+            "==", tag, ir.Constant(tag.type, PY_TYPE_STR),
+            name=self._fresh("str.predicate.is_str"),
+        )
+        fn = self.current_function
+        exact_bb = fn.append_basic_block(name=self._fresh("str.predicate.exact"))
+        generic_bb = fn.append_basic_block(name=self._fresh("str.predicate.generic"))
+        done_bb = fn.append_basic_block(name=self._fresh("str.predicate.done"))
+        self.builder.cbranch(is_str, exact_bb, generic_bb)
+
+        self.builder.position_at_end(exact_bb)
+        status = self.builder.call(
+            self.runtime["py_str_eq"], [lhs, rhs],
+            name=self._fresh("str.predicate.eq"),
+        )
+        exact = self.builder.icmp_signed(
+            "!=", status, ir.Constant(status.type, 0),
+            name=self._fresh("str.predicate.eq.i1"),
+        )
+        if expr.op == "!=":
+            exact = self.builder.not_(exact, name=self._fresh("str.predicate.eq.not"))
+        self.builder.branch(done_bb)
+        exact_end = self.builder.block
+
+        self.builder.position_at_end(generic_bb)
+        generic = self._emit_runtime_object_compare(
+            expr, lhs, rhs, "str.predicate", pinned_release_on_error=cleanup,
+        )
+        self.builder.branch(done_bb)
+        generic_end = self.builder.block
+
+        self.builder.position_at_end(done_bb)
+        result = self.builder.phi(_I1, name=self._fresh("str.predicate.result"))
+        result.add_incoming(exact, exact_end)
+        result.add_incoming(generic, generic_end)
+        return result
+
+    def _emit_owned_string_predicate(
+        self,
+        expr: Compare,
+        contains: bool,
+        object_compare: bool = False,
+        dynamic_operand: str = "",
+    ) -> ir.Value:
+        """Consume transient strings and preserve the LHS through RHS effects.
+
+        ``dynamic_operand`` ("lhs"/"rhs") names the dynamic side of an object
+        comparison whose other side is statically a str.
+        """
         lhs = self._emit_expr_as_pcc_object(expr.lhs) if object_compare else self._emit_expr(expr.lhs)
         if not self._owned_release_needed(lhs, expr.lhs):
             # A borrowed global/field may lose its original owner when the
@@ -873,9 +939,15 @@ class CompareMembershipLoweringMixin:
         if object_compare:
             # One owner for runtime object comparison (symbol, raising edge,
             # bool normalization and ``!=``); this path only adds ownership.
-            result = self._emit_runtime_object_compare(
-                expr, lhs, rhs, "str.predicate", pinned_release_on_error=cleanup,
-            )
+            if dynamic_operand:
+                dynamic = lhs if dynamic_operand == "lhs" else rhs
+                result = self._emit_str_tag_fast_compare(
+                    expr, lhs, rhs, dynamic, cleanup,
+                )
+            else:
+                result = self._emit_runtime_object_compare(
+                    expr, lhs, rhs, "str.predicate", pinned_release_on_error=cleanup,
+                )
             self._gc_unpin(lhs)
             self._gc_release(lhs)
             if rhs_owned:
@@ -909,18 +981,19 @@ class CompareMembershipLoweringMixin:
         lhs_ty = expr.lhs.ty
         rhs_ty = expr.rhs.ty
         if isinstance(lhs_ty, DynType) and isinstance(rhs_ty, StrType):
-            dyn_expr = expr.lhs
-            str_expr = expr.rhs
+            dynamic_operand = "lhs"
         elif isinstance(lhs_ty, StrType) and isinstance(rhs_ty, DynType):
-            dyn_expr = expr.rhs
-            str_expr = expr.lhs
+            dynamic_operand = "rhs"
         else:
             return None
 
         # Keep source evaluation order and both operand owners through
         # callbacks. The generic equality contract also permits a non-string
-        # dynamic object to implement __eq__ against the string.
-        return self._emit_owned_string_predicate(expr, False, object_compare=True)
+        # dynamic object to implement __eq__ against the string; an exact
+        # str compares natively.
+        return self._emit_owned_string_predicate(
+            expr, False, object_compare=True, dynamic_operand=dynamic_operand,
+        )
 
     def _emit_complex_ordering_typeerror(self, expr: Compare) -> Optional[ir.Value]:
         """Raise ``TypeError`` for ``<``/``<=``/``>``/``>=`` on a complex operand.
@@ -1378,7 +1451,11 @@ class CompareMembershipLoweringMixin:
         # Evaluate each operand once, in Python order. Preserve the original
         # domain until the container is known: a late CPython container must
         # receive the original CPython needle, not a converted copy.
-        lhs_raw = self._emit_expr(expr.lhs)
+        valueclass_needle = self._emit_valueclass_constructor_needle(expr.lhs)
+        if valueclass_needle is not None:
+            lhs_raw = valueclass_needle
+        else:
+            lhs_raw = self._emit_expr(expr.lhs)
         lhs_is_cpy = lhs_raw in getattr(self, "_cpy_values", ())
         cpy_live = ()
         pcc_live = ()
@@ -1390,9 +1467,12 @@ class CompareMembershipLoweringMixin:
                 self._mark_owned_cpy_value(lhs)
             cpy_live = (lhs,)
         else:
-            lhs = self._emit_value_as_pcc_object_or_bridge(
-                lhs_raw, expr.lhs.ty, "membership.needle",
-            )
+            if valueclass_needle is not None:
+                lhs = valueclass_needle
+            else:
+                lhs = self._emit_value_as_pcc_object_or_bridge(
+                    lhs_raw, expr.lhs.ty, "membership.needle",
+                )
             if lhs is lhs_raw and not self._owned_release_needed(lhs, expr.lhs):
                 lhs = self._gc_retain(lhs, name=self._fresh("membership.lhs.retain"))
             self._gc_pin(lhs)
@@ -1472,18 +1552,31 @@ class CompareMembershipLoweringMixin:
             return self.builder.not_(contains, name=self._fresh("not_in"))
         return contains
 
-    def _emit_membership_needle_object(self, expr: Expr, name_hint: str) -> ir.Value:
-        valueclass_payload = self._maybe_emit_valueclass_constructor_payload(
-            expr.ty,
-            expr,
-        )
-        if valueclass_payload is not None:
-            boxed_valueclass = self._emit_valueclass_payload_to_object(
-                valueclass_payload,
-                expr.ty,
+    def _emit_valueclass_constructor_needle(self, expr: Expr) -> Optional[ir.Value]:
+        """A direct valueclass constructor as an owned valuebox, else None.
+
+        The needle of a membership test is a value: it must hash and compare
+        by fields like the valueboxes already in the container, which an
+        identity instance built by ``__init__`` does not.
+        """
+        payload = self._maybe_emit_valueclass_constructor_payload(expr.ty, expr)
+        if payload is None:
+            return None
+        boxed = self._emit_valueclass_payload_to_object(payload, expr.ty)
+        if boxed is None:
+            # The constructor arguments are already evaluated; emitting the
+            # expression again would run their effects twice.
+            raise NotImplementedError(
+                f"valueclass needle {getattr(expr.ty, 'name', '?')!r} has a "
+                "payload but no valuebox"
             )
-            if boxed_valueclass is not None:
-                return boxed_valueclass
+        self._note_owned_object_value(boxed)
+        return boxed
+
+    def _emit_membership_needle_object(self, expr: Expr, name_hint: str) -> ir.Value:
+        boxed_valueclass = self._emit_valueclass_constructor_needle(expr)
+        if boxed_valueclass is not None:
+            return boxed_valueclass
         value = self._emit_expr(expr)
         return self._emit_value_as_pcc_object_or_bridge(
             value,

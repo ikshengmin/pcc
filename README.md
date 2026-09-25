@@ -628,9 +628,9 @@ keyed render/commit, compiled style utilities, typed commands, application
 lifecycle) and its macOS canary, a dual-pane file comparison app, now live in
 https://github.com/allstoalls/pcc-gui. It is an ordinary pcc package: an
 application does `import pcc_gui` and `pcc1` compiles the framework into the
-program (`PCC_PACKAGE_SITE=/path/to/pcc-gui pcc1 ... app.py -o app`). The core
-keeps only the generic Metal render surface (`pcc/kernel_ir/metal_render_surface.py`)
-that the framework's window bridge is generated from. The GUI still uses AppKit,
+program (`PCC_PACKAGE_SITE=/path/to/pcc-gui pcc1 ... app.py -o app`). Its
+Metal/AppKit window bridge (`pcc_gui/native/pcc_gui_metal_render_bridge.m`) is
+maintained in that repository; the core has no GUI code. The GUI still uses AppKit,
 Metal, libSystem and a clang-built Objective-C bridge dylib, so **no-libpython
 GUI does not mean zero-libc GUI**.
 

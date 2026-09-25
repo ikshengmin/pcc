@@ -74,14 +74,9 @@
 
 ## GUI 与应用执行(第 20 章)
 
-| 路径 | 角色 |
-|---|---|
-| [pcc/py_runtime/gui_declarative_contract_v1.json](../../pcc/py_runtime/gui_declarative_contract_v1.json) | 声明式 GUI v1 记录、状态机、容量与错误 ABI |
-| [pcc/py_runtime/py/pcc_gui_kit.py](../../pcc/py_runtime/py/pcc_gui_kit.py) | canonical 可回收组合树 kernel、布局、clip、hit path、render walk |
-| `pcc/py_runtime/py/pcc_gui_{components,scheduler,events}.py` | keyed atomic commit、state lanes、listener/effect 生命周期 |
-| `pcc/py_runtime/py/pcc_gui_{style,commands,app_lifecycle}.py` | utility compiler/cache、managed command resolver、无 WebView run lifecycle |
-| [projects/mac_diff_app/](../../projects/mac_diff_app) | 双栏 diff 声明式 canary 与 AppKit/Metal 边界 |
-| [docs/design/gui-declarative-absorption.md](../../docs/design/gui-declarative-absorption.md) | React/Tailwind/Tauri 机制吸收边界、非声明与任务路线 |
+GUI 框架、v1 契约、`mac_diff_app` canary、Metal/AppKit 桥接及其测试已于 2026-09-06
+迁至 [allstoalls/pcc-gui](https://github.com/allstoalls/pcc-gui)。核心提交 `977ad074`
+是最后一个包含它们的版本。
 
 ## 方法论文档(第 18 章)
 

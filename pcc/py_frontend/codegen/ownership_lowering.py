@@ -631,7 +631,9 @@ class OwnershipLoweringMixin:
         ):
             field_idx = self.class_lowering.lookup_field_index(current_class, expr.name)
             if field_idx is not None:
-                field_ty = getattr(current_class, "field_types", {}).get(expr.name)
+                field_ty = getattr(current_class, "field_types", {}).get(
+                    self.class_lowering.private_field_key(expr.name)
+                )
                 if field_ty is None or isinstance(field_ty, DynType):
                     return False
                 return self._is_object(field_ty)
@@ -650,7 +652,9 @@ class OwnershipLoweringMixin:
                     and self.class_lowering.lookup_field_index(class_info, expr.name)
                     is not None
                 ):
-                    field_ty = getattr(class_info, "field_types", {}).get(expr.name)
+                    field_ty = getattr(class_info, "field_types", {}).get(
+                        self.class_lowering.private_field_key(expr.name)
+                    )
                     if field_ty is None or isinstance(field_ty, DynType):
                         return False
                     return self._is_object(field_ty)

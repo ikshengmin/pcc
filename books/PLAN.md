@@ -265,7 +265,7 @@
   managed state、invoke/result/error/cancellation;无 WebView 的 app lifecycle;
   CoreGraphics/Metal/AppKit 边界与 `mac_diff_app` canary。明确“吸收机制”不等于
   React/Tailwind/Tauri API/wire compatibility。
-- 素材:`docs/design/gui-declarative-absorption.md`、
+- 素材(2026-09-06 已迁至 allstoalls/pcc-gui,核心最后版本 `977ad074`):`docs/design/gui-declarative-absorption.md`、
   `pcc/py_runtime/gui_declarative_contract_v1.json`、
   `pcc/py_runtime/py/pcc_gui_{kit,components,scheduler,events,style,commands,app_lifecycle}.py`、
   `projects/mac_diff_app/{declarative_app,declarative_headless,app}.py`、

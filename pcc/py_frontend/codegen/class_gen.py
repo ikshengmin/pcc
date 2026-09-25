@@ -4876,7 +4876,11 @@ class ClassLowering:
             )
             builder.call(
                 runtime["pcc_gc_unpin"],
-                [parent._value_available_at_insertion_point(previous_cls_ptr)],
+                [
+                    self.parent._value_available_at_insertion_point(
+                        previous_cls_ptr
+                    )
+                ],
             )
             self.parent._gc_release(
                 previous_cls_ptr,
@@ -6108,9 +6112,28 @@ class ClassLowering:
 
     # ------------------------------------------------------ call/attr helpers
 
+    def private_field_key(self, name: str) -> str:
+        """Spell attribute ``name`` the way the code being lowered sees it.
+
+        Python mangles a private ``__name`` with the class whose body contains
+        the access, whatever the receiver's class; outside a class body it is
+        not mangled.  Field layouts, field types and runtime attribute names
+        all use that lexical spelling.
+        """
+        lexical = getattr(self.parent, "current_class", None)
+        if lexical is None:
+            return name
+        return _mangle_private_name(lexical.name, name)
+
     def lookup_field_index(self, info: ClassInfo, name: str) -> Optional[int]:
-        """Return the slot index for ``name`` on the class, or None."""
-        name = _mangle_private_name(info.name, name)
+        """Return the slot index for ``name`` on the class, or None.
+
+        Private names are mangled lexically (see ``private_field_key``): in a
+        method of ``Base`` the access ``other.__x`` reads ``_Base__x`` even when
+        ``other`` is a ``Child``, whose layout also holds ``_Child__x``.
+        Mangling with the receiver's class read and wrote the subclass field.
+        """
+        name = self.private_field_key(name)
         field_names = _classgen_effective_field_names(info)
         i = 0
         while i < len(field_names):

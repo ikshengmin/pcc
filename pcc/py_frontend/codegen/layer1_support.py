@@ -20,6 +20,7 @@ from ..py_ast import (
     ClassDef,
     ClassType,
     Compare,
+    ComplexType,
     Continue,
     Delete,
     DictExpr,
