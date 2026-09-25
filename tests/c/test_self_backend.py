@@ -314,9 +314,11 @@ def test_self_backend_phi_parallel_copy_swap_stages_through_temp(tmp_path):
         "}\n"
     )
     asm_text = emit_self_asm(ir_text)
-    # The back-edge must buffer sources through a temp frame, not store
-    # directly into the (aliasing) destination slots.
-    assert "  sub sp, sp, #" in asm_text.split("L_main_loop:", 1)[1]
+    # The back-edge must read every source before writing a destination; the
+    # swap now parks one value in x10 instead of a stack buffer.
+    loop_text = asm_text.split("L_main_loop:", 1)[1].split("L_main_exit:", 1)[0]
+    assert "  sub sp, sp, #" not in loop_text
+    assert "w10" in loop_text
 
     asm_path = tmp_path / "swap.s"
     asm_path.write_text(asm_text, encoding="utf-8")
@@ -6768,11 +6770,48 @@ loop:
     lines = emit_phi_assignments(
         func, source_block="loop", target_block="loop", module_symbols=symbols
     )
+    a_offset = func.value_slots["a"].offset
+    b_offset = func.value_slots["b"].offset
+    # The cycle parks one source in x10; both sources are read before either
+    # slot is written, with no stack buffer.
+    assert lines == [
+        f"  ldur x10, [x29, #-{b_offset}]",
+        f"  ldur x9, [x29, #-{a_offset}]",
+        f"  stur x9, [x29, #-{b_offset}]",
+        f"  stur x10, [x29, #-{a_offset}]",
+    ]
+
+
+def test_self_backend_aarch64_phi_float_cycle_stages_through_the_stack_buffer():
+    phi_ir = """
+target triple = "arm64-apple-darwin23.6.0"
+
+define double @main(double %x, double %y) {
+entry:
+  br label %loop
+
+loop:
+  %a = phi double [%x, %entry], [%b, %loop]
+  %b = phi double [%y, %entry], [%a, %loop]
+  br label %loop
+}
+""".strip()
+    module = parse_self_backend_module(phi_ir)
+    symbols = prepare_module_symbols(
+        phi_ir, list(module.globals_), list(module.functions)
+    )
+    func = module.functions[0]
+    prepare_parsed_function(func)
+    assign_stack_slots(func, aggregate_returned_indirect=lambda _ty: False)
+    lines = emit_phi_assignments(
+        func, source_block="loop", target_block="loop", module_symbols=symbols
+    )
+    # x10 cannot hold a double: a floating-point cycle keeps the buffer.
     assert lines[0] == "  sub sp, sp, #16"
-    assert f"  ldur x9, [x29, #-{func.value_slots['b'].offset}]" in lines
-    assert f"  ldur x9, [x29, #-{func.value_slots['a'].offset}]" in lines
-    assert f"  stur x9, [x29, #-{func.value_slots['a'].offset}]" in lines
-    assert f"  stur x9, [x29, #-{func.value_slots['b'].offset}]" in lines
+    assert "  str d9, [x13]" in lines
+    assert "  ldr d9, [x13]" in lines
+    assert f"  stur d9, [x29, #-{func.value_slots['a'].offset}]" in lines
+    assert f"  stur d9, [x29, #-{func.value_slots['b'].offset}]" in lines
     assert lines[-1] == "  add sp, sp, #16"
 
 
@@ -6850,13 +6889,18 @@ step:
         func, source_block="step", target_block="loop", module_symbols=symbols
     )
 
-    assert "  mov x15, sp" not in lines
-    assert "  mov x13, sp" in lines
-    assert f"  sub x15, x29, #{func.value_slots['cur39'].offset}" in lines
-    assert "  str x9, [x13]" in lines
-    assert f"  sub x15, x29, #{func.value_slots['cur39'].offset}" in lines
-    assert "  stur x9, [x15]" in lines
-    assert lines[-1] == "  add sp, sp, #320"
+    # One 40-copy rotation: cur0's source parks in x10, the chain unwinds
+    # through x9, and x10 lands last.  Slots beyond the stur range are
+    # addressed through x15, which never holds the parked value.
+    cur0 = func.value_slots["cur0"].offset
+    cur1 = func.value_slots["cur1"].offset
+    assert not any(line.startswith("  sub sp") for line in lines)
+    assert lines[:2] == [f"  sub x15, x29, #{cur1}", "  ldur x10, [x15]"]
+    assert lines[-2:] == [f"  sub x15, x29, #{cur0}", "  stur x10, [x15]"]
+    assert sum(1 for line in lines if "x10" in line) == 2
+    assert lines.count(f"  sub x15, x29, #{func.value_slots['cur39'].offset}") == 2
+    assert lines.count("  ldur x9, [x15]") == 39
+    assert lines.count("  stur x9, [x15]") == 39
 
 
 def test_self_backend_aarch64_terminator_helpers_cover_epilogue_branch_and_switch():
@@ -7166,6 +7210,39 @@ def test_self_backend_can_execute_via_evaluate(tmp_path):
     result = CEvaluator(backend="self", allow_unimplemented_backend=True).evaluate(
         source,
         optimize=0,
+        base_dir=str(tmp_path),
+        use_system_cpp=False,
+    )
+
+    assert result == 0
+
+
+@pytest.mark.parametrize("optimize", [0, 1])
+def test_self_backend_layout_aware_branches_keep_semantics(tmp_path, optimize):
+    # Conditional branches fall through to whichever edge is laid out next;
+    # ternaries and short-circuit values make PHIs on one or both edges, and
+    # the loop carries PHIs around its back edge.  An empty edge block can be
+    # entered by fallthrough, so trampoline removal must not delete it.
+    source = (
+        "static long pick(long a, long b) { return a > b ? a : b; }\n"
+        "static long mix(long a, long b) {\n"
+        "    return (a && b) ? a + b : (a || b) ? a - b : 7;\n"
+        "}\n"
+        "static long loop(long n) {\n"
+        "    long s = 0;\n"
+        "    for (long i = 0; i < n; i++) s += (i & 1) ? i : -i;\n"
+        "    return s;\n"
+        "}\n"
+        "int main(void) {\n"
+        "    long r = pick(3, 9) + pick(9, 3) + mix(2, 3) + mix(0, 4)\n"
+        "        + mix(5, 0) + mix(0, 0) + loop(10);\n"
+        "    return r == 36 ? 0 : 1;\n"
+        "}\n"
+    )
+
+    result = CEvaluator(backend="self", allow_unimplemented_backend=True).evaluate(
+        source,
+        optimize=optimize,
         base_dir=str(tmp_path),
         use_system_cpp=False,
     )
@@ -7686,7 +7763,9 @@ bb0:
     asm_text = emit_aarch64_darwin_asm(ir_text)
 
     assert "_probe:" in asm_text
-    assert "add x11, x9, #16" in asm_text
+    # [53 x [2 x ptr]] index (0, 1, 0) is byte offset 16 from the base; the
+    # destination register is an allocation choice.
+    assert re.search(r"add x\d+, x9, #16", asm_text)
 
 
 def test_self_backend_supports_zero_length_external_array_decay_gep_in_ir():
@@ -7706,13 +7785,10 @@ bb0:
     asm_text = emit_aarch64_darwin_asm(ir_text)
 
     assert "_probe:" in asm_text
-    # Older codegen materialized the base via ``mov x11, x9`` before
-    # the ``add``; the current backend folds the move and just emits
-    # ``add x11, x9, x10`` directly. The semantic invariant — the
-    # GEP lowers to a base+index add — is what this test should
-    # defend; the intermediate ``mov`` was a register-allocation
-    # artifact, not a correctness anchor.
-    assert "add x11, x9, x10" in asm_text
+    # The semantic invariant -- the GEP lowers to one base+index add of the
+    # GOT-loaded base (x9) and the index (x10) -- is what this test defends;
+    # the destination register is a register-allocation choice.
+    assert re.search(r"add x\d+, x9, x10", asm_text)
 
 
 def test_self_backend_supports_large_struct_field_gep_offset_in_ir(tmp_path):

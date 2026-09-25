@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).absolute().parents[3]
@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
 @pytest.fixture(scope="module")
 def _timer_cancel_exe(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gc_vthread_timer_cancel")
-    work_runtime = cached_c_runtime()
+    work_runtime = cached_pcc_python_runtime()
     src = tmp / "vthread_timer_cancel.c"
     src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")
     exe = tmp / "vthread_timer_cancel_bin"
@@ -138,7 +138,7 @@ def _timer_cancel_exe(tmp_path_factory):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),
@@ -169,15 +169,7 @@ def test_vthread_timer_cancel_is_immediate_and_root_safe(
 
 
 def test_production_timer_cancel_wiring_is_not_a_sorted_list() -> None:
-    source = (RUNTIME_DIR / "src" / "pcc_threads.c").read_text(
-        encoding="utf-8"
-    )
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(
         encoding="utf-8"
     )
-    assert "pcc_timer_heap_insert" in source
-    assert "pcc_timer_heap_cancel" in source
-    assert "pcc_timer_heap_pop_expired" in source
-    assert "py_virtual_thread_cancel_timer" in source
     assert "py_virtual_thread_cancel_timer" in header
-    assert "PccVirtualThreadTimerEntry *next;" not in source

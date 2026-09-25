@@ -121,8 +121,8 @@ def test_thread_runtime_is_owned_by_pcc_python(
         assert owners[symbol] == {owner}
 
 
-def test_c_oracle_thread_quiescence_symbols_have_exact_owner() -> None:
-    from tests.runtime_build_cache import cached_c_runtime, cached_threaded_c_runtime
+def test_thread_quiescence_symbols_have_exact_owner() -> None:
+    from tests.runtime_build_cache import cached_pcc_python_runtime, cached_threaded_pcc_python_runtime
 
     symbols = {
         "pcc_thread_stop_requested_acquire",
@@ -133,10 +133,18 @@ def test_c_oracle_thread_quiescence_symbols_have_exact_owner() -> None:
         "pcc_thread_registration_waiter_count",
         "pcc_thread_unregister_current",
     }
-    for runtime in (cached_c_runtime(), cached_threaded_c_runtime()):
-        owners = _defined_symbol_owners(runtime / "libpy_runtime.a")
+    # Each archive links exactly one thread kernel, and that kernel alone
+    # defines the quiescence protocol.
+    for runtime, kernel in (
+        (cached_pcc_python_runtime(), "freestanding_thread_kernel.o"),
+        (
+            cached_threaded_pcc_python_runtime(),
+            "freestanding_thread_kernel_pthread.o",
+        ),
+    ):
+        owners = _defined_symbol_owners(runtime / "libpy_runtime_pcc_py.a")
         for symbol in symbols:
-            assert owners[symbol] == {"pcc_threads.o"}
+            assert owners[symbol] == {kernel}, (symbol, owners[symbol])
 
 
 def test_production_archive_has_no_handwritten_c_runtime_helpers(
@@ -944,9 +952,13 @@ def test_explicit_thread_runtime_is_owned_by_pcc_python() -> None:
     thread_ir = (
         runtime / "build_py" / "freestanding_thread_kernel_pthread.ll"
     ).read_text(encoding="utf-8")
-    safepoint_body = thread_ir.split("@pcc_thread_safepoint() {", 1)[1].split(
-        "\n}\n", 1
-    )[0]
+    # The definition line may carry function attributes after the signature
+    # (for example "no-builtins"), so find the body from the next brace.
+    definition = re.search(
+        r"^define [^\n]*@pcc_thread_safepoint\(\)[^\n]*\{$", thread_ir, re.M
+    )
+    assert definition is not None
+    safepoint_body = thread_ir[definition.end():].split("\n}\n", 1)[0]
     assert "call void @pcc_thread_safepoint()" not in safepoint_body
 
 
@@ -1752,14 +1764,7 @@ int main(void) {
 
 def test_context_runtime_recipe_uses_only_the_pcc_python_owner() -> None:
     makefile = RUNTIME_MAKEFILE.read_text(encoding="utf-8")
-    helper_lines = [
-        line
-        for line in makefile.splitlines()
-        if line.startswith("OBJ_PY_CC_HELPERS")
-    ]
-    assert not any("py_context.o" in line for line in helper_lines)
     assert "py_context_runtime" in _make_variable_tokens(makefile, "PY_MODULES")
-    assert "py_context" in _make_variable_tokens(makefile, "PY_REPLACED_C_MODULES")
 
 
 def test_context_runtime_symbols_are_owned_by_pcc_python(
@@ -1776,16 +1781,7 @@ def test_context_runtime_symbols_are_owned_by_pcc_python(
 
 def test_call_splat_recipe_uses_only_the_pcc_python_owner() -> None:
     makefile = RUNTIME_MAKEFILE.read_text(encoding="utf-8")
-    helper_lines = [
-        line
-        for line in makefile.splitlines()
-        if line.startswith("OBJ_PY_CC_HELPERS")
-    ]
-    assert not any("py_call_splat.o" in line for line in helper_lines)
     assert "py_call_splat_runtime" in _make_variable_tokens(makefile, "PY_MODULES")
-    assert "py_call_splat" in _make_variable_tokens(
-        makefile, "PY_REPLACED_C_MODULES"
-    )
 
 
 def test_call_splat_symbols_are_owned_by_pcc_python(
@@ -1805,17 +1801,8 @@ def test_call_splat_symbols_are_owned_by_pcc_python(
 
 def test_module_attrs_recipe_uses_only_the_pcc_python_owner() -> None:
     makefile = RUNTIME_MAKEFILE.read_text(encoding="utf-8")
-    helper_lines = [
-        line
-        for line in makefile.splitlines()
-        if line.startswith("OBJ_PY_CC_HELPERS")
-    ]
-    assert not any("py_module_attrs.o" in line for line in helper_lines)
     assert "py_module_attrs_runtime" in _make_variable_tokens(
         makefile, "PY_MODULES"
-    )
-    assert "py_module_attrs" in _make_variable_tokens(
-        makefile, "PY_REPLACED_C_MODULES"
     )
 
 
@@ -1892,17 +1879,8 @@ int main(void) {
 
 def test_compiled_module_recipe_uses_only_the_pcc_python_owner() -> None:
     makefile = RUNTIME_MAKEFILE.read_text(encoding="utf-8")
-    helper_lines = [
-        line
-        for line in makefile.splitlines()
-        if line.startswith("OBJ_PY_CC_HELPERS")
-    ]
-    assert not any("py_compiled_module.o" in line for line in helper_lines)
     assert "py_compiled_module_runtime" in _make_variable_tokens(
         makefile, "PY_MODULES"
-    )
-    assert "py_compiled_module" in _make_variable_tokens(
-        makefile, "PY_REPLACED_C_MODULES"
     )
 
 
@@ -1977,8 +1955,12 @@ def test_runtime_high_substrate_is_owned_by_freestanding_pcc_python(
 
 def test_runtime_high_substrate_tls_and_reentrant_lock_behavior(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    threaded_pcc_py_runtime_archive: Path,
 ) -> None:
+    # Four raw pthreads contend on the graph lock, so this needs the pthread
+    # kernel: the threads-off kernel elides the lock (no second thread can
+    # exist there), which makes the mutual-exclusion check meaningless.
+    pcc_py_runtime_archive = threaded_pcc_py_runtime_archive
     source = tmp_path / "runtime_high_substrate_probe.c"
     executable = tmp_path / "runtime_high_substrate_probe"
     source.write_text(

@@ -750,7 +750,9 @@ class TestObligation6FiveGCComparativeStatic:
         internal = _read("pcc/py_runtime/src/py_internal.h")
         assert "pcc_gc_load_ptr" in header
         assert "pcc_gc_store_ptr" in header
-        assert "pcc_gc_visit_runtime_roots" in internal
+        assert "pcc_gc_slot_is_runtime_root" in internal
+        mapped_roots = _read("pcc/py_runtime/py/freestanding_gc_mapped_roots.py")
+        assert '@c_abi_export("pcc_gc_visit_registered_root_slots")' in mapped_roots
 
     def test_every_backend_has_its_own_bootstrap_gate(self):
         gc_dir = REPO_ROOT / "tests" / "python" / "gc"

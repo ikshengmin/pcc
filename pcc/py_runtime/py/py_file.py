@@ -15,6 +15,11 @@ from pcc.py_runtime.py.py_abi_constants import (
     PYBYTESOBJECT_BYTE_LEN_OFFSET,
     PYBYTESOBJECT_DATA_OFFSET,
     PYMEMORYVIEWOBJECT_BASE_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PYOBJECTHEADER_REFCOUNT_OFFSET,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_FLAG_GC_MALLOC_ALLOC,
+    PY_FLAG_IMMORTAL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_FILE,
@@ -28,8 +33,11 @@ from pcc.py_runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     cstr,
+    define_global_ptr_null,
     free,
+    global_addr,
     global_load_ptr,
+    global_store_ptr,
     is_tagged_int,
     load_i8,
     load_i32,
@@ -37,6 +45,7 @@ from pcc.unsafe import (
     load_ptr,
     malloc,
     memcpy,
+    memset,
     null,
     ptr_add,
     ptr_eq,
@@ -60,6 +69,21 @@ fseek = extern("fseek", (c_ptr, c_int64, c_int32), c_int32)
 ftell = extern("ftell", (c_ptr,), c_int64)
 fwrite = extern("fwrite", (c_ptr, c_size_t, c_size_t, c_ptr), c_size_t)
 fileno = extern("fileno", (c_ptr,), c_int32)
+isatty = extern("isatty", (c_int32,), c_int32)
+py_func_new_bound = extern("py_func_new_bound", (c_ptr, c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_iter = extern("py_obj_iter", (c_ptr,), c_ptr)
+py_obj_next = extern("py_obj_next", (c_ptr,), c_ptr)
+py_err_occurred = extern("py_err_occurred", (), c_int64)
+py_current_exception = extern("py_current_exception", (), c_ptr)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
+py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
+pcc_gc_pointer_register = extern("pcc_gc_pointer_register", (c_ptr,), c_int64)
+strcmp = extern("strcmp", (c_ptr, c_ptr), c_int32)
+
+define_global_ptr_null("py_sys_stdin_object")
+define_global_ptr_null("py_sys_stdout_object")
+define_global_ptr_null("py_sys_stderr_object")
 
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -129,6 +153,31 @@ def _mode_is_binary(mode_s) -> int:
     return 0
 
 
+# Offset 32 of a file object: bits 0-7 hold ``fd + 1`` for a standard stream
+# (0 for opened files), bit 8 readable, bit 9 writable.
+def _mode_access_bits(mode_s) -> int:
+    if ptr_is_null(mode_s):
+        return 256
+    data = py_str_utf8(mode_s)
+    n: int = py_str_byte_len(mode_s)
+    bits: int = 0
+    i: int = 0
+    while i < n:
+        c: int = load_i8(data, i) & 255
+        if c == 114:  # r
+            bits = bits | 256
+        elif c == 119 or c == 97 or c == 120:  # w a x
+            bits = bits | 512
+        elif c == 43:  # +
+            bits = bits | 768
+        i = i + 1
+    return bits
+
+
+def _file_std_fd_plus1(file) -> int:
+    return load_i64(file, 32) & 255
+
+
 def _file_binary(file) -> int:
     return load_i32(file, 28)
 
@@ -178,6 +227,7 @@ def py_file_open(path, mode):
         return null()
 
     binary: int = _mode_is_binary(mode_s)
+    access: int = _mode_access_bits(mode_s)
     fp = fopen(py_str_utf8(path_s), py_str_utf8(mode_s))
     py_decref(path_owned)
     py_decref(mode_owned)
@@ -194,6 +244,7 @@ def py_file_open(path, mode):
     store_ptr(out, 16, fp)
     store_i32(out, 24, 0)
     store_i32(out, 28, binary)
+    store_i64(out, 32, access)
     return out
 
 
@@ -437,9 +488,279 @@ def py_file_close(file) -> None:
     if load_i32(file, 24) == 0:
         fp = load_ptr(file, 16)
         if not ptr_is_null(fp):
-            fclose(fp)
-            store_ptr(file, 16, null())
+            if _file_std_fd_plus1(file) != 0:
+                # sys.stdin/stdout/stderr: closefd=False, like CPython.
+                fflush(fp)
+            else:
+                fclose(fp)
+                store_ptr(file, 16, null())
             store_i32(file, 24, 1)
+
+
+@c_abi_export("py_file_readlines")
+def py_file_readlines(file):
+    """``f.readlines()``: every remaining line, keeping line endings."""
+    out = py_list_new(0)
+    if ptr_is_null(out):
+        return null()
+    while True:
+        line = py_file_readline(file, -1)
+        if ptr_is_null(line):
+            py_decref(out)
+            return null()
+        n: int = 0
+        if _type_of(line) == PY_TYPE_STR:
+            n = py_str_byte_len(line)
+        else:
+            n = load_i64(line, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+        if n == 0:
+            py_decref(line)
+            return out
+        py_list_append(out, line)
+        py_decref(line)
+
+
+@c_abi_export("py_file_writelines")
+def py_file_writelines(file, lines):
+    """``f.writelines(iterable)``: write each item; returns None."""
+    it = py_obj_iter(lines)
+    if ptr_is_null(it):
+        return null()
+    while True:
+        item = py_obj_next(it)
+        if ptr_is_null(item):
+            py_decref(it)
+            if py_err_occurred() != 0:
+                # 8 == PY_EXC_STOPITERATION: exhaustion, not a failure.
+                if py_exc_matches(py_current_exception(), py_exc_builtin_class(8)) == 0:
+                    return null()
+                py_clear_exception()
+            none = global_load_ptr("py_None")
+            py_incref(none)
+            return none
+        wrote = py_file_write(file, item)
+        py_decref(item)
+        if ptr_is_null(wrote):
+            py_decref(it)
+            return null()
+        py_decref(wrote)
+
+
+def _std_stream_new(fd: int):
+    """A file object over the runtime's own standard stream ``fd``.
+
+    The freestanding stdio's standard streams carry no buffer, so writes go
+    straight to the descriptor and interleave with print() and the direct
+    ``sys.stdout.write`` path, and reads consume no more than
+    ``sys.stdin.readline()`` does.  Cached in a raw global pointer, so it gets
+    stable storage like the ``object`` root.  Offset 32 marks it as standard
+    stream ``fd``: it never closes its descriptor (CPython's closefd=False).
+    """
+    fp = null()
+    if fd == 0:
+        fp = global_addr("pcc_stdio_stdin_storage")
+    elif fd == 1:
+        fp = global_addr("pcc_stdio_stdout_storage")
+    else:
+        fp = global_addr("pcc_stdio_stderr_storage")
+    out = malloc(40)
+    if ptr_is_null(out):
+        return null()
+    memset(out, 0, 40)
+    store_i64(out, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
+    store_i32(out, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_FILE)
+    store_i32(out, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC)
+    if pcc_gc_pointer_register(out) < 0:
+        free(out)
+        return null()
+    store_ptr(out, 16, fp)
+    store_i32(out, 24, 0)
+    store_i32(out, 28, 0)
+    if fd == 0:
+        store_i64(out, 32, (fd + 1) | 256)
+    else:
+        store_i64(out, 32, (fd + 1) | 512)
+    return out
+
+
+@c_abi_export("py_sys_stream_object")
+def py_sys_stream_object(fd: int):
+    """``sys.stdin`` / ``sys.stdout`` / ``sys.stderr`` (fd 0/1/2) as values."""
+    cached = null()
+    if fd == 0:
+        cached = global_load_ptr("py_sys_stdin_object")
+    elif fd == 1:
+        cached = global_load_ptr("py_sys_stdout_object")
+    else:
+        cached = global_load_ptr("py_sys_stderr_object")
+    if ptr_is_null(cached):
+        if fd == 0:
+            cached = _std_stream_new(0)
+            global_store_ptr("py_sys_stdin_object", cached)
+        elif fd == 1:
+            cached = _std_stream_new(1)
+            global_store_ptr("py_sys_stdout_object", cached)
+        else:
+            cached = _std_stream_new(2)
+            global_store_ptr("py_sys_stderr_object", cached)
+        if ptr_is_null(cached):
+            return null()
+    py_incref(cached)
+    return cached
+
+
+# Dynamic method codes for file objects (``destination.write(text)`` on a
+# file that no static type describes).
+def _file_method_code(name) -> int:
+    if strcmp(name, cstr("write")) == 0:
+        return 1
+    if strcmp(name, cstr("read")) == 0:
+        return 2
+    if strcmp(name, cstr("readline")) == 0:
+        return 3
+    if strcmp(name, cstr("readlines")) == 0:
+        return 4
+    if strcmp(name, cstr("writelines")) == 0:
+        return 5
+    if strcmp(name, cstr("flush")) == 0:
+        return 6
+    if strcmp(name, cstr("close")) == 0:
+        return 7
+    if strcmp(name, cstr("fileno")) == 0:
+        return 8
+    if strcmp(name, cstr("seek")) == 0:
+        return 9
+    if strcmp(name, cstr("tell")) == 0:
+        return 10
+    if strcmp(name, cstr("isatty")) == 0:
+        return 11
+    if strcmp(name, cstr("__enter__")) == 0:
+        return 12
+    if strcmp(name, cstr("__exit__")) == 0:
+        return 13
+    if strcmp(name, cstr("readable")) == 0:
+        return 14
+    if strcmp(name, cstr("writable")) == 0:
+        return 15
+    return 0
+
+
+def _method_arg_i64(args, index: int, default: int) -> int:
+    """Positional int argument ``index`` (None or absent: ``default``)."""
+    if ptr_is_null(args) != 0 or index >= py_tuple_len(args):
+        return default
+    value = py_tuple_get(args, index)
+    if ptr_is_null(value) != 0:
+        return default
+    if ptr_eq(value, global_load_ptr("py_None")) != 0:
+        py_decref(value)
+        return default
+    out: int = py_int_value_i64(value)
+    py_decref(value)
+    return out
+
+
+def _file_method_entry(captures, args):
+    f = py_tuple_get(captures, 0)
+    code_obj = py_tuple_get(captures, 1)
+    if ptr_is_null(f) != 0 or ptr_is_null(code_obj) != 0:
+        return null()
+    code: int = py_int_value_i64(code_obj)
+    py_decref(code_obj)
+    nargs: int = 0
+    if ptr_is_null(args) == 0:
+        nargs = py_tuple_len(args)
+    none = global_load_ptr("py_None")
+    result = null()
+    if code == 1 or code == 5:
+        if nargs != 1:
+            py_raise_owned(py_exc_new(3, cstr("expected exactly one argument")))
+        else:
+            arg = py_tuple_get(args, 0)
+            if code == 1:
+                result = py_file_write(f, arg)
+            else:
+                result = py_file_writelines(f, arg)
+            py_decref(arg)
+    elif code == 2:
+        result = py_file_read(f, _method_arg_i64(args, 0, -1))
+    elif code == 3:
+        result = py_file_readline(f, _method_arg_i64(args, 0, -1))
+    elif code == 4:
+        result = py_file_readlines(f)
+    elif code == 6:
+        result = py_file_flush(f)
+    elif code == 7:
+        py_file_close(f)
+        py_incref(none)
+        result = none
+    elif code == 8:
+        result = py_file_fileno(f)
+    elif code == 9:
+        result = py_file_seek(f, _method_arg_i64(args, 0, 0), _method_arg_i64(args, 1, 0))
+    elif code == 10:
+        result = py_file_tell(f)
+    elif code == 11:
+        checked = _checked_open_file(f)
+        if ptr_is_null(checked) == 0:
+            result = py_bool_from_bit(isatty(fileno(load_ptr(f, 16))))
+    elif code == 12:
+        checked = _checked_open_file(f)
+        if ptr_is_null(checked) == 0:
+            py_incref(f)
+            result = f
+    elif code == 13:
+        py_file_close(f)
+        result = global_load_ptr("py_False")
+    elif code == 14 or code == 15:
+        checked = _checked_open_file(f)
+        if ptr_is_null(checked) == 0:
+            wanted: int = 256
+            if code == 15:
+                wanted = 512
+            result = py_bool_from_bit((load_i64(f, 32) & wanted) != 0)
+    py_decref(f)
+    return result
+
+
+@c_abi_export("py_file_type_kind")
+def py_file_type_kind(file) -> int:
+    """0 TextIOWrapper, 1 BufferedReader, 2 BufferedWriter, 3 BufferedRandom."""
+    if ptr_is_null(file) or _type_of(file) != PY_TYPE_FILE:
+        return 0
+    if _file_binary(file) == 0:
+        return 0
+    access: int = load_i64(file, 32) & 768
+    if access == 768:
+        return 3
+    if access == 512:
+        return 2
+    return 1
+
+
+@c_abi_export("py_file_getattr")
+def py_file_getattr(file, name):
+    """Attribute load on a file object: ``closed`` and bound methods.
+
+    NULL without an exception when ``name`` is not a file attribute.
+    """
+    if ptr_is_null(file) or _type_of(file) != PY_TYPE_FILE or ptr_is_null(name):
+        return null()
+    if strcmp(name, cstr("closed")) == 0:
+        return py_bool_from_bit(load_i32(file, 24))
+    code: int = _file_method_code(name)
+    if code == 0:
+        return null()
+    captures = py_tuple_new(2)
+    if ptr_is_null(captures):
+        return null()
+    py_tuple_set_item(captures, 0, file)
+    code_obj = py_int_from_i64(code)
+    py_tuple_set_item(captures, 1, code_obj)
+    py_decref(code_obj)
+    fn = py_func_new_bound(_file_method_entry, captures, name, file)
+    py_decref(captures)
+    return fn
 
 
 # Keep fileinput state indexes as integer literals at use sites below. The

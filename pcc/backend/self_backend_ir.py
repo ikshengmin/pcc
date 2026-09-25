@@ -1340,6 +1340,17 @@ class ParsedFunction:
     # Callee-saved registers (x19-x28 indices) the AArch64 allocator assigned;
     # the prologue saves and every epilogue restores exactly these.
     aarch64_callee_saved: list[int] = field(default_factory=list)
+    # Spill-slot offsets a stack-map reload rewrites after a safepoint; the
+    # AArch64 allocator keeps every value stored there in its slot.
+    aarch64_reload_slot_offsets: list[int] = field(default_factory=list)
+    # icmp value id -> block id for compares the AArch64 allocator fused into
+    # their block's br_cond: the compare only sets the flags, the terminator
+    # branches on them, and the i1 is never materialised.
+    aarch64_fused_branch_values: dict[int, int] = field(default_factory=dict)
+    # The AArch64 allocator proved this function needs no frame: no call, no
+    # stack memory, every value in a register.  Its prologue pushes nothing
+    # and every return is a bare ``ret``.
+    aarch64_frameless: bool = False
 
 
 def parsed_module_instruction_arena_profile(module: ParsedModule) -> dict[str, int]:

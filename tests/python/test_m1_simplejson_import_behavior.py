@@ -37,8 +37,6 @@ def _compile_with_pcc1(pcc1: Path, site: Path, source: Path, exe: Path) -> None:
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     env["PCC_HOST_PYTHON"] = "/usr/bin/false"
     env["PCC_HOST_PCC"] = "/usr/bin/false"
     proc = subprocess.run(

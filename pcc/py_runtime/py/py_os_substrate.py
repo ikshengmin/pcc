@@ -54,8 +54,11 @@ py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
 py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_float_from_f64 = extern("py_float_from_f64", (c_double,), c_ptr)
+py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 pcc_runtime_now_us = extern("pcc_platform_wall_time_us", (), c_int64)
 pcc_runtime_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
+pcc_platform_monotonic_ns = extern("pcc_platform_monotonic_ns", (), c_int64)
+pcc_platform_wall_time_ns = extern("pcc_platform_wall_time_ns", (), c_int64)
 pcc_platform_sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
 py_float_to_f64 = extern("py_float_to_f64", (c_ptr,), c_double)
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
@@ -119,6 +122,21 @@ def py_time_perf_counter():
 @c_abi_export("py_time_time")
 def py_time_time():
     return py_float_from_f64(pcc_runtime_now_us() * 0.000001)
+
+
+@c_abi_export("py_time_perf_counter_ns")
+def py_time_perf_counter_ns():
+    return py_int_from_i64(pcc_platform_monotonic_ns())
+
+
+@c_abi_export("py_time_monotonic_ns")
+def py_time_monotonic_ns():
+    return py_int_from_i64(pcc_platform_monotonic_ns())
+
+
+@c_abi_export("py_time_time_ns")
+def py_time_time_ns():
+    return py_int_from_i64(pcc_platform_wall_time_ns())
 
 
 @c_abi_export("py_time_sleep")

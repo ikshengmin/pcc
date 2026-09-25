@@ -1,4 +1,8 @@
-"""Ratchet on the atomics mirror between the C runtime and the pcc-Python ports.
+"""Ratchet on the atomics surface of the remaining C and the pcc-Python ports.
+
+The C runtime is retired; the C left under ``pcc/py_runtime/src`` is the
+CPython bridge (``py_libpython.c``) and the C ABI headers, which the scans
+below still cover.
 
 History: until 2026-08-02 `pcc.unsafe` had no atomic intrinsic, so a port
 reached atomics only through seven fixed C helpers in
@@ -109,15 +113,12 @@ def test_c_runtime_uses_no_atomic_operation_outside_the_pinned_set():
 
 
 def test_every_c_atomic_op_has_an_intrinsic_mirror():
-    """The byte-flag ops were the last gap; the whole C atomic surface is
-    now expressible through pcc.unsafe. A new C op kind must land with its
-    intrinsic (or a deliberate entry here) in the same change."""
+    """The whole remaining C atomic surface is expressible through
+    pcc.unsafe. A new C op kind must land with its intrinsic (or a
+    deliberate entry here) in the same change."""
     assert C_OPS_WITHOUT_INTRINSIC_MIRROR == set()
     ops = _scan(_c_sources(), r"__atomic_(\w+)")
-    assert {"test_and_set", "clear"} <= ops, (
-        "the C byte-flag ops disappeared; update the pinned sets and the "
-        "LIBC-P1-PRIMITIVES boundary deliberately"
-    )
+    assert ops <= KNOWN_C_ATOMIC_OPS
 
 
 def test_c_runtime_uses_no_memory_ordering_outside_the_known_set():

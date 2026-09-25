@@ -113,7 +113,38 @@ enum {
     PY_EXC_BYTESWARNING      = 31,
     PY_EXC_ENCODINGWARNING   = 32,
     PY_EXC_RESOURCEWARNING   = 33,
-    PY_EXC_N_BUILTIN         = 34
+    PY_EXC_FILENOTFOUNDERROR = 34,
+    PY_EXC_FILEEXISTSERROR = 35,
+    PY_EXC_PERMISSIONERROR = 36,
+    PY_EXC_ISADIRECTORYERROR = 37,
+    PY_EXC_NOTADIRECTORYERROR = 38,
+    PY_EXC_PROCESSLOOKUPERROR = 39,
+    PY_EXC_CHILDPROCESSERROR = 40,
+    PY_EXC_TIMEOUTERROR = 41,
+    PY_EXC_INTERRUPTEDERROR = 42,
+    PY_EXC_BLOCKINGIOERROR = 43,
+    PY_EXC_CONNECTIONERROR = 44,
+    PY_EXC_BROKENPIPEERROR = 45,
+    PY_EXC_CONNECTIONABORTEDERROR = 46,
+    PY_EXC_CONNECTIONREFUSEDERROR = 47,
+    PY_EXC_CONNECTIONRESETERROR = 48,
+    PY_EXC_SYNTAXERROR = 49,
+    PY_EXC_INDENTATIONERROR = 50,
+    PY_EXC_TABERROR = 51,
+    PY_EXC_EOFERROR = 52,
+    PY_EXC_SYSTEMEXIT = 53,
+    PY_EXC_KEYBOARDINTERRUPT = 54,
+    PY_EXC_GENERATOREXIT = 55,
+    PY_EXC_RECURSIONERROR = 56,
+    PY_EXC_UNICODEERROR = 57,
+    PY_EXC_UNICODEDECODEERROR = 58,
+    PY_EXC_UNICODEENCODEERROR = 59,
+    PY_EXC_UNICODETRANSLATEERROR = 60,
+    PY_EXC_FLOATINGPOINTERROR = 61,
+    PY_EXC_BUFFERERROR = 62,
+    PY_EXC_UNBOUNDLOCALERROR = 63,
+    PY_EXC_SYSTEMERROR = 64,
+    PY_EXC_N_BUILTIN         = 65
 };
 
 /* Every PyObject has this header prefix. */
@@ -325,6 +356,7 @@ void      pcc_gc_pin(PyObject *o);
 void      pcc_gc_unpin(PyObject *o);
 void      pcc_gc_immortalize(PyObject *o);
 int64_t   pcc_gc_object_id(PyObject *o);
+int64_t   py_obj_id(PyObject *o);
 void      pcc_gc_reset_relocation_set(void);
 int64_t   pcc_gc_select_relocation_set(int64_t budget);
 int64_t   pcc_gc_backend4_evacuation_drain(int64_t budget);
@@ -788,6 +820,7 @@ PyObject *py_bool_from_bit(int b);           /* b: 0 or 1 */
  * Non-tagged: regular PyObject* with PY_TYPE_INT header. */
 PyObject *py_int_from_i64(int64_t v);
 int64_t   py_int_to_i64(PyObject *o, int *overflow);   /* returns 0 on overflow */
+int64_t   py_int_to_i64_lane(PyObject *o, int *overflow); /* raises OverflowError on overflow */
 PyObject *py_int_add(PyObject *a, PyObject *b);
 PyObject *py_int_sub(PyObject *a, PyObject *b);
 PyObject *py_int_mul(PyObject *a, PyObject *b);
@@ -925,6 +958,8 @@ PyObject *py_str_concat(PyObject *a, PyObject *b);
 PyObject *py_str_repeat(PyObject *s, PyObject *n);
 PyObject *py_str_slice(PyObject *s, PyObject *lo, PyObject *hi, PyObject *step);
 PyObject *py_str_index(PyObject *s, PyObject *i);    /* returns single-char str */
+int64_t py_str_codepoint_at(PyObject *s, int64_t idx); /* code point of s[idx], -1 + IndexError */
+int64_t py_str_contains_codepoint(PyObject *t, int64_t cp); /* c in t for one-char c */
 int64_t   py_str_eq(PyObject *a, PyObject *b);
 int64_t   py_str_contains(PyObject *s, PyObject *sub);
 int64_t   py_str_find(PyObject *s, PyObject *sub);   /* -1 if not found */
@@ -1157,7 +1192,9 @@ int64_t   py_obj_type_tag(PyObject *o);
 int64_t   py_obj_eq(PyObject *a, PyObject *b);       /* identity-or-equality for containers */
 int64_t   py_obj_eq_value(PyObject *a, PyObject *b); /* direct Python value equality */
 #define PY_OBJ_CMP_UNORDERED 2
-int       py_obj_cmp_threeway(PyObject *a, PyObject *b);  /* -1 / 0 / 1 / unordered */
+/* int (or bool) against a double by exact value, as CPython's
+ * float_richcompare: -1 / 0 / 1, or PY_OBJ_CMP_UNORDERED when f is NaN. */
+int64_t   py_int_f64_cmp(PyObject *o, double f);
 PyObject *py_obj_min_max(PyObject *iterable, int64_t want_max);  /* min/max over iterable */
 int64_t   py_obj_lt(PyObject *a, PyObject *b);
 int64_t   py_obj_le(PyObject *a, PyObject *b);
@@ -1274,6 +1311,7 @@ int64_t py_gen_frame_save(PyObject *frame, void *slot_addresses, int64_t slot_co
 PyObject *py_gen_new(void *resume, PyObject *frame);
 PyObject *py_gen_completed(PyObject *value); /* owned completed continuation */
 PyObject *py_gen_take_completed(PyObject *gen); /* borrowed value, NULL if not ready */
+PyObject *py_gen_run_may_park_sync(PyObject *gen); /* new ref, NULL on error */
 void      py_gen_set_may_park(PyObject *gen);
 int64_t   py_gen_is_may_park(PyObject *gen);
 PyObject *py_gen_next(PyObject *gen);
@@ -1527,6 +1565,27 @@ PyObject *py_file_seek(PyObject *file, int64_t offset, int64_t whence);
 PyObject *py_file_tell(PyObject *file);
 PyObject *py_file_flush(PyObject *file);
 PyObject *py_file_fileno(PyObject *file);
+PyObject *py_file_readlines(PyObject *file);
+PyObject *py_file_writelines(PyObject *file, PyObject *lines);
+/* Attribute load on a file object (``closed`` and bound methods); NULL
+ * without an exception when ``name`` is not a file attribute. */
+PyObject *py_file_getattr(PyObject *file, const char *name);
+/* type(f): 0 TextIOWrapper, 1 BufferedReader, 2 BufferedWriter,
+ * 3 BufferedRandom. */
+int64_t   py_file_type_kind(PyObject *file);
+/* sys.stdin / sys.stdout / sys.stderr (fd 0/1/2) as values; NEW ref. */
+PyObject *py_sys_stream_object(int64_t fd);
+/* time.perf_counter_ns / monotonic_ns / time_ns (NEW int). */
+PyObject *py_time_perf_counter_ns(void);
+PyObject *py_time_monotonic_ns(void);
+PyObject *py_time_time_ns(void);
+/* fn.__qualname__ when set, else __name__ (NEW str). */
+PyObject *py_func_display_name(PyObject *fn);
+/* f(**a, **b) keyword merge with CPython's duplicate-key TypeError. */
+PyObject *py_call_merge_kwargs_unique(PyObject *base_kwargs, PyObject *star_kwargs);
+/* print(..., file=<object>): writes through file.write; -1 on error. */
+int64_t   py_print_to_file(PyObject *file, PyObject *args_tuple, PyObject *sep,
+                           PyObject *end, PyObject *flush);
 PyObject *py_fileinput_new(PyObject *files, PyObject *openhook);
 PyObject *py_fileinput_readline(PyObject *state);
 PyObject *py_fileinput_filename(PyObject *state);
@@ -1637,7 +1696,6 @@ int32_t   py_path_stat_kind(const char *path);
  * if stat() fails. Hides struct timespec layout from the pcc-Python
  * port. */
 double      py_path_stat_mtime(const char *path);
-int64_t     py_path_stat_size(const char *path);
 /* Current working directory as a NUL-terminated cstring. Pointer is
  * borrowed (thread-local static buffer); copy before the next call. */
 const char *py_path_getcwd(void);
@@ -1793,6 +1851,14 @@ PyObject *py_exc_traceback_format_exc(PyObject *exc);
 /* traceback.print_exc(): same text as py_exc_traceback_format_exc,
  * written to stderr. `exc` is borrowed and may be NULL. */
 void py_exc_traceback_print_exc(PyObject *exc);
+
+/* exc.__traceback__: traceback -> frame -> code objects built from the
+ * frame records; NEW reference, None when no frame was recorded. */
+PyObject *py_exc_traceback_object(PyObject *exc);
+
+/* Exit status for an uncaught exception (SystemExit code, 130 for
+ * KeyboardInterrupt, else 1 after printing the traceback). */
+int64_t py_exc_handle_uncaught(PyObject *exc);
 
 /* ---- GC ---------------------------------------------------------------- */
 void py_gc_init(void);

@@ -17,7 +17,7 @@ from tests.python.test_gc_threading_substrate import (
     ALL_GC_KINDS,
 )
 
-pytestmark = pytest.mark.parametrize("kind", ["c", "pcc_python"])
+pytestmark = pytest.mark.parametrize("kind", ["pcc_python"])
 
 
 @pytest.mark.parametrize("gc_kind", ["PCC_GC_KIND_COLORED_RELOCATING"])

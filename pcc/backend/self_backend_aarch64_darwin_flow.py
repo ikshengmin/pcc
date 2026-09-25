@@ -16,6 +16,9 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_memory_instruction_line,
     emitted_move_register_line,
 )
+from .self_backend_aarch64_darwin_regalloc import (
+    allocated_scalar_register_indexed,
+)
 from .self_backend_aarch64_darwin_regs import emit_add_offset, emit_stack_adjust
 from .self_backend_aarch64_darwin_slots import (
     copy_address_to_address,
@@ -421,6 +424,77 @@ def _indexed_phi_stack_store(
     return [emitted_memory_instruction_line(op, reg, "x29", -offset)]
 
 
+# A phi copy's location key: a slot id, or this base plus a register index.
+_PHI_REGISTER_KEY_BASE = 1 << 20
+# Breaks a cycle of register/slot copies.  x10 is outside the allocation pools
+# and no slot, constant or address helper used by the copies writes it (they
+# use x9 and x12-x15).
+_PHI_CYCLE_REGISTER = 10
+
+
+def _phi_copy_to_register(
+    func: ParsedFunction,
+    kernel: IndexedFunctionKernel,
+    type_id: int,
+    dest_reg: int,
+    src_reg: int,
+    value_ref: int,
+    module_symbols: PreparedModuleSymbols,
+) -> list[str]:
+    """Copy one incoming value into the register its phi was assigned."""
+    dest = reg_name_indexed(kernel, type_id, dest_reg)
+    if src_reg >= 0:
+        if src_reg == dest_reg:
+            return []
+        return [
+            emitted_move_register_line(
+                dest, reg_name_indexed(kernel, type_id, src_reg)
+            )
+        ]
+    lines = materialize_scalar_value_indexed(
+        func,
+        kernel,
+        kernel.phi_incoming_value(value_ref),
+        type_id,
+        dest_reg,
+        module_symbols,
+        value_id=value_ref,
+    )
+    header: CompilerInt4 = kernel.type_header(type_id)
+    if value_ref < 0 and header.first == TYPE_KIND_INT and header.second <= 16:
+        # An allocated i1/i8/i16 holds its zero-extended value (the allocator
+        # commits one with the same mask); a constant is materialised at
+        # 32 bits.
+        mask = 0xFF if header.second <= 8 else 0xFFFF
+        lines.append(f"  and {dest}, {dest}, #0x{mask:x}")
+    return lines
+
+
+def _phi_copy_to_slot(
+    func: ParsedFunction,
+    kernel: IndexedFunctionKernel,
+    type_id: int,
+    dest_slot_id: int,
+    src_reg: int,
+    value_ref: int,
+    module_symbols: PreparedModuleSymbols,
+) -> list[str]:
+    """Copy one incoming value into its phi's stack slot."""
+    if src_reg >= 0:
+        return _indexed_phi_stack_store(kernel, dest_slot_id, type_id, src_reg)
+    lines = materialize_scalar_value_indexed(
+        func,
+        kernel,
+        kernel.phi_incoming_value(value_ref),
+        type_id,
+        9,
+        module_symbols,
+        value_id=value_ref,
+    )
+    lines.extend(_indexed_phi_stack_store(kernel, dest_slot_id, type_id, 9))
+    return lines
+
+
 def _emit_phi_assignments_indexed(
     func: ParsedFunction,
     *,
@@ -428,13 +502,25 @@ def _emit_phi_assignments_indexed(
     target_block_id: int,
     module_symbols: PreparedModuleSymbols,
 ) -> list[str]:
+    """Emit the parallel copy for the edge into ``target_block_id``.
+
+    A phi lives in its allocated register or its slot; an incoming value in
+    its register, its slot, or is a constant.  A copy is emitted once no other
+    pending copy still reads the location it writes, so every source is read
+    before it is overwritten.  A cycle parks one integer source in x10; a
+    cycle through a floating-point copy takes the stack-buffer path, which
+    reads every source before writing any destination.
+    """
     kernel = get_indexed_function_kernel(func)
     phi_fact: CompilerInt2 = kernel.block_phi_fact(target_block_id)
     phi_ids: list[int] = []
     incoming_refs: list[int] = []
     temp_offsets: list[int] = []
     dest_slot_ids: list[int] = []
-    src_slot_ids: list[int] = []
+    dest_regs: list[int] = []
+    src_regs: list[int] = []
+    dest_keys: list[int] = []
+    src_keys: list[int] = []
     temp_offset = 0
     phi_index = 0
     while phi_index < phi_fact.second:
@@ -461,15 +547,27 @@ def _emit_phi_assignments_indexed(
             layout: CompilerInt4 = kernel.type_layout(phi.second)
             temp_align = max(1, min(layout.second, 8))
             temp_offset = _align_to(temp_offset, temp_align)
+            dest_reg = allocated_scalar_register_indexed(kernel, phi.first, phi.second)
+            src_reg = -1
+            src_key = -1
+            if incoming_ref >= 0:
+                src_reg = allocated_scalar_register_indexed(
+                    kernel, incoming_ref, phi.second
+                )
+                if src_reg >= 0:
+                    src_key = _PHI_REGISTER_KEY_BASE + src_reg
+                else:
+                    src_key = kernel.value_slot_id(incoming_ref)
             phi_ids.append(phi_id)
             incoming_refs.append(incoming_ref)
             temp_offsets.append(temp_offset)
             dest_slot_ids.append(dest_slot_id)
-            src_slot_ids.append(
-                kernel.value_slot_id(incoming_ref)
-                if incoming_ref >= 0
-                else -1
+            dest_regs.append(dest_reg)
+            src_regs.append(src_reg)
+            dest_keys.append(
+                _PHI_REGISTER_KEY_BASE + dest_reg if dest_reg >= 0 else dest_slot_id
             )
+            src_keys.append(src_key)
             phi_span: CompilerInt4 = kernel.type_span(phi.second)
             temp_offset += phi_span.third
         phi_index += 1
@@ -480,56 +578,93 @@ def _emit_phi_assignments_indexed(
     pending: list[int] = []
     index = 0
     while index < len(phi_ids):
-        if src_slot_ids[index] != dest_slot_ids[index]:
+        if src_keys[index] != dest_keys[index]:
             pending.append(index)
         index += 1
-    ordered: list[int] = []
+    lines: list[str] = []
     while pending:
         ready: list[int] = []
         for candidate in pending:
             blocked = False
             for other in pending:
-                if (
-                    other != candidate
-                    and src_slot_ids[other] == dest_slot_ids[candidate]
-                ):
+                if other != candidate and src_keys[other] == dest_keys[candidate]:
                     blocked = True
                     break
             if not blocked:
                 ready.append(candidate)
         if not ready:
-            break
-        for candidate in ready:
-            ordered.append(candidate)
-            pending.remove(candidate)
-
-    if not pending:
-        lines: list[str] = []
-        for assignment in ordered:
-            phi: CompilerInt4 = kernel.phi_record(phi_ids[assignment])
-            value_ref = incoming_refs[assignment]
-            lines.extend(
-                materialize_scalar_value_indexed(
+            victim = pending[0]
+            victim_phi: CompilerInt4 = kernel.phi_record(phi_ids[victim])
+            victim_header: CompilerInt4 = kernel.type_header(victim_phi.second)
+            if victim_header.first == TYPE_KIND_FP:
+                return _emit_phi_assignments_buffered(
                     func,
                     kernel,
-                    kernel.phi_incoming_value(value_ref),
-                    phi.second,
-                    9,
+                    phi_ids,
+                    incoming_refs,
+                    temp_offsets,
+                    temp_offset,
+                    dest_slot_ids,
+                    dest_regs,
                     module_symbols,
-                    value_id=value_ref,
                 )
-            )
             lines.extend(
-                _indexed_phi_stack_store(
+                _phi_copy_to_register(
+                    func,
                     kernel,
-                    dest_slot_ids[assignment],
-                    phi.second,
-                    9,
+                    victim_phi.second,
+                    _PHI_CYCLE_REGISTER,
+                    src_regs[victim],
+                    incoming_refs[victim],
+                    module_symbols,
                 )
             )
-        return lines
+            src_regs[victim] = _PHI_CYCLE_REGISTER
+            src_keys[victim] = _PHI_REGISTER_KEY_BASE + _PHI_CYCLE_REGISTER
+            continue
+        for candidate in ready:
+            phi = kernel.phi_record(phi_ids[candidate])
+            if dest_regs[candidate] >= 0:
+                lines.extend(
+                    _phi_copy_to_register(
+                        func,
+                        kernel,
+                        phi.second,
+                        dest_regs[candidate],
+                        src_regs[candidate],
+                        incoming_refs[candidate],
+                        module_symbols,
+                    )
+                )
+            else:
+                lines.extend(
+                    _phi_copy_to_slot(
+                        func,
+                        kernel,
+                        phi.second,
+                        dest_slot_ids[candidate],
+                        src_regs[candidate],
+                        incoming_refs[candidate],
+                        module_symbols,
+                    )
+                )
+            pending.remove(candidate)
+    return lines
 
-    total_temp = _align_to(temp_offset, 16)
+
+def _emit_phi_assignments_buffered(
+    func: ParsedFunction,
+    kernel: IndexedFunctionKernel,
+    phi_ids: list[int],
+    incoming_refs: list[int],
+    temp_offsets: list[int],
+    temp_size: int,
+    dest_slot_ids: list[int],
+    dest_regs: list[int],
+    module_symbols: PreparedModuleSymbols,
+) -> list[str]:
+    """Copy every incoming value to a stack buffer, then to its phi."""
+    total_temp = _align_to(temp_size, 16)
     lines = emit_stack_adjust(-total_temp) if total_temp else []
     index = 0
     while index < len(phi_ids):
@@ -558,18 +693,20 @@ def _emit_phi_assignments_indexed(
         phi = kernel.phi_record(phi_ids[index])
         lines.extend(emit_add_offset("x13", "sp", temp_offsets[index]))
         type_header = kernel.type_header(phi.second)
+        load_reg = dest_regs[index] if dest_regs[index] >= 0 else 9
         lines.append(
             f"  {_indexed_phi_mem_op(type_header, load=True)} "
-            f"{reg_name_indexed(kernel, phi.second, 9)}, [x13]"
+            f"{reg_name_indexed(kernel, phi.second, load_reg)}, [x13]"
         )
-        lines.extend(
-            _indexed_phi_stack_store(
-                kernel,
-                dest_slot_ids[index],
-                phi.second,
-                9,
+        if dest_regs[index] < 0:
+            lines.extend(
+                _indexed_phi_stack_store(
+                    kernel,
+                    dest_slot_ids[index],
+                    phi.second,
+                    9,
+                )
             )
-        )
         index += 1
     if total_temp:
         lines.extend(emit_stack_adjust(total_temp))

@@ -19,6 +19,7 @@ from .self_backend_aarch64_darwin_regalloc import (
     callee_saved_area_size,
     emit_callee_saved_loads,
 )
+from .self_backend_aarch64_darwin_ops import aarch64_cc, aarch64_inverse_cc
 from .self_backend_aarch64_darwin_regs import (
     emit_const_to_reg,
     emit_const_to_reg_bits,
@@ -32,6 +33,8 @@ from .self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntAre
 
 
 def emit_epilogue(func: ParsedFunction) -> list[str]:
+    if func.aarch64_frameless:
+        return [emitted_fixed_instruction_line("ret")]
     lines = emit_callee_saved_loads(func)
     total_frame = func.frame_size + callee_saved_area_size(func)
     if total_frame:
@@ -50,6 +53,8 @@ def emit_epilogue(func: ParsedFunction) -> list[str]:
 
 def emit_tail_epilogue(func: ParsedFunction, target: str) -> list[str]:
     """Restore the caller's frame/return address before a direct sibling jump."""
+    if func.aarch64_frameless:
+        return [emitted_branch_line("b", target)]
     lines = emit_callee_saved_loads(func)
     total_frame = func.frame_size + callee_saved_area_size(func)
     if total_frame:
@@ -67,6 +72,7 @@ def emit_branch_terminator(
     source_block: str,
     target: str,
     module_symbols: PreparedModuleSymbols,
+    falls_through: bool = False,
 ) -> list[str]:
     lines = emit_phi_assignments(
         func,
@@ -74,7 +80,9 @@ def emit_branch_terminator(
         target_block=target,
         module_symbols=module_symbols,
     )
-    lines.append(emitted_branch_line("b", block_label(func.name, target)))
+    # ``falls_through``: the target is laid out immediately after this block.
+    if not falls_through:
+        lines.append(emitted_branch_line("b", block_label(func.name, target)))
     return lines
 
 
@@ -129,7 +137,20 @@ def emit_cond_branch_terminator_indexed(
     true_target_id: int,
     false_target_id: int,
     module_symbols: PreparedModuleSymbols,
+    next_block_id: int = -1,
+    direct_targets: bool = False,
 ) -> list[str]:
+    """Branch on an i1, choosing the branch polarity from the block layout.
+
+    ``next_block_id`` is the block laid out right after this one (-1 when
+    unknown); an edge into it with no PHI moves falls through instead of
+    branching.  ``direct_targets`` lets the conditional branch name a block
+    label directly: the caller sets it only when the whole function is
+    small enough for the +/-1 MiB conditional-branch range.  Without it
+    the conditional branch keeps targeting the local edge label that
+    immediately follows, and far targets stay on unconditional branches.
+    """
+
     block_name = kernel.block_names[block_id]
     cond_name = kernel.terminator_value(condition_ref)
     true_target = kernel.block_names[true_target_id]
@@ -139,17 +160,112 @@ def emit_cond_branch_terminator_indexed(
         if condition_ref >= 0
         else kernel.intern_type(I1)
     )
+    true_label = block_label(func.name, true_target)
+    false_label = block_label(func.name, false_target)
     false_prep = block_edge_label(func.name, block_name, false_target)
-    lines = materialize_scalar_value_indexed(
-        func,
-        kernel,
-        cond_name,
-        condition_type_id,
-        9,
-        module_symbols,
-        value_id=condition_ref,
-    )
-    lines.append(emitted_branch_line("cbz", false_prep, "w9"))
+    fused_predicate = ""
+    if condition_ref >= 0 and condition_ref in func.aarch64_fused_branch_values:
+        # The block ends with the compare that defines the condition; it left
+        # its result in the flags (see _fusable_branch_conditions).
+        block_fact: CompilerInt4 = kernel.block_fact(block_id)
+        metadata: CompilerInt4 = kernel.instruction_metadata_by_id(
+            block_fact.first + block_fact.second - 1
+        )
+        icmp: CompilerInt4 = kernel.instruction_record(metadata.second)
+        fused_predicate = kernel.call_texts[icmp.first]
+        lines: list[str] = []
+    else:
+        lines = materialize_scalar_value_indexed(
+            func,
+            kernel,
+            cond_name,
+            condition_type_id,
+            9,
+            module_symbols,
+            value_id=condition_ref,
+        )
+    # Direct instruction capture records each emitted instruction when its
+    # helper is called and the native sink consumes those records in line
+    # order, so every helper below is called in output order.  The shape is
+    # chosen from whether a target has PHIs (without PHIs an edge moves
+    # nothing), never by emitting an edge's moves ahead of the branch.
+    true_has_phis = kernel.block_phi_fact(true_target_id).second > 0
+    false_has_phis = kernel.block_phi_fact(false_target_id).second > 0
+
+    if direct_targets and true_target_id == false_target_id:
+        # Both edges enter one block with the same incoming values.
+        lines.extend(
+            emit_phi_assignments(
+                func,
+                source_block=block_name,
+                target_block=true_target,
+                module_symbols=module_symbols,
+            )
+        )
+        if true_target_id != next_block_id:
+            lines.append(emitted_branch_line("b", true_label))
+        return lines
+    if direct_targets and not true_has_phis and not false_has_phis:
+        if true_target_id == next_block_id:
+            lines.append(_cond_branch_line(fused_predicate, False, false_label))
+        elif false_target_id == next_block_id:
+            lines.append(_cond_branch_line(fused_predicate, True, true_label))
+        else:
+            lines.append(_cond_branch_line(fused_predicate, False, false_label))
+            lines.append(emitted_branch_line("b", true_label))
+        return lines
+    if direct_targets and not false_has_phis:
+        lines.append(_cond_branch_line(fused_predicate, False, false_label))
+        lines.extend(
+            emit_phi_assignments(
+                func,
+                source_block=block_name,
+                target_block=true_target,
+                module_symbols=module_symbols,
+            )
+        )
+        if true_target_id != next_block_id:
+            lines.append(emitted_branch_line("b", true_label))
+        return lines
+    if direct_targets and not true_has_phis:
+        lines.append(_cond_branch_line(fused_predicate, True, true_label))
+        lines.extend(
+            emit_phi_assignments(
+                func,
+                source_block=block_name,
+                target_block=false_target,
+                module_symbols=module_symbols,
+            )
+        )
+        if false_target_id != next_block_id:
+            lines.append(emitted_branch_line("b", false_label))
+        return lines
+    if true_target_id == next_block_id and true_target_id != false_target_id:
+        # Put the true edge last so its moves fall into the true block.  The
+        # conditional branch targets the local edge label right after the
+        # false edge, which is in range for a function of any size.
+        true_prep = block_edge_label(func.name, block_name, true_target)
+        lines.append(_cond_branch_line(fused_predicate, True, true_prep))
+        lines.extend(
+            emit_phi_assignments(
+                func,
+                source_block=block_name,
+                target_block=false_target,
+                module_symbols=module_symbols,
+            )
+        )
+        lines.append(emitted_branch_line("b", false_label))
+        lines.append(f"{true_prep}:")
+        lines.extend(
+            emit_phi_assignments(
+                func,
+                source_block=block_name,
+                target_block=true_target,
+                module_symbols=module_symbols,
+            )
+        )
+        return lines
+    lines.append(_cond_branch_line(fused_predicate, False, false_prep))
     lines.extend(
         emit_phi_assignments(
             func,
@@ -158,7 +274,7 @@ def emit_cond_branch_terminator_indexed(
             module_symbols=module_symbols,
         )
     )
-    lines.append(emitted_branch_line("b", block_label(func.name, true_target)))
+    lines.append(emitted_branch_line("b", true_label))
     lines.append(f"{false_prep}:")
     lines.extend(
         emit_phi_assignments(
@@ -168,8 +284,26 @@ def emit_cond_branch_terminator_indexed(
             module_symbols=module_symbols,
         )
     )
-    lines.append(emitted_branch_line("b", block_label(func.name, false_target)))
+    if false_target_id != next_block_id:
+        lines.append(emitted_branch_line("b", false_label))
     return lines
+
+
+def _cond_branch_line(fused_predicate: str, branch_when: bool, label: str) -> str:
+    """Branch to ``label`` when the condition equals ``branch_when``.
+
+    A fused compare left its predicate in the flags; otherwise the i1 was
+    materialized in w9.
+    """
+    if fused_predicate:
+        if branch_when:
+            return emitted_branch_line("b." + aarch64_cc(fused_predicate), label)
+        return emitted_branch_line(
+            "b." + aarch64_inverse_cc(fused_predicate), label
+        )
+    if branch_when:
+        return emitted_branch_line("cbnz", label, "w9")
+    return emitted_branch_line("cbz", label, "w9")
 
 
 def emit_inline_error_edge_indexed(

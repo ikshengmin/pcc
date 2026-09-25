@@ -25,14 +25,12 @@ from pcc.py_runtime.py import py_abi_constants as abi
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME = REPO_ROOT / "pcc" / "py_runtime"
 PY_OBJ_PORT = (RUNTIME / "py" / "py_obj.py").read_text(encoding="utf-8")
-PY_OBJ_C = (RUNTIME / "src" / "py_obj.c").read_text(encoding="utf-8")
 GC_STATE_PORT = (RUNTIME / "py" / "freestanding_gc_state.py").read_text(
     encoding="utf-8"
 )
 GC_CONFIG_PORT = (
     RUNTIME / "py" / "freestanding_gc_public_collection.py"
 ).read_text(encoding="utf-8")
-GC_BACKEND_C = (RUNTIME / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
 TELEMETRY_PORT = (RUNTIME / "py" / "py_gc_telemetry.py").read_text(
     encoding="utf-8"
 )
@@ -51,7 +49,6 @@ def test_both_mirrors_start_probing_until_config_is_read() -> None:
     # A refcount that runs before pcc_gc_config_ensure has read the env keeps
     # the historical check; only the configured value can turn it off.
     assert 'define_global_i32("pcc_gc_refcount_provenance_probe", 1)' in GC_STATE_PORT
-    assert "int32_t pcc_gc_refcount_provenance_probe = 1;" in GC_BACKEND_C
 
 
 def test_both_mirrors_parse_the_same_env_default_and_range() -> None:
@@ -64,11 +61,6 @@ def test_both_mirrors_parse_the_same_env_default_and_range() -> None:
     assert (
         'store_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0, refcount_probe)'
         in GC_CONFIG_PORT
-    )
-    assert '"PCC_GC_REFCOUNT_PROVENANCE_PROBE", -1, -1, 3' in GC_BACKEND_C
-    assert (
-        "refcount_probe = pcc_gc_backend_kind_uses_forwarding(backend) ? 1 : 0;"
-        in GC_BACKEND_C
     )
 
 
@@ -92,28 +84,13 @@ def test_python_mirror_guards_every_refcount_probe_site() -> None:
     assert candidate.lstrip().startswith("if not _ptr_can_have_header(o):")
 
 
-def test_c_mirror_guards_every_refcount_probe_site() -> None:
-    guarded = (
-        "if (pcc_refcount_provenance_probe_enabled()\n"
-        "        && !py_pointer_can_have_header(o)) {\n"
-        "        pcc_note_unmanaged_refcount_op();\n"
-    )
-    assert PY_OBJ_C.count(guarded) == 2
-    # Only the relocation-candidate query still asks unconditionally.
-    assert PY_OBJ_C.count("if (!py_pointer_can_have_header(o))") == 1
-    assert "if (!py_pointer_can_have_header(o)) return 0;" in PY_OBJ_C
-
-
 def test_first_miss_report_is_identical_in_both_mirrors() -> None:
     assert FIRST_MISS_MESSAGE in PY_OBJ_PORT
-    assert FIRST_MISS_MESSAGE in PY_OBJ_C
     # Both mirrors gate the report on mode >= 2 and a once-only flag, and
     # abort in mode 3.
     assert "if mode >= 2:" in PY_OBJ_PORT
     assert "if mode == 3:\n                pcc_platform_abort()" in PY_OBJ_PORT
-    assert "if (mode == 3) abort();" in PY_OBJ_C
     assert 'global_addr("pcc_gc_refcount_provenance_probe_reported")' in PY_OBJ_PORT
-    assert "&pcc_gc_refcount_provenance_probe_reported, 1, __ATOMIC_RELAXED" in PY_OBJ_C
     length = len((FIRST_MISS_MESSAGE + "\n").encode("utf-8"))
     assert f"                {length},\n" in PY_OBJ_PORT
 
@@ -125,7 +102,6 @@ def test_mode_is_readable_through_telemetry_in_both_mirrors() -> None:
         '        return load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0)'
         in TELEMETRY_PORT
     )
-    assert "if (metric == PCC_GC_COUNTER_REFCOUNT_PROVENANCE_PROBE)" in GC_BACKEND_C
 
 
 def test_new_globals_are_registered_for_the_freestanding_closure() -> None:
@@ -150,7 +126,6 @@ def _fake_object_program() -> str:
         py_incref = extern("py_incref", (c_ptr,), c_void)
         py_decref = extern("py_decref", (c_ptr,), c_void)
 
-
         def main() -> None:
             raw = malloc(64)
             memset(raw, 0, 64)
@@ -162,7 +137,6 @@ def _fake_object_program() -> str:
             py_incref(raw)
             print(pcc_gc_telemetry({UNMANAGED_METRIC}) - before)
             free(raw)
-
 
         main()
         """

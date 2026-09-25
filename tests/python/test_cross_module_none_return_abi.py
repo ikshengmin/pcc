@@ -4,10 +4,9 @@ An explicit ``-> None`` method encodes as a NoneType descriptor in the
 class export schema; the extern-class declaration path lowered it to a
 PyObject*-returning declaration while the defining module emitted
 ``define void``. The linker cannot see the mismatch, so callers rooted
-leftover x0 as an owned object — latent under the pcc-Python port
-runtime (leftover happened to be a heap object) and fatal under the
-all-C runtime archives, where pcc_gc_frame_leave leaves a stack
-frame-node address in x0 (libpy_runtime_pcc.a stage1 smoke abort; see
+leftover x0 as an owned object — latent under the pcc-Python runtime
+(leftover happened to be a heap object) and fatal when x0 held a stack
+frame-node address left by pcc_gc_frame_leave (see
 docs/investigations/libpy-runtime-pcc-archive-pure-c-chain-crashes.md).
 
 The regression is generic: compile a two-module program and assert that

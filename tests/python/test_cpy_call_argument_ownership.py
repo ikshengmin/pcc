@@ -5,6 +5,16 @@ import re
 import pytest
 
 
+# The IR printer spells every call with its explicit function type
+# (``call ptr (ptr) @f(...)``); these assertions were written against the
+# short form, which carries the same callee and operands.
+_EXPLICIT_CALL_TYPE = re.compile(r"\bcall (\S+) \((?:[^()]|\([^()]*\))*\) @")
+
+
+def _normalize_call_types(ir_text: str) -> str:
+    return _EXPLICIT_CALL_TYPE.sub(r"call \1 @", ir_text)
+
+
 def _compile_to_ir(tmp_path, source: str) -> str:
     from pcc.py_frontend.pipeline import compile_python
 
@@ -17,7 +27,7 @@ def _compile_to_ir(tmp_path, source: str) -> str:
         emit_llvm_only=True,
         libpython_mode="auto",
     )
-    return out.read_text(encoding="utf-8")
+    return _normalize_call_types(out.read_text(encoding="utf-8"))
 
 
 def _function_body(ir_text: str, name: str) -> str:
@@ -170,7 +180,7 @@ def test_freestanding_raw_pointer_call_args_do_not_emit_managed_pins(tmp_path):
         libpython_mode="off",
         python_library=True,
     )
-    llvm_ir = out.read_text(encoding="utf-8")
+    llvm_ir = _normalize_call_types(out.read_text(encoding="utf-8"))
     body = _function_body(llvm_ir, "raw_call")
     assert "@pcc_gc_pin" not in body
     assert "@pcc_gc_unpin" not in body
@@ -201,7 +211,7 @@ def test_c_abi_library_raw_pointer_call_args_do_not_emit_managed_pins(tmp_path):
         libpython_mode="off",
         python_library=True,
     )
-    llvm_ir = out.read_text(encoding="utf-8")
+    llvm_ir = _normalize_call_types(out.read_text(encoding="utf-8"))
     body = _function_body(llvm_ir, "raw_call")
     assert "@pcc_gc_pin" not in body
     assert "@pcc_gc_unpin" not in body
@@ -1746,7 +1756,9 @@ def build(mapping: Any) -> dict[object, int]:
 """,
     )
     body = _function_body(ir_text, "build")
-    getitem = body.index("call ptr @py_obj_getitem")
+    getitem_call = re.search(r"call ptr @py_obj_(?:getitem|subscript)\(", body)
+    assert getitem_call is not None, body
+    getitem = getitem_call.start()
     later = re.search(r"call ptr @[^\n]*later\(", body)
     assert later is not None, body
     assert getitem < later.start()
@@ -1794,7 +1806,8 @@ def build_table() -> dict[str, str]:
 
     small, large = bodies
     assert len(large) < len(small) * 3
-    assert large.count("call void @pcc_gc_unpin") < (
+    # Static literals need no pinned temporaries at all (0 <= 0).
+    assert large.count("call void @pcc_gc_unpin") <= (
         small.count("call void @pcc_gc_unpin") * 3
     )
 
@@ -1816,7 +1829,8 @@ def build_values() -> list[str]:
 
     small, large = bodies
     assert len(large) < len(small) * 3
-    assert large.count("call void @pcc_gc_unpin") < (
+    # Static literals need no pinned temporaries at all (0 <= 0).
+    assert large.count("call void @pcc_gc_unpin") <= (
         small.count("call void @pcc_gc_unpin") * 3
     )
 
@@ -1838,7 +1852,8 @@ def build_values() -> tuple:
 
     small, large = bodies
     assert len(large) < len(small) * 3
-    assert large.count("call void @pcc_gc_unpin") < (
+    # Static literals need no pinned temporaries at all (0 <= 0).
+    assert large.count("call void @pcc_gc_unpin") <= (
         small.count("call void @pcc_gc_unpin") * 3
     )
 
@@ -2627,14 +2642,13 @@ def starred_keyword_mix(
         )
 
 
-def test_multiple_starstar_mappings_fail_closed_before_duplicate_merge(tmp_path):
-    with pytest.raises(
-        NotImplementedError,
-        match=r"multiple \*\*mapping operands",
-    ):
-        _compile_to_ir(
-            tmp_path,
-            """
+def test_multiple_starstar_mappings_merge_with_duplicate_check(tmp_path):
+    # Several ** operands (no explicit keyword to interleave) merge left to
+    # right through the duplicate-checking helper: a repeated key is CPython's
+    # TypeError instead of a silent dict-update overwrite.
+    ir_text = _compile_to_ir(
+        tmp_path,
+        """
 from decimal import Context
 
 def duplicate_mapping_keys(
@@ -2642,7 +2656,9 @@ def duplicate_mapping_keys(
 ) -> object:
     return Context(**first, **second)
 """,
-        )
+    )
+    body = _function_body(ir_text, "duplicate_mapping_keys")
+    assert body.count("@py_call_merge_kwargs_unique(") == 2, body
 
 
 def test_custom_starstar_mapping_fails_closed_before_delayed_expansion(tmp_path):

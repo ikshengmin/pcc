@@ -1473,7 +1473,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             f.write("define i32 @main() { ret i32 0 }\n")
         runtime_archive = os.path.join(
             self.td,
-            "libpy_runtime_libpython.a",
+            "libpy_runtime_pcc_py_libpython.a",
         )
         with open(runtime_archive + ".capi_syms", "w", encoding="utf-8") as f:
             f.write("_PyCapsule_New\n")
@@ -1515,48 +1515,42 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             built["done"] = True
 
         with mock.patch(
-            "pcc.py_frontend.pipeline._runtime_cc_mode", return_value="pcc"
+            "pcc.py_frontend.pipeline._resolve_pcc_binary",
+            return_value="/tmp/pcc1",
         ):
             with mock.patch(
-                "pcc.py_frontend.pipeline._runtime_high_mode", return_value="py"
+                "pcc.py_frontend.pipeline._host_python_command",
+                return_value=".venv/bin/python3",
             ):
                 with mock.patch(
-                    "pcc.py_frontend.pipeline._resolve_pcc_binary",
-                    return_value="/tmp/pcc1",
-                ):
+                    "pcc.py_frontend.pipeline.os.path.isfile"
+                ) as isfile:
+                    isfile.side_effect = lambda path: (
+                        str(path).endswith("Makefile")
+                        or (
+                            built["done"]
+                            and str(path).endswith(
+                                "libpy_runtime_pcc_py_libpython.a"
+                            )
+                        )
+                    )
                     with mock.patch(
-                        "pcc.py_frontend.pipeline._host_python_command",
-                        return_value=".venv/bin/python3",
+                        "pcc.py_frontend.pipeline._run_runtime_make",
+                        side_effect=fake_run_runtime_make,
                     ):
                         with mock.patch(
-                            "pcc.py_frontend.pipeline.os.path.isfile"
-                        ) as isfile:
-                            isfile.side_effect = lambda path: (
-                                str(path).endswith("Makefile")
-                                or (
-                                    built["done"]
-                                    and str(path).endswith(
-                                        "libpy_runtime_pcc_py_libpython.a"
-                                    )
-                                )
-                            )
+                            "pcc.py_frontend.pipeline."
+                            "_runtime_archive_c_bundle_valid",
+                            return_value=True,
+                        ):
                             with mock.patch(
-                                "pcc.py_frontend.pipeline._run_runtime_make",
-                                side_effect=fake_run_runtime_make,
+                                "pcc.py_frontend.pipeline."
+                                "_write_runtime_archive_target_stamp"
                             ):
-                                with mock.patch(
-                                    "pcc.py_frontend.pipeline."
-                                    "_runtime_archive_c_bundle_valid",
-                                    return_value=True,
-                                ):
-                                    with mock.patch(
-                                        "pcc.py_frontend.pipeline."
-                                        "_write_runtime_archive_target_stamp"
-                                    ):
-                                        pipeline._ensure_runtime(
-                                            verbose=False,
-                                            needs_libpython=True,
-                                        )
+                                pipeline._ensure_runtime(
+                                    verbose=False,
+                                    needs_libpython=True,
+                                )
 
         self.assertEqual(len(make_cmds), 1)
         python_args = [arg for arg in make_cmds[0] if arg.startswith("PYTHON=")]
@@ -1613,17 +1607,17 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         with mock.patch("pcc.py_frontend.pipeline.sys.platform", "darwin"):
             self.assertEqual(
                 pipeline._runtime_archive_link_args_for_native_extensions(
-                    "/tmp/libpy_runtime.a",
+                    "/tmp/fake_runtime.a",
                     False,
                 ),
-                ["/tmp/libpy_runtime.a"],
+                ["/tmp/fake_runtime.a"],
             )
             self.assertEqual(
                 pipeline._runtime_archive_link_args_for_native_extensions(
-                    "/tmp/libpy_runtime.a",
+                    "/tmp/fake_runtime.a",
                     True,
                 ),
-                ["-Wl,-u,_PyArg_ParseTuple", "/tmp/libpy_runtime.a"],
+                ["-Wl,-u,_PyArg_ParseTuple", "/tmp/fake_runtime.a"],
             )
             self.assertEqual(pipeline._native_extension_export_link_flags(False), [])
             self.assertEqual(
@@ -1717,7 +1711,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         exe = os.path.join(self.td, "backend_llvm.out")
         with mock.patch(
             "pcc.py_frontend.pipeline._ensure_runtime",
-            return_value="/tmp/libpy_runtime.a",
+            return_value="/tmp/fake_runtime.a",
         ):
             with mock.patch("pcc.py_frontend.pipeline._link_with_clang") as clang_link:
                 with mock.patch(
@@ -1739,7 +1733,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PCC_BACKEND": "self"}):
             with mock.patch(
                 "pcc.py_frontend.pipeline._ensure_runtime",
-                return_value="/tmp/libpy_runtime.a",
+                return_value="/tmp/fake_runtime.a",
             ):
                 with mock.patch(
                     "pcc.py_frontend.pipeline._link_with_clang"
@@ -1792,7 +1786,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                         pipeline._link_with_self_backend(
                             [ll_path],
                             os.path.join(self.td, "self.out"),
-                            "/tmp/libpy_runtime.a",
+                            "/tmp/fake_runtime.a",
                             False,
                         )
 
@@ -1819,7 +1813,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
         self.assertEqual(
             link_cmd[link_cmd.index("--archive") + 1],
-            "/tmp/libpy_runtime.a",
+            "/tmp/fake_runtime.a",
         )
 
     def test_self_native_link_keeps_in_process_emission_for_multiple_modules(self):
@@ -1861,7 +1855,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                         pipeline._link_with_self_backend(
                             ll_paths,
                             os.path.join(self.td, "self_parallel.out"),
-                            "/tmp/libpy_runtime.a",
+                            "/tmp/fake_runtime.a",
                             False,
                         )
 
@@ -1886,7 +1880,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertTrue(all(path.endswith(".s") for path in asm_inputs))
         self.assertEqual(
             link_cmd[link_cmd.index("--archive") + 1],
-            "/tmp/libpy_runtime.a",
+            "/tmp/fake_runtime.a",
         )
 
     def test_self_native_emitter_collects_incrementally(self):
@@ -3077,7 +3071,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             os.environ.pop("PCC_SELF_BACKEND_SKIP_LL_TEMP", None)
             with mock.patch(
                 "pcc.py_frontend.pipeline._ensure_runtime",
-                return_value="/tmp/libpy_runtime.a",
+                return_value="/tmp/fake_runtime.a",
             ):
                 with mock.patch(
                     "pcc.py_frontend.pipeline._link_with_self_backend_ir_texts",
@@ -3096,7 +3090,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         text_link_mock.assert_called_once()
         path_link_mock.assert_not_called()
         self.assertEqual(linked[0][1], exe)
-        self.assertEqual(linked[0][2], "/tmp/libpy_runtime.a")
+        self.assertEqual(linked[0][2], "/tmp/fake_runtime.a")
         self.assertFalse(linked[0][3])
         self.assertEqual(len(linked[0][0]), 1)
         self.assertIn("define", linked[0][0][0])
@@ -3132,7 +3126,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         exe = os.path.join(self.td, "backend_self_fail.out")
         with mock.patch(
             "pcc.py_frontend.pipeline._ensure_runtime",
-            return_value="/tmp/libpy_runtime.a",
+            return_value="/tmp/fake_runtime.a",
         ):
             with mock.patch(
                 "pcc.py_frontend.pipeline._link_with_self_backend_ir_texts",

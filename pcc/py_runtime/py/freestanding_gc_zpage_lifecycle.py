@@ -88,6 +88,10 @@ def pcc_gc_backend4_zpage_clear_reusable_state(page) -> None:
     store_i32(page, 104, 0)
     store_i32(page, 108, 0)
     store_ptr(page, 112, null())
+    card: i64 = 0
+    while card < 32:
+        store_i64(page, 120 + card * 8, 0)
+        card = card + 1
 
 
 @c_abi_export("pcc_gc_backend4_zpage_cache")

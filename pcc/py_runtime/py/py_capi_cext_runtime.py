@@ -65,7 +65,6 @@ from pcc.unsafe import (
     call_void_ptr1,
     cstr,
     f64_bits,
-    float_to_i64,
     global_addr,
     global_load_ptr,
     i64_to_float,
@@ -1133,70 +1132,13 @@ def _load_i8_signed(p) -> int:
 
 # --- _Py_HashDouble --------------------------------------------------
 
-py_obj_hash = extern("py_obj_hash", (c_ptr,), c_int64)
+pcc_hash_f64_bits = extern("pcc_hash_f64_bits", (c_int64, c_ptr), c_int64)
 
 
 @c_abi_typed_export("_Py_HashDouble", "i64", ("ptr", "f64"))
 def _Py_HashDouble(inst, v: float) -> int:
-    bits: int = 61
-    modulus: int = (1 << bits) - 1
-    raw: int = f64_bits(v)
-    exp_field: int = (raw >> 52) & 0x7FF
-    mant_field: int = raw & ((1 << 52) - 1)
-    sign_field: int = (raw >> 63) & 1
-    # isinf: exp==0x7FF and mant==0; isnan: exp==0x7FF and mant!=0
-    if exp_field == 0x7FF:
-        if mant_field == 0:
-            if sign_field == 0:
-                return 314159
-            return -314159
-        if not ptr_is_null(inst):
-            return py_obj_hash(inst)
-        return 0
-    if exp_field == 0 and mant_field == 0:
-        return 0  # +/-0.0 -> 0
-    # frexp: v = m * 2^e with 0.5 <= |m| < 1
-    m: float = v
-    e: int = 0
-    if exp_field == 0:  # subnormal
-        m = m * 2.0**64
-        e = -64
-        exp_field = (f64_bits(m) >> 52) & 0x7FF
-    e = e + (exp_field - 1022)
-    m = i64_to_float(0)  # placeholder; recompute below
-    # Recompute mantissa directly: m = 1.fraction (normalized) or fraction (subnormal)
-    if sign_field != 0:
-        m = 0.0 - m
-    # Use the C algorithm with integer bit extraction:
-    # Build mantissa as integer from the 52 fraction bits.
-    x: int = 0
-    sign: int = 1
-    if sign_field != 0:
-        sign = -1
-    m = v
-    if m < 0.0:
-        m = 0.0 - m
-    # integer loop port: m in [0.5, 1); extract 28-bit chunks
-    frac_bits: int = mant_field
-    if exp_field == 0:
-        frac_bits = mant_field
-    # x = fraction bits treated as 0.frac... in base 2^28
-    # The C loop multiplies m by 2^28 repeatedly; we do the same with f64.
-    x = 0
-    while m != 0.0:
-        x = ((x << 28) & modulus) | (x >> (bits - 28))
-        m = m * 268435456.0  # 2**28
-        e = e - 28
-        y = float_to_i64(m)
-        m = m - i64_to_float(y)
-        x = x + y
-        if x >= modulus:
-            x = x - modulus
-    e = e % bits
-    if e < 0:
-        e = e + bits
-    x = ((x << e) & modulus) | (x >> (bits - e))
-    x = x * sign
-    if x == -1:
-        x = -2
-    return x
+    # Python/pyhash.c: the value modulo 2**61 - 1, +-314159 for infinities and
+    # the identity hash of ``inst`` for NaN.  The numeric hash lives beside
+    # ``py_obj_hash``; the old local loop hashed ``|v|`` instead of frexp's
+    # mantissa, so ``_Py_HashDouble(NULL, 2.0)`` was 8 rather than hash(2).
+    return pcc_hash_f64_bits(f64_bits(v), inst)

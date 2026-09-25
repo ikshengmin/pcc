@@ -323,10 +323,6 @@ def test_unaliased_dotted_native_import_keeps_top_level_package_binding():
 
 def test_compiled_registry_rejects_unknown_names_instead_of_empty_modules():
     repo_root = Path(__file__).absolute().parents[2]
-    runtime_source = (
-        repo_root / "pcc" / "py_runtime" / "src" / "py_compiled_module.c"
-    ).read_text(encoding="utf-8")
-    assert "if (!pcc_compiled_module_has_init(name)) return NULL;" in runtime_source
     runtime_mirror = (
         repo_root
         / "pcc"
@@ -335,10 +331,6 @@ def test_compiled_registry_rejects_unknown_names_instead_of_empty_modules():
         / "py_compiled_module_runtime.py"
     ).read_text(encoding="utf-8")
     assert "if not _compiled_module_has_init(name):" in runtime_mirror
-    capi_source = (
-        repo_root / "pcc" / "py_runtime" / "src" / "py_capi_shim.c"
-    ).read_text(encoding="utf-8")
-    assert "strlen(cname) != py_str_byte_len(name)" in capi_source
     capi_mirror = (
         repo_root
         / "pcc"

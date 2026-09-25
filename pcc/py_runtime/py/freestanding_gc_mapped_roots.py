@@ -122,7 +122,7 @@ def pcc_gc_visit_scheduler_root_slots(mode: i64, resolve: i64) -> i64:
 @c_abi_export("pcc_gc_visit_builtin_exception_cache_slots")
 def pcc_gc_visit_builtin_exception_cache_slots(mode: i64, resolve: i64) -> i64:
     result: i64 = pcc_gc_visit_mapped_root_slots(
-        34,
+        65,  # PY_EXC_N_BUILTIN
         py_subs_exc_cache_slot(0),
         null(),
         0,

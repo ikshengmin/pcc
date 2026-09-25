@@ -315,12 +315,14 @@ def test_c_cli_freestanding_libc_rejects_non_pcc_python_runtime(
 ):
     source = tmp_path / "main.c"
     source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
+    foreign = tmp_path / "foreign_runtime.a"
+    foreign.write_bytes(b"!<arch>\n")
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(foreign))
 
     result = cli_main(["--freestanding-libc", str(source)])
 
     assert result == 1
-    assert "requires PCC_RUNTIME_CC=pcc" in capsys.readouterr().err
+    assert "requires libpy_runtime_pcc_py.a" in capsys.readouterr().err
 
 
 def test_c_cli_freestanding_libc_rejects_python_and_emit_only(

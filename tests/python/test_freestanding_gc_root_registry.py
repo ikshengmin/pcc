@@ -16,7 +16,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 REGISTRY_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_root_registry.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
-ORACLE_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 PUBLIC_SYMBOLS = {
@@ -26,12 +25,16 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_scheduler_root_unregister",
     "pcc_gc_register_continuation_root",
     "pcc_gc_unregister_continuation_root",
+    # Node-level forms the coroutine runtime registers frames through.
+    "pcc_gc_register_continuation_root_node",
+    "pcc_gc_unregister_continuation_root_node",
 }
 INTERNAL_SYMBOLS = {
     "pcc_gc_cycle_requested_store_release",
     "pcc_gc_root_registry_note_mutation_locked",
     "pcc_gc_scheduler_root_link_locked",
     "pcc_gc_scheduler_root_unlink_locked",
+    "pcc_gc_continuation_root_unlink_locked",
     "pcc_gc_root_slot_count_from_map",
     "pcc_gc_root_map_is_borrowed",
 }
@@ -91,7 +94,6 @@ def _compile_object(tmp_path: Path, emitter: str) -> tuple[Path, str]:
 def test_root_registry_has_one_strict_source_owner_and_one_lock_contract():
     strict = REGISTRY_SOURCE.read_text(encoding="utf-8")
     managed = MANAGED_SOURCE.read_text(encoding="utf-8")
-    oracle = ORACLE_SOURCE.read_text(encoding="utf-8")
     makefile = MAKEFILE.read_text(encoding="utf-8")
 
     assert "__pcc_freestanding__ = True" in strict
@@ -99,7 +101,6 @@ def test_root_registry_has_one_strict_source_owner_and_one_lock_contract():
     assert _exported_symbols(managed).isdisjoint(PUBLIC_SYMBOLS | INTERNAL_SYMBOLS)
     assert "freestanding_gc_root_registry" in makefile
     assert 'atomic_store_i32(slot, 0, value, "release")' in strict
-    assert "__atomic_store_n(&pcc_gc_cycle_requested, value, __ATOMIC_RELEASE)" in oracle
     for name in PUBLIC_SYMBOLS:
         body = strict.split("def " + name, 1)[1].split("\n\n@", 1)[0]
         assert "gc_backend_current()" in body or name in {
@@ -115,38 +116,6 @@ def test_continuation_unregister_frees_only_after_graph_unlock():
     assert "dead = null()" in strict_body
     assert strict_body.rindex("pcc_py_gc_minor_graph_unlock()") < (
         strict_body.rindex("free(dead)")
-    )
-
-    oracle = ORACLE_SOURCE.read_text(encoding="utf-8")
-    oracle_body = oracle.split("void pcc_gc_unregister_continuation_root", 1)[
-        1
-    ].split("\n}\n", 1)[0]
-    assert "PccGcContinuationRootNode *dead = NULL;" in oracle_body
-    assert oracle_body.rindex("pcc_gc_graph_unlock();") < oracle_body.rindex(
-        "free(dead);"
-    )
-
-
-def test_scheduler_root_link_tripwire_reports_only_after_graph_unlock():
-    oracle = ORACLE_SOURCE.read_text(encoding="utf-8")
-    link = oracle.split(
-        "static int32_t pcc_gc_scheduler_root_link_locked", 1
-    )[1].split("static void pcc_gc_scheduler_root_unlink_locked", 1)[0]
-    assert "PCC_RT_TRIPWIRE" not in link
-    assert "return link_error;" in link
-
-    register = oracle.split(
-        "void *pcc_gc_scheduler_root_register_handle", 1
-    )[1].split("void pcc_gc_scheduler_root_register(", 1)[0]
-    assert register.index("pcc_gc_graph_unlock();") < register.index(
-        "pcc_gc_scheduler_root_link_tripwire_fail(link_error);"
-    )
-
-    queue_push = oracle.split("int64_t pcc_gc_scheduler_queue_push(", 1)[
-        1
-    ].split("int64_t pcc_gc_scheduler_queue_pop_into", 1)[0]
-    assert queue_push.index("pcc_gc_graph_unlock();") < queue_push.index(
-        "pcc_gc_scheduler_root_link_tripwire_fail(link_error);"
     )
 
 
@@ -306,9 +275,19 @@ def _link_harness(
     return executable
 
 
-def test_production_archive_uniquely_owns_registry_and_matches_c_oracle(
+# What the harness printed against the retired C runtime oracle.
+REGISTRY_EXPECTED = (
+    "scheduler:3\n"
+    "scheduler-slot:2\n"
+    "scheduler-empty:0\n"
+    "continuation:4\n"
+    "continuation-owned:2\n"
+    "continuation-empty:0\n"
+)
+
+
+def test_production_archive_uniquely_owns_registry(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     members_result = subprocess.run(
@@ -343,35 +322,23 @@ def test_production_archive_uniquely_owns_registry_and_matches_c_oracle(
         ":py_gc_backend.o:" in line for lines in owners.values() for line in lines
     )
 
-    oracle = _link_harness(tmp_path, "gc_registry_c_oracle", c_runtime_archive)
     implementation = _link_harness(
         tmp_path, "gc_registry_pcc_python", pcc_py_runtime_archive
     )
     for backend in range(5):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
-        oracle_result = subprocess.run(
-            [str(oracle)], env=env, capture_output=True, text=True, timeout=30
-        )
         result = subprocess.run(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30
         )
-        assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == oracle_result.stdout
+        assert result.stdout == REGISTRY_EXPECTED
 
 
 def test_root_registry_survives_pthread_mutation_and_observation(
     tmp_path: Path,
-    threaded_c_runtime_archive: Path,
 ):
     threaded_pcc_python_archive = (
         cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-    )
-    oracle = _link_harness(
-        tmp_path,
-        "gc_registry_threads_c_oracle",
-        threaded_c_runtime_archive,
-        concurrent=True,
     )
     implementation = _link_harness(
         tmp_path,
@@ -381,12 +348,8 @@ def test_root_registry_survives_pthread_mutation_and_observation(
     )
     for backend in range(5):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
-        oracle_result = subprocess.run(
-            [str(oracle)], env=env, capture_output=True, text=True, timeout=30
-        )
         result = subprocess.run(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30
         )
-        assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == oracle_result.stdout == "final:0,0\n"
+        assert result.stdout == "final:0,0\n"

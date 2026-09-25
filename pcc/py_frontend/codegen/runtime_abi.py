@@ -93,8 +93,18 @@ def _runtime_signatures_part_0():
     "pcc_gc_unpin": (_VOID, [_PYOBJ], False),
     "pcc_gc_immortalize": (_VOID, [_PYOBJ], False),
     "pcc_gc_object_id": (_I64, [_PYOBJ], False),
+    "py_obj_id": (_I64, [_PYOBJ], False),
+    "py_sys_stream_object": (_PYOBJ, [_I64], False),
+    "py_print_to_file": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_call_merge_kwargs_unique": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    "py_exc_handle_uncaught": (_I64, [_PYOBJ], False),
     "pcc_gc_reset_relocation_set": (_VOID, [], False),
     "pcc_gc_select_relocation_set": (_I64, [_I64], False),
+    }
+
+
+def _runtime_signatures_part_1():
+    return {
     "pcc_gc_backend4_evacuation_drain": (_I64, [_I64], False),
     "pcc_gc_backend4_evacuation_page_drain": (_I64, [_I64], False),
     "pcc_gc_backend4_reseed_plan_probe_config": (
@@ -113,11 +123,6 @@ def _runtime_signatures_part_0():
     "pcc_gc_backend4_finish_retained_page_releases": (_VOID, [_PTR], False),
     "pcc_gc_backend4_finish_remap_retirement": (_VOID, [_PTR], False),
     "pcc_gc_relocation_set_contains": (_I64, [_PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_1():
-    return {
     "pcc_gc_relocation_set_size": (_I64, [], False),
     "pcc_gc_install_forwarding": (_I64, [_PYOBJ, _PYOBJ], False),
     "pcc_gc_relocate_copy": (_PYOBJ, [_PYOBJ, _I64], False),
@@ -132,13 +137,10 @@ def _runtime_signatures_part_1():
     "py_obj_le": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_gt": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_ge": (_I64, [_PYOBJ, _PYOBJ], False),
+    # int <op> float by exact value: -1 / 0 / 1, or 2 when the float is NaN.
+    "py_int_f64_cmp": (_I64, [_PYOBJ, _DOUBLE], False),
     "py_obj_hash": (_I64, [_PYOBJ], False),
     "py_instance_set_field": (_VOID, [_PYOBJ, _I32, _PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_2():
-    return {
     "pcc_gc_set_backend": (_I64, [_I64], False),
     "pcc_gc_backend_name": (_CSTR, [_I64], False),
     "pcc_gc_telemetry": (_I64, [_I64], False),
@@ -162,6 +164,11 @@ def _runtime_signatures_part_2():
     "pcc_gc_backend4_small_page_candidate_bytes": (_I64, [], False),
     "pcc_gc_backend4_medium_page_candidate_bytes": (_I64, [], False),
     "pcc_gc_backend4_evacuation_candidate_zpage_bytes": (_I64, [], False),
+    }
+
+
+def _runtime_signatures_part_2():
+    return {
     "pcc_gc_backend4_small_page_candidate_zpage_bytes": (_I64, [], False),
     "pcc_gc_backend4_medium_page_candidate_zpage_bytes": (_I64, [], False),
     "pcc_gc_backend4_evacuation_page_candidate_score": (_I64, [], False),
@@ -193,11 +200,6 @@ def _runtime_signatures_part_2():
     "pcc_gc_backend4_remembered_set_entries": (_I64, [], False),
     "pcc_gc_backend4_remembered_set_duplicate_skips": (_I64, [], False),
     "pcc_gc_backend4_remembered_set_high_water": (_I64, [], False),
-    }
-
-
-def _runtime_signatures_part_3():
-    return {
     "pcc_gc_backend4_remembered_page_entries": (_I64, [], False),
     "pcc_gc_backend4_remembered_page_slot_entries": (_I64, [], False),
     "pcc_gc_backend4_remembered_page_high_water": (_I64, [], False),
@@ -233,6 +235,11 @@ def _runtime_signatures_part_3():
         False,
     ),
     "pcc_gc_backend4_zpage_fragmentation_per_mille": (_I64, [], False),
+    }
+
+
+def _runtime_signatures_part_3():
+    return {
     "pcc_gc_backend4_zpage_policy_score": (_I64, [], False),
     "pcc_gc_backend4_zpage_remembered_slots": (_I64, [], False),
     "pcc_gc_backend4_zpage_remembered_cards": (_I64, [], False),
@@ -260,11 +267,6 @@ def _runtime_signatures_part_3():
     "pcc_gc_backend4_large_page_object_count": (_I64, [], False),
     "pcc_gc_backend4_small_page_live_bytes": (_I64, [], False),
     "pcc_gc_backend4_medium_page_live_bytes": (_I64, [], False),
-    }
-
-
-def _runtime_signatures_part_4():
-    return {
     "pcc_gc_backend4_large_page_live_bytes": (_I64, [], False),
     "pcc_gc_backend2_production_score": (_I64, [], False),
     "pcc_gc_backend2_worker_buffer_score": (_I64, [], False),
@@ -289,6 +291,11 @@ def _runtime_signatures_part_4():
     "pcc_refcount_strategy": (_I64, [], False),
     "pcc_thread_safepoint": (_VOID, [], False),
     "pcc_thread_stop_requested_acquire": (_I64, [], False),
+    }
+
+
+def _runtime_signatures_part_4():
+    return {
     "pcc_thread_no_park_enter": (_VOID, [], False),
     "pcc_thread_no_park_exit": (_VOID, [], False),
     "pcc_thread_no_park_depth": (_I64, [], False),
@@ -319,11 +326,6 @@ def _runtime_signatures_part_4():
     "py_threading_condition_wait": (_I64, [_PYOBJ], False),
     "py_threading_condition_wait_vthread": (_I64, [_PYOBJ], False),
     "py_threading_condition_notify": (_I64, [_PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_5():
-    return {
     "py_threading_semaphore_new": (_PYOBJ, [_I64], False),
     "py_threading_semaphore_acquire": (_I64, [_PYOBJ], False),
     "py_threading_semaphore_acquire_vthread": (_I64, [_PYOBJ], False),
@@ -333,11 +335,6 @@ def _runtime_signatures_part_5():
     "py_threading_thread_join": (_I64, [_PYOBJ], False),
     "py_bytes_join": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "pcc_gc_store_root_take": (_VOID, [_PTR, _PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_6():
-    return {
     "py_threading_thread_is_alive": (_I64, [_PYOBJ], False),
     # ---- refcount --------------------------------------------------
     "py_incref": (_VOID, [_PYOBJ], False),
@@ -352,6 +349,12 @@ def _runtime_signatures_part_6():
     "py_int_from_cstr_or_raise": (_PYOBJ, [_CSTR, _I32], False),
     "py_obj_as_int_object": (_PYOBJ, [_PYOBJ, _I32], False),
     "py_int_to_i64": (_I64, [_PYOBJ, _I32_PTR], False),
+    "py_int_to_i64_lane": (_I64, [_PYOBJ, _I32_PTR], False),
+    }
+
+
+def _runtime_signatures_part_5():
+    return {
     "py_int_bit_length": (_I64, [_PYOBJ], False),
     "py_int_bit_count": (_I64, [_PYOBJ], False),
     "py_int_add": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -368,6 +371,9 @@ def _runtime_signatures_part_6():
     "py_tuple_index": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_tuple_index_range": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_int_neg": (_PYOBJ, [_PYOBJ], False),
+    "py_obj_neg": (_PYOBJ, [_PYOBJ], False),
+    "py_obj_pos": (_PYOBJ, [_PYOBJ], False),
+    "py_obj_invert": (_PYOBJ, [_PYOBJ], False),
     "py_int_and": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_int_or": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_int_xor": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -383,6 +389,8 @@ def _runtime_signatures_part_6():
     "py_builtin_callable": (_PYOBJ, [_PYOBJ], False),
     # ---- Float -----------------------------------------------------
     "py_float_from_f64": (_PYOBJ, [_DOUBLE], False),
+    "py_int_from_f64_exact": (_PYOBJ, [_DOUBLE], False),
+    "py_float_to_i64_checked": (_I64, [_DOUBLE], False),
     "py_time_sleep": (_PYOBJ, [_PYOBJ], False),
     "py_float_to_f64": (_DOUBLE, [_PYOBJ], False),
     "py_float_value_of": (_DOUBLE, [_PYOBJ], False),
@@ -395,16 +403,16 @@ def _runtime_signatures_part_6():
     # ---- Complex ---------------------------------------------------
     "py_complex_new": (_PYOBJ, [_DOUBLE, _DOUBLE], False),
     "py_complex_real": (_PYOBJ, [_PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_7():
-    return {
     "py_complex_imag": (_PYOBJ, [_PYOBJ], False),
     "py_complex_add": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_complex_sub": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_complex_mul": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_complex_div": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    }
+
+
+def _runtime_signatures_part_6():
+    return {
     # ``base ** exp`` for complex operands; may raise ZeroDivisionError.
     "py_complex_pow": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_complex_neg": (_PYOBJ, [_PYOBJ], False),
@@ -461,6 +469,11 @@ def _runtime_signatures_part_7():
     "py_i64_buffer_dot_scalar": (_PYOBJ, [_PYOBJ, _PYOBJ, _I64], False),
     "py_guarded_loop_counter_add": (_I64, [_I64, _I64], False),
     "py_guarded_loop_counter_get": (_I64, [_I64], False),
+    }
+
+
+def _runtime_signatures_part_7():
+    return {
     "py_bytes_find": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_bytes_find_from": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_bytes_find_range": (_I64, [_PYOBJ, _PYOBJ, _I64, _I64], False),
@@ -474,6 +487,7 @@ def _runtime_signatures_part_7():
     "py_bytearray_append": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_bytearray_insert": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_bytearray_pop": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    "py_bytearray_clear": (_VOID, [_PYOBJ], False),
     "py_bytearray_setitem": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_bytearray_del_slice": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_bytearray_set_slice": (
@@ -483,11 +497,6 @@ def _runtime_signatures_part_7():
     ),
     # ---- Str -------------------------------------------------------
     "py_str_new": (_PYOBJ, [_CSTR, _I64], False),
-    }
-
-
-def _runtime_signatures_part_8():
-    return {
     "py_str_len": (_I64, [_PYOBJ], False),
     "py_str_byte_len": (_I64, [_PYOBJ], False),
     "py_str_utf8": (_CSTR, [_PYOBJ], False),
@@ -503,6 +512,8 @@ def _runtime_signatures_part_8():
     "py_str_repeat": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_str_slice": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_str_index": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    "py_str_codepoint_at": (_I64, [_PYOBJ, _I64], False),
+    "py_str_contains_codepoint": (_I64, [_PYOBJ, _I64], False),
     "py_str_eq": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_str_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_str_find": (_I64, [_PYOBJ, _PYOBJ], False),
@@ -518,6 +529,11 @@ def _runtime_signatures_part_8():
     "py_textwrap_dedent": (_PYOBJ, [_PYOBJ], False),
     "py_str_strip": (_PYOBJ, [_PYOBJ], False),
     "py_str_split": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    }
+
+
+def _runtime_signatures_part_8():
+    return {
     "py_str_partition": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_str_rpartition": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_str_translate": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -539,11 +555,6 @@ def _runtime_signatures_part_8():
     "py_str_lstrip_chars": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_str_rstrip_chars": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_str_count": (_I64, [_PYOBJ, _PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_9():
-    return {
     "py_str_count_range": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_str_isdigit": (_I64, [_PYOBJ], False),
     "py_str_isalpha": (_I64, [_PYOBJ], False),
@@ -573,6 +584,11 @@ def _runtime_signatures_part_9():
     "py_json_dumps_ex": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_copy_copy": (_PYOBJ, [_PYOBJ], False),
     "py_copy_deepcopy": (_PYOBJ, [_PYOBJ], False),
+    }
+
+
+def _runtime_signatures_part_9():
+    return {
     "py_pickle_dumps": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_pickle_loads": (_PYOBJ, [_PYOBJ], False),
     "py_os_urandom": (_PYOBJ, [_PYOBJ], False),
@@ -602,11 +618,6 @@ def _runtime_signatures_part_9():
     "py_list_insert": (_VOID, [_PYOBJ, _I64, _PYOBJ], False),
     "py_list_pop": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_list_remove": (_VOID, [_PYOBJ, _PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_10():
-    return {
     "py_list_clear": (_VOID, [_PYOBJ], False),
     "py_obj_clear": (_VOID, [_PYOBJ], False),
     "py_list_contains": (_I64, [_PYOBJ, _PYOBJ], False),
@@ -639,6 +650,11 @@ def _runtime_signatures_part_10():
     "py_dict_len": (_I64, [_PYOBJ], False),
     "py_dict_entries_used": (_I64, [_PYOBJ], False),
     "py_dict_entry_key_at": (_PYOBJ, [_PYOBJ, _I64], False),
+    }
+
+
+def _runtime_signatures_part_10():
+    return {
     "py_dict_entry_value_at": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_dict_keys": (_PYOBJ, [_PYOBJ], False),
     "py_dict_values": (_PYOBJ, [_PYOBJ], False),
@@ -673,13 +689,9 @@ def _runtime_signatures_part_10():
     "py_set_difference_update": (_VOID, [_PYOBJ, _PYOBJ], False),
     "py_set_symmetric_difference_update": (_VOID, [_PYOBJ, _PYOBJ], False),
     "py_set_issubset": (_I64, [_PYOBJ, _PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_11():
-    return {
     "py_set_issuperset": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_set_pop": (_PYOBJ, [_PYOBJ], False),
+    "py_set_clear": (_VOID, [_PYOBJ], False),
     "py_set_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_set_remove": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_set_len": (_I64, [_PYOBJ], False),
@@ -707,6 +719,11 @@ def _runtime_signatures_part_11():
     "py_obj_lshift": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_rshift": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_truediv": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    }
+
+
+def _runtime_signatures_part_11():
+    return {
     "py_obj_mod": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_str_mod": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_weakref_new": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -750,11 +767,6 @@ def _runtime_signatures_part_11():
     "py_obj_len": (_I64, [_PYOBJ], False),
     "py_obj_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_sorted": (_PYOBJ, [_PYOBJ], False),
-    }
-
-
-def _runtime_signatures_part_12():
-    return {
     "py_obj_index_i64": (_I64, [_PYOBJ], False),
     "py_index_i64_checked": (_I64, [_PYOBJ], False),
     "py_obj_repr": (_PYOBJ, [_PYOBJ], False),
@@ -766,6 +778,11 @@ def _runtime_signatures_part_12():
     "py_obj_iter": (_PYOBJ, [_PYOBJ], False),
     "py_obj_next": (_PYOBJ, [_PYOBJ], False),
     "py_iter_callable_new": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    }
+
+
+def _runtime_signatures_part_12():
+    return {
     "py_user_str_dispatch": (_PYOBJ, [_PYOBJ], False),
     "py_user_repr_dispatch": (_PYOBJ, [_PYOBJ], False),
     "py_user_hash_dispatch": (_I64, [_PYOBJ, _PTR], False),
@@ -809,6 +826,7 @@ def _runtime_signatures_part_12():
     "py_gen_new": (_PYOBJ, [_PTR, _PYOBJ], False),
     "py_gen_completed": (_PYOBJ, [_PYOBJ], False),
     "py_gen_take_completed": (_PYOBJ, [_PYOBJ], False),
+    "py_gen_run_may_park_sync": (_PYOBJ, [_PYOBJ], False),
     "py_gen_set_may_park": (_VOID, [_PYOBJ], False),
     "py_gen_is_may_park": (_I64, [_PYOBJ], False),
     "py_gen_next": (_PYOBJ, [_PYOBJ], False),
@@ -818,14 +836,14 @@ def _runtime_signatures_part_12():
     "py_gen_close_preserving_exception": (_I64, [_PYOBJ], False),
     "py_gen_take_send": (_PYOBJ, [_PYOBJ], False),
     "py_gen_state": (_I64, [_PYOBJ], False),
+    "py_gen_set_state": (_VOID, [_PYOBJ, _I64], False),
+    "py_gen_set_done": (_VOID, [_PYOBJ], False),
+    "py_gen_is_done": (_I64, [_PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_13():
     return {
-    "py_gen_set_state": (_VOID, [_PYOBJ, _I64], False),
-    "py_gen_set_done": (_VOID, [_PYOBJ], False),
-    "py_gen_is_done": (_I64, [_PYOBJ], False),
     "py_gen_finish": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     # ---- Native coroutine shell objects ----------------------------
     "py_coroutine_new": (_PYOBJ, [_CSTR], False),
@@ -889,12 +907,12 @@ def _runtime_signatures_part_13():
         [_I64, _I64, _PTR],
         False,
     ),
-    "py_virtual_thread_tcp_register_accepted": (_I64, [_I64], False),
     }
 
 
 def _runtime_signatures_part_14():
     return {
+    "py_virtual_thread_tcp_register_accepted": (_I64, [_I64], False),
     "py_virtual_thread_tcp_connect_start": (
         _I64,
         [_PYOBJ, _PYOBJ, _PTR],
@@ -964,12 +982,12 @@ def _runtime_signatures_part_14():
     ),
     "py_virtual_thread_channel_select2_result": (_PYOBJ, [_PYOBJ], False),
     "py_virtual_thread_result": (_PYOBJ, [_PYOBJ], False),
-    "py_virtual_thread_exception": (_PYOBJ, [_PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_15():
     return {
+    "py_virtual_thread_exception": (_PYOBJ, [_PYOBJ], False),
     "py_virtual_thread_outcome": (_I64, [_PYOBJ], False),
     "py_task_new": (_PYOBJ, [_PYOBJ], False),
     "py_task_step": (_PYOBJ, [_PYOBJ], False),
@@ -1022,12 +1040,12 @@ def _runtime_signatures_part_15():
     "py_os_listdir": (_PYOBJ, [_PYOBJ], False),
     "py_shlex_split": (_PYOBJ, [_PYOBJ], False),
     "py_shutil_which": (_PYOBJ, [_PYOBJ], False),
-    "py_tempdir_new": (_PYOBJ, [_PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_16():
     return {
+    "py_tempdir_new": (_PYOBJ, [_PYOBJ], False),
     "py_tempdir_cleanup": (_VOID, [_PYOBJ], False),
     "py_re_escape": (_PYOBJ, [_PYOBJ], False),
     "py_re_match": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -1044,6 +1062,9 @@ def _runtime_signatures_part_16():
     "py_re_engine_split": (_PYOBJ, [_PYOBJ, _PYOBJ, _I64, _I64], False),
     "py_time_monotonic": (_PYOBJ, [], False),
     "py_time_perf_counter": (_PYOBJ, [], False),
+    "py_time_perf_counter_ns": (_PYOBJ, [], False),
+    "py_time_monotonic_ns": (_PYOBJ, [], False),
+    "py_time_time_ns": (_PYOBJ, [], False),
     "py_time_time": (_PYOBJ, [], False),
     "py_time_strftime": (_PYOBJ, [_PYOBJ], False),
     "py_sys_stdin_readline": (_PYOBJ, [], False),
@@ -1081,6 +1102,11 @@ def _runtime_signatures_part_16():
     "py_os_path_commonpath": (_PYOBJ, [_PYOBJ], False),
     "py_os_path_expandvars": (_PYOBJ, [_PYOBJ], False),
     "py_os_path_relpath": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    }
+
+
+def _runtime_signatures_part_17():
+    return {
     "py_os_path_commonprefix": (_PYOBJ, [_PYOBJ], False),
     "py_os_getcwd_str": (_PYOBJ, [], False),
     "py_os_makedirs": (_PYOBJ, [_PYOBJ, _I64, _I32], False),
@@ -1089,11 +1115,6 @@ def _runtime_signatures_part_16():
     "py_os_replace": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_os_chmod": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_os_fsync": (_PYOBJ, [_I64], False),
-    }
-
-
-def _runtime_signatures_part_17():
-    return {
     "py_os_access": (_I32, [_PYOBJ, _I32], False),
     "py_os_write": (_I32, [_I32, _PYOBJ], False),
     "py_http_download_to_file": (_I64, [_PYOBJ, _PYOBJ], False),
@@ -1159,6 +1180,11 @@ def _runtime_signatures_part_17():
     "py_class_lookup": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_class_getattr": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_class_setattr": (_I64, [_PYOBJ, _CSTR, _PYOBJ], False),
+    }
+
+
+def _runtime_signatures_part_18():
+    return {
     "py_class_setattr_raw": (_I64, [_PYOBJ, _CSTR, _PYOBJ], False),
     "py_class_apply_namespace_dict": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_class_delattr": (_I64, [_PYOBJ, _CSTR], False),
@@ -1167,11 +1193,6 @@ def _runtime_signatures_part_17():
     "py_valuebox_set_field": (_VOID, [_PYOBJ, _I32, _PYOBJ], False),
     "py_instance_new": (_PYOBJ, [_PYOBJ], False),
     "py_instance_get_field": (_PYOBJ, [_PYOBJ, _I32], False),
-    }
-
-
-def _runtime_signatures_part_18():
-    return {
     "py_instance_getattr": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_instance_getattr_default": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_instance_setattr": (_I64, [_PYOBJ, _CSTR, _PYOBJ], False),
@@ -1241,6 +1262,11 @@ def _runtime_signatures_part_18():
     # (``sorted(xs, key=<fn>)``, ``re.sub(pat, <repl>, text)``, etc.).
     "py_cpy_wrap_pcc_0arg": (_PTR, [_PTR], False),
     "py_cpy_wrap_pcc_1arg": (_PTR, [_PTR], False),
+    }
+
+
+def _runtime_signatures_part_19():
+    return {
     "py_cpy_wrap_pcc_2arg": (_PTR, [_PTR], False),
     "py_cpy_wrap_pcc_3arg": (_PTR, [_PTR], False),
     "py_cpy_wrap_pcc_4arg": (_PTR, [_PTR], False),
@@ -1249,11 +1275,6 @@ def _runtime_signatures_part_18():
     "py_cpy_wrap_pcc_7arg": (_PTR, [_PTR], False),
     "py_cpy_wrap_pcc_8arg": (_PTR, [_PTR], False),
     "py_cpy_wrap_pcc_9arg": (_PTR, [_PTR], False),
-    }
-
-
-def _runtime_signatures_part_19():
-    return {
     "pcc_capi_str_utf8_pinned": (_CSTR, [_PYOBJ], False),
     "py_cpy_len": (_I64, [_PTR], False),
     "py_cpy_getitem": (_PTR, [_PTR, _PTR], False),
@@ -1327,9 +1348,12 @@ RUNTIME_FUNCTION_ATTRS: dict[str, frozenset[str]] = {
     "py_gc_is_tracked": _READONLY_RUNTIME_ATTRS,
     "py_gc_get_count": _READONLY_RUNTIME_ATTRS,
     "py_gc_get_threshold": _READONLY_RUNTIME_ATTRS,
-    "pcc_gc_backend": _READONLY_RUNTIME_ATTRS,
+    # Not pcc_gc_backend / pcc_gc_telemetry: their first call initializes the
+    # GC configuration from PCC_GC_BACKEND.  Runtime code calls
+    # gc_backend_current() as a statement for exactly that effect, and a
+    # readonly declaration let DCE delete it (frame roots then went
+    # unregistered under GC1-4 when frame entry was the first GC call).
     "pcc_gc_backend_name": _READONLY_RUNTIME_ATTRS,
-    "pcc_gc_telemetry": _READONLY_RUNTIME_ATTRS,
     "pcc_threads_enabled": _READONLY_RUNTIME_ATTRS,
     "pcc_refcount_strategy": _READONLY_RUNTIME_ATTRS,
 }
@@ -1377,11 +1401,16 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_selector_scan_require_unselected',
         'pcc_gc_backend4_selector_scan_restart',
         'pcc_gc_backend4_remembered_set_duplicate_skips_count',
+        'pcc_gc_backend4_remembered_page_entries_count',
+        'pcc_gc_backend4_remembered_page_high_water_count',
+        'pcc_gc_backend4_remembered_page_slot_entries_count',
         'pcc_gc_backend4_remembered_set_entries_count',
         'pcc_gc_backend4_remembered_set_high_water_count',
         'pcc_gc_backend4_small_page_candidate_bytes_count',
         'pcc_gc_backend4_small_page_candidate_zpage_bytes_count',
         'pcc_gc_backend4_small_page_candidates',
+        'pcc_gc_backend4_store_buffer_cross_thread_medium_flushed_entries_count',
+        'pcc_gc_backend4_store_buffer_cross_thread_medium_flushes_count',
         'pcc_gc_backend4_store_buffer_drain_batches_count',
         'pcc_gc_backend4_store_buffer_drained_entries_count',
         'pcc_gc_backend4_store_buffer_duplicate_skips_count',
@@ -1537,6 +1566,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_reset_object_cursor',
         'pcc_gc_backend4_reseed_page_count_cursor',
         'pcc_gc_backend4_reseed_relocation_cursor',
+        'pcc_gc_backend4_remembered_page_head',
         'pcc_gc_backend4_remembered_slots_head',
         'pcc_gc_backend4_selector_page',
         'pcc_gc_backend4_selector_page_cursor',
@@ -1823,11 +1853,6 @@ def _cross_object_signatures_part_1():
     "py_incref": (("c_ptr",), "c_void"),
     "py_decref": (("c_ptr",), "c_void"),
     "pcc_gc_object_list_head": ((), "c_ptr"),
-    }
-
-
-def _cross_object_signatures_part_2():
-    return {
     "pcc_gc_object_set_list_head": (("c_ptr",), "c_void"),
     "pcc_gc_trace_cursor_load": ((), "c_ptr"),
     "pcc_gc_trace_cursor_store": (("c_ptr",), "c_void"),
@@ -1851,6 +1876,11 @@ def _cross_object_signatures_part_2():
     "pcc_gc_object_node_set_young_prev": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_object_node_clear_promotion_state": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_promotion_unlink": (("c_ptr",), "c_void"),
+    }
+
+
+def _cross_object_signatures_part_2():
+    return {
     "pcc_gc_object_node_alloc": ((), "c_ptr"),
     "pcc_gc_object_node_prepare": ((), "c_ptr"),
     "pcc_gc_object_node_plan_requires_prepare": ((), "c_int64"),
@@ -1902,11 +1932,6 @@ def _cross_object_signatures_part_2():
         ("c_ptr",),
         "c_int64",
     ),
-    }
-
-
-def _cross_object_signatures_part_3():
-    return {
     "pcc_gc_relocation_payload_plan_prepare": (
         ("c_int64",),
         "c_ptr",
@@ -1963,6 +1988,11 @@ def _cross_object_signatures_part_3():
         ("c_ptr", "c_int64", "c_int64", "c_ptr", "c_ptr", "c_ptr"),
         "c_int64",
     ),
+    }
+
+
+def _cross_object_signatures_part_3():
+    return {
     "pcc_gc_backend3_drain_promotion_worklist": (
         ("c_int64",),
         "c_int64",
@@ -2000,11 +2030,6 @@ def _cross_object_signatures_part_3():
         ("c_ptr",),
         "c_void",
     ),
-    }
-
-
-def _cross_object_signatures_part_4():
-    return {
     "pcc_gc_generational_step": (
         ("c_int64", "c_int64"),
         "c_int64",
@@ -2093,6 +2118,11 @@ def _cross_object_signatures_part_4():
         "c_void",
     ),
     "pcc_gc_backend4_zpage_unlink_node": (("c_ptr",), "c_void"),
+    }
+
+
+def _cross_object_signatures_part_4():
+    return {
     "pcc_gc_backend4_zpage_find": (("c_ptr",), "c_ptr"),
     "pcc_gc_backend4_zpage_unlink_page": (("c_ptr",), "c_void"),
     "pcc_gc_backend4_zpage_find_owner_for_page": (("c_ptr",), "c_ptr"),
@@ -2127,11 +2157,6 @@ def _cross_object_signatures_part_4():
         "c_ptr",
     ),
     "pcc_gc_relocate_copy": (("c_ptr", "c_int64"), "c_ptr"),
-    }
-
-
-def _cross_object_signatures_part_5():
-    return {
     "pcc_gc_backend4_remap_and_retire_unlocked": (("c_ptr",), "c_void"),
     "pcc_gc_backend4_remap_and_retire_stopped_world": ((), "c_int64"),
     "pcc_gc_backend4_finish_retained_page_releases": (("c_ptr",), "c_void"),
@@ -2151,11 +2176,6 @@ def _cross_object_signatures_part_5():
     "pcc_gc_forwarding_unlink_main": (("c_ptr",), "c_void"),
     "pcc_gc_forwarding_remove": (("c_ptr",), "c_void"),
     "pcc_gc_forwarding_detach_into_finish": (("c_ptr", "c_ptr"), "c_void"),
-    }
-
-
-def _cross_object_signatures_part_6():
-    return {
     "pcc_gc_forwarding_remove_target": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_relocation_retire_source_payload_for_target_death_into_finish": (
         ("c_ptr", "c_ptr", "c_ptr"),
@@ -2216,6 +2236,11 @@ def _cross_object_signatures_part_6():
         ("c_ptr", "c_int64", "c_ptr"),
         "c_void",
     ),
+    }
+
+
+def _cross_object_signatures_part_5():
+    return {
     "pcc_gc_relocation_payload_retire_count_slot": (
         ("c_ptr", "c_int64", "c_ptr"),
         "c_void",
@@ -2279,11 +2304,6 @@ def _cross_object_signatures_part_6():
         ("c_ptr", "c_ptr", "c_int32"),
         "c_void",
     ),
-    }
-
-
-def _cross_object_signatures_part_7():
-    return {
     "pcc_gc_tripwire_defer_or_fail": (
         ("c_ptr", "c_ptr", "c_int32"),
         "c_int32",
@@ -2317,13 +2337,13 @@ def _cross_object_signatures_part_7():
     "pcc_gc_note_object_freeing": (("c_ptr",), "c_void"),
     "pcc_gc_trace_continuation_roots": ((), "c_int64"),
     "pcc_stop_the_world": ((), "c_int64"),
+    "pcc_resume_world": ((), "c_int64"),
+    "pcc_capi_is_cext_type_tag": (("c_int64",), "c_int64"),
     }
 
 
-def _cross_object_signatures_part_8():
+def _cross_object_signatures_part_6():
     return {
-    "pcc_resume_world": ((), "c_int64"),
-    "pcc_capi_is_cext_type_tag": (("c_int64",), "c_int64"),
     "pcc_capi_dealloc_cext_object": (
         ("c_ptr", "c_int64"),
         "c_int64",
@@ -2411,7 +2431,7 @@ def _cross_object_signatures_part_8():
     }
 
 
-def _cross_object_signatures_part_9():
+def _cross_object_signatures_part_7():
     return {
     "py_dealloc_func": (("c_ptr",), "c_void"),
     "py_class_dealloc": (("c_ptr",), "c_void"),
@@ -2419,11 +2439,6 @@ def _cross_object_signatures_part_9():
     "py_descriptor_dealloc": (("c_ptr",), "c_void"),
     "py_dealloc_exc": (("c_ptr",), "c_void"),
     "py_dealloc_file": (("c_ptr",), "c_void"),
-    }
-
-
-def _cross_object_signatures_part_10():
-    return {
     "py_dealloc_iter": (("c_ptr",), "c_void"),
     "py_dealloc_gen": (("c_ptr",), "c_void"),
     "py_dealloc_coroutine": (("c_ptr",), "c_void"),
@@ -2440,6 +2455,9 @@ def _cross_object_signatures_part_10():
     "py_dealloc_thread_semaphore": (("c_ptr",), "c_void"),
     "py_dealloc_thread_thread": (("c_ptr",), "c_void"),
     "py_dealloc_generic": (("c_ptr",), "c_void"),
+    # Allocator queries behind the primary tracked-object index.
+    "pcc_allocator_object_side_slot": (("c_ptr", "c_int64"), "c_ptr"),
+    "pcc_allocator_granule_object_slot": (("c_ptr",), "c_ptr"),
     }
 
 
@@ -2453,9 +2471,6 @@ FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_4()
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_5())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_6())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_7())
-FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_8())
-FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_9())
-FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_10())
 
 
 def is_freestanding_gc_cross_object_runtime_import(

@@ -90,6 +90,9 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_frame_head",
     "pcc_gc_scheduler_root_head",
 }
+# Not GC state: the managed runtime's builtin type root table, which the
+# visitor walks for the builtin class statics it keeps alive.
+MANAGED_ROOT_TABLE_IMPORTS = {"pcc_builtin_type_root_slots"}
 
 
 def test_mapped_roots_stackmap_constants_match_producer_abi():
@@ -205,7 +208,9 @@ def test_mapped_root_object_has_exact_raw_closure(tmp_path: Path, emitter: str):
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    assert undefined == (
+        RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS | MANAGED_ROOT_TABLE_IMPORTS
+    )
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30
@@ -483,22 +488,16 @@ def _link_harness(tmp_path: Path, name: str, source_text: str, archive: Path) ->
     return executable
 
 
-def _assert_same_output(oracle: Path, implementation: Path, env: dict[str, str]):
-    oracle_result = subprocess.run(
-        [str(oracle)], env=env, capture_output=True, text=True, timeout=30
-    )
+def _run_ok(implementation: Path, env: dict[str, str]) -> str:
     result = subprocess.run(
         [str(implementation)], env=env, capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == oracle_result.stdout
     return result.stdout
 
 
-def test_archive_owns_mapped_visitor_and_matches_gc0_to_gc4_oracle(
+def test_archive_owns_mapped_visitor_gc0_to_gc4(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     symbols_result = subprocess.run(
@@ -521,9 +520,6 @@ def test_archive_owns_mapped_visitor_and_matches_gc0_to_gc4_oracle(
         for lines in owners.values()
     )
 
-    oracle = _link_harness(
-        tmp_path, "mapped_c_oracle", _mapped_harness_source(), c_runtime_archive
-    )
     implementation = _link_harness(
         tmp_path,
         "mapped_pcc_python",
@@ -531,17 +527,12 @@ def test_archive_owns_mapped_visitor_and_matches_gc0_to_gc4_oracle(
         pcc_py_runtime_archive,
     )
     for backend in range(5):
-        output = _assert_same_output(
-            oracle,
-            implementation,
-            {**os.environ, "PCC_GC_BACKEND": str(backend)},
-        )
+        output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
         assert output == "mapped:3,0\nempty:0\n"
 
 
 def test_backend4_precise_stackmap_consumer_rewrites_exact_frame_location(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     implementation = _link_harness(
@@ -559,21 +550,13 @@ def test_backend4_precise_stackmap_consumer_rewrites_exact_frame_location(
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == "precise:1,1,1\nraw:-10\n"
 
-    relocation_oracle = _link_harness(
-        tmp_path,
-        "mapped_relocation_c_oracle",
-        _relocation_harness_source(),
-        c_runtime_archive,
-    )
     relocation_implementation = _link_harness(
         tmp_path,
         "mapped_relocation_pcc_python",
         _relocation_harness_source(),
         pcc_py_runtime_archive,
     )
-    assert _assert_same_output(
-        relocation_oracle, relocation_implementation, dict(os.environ)
-    ) == "relocate:1,1,1,1\n"
+    assert _run_ok(relocation_implementation, dict(os.environ)) == "relocate:1,1,1,1\n"
 
     registered_scan = _link_harness(
         tmp_path,
@@ -592,16 +575,9 @@ def test_backend4_precise_stackmap_consumer_rewrites_exact_frame_location(
 
 def test_mapped_root_visitor_survives_threaded_registry_mutation(
     tmp_path: Path,
-    threaded_c_runtime_archive: Path,
 ):
     threaded_pcc_python_archive = (
         cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-    )
-    oracle = _link_harness(
-        tmp_path,
-        "mapped_threads_c_oracle",
-        _thread_harness_source(),
-        threaded_c_runtime_archive,
     )
     implementation = _link_harness(
         tmp_path,
@@ -610,9 +586,5 @@ def test_mapped_root_visitor_survives_threaded_registry_mutation(
         threaded_pcc_python_archive,
     )
     for backend in range(5):
-        output = _assert_same_output(
-            oracle,
-            implementation,
-            {**os.environ, "PCC_GC_BACKEND": str(backend)},
-        )
+        output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
         assert output == "final:0,0\n"

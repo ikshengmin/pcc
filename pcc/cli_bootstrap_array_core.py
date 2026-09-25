@@ -211,10 +211,17 @@ def _native_array_dtype_range_json(dtype: str) -> str:
     if not _native_array_is_integer_dtype(dtype):
         return "null"
     bits = _native_array_integer_bits(dtype)
+    # 2**63 and 2**64 do not fit the raw i64 lane this module is compiled
+    # in (pcc1 read them as 0, reporting uint64 as [0, -1]); the 64-bit
+    # limits are text, as _native_array_int_pow2 documents.
     if _native_array_integer_signed(dtype):
+        if bits == 64:
+            return "[-9223372036854775808, 9223372036854775807]"
         low = -_native_array_int_pow2(bits - 1)
         high = _native_array_int_pow2(bits - 1) - 1
         return "[" + str(low) + ", " + str(high) + "]"
+    if bits == 64:
+        return "[0, 18446744073709551615]"
     high = _native_array_int_pow2(bits) - 1
     return "[0, " + str(high) + "]"
 

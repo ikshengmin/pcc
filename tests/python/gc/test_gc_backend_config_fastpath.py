@@ -82,18 +82,12 @@ def test_init_config_returns_cached_backend_for_hot_dispatch() -> None:
     init_config = _function_source("pcc_gc_config_ensure", _GC_PUBLIC_COLLECTION_PY)
     backend = _function_source("pcc_gc_backend")
     managed = _source_text()
-    c_src = (_REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_backend = c_src.split("int64_t pcc_gc_backend(void)", 1)[1].split("\n}", 1)[0]
 
     assert "def pcc_gc_config_ensure() -> i64:" in init_config
     assert 'return load_i32(global_addr("pcc_gc_backend_selected"), 0)' in init_config
     assert "return backend" in init_config
     assert '_init_config = extern("pcc_gc_config_ensure", (), c_int64)' in managed
     assert "return _init_config()" in backend
-    assert "if (pcc_gc_config_initialized) return pcc_gc_selected_backend;" in c_backend
-    assert c_backend.index("pcc_gc_config_initialized") < c_backend.index("pcc_gc_init_config()")
 
 
 def test_gc_backend_environment_is_exact_and_fails_closed() -> None:
@@ -103,24 +97,12 @@ def test_gc_backend_environment_is_exact_and_fails_closed() -> None:
     py_abort = _function_source(
         "_pcc_gc_config_abort_bad_backend", _GC_PUBLIC_COLLECTION_PY
     )
-    c_src = (_REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_parser = c_src.split(
-        "static int64_t pcc_gc_parse_backend_env(void)", 1
-    )[1].split("\n}", 1)[0]
 
     assert "first >= 48 and first <= 52" in py_parser
     assert "load_i8(raw, 1) == 0" in py_parser
     assert "_pcc_gc_config_abort_bad_backend()" in py_parser
     assert "pcc_platform_write(2, message, length)" in py_abort
     assert "pcc_platform_abort()" in py_abort
-
-    assert "raw[0] >= '0' && raw[0] <= '4'" in c_parser
-    assert "raw[1] == '\\0'" in c_parser
-    assert "write(2, message" in c_parser
-    assert "abort();" in c_parser
-    assert "pcc_gc_parse_env_i64(\n        \"PCC_GC_BACKEND\"" not in c_src
 
 
 def test_hot_gc_paths_reuse_init_config_backend_value() -> None:
@@ -248,14 +230,6 @@ def test_pcc_gc_release_skips_backend_query_for_null_and_tagged_ints() -> None:
     assert "return" in py_prefix
     assert "_gc_backend_fast()" not in py_prefix
 
-    c_src = (_REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_obj.c").read_text(
-        encoding="utf-8"
-    )
-    c_body = c_src.split("void pcc_gc_release(PyObject *o)", 1)[1].split("\n}", 1)[0]
-    c_prefix = c_body.split("int64_t backend = pcc_gc_backend();", 1)[0]
-    assert "if (o == NULL || PY_IS_TAGGED_INT(o)) return;" in c_prefix
-    assert "pcc_gc_backend()" not in c_prefix
-
 
 def test_py_gc_track_checks_threads_before_backend_query() -> None:
     for name in ("py_gc_track", "py_gc_untrack"):
@@ -269,15 +243,6 @@ def test_py_gc_track_checks_threads_before_backend_query() -> None:
         )
         assert "if pcc_threads_enabled() != 0 and gc_backend_current() == 4:" in body, name
         assert "if gc_backend_current() == 4 and pcc_threads_enabled() != 0:" not in body, name
-
-    c_src = (_REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_obj_gc.c").read_text(
-        encoding="utf-8"
-    )
-    for name in ("void py_gc_track", "void py_gc_untrack"):
-        body = c_src.split(name, 1)[1].split("\n}", 1)[0]
-        condition = body.split("py_gc_table_lock", 1)[0]
-        assert "pcc_threads_enabled()\n        && pcc_gc_backend()" in condition, name
-        assert "pcc_gc_backend() == PCC_GC_KIND_COLORED_RELOCATING\n        && pcc_threads_enabled()" not in condition, name
 
 
 def test_class_cstr_equality_rejects_prefix_mismatch_before_strlen() -> None:

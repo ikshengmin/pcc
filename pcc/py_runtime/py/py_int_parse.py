@@ -8,7 +8,29 @@ delegates canonical tagged-vs-heap construction to py_int_from_i64.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int64, c_void, c_double
-from pcc.unsafe import cstr, load_i8, store_i8, malloc, free, strlen, null, ptr_is_null
+from pcc.py_runtime.py.py_abi_constants import (
+    PY_TYPE_BOOL,
+    PY_TYPE_FLOAT,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_STR,
+    PY_TYPE_USER_CLASS_START,
+)
+from pcc.unsafe import (
+    cstr,
+    f64_bits,
+    f64_signbit,
+    free,
+    global_load_ptr,
+    load_i8,
+    load_i64,
+    malloc,
+    null,
+    ptr_is_null,
+    stack_alloc,
+    store_i8,
+    strlen,
+)
 
 
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,),       c_ptr)
@@ -24,6 +46,16 @@ py_raise        = extern("py_raise",        (c_ptr,),         c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_exc_new      = extern("py_exc_new",      (c_int64, c_ptr), c_ptr)
+py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
+py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
+py_err_occurred = extern("py_err_occurred", (), c_int64)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
+pcc_stdio_float_exact_digits = extern(
+    "pcc_stdio_float_exact_digits", (c_int64, c_ptr, c_ptr), c_int64
+)
 
 
 def _byte_at(s, i: int) -> int:
@@ -380,11 +412,106 @@ def py_obj_as_int_object(obj, base: int):
     if ptr_is_null(obj):
         return null()
     tag: int = py_obj_type_tag(obj)
-    if tag == 4:  # PY_TYPE_STR
+    if tag == PY_TYPE_STR:
         return py_int_from_cstr_or_raise(py_str_utf8(obj), base)
-    if tag == 3:  # PY_TYPE_FLOAT
-        return py_int_from_i64(int(py_float_to_f64(obj)))
-    if tag == 1:  # PY_TYPE_BOOL
+    if tag == PY_TYPE_FLOAT:
+        # Exact: int(1e20) is 100000000000000000000 (was a saturated i64).
+        return py_int_from_f64_exact(py_float_to_f64(obj))
+    if tag == PY_TYPE_BOOL:
         return py_int_from_i64(py_obj_truthy(obj))
-    py_incref(obj)
-    return obj
+    if tag == PY_TYPE_INT:
+        py_incref(obj)
+        return obj
+    if tag == PY_TYPE_INSTANCE or tag >= PY_TYPE_USER_CLASS_START:  # __int__, then __index__
+        method = py_obj_getattr(obj, cstr("__int__"))
+        if ptr_is_null(method):
+            if py_err_occurred() != 0:
+                py_clear_exception()
+            method = py_obj_getattr(obj, cstr("__index__"))
+        if not ptr_is_null(method):
+            empty = py_tuple_new(0)
+            result = py_obj_call(method, empty, global_load_ptr("py_None"))
+            py_decref(empty)
+            py_decref(method)
+            return result
+        if py_err_occurred() != 0:
+            py_clear_exception()
+    # int([1]) is a TypeError; this used to hand the list back as the "int".
+    message = stack_alloc(200)
+    prefix = cstr("int() argument must be a string, a bytes-like object or a real number, not '")
+    length: int = 0
+    while load_i8(prefix, length) != 0:
+        store_i8(message, length, load_i8(prefix, length))
+        length = length + 1
+    name = py_obj_type_name(obj)
+    if not ptr_is_null(name):
+        text = py_str_utf8(name)
+        count: int = py_str_byte_len(name)
+        if count > 80:
+            count = 80
+        index: int = 0
+        while index < count:
+            store_i8(message, length, load_i8(text, index))
+            length = length + 1
+            index = index + 1
+        py_decref(name)
+    store_i8(message, length, 39)
+    store_i8(message, length + 1, 0)
+    py_raise_owned(py_exc_new(3, message))
+    return null()
+
+
+@c_abi_export("py_int_from_f64_exact")
+def py_int_from_f64_exact(value: float):
+    # int(value) for a double: truncation toward zero, exact, as a NEW int.
+    if value != value:
+        py_raise_owned(py_exc_new(2, cstr("cannot convert float NaN to integer")))
+        return null()
+    if value != 0.0 and value == value * 2.0:
+        py_raise_owned(py_exc_new(15, cstr("cannot convert float infinity to integer")))
+        return null()
+    if value > -9.0e18 and value < 9.0e18:
+        truncated: int = int(value)
+        return py_int_from_i64(truncated)
+    # Beyond 2**53 every double is an integer: parse its exact digits.
+    negative: int = f64_signbit(value)
+    absolute: float = value
+    if negative != 0:
+        absolute = 0.0 - value
+    digits = stack_alloc(800)
+    point_box = stack_alloc(8)
+    total: int = pcc_stdio_float_exact_digits(f64_bits(absolute), digits, point_box)
+    point: int = load_i64(point_box, 0)
+    text = stack_alloc(340)
+    position: int = 0
+    if negative != 0:
+        store_i8(text, position, 45)
+        position = position + 1
+    index: int = 0
+    while index < point:
+        digit: int = 0
+        if index < total:
+            digit = load_i8(digits, index)
+        store_i8(text, position, 48 + digit)
+        position = position + 1
+        index = index + 1
+    store_i8(text, position, 0)
+    return py_int_from_cstr_or_raise(text, 10)
+
+
+@c_abi_export("py_float_to_i64_checked")
+def py_float_to_i64_checked(value: float) -> int:
+    # The i64-lane int(float) slow path: the frontend inlines the in-range
+    # fptosi and calls this only for NaN, infinities and |value| >= 2**63,
+    # which a lane cannot hold.  Raises CPython's error for each.
+    if value != value:
+        py_raise_owned(py_exc_new(2, cstr("cannot convert float NaN to integer")))
+        return 0
+    if value != 0.0 and value == value * 2.0:
+        py_raise_owned(py_exc_new(15, cstr("cannot convert float infinity to integer")))
+        return 0
+    if value >= -9223372036854775808.0 and value < 9223372036854775808.0:
+        truncated: int = int(value)
+        return truncated
+    py_raise_owned(py_exc_new(15, cstr("Python int too large to convert to C int64")))
+    return 0

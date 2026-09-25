@@ -169,7 +169,6 @@ int main(void) {
 
 def test_production_archive_uniquely_owns_backend0_actions_and_collects_cycle(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     symbols_result = subprocess.run(
@@ -191,25 +190,18 @@ def test_production_archive_uniquely_owns_backend0_actions_and_collects_cycle(
         assert ":freestanding_gc_backend0_slots.o:" in owners[0]
         assert ":py_obj_gc.o:" not in owners[0]
 
-    oracle = _link_cycle_harness(tmp_path, "backend0_cycle_c", c_runtime_archive)
     implementation = _link_cycle_harness(
         tmp_path, "backend0_cycle_pcc_python", pcc_py_runtime_archive
-    )
-    oracle_result = subprocess.run(
-        [str(oracle)], capture_output=True, text=True, timeout=30
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == oracle_result.stdout
     assert result.stdout == "before:2\ncollected:2\nafter:0\n"
 
 
 def test_backend0_finalizer_may_track_temporaries_without_table_lock_deadlock(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     source = tmp_path / "backend0_finalizer_reentry.py"
@@ -243,26 +235,19 @@ def test_backend0_finalizer_may_track_temporaries_without_table_lock_deadlock(
         encoding="utf-8",
     )
 
-    outputs: list[str] = []
-    for name, archive in (
-        ("c_oracle", c_runtime_archive),
-        ("pcc_python", pcc_py_runtime_archive),
-    ):
-        executable = tmp_path / ("backend0_finalizer_reentry_" + name)
-        pipeline.compile_python(
-            str(source),
-            str(executable),
-            libpython_mode="off",
-            ir_scaffold_mode="on",
-            runtime_archive=str(archive),
-        )
-        result = subprocess.run(
-            [str(executable)],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        outputs.append(result.stdout)
-
-    assert outputs == ["True\n['ran']\n", "True\n['ran']\n"]
+    executable = tmp_path / "backend0_finalizer_reentry"
+    pipeline.compile_python(
+        str(source),
+        str(executable),
+        libpython_mode="off",
+        ir_scaffold_mode="on",
+        runtime_archive=str(pcc_py_runtime_archive),
+    )
+    result = subprocess.run(
+        [str(executable)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "True\n['ran']\n"

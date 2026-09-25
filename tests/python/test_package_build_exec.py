@@ -634,7 +634,7 @@ def test_execute_build_actions_links_with_vendor_binding(tmp_path, monkeypatch):
 
 
 def test_execute_build_actions_builds_reusable_numpy_capi_provider_with_include_dirs(
-    tmp_path,
+    tmp_path, pcc_py_runtime_archive,
 ):
     if shutil.which("cc") is None:
         pytest.fail("C compiler is required for native provider build smoke")
@@ -642,11 +642,9 @@ def test_execute_build_actions_builds_reusable_numpy_capi_provider_with_include_
     provider_source = provider_dir / "pccnpapi.c"
     fake_include = Path("utils/fake_libc_include").resolve()
     runtime_include = Path("pcc/py_runtime/include").resolve()
-    runtime_lib = Path("pcc/py_runtime").resolve()
+    runtime_lib = Path(pcc_py_runtime_archive).parent
     if not provider_source.exists():
         pytest.fail("reusable NumPy C-API provider source is not present")
-    if not (runtime_lib / "libpy_runtime.a").exists():
-        pytest.fail("pcc runtime archive is required for native provider link smoke")
     project = tmp_path / "pccnpapi-src"
     shutil.copytree(provider_dir, project)
 
@@ -655,7 +653,7 @@ def test_execute_build_actions_builds_reusable_numpy_capi_provider_with_include_
         project,
         include_dirs=[str(fake_include), str(runtime_include)],
         library_dirs=[str(runtime_lib)],
-        libraries=["py_runtime"],
+        libraries=["py_runtime_pcc_py"],
         execute=True,
         link_output="pccnpapi.so",
     )
@@ -1058,7 +1056,7 @@ def test_pcc1_build_exec_does_not_need_host_python(tmp_path):
 
 
 def test_pcc1_build_exec_builds_reusable_numpy_capi_provider_without_host_python(
-    tmp_path,
+    tmp_path, pcc_py_runtime_archive,
 ):
     pcc1 = _find_current_pcc1()
     if pcc1 is None:
@@ -1072,11 +1070,9 @@ def test_pcc1_build_exec_builds_reusable_numpy_capi_provider_without_host_python
     provider_source = provider_dir / "pccnpapi.c"
     fake_include = Path("utils/fake_libc_include").resolve()
     runtime_include = Path("pcc/py_runtime/include").resolve()
-    runtime_lib = Path("pcc/py_runtime").resolve()
+    runtime_lib = Path(pcc_py_runtime_archive).parent
     if not provider_source.exists():
         pytest.fail("reusable NumPy C-API provider source is not present")
-    if not (runtime_lib / "libpy_runtime.a").exists():
-        pytest.fail("pcc runtime archive is required for native provider link smoke")
     project = tmp_path / "pccnpapi-src"
     shutil.copytree(provider_dir, project)
     env = os.environ.copy()
@@ -1101,7 +1097,7 @@ def test_pcc1_build_exec_builds_reusable_numpy_capi_provider_without_host_python
             "--library-dir",
             str(runtime_lib),
             "--library",
-            "py_runtime",
+            "py_runtime_pcc_py",
             "--execute",
             "--link-output",
             "pccnpapi.so",

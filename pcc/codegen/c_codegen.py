@@ -3594,6 +3594,27 @@ class LLVMCodeGenerator(
             raise CodegenError(f"Field '{field_name}' not found in aggregate")
         return self._get_aggregate_field_info_by_path(aggregate_type, field_path)
 
+    def _offsetof_keyword_value(self, node):
+        """``offsetof(type, member)`` spelled as the keyword.
+
+        The parser turns ``offsetof`` (a keyword token) into
+        ``FuncCall(ID("offsetof"), ExprList([Typename, ID]))``; only the
+        macro expansion ``&((T*)0)->m`` was handled, so the keyword form
+        evaluated ``member`` as an undeclared identifier.
+        """
+        args = node.args.exprs if node.args is not None else []
+        if (
+            len(args) != 2
+            or not isinstance(args[0], c_ast.Typename)
+            or not isinstance(args[1], c_ast.ID)
+        ):
+            raise CodegenError("offsetof expects (type, member)")
+        aggregate_type = self._resolve_ast_type(args[0].type)
+        offset, _field_type = self._get_aggregate_field_info(
+            aggregate_type, args[1].name
+        )
+        return offset
+
     def _eval_offsetof_structref(self, node):
         """Evaluate offsetof-like expressions expanded as &((T*)0)->field."""
         if isinstance(node, c_ast.StructRef):
@@ -4629,6 +4650,9 @@ class LLVMCodeGenerator(
         callee = None
         if isinstance(node.name, c_ast.ID):
             callee = node.name.name
+            if callee == "offsetof" and "offsetof" not in self.env:
+                offset = self._offsetof_keyword_value(node)
+                return self._tag_unsigned(ir.Constant(int64_t, offset)), None
             if callee == "__builtin_va_start":
                 return self._codegen_builtin_va_start(node)
             if callee == "__builtin_va_end":
@@ -7359,6 +7383,8 @@ class LLVMCodeGenerator(
         elif isinstance(node, c_ast.FuncCall):
             if isinstance(node.name, c_ast.ID):
                 callee = node.name.name
+                if callee == "offsetof" and "offsetof" not in self.env:
+                    return make_int(self._offsetof_keyword_value(node), 64, True)
                 if callee in ("__builtin_inf", "__builtin_inff", "__builtin_infl"):
                     return float("inf")
                 if callee in ("__builtin_nan", "__builtin_nanf", "__builtin_nanl"):

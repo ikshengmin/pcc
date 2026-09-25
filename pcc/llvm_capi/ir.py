@@ -33,7 +33,9 @@ from pcc.stdlib._float_bits import (
 )
 
 
-def _hex64(value: int) -> str:
+def _hex64(value) -> str:
+    # ``value`` is a uint64 bit pattern (a negative double's is >= 2**63), so
+    # it stays an exact int rather than an i64 lane.
     digits = "0123456789ABCDEF"
     out = ""
     shift = 60
@@ -43,8 +45,18 @@ def _hex64(value: int) -> str:
     return "0x" + out
 
 
-def _float64_to_bits_ir(f: float) -> int:
-    """Return the canonical IEEE 754 binary64 bit pattern."""
+def _i64_spelling(value: object) -> object:
+    # ``object`` rather than inferred: pcc1 typed ``Constant._format``'s
+    # ``value`` as a class and rejected the comparisons inline (host inferred
+    # dyn), so the arithmetic lives behind an explicit object parameter.
+    number: object = value
+    if number >= (1 << 63) and number < (1 << 64):
+        return number - (1 << 64)
+    return number
+
+
+def _float64_to_bits_ir(f: float):
+    """Return the canonical IEEE 754 binary64 bit pattern (a uint64)."""
     return _shared_float64_to_bits(f)
 
 
@@ -53,7 +65,7 @@ def _coerce_float64_ir(value) -> float:
     return value
 
 
-def _bits_to_float64_ir(bits: int) -> float:
+def _bits_to_float64_ir(bits) -> float:
     return _shared_bits_to_float64(bits)
 
 
@@ -736,6 +748,13 @@ class Constant(Value):
         if isinstance(ty, IntType):
             if isinstance(value, bool):
                 return "1" if value else "0"
+            if ty.width == 64:
+                # LLVM prints an i64 as signed decimal; a pattern written
+                # unsigned (0xFFFFFFFFFFFFFFFF) keeps that canonical spelling
+                # (-1), so every consumer of the text -- the self backend
+                # included, whose materializer takes i64 lanes -- sees an
+                # i64-range value.
+                return Constant._format_int(_i64_spelling(value))
             return Constant._format_int(value)
         if isinstance(ty, (FloatType, DoubleType, HalfType)):
             # Do not coerce with ``value * 1.0``: during self-host this path can

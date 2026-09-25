@@ -12,7 +12,17 @@ from pcc.python_target import (
     PYTHON_TARGET_VERSION_INFO,
 )
 
-from ..py_ast import Attr, BoolLit, Call, Expr, Name, StrLit, StrType
+from ..py_ast import (
+    Attr,
+    BoolLit,
+    Call,
+    DynType,
+    Expr,
+    Name,
+    Raise,
+    StrLit,
+    StrType,
+)
 from . import marshal
 from .layer1_support import _native_stdlib_semantic_provider
 
@@ -488,6 +498,10 @@ class NativeSystemLoweringMixin:
         present (otherwise we'd need a runtime helper to read their bytes).
         Other kwargs trigger fallback.
         """
+        if self._has_starred_unpack(call.args):
+            # ``print(*items, file=sys.stderr)``: the per-arg loop below would
+            # evaluate the splat marker itself; the tuple path expands it.
+            return False
         file_expr = None
         sep_expr = None
         end_expr = None
@@ -555,15 +569,30 @@ class NativeSystemLoweringMixin:
             kind = self._native_builtin_value_kind_for_expr(expr.func)
         if kind != "sys.exit":
             return None
-        code_i64 = ir.Constant(_I64, 0)
-        if len(expr.args) == 1:
-            code_val = self._emit_expr(expr.args[0])
-            code_i64 = self._to_int64(code_val, expr.args[0].ty)
-        self.builder.call(
-            self.runtime["py_process_exit"],
-            [code_i64],
+        # ``sys.exit(code)`` raises ``SystemExit(code)`` as in CPython, so
+        # ``finally`` blocks run and ``except SystemExit`` can catch it; an
+        # uncaught one exits with its code (``py_exc_handle_uncaught``).
+        # Exiting the process directly also mangled non-int codes.
+        span = getattr(expr, "span", None)
+        dyn = DynType(name="dyn")
+        self._emit_raise(
+            Raise(
+                span=span,
+                exc=Call(
+                    span=span,
+                    ty=dyn,
+                    func=Name(span=span, ty=dyn, ident="SystemExit"),
+                    args=tuple(expr.args),
+                    kwargs=(),
+                ),
+                cause=None,
+            )
         )
-        return ir.Constant(_CSTR, None)
+        after = self.current_function.append_basic_block(
+            name=self._fresh("sys.exit.after")
+        )
+        self.builder.position_at_end(after)
+        return self._emit_none_literal()
 
     def _declare_strlen(self) -> ir.Function:
         fn = self.module.globals.get("strlen")

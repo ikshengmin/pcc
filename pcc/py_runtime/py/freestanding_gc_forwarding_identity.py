@@ -317,6 +317,10 @@ def pcc_gc_identity_ensure(obj: c_ptr) -> c_ptr:
 def pcc_gc_identity_detach(obj: c_ptr) -> c_ptr:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return null()
+    # Every indexed identity node is linked from the head, so an empty list
+    # means an empty index: skip the probe every object free used to pay.
+    if ptr_is_null(global_load_ptr("pcc_gc_identity_head")) != 0:
+        return null()
     node = pcc_gc_identity_index_remove(obj)
     if ptr_is_null(node) != 0:
         return null()

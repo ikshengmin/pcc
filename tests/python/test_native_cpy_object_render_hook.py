@@ -31,7 +31,6 @@ def _compile_auto(monkeypatch, src: Path, exe: Path) -> None:
     looked up via CPython).  Self backend + ir-scaffold=on stays
     consistent with the rest of the suite.
     """
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     compile_python(

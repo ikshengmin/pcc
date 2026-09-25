@@ -7,7 +7,7 @@ Orchestrates the full pipeline for a single ``.py`` file:
       -> pcc.py_frontend.type_infer.infer_module() -> typed Module
       -> pcc.py_frontend.codegen.layer1.L1CodeGen().generate() -> LLVM IR text
       -> write .ll to a temp file
-      -> clang .ll + pcc/py_runtime/libpy_runtime.a -> native exe
+      -> link .o + pcc/py_runtime/libpy_runtime_pcc_py.a -> native exe
 
 This is the Phase 1 MVP dispatcher. See
 ``docs/plans/python-frontend-interfaces.md`` for the frozen v0.1
@@ -327,19 +327,6 @@ if os.environ.get("PCC_DEBUG_RUNTIME", "").strip():
             )
     except Exception:
         pass
-_PY_RUNTIME_ARCHIVE = str(os.path.join(_PY_RUNTIME_DIR, "libpy_runtime.a"))
-_PY_RUNTIME_ARCHIVE_LIBPYTHON = str(
-    os.path.join(
-        _PY_RUNTIME_DIR,
-        "libpy_runtime_libpython.a",
-    )
-)
-_PY_RUNTIME_ARCHIVE_PCC = str(
-    os.path.join(
-        _PY_RUNTIME_DIR,
-        "libpy_runtime_pcc.a",
-    )
-)
 _PY_RUNTIME_ARCHIVE_PCC_PY = str(
     os.path.join(
         _PY_RUNTIME_DIR,
@@ -388,8 +375,6 @@ _PY_FRONTEND_WORKER_MANIFEST_V2 = "pcc.py_frontend.codegen_worker.v2"
 _PY_FRONTEND_WORKER_MANIFEST_V3 = "pcc.py_frontend.codegen_worker.v3"
 _PY_FRONTEND_WORKER_MANIFEST_V4 = "pcc.py_frontend.codegen_worker.v4"
 _PY_FRONTEND_AST_WIRE_ENV = "PCC_PY_FRONTEND_AST_WIRE"
-_PY_RUNTIME_CC_ENV = "PCC_RUNTIME_CC"
-_PY_RUNTIME_HIGH_ENV = "PCC_RUNTIME_HIGH"
 _PY_RUNTIME_ARCHIVE_ENV = "PCC_RUNTIME_ARCHIVE"
 _PY_RUNTIME_DIR_ENV = "PCC_RUNTIME_DIR"
 _GPU_BACKEND_ENV = _pipeline_modes.GPU_BACKEND_ENV
@@ -702,16 +687,7 @@ def _runtime_archive_stale(archive: str) -> bool:
         archive_codegen_stale=_runtime_archive_codegen_stale,
         wheel_matches=_runtime_archive_wheel_stamp_matches,
         compiler_sources_newer=_runtime_archive_compiler_sources_newer_than,
-        replaced_c_modules=_runtime_pcc_python_replaced_c_modules,
     )
-
-
-def _runtime_makefile_variable_words(name: str) -> list[str]:
-    return _pipeline_runtime_archive.makefile_variable_words(_PY_RUNTIME_DIR, name)
-
-
-def _runtime_pcc_python_replaced_c_modules() -> set[str]:
-    return _pipeline_runtime_archive.pcc_python_replaced_c_modules(_PY_RUNTIME_DIR)
 
 
 def _runtime_archive_compiler_sources_newer_than(
@@ -817,18 +793,6 @@ def _run_runtime_make(make_cmd, *, verbose: bool) -> None:
     )
 
 
-def _runtime_cc_mode() -> str:
-    return _pipeline_runtime_archive.cc_mode(
-        str(os.environ.get(_PY_RUNTIME_CC_ENV, "") or "")
-    )
-
-
-def _runtime_high_mode() -> str:
-    return _pipeline_runtime_archive.high_mode(
-        str(os.environ.get(_PY_RUNTIME_HIGH_ENV, "") or "")
-    )
-
-
 def _runtime_host_python_for_make() -> str:
     return _pipeline_runtime_archive.host_python_for_make(_host_python_command())
 
@@ -843,14 +807,9 @@ def _ensure_runtime(
             verbose,
             needs_libpython=needs_libpython,
             runtime_dir_default=_PY_RUNTIME_DIR,
-            archive_default=_PY_RUNTIME_ARCHIVE,
-            archive_libpython=_PY_RUNTIME_ARCHIVE_LIBPYTHON,
-            archive_pcc=_PY_RUNTIME_ARCHIVE_PCC,
             archive_pcc_py=_PY_RUNTIME_ARCHIVE_PCC_PY,
             archive_pcc_py_libpython=_PY_RUNTIME_ARCHIVE_PCC_PY_LIBPYTHON,
             archive_stale_check=_runtime_archive_stale,
-            selected_cc_mode=_runtime_cc_mode,
-            selected_high_mode=_runtime_high_mode,
             c_bundle_valid=_runtime_archive_c_bundle_valid,
             archive_requires_provenance=_runtime_archive_requires_provenance,
             archive_provenance_valid=_runtime_archive_provenance_valid,
@@ -892,7 +851,7 @@ def _ensure_runtime_without_direct_indexed_env(verbose: bool) -> str:
 
 
 def _resolve_pcc_binary() -> Optional[str]:
-    """Locate the pcc CLI binary for PCC_RUNTIME_CC=pcc builds."""
+    """Locate the pcc CLI binary that builds the pcc-Python runtime archive."""
     env_override = str(os.environ.get("PCC_BINARY", "") or "").strip()
     if env_override:
         return env_override
@@ -1562,18 +1521,30 @@ def _default_self_link_mode() -> str:
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
 
 
-def _resolve_self_link_mode() -> str:
+def _resolve_self_link_mode(
+    *,
+    needs_libpython: bool = False,
+    needs_native_extension_exports: bool = False,
+    extra_link_args: tuple[str, ...] = (),
+) -> str:
     """Return the selected self-link implementation, rejecting typos.
 
     Darwin arm64 owns the accepted pcc default. Other hosts retain cc because
     this Mach-O route does not own their output format. Once the variable is
     present, only explicit ``cc`` (oracle/fallback) and ``pcc`` are accepted;
     arbitrary text must not turn a misspelled owner selection into cc output.
+
+    The pcc default covers only what the owned linker implements
+    (``validate_pcc_self_link_surface``): a build that needs libpython,
+    native-extension export anchors or extra link arguments defaults to cc.
+    An explicit ``PCC_SELF_LINK=pcc`` for such a build still fails closed.
     """
     value = os.environ.get("PCC_SELF_LINK", "")
     default_mode = "cc"
     if not str(value or "").strip():
         default_mode = _default_self_link_mode()
+        if needs_libpython or needs_native_extension_exports or extra_link_args:
+            default_mode = "cc"
     try:
         return _pipeline_self_link.normalize_self_link_mode(
             value,
@@ -1600,7 +1571,11 @@ def _validate_pcc_self_link_surface(
     """
     try:
         _pipeline_self_link.validate_pcc_self_link_surface(
-            _resolve_self_link_mode(),
+            _resolve_self_link_mode(
+                needs_libpython=needs_libpython,
+                needs_native_extension_exports=needs_native_extension_exports,
+                extra_link_args=extra_link_args,
+            ),
             extra_link_args=extra_link_args,
             needs_libpython=needs_libpython,
             needs_native_extension_exports=needs_native_extension_exports,
@@ -1778,7 +1753,11 @@ def _link_with_self_backend_assembly_texts(
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
     )
-    signature_owned_by_pcc = _resolve_self_link_mode() == "pcc"
+    signature_owned_by_pcc = _resolve_self_link_mode(
+        needs_libpython=needs_libpython,
+        needs_native_extension_exports=needs_native_extension_exports,
+        extra_link_args=extra_link_args,
+    ) == "pcc"
     export_pcc_capi = needs_native_extension_exports and not needs_libpython
     with tempfile.TemporaryDirectory(prefix="pcc_py_direct_asm_") as tmp:
         asm_paths = []

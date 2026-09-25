@@ -305,7 +305,7 @@ def test_pcc1_native_libpython_scan_parity_with_host_patterns():
     Regression for BUG-P1-PCC1-LINKAGE-SCANNER-FALSE-LIBPYTHON-EDGE: the
     native substring scan in cli_bootstrap flagged pcc's own runtime
     diagnostic literal ``[pcc-native/no-libpython]`` (embedded in every
-    artifact that links libpy_runtime.a) as a libpython edge, failing every
+    artifact that links the pcc runtime) as a libpython edge, failing every
     pcc-native artifact under a pcc1-run build-exec/linkage scan.
     """
     from pcc.cli_bootstrap import (

@@ -5,7 +5,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_c_runtime, cached_threaded_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime, cached_threaded_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
@@ -18,8 +18,8 @@ def _cc() -> str:
 def _build_runtime(tmp_path: Path, *, with_threads: bool = False) -> Path:
     del tmp_path
     if with_threads:
-        return cached_threaded_c_runtime()
-    return cached_c_runtime()
+        return cached_threaded_pcc_python_runtime()
+    return cached_pcc_python_runtime()
 
 
 def _compile_and_run(tmp_path: Path, source: str, *, with_threads: bool = False):
@@ -36,7 +36,7 @@ def _compile_and_run(tmp_path: Path, source: str, *, with_threads: bool = False)
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),
@@ -749,7 +749,6 @@ def test_virtual_thread_typed_resume_and_persistent_pool_pin_blocking(tmp_path):
 
 def test_coroutine_root_public_symbols_are_wired():
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(encoding="utf-8")
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     registry_src = (
         RUNTIME_DIR / "py" / "freestanding_gc_root_registry.py"
@@ -769,9 +768,6 @@ def test_coroutine_root_public_symbols_are_wired():
     assert "pcc_gc_scheduler_root_count" in header
     assert "pcc_gc_scheduler_root_register_handle" in header
     assert "pcc_gc_scheduler_root_unregister_handle" in header
-    assert "PCC_GC_SCHEDULER_QUEUE_ENTRY_POOL_LIMIT" in c_src
-    assert "free_head" in c_src
-    assert "pcc_gc_scheduler_queue_entry_recycle" in c_src
     assert "pcc_gc_register_continuation_root" in header
     assert "pcc_gc_rewrite_continuation_roots" in header
     assert "PY_TYPE_CONTINUATION" in header
@@ -797,12 +793,6 @@ def test_coroutine_root_public_symbols_are_wired():
     assert "py_virtual_thread_pin_enter" in header
     assert "py_threading_lock_acquire_vthread" in header
     assert "py_threading_event_wait_vthread" in header
-    assert "py_dealloc_continuation" in c_src
-    assert "pcc_vthread_ready_queue" in (
-        RUNTIME_DIR / "src" / "pcc_threads.c"
-    ).read_text(encoding="utf-8")
-    assert "pcc_gc_frame_root_slot_count" in c_src
-    assert "pcc_gc_continuation_root_slot_count" in c_src
     assert '@c_abi_export("pcc_gc_scheduler_root_count")' in introspection_src
     assert (
         '@c_abi_export("pcc_gc_continuation_root_slot_count")'

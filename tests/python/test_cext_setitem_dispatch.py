@@ -169,11 +169,8 @@ def _compile_extension(tmp_path: Path) -> Path:
     return site
 
 
-@pytest.mark.parametrize("runtime_kind", ["port", "cc"])
 def test_cext_mapping_assignment_for_vander_shaped_keys(
     tmp_path,
-    runtime_kind,
-    c_runtime_archive,
     pcc_py_runtime_archive,
 ):
     site = _compile_extension(tmp_path)
@@ -189,14 +186,8 @@ def test_cext_mapping_assignment_for_vander_shaped_keys(
     # rejects until it implements that public link surface.  Select the system
     # linker explicitly so this regression remains about runtime slot dispatch.
     env["PCC_SELF_LINK"] = "cc"
-    if runtime_kind == "cc":
-        env["PCC_RUNTIME_CC"] = "cc"
-        env["PCC_RUNTIME_HIGH"] = "c"
-        env["PCC_RUNTIME_ARCHIVE"] = str(c_runtime_archive)
-    else:
-        env["PCC_RUNTIME_CC"] = "pcc"
-        env["PCC_RUNTIME_HIGH"] = "py"
-        env["PCC_RUNTIME_ARCHIVE"] = str(pcc_py_runtime_archive)
+    env["PCC_RUNTIME_CC"] = "pcc"
+    env["PCC_RUNTIME_ARCHIVE"] = str(pcc_py_runtime_archive)
 
     compile_proc = subprocess.run(
         [

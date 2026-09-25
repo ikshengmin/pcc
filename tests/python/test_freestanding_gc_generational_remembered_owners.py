@@ -21,7 +21,6 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 SCHEDULER_SOURCE = (
     RUNTIME_DIR / "py" / "freestanding_gc_generational_scheduler.py"
 )
-C_RUNTIME_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
 
 OWNED_SYMBOLS = {
     "pcc_gc_backend3_clear_remembered_owners",
@@ -104,13 +103,11 @@ def test_remembered_owner_node_retirement_finishes_after_graph_unlock() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     scheduler = SCHEDULER_SOURCE.read_text(encoding="utf-8")
     managed = MANAGED_SOURCE.read_text(encoding="utf-8")
-    c_src = C_RUNTIME_SOURCE.read_text(encoding="utf-8")
 
     finish_symbol = "pcc_gc_backend3_finish_detached_remembered_owners"
     assert finish_symbol in strict
     assert finish_symbol in scheduler
     assert finish_symbol in managed
-    assert finish_symbol in c_src
 
     strict_clear = _export_body(
         strict, "pcc_gc_backend3_clear_remembered_owners"
@@ -120,33 +117,6 @@ def test_remembered_owner_node_retirement_finishes_after_graph_unlock() -> None:
     )
     assert "free(" not in strict_clear
     assert "free(" not in strict_drain
-
-    c_clear = c_src.rsplit(
-        "pcc_gc_backend3_remembered_owners_clear_unlocked(void)", 1
-    )[1].split(
-        "static void pcc_gc_backend3_finish_detached_remembered_owners", 1
-    )[0]
-    c_drain = c_src.split(
-        "static int64_t pcc_gc_backend3_drain_remembered_owners", 1
-    )[1].split("static void pcc_gc_promote_tls_exception_root", 1)[0]
-    assert "free(" not in c_clear
-    assert "free(" not in c_drain
-
-    c_step = c_src.rsplit(
-        "static int64_t pcc_gc_step_generational_promotion", 1
-    )[1].split("static int64_t pcc_gc_step_colored_remembered_roots", 1)[0]
-    c_drain_at = c_step.index("pcc_gc_backend3_drain_remembered_owners")
-    c_unlock_at = c_step.index("pcc_gc_graph_unlock();", c_drain_at)
-    assert c_unlock_at < c_step.index(finish_symbol, c_unlock_at)
-
-    c_telemetry = c_src.split("void pcc_gc_telemetry_reset", 1)[1].split(
-        "int64_t pcc_gc_counter", 1
-    )[0]
-    c_clear_at = c_telemetry.index(
-        "pcc_gc_backend3_remembered_owners_clear_unlocked"
-    )
-    c_unlock_at = c_telemetry.index("pcc_gc_graph_unlock();", c_clear_at)
-    assert c_unlock_at < c_telemetry.index(finish_symbol, c_unlock_at)
 
     strict_step = _export_body(scheduler, "pcc_gc_generational_step")
     strict_drain_at = strict_step.index(
@@ -172,7 +142,6 @@ def test_remembered_owner_node_retirement_finishes_after_graph_unlock() -> None:
 def test_generational_locked_step_caps_work_without_safepointing() -> None:
     strict_owners = STRICT_SOURCE.read_text(encoding="utf-8")
     strict_scheduler = SCHEDULER_SOURCE.read_text(encoding="utf-8")
-    c_src = C_RUNTIME_SOURCE.read_text(encoding="utf-8")
 
     strict_scan = _export_body(
         strict_owners, "pcc_gc_backend3_scan_remembered_owners"
@@ -191,23 +160,6 @@ def test_generational_locked_step_caps_work_without_safepointing() -> None:
     assert strict_unlock_at < strict_step.index(
         "pcc_thread_safepoint", strict_unlock_at
     )
-
-    c_scan = c_src.split(
-        "static int64_t pcc_gc_backend3_scan_remembered_owners", 1
-    )[1].split("static int64_t pcc_gc_backend3_drain_remembered_owners", 1)[0]
-    c_drain = c_src.split(
-        "static int64_t pcc_gc_backend3_drain_remembered_owners", 1
-    )[1].split("static void pcc_gc_promote_tls_exception_root", 1)[0]
-    assert "pcc_thread_safepoint" not in c_scan
-    assert "pcc_thread_safepoint" not in c_drain
-
-    c_step = c_src.rsplit(
-        "static int64_t pcc_gc_step_generational_promotion", 1
-    )[1].split("static int64_t pcc_gc_step_colored_remembered_roots", 1)[0]
-    c_unlock_at = c_step.index("pcc_gc_graph_unlock();")
-    assert "pcc_thread_safepoint" not in c_step[:c_unlock_at]
-    assert "batch_budget = PCC_GC_SAFEPOINT_BATCH" in c_step
-    assert c_unlock_at < c_step.index("pcc_thread_safepoint", c_unlock_at)
 
 
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
@@ -321,7 +273,6 @@ def test_generational_remembered_overflow_scan_has_restartable_cursors() -> None
     state = (RUNTIME_DIR / "py" / "freestanding_gc_state.py").read_text(
         encoding="utf-8"
     )
-    c_src = C_RUNTIME_SOURCE.read_text(encoding="utf-8")
 
     strict_remember = _export_body(strict, "pcc_gc_backend3_remember_owner")
     strict_scan = _export_body(
@@ -346,24 +297,6 @@ def test_generational_remembered_overflow_scan_has_restartable_cursors() -> None
         'define_global_ptr_null("pcc_gc_backend3_remembered_scan_cursor")',
     ):
         assert declaration in state
-
-    c_scan = c_src.split(
-        "static int64_t pcc_gc_backend3_scan_remembered_owners", 1
-    )[1].split(
-        "static int64_t pcc_gc_backend3_drain_remembered_owners", 1
-    )[0]
-    c_unlink = c_src.split("static void pcc_gc_object_node_unlink", 1)[1].split(
-        "#define PCC_GC_OBJECT_NODE_FREE_LIMIT", 1
-    )[0]
-    assert "pcc_gc_backend3_remembered_owner_allocation_limit" in c_src
-    assert "pcc_gc_backend3_remembered_scan_cursor" in c_scan
-    assert "pcc_gc_backend3_remembered_scan_revision" in c_scan
-    assert "pcc_gc_object_list_revision" in c_scan
-    assert "examined < budget" in c_scan
-    assert c_unlink.index("pcc_gc_backend3_remembered_scan_cursor") < (
-        c_unlink.index("pcc_gc_backend3_young_unlink(n)")
-    )
-    assert "pcc_gc_object_list_revision" in c_unlink
 
 
 def test_production_archive_has_one_generational_remembered_owner_provider(

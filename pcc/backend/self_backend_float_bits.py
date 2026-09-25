@@ -16,12 +16,25 @@ from pcc.stdlib._float_bits import (
 )
 
 
-def float64_to_bits(value: float) -> int:
+def float64_to_bits(value: float):
+    # uint64, so unannotated: see ``_float64_to_bits``.
     return _float64_to_bits(value)
 
 
-def bits_to_float64(bits: int) -> float:
+def bits_to_float64(bits) -> float:
     return _bits_to_float64(bits)
+
+
+def u64_as_i64(bits) -> int:
+    """The signed i64 with the same 64 bits as the uint64 ``bits``.
+
+    Register materialization (``emit_const_to_reg*``) takes an i64-lane
+    ``value``; a double's pattern at or above 2**63 must be passed in its
+    two's-complement spelling, which the movz/movk chunking already handles.
+    """
+    if bits >= (1 << 63):
+        return bits - (1 << 64)
+    return bits
 
 
 def float32_to_bits(value: float) -> int:

@@ -9,7 +9,7 @@ import sys
 import pytest
 
 from pcc.py_frontend.pipeline import compile_python
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 @pytest.fixture
@@ -18,12 +18,10 @@ def int_object_runtime(monkeypatch):
     archive = (
         Path(configured)
         if configured and os.environ.get("PCC_RUNTIME_HIGH") == "c"
-        else cached_c_runtime() / "libpy_runtime.a"
+        else cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
     )
     assert archive.is_file()
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(archive))
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
 
 
 MINIMAL = """def object_local(value: object) -> object:

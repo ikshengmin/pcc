@@ -470,7 +470,9 @@ def pcc_gc_release(o) -> None:
     if backend == 3:
         if _gc_relocation_candidate(o) != 0:
             resolved = pcc_gc_note_relocation_read(o)
-            if resolved != o:
+            # Identity, not ``!=``: a value comparison retains both operands
+            # and drops them through this very function, recursing forever.
+            if ptr_eq(resolved, o) == 0:
                 py_decref(o)
                 return
     elif backend == 4:
@@ -698,6 +700,10 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
             value = pcc_gc_note_relocation_read(value)
     _py_incref_prepare(value, plan)
+    if load_i64(plan, 48) != 0:
+        # Debug-invalid value: the store note and the deferred diagnostic
+        # run, but no slot publication or old-value release occurs.
+        return 0
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
         pcc_gc_note_slot_write_barrier(
             owner, slot, load_ptr(plan, 0)
@@ -756,6 +762,8 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
             ):
                 value = pcc_gc_note_relocation_read(value)
         _py_incref_prepare(value, plan)
+        if load_i64(plan, 48) != 0:
+            return 0
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
         pcc_gc_note_slot_write_barrier(owner, slot, load_ptr(plan, 0))
     old = load_ptr(slot, 0)
@@ -1168,6 +1176,7 @@ def pcc_gc_immortalize(o) -> None:
 
 
 _pcc_debug_bad_incref = extern("pcc_debug_bad_incref", (c_ptr, c_int32), c_void)
+_pcc_debug_runtime_enabled = extern("pcc_debug_runtime_enabled_py", (), c_int64)
 
 
 def _py_refcount_prepared_reset(prepared, o) -> None:
@@ -1207,6 +1216,11 @@ def _py_incref_prepare(o, prepared) -> None:
         or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER)
         or (tag >= (0x10000) and pcc_capi_is_cext_type_tag(tag) == 0)
     ):
+        if _pcc_debug_runtime_enabled() != 0:
+            # Debug-invalid value: a store plan must not publish it, and the
+            # diagnostic runs from finish once the caller dropped its lock.
+            store_i64(prepared, 8, tag)
+            store_i64(prepared, 48, 1)
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (backend == 1 or backend == 2) and flags == 0:
@@ -1250,6 +1264,9 @@ def _py_incref_prepare(o, prepared) -> None:
 
 
 def _py_incref_finish(prepared) -> None:
+    if load_i64(prepared, 48) != 0:
+        _pcc_debug_bad_incref(load_ptr(prepared, 0), load_i64(prepared, 8))
+        return
     if load_i64(prepared, 40) == 0:
         return
     if load_i32(global_addr("pcc_runtime_log_fast_state"), 0) != 0:

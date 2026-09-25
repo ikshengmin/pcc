@@ -1,7 +1,7 @@
 """Freestanding pcc-Python virtual-thread IO waitset."""
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_abi_typed_export
+from pcc.extern import c_abi_export, c_abi_typed_export, c_ptr
 from pcc.unsafe import (
     clock_gettime,
     define_global_i64,

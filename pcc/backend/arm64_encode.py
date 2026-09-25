@@ -105,6 +105,16 @@ def _imm(tok: str) -> int:
     return int(t[1:], 0)
 
 
+def _imm_exact(tok: str):
+    # A bitmask immediate is a 64-bit pattern (``#0x8000000000000000``); the
+    # unannotated return keeps it exact instead of an i64 lane, which raised
+    # (formerly zeroed) in pcc's own build.
+    t = tok.strip().rstrip(",")
+    if not t.startswith("#"):
+        raise EncodeError(f"expected immediate, got {tok!r}")
+    return int(t[1:], 0)
+
+
 def _fp_imm8(tok: str) -> int:
     """Encode the direct FP literals emitted by the self backend.
 
@@ -209,8 +219,26 @@ def _mem(tok: str) -> tuple[int, int, str]:
 # --- bitmask (logical) immediates -------------------------------------------
 
 
-def _logical_imm(value: int, is64: bool) -> tuple[int, int, int]:
-    """Encode a bitmask immediate -> (N, immr, imms); EncodeError if impossible."""
+_LOGICAL_IMM_CACHE: dict = {}
+
+
+def _logical_imm(value, is64: bool) -> tuple[int, int, int]:
+    """Encode a bitmask immediate -> (N, immr, imms); EncodeError if impossible.
+
+    ``value`` is unannotated: a 64-bit pattern with the top bit set does not
+    fit pcc's i64 lane.  The exact arithmetic is memoized -- a module repeats
+    a handful of masks thousands of times.
+    """
+    key = (value, is64)
+    cached = _LOGICAL_IMM_CACHE.get(key)
+    if cached is not None:
+        return cached
+    encoded = _logical_imm_uncached(value, is64)
+    _LOGICAL_IMM_CACHE[key] = encoded
+    return encoded
+
+
+def _logical_imm_uncached(value, is64: bool) -> tuple[int, int, int]:
     size = 64 if is64 else 32
     mask = (1 << size) - 1
     value &= mask
@@ -1232,6 +1260,8 @@ def append_emitted_instruction_record(
         fixed_word = 0xD503233F
     elif line == "  autiasp":
         fixed_word = 0xD50323BF
+    elif line == "  bti c":
+        fixed_word = 0xD503245F
     if fixed_word >= 0:
         records.append4(
             line_index, fixed_word, STRUCTURED_RELOCATION_NONE, -1
@@ -2721,6 +2751,8 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         return 0xD503233F
     if mn == "autiasp":
         return 0xD50323BF
+    if mn == "bti" and ops == ["c"]:
+        return 0xD503245F
 
     if mn in ("add", "sub", "adds", "subs"):
         op_sub = 1 if mn.startswith("sub") else 0
@@ -2766,7 +2798,7 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         if ops[2].startswith("#"):
             if mn != "and":
                 raise EncodeError(f"{mn} immediate not in the proven subset")
-            n_bit, immr, imms = _logical_imm(_imm(ops[2]), d64)
+            n_bit, immr, imms = _logical_imm(_imm_exact(ops[2]), d64)
             return (
                 _sf(d64) | 0x12000000 | (n_bit << 22)
                 | (immr << 16) | (imms << 10) | (rn << 5) | rd

@@ -178,7 +178,7 @@ def runtime_dir_has_runtime_files(path: str) -> bool:
         return False
     include_h = os.path.isfile(os.path.join(path, "include", "py_runtime.h"))
     makefile = os.path.isfile(os.path.join(path, "Makefile"))
-    maybe_lib = os.path.isfile(os.path.join(path, "libpy_runtime.a"))
+    maybe_lib = os.path.isfile(os.path.join(path, "libpy_runtime_pcc_py.a"))
     return include_h or makefile or maybe_lib
 
 

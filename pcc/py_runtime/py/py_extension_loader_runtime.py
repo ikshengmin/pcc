@@ -26,6 +26,7 @@ from pcc.unsafe import (
     memcpy,
     null,
     ptr_add,
+    ptr_eq,
     ptr_is_null,
     stack_alloc,
     store_i8,
@@ -169,10 +170,10 @@ def _register(module_name, path, handle, module):
 def _unregister(node) -> None:
     previous = null()
     current = global_load_ptr("pcc_extension_modules")
-    while ptr_is_null(current) == 0 and current != node:
+    while ptr_is_null(current) == 0 and ptr_eq(current, node) == 0:
         previous = current
         current = load_ptr(current, 32)
-    if current == node:
+    if ptr_eq(current, node) != 0:
         next_node = load_ptr(node, 32)
         if ptr_is_null(previous) != 0:
             global_store_ptr("pcc_extension_modules", next_node)
@@ -401,7 +402,7 @@ def py_native_extension_import_by_name(module_name):
             end = ptr_add(end, 1)
         site_len: int = 0
         cursor = start
-        while cursor != end:
+        while ptr_eq(cursor, end) == 0:
             site_len = site_len + 1
             cursor = ptr_add(cursor, 1)
         if site_len > 0:

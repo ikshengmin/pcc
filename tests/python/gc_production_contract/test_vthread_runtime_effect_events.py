@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 from pcc.runtime_effects import (
     ProductionVThreadEvent,
@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
 @pytest.fixture(scope="module")
 def _runtime_effect_exe(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gc_vthread_runtime_effects")
-    work_runtime = cached_c_runtime()
+    work_runtime = cached_pcc_python_runtime()
     src = tmp / "vthread_runtime_effect_events.c"
     src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")
     exe = tmp / "vthread_runtime_effect_events_bin"
@@ -118,7 +118,7 @@ def _runtime_effect_exe(tmp_path_factory):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),
@@ -188,14 +188,8 @@ def test_production_vthread_effect_path_is_balanced(_runtime_effect_exe, backend
 
 
 def test_production_event_abi_is_bounded_and_public() -> None:
-    source = (RUNTIME_DIR / "src" / "pcc_threads.c").read_text(
-        encoding="utf-8"
-    )
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(
         encoding="utf-8"
     )
-    assert "PCC_VTHREAD_EFFECT_EVENT_CAPACITY" in source
-    assert "py_virtual_thread_effect_count" in source
-    assert "py_virtual_thread_effect_root_delta_at" in source
     assert "py_virtual_thread_effect_count" in header
     assert "PCC_VTHREAD_EFFECT_COMPLETE" in header

@@ -105,7 +105,9 @@ def test_hoist_pass_keeps_analysis_and_boxing_out_of_orchestrator():
     # rewrites raise/del/def-default/class-header reads, respects lambda and
     # comprehension scopes, boxes names a lambda sees rebound (the late-binding
     # scan), and gives lambda-captured comprehension targets per-run cells.
-    assert combined_lines <= 5185
+    # +24: a hoisted closure's captured ``self`` keeps the enclosing method's
+    # inferred type (mixin methods read the host class layout).
+    assert combined_lines <= 5209
 
 
 def test_hoist_exception_handlers_use_stage_safe_field_access():

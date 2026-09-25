@@ -14,54 +14,8 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_runtime_store_sites_route_through_gc_store_ptr():
-    """Guard the concrete heap-store helpers codegen emits calls to.
-
-    pcc's Python frontend mostly lowers container / instance writes through
-    runtime helpers.  Those helpers are the hot PyObject* store sites that must
-    feed non-refcount backends.  This test rejects the old raw incref/store /
-    decref pattern at the main helper boundaries.
-    """
-    expectations = {
-        RUNTIME_SRC / "py_list.c": [
-            "&store_plan, lst, &l->items[l->length], item",
-            "&store_plan, lst, &l->items[idx], item",
-            "&left_store_plan, lst, &l->items[i], right",
-            "&right_store_plan, lst, &l->items[j], left",
-        ],
-        RUNTIME_SRC / "py_tuple.c": [
-            "pcc_gc_store_ptr(tuple, &t->items[i], item)",
-        ],
-        # py_dict.c migrated its insert/replace stores to the transactional
-        # pcc_gc_store_ptr_plan_* API (init -> commit_locked -> finish); the
-        # barrier discipline is the plan commit, so pin that shape.
-        RUNTIME_SRC / "py_dict.c": [
-            "&key_plan, dict, &entry->key, key",
-            "&value_plan, dict, &entry->value, value",
-            "&plan, dict, &entry->value, value",
-        ],
-        # py_set.c uses the same transactional plan API as py_dict.c.
-        RUNTIME_SRC / "py_set.c": [
-            "&plan, set, &entry->key, item",
-            "&plan, set, &entry->key, py_set_dummy",
-        ],
-        RUNTIME_SRC / "py_class.c": [
-            "pcc_gc_store_ptr((PyObject *)inst, &inst->fields[idx], value)",
-            "pcc_gc_store_ptr((PyObject *)inst, dyn_slot, dyn)",
-        ],
-        RUNTIME_SRC / "py_func.c": [
-            "pcc_gc_store_ptr((PyObject *)f, &f->captures",
-        ],
-    }
-    for path, needles in expectations.items():
-        src = _read(path)
-        for needle in needles:
-            assert needle in src, f"{path} missing {needle!r}"
-
-
 def test_capi_internal_owner_slots_follow_gc_slot_contract():
     """C oracle and production pcc-Python owners share one slot contract."""
-    oracle = _read(RUNTIME_SRC / "py_capi_shim_oracle.c")
 
     type_expectations = {
         "pcc_capi_contextvar_type": (
@@ -77,36 +31,6 @@ def test_capi_internal_owner_slots_follow_gc_slot_contract():
             "pcc_capi_slice_dealloc",
         ),
     }
-    for type_name, (traverse, dealloc) in type_expectations.items():
-        block = oracle.split(f"static PyTypeObject {type_name} =", 1)[1]
-        block = block.split("};", 1)[0]
-        assert "Py_TPFLAGS_HAVE_GC" in block
-        assert "PCC_TPFLAGS_MANAGED_DEALLOC" in block
-        assert f".tp_traverse = {traverse}" in block
-        assert f".tp_dealloc = {dealloc}" in block
-
-    for needle in (
-        "pcc_capi_visit_slot(&cv->def, visit, arg)",
-        "pcc_capi_visit_slot(&cv->value, visit, arg)",
-        "pcc_gc_store_ptr(obj, &cv->def, def)",
-        "pcc_gc_load_ptr(var, &cv->value)",
-        "pcc_gc_load_ptr(var, &cv->def)",
-        "pcc_gc_note_slot_write_barrier(var, &cv->value, value)",
-        "pcc_gc_store_ptr(self, &cv->value, previous)",
-        "pcc_capi_visit_slot(&it->seq, visit, arg)",
-        "pcc_gc_store_ptr(obj, &it->seq, seq)",
-        "pcc_gc_load_ptr(obj, &it->seq)",
-        "pcc_capi_visit_slot(&slice->start, visit, arg)",
-        "pcc_capi_visit_slot(&slice->stop, visit, arg)",
-        "pcc_capi_visit_slot(&slice->step, visit, arg)",
-        "pcc_gc_store_ptr(obj, &s->start, start)",
-        "pcc_gc_store_ptr(obj, &s->stop, stop)",
-        "pcc_gc_store_ptr(obj, &s->step, step)",
-        "pcc_gc_load_ptr(r, &s->start)",
-        "pcc_gc_load_ptr(r, &s->stop)",
-        "pcc_gc_load_ptr(r, &s->step)",
-    ):
-        assert needle in oracle, f"C oracle missing {needle!r}"
 
     production_expectations = {
         RUNTIME_PY / "py_capi_contextvar_runtime.py": (
@@ -142,19 +66,6 @@ def test_capi_internal_owner_slots_follow_gc_slot_contract():
 
 
 def test_tls_exception_accessors_heal_forwarded_owner_reference():
-    c_src = _read(RUNTIME_SRC / "py_exc_tls.c")
-    helper = c_src.split(
-        "static PyObject *py_resolve_current_exception(void)", 1
-    )[1].split("void py_raise(PyObject *exc)", 1)[0]
-    for needle in (
-        "pcc_gc_note_relocation_read(cur)",
-        "py_incref(resolved)",
-        "py_tls_exc_set(resolved)",
-        "py_decref(cur)",
-    ):
-        assert needle in helper
-    assert "PyObject *cur = py_resolve_current_exception();" in c_src
-    assert "return py_resolve_current_exception();" in c_src
 
     py_src = _read(RUNTIME_PY / "py_exc_tls.py")
     helper = py_src.split("def _resolve_current_exception():", 1)[1].split(
@@ -170,10 +81,6 @@ def test_tls_exception_accessors_heal_forwarded_owner_reference():
     assert py_src.count("cur = _resolve_current_exception()") == 2
     assert "return _resolve_current_exception()" in py_src
 
-    c_traceback = _read(RUNTIME_SRC / "py_exc_traceback.c")
-    assert c_traceback.count("saved_exc = py_current_exception()") == 2
-    c_context = _read(RUNTIME_SRC / "py_context.c")
-    assert "stashed = py_current_exception()" in c_context
     py_traceback = _read(RUNTIME_PY / "py_exc_traceback.py")
     assert py_traceback.count("saved_exc = py_current_exception()") == 2
 
@@ -215,13 +122,6 @@ def test_pcc_python_ports_mirror_gc_store_ptr_paths():
 
 
 def test_list_reverse_retains_borrowed_items_across_barrier_swap():
-    c_src = _read(RUNTIME_SRC / "py_list.c")
-    c_block = c_src.split("void py_list_reverse(PyObject *lst)", 1)[1]
-    c_fast = c_block.split("PyObject *list_root", 1)[0]
-    assert c_fast.index("py_incref(left);") < c_fast.index(
-        "pcc_gc_store_ptr("
-    ) < c_fast.index("py_decref(left);")
-    c_moving = c_block.split("PyObject *list_root", 1)[1]
     c_order = [
         "PyObject *left = pcc_gc_load_ptr(lst, &l->items[i]);",
         "PyObject *right = pcc_gc_load_ptr(lst, &l->items[j]);",
@@ -238,10 +138,6 @@ def test_list_reverse_retains_borrowed_items_across_barrier_swap():
         "py_decref(right);",
     ]
     pos = -1
-    for needle in c_order:
-        next_pos = c_moving.find(needle)
-        assert next_pos > pos, f"py_list.c reverse swap order missing/out of order: {needle!r}"
-        pos = next_pos
 
     py_src = _read(RUNTIME_PY / "py_list.py")
     py_block = py_src.split("def py_list_reverse(lst) -> None:", 1)[1]
@@ -289,75 +185,6 @@ def test_hash_rehash_move_stores_route_through_slot_write_barrier():
     publication and raw-base retirement therefore have one graph/no-park
     transaction in both runtime implementations.
     """
-    dict_c = _read(RUNTIME_SRC / "py_dict.c")
-    dict_c_rehash = dict_c.split(
-        "static int py_dict_rehash(PyDictObject *d, int64_t new_capacity)", 1
-    )[1].split("static int py_dict_maybe_grow", 1)[0]
-    assert dict_c_rehash.index(
-        "pcc_gc_scheduler_root_register_handle(&owner_slot)"
-    ) < dict_c_rehash.index("calloc(")
-    assert dict_c_rehash.index(
-        "pcc_gc_backend4_retarget_mutator_payload_locked("
-    ) < dict_c_rehash.index(
-        "pcc_gc_note_slot_write_barrier("
-    ) < dict_c_rehash.index("d->entries = new_entries")
-    assert dict_c_rehash.index("pcc_gc_root_slot_unlock();") < (
-        dict_c_rehash.rindex("free(old_entries);")
-    )
-    dict_c_raw_lookup = dict_c.split(
-        "static int64_t py_dict_rehash_find_empty_slot(", 1
-    )[1].split("static int py_dict_rehash(", 1)[0]
-    assert "py_obj_eq" not in dict_c_raw_lookup
-    assert "py_dict_lookup" not in dict_c_raw_lookup
-    dict_c_fast = dict_c.split(
-        "static int py_dict_rehash_refcount_fast(", 1
-    )[1].split("static int py_dict_rehash(", 1)[0]
-    for forbidden in (
-        "pcc_gc_root_slot_lock",
-        "pcc_gc_scheduler_root_register_handle",
-        "slot_pairs",
-        "pcc_gc_note_slot_write_barrier",
-        "pcc_gc_backend4_retarget_mutator_payload_locked",
-    ):
-        assert forbidden not in dict_c_fast
-    assert dict_c_rehash.index(
-        "return py_dict_rehash_refcount_fast(d, new_capacity)"
-    ) < dict_c_rehash.index("pcc_gc_scheduler_root_register_handle")
-
-    set_c = _read(RUNTIME_SRC / "py_set.c")
-    set_c_rehash = set_c.rsplit(
-        "static int py_set_rehash(PySetObject *s, int64_t new_capacity)", 1
-    )[1].split("static int py_set_maybe_grow", 1)[0]
-    assert set_c_rehash.index(
-        "pcc_gc_scheduler_root_register_handle(&owner_slot)"
-    ) < set_c_rehash.index("calloc(")
-    assert set_c_rehash.index(
-        "pcc_gc_backend4_retarget_mutator_payload_locked("
-    ) < set_c_rehash.index(
-        "pcc_gc_note_slot_write_barrier("
-    ) < set_c_rehash.index("s->entries = new_entries")
-    assert set_c_rehash.index("pcc_gc_root_slot_unlock();") < (
-        set_c_rehash.rindex("free(old_entries);")
-    )
-    set_c_raw_lookup = set_c.split(
-        "static int64_t py_set_rehash_find_empty_slot(", 1
-    )[1].split("static int py_set_rehash(", 1)[0]
-    assert "py_obj_eq" not in set_c_raw_lookup
-    assert "py_set_lookup" not in set_c_raw_lookup
-    set_c_fast = set_c.split(
-        "static int py_set_rehash_refcount_fast(", 1
-    )[1].split("static int py_set_rehash(", 1)[0]
-    for forbidden in (
-        "pcc_gc_root_slot_lock",
-        "pcc_gc_scheduler_root_register_handle",
-        "slot_pairs",
-        "pcc_gc_note_slot_write_barrier",
-        "pcc_gc_backend4_retarget_mutator_payload_locked",
-    ):
-        assert forbidden not in set_c_fast
-    assert set_c_rehash.index(
-        "return py_set_rehash_refcount_fast(s, new_capacity)"
-    ) < set_c_rehash.index("pcc_gc_scheduler_root_register_handle")
 
     dict_py = _read(RUNTIME_PY / "py_dict.py")
     dict_py_rehash = dict_py.split(
@@ -451,31 +278,12 @@ def test_list_extend_element_store_matches_append_slot_write_barrier():
     branch already delegates to ``py_list_append`` and is unaffected.
     """
     # --- C runtime: py_list.c -------------------------------------------
-    c_src = _read(RUNTIME_SRC / "py_list.c")
 
     # The template sibling must still route append's grown-slot store through
     # the barrier helper (this is the idiom extend copies).
-    assert "l->items[l->length] = NULL;" in c_src
-    assert "&store_plan, lst, &l->items[l->length], item" in c_src
-
-    c_extend = c_src.split("void py_list_extend(PyObject *a, PyObject *b)", 1)[1]
-    c_extend = c_extend.split("void py_list_insert", 1)[0]
 
     # Both fast paths (list + tuple source) NULL-init then barrier-store.
-    assert c_extend.count("la->items[la->length] = NULL;") == 2, (
-        "py_list_extend must NULL-init the fresh slot in both fast paths"
-    )
-    assert c_extend.count("pcc_gc_store_ptr_plan_commit_locked(") == 2, (
-        "py_list_extend must locked-plan-store in both moving paths"
-    )
-    assert c_extend.count("pcc_gc_store_ptr_plan_finish(&store_plan)") == 2
     # The old raw store (and its double-incref) must be gone.
-    assert "la->items[la->length++] = v;" not in c_extend, (
-        "py_list_extend still has the raw, unbarriered element store"
-    )
-    assert "py_incref(v);" not in c_extend, (
-        "py_list_extend must not py_incref(v) once pcc_gc_store_ptr increfs it"
-    )
 
     # --- pcc-Python port: py_list.py ------------------------------------
     py_src = _read(RUNTIME_PY / "py_list.py")
@@ -504,43 +312,6 @@ def test_list_extend_element_store_matches_append_slot_write_barrier():
 
 
 def test_list_capacity_growth_retargets_raw_slots_and_preserves_backend0_fast_path():
-    c_src = _read(RUNTIME_SRC / "py_list.c")
-    c_grow = c_src.split(
-        "static int grow_if_needed(PyListObject **owner, int64_t want)", 1
-    )[1].split("static int64_t normalize_index", 1)[0]
-    c_fast = c_grow.split(
-        "if (initial_backend == PCC_GC_KIND_REFCOUNT_CYCLE)", 1
-    )[1].split("PyObject *owner_slot", 1)[0]
-    assert "realloc(" in c_fast
-    for forbidden in (
-        "pcc_gc_root_slot_lock",
-        "pcc_gc_scheduler_root_register_handle",
-        "slot_pairs",
-        "pcc_gc_note_slot_write_barrier",
-        "pcc_gc_backend4_retarget_mutator_payload_locked",
-    ):
-        assert forbidden not in c_fast
-    assert c_grow.index("pcc_gc_scheduler_root_register_handle(&owner_slot)") < (
-        c_grow.index("calloc(")
-    )
-    assert c_grow.index("pcc_gc_root_slot_unlock();") < c_grow.index(
-        "calloc("
-    ) < c_grow.index("pcc_gc_root_slot_lock();", c_grow.index("calloc("))
-    c_retarget = c_grow.index(
-        "pcc_gc_backend4_retarget_mutator_payload_locked("
-    )
-    c_barrier = c_grow.index("pcc_gc_note_slot_write_barrier(", c_retarget)
-    c_publish = c_grow.index("l->items = new_items", c_barrier)
-    assert c_retarget < c_barrier < c_publish < c_grow.rindex(
-        "pcc_gc_root_slot_unlock();"
-    ) < c_grow.index("free(old_items)")
-    assert "grow_if_needed(&l, l->length + 1)" in c_src
-    assert "grow_if_needed(&la, la->length + bl)" in c_src
-    c_slice = c_src.split("PyObject *py_list_slice(", 1)[1].split(
-        "int64_t py_list_set_slice", 1
-    )[0]
-    assert c_slice.count("py_list_append(out, v)") == 2
-    assert "lo_obj->items[lo_obj->length++] = v" not in c_slice
 
     strict_src = _read(RUNTIME_PY / "py_list.py")
     strict_grow = strict_src.split("def _grow_if_needed(l, want: int):", 1)[
@@ -591,69 +362,6 @@ def test_list_capacity_growth_retargets_raw_slots_and_preserves_backend0_fast_pa
 
 
 def test_list_growth_callers_root_and_reload_retained_managed_inputs():
-    c_src = _read(RUNTIME_SRC / "py_list.c")
-    c_append = c_src.split("void py_list_append(PyObject *lst, PyObject *item)", 1)[
-        1
-    ].split("void py_list_append_fresh_native_instance", 1)[0]
-    c_append_fast = c_append.split(
-        "if (pcc_gc_backend() == PCC_GC_KIND_REFCOUNT_CYCLE)", 1
-    )[1].split("PyObject *list_root", 1)[0]
-    for forbidden in (
-        "list_prepare_moving_root",
-        "pcc_gc_root_slot_lock",
-        "pcc_gc_scheduler_root_register_handle",
-    ):
-        assert forbidden not in c_append_fast
-    c_list_prepare = c_append.index(
-        "list_prepare_moving_root(&list_root, &list_handle)"
-    )
-    c_item_prepare = c_append.index(
-        "list_prepare_moving_root(&item_root, &item_handle)"
-    )
-    c_grow = c_append.index("grow_if_needed(&l", c_item_prepare)
-    c_lock = c_append.index("pcc_gc_root_slot_lock()", c_grow)
-    c_reload = c_append.index(
-        "item = list_reload_moving_root(&item_root, item_handle)", c_lock
-    )
-    c_store = c_append.index(
-        "pcc_gc_store_ptr_plan_commit_locked(", c_reload
-    )
-    c_unlock = c_append.index("pcc_gc_root_slot_unlock()", c_store)
-    c_finish = c_append.index("pcc_gc_store_ptr_plan_finish(", c_unlock)
-    assert c_list_prepare < c_item_prepare < c_grow < c_lock < c_reload < (
-        c_store
-    ) < c_unlock < c_finish < c_append.rindex("list_finish_moving_root(")
-
-    c_extend = c_src.split("void py_list_extend(PyObject *a, PyObject *b)", 1)[
-        1
-    ].split("void py_list_insert", 1)[0]
-    assert c_extend.index(
-        "list_prepare_moving_root(&list_root, &list_handle)"
-    ) < c_extend.index(
-        "list_prepare_moving_root(&source_root, &source_handle)"
-    )
-    for token in (
-        "a = list_reload_moving_root(&list_root, list_handle)",
-        "b = list_reload_moving_root(&source_root, source_handle)",
-        "pcc_gc_root_slot_lock()",
-        "pcc_gc_root_slot_unlock()",
-    ):
-        assert token in c_extend
-    c_slice = c_src.split("PyObject *py_list_slice(", 1)[1].split(
-        "int64_t py_list_set_slice", 1
-    )[0]
-    assert "list_prepare_moving_root(&source_root, &source_handle)" in c_slice
-    assert "list_prepare_moving_root(&out_root, &out_handle)" in c_slice
-    assert "py_list_append(out, v)" in c_slice
-    c_set_slice = c_src.split("int64_t py_list_set_slice(", 1)[1].split(
-        "int64_t py_list_del_slice", 1
-    )[0]
-    assert "list_prepare_moving_root(&list_root, &list_handle)" in c_set_slice
-    assert (
-        "list_prepare_moving_root(\n            &replacement_root, &replacement_handle"
-        in c_set_slice
-    )
-    assert "replacement = list_reload_moving_root(" in c_set_slice
 
     strict_src = _read(RUNTIME_PY / "py_list.py")
     strict_append = strict_src.split("def py_list_append(lst, item) -> None:", 1)[
@@ -732,90 +440,6 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
 
 
 def test_list_get_pop_reverse_use_callback_free_graph_transactions():
-    c_src = _read(RUNTIME_SRC / "py_list.c")
-    c_get = c_src.split("PyObject *py_list_get(PyObject *lst, int64_t i)", 1)[
-        1
-    ].split("PyObject *py_list_getitem", 1)[0]
-    c_get_fast = c_get.split(
-        "if (pcc_gc_backend() == PCC_GC_KIND_REFCOUNT_CYCLE)", 1
-    )[1].split("PyObject *list_root", 1)[0]
-    assert "pcc_gc_root_slot_lock" not in c_get_fast
-    assert "pcc_gc_scheduler_root_register_handle" not in c_get_fast
-    c_get_lock = c_get.index("pcc_gc_root_slot_lock()")
-    c_get_load = c_get.index("pcc_gc_load_ptr(", c_get_lock)
-    c_get_prepare = c_get.index(
-        "pcc_gc_retain_plan_prepare_locked(", c_get_load
-    )
-    c_get_unlock = c_get.index("pcc_gc_root_slot_unlock()", c_get_prepare)
-    assert c_get_lock < c_get_load < c_get_prepare < c_get_unlock < (
-        c_get.index("pcc_gc_retain_plan_finish(", c_get_unlock)
-    )
-
-    c_pop = c_src.split("PyObject *py_list_pop(PyObject *lst, int64_t i)", 1)[
-        1
-    ].split("void py_list_remove", 1)[0]
-    c_pop_fast = c_pop.split(
-        "if (pcc_gc_backend() == PCC_GC_KIND_REFCOUNT_CYCLE)", 1
-    )[1].split("PyObject *list_root", 1)[0]
-    assert "pcc_gc_root_slot_lock" not in c_pop_fast
-    assert "pcc_gc_scheduler_root_register_handle" not in c_pop_fast
-    c_result_register = c_pop.index(
-        "pcc_gc_scheduler_root_register_handle(&result_root)"
-    )
-    c_pop_lock = c_pop.index("pcc_gc_root_slot_lock()", c_result_register)
-    c_result_assign = c_pop.index(
-        "result_root = pcc_gc_load_ptr(", c_pop_lock
-    )
-    c_pop_move = c_pop.index("memmove(", c_result_assign)
-    c_pop_unlock = c_pop.index("pcc_gc_root_slot_unlock()", c_result_assign)
-    c_list_finish = c_pop.index(
-        "list_finish_moving_root(list_handle)", c_pop_unlock
-    )
-    assert c_result_register < c_pop_lock < c_result_assign < c_pop_move < (
-        c_pop_unlock
-    ) < c_list_finish < c_pop.rindex(
-        "pcc_gc_scheduler_root_unregister_handle(result_handle)"
-    )
-
-    c_reverse = c_src.split("void py_list_reverse(PyObject *lst)", 1)[1]
-    c_reverse_fast = c_reverse.split(
-        "if (pcc_gc_backend() == PCC_GC_KIND_REFCOUNT_CYCLE)", 1
-    )[1].split("PyObject *list_root", 1)[0]
-    assert "pcc_gc_root_slot_lock" not in c_reverse_fast
-    c_reverse_lock = c_reverse.index("pcc_gc_root_slot_lock()")
-    c_reverse_prepare = c_reverse.index(
-        "pcc_gc_retain_plan_prepare_locked(", c_reverse_lock
-    )
-    c_reverse_store = c_reverse.index(
-        "pcc_gc_store_ptr_plan_commit_locked(", c_reverse_prepare
-    )
-    c_reverse_unlock = c_reverse.index(
-        "pcc_gc_root_slot_unlock()", c_reverse_store
-    )
-    c_reverse_finish = c_reverse.index(
-        "pcc_gc_retain_plan_finish(", c_reverse_unlock
-    )
-    assert c_reverse_lock < c_reverse_prepare < c_reverse_store < (
-        c_reverse_unlock
-    ) < c_reverse_finish < c_reverse.index("py_decref(left)", c_reverse_finish)
-    c_snapshot = c_src.split("static int list_append_snapshot_items(", 1)[1].split(
-        "PyObject *py_list_concat", 1
-    )[0]
-    assert "list_prepare_moving_root(out_slot, &out_handle)" in c_snapshot
-    assert "list_prepare_moving_root(&source_root, &source_handle)" in c_snapshot
-    assert "PyObject *value = py_list_get(source, i)" in c_snapshot
-    assert "py_list_append(*out_slot, value)" in c_snapshot
-    c_concat = c_src.split("PyObject *py_list_concat(", 1)[1].split(
-        "PyObject *py_list_repeat(", 1
-    )[0]
-    c_repeat = c_src.split("PyObject *py_list_repeat(", 1)[1].split(
-        "PyObject *py_list_copy(", 1
-    )[0]
-    c_copy = c_src.split("PyObject *py_list_copy(", 1)[1].split(
-        "int64_t py_list_contains(", 1
-    )[0]
-    for body in (c_concat, c_repeat, c_copy):
-        assert "list_append_snapshot_items(" in body
 
     strict_src = _read(RUNTIME_PY / "py_list.py")
     strict_get = strict_src.split("def py_list_get(lst, i: int):", 1)[1].split(
@@ -901,45 +525,6 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
 
 
 def test_list_equality_callbacks_run_unlocked_and_remove_reloads_current_index():
-    c_src = _read(RUNTIME_SRC / "py_list.c")
-    c_eq = c_src.split("static int list_eq_at_callback(", 1)[1].split(
-        "int64_t py_list_contains", 1
-    )[0]
-    c_eq_lock = c_eq.index("pcc_gc_root_slot_lock()")
-    c_eq_prepare = c_eq.index("pcc_gc_retain_plan_prepare_locked(", c_eq_lock)
-    c_eq_unlock = c_eq.index("pcc_gc_root_slot_unlock()", c_eq_prepare)
-    c_eq_finish = c_eq.index("pcc_gc_retain_plan_finish(", c_eq_unlock)
-    c_eq_callback = c_eq.index("py_obj_eq(", c_eq_finish)
-    c_eq_relock = c_eq.index("pcc_gc_root_slot_lock()", c_eq_callback)
-    c_eq_clear = c_eq.index("*candidate_root = NULL", c_eq_relock)
-    c_eq_reunlock = c_eq.index("pcc_gc_root_slot_unlock()", c_eq_clear)
-    assert c_eq_lock < c_eq_prepare < c_eq_unlock < c_eq_finish < (
-        c_eq_callback
-    ) < c_eq_relock < c_eq_clear < c_eq_reunlock < c_eq.index(
-        "py_decref(candidate)", c_eq_reunlock
-    )
-    for fn, end_marker in (
-        ("py_list_contains", "py_list_slice"),
-        ("py_list_index", "py_list_index_range"),
-        ("py_list_index_range", "py_list_count"),
-        ("py_list_count", "py_list_reverse"),
-    ):
-        body = c_src.split(f"{fn}(", 1)[1].split(end_marker, 1)[0]
-        assert "list_eq_at_callback(" in body
-    c_remove = c_src.split("void py_list_remove(PyObject *lst, PyObject *item)", 1)[
-        1
-    ].split("void py_list_clear", 1)[0]
-    c_callback = c_remove.index("list_eq_at_callback(")
-    c_commit_lock = c_remove.index("pcc_gc_root_slot_lock()", c_callback)
-    c_reload = c_remove.index(
-        "lst = list_reload_moving_root(&list_root, list_handle)", c_commit_lock
-    )
-    c_detach = c_remove.index("l->items[index] = NULL", c_reload)
-    c_commit_unlock = c_remove.index("pcc_gc_root_slot_unlock()", c_detach)
-    c_decref = c_remove.index("py_decref(candidate_root)", c_commit_unlock)
-    assert c_callback < c_commit_lock < c_reload < c_detach < c_commit_unlock < (
-        c_decref
-    )
 
     strict_src = _read(RUNTIME_PY / "py_list.py")
     strict_eq = strict_src.split("def _list_eq_at_callback(", 1)[1].split(
@@ -994,21 +579,6 @@ def test_list_equality_callbacks_run_unlocked_and_remove_reloads_current_index()
 
 
 def test_list_clear_publishes_empty_before_split_decref_tails():
-    c_src = _read(RUNTIME_SRC / "py_list.c")
-    c_clear = c_src.split("void py_list_clear(PyObject *lst)", 1)[1].split(
-        "void py_obj_clear", 1
-    )[0]
-    c_fast = c_clear.split(
-        "if (pcc_gc_backend() == PCC_GC_KIND_REFCOUNT_CYCLE)", 1
-    )[1].split("PyObject *list_root", 1)[0]
-    assert "pcc_gc_store_ptr_plan_" not in c_fast
-    c_init = c_clear.index("pcc_gc_store_ptr_plan_init(")
-    c_lock = c_clear.index("pcc_gc_root_slot_lock()", c_init)
-    c_commit = c_clear.index("pcc_gc_store_ptr_plan_commit_locked(", c_lock)
-    c_publish = c_clear.index("l->length = 0", c_commit)
-    c_unlock = c_clear.index("pcc_gc_root_slot_unlock()", c_publish)
-    c_finish = c_clear.index("pcc_gc_store_ptr_plan_finish(", c_unlock)
-    assert c_init < c_lock < c_commit < c_publish < c_unlock < c_finish
 
     strict_src = _read(RUNTIME_PY / "py_list.py")
     strict_clear = strict_src.split("def py_list_clear(lst) -> None:", 1)[1].split(
@@ -1038,31 +608,6 @@ def test_list_clear_publishes_empty_before_split_decref_tails():
 
 
 def test_list_delete_slice_converts_bounds_before_locked_compaction_and_decref_tails():
-    c_src = _read(RUNTIME_SRC / "py_list.c")
-    c_delete = c_src.split("int64_t py_list_del_slice(", 1)[1].split(
-        "/* ---- Extend", 1
-    )[0]
-    c_fast = c_delete.split(
-        "if (pcc_gc_backend() == PCC_GC_KIND_REFCOUNT_CYCLE)", 1
-    )[1].split("PyObject *list_root", 1)[0]
-    assert "PccGcStoreRootPlan" not in c_fast
-    assert "pcc_gc_root_slot_lock" not in c_fast
-    c_bound_root = c_delete.index(
-        "list_prepare_moving_root(&step_root, &step_handle)"
-    )
-    c_convert = c_delete.index("step_v = py_obj_index_i64(step_root)")
-    c_plan_init = c_delete.index("pcc_gc_store_ptr_plan_init(", c_convert)
-    c_lock = c_delete.index("pcc_gc_root_slot_lock()", c_plan_init)
-    c_retarget = c_delete.index(
-        "pcc_gc_backend4_retarget_mutator_payload_locked(", c_lock
-    )
-    c_commit = c_delete.index("pcc_gc_store_ptr_plan_commit_locked(", c_retarget)
-    c_publish = c_delete.index("l->length = dst", c_commit)
-    c_unlock = c_delete.index("pcc_gc_root_slot_unlock()", c_publish)
-    c_finish = c_delete.index("pcc_gc_store_ptr_plan_finish(", c_unlock)
-    assert c_bound_root < c_convert < c_plan_init < c_lock < c_retarget < (
-        c_commit
-    ) < c_publish < c_unlock < c_finish
 
     strict_src = _read(RUNTIME_PY / "py_list.py")
     strict_delete = strict_src.split("def py_list_del_slice(", 1)[1].split(
@@ -1101,32 +646,6 @@ def test_list_delete_slice_converts_bounds_before_locked_compaction_and_decref_t
 
 
 def test_list_set_slice_snapshots_then_publishes_whole_payload_before_decref_tails():
-    c_src = _read(RUNTIME_SRC / "py_list.c")
-    c_set = c_src.split("int64_t py_list_set_slice(", 1)[1].split(
-        "int64_t py_list_del_slice", 1
-    )[0]
-    c_convert = c_set.index("step_v = py_obj_index_i64(step_root)")
-    c_snapshot = c_set.index("list_snapshot_sequence(replacement)", c_convert)
-    c_fast = c_set.split(
-        "if (backend == PCC_GC_KIND_REFCOUNT_CYCLE)", 1
-    )[1].split("PccGcStoreRootPlan *old_plans", 1)[0]
-    assert c_fast.index("old_list->items = new_items") < c_fast.index(
-        "py_decref(old_items[i])"
-    )
-    c_plan_init = c_set.index("pcc_gc_store_ptr_plan_init(", c_snapshot)
-    c_lock = c_set.index("pcc_gc_root_slot_lock()", c_plan_init)
-    c_retarget = c_set.index(
-        "pcc_gc_backend4_retarget_mutator_payload_locked(", c_lock
-    )
-    c_retain = c_set.index("pcc_gc_retain_plan_prepare_locked(", c_retarget)
-    c_detach = c_set.index("pcc_gc_store_ptr_plan_commit_locked(", c_retain)
-    c_publish = c_set.index("old_list->items = new_items", c_detach)
-    c_unlock = c_set.index("pcc_gc_root_slot_unlock()", c_publish)
-    c_finish_retain = c_set.index("pcc_gc_retain_plan_finish(", c_unlock)
-    c_finish_old = c_set.index("pcc_gc_store_ptr_plan_finish(", c_finish_retain)
-    assert c_convert < c_snapshot < c_plan_init < c_lock < c_retarget < (
-        c_retain
-    ) < c_detach < c_publish < c_unlock < c_finish_retain < c_finish_old
 
     strict_src = _read(RUNTIME_PY / "py_list_set_slice.py")
     strict_set = strict_src.split("def _set_slice_transaction(", 1)[1]

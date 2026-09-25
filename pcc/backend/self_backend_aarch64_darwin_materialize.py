@@ -16,7 +16,7 @@ from .self_backend_aarch64_darwin_regs import (
     pick_scratch_gpr,
 )
 from .self_backend_aarch64_darwin_regalloc import allocated_register_name
-from .self_backend_float_bits import bits_to_float64, float32_to_bits
+from .self_backend_float_bits import bits_to_float64, float32_to_bits, u64_as_i64
 from .self_backend_aarch64_darwin_slots import (
     copy_slot_to_slot,
     copy_slot_to_slot_parts,
@@ -859,7 +859,9 @@ def materialize_scalar_value_indexed(
             )
         int_bits = 32 if type_header.second <= 32 else 64
         int_reg = "w12" if int_bits == 32 else "x12"
-        lines = emit_const_to_reg_bits(int_bits, int_reg, fp_bits)
+        # A negative double's pattern is >= 2**63: pass the lane its signed
+        # spelling (the old lane unboxing turned it into 0.0).
+        lines = emit_const_to_reg_bits(int_bits, int_reg, u64_as_i64(fp_bits))
         lines.append(f"  fmov {reg}, {int_reg}")
         return lines
 

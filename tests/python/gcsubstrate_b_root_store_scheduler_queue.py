@@ -6,93 +6,7 @@ that facade so pytest node ids stay stable.
 from _gc_substrate_common import *  # noqa: F401,F403
 
 
-
-
 def test_root_store_prepares_inside_and_finishes_after_its_own_lock_scope():
-    c_src = PY_OBJ_C.read_text(encoding="utf-8")
-    for helper in [
-        "pcc_incref_prepare",
-        "pcc_incref_finish",
-        "pcc_decref_prepare",
-        "pcc_decref_finish",
-    ]:
-        assert f"static void {helper}(" in c_src
-
-    c_incref_prepare = c_src.rsplit("static void pcc_incref_prepare(", 1)[1].split(
-        "static void pcc_incref_finish(", 1
-    )[0]
-    assert "pcc_refcount_incref(" in c_incref_prepare
-    assert "pcc_obj_runtime_log_event_code" not in c_incref_prepare
-    assert "pcc_debug_bad_incref(" not in c_incref_prepare
-    assert "pcc_obj_debug_runtime_enabled(" not in c_incref_prepare
-    assert c_incref_prepare.count("pcc_refcount_prepare_debug_bad(") == 2
-    c_debug_capture = c_src.rsplit(
-        "static void pcc_refcount_prepare_debug_bad(", 1
-    )[1].split("static void pcc_incref_prepare(", 1)[0]
-    assert "prepared->debug_bad_tag = bad_tag" in c_debug_capture
-    assert "prepared->debug_bad = 1" in c_debug_capture
-    assert "prepared->debug_check_deferred = 1" in c_debug_capture
-    assert "pcc_obj_debug_runtime_enabled(" not in c_debug_capture
-    assert "pcc_debug_bad_incref(" not in c_debug_capture
-    c_incref_finish = c_src.rsplit("static void pcc_incref_finish(", 1)[1].split(
-        "void py_incref(", 1
-    )[0]
-    assert c_incref_finish.count("pcc_obj_runtime_log_event_code(") == 1
-    assert "\n        3,\n        1," in c_incref_finish
-    assert "pcc_debug_bad_incref(" in c_incref_finish
-    c_decref_prepare = c_src.rsplit("static void pcc_decref_prepare(", 1)[1].split(
-        "static void pcc_decref_finish(", 1
-    )[0]
-    assert "pcc_refcount_decref(" in c_decref_prepare
-    assert "PY_FLAG_GC_DEALLOCATING" in c_decref_prepare
-    assert c_decref_prepare.count("pcc_refcount_prepare_debug_bad(") == 2
-    for forbidden in [
-        "pcc_obj_runtime_log_event_code",
-        "pcc_debug_bad_incref(",
-        "pcc_obj_debug_runtime_enabled(",
-        "py_weakref_invalidate",
-        "pcc_gc_note_object_freeing",
-        "py_gc_untrack",
-        "pcc_dealloc_dispatch",
-    ]:
-        assert forbidden not in c_decref_prepare
-    c_underflow_prepare = c_decref_prepare.split(
-        "if (pcc_refcount_load(&h->refcount) <= 0)", 1
-    )[1].split("prepared->new_refcount = pcc_refcount_decref", 1)[0]
-    assert "prepared->underflow_before = 1" in c_underflow_prepare
-    assert "return;" in c_underflow_prepare
-    assert "pcc_refcount_decref" not in c_underflow_prepare
-    c_decref_finish = c_src.rsplit("static void pcc_decref_finish(", 1)[1].split(
-        "void py_decref(", 1
-    )[0]
-    assert "pcc_refcount_decref(" not in c_decref_finish
-    assert "pcc_gc_note_relocation_read(" not in c_decref_finish
-    assert "py_weakref_invalidate(" in c_decref_finish
-    assert "pcc_gc_note_object_freeing(" in c_decref_finish
-    assert "pcc_debug_bad_incref(" in c_decref_finish
-    c_nonterminal_finish = c_decref_finish.split("if (new_refcount > 0)", 1)[
-        1
-    ].split("int delay_zpage_freeing_note", 1)[0]
-    c_terminal_finish = c_decref_finish.split("int delay_zpage_freeing_note", 1)[1]
-    assert c_nonterminal_finish.count("pcc_obj_runtime_log_event_code(") == 1
-    assert c_nonterminal_finish.count("pcc_obj_runtime_log_event_code(3, 2") == 1
-    assert "return;" in c_nonterminal_finish
-    assert c_terminal_finish.count("pcc_obj_runtime_log_event_code(") == 2
-    assert c_terminal_finish.count("pcc_obj_runtime_log_event_code(3, 2") == 1
-    assert c_terminal_finish.count("pcc_obj_runtime_log_event_code(3, 3") == 1
-
-    c_incref = c_src.split("void py_incref(PyObject *o)", 1)[1].split(
-        "typedef struct PccTrashNode", 1
-    )[0]
-    assert "pcc_obj_debug_runtime_enabled()" not in c_incref
-    assert c_incref.count("pcc_incref_prepare(o, -1, &prepared)") == 1
-    assert c_incref.count("pcc_incref_finish(&prepared)") == 1
-    assert "pcc_refcount_incref(" not in c_incref
-    c_decref = c_src.split("void py_decref(PyObject *o)", 1)[1]
-    assert "pcc_obj_debug_runtime_enabled()" not in c_decref
-    assert c_decref.count("pcc_decref_prepare(o, -1, &prepared)") == 1
-    assert c_decref.count("pcc_decref_finish(&prepared)") == 1
-    assert "pcc_refcount_decref(" not in c_decref
 
     header_src = RUNTIME_HEADER.read_text(encoding="utf-8")
     for helper in [
@@ -103,40 +17,6 @@ def test_root_store_prepares_inside_and_finishes_after_its_own_lock_scope():
     ]:
         assert helper not in header_src
         assert helper not in RUNTIME_SIGNATURES
-
-    c_root = c_src.split("void pcc_gc_store_root(", 1)[1].split(
-        "void pcc_gc_frame_enter", 1
-    )[0]
-    c_before_lock = c_root.split("pcc_gc_root_slot_lock();", 1)[0]
-    c_plan_init = c_src.split(
-        "void pcc_gc_store_root_plan_init(", 1
-    )[1].split(
-        "int64_t pcc_gc_store_root_plan_commit_locked(", 1
-    )[0]
-    assert c_plan_init.count("pcc_obj_debug_runtime_enabled()") == 1
-    assert c_before_lock.count("pcc_gc_store_root_plan_init(&plan, backend)") == 1
-    assert (
-        c_root.index("pcc_gc_store_root_plan_init(&plan, backend)")
-        < c_root.index("pcc_gc_root_slot_lock();")
-    )
-    c_locked = c_root.split("pcc_gc_root_slot_lock();", 1)[1].split(
-        "pcc_gc_root_slot_unlock();", 1
-    )[0]
-    assert c_locked.count(
-        "pcc_gc_store_root_plan_commit_locked(&plan, slot, value)"
-    ) == 1
-    for forbidden in [
-        "pcc_obj_runtime_log_event_code",
-        "pcc_debug_bad_incref(",
-        "py_incref(",
-        "py_decref(",
-        "pcc_incref_finish(",
-        "pcc_decref_finish(",
-        "pcc_obj_debug_runtime_enabled(",
-    ]:
-        assert forbidden not in c_locked
-    c_tail = c_root.split("pcc_gc_root_slot_unlock();", 1)[1]
-    assert c_tail.count("pcc_gc_store_root_plan_finish(&plan)") == 1
 
     py_src = PY_OBJ_PORT.read_text(encoding="utf-8")
     for helper in [
@@ -268,81 +148,6 @@ def test_scheduler_queue_root_transfer_plans_finish_after_outer_graph_unlock():
         assert symbol not in public_header
         assert symbol not in RUNTIME_SIGNATURES
 
-    c_obj = PY_OBJ_C.read_text(encoding="utf-8")
-    assert "sizeof(PccRefcountPrepared) == 56" in c_obj
-    for field, offset in [
-        ("new_prepared", 0),
-        ("old_prepared", 56),
-        ("backend", 112),
-        ("debug_runtime_enabled", 120),
-        ("state", 124),
-    ]:
-        assert (
-            f"offsetof(PccGcStoreRootPlanImpl, {field}) == {offset}"
-            in c_obj
-        )
-    assert "sizeof(PccGcStoreRootPlanImpl) == sizeof(PccGcStoreRootPlan)" in c_obj
-    assert "_Alignof(PccGcStoreRootPlanImpl) <= _Alignof(PccGcStoreRootPlan)" in c_obj
-    c_commit = c_obj.split(
-        "static int64_t pcc_gc_store_plan_commit_locked_impl(", 1
-    )[1].split("int64_t pcc_gc_store_root_plan_commit_locked(", 1)[0]
-    for forbidden in [
-        "pcc_obj_runtime_log_event_code(",
-        "pcc_incref_finish(",
-        "pcc_decref_finish(",
-        "py_incref(",
-        "py_decref(",
-        "malloc(",
-        "calloc(",
-        "free(",
-        "pcc_gc_note_safepoint(",
-    ]:
-        assert forbidden not in c_commit
-    assert (
-        c_commit.index("pcc_incref_prepare(")
-        < c_commit.index("pcc_gc_note_slot_write_barrier(")
-        < c_commit.index("PyObject *old = *slot;")
-        < c_commit.index("*slot = impl->new_prepared.obj;")
-        < c_commit.index("pcc_decref_prepare(")
-    )
-
-    c_src = PY_GC_BACKEND_C.read_text(encoding="utf-8")
-    c_queue_layout = c_src.split(
-        "struct PccGcSchedulerQueue {", 1
-    )[1].split("};", 1)[0]
-    assert [
-        line.strip() for line in c_queue_layout.splitlines() if line.strip()
-    ] == [
-        "PccMutex *mutex;",
-        "PccGcSchedulerQueueEntry *head;",
-        "PccGcSchedulerQueueEntry *tail;",
-        "int64_t length;",
-        "PccGcSchedulerQueueEntry *free_head;",
-        "int64_t free_count;",
-    ]
-    c_free = c_src.split(
-        "static void pcc_gc_scheduler_queue_entry_free(", 1
-    )[1].split("#define PCC_GC_SCHEDULER_QUEUE_ENTRY_POOL_LIMIT", 1)[0]
-    c_alloc = c_src.split(
-        "static PccGcSchedulerQueueEntry *pcc_gc_scheduler_queue_entry_alloc(", 1
-    )[1].split(
-        "static void pcc_gc_scheduler_queue_entry_recycle(", 1
-    )[0]
-    c_recycle = c_src.split(
-        "static void pcc_gc_scheduler_queue_entry_recycle(", 1
-    )[1].split(
-        "static void pcc_gc_scheduler_queue_entry_release(", 1
-    )[0]
-    c_release = c_src.split(
-        "static void pcc_gc_scheduler_queue_entry_release(", 1
-    )[1].split("void pcc_gc_scheduler_queue_free(", 1)[0]
-    c_push = c_src.split("int64_t pcc_gc_scheduler_queue_push(", 1)[1].split(
-        "int64_t pcc_gc_scheduler_queue_pop_into(", 1
-    )[0]
-    c_pop = c_src.split("int64_t pcc_gc_scheduler_queue_pop_into(", 1)[1].split(
-        "int64_t pcc_gc_scheduler_queue_len(", 1
-    )[0]
-
     def locked_region(body: str) -> str:
         return body.split("pcc_gc_graph_lock();", 1)[1].split(
             "pcc_gc_graph_unlock();", 1
@@ -361,98 +166,6 @@ def test_scheduler_queue_root_transfer_plans_finish_after_outer_graph_unlock():
         "calloc(",
         "free(",
     ]
-    for body in [c_free, c_release, c_push, c_pop]:
-        locked = locked_region(body)
-        assert "pcc_gc_store_root_plan_commit_locked(" in locked
-        for forbidden in forbidden_locked:
-            assert forbidden not in locked
-        tail = body.split("pcc_gc_graph_unlock();", 1)[1]
-        assert "pcc_gc_store_root_plan_finish(" in tail
-
-    assert (
-        c_push.index("pcc_gc_scheduler_root_node_alloc(")
-        < c_push.index("pcc_gc_store_root_plan_init(")
-        < c_push.index("pcc_gc_graph_lock();")
-    )
-    c_push_locked = locked_region(c_push)
-    assert (
-        c_push_locked.index("pcc_gc_store_root_plan_commit_locked(")
-        < c_push_locked.index("entry->root_handle = root_node")
-        < c_push_locked.index("pcc_gc_scheduler_root_link_locked(")
-    )
-    assert c_push_locked.count("entry->root_handle = root_node") == 1
-    assert c_push_locked.count("pcc_gc_scheduler_root_link_locked(") == 1
-    assert c_push.split("pcc_gc_graph_unlock();", 1)[1].index(
-        "pcc_gc_cycle_requested_store(1)"
-    ) < c_push.split("pcc_gc_graph_unlock();", 1)[1].index(
-        "pcc_gc_store_root_plan_finish("
-    )
-
-    for body in [c_free, c_release, c_pop]:
-        assert body.index("pcc_gc_store_root_plan_init(") < body.index(
-            "pcc_gc_graph_lock();"
-        )
-        locked = locked_region(body)
-        assert "pcc_gc_scheduler_root_unlink_locked(" in locked
-        tail = body.split("pcc_gc_graph_unlock();", 1)[1]
-        assert tail.index("pcc_gc_cycle_requested_store(1)") < tail.index(
-            "pcc_gc_scheduler_root_node_free("
-        )
-    assert locked_region(c_pop).count(
-        "pcc_gc_store_root_plan_commit_locked("
-    ) == 2
-    c_pop_tail = c_pop.split("pcc_gc_graph_unlock();", 1)[1]
-    assert c_pop_tail.index("pcc_gc_scheduler_queue_entry_recycle(") < (
-        c_pop_tail.index("pcc_gc_store_root_plan_finish(")
-    )
-    c_release_tail = c_release.split("pcc_gc_graph_unlock();", 1)[1]
-    assert c_release_tail.index("pcc_gc_scheduler_queue_entry_recycle(") < (
-        c_release_tail.index("pcc_gc_store_root_plan_finish(")
-    )
-    c_free_tail = c_free.split("pcc_gc_graph_unlock();", 1)[1]
-    assert c_free_tail.index("free(entry)") < c_free_tail.index(
-        "pcc_gc_store_root_plan_finish("
-    )
-    for body in [c_free, c_release, c_pop]:
-        assert body.count("pcc_gc_scheduler_root_node_free(root_node)") == 1
-    assert (
-        c_alloc.index("entry = queue->free_head")
-        < c_alloc.index("queue->free_head = entry->next")
-        < c_alloc.index("queue->free_count--")
-    )
-    assert c_alloc.index("queue->free_head = entry->next") < c_alloc.index(
-        "entry = (PccGcSchedulerQueueEntry *)malloc("
-    )
-    assert c_recycle.count("free(entry);") == 3
-    assert (
-        c_recycle.index("entry->next = queue->free_head")
-        < c_recycle.index("queue->free_head = entry")
-        < c_recycle.index("queue->free_count++")
-    )
-    c_alloc_failure = c_push.split("if (root_node == NULL) {", 1)[1].split(
-        "PccGcStoreRootPlan store_plan", 1
-    )[0]
-    assert c_alloc_failure.count(
-        "pcc_gc_scheduler_queue_entry_recycle(queue, entry)"
-    ) == 1
-    assert c_alloc_failure.count("return -1") == 1
-    c_push_tail = c_push.split("pcc_gc_graph_unlock();", 1)[1]
-    assert (
-        c_push_tail.index("if (published == 0) {")
-        < c_push_tail.index("pcc_gc_scheduler_root_node_free(root_node)")
-        < c_push_tail.index(
-            "pcc_gc_scheduler_queue_entry_recycle(queue, entry)"
-        )
-        < c_push_tail.index("pcc_gc_store_root_plan_finish(&store_plan)")
-        < c_push_tail.index("if (published == 0) return -1")
-    )
-    c_lock_failure = c_push.split(
-        "if (pcc_mutex_lock(queue->mutex) != 0) {", 1
-    )[1].split("if (queue->tail == NULL)", 1)[0]
-    assert c_lock_failure.count(
-        "pcc_gc_scheduler_queue_entry_release(queue, entry)"
-    ) == 1
-    assert c_lock_failure.count("return -1") == 1
 
     expected_cross_signatures = {
         "pcc_gc_store_root_plan_init": (
@@ -664,7 +377,7 @@ def test_scheduler_queue_root_transfer_plans_finish_after_outer_graph_unlock():
     assert strict_pop.count("stack_alloc(128)") == 2
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 @pytest.mark.parametrize("backend", [3, 4])
 def test_scheduler_queue_pop_finalizer_runs_after_outer_graph_unlock(
     tmp_path: Path,
@@ -851,7 +564,7 @@ def test_scheduler_queue_pop_finalizer_runs_after_outer_graph_unlock(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 @pytest.mark.parametrize("backend", [3, 4])
 def test_scheduler_queue_transfer_canonicalizes_forwarded_value_and_balances_exact_counts(
     tmp_path: Path,
@@ -1129,7 +842,7 @@ def test_scheduler_queue_transfer_canonicalizes_forwarded_value_and_balances_exa
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 @pytest.mark.parametrize("backend", [3, 4])
 def test_outermost_root_store_finalizer_runs_after_its_own_lock_scope(
     tmp_path: Path,
@@ -1261,7 +974,7 @@ def test_outermost_root_store_finalizer_runs_after_its_own_lock_scope(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 @pytest.mark.parametrize("backend", [3, 4])
 def test_root_store_canonicalizes_forwarded_value_and_balances_exact_counts(
     tmp_path: Path,
@@ -1412,7 +1125,7 @@ def test_root_store_canonicalizes_forwarded_value_and_balances_exact_counts(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_root_store_zero_refcount_underflow_fails_stop_in_finish(
     tmp_path: Path,
     kind: str,
@@ -1464,7 +1177,7 @@ def test_c_root_store_debug_off_invalid_new_preserves_benign_update(
 ) -> None:
     executable = _compile_runtime_probe(
         tmp_path,
-        kind="c",
+        kind="pcc_python",
         threaded=True,
         stem="root_store_invalid_new_token",
         source_text=r'''
@@ -1518,7 +1231,7 @@ def test_c_public_refcount_debug_on_accepts_legitimate_cpy_handle(
 ) -> None:
     executable = _compile_runtime_probe(
         tmp_path,
-        kind="c",
+        kind="pcc_python",
         threaded=True,
         stem="public_refcount_debug_on_cpy_handle",
         source_text=r'''
@@ -1580,7 +1293,7 @@ def test_c_root_store_debug_on_invalid_value_traps_after_expected_boundary(
 ) -> None:
     executable = _compile_runtime_probe(
         tmp_path,
-        kind="c",
+        kind="pcc_python",
         threaded=True,
         stem="root_store_debug_on_invalid_boundary",
         source_text=r'''

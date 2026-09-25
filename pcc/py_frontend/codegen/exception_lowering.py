@@ -957,6 +957,21 @@ class ExceptionLoweringMixin:
             cls_name = exc_expr.func.ident
             tag = _builtin_exc_tag_or_missing(cls_name)
             if tag >= 0:
+                if (
+                    len(exc_expr.args) == 1
+                    and not exc_expr.kwargs
+                    and not isinstance(exc_expr.args[0], StrLit)
+                    and not self._is_starred_unpack_expr(exc_expr.args[0])
+                ):
+                    # The argument object itself is args[0]: ``SystemExit(3)``
+                    # exits with 3 and ``ValueError(3).args == (3,)``; it
+                    # used to be stringified into the message.
+                    arg_obj = self._emit_expr_as_pcc_object(exc_expr.args[0])
+                    return self.builder.call(
+                        self.runtime["py_exc_new_with_value"],
+                        [ir.Constant(_I64, tag), arg_obj],
+                        name=self._fresh(f"exc.{cls_name}"),
+                    )
                 msg_ptr = _message_cstr(exc_expr.args, exc_expr.kwargs)
                 return self.builder.call(
                     self.runtime["py_exc_new"],
@@ -1663,12 +1678,19 @@ class ExceptionLoweringMixin:
                     [],
                     name=self._fresh("unhandled.exc"),
                 )
-                self.builder.call(
-                    self.runtime["py_exc_print_unhandled"],
+                # SystemExit(code) exits with its code silently, as in
+                # CPython; anything else prints its traceback.
+                status = self.builder.call(
+                    self.runtime["py_exc_handle_uncaught"],
                     [exc],
+                    name=self._fresh("unhandled.status"),
                 )
                 self.builder.call(self.runtime["py_clear_exception"], [])
-                self.builder.ret(ir.Constant(ret_ty, 1))
+                if ret_ty.width != 64:
+                    status = self.builder.trunc(
+                        status, ret_ty, name=self._fresh("unhandled.status.trunc")
+                    )
+                self.builder.ret(status)
             else:
                 self.builder.ret(ir.Constant(ret_ty, 0))
         elif isinstance(ret_ty, ir.LiteralStructType):

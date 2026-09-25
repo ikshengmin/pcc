@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def test_generator_next_send_finish_and_stop_value_native(
-    tmp_path, c_runtime_archive
+    tmp_path, pcc_py_runtime_archive
 ):
     src = tmp_path / "gen_probe.c"
     exe = tmp_path / "gen_probe"
@@ -84,9 +84,9 @@ def test_generator_next_send_finish_and_stop_value_native(
         [
             os.environ.get("CC", "cc"),
             "-I",
-            str(c_runtime_archive.parent / "include"),
+            str(pcc_py_runtime_archive.parent / "include"),
             str(src),
-            str(c_runtime_archive),
+            str(pcc_py_runtime_archive),
             "-lm",
             "-o",
             str(exe),
@@ -98,20 +98,16 @@ def test_generator_next_send_finish_and_stop_value_native(
 
 
 def test_generator_finish_symbols_are_wired():
-    c_src = Path("pcc/py_runtime/src/py_gen.c").read_text(encoding="utf-8")
     py_src = Path("pcc/py_runtime/py/py_gen.py").read_text(encoding="utf-8")
     header = Path("pcc/py_runtime/include/py_runtime.h").read_text(encoding="utf-8")
     abi = Path("pcc/py_frontend/codegen/runtime_abi.py").read_text(encoding="utf-8")
 
-    assert "PyObject *py_gen_finish(PyObject *gen, PyObject *value)" in c_src
-    assert "int64_t py_gen_is_done(PyObject *gen)" in c_src
     assert '@c_abi_export("py_gen_finish")' in py_src
     assert "PyObject *py_gen_finish(PyObject *gen, PyObject *value);" in header
     assert '"py_gen_finish": (_PYOBJ, [_PYOBJ, _PYOBJ], False)' in abi
 
 
 def test_generator_resume_boundaries_attribute_silent_null_results():
-    c_src = Path("pcc/py_runtime/src/py_gen.c").read_text(encoding="utf-8")
     py_src = Path("pcc/py_runtime/py/py_gen.py").read_text(encoding="utf-8")
 
     messages = (
@@ -124,23 +120,16 @@ def test_generator_resume_boundaries_attribute_silent_null_results():
         "generator throw returned NULL without setting an exception",
         "generator close resume returned NULL without setting an exception",
     )
-    for source in (c_src, py_src):
+    for source in (py_src,):
         assert "py_runtime_error_if_unset" in source
         for message in messages:
             assert message in source
 
-    for source, resume, guard in (
-        (
-            c_src,
-            "g->resume(gen, frame)",
-            "generator resume returned NULL without StopIteration or an exception",
-        ),
-        (
+    for source, resume, guard in ((
             py_src,
             "call_ptr2(resume, gen, frame)",
             "generator resume returned NULL without StopIteration or an exception",
-        ),
-    ):
+        ),):
         resume_pos = source.index(resume)
         guard_pos = source.index(guard, resume_pos)
         assert resume_pos < guard_pos

@@ -1415,6 +1415,9 @@ def emit_compute_instruction_by_id(
                             reg_name_indexed(indexed_kernel, value_type_id, rhs_register),
                         )
                     )
+                if indexed_dest_id in func.aarch64_fused_branch_values:
+                    # The block's br_cond branches on these flags directly.
+                    return lines
                 lines.append(emitted_cset_line("w11", aarch64_cc(cond)))
                 result_type_id = indexed_kernel.value_type_id(indexed_dest_id)
                 lines.extend(

@@ -14,7 +14,6 @@ import textwrap
 
 
 def test_rsplit_no_args_matches_cpython(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "rsplit0.py"

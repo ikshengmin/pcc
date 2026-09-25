@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.runtime_build_cache import cached_threaded_c_runtime
+from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).absolute().parents[3]
@@ -285,7 +285,7 @@ int main(int argc, char **argv) {
 @pytest.fixture(scope="module")
 def _io_waitset_runtime_exe(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gc_vthread_io_waitset_runtime")
-    work_runtime = cached_threaded_c_runtime()
+    work_runtime = cached_threaded_pcc_python_runtime()
     src = tmp / "vthread_io_waitset_runtime.c"
     src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")
     exe = tmp / "vthread_io_waitset_runtime_bin"
@@ -296,7 +296,7 @@ def _io_waitset_runtime_exe(tmp_path_factory):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-pthread",
             "-lm",
             "-o",
@@ -331,26 +331,9 @@ def test_production_io_waitset_modes_preserve_roots(
 
 
 def test_scheduler_owns_waitset_instead_of_per_entry_poll() -> None:
-    source = (RUNTIME_DIR / "src" / "pcc_threads.c").read_text(
-        encoding="utf-8"
-    )
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(
         encoding="utf-8"
     )
-    poll_io = source.split("int64_t py_virtual_thread_poll_io", 1)[1].split(
-        "int64_t py_virtual_thread_io_wait_count", 1
-    )[0]
-    assert "pcc_io_waitset_add" in source
-    assert "pcc_io_waitset_wait_prepare" in poll_io
-    assert "pcc_io_waitset_wait_block" in poll_io
-    assert "pcc_io_waitset_wait_finish" in poll_io
-    block_at = poll_io.index("pcc_io_waitset_wait_block")
-    assert poll_io.rfind("pcc_mutex_unlock", 0, block_at) >= 0
-    assert poll_io.find("pcc_mutex_lock", block_at) > block_at
-    assert "pcc_vthread_io_wait_active" in poll_io
-    assert "pcc_io_waitset_interrupt" in source
-    assert "pcc_vthread_fd_ready(entry->fd" not in poll_io
-    assert "py_virtual_thread_io_backend" in source
     assert "py_virtual_thread_io_backend" in header
     assert "py_virtual_thread_io_wait_active" in header
 
@@ -375,30 +358,9 @@ def test_current_pcc1_scheduler_releases_lock_around_live_wait() -> None:
 
 
 def test_carrier_stop_disposes_after_join_and_restart_rehydrates_roots() -> None:
-    c_source = (RUNTIME_DIR / "src" / "pcc_threads.c").read_text(
-        encoding="utf-8"
-    )
     py_source = (
         RUNTIME_DIR / "py" / "py_virtual_thread_runtime.py"
     ).read_text(encoding="utf-8")
-
-    c_stop = c_source.split(
-        "int64_t py_virtual_thread_carrier_pool_stop(void)", 1
-    )[1].split("PyObject *py_virtual_thread_current", 1)[0]
-    assert c_stop.index("pcc_thread_join") < c_stop.index(
-        "pcc_vthread_io_waitset_dispose_locked"
-    )
-    assert c_stop.count("pcc_vthread_io_waitset_dispose_locked") == 1
-    assert "if (join_failed)" in c_stop
-    assert "pcc_vthread_persistent_cleanup_active" in c_stop
-    assert "pcc_vthread_poll_queue = NULL" not in c_stop
-    assert "pcc_vthread_io_refresh_registered_fd_locked(entry->fd)" in c_source
-    c_start = c_source.split(
-        "int64_t py_virtual_thread_carrier_pool_start", 1
-    )[1].split("int64_t py_virtual_thread_carrier_pool_stop", 1)[0]
-    assert c_start.index("pcc_vthread_io_waitset_ensure_locked") < (
-        c_start.index("pcc_thread_start")
-    )
 
     py_stop = py_source.split(
         '@c_abi_export("py_virtual_thread_carrier_pool_stop")', 1
@@ -422,21 +384,12 @@ def test_carrier_stop_disposes_after_join_and_restart_rehydrates_roots() -> None
 
 
 def test_waitset_dispose_resets_backend_generation_and_wake_state() -> None:
-    c_source = (RUNTIME_DIR / "src" / "py_io_waitset.c").read_text(
-        encoding="utf-8"
-    )
     py_source = (
         RUNTIME_DIR / "py" / "freestanding_io_waitset.py"
     ).read_text(encoding="utf-8")
-    c_dispose = c_source.split("void pcc_io_waitset_dispose", 1)[1].split(
-        "int pcc_io_waitset_interrupt", 1
-    )[0]
     py_dispose = py_source.split(
         '@c_abi_export("pcc_io_waitset_dispose")', 1
     )[1].split('@c_abi_export("pcc_io_waitset_interrupt")', 1)[0]
-    assert "ws->next_generation = 0" in c_dispose
-    assert "ws->wake_fd = -1" in c_dispose
-    assert "ws->backend = PCC_IO_WAITSET_BACKEND_POLL" in c_dispose
     assert "store_i32(ws, 76, 0)" in py_dispose
     assert "store_i32(ws, 80, -1)" in py_dispose
     assert "store_i32(ws, 0, 0)" in py_dispose

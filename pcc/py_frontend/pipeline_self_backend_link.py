@@ -292,7 +292,11 @@ def run_link_command(
     join_strings,
 ) -> None:
     """Run exactly the selected linker; never fall back after selection."""
-    selected_mode = resolve_self_link_mode()
+    selected_mode = resolve_self_link_mode(
+        needs_libpython=needs_libpython,
+        needs_native_extension_exports=needs_native_extension_exports,
+        extra_link_args=extra_link_args,
+    )
     if semantic_layout_policy and (
         selected_mode != "pcc" or sys.platform != "darwin"
     ):
@@ -442,7 +446,11 @@ def link_ir_texts_run(
     semantic_layout_enabled,
     write_semantic_layout_policy,
 ) -> None:
-    signature_owned_by_pcc = resolve_self_link_mode() == "pcc"
+    signature_owned_by_pcc = resolve_self_link_mode(
+        needs_libpython=needs_libpython,
+        needs_native_extension_exports=needs_native_extension_exports,
+        extra_link_args=extra_link_args,
+    ) == "pcc"
     # Owned Darwin and Linux links consume internal assembly.  Their drivers
     # encode directly into Mach-O/ELF objects; external object inputs remain an
     # explicit, separately labelled boundary.

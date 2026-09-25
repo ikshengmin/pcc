@@ -104,7 +104,12 @@ def test_print_with_literal_flush_kwarg_dispatches_natively(mode):
     assert "cpy.builtin.print" not in body, body
 
 
-def test_print_with_dynamic_flush_kwarg_falls_back_in_auto_mode():
+@pytest.mark.parametrize("libpython_mode", ["auto", "off"])
+def test_print_with_dynamic_flush_kwarg_writes_through_the_stream(libpython_mode):
+    # A non-literal flush= used to need CPython's print (and was stubbed out
+    # under --python-libpython=off).  It now lowers natively: the stream is a
+    # file object and py_print_to_file writes through it, calling flush()
+    # when the flag is true.
     program = textwrap.dedent(
         """
         import sys
@@ -115,31 +120,15 @@ def test_print_with_dynamic_flush_kwarg_falls_back_in_auto_mode():
     )
     ir = _compile_to_ll(
         program,
-        "pflush_dynamic_auto",
+        f"pflush_dynamic_{libpython_mode}",
         mode="off",
-        libpython_mode="auto",
+        libpython_mode=libpython_mode,
     )
     body = _function_body(ir, "f")
     assert body is not None
-    assert "@py_sys_stderr_write" not in body, body
-    assert "cpy.builtin.print" in body, body
-
-
-def test_print_with_dynamic_flush_kwarg_is_rejected_in_no_libpython_mode():
-    program = textwrap.dedent(
-        """
-        import sys
-
-        def f(msg: str, should_flush: bool) -> None:
-            print(msg, file=sys.stderr, flush=should_flush)
-        """
-    )
-    ir = _compile_to_ll(program, "pflush_dynamic_off", mode="off")
-    body = _function_body(ir, "f")
-    assert body is not None
-    assert "@py_sys_stderr_write" not in body, body
-    assert "strict.nolib.stub" in body, body
+    assert "@py_print_to_file" in body, body
     assert "cpy.builtin.print" not in body, body
+    assert "strict.nolib.stub" not in body, body
 
 
 @pytest.mark.parametrize("mode", ["off", "on"])

@@ -27,6 +27,7 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
 pcc_gc_backend3_drain_remembered_owners = extern(
     "pcc_gc_backend3_drain_remembered_owners",
     (c_int64, c_ptr),
@@ -317,10 +318,10 @@ def pcc_gc_generational_promote_scheduler_roots(
             continue
 
         slot = null()
-        if slot_index < 34:
+        if slot_index < 65:  # PY_EXC_N_BUILTIN
             slot = py_subs_exc_cache_slot(slot_index)
         else:
-            slot = load_ptr(global_addr("pcc_builtin_type_root_slots"), (slot_index - 34) * 8)
+            slot = load_ptr(global_addr("pcc_builtin_type_root_slots"), (slot_index - 65) * 8)
         if ptr_is_null(slot) != 0:
             _reset_scheduler_root_scan()
             break
@@ -474,11 +475,45 @@ def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
         store_i32(
             global_addr("pcc_gc_backend4_store_buffer_medium_count"), 0, 0
         )
+        # Medium nodes record their enqueuing thread at +32.
+        me: i64 = pcc_current_thread_id()
+        foreign: i64 = 0
         tail = medium
+        if load_i64(tail, 32) != me:
+            foreign = foreign + 1
         tail_next = load_ptr(tail, 24)
         while ptr_is_null(tail_next) == 0:
             tail = tail_next
+            if load_i64(tail, 32) != me:
+                foreign = foreign + 1
             tail_next = load_ptr(tail, 24)
+        if foreign > 0:
+            cross_flushes: i64 = load_i32(
+                global_addr(
+                    "pcc_gc_backend4_store_buffer_cross_thread_medium_flushes_count"
+                ),
+                0,
+            )
+            store_i32(
+                global_addr(
+                    "pcc_gc_backend4_store_buffer_cross_thread_medium_flushes_count"
+                ),
+                0,
+                cross_flushes + 1,
+            )
+            cross_entries: i64 = load_i32(
+                global_addr(
+                    "pcc_gc_backend4_store_buffer_cross_thread_medium_flushed_entries_count"
+                ),
+                0,
+            )
+            store_i32(
+                global_addr(
+                    "pcc_gc_backend4_store_buffer_cross_thread_medium_flushed_entries_count"
+                ),
+                0,
+                cross_entries + foreign,
+            )
         store_ptr(
             tail,
             24,

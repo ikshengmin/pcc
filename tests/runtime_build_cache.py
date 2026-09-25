@@ -44,8 +44,6 @@ _BUILD_ENV_KEYS = (
     "PCC_REFCOUNT_KIND",
     "PCC_WITH_THREADS",
     "PCC_WITH_LIBPYTHON",
-    "PCC_RUNTIME_CC",
-    "PCC_RUNTIME_HIGH",
 )
 _PCC_PY_ARCHIVE_ENV_KEYS = (
     "CC",
@@ -59,7 +57,6 @@ _PCC_PY_ARCHIVE_ENV_KEYS = (
 _REPO_ROOT = Path(__file__).absolute().parents[1]
 _RUNTIME_DIR = _REPO_ROOT / "pcc" / "py_runtime"
 _PCC_RUNTIME_CACHE_MARKER_SCHEMA = "pcc.runtime-build-cache.v4"
-_C_RUNTIME_CACHE_KEY_SCHEMA = "pcc.c-runtime-build-cache.v2"
 
 
 def _sha256_file(path: Path) -> str:
@@ -156,8 +153,6 @@ def self_host_source_key() -> str:
         "PCC_HOST_PYTHON",
         "PCC_PYTHON_CONFIG",
         "PCC_REFCOUNT_KIND",
-        "PCC_RUNTIME_CC",
-        "PCC_RUNTIME_HIGH",
         "PCC_WITH_THREADS",
         "PCC_SELF_TARGET_PASSES",
         "PCC_SELF_TARGET_PASS_TRANSPORT",
@@ -235,118 +230,6 @@ def self_host_object_cache_dir() -> Path:
     path = Path.home() / ".cache" / "pcc" / "test-artifacts" / "self-host-objects"
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def _c_runtime_source_key() -> str:
-    """Hash inputs that can change the default C runtime archive."""
-
-    digest = hashlib.sha256()
-    digest.update(_C_RUNTIME_CACHE_KEY_SCHEMA.encode("ascii"))
-    digest.update(b"\0")
-    for name in (
-        "CC",
-        "CFLAGS",
-        "CPPFLAGS",
-        "LDFLAGS",
-        "PCC_REFCOUNT_KIND",
-        "PCC_WITH_LIBPYTHON",
-    ):
-        digest.update(name.encode("utf-8"))
-        digest.update(str(os.environ.get(name, "")).encode("utf-8"))
-    files = []
-    for path in _RUNTIME_DIR.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part.startswith(".") or part == "__pycache__" for part in path.parts):
-            continue
-        if path.suffix not in {".c", ".h"} and path.name != "Makefile":
-            continue
-        files.append(path)
-    for path in sorted(files):
-        digest.update(path.relative_to(_RUNTIME_DIR).as_posix().encode("utf-8"))
-        digest.update(path.read_bytes())
-    return digest.hexdigest()[:24]
-
-
-def _cached_c_runtime(*, threaded: bool) -> Path:
-    """Build/reuse one immutable C runtime variant across pytest workers.
-
-    Tests must never rebuild or link the repository's mutable
-    ``pcc/py_runtime/libpy_runtime.a`` under xdist.  A content-addressed key,
-    inter-process lock, staging directory, and atomic publish make readers see
-    either a complete old artifact or a complete new artifact.
-    """
-
-    variant = "c-threaded" if threaded else "c-default"
-    key = _c_runtime_source_key() + "-" + variant
-    cache_root = Path.home() / ".cache" / "pcc" / "test-artifacts" / "runtime-builds"
-    cache_root.mkdir(parents=True, exist_ok=True)
-    runtime = cache_root / key
-    marker_name = ".pcc-c-runtime-complete"
-    marker = runtime / marker_name
-    archive = runtime / "libpy_runtime.a"
-    lock_path = cache_root / (key + ".lock")
-
-    with lock_path.open("a", encoding="utf-8") as lock_file:
-        try:
-            import fcntl
-        except ImportError:  # pragma: no cover - POSIX test environment
-            fcntl = None
-        if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        staging_root: Path | None = None
-        try:
-            if archive.is_file() and marker.is_file():
-                if marker.read_text(encoding="utf-8") == key:
-                    return runtime
-            if runtime.exists():
-                shutil.rmtree(runtime)
-            staging_root = Path(tempfile.mkdtemp(prefix=key + ".", dir=str(cache_root)))
-            work_runtime = staging_root / "py_runtime"
-            shutil.copytree(
-                _RUNTIME_DIR,
-                work_runtime,
-                ignore=shutil.ignore_patterns(
-                    "_native", "__pycache__", "build", "build_*", "*.a", "*.a.target"
-                ),
-            )
-            env = dict(os.environ)
-            env.pop("LC_ALL", None)
-            command = [
-                "make",
-                "-C",
-                str(work_runtime),
-                f"PCC_WITH_THREADS={1 if threaded else 0}",
-            ]
-            command.append("libpy_runtime.a")
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=180,
-                env=env,
-            )
-            assert result.returncode == 0, result.stdout + result.stderr
-            (work_runtime / marker_name).write_text(key, encoding="utf-8")
-            os.replace(work_runtime, runtime)
-            return runtime
-        finally:
-            if staging_root is not None:
-                shutil.rmtree(staging_root, ignore_errors=True)
-            if fcntl is not None:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
-def cached_c_runtime() -> Path:
-    """Return the immutable default C runtime source tree and archive."""
-
-    return _cached_c_runtime(threaded=False)
-
-
-def cached_threaded_c_runtime() -> Path:
-    """Return the immutable ``PCC_WITH_THREADS=1`` C runtime variant."""
-
-    return _cached_c_runtime(threaded=True)
 
 
 def cache_runtime_build(
@@ -505,10 +388,14 @@ def _cached_pcc_python_runtime(
                 ),
             )
             _make_runtime_staging_writable(work_runtime)
+            # Module rules are independent (.py -> .ll -> .o); the archive
+            # recipe holds its own lock, so a bounded -j is safe and turns a
+            # ~15 minute serial cold build into a few minutes.
             command = [
                 "make",
                 "-C",
                 str(work_runtime),
+                "-j" + str(min(8, os.cpu_count() or 1)),
                 f"PCC={pcc_bin}",
                 f"PYTHON={sys.executable}",
                 f"PCC_REPO_ROOT={_REPO_ROOT}",

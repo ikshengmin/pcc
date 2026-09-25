@@ -104,8 +104,6 @@ def test_dynamic_dunder_import_with_fromlist_returns_compiled_module(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
 
     def build(site):
         pkg = site / "dynamic_pkg"

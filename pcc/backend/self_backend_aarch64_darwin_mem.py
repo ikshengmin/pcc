@@ -292,6 +292,8 @@ def emitted_fixed_instruction_line(mnemonic: str) -> str:
             word = 0xD503233F
         elif mnemonic == "autiasp":
             word = 0xD50323BF
+        elif mnemonic == "bti c":
+            word = 0xD503245F
         elif mnemonic == "mrs x17, nzcv":
             word = 0xD53B4211
         elif mnemonic == "msr nzcv, x17":

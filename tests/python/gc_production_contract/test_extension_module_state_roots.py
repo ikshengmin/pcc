@@ -139,7 +139,6 @@ def _extension_module_state_exe(tmp_path_factory):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv",

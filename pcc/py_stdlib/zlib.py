@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import binascii
 
-from pcc.extern import c_int64, c_ptr, extern, c_obj
+from pcc.extern import c_int64, c_ptr, c_rawptr, extern, c_obj
 from pcc.unsafe import (
     call_i32_ptr1,
     call_i32_ptr_i32,
@@ -40,7 +40,8 @@ from pcc.unsafe import (
 )
 
 
-_py_bytes_new: "extern" = extern("py_bytes_new", (c_ptr, c_int64), c_obj)
+# The data operand is a raw native buffer address, never an object.
+_py_bytes_new: "extern" = extern("py_bytes_new", (c_rawptr, c_int64), c_obj)
 
 
 MAX_WBITS = 15
@@ -79,7 +80,7 @@ def _signed_i32(value):
     return narrowed
 
 
-def _open_zlib():
+def _open_zlib() -> int:
     handle = dynamic_library_open(
         cstr("/usr/lib/libz.1.dylib"), "darwin"
     )
@@ -92,7 +93,7 @@ def _open_zlib():
     return handle
 
 
-def _resolve_inflate_symbols(handle):
+def _resolve_inflate_symbols(handle: int) -> tuple[int, int, int, int]:
     init_fn = dynamic_library_symbol(handle, cstr("inflateInit2_"))
     inflate_fn = dynamic_library_symbol(handle, cstr("inflate"))
     end_fn = dynamic_library_symbol(handle, cstr("inflateEnd"))
@@ -107,7 +108,7 @@ def _resolve_inflate_symbols(handle):
     return init_fn, inflate_fn, end_fn, version_fn
 
 
-def _resolve_deflate_symbols(handle):
+def _resolve_deflate_symbols(handle: int) -> tuple[int, int, int, int]:
     init_fn = dynamic_library_symbol(handle, cstr("deflateInit2_"))
     deflate_fn = dynamic_library_symbol(handle, cstr("deflate"))
     end_fn = dynamic_library_symbol(handle, cstr("deflateEnd"))
@@ -122,12 +123,12 @@ def _resolve_deflate_symbols(handle):
     return init_fn, deflate_fn, end_fn, version_fn
 
 
-def _bytes_data(data):
+def _bytes_data(data) -> int:
     # pcc bytes and bytearray share byte_len@16 followed by inline data@24.
     return ptr_add(data, 24)
 
 
-def _grow_compression_output(stream, output, capacity):
+def _grow_compression_output(stream: int, output: int, capacity: int) -> tuple[int, int]:
     total = load_i64(stream, 40)
     new_capacity = capacity * 2
     if new_capacity > _COMPRESSION_OUTPUT_SENTINEL_CAPACITY:
@@ -144,6 +145,27 @@ def _grow_compression_output(stream, output, capacity):
 
 def crc32(data, value: int = 0) -> int:
     return binascii.crc32(data, value)
+
+
+def adler32(data, value: int = 1) -> int:
+    # zlib's Adler-32: sums modulo 65521, reduced every NMAX=5552 bytes (the
+    # largest run that cannot overflow 32-bit accumulators in the C code).
+    a = value & 0xFFFF
+    b = (value >> 16) & 0xFFFF
+    view = bytes(data)
+    size = len(view)
+    index = 0
+    while index < size:
+        end = index + 5552
+        if end > size:
+            end = size
+        while index < end:
+            a += view[index]
+            b += a
+            index += 1
+        a %= 65521
+        b %= 65521
+    return (b << 16) | a
 
 
 class Compress:

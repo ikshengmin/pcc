@@ -5,7 +5,7 @@ import subprocess
 import textwrap
 
 
-def test_context_enter_exit_runtime(tmp_path, c_runtime_archive):
+def test_context_enter_exit_runtime(tmp_path, pcc_py_runtime_archive):
     src = tmp_path / "context_probe.c"
     exe = tmp_path / "context_probe"
     src.write_text(
@@ -64,9 +64,9 @@ def test_context_enter_exit_runtime(tmp_path, c_runtime_archive):
     subprocess.run(
         [
             os.environ.get("CC", "cc"),
-            "-I", str(c_runtime_archive.parent / "include"),
-            "-I", str(c_runtime_archive.parent / "src"),
-            str(src), str(c_runtime_archive),
+            "-I", str(pcc_py_runtime_archive.parent / "include"),
+            "-I", str(pcc_py_runtime_archive.parent / "src"),
+            str(src), str(pcc_py_runtime_archive),
             "-lm", "-o", str(exe),
         ],
         check=True,
@@ -76,44 +76,28 @@ def test_context_enter_exit_runtime(tmp_path, c_runtime_archive):
 
 
 def test_context_runtime_guards_silent_null_before_owned_method_cleanup():
-    c_source = open("pcc/py_runtime/src/py_context.c", encoding="utf-8").read()
     py_source = open(
         "pcc/py_runtime/py/py_context_runtime.py", encoding="utf-8"
     ).read()
 
-    for source in (c_source, py_source):
+    for source in (py_source,):
         assert "py_runtime_error_if_unset" in source
         assert "context __enter__ returned NULL without setting an exception" in source
         assert "context __exit__ returned NULL without setting an exception" in source
         assert "py_context_enter received NULL manager" in source
         assert "py_context_exit received NULL manager" in source
 
-    for source, call, guard, cleanup in (
-        (
-            c_source,
-            "PyObject *result = call_unary_method(method, manager);",
-            "py_context_enter returned NULL without setting an exception",
-            "py_decref(method);",
-        ),
-        (
+    for source, call, guard, cleanup in ((
             py_source,
             "result = _call_enter_method(method, manager)",
             "py_context_enter returned NULL without setting an exception",
             "py_decref(method)",
-        ),
-        (
-            c_source,
-            "PyObject *result = call_exit_method(method, manager, exc_type, exc, tb);",
-            "py_context_exit returned NULL without setting an exception",
-            "py_decref(method);",
-        ),
-        (
+        ), (
             py_source,
             "result = _call_exit_method(method, manager, exc_type, exc, traceback)",
             "py_context_exit returned NULL without setting an exception",
             "py_decref(method)",
-        ),
-    ):
+        )):
         call_pos = source.index(call)
         guard_pos = source.index(guard, call_pos)
         cleanup_pos = source.index(cleanup, call_pos)

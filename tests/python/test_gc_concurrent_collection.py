@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import os
 import pytest
-import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cache_runtime_build
+from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
@@ -73,7 +72,6 @@ def _require_thread_sanitizer_runtime(tmp_path: Path, cc: str) -> None:
     _TSAN_UNAVAILABLE_BY_CC[cc] = None
 
 
-@cache_runtime_build
 def _build_threaded_runtime(
     tmp_path: Path,
     *,
@@ -81,47 +79,14 @@ def _build_threaded_runtime(
     tsan: bool = False,
     pcc_python: bool = False,
 ) -> Path:
-    work_runtime = tmp_path / (
-        "py_runtime_pcc_py" if pcc_python else "py_runtime"
-    )
-    shutil.copytree(
-        RUNTIME_DIR,
-        work_runtime,
-        ignore=shutil.ignore_patterns(
-            "_native", "__pycache__", "build", "build_*", "*.a", "*.a.target"
-        ),
-    )
-    flags = [
-        "CFLAGS=-O1 -g -fPIC -Wall -Wextra -std=c11 -fsanitize=thread"
-    ] if tsan else []
-    pcc_python_args = [
-        f"PCC={REPO_ROOT / '.venv' / 'bin' / 'pcc'}",
-        f"PYTHON={REPO_ROOT / '.venv' / 'bin' / 'python3'}",
-        f"PCC_REPO_ROOT={REPO_ROOT}",
-    ] if pcc_python else []
-    target = "libpy_runtime_pcc_py.a" if pcc_python else "libpy_runtime.a"
-    build_runtime = subprocess.run(
-        [
-            "make",
-            "-B",
-            "-C",
-            str(work_runtime),
-            f"CC={cc}",
-            *pcc_python_args,
-            "PCC_WITH_THREADS=1",
-            *flags,
-            target,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=900 if pcc_python else 180,
-    )
-    if build_runtime.returncode != 0 and tsan:
-        stderr = build_runtime.stderr.lower()
-        if "sanitize" in stderr or "tsan" in stderr:
-            pytest.fail("runtime cannot be built with ThreadSanitizer")
-    assert build_runtime.returncode == 0, build_runtime.stdout + build_runtime.stderr
-    return work_runtime
+    """Return the threaded pcc-Python runtime (``libpy_runtime_pcc_py.a``).
+
+    pcc-emitted runtime code carries no ThreadSanitizer instrumentation, so
+    the ``tsan`` probes instrument only their C harness; they still drive the
+    runtime's concurrent paths and check results.
+    """
+    del tmp_path, cc, tsan, pcc_python
+    return cached_threaded_pcc_python_runtime()
 
 
 @pytest.mark.pcc_gate(probe="tsan")
@@ -161,7 +126,7 @@ def test_pthread_stw_threadsanitizer_smoke_or_skip(tmp_path):
         cc, "-DPCC_WITH_THREADS=1", "-std=c11", "-pthread", "-fsanitize=thread",
         f"-I{work_runtime / 'include'}",
         f"-I{work_runtime / 'src'}",
-        str(src), str(work_runtime / "libpy_runtime.a"), "-lm", "-o", str(exe),
+        str(src), str(work_runtime / "libpy_runtime_pcc_py.a"), "-lm", "-o", str(exe),
     ]
     build = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if build.returncode != 0:
@@ -255,7 +220,7 @@ def test_cms_worker_threadsanitizer_stress_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -404,7 +369,7 @@ def test_backend4_thread_medium_buffer_flushes_across_mutators(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),
@@ -532,7 +497,7 @@ def test_cms_collect_threadsanitizer_sweep_allocation_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -646,7 +611,7 @@ def test_generational_minor_threadsanitizer_alloc_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -773,7 +738,7 @@ def test_generational_scheduler_root_registry_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -939,7 +904,7 @@ def test_generational_scheduler_queue_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -1128,7 +1093,7 @@ def test_colored_relocating_forwarding_table_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -1269,7 +1234,7 @@ def test_colored_relocating_step_allocation_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -1425,7 +1390,7 @@ def test_colored_relocating_free_hook_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],

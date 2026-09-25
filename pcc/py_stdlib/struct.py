@@ -1,13 +1,32 @@
-"""Finite ``struct`` provider for pcc-owned compiler/runtime metadata.
+"""``struct`` provider for pcc-owned code and compiled programs.
 
-The owned surface is the explicit-standard-layout integer/bytes subset used by
-pcc's native object, ELF and precise-stackmap codecs.  Native alignment,
-pointer-sized fields and floating-point formats are deliberately rejected
-until their target ABI and shared float-bit implementation are wired into this
-provider.  Unsupported shapes fail before producing partial bytes.
+Standard layouts (``<``, ``>``, ``!``, ``=``) cover every integer, bytes,
+bool and IEEE float (``e``/``f``/``d``) code.  ``@`` and a format with no
+prefix use the LP64 native layout of pcc's little-endian targets: ``l``/``L``,
+``n``/``N`` and ``P`` are 8 bytes and every field is aligned to its size.
+Unsupported shapes fail before producing partial bytes.
 """
 from __future__ import annotations
 
+try:
+    from ._pcc_float_bits import (
+        _bits_to_float16,
+        _bits_to_float32,
+        _bits_to_float64,
+        _float16_to_bits,
+        _float32_to_bits,
+        _float64_to_bits,
+    )
+except ImportError:
+    # pcc publishes this provider as the top-level stdlib module ``struct``.
+    from _pcc_float_bits import (
+        _bits_to_float16,
+        _bits_to_float32,
+        _bits_to_float64,
+        _float16_to_bits,
+        _float32_to_bits,
+        _float64_to_bits,
+    )
 from pcc.unsafe import abi_constant, load_i8, load_i32, load_i64, null, ptr_is_null
 
 
@@ -23,6 +42,7 @@ _KIND_PAD = 1
 _KIND_BYTES = 2
 _KIND_CHAR = 3
 _KIND_BOOL = 4
+_KIND_FLOAT = 5
 
 
 def _native_payload_reads_available() -> bool:
@@ -55,6 +75,9 @@ _SIZES = {
     "L": 4,
     "q": 8,
     "Q": 8,
+    "e": 2,
+    "f": 4,
+    "d": 8,
     "s": 1,
 }
 
@@ -65,6 +88,7 @@ def _parse_format(fmt: str):
     if fmt == "":
         return "little", []
     prefix = fmt[0]
+    native = False
     if prefix == "<" or prefix == "=" :
         byteorder = "little"
         index = 1
@@ -72,13 +96,14 @@ def _parse_format(fmt: str):
         byteorder = "big"
         index = 1
     elif prefix == "@":
-        raise NotImplementedError(
-            "native-aligned struct layouts are not owned by pcc.py_stdlib.struct"
-        )
+        byteorder = "little"
+        native = True
+        index = 1
     else:
-        raise NotImplementedError(
-            "struct formats must use an explicit '<', '>', '!', or '=' prefix"
-        )
+        # No prefix is ``@``: native sizes and alignment.
+        byteorder = "little"
+        native = True
+        index = 0
 
     fields = []
     repeat = -1
@@ -92,18 +117,65 @@ def _parse_format(fmt: str):
                 repeat = 0
             repeat = repeat * 10 + (ord(ch) - ord("0"))
             continue
-        if ch not in _SIZES:
-            if ch in "efdPnN":
-                raise NotImplementedError(
-                    "struct format code " + repr(ch) + " is not owned yet"
-                )
-            raise error("bad char in struct format: " + repr(ch))
+        if ch not in _SIZES and not (native and ch in "nNP"):
+            raise error("bad char in struct format")
         count = repeat if repeat >= 0 else 1
         fields.append((ch, count))
         repeat = -1
     if repeat >= 0:
         raise error("repeat count given without format specifier")
+    if native:
+        fields = _native_layout(fields)
     return byteorder, fields
+
+
+# LP64 native spellings of the 8-byte integer codes.
+_NATIVE_WIDE = {"l": "q", "L": "Q", "n": "q", "N": "Q", "P": "Q"}
+
+
+def _native_layout(fields):
+    """``@`` fields: 8-byte ``l``/``L``/``n``/``N``/``P`` and size alignment.
+
+    Each field starts at a multiple of its item size (bytes, chars and pads
+    are unaligned); the struct is not padded at its end, as in CPython.
+    """
+    out = []
+    offset = 0
+    for ch, count in fields:
+        ch = _NATIVE_WIDE.get(ch, ch)
+        size = _SIZES[ch]
+        if ch != "x" and ch != "s" and ch != "c" and size > 1 and count > 0:
+            padding = (-offset) % size
+            if padding:
+                out.append(("x", padding))
+                offset += padding
+        out.append((ch, count))
+        offset += size * count
+    return out
+
+
+def _float_width_bits(ch: str, value: float):
+    """IEEE bits of ``value`` for float code ``ch``; finite overflow raises.
+
+    Unannotated result, like ``_float64_to_bits``: a negative double's pattern
+    is >= 2**63, which an ``-> int`` i64 lane cannot carry in pcc's own build.
+    """
+    if ch == "d":
+        return _float64_to_bits(value)
+    bits = _float32_to_bits(value) if ch == "f" else _float16_to_bits(value)
+    exponent_mask = 0x7F800000 if ch == "f" else 0x7C00
+    if (bits & exponent_mask) == exponent_mask and value == value:
+        if value - value == 0.0:
+            raise OverflowError("float too large to pack with " + ch + " format")
+    return bits
+
+
+def _float_from_bits(width: int, bits) -> float:
+    if width == 8:
+        return _bits_to_float64(bits)
+    if width == 4:
+        return _bits_to_float32(bits)
+    return _bits_to_float16(bits)
 
 
 def _format_size(fields) -> int:
@@ -177,6 +249,13 @@ def _pack_fields(byteorder: str, fields, values) -> bytes:
                     raise error("char format requires a bytes object of length 1")
                 out += bytes(value)
                 continue
+            if ch == "e" or ch == "f" or ch == "d":
+                try:
+                    number = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise error("required argument is not a float") from exc
+                out += _float_width_bits(ch, number).to_bytes(_SIZES[ch], byteorder)
+                continue
             width, signed = _integer_shape(ch)
             if ch == "?":
                 numeric = 1 if bool(value) else 0
@@ -231,6 +310,8 @@ def _build_plan(fields) -> list[tuple[int, int, int, int]]:
             plan.append((_KIND_CHAR, 1, 0, count))
         elif ch == "?":
             plan.append((_KIND_BOOL, 1, 0, count))
+        elif ch == "e" or ch == "f" or ch == "d":
+            plan.append((_KIND_FLOAT, _SIZES[ch], 0, count))
         else:
             width, signed = _integer_shape(ch)
             plan.append((_KIND_INT, width, 1 if signed else 0, count))
@@ -259,6 +340,10 @@ def _unpack_generic(
                 cursor += 1
                 continue
             numeric = int.from_bytes(raw[cursor : cursor + width], byteorder)
+            if kind == _KIND_FLOAT:
+                cursor += width
+                values.append(_float_from_bits(width, numeric))
+                continue
             if signed != 0:
                 # Derive both bounds from ``width`` with one shift each.
                 #
@@ -358,9 +443,16 @@ def _unpack_plan(byteorder: str, plan, size: int, buffer, offset: int) -> tuple:
             + str(offset + size)
             + " bytes"
         )
-    if _NATIVE_PAYLOAD_READS and byteorder == "little":
+    if _NATIVE_PAYLOAD_READS and byteorder == "little" and not _plan_has_float(plan):
         return _unpack_native_little(plan, raw, offset)
     return _unpack_generic(byteorder, plan, raw, offset)
+
+
+def _plan_has_float(plan) -> bool:
+    for kind, _width, _signed, _count in plan:
+        if kind == _KIND_FLOAT:
+            return True
+    return False
 
 
 def _unpack_fields(byteorder: str, fields, buffer, offset: int):

@@ -18,8 +18,6 @@ import pytest
 
 
 def _run(tmp_path: Path, source: str, *, runtime_cc: bool, monkeypatch) -> str:
-    if runtime_cc:
-        monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "cx.py"
@@ -32,7 +30,7 @@ def _run(tmp_path: Path, source: str, *, runtime_cc: bool, monkeypatch) -> str:
     return r.stdout
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_complex_arithmetic(tmp_path, monkeypatch, runtime_cc):
     out = _run(tmp_path, """
         def main():
@@ -60,7 +58,7 @@ def test_complex_arithmetic(tmp_path, monkeypatch, runtime_cc):
     ], out
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_complex_div_by_zero_raises(tmp_path, monkeypatch, runtime_cc):
     out = _run(tmp_path, """
         def main():
@@ -76,7 +74,7 @@ def test_complex_div_by_zero_raises(tmp_path, monkeypatch, runtime_cc):
     assert out.strip() == "zerodiv raised", out
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_complex_ordering_raises(tmp_path, monkeypatch, runtime_cc):
     # complex supports ==/!= but no ordering; CPython raises TypeError with
     # ``'<' not supported between instances of 'complex' and 'complex'``.
@@ -123,7 +121,7 @@ def test_complex_ordering_raises(tmp_path, monkeypatch, runtime_cc):
     ], out
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_complex_pow(tmp_path, monkeypatch, runtime_cc):
     # ``**`` on complex operands routes to the py_complex_pow runtime helper
     # (mirrors CPython _Py_c_pow: integer fast path + exp/log/cos/sin general
@@ -151,7 +149,7 @@ def test_complex_pow(tmp_path, monkeypatch, runtime_cc):
     ], out
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_complex_pow_zero_to_negative_raises(tmp_path, monkeypatch, runtime_cc):
     # 0 ** (negative or complex power) raises ZeroDivisionError, mirroring
     # CPython. The frontend emits a py_err_occurred() check after the call.
@@ -170,7 +168,7 @@ def test_complex_pow_zero_to_negative_raises(tmp_path, monkeypatch, runtime_cc):
     assert out.split("\n")[:2] == ["zerodiv raised", "0j"], out
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_complex_pow_general_imaginary_exponent_and_numeric_coercion(
     tmp_path, monkeypatch, runtime_cc
 ):

@@ -189,9 +189,10 @@ def test_linux_pcc1_libc_imports_stay_within_baseline():
                 "cp -r /workspace/pcc/py_runtime/src /workspace/pcc/py_runtime/py "
                 "/workspace/pcc/py_runtime/include /workspace/pcc/py_runtime/Makefile $RT/; "
                 "cp -r /workspace/pcc/py_runtime/vendor $RT/ 2>/dev/null || true; "
-                "cd $RT && make libpy_runtime.a >/dev/null 2>&1; cd /workspace; "
-                "PCC_RUNTIME_ARCHIVE=$RT/libpy_runtime.a PCC_RUNTIME_DIR=$RT "
-                "PCC_RUNTIME_CC=cc PCC_RUNTIME_HIGH=c "
+                "cd $RT && make PYTHON=python3 'PCC=python3 -m pcc' "
+                "PCC_REPO_ROOT=/workspace libpy_runtime_pcc_py.a >/dev/null 2>&1; "
+                "cd /workspace; "
+                "PCC_RUNTIME_ARCHIVE=$RT/libpy_runtime_pcc_py.a PCC_RUNTIME_DIR=$RT "
                 "PCC_BOOTSTRAP_OUT_DIR=/workspace/build/libc-ratchet-linux "
                 "bash scripts/bootstrap.sh --backend llvm --stage 1",
             ],

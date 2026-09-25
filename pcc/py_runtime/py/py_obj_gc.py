@@ -21,6 +21,7 @@ from pcc.unsafe import (
     load_i64,
     load_ptr,
     null,
+    ptr_eq,
     ptr_is_null,
 )
 
@@ -62,7 +63,7 @@ def _list_has_identical_item(lst, target) -> int:
     items = load_ptr(lst, 32)
     i: int = 0
     while i < length:
-        if load_ptr(items, i * 8) == target:
+        if ptr_eq(load_ptr(items, i * 8), target) != 0:
             return 1
         i = i + 1
     return 0

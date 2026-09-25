@@ -126,8 +126,6 @@ def test_star_import_respects_all_dunder_names(tmp_path):
 
 
 def test_star_import_copies_dynamic_globals_exports(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
 
     def build(site):
         pkg = site / "u"
@@ -151,8 +149,6 @@ def test_star_import_copies_dynamic_globals_exports(tmp_path, monkeypatch):
 
 
 def test_star_import_publishes_metadata_decorated_function(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
 
     def build(site):
         pkg = site / "v"

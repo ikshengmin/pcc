@@ -8,6 +8,7 @@ from . import BackendUnavailable
 from .self_backend_aarch64_darwin_regs import align_pow2
 from .self_backend_aarch64_darwin_symbols import asm_symbol
 from .self_backend_ir import GlobalDef, TypeDesc, _align_to
+from .self_backend_literals import fp_bitcast_initializer_bits
 from .self_backend_float_bits import bits_to_float64, float32_to_bits
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_parse import (
@@ -268,6 +269,13 @@ def emit_scalar_initializer(
                 fp32_bits = float32_to_bits(value)
                 return [f"  .long {fp32_bits}"]
             if ty.width <= 64:
+                return [f"  .quad {bits}"]
+        bitcast = fp_bitcast_initializer_bits(init)
+        if bitcast is not None:
+            width, bits = bitcast
+            if width == 32 and ty.width <= 32:
+                return [f"  .long {bits}"]
+            if width == 64 and ty.width == 64:
                 return [f"  .quad {bits}"]
         return [f"  .float {init}" if ty.width <= 32 else f"  .double {init}"]
     raise BackendUnavailable(

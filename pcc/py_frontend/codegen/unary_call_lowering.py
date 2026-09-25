@@ -97,6 +97,17 @@ class UnaryCallLoweringMixin:
             }[expr.op]
             fn_val = self._emit_cpy_attr(operand, dunder_name)
             return self._emit_cpy_func_call(fn_val, dunder_name, ())
+        if (
+            expr.op in ("+", "-", "~")
+            and isinstance(operand.type, ir.PointerType)
+            and not isinstance(ty, (IntType, BoolType, FloatType, ComplexType))
+        ):
+            # A dynamically-typed operand can be an int, a float, a complex or
+            # an instance with __neg__: dispatch at run time.  The numeric
+            # fallthrough below reads the operand through the i64 lane, which
+            # returned the int 0 for ``-f`` on a dyn float -- pcc1's
+            # ``_bits_to_float64`` produced 0.0 for every negative double.
+            return self._emit_dynamic_unary(expr, operand)
         if expr.op == "+":
             return operand
         if expr.op == "-":
@@ -197,6 +208,40 @@ class UnaryCallLoweringMixin:
             return self.builder.not_(ival, name=self._fresh("bnot"))
 
         raise NotImplementedError(f"Layer 1 unary {expr.op!r} not supported")
+
+    def _emit_dynamic_unary(self, expr: UnaryOp, operand: ir.Value) -> ir.Value:
+        runtime_name = {
+            "+": "py_obj_pos",
+            "-": "py_obj_neg",
+            "~": "py_obj_invert",
+        }[expr.op]
+        operand_owned = (
+            operand not in getattr(self, "_cpy_values", ())
+            and self._pcc_pointer_source_is_owned(expr.operand)
+        )
+        operand_pinned = operand not in getattr(self, "_cpy_values", ())
+        operand_cleanup = ()
+        if operand_pinned:
+            self._gc_pin(operand)
+            operand_cleanup = ((operand, operand_owned),)
+        result = self.builder.call(
+            self.runtime[runtime_name],
+            [operand],
+            name=self._fresh("dyn.unary"),
+        )
+        self._emit_post_call_err_check(
+            self._expr_span_or_none(expr),
+            pinned_release_on_error=operand_cleanup,
+        )
+        self._guard_cpy_value_not_null(
+            result,
+            pinned_pcc_on_error=operand_cleanup,
+        )
+        if operand_pinned:
+            self._gc_unpin(operand)
+        if operand_owned:
+            self._gc_release(operand)
+        return result
 
     # -- Compare -------------------------------------------------------
 

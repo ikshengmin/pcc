@@ -227,6 +227,38 @@ def test_nested_async_closure_forwarded_through_method_parameter_keeps_writer(tm
     ]
 
 
+def test_async_param_captured_by_returned_closure_is_a_cell(tmp_path):
+    """A parameter a returned closure captures is a list cell for the whole
+    body; a generator's factory must store that cell in the frame, or the
+    closure's ``writer[0]`` read subscripts the argument itself."""
+    result = _compile_and_run(tmp_path, """
+        import asyncio
+
+        class Writer:
+            pass
+
+        async def accept(writer, other):
+            def sync_reply():
+                return type(writer).__name__ + " " + str(other)
+            async def async_reply():
+                return type(writer).__name__ + "!"
+            return sync_reply, async_reply
+
+        async def outer():
+            sync_reply, async_reply = await accept(Writer(), 5)
+            print(sync_reply())
+            print(await async_reply())
+
+        def main() -> None:
+            asyncio.run(outer())
+
+        if __name__ == "__main__":
+            main()
+        """)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines() == ["Writer 5", "Writer!"]
+
+
 def test_cross_module_async_function_attr_call_returns_coroutine(tmp_path):
     from pcc.py_frontend.pipeline import compile_python
 

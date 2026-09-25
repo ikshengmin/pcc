@@ -30,7 +30,7 @@ def test_type_infer_preserves_bytes_type():
     assert isinstance(second.value.ty, BytesType)
 
 
-def test_runtime_bytes_len_getitem_and_slice_native(tmp_path, c_runtime_archive):
+def test_runtime_bytes_len_getitem_and_slice_native(tmp_path, pcc_py_runtime_archive):
     src = tmp_path / "bytes_probe.c"
     exe = tmp_path / "bytes_probe"
     src.write_text(
@@ -80,9 +80,9 @@ def test_runtime_bytes_len_getitem_and_slice_native(tmp_path, c_runtime_archive)
         [
             os.environ.get("CC", "cc"),
             "-I",
-            str(c_runtime_archive.parent / "include"),
+            str(pcc_py_runtime_archive.parent / "include"),
             str(src),
-            str(c_runtime_archive),
+            str(pcc_py_runtime_archive),
             "-lm",
             "-o",
             str(exe),

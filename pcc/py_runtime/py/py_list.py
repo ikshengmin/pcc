@@ -34,7 +34,9 @@ from pcc.py_runtime.py.py_abi_constants import (
     PY_TYPE_TUPLE,
 )
 from pcc.py_runtime.py.py_abi_constants import (
+    PY_TYPE_BYTEARRAY,
     PY_TYPE_DICT,
+    PY_TYPE_SET,
 )
 from pcc.unsafe import (
     cstr,
@@ -138,6 +140,11 @@ pcc_gc_store_ptr_plan_finish = extern(
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 py_dict_clear = extern("py_dict_clear", (c_ptr,), c_void)
+py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
+py_set_clear = extern("py_set_clear", (c_ptr,), c_void)
+py_bytearray_clear = extern("py_bytearray_clear", (c_ptr,), c_void)
+py_obj_load_method = extern("py_obj_load_method", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_method = extern("py_obj_call_method", (c_ptr, c_ptr, c_ptr), c_ptr)
 _pcc_debug_bad_incref = extern("pcc_debug_bad_incref", (c_ptr, c_int32), c_void)
 getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 
@@ -2253,8 +2260,30 @@ def py_obj_clear(obj) -> None:
     tag: int = _type_of(obj)
     if tag == PY_TYPE_LIST:  # PY_TYPE_LIST
         py_list_clear(obj)
-    elif tag == PY_TYPE_DICT:  # PY_TYPE_DICT
+        return
+    if tag == PY_TYPE_DICT:  # PY_TYPE_DICT
         py_dict_clear(obj)
+        return
+    if tag == PY_TYPE_SET:
+        py_set_clear(obj)
+        return
+    if tag == PY_TYPE_BYTEARRAY:
+        py_bytearray_clear(obj)
+        return
+    # Anything else -- a user class with clear(), threading.Event -- takes the
+    # ordinary method call, which raises AttributeError when there is none.
+    # This helper used to return silently, so ``x.clear()`` on an untyped
+    # set, Event or user object did nothing.
+    out_self = stack_alloc(8)
+    method = py_obj_load_method(obj, cstr("clear"), out_self)
+    if ptr_is_null(method) != 0:
+        return
+    args = py_tuple_new(0)
+    result = py_obj_call_method(method, load_ptr(out_self, 0), args)
+    py_decref(args)
+    py_decref(method)
+    if ptr_is_null(result) == 0:
+        py_decref(result)
 
 
 @c_abi_export("py_list_index")

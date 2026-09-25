@@ -198,30 +198,17 @@ def test_generational_oldification_preserves_registration_and_rollback_order() -
 
 def test_generational_cpy_handle_oldification_moves_one_foreign_owner() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     strict_oldify = _export_body(strict, "pcc_gc_generational_oldify_copy")
-    c_oldify = c_source.split(
-        "static PyObject *pcc_gc_generational_oldify_copy", 1
-    )[1].split("static void pcc_gc_promote_owner_referents", 1)[0]
 
     assert "PY_TYPE_CPY_HANDLE" in strict
     assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
         "pcc_cpy_handle_move_owned_ref"
     ] == (("c_ptr", "c_ptr"), "c_void")
-    for body, forward_move, rollback_move in (
-        (
+    for body, forward_move, rollback_move in ((
             strict_oldify,
             "pcc_cpy_handle_move_owned_ref(from_obj, to_obj)",
             "pcc_cpy_handle_move_owned_ref(to_obj, from_obj)",
-        ),
-        (
-            c_oldify,
-            "pcc_cpy_handle_move_owned_ref(from, to)",
-            "pcc_cpy_handle_move_owned_ref(to, from)",
-        ),
-    ):
+        ),):
         payload = body.index("pcc_gc_relocate_copy_payload")
         forward = body.index(forward_move)
         install = body.index("pcc_gc_install_forwarding_unlocked")

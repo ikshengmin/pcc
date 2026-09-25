@@ -9,7 +9,6 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_SOURCE = ROOT / "pcc" / "py_runtime" / "src" / "pcc_metal_runtime.c"
 PORT_SOURCE = (
     ROOT / "pcc" / "py_runtime" / "py" / "freestanding_metal_runtime.py"
 )
@@ -173,21 +172,19 @@ def _build_fake_bridge(tmp_path: Path) -> tuple[Path, list[str]]:
     return bridge, driver_extra
 
 
-def test_metal_runtime_c_oracle_and_python_archive_route_are_declared() -> None:
+def test_metal_runtime_python_archive_route_is_declared() -> None:
     makefile = RUNTIME_MAKEFILE.read_text(encoding="utf-8")
-    assert "$(SRCDIR)/pcc_metal_runtime.c" in makefile
-    assert "PCC_CC_ONLY_SRCS = py_os_rss py_os_heap py_io_waitset pcc_metal_runtime" in makefile
     assert "freestanding_metal_runtime" in makefile
-    assert "$(OBJDIR_PY)/pcc_metal_runtime.o:" not in makefile
+    assert "pcc_metal_runtime.o:" not in makefile
     header = RUNTIME_HEADER.read_text(encoding="utf-8")
     assert "pcc_metal_source_runtime_call_prebuilt" in header
     assert "pcc_metal_metallib_runtime_call_prebuilt" in header
 
-    source = RUNTIME_SOURCE.read_text(encoding="utf-8")
+    source = PORT_SOURCE.read_text(encoding="utf-8")
+    assert "__pcc_freestanding__ = True" in source
     assert "Python.h" not in source
     assert "ctypes" not in source
     assert "py_cpy" not in source
-    assert "PyObject" not in source
 
 
 def test_metal_runtime_python_port_emits_through_self_backend(tmp_path: Path) -> None:
@@ -229,7 +226,9 @@ def test_metal_runtime_python_port_emits_through_self_backend(tmp_path: Path) ->
         )
 
 
-def test_metal_runtime_c_shim_calls_prebuilt_bridge_without_python(tmp_path: Path) -> None:
+def test_metal_runtime_calls_prebuilt_bridge_without_python(
+    tmp_path: Path, pcc_py_runtime_archive: Path,
+) -> None:
     bridge, driver_extra = _build_fake_bridge(tmp_path)
 
     driver_source = tmp_path / "driver.c"
@@ -280,7 +279,8 @@ def test_metal_runtime_c_shim_calls_prebuilt_bridge_without_python(tmp_path: Pat
             "-I",
             str(RUNTIME_INCLUDE),
             str(driver_source),
-            str(RUNTIME_SOURCE),
+            str(pcc_py_runtime_archive),
+            "-lm",
             "-o",
             str(driver),
             *driver_extra,
@@ -298,8 +298,8 @@ def test_metal_runtime_c_shim_calls_prebuilt_bridge_without_python(tmp_path: Pat
     assert result.stdout.strip() == "rc=0"
 
 
-def test_metal_runtime_c_shim_calls_prebuilt_metallib_bridge_without_python(
-    tmp_path: Path,
+def test_metal_runtime_calls_prebuilt_metallib_bridge_without_python(
+    tmp_path: Path, pcc_py_runtime_archive: Path,
 ) -> None:
     bridge, driver_extra = _build_fake_bridge(tmp_path)
 
@@ -349,7 +349,8 @@ def test_metal_runtime_c_shim_calls_prebuilt_metallib_bridge_without_python(
             "-I",
             str(RUNTIME_INCLUDE),
             str(driver_source),
-            str(RUNTIME_SOURCE),
+            str(pcc_py_runtime_archive),
+            "-lm",
             "-o",
             str(driver),
             *driver_extra,
@@ -367,7 +368,9 @@ def test_metal_runtime_c_shim_calls_prebuilt_metallib_bridge_without_python(
     assert result.stdout.strip() == "rc=0"
 
 
-def test_metal_runtime_c_shim_calls_prebuilt_buffer_runtime(tmp_path: Path) -> None:
+def test_metal_runtime_calls_prebuilt_buffer_runtime(
+    tmp_path: Path, pcc_py_runtime_archive: Path,
+) -> None:
     bridge, driver_extra = _build_fake_bridge(tmp_path)
 
     driver_source = tmp_path / "buffer_driver.c"
@@ -419,7 +422,8 @@ def test_metal_runtime_c_shim_calls_prebuilt_buffer_runtime(tmp_path: Path) -> N
             "-I",
             str(RUNTIME_INCLUDE),
             str(driver_source),
-            str(RUNTIME_SOURCE),
+            str(pcc_py_runtime_archive),
+            "-lm",
             "-o",
             str(driver),
             *driver_extra,

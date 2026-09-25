@@ -111,6 +111,9 @@ pcc_stdio_format_float_raw = extern(
     (c_ptr, c_double, c_int64, c_int64, c_int64, c_int64, c_int64),
     c_int64,
 )
+pcc_stdio_float_raw_capacity = extern(
+    "pcc_stdio_float_raw_capacity", (c_int64,), c_int64
+)
 
 # --- PyExc_* singleton data symbols -------------------------------------
 # Mirror of py_capi_shim.c: each PyExc_* is a linker-visible pointer global
@@ -767,12 +770,22 @@ def _format_message(message, message_cap: int, format, cursor) -> None:
         ):
             value = va_arg_f64(cursor)
             raw_float = stack_alloc(512)
-            raw_length = pcc_stdio_format_float_raw(
-                raw_float, value, conv, precision, 0, 0, 0
-            )
-            out_len = _append_bytes(
-                message, message_cap, out_len, raw_float, raw_length
-            )
+            raw_heap = null()
+            if pcc_stdio_float_raw_capacity(precision) > 512:
+                raw_heap = malloc(pcc_stdio_float_raw_capacity(precision))
+                if not ptr_is_null(raw_heap):
+                    raw_float = raw_heap
+            if ptr_is_null(raw_heap) and pcc_stdio_float_raw_capacity(precision) > 512:
+                out_len = _append_bytes(message, message_cap, out_len, cstr("?"), 1)
+            else:
+                raw_length = pcc_stdio_format_float_raw(
+                    raw_float, value, conv, precision, 0, 0, 0
+                )
+                out_len = _append_bytes(
+                    message, message_cap, out_len, raw_float, raw_length
+                )
+            if not ptr_is_null(raw_heap):
+                free(raw_heap)
         else:
             out_len = _append_bytes(message, message_cap, out_len, cstr("%"), 1)
             ch = stack_alloc(1)

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
@@ -29,7 +29,7 @@ def _cc() -> str:
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 _PROBE = """
@@ -85,7 +85,7 @@ def test_pause_telemetry_counters_consistent(tmp_path, backend):
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],

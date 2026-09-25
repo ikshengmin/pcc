@@ -140,7 +140,6 @@ def test_dict_semantics_and_numeric_hash_match_cpython_on_every_backend(tmp_path
 
 
 def test_dict_semantics_match_cpython_with_the_c_runtime_mirror(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "dict_semantics_cc.py"

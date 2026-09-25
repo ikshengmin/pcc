@@ -118,7 +118,17 @@ NATIVE_IMPORT_FROMS = {
     ),
     "sys": frozenset({"exit", "stdin", "stdout", "stderr"}),
     "os": frozenset({"path", "sep", "linesep", "altsep"}),
-    "time": frozenset({"monotonic", "perf_counter", "time", "strftime"}),
+    "time": frozenset(
+        {
+            "monotonic",
+            "perf_counter",
+            "time",
+            "strftime",
+            "monotonic_ns",
+            "perf_counter_ns",
+            "time_ns",
+        }
+    ),
     "functools": frozenset({"partial"}),
     "string": frozenset(
         {

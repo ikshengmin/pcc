@@ -546,6 +546,18 @@ class UnsafeIntrinsicMixin:
     def _unsafe_ptr_arg(self, expr: Expr) -> ir.Value:
         ptr = self._emit_expr(expr)
         if isinstance(ptr.type, ir.PointerType):
+            if (
+                isinstance(getattr(expr, "ty", None), IntType)
+                and self._raw_addresses_are_ints()
+            ):
+                # An ``int`` raw address in its boxed object form (a dyn-ABI
+                # helper return, a ternary joining two addresses): the value
+                # is the address, not the int object's own pointer.
+                return self.builder.inttoptr(
+                    self._to_int64(ptr, expr.ty),
+                    _CSTR,
+                    name=self._fresh("unsafe.int.addr"),
+                )
             if not self._ir_type_matches(ptr.type, _CSTR):
                 ptr = self.builder.bitcast(
                     ptr,
@@ -2069,8 +2081,11 @@ class UnsafeIntrinsicMixin:
             )
         if intrinsic == "ptr_to_int":
             self._unsafe_expect_arity(intrinsic, expr, 1)
+            # The operand is a raw address; an untyped value (a tuple element,
+            # a helper parameter) carries it as a tagged small int whose
+            # untagged bits are the address.
             return self.builder.ptrtoint(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 _I64,
                 name=self._fresh("unsafe.ptr.to.int"),
             )
@@ -5138,7 +5153,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 2)
             fnty = ir.FunctionType(_CSTR, [_CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr1.fn"),
             )
@@ -5151,7 +5166,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 1)
             fnty = ir.FunctionType(_CSTR, [])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr0.fn"),
             )
@@ -5164,7 +5179,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 1)
             fnty = ir.FunctionType(ir.VoidType(), [])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.void.ptr0.fn"),
             )
@@ -5173,7 +5188,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 2)
             fnty = ir.FunctionType(ir.VoidType(), [_CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.void.ptr1.fn"),
             )
@@ -5185,7 +5200,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fnty = ir.FunctionType(ir.VoidType(), [_CSTR, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.void.ptr2.fn"),
             )
@@ -5200,7 +5215,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(ir.VoidType(), [_CSTR, _I64, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.void.ptr.i64.ptr.fn"),
             )
@@ -5216,7 +5231,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fnty = ir.FunctionType(_CSTR, [_CSTR, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr2.fn"),
             )
@@ -5232,7 +5247,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fnty = ir.FunctionType(_CSTR, [_CSTR, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr.ptr.i64.fn"),
             )
@@ -5248,7 +5263,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 5)
             fnty = ir.FunctionType(_CSTR, [_CSTR, _CSTR, _I64, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr.ptr.ptr.i64.ptr.fn"),
             )
@@ -5266,7 +5281,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_CSTR, [_CSTR, _CSTR, _I32])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr.ptr.ptr.i32.fn"),
             )
@@ -5283,7 +5298,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_CSTR, [_CSTR, _CSTR, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr3.fn"),
             )
@@ -5300,7 +5315,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 5)
             fnty = ir.FunctionType(_CSTR, [_CSTR, _CSTR, _CSTR, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr4.fn"),
             )
@@ -5318,7 +5333,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 2)
             fnty = ir.FunctionType(_I64, [_I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.i64.fn"),
             )
@@ -5331,7 +5346,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fnty = ir.FunctionType(_I64, [_I64, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.i64.ptr.fn"),
             )
@@ -5347,7 +5362,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 2)
             fnty = ir.FunctionType(_I32, [_CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.ptr1.fn"),
             )
@@ -5365,7 +5380,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fnty = ir.FunctionType(_I32, [_CSTR, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.ptr.i64.fn"),
             )
@@ -5386,7 +5401,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fnty = ir.FunctionType(_I32, [_CSTR, _I32])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.ptr.i32.fn"),
             )
@@ -5407,7 +5422,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_I32, [_CSTR, _I32, _I32])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.ptr.i32.i32.fn"),
             )
@@ -5429,7 +5444,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 5)
             fnty = ir.FunctionType(_I32, [_CSTR, _I32, _I32, _I32])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.ptr.i32.i32.i32.fn"),
             )
@@ -5455,7 +5470,7 @@ class UnsafeIntrinsicMixin:
                 [_CSTR, _I32, _I32, _I32, _I32, _I32, _CSTR, _I32],
             )
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.deflate.init2.fn"),
             )
@@ -5482,7 +5497,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_I32, [_I32, _CSTR, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.i32.ptr.i64.fn"),
             )
@@ -5504,7 +5519,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_I32, [_I64, _I64, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.i64.i64.ptr.fn"),
             )
@@ -5526,7 +5541,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_I32, [_I64, _I32, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i32.i64.i32.i64.fn"),
             )
@@ -5557,7 +5572,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 2)
             fnty = ir.FunctionType(_I64, [_CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr1.fn"),
             )
@@ -5570,7 +5585,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 5)
             fnty = ir.FunctionType(_I64, [_CSTR, _CSTR, _CSTR, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr.ptr.ptr.i64.fn"),
             )
@@ -5588,7 +5603,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fnty = ir.FunctionType(_I64, [_CSTR, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr.i64.fn"),
             )
@@ -5604,7 +5619,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fnty = ir.FunctionType(_I64, [_CSTR, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr2.fn"),
             )
@@ -5620,7 +5635,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 7)
             fnty = ir.FunctionType(_I64, [_CSTR, _CSTR, _CSTR, _CSTR, _I64, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr4.i64.i64.fn"),
             )
@@ -5640,7 +5655,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 7)
             fnty = ir.FunctionType(_I64, [_CSTR, _CSTR, _CSTR, _I64, _I64, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr3.i64.i64.i64.fn"),
             )
@@ -5660,7 +5675,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_CSTR, [_CSTR, _I64, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.ptr.i64.i64.fn"),
             )
@@ -5677,7 +5692,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_I64, [_CSTR, _CSTR, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr3.fn"),
             )
@@ -5694,7 +5709,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_I64, [_I64, _I64, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.i64.i64.ptr.fn"),
             )
@@ -5740,7 +5755,7 @@ class UnsafeIntrinsicMixin:
                 var_arg=variadic_flag,
             )
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.variadic.fn"),
             )
@@ -5775,7 +5790,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_I64, [_CSTR, _I64, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr.i64.ptr.fn"),
             )
@@ -5792,7 +5807,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             fnty = ir.FunctionType(_I64, [_CSTR, _I64, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr.i64.i64.fn"),
             )
@@ -5809,7 +5824,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 5)
             fnty = ir.FunctionType(_I64, [_CSTR, _I64, _CSTR, _I64])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr.i64.ptr.i64.fn"),
             )
@@ -5827,7 +5842,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 5)
             fnty = ir.FunctionType(_I64, [_CSTR, _I64, _I64, _CSTR])
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.ptr.i64.i64.ptr.fn"),
             )
@@ -5848,7 +5863,7 @@ class UnsafeIntrinsicMixin:
                 [_CSTR, _I64, _CSTR, _CSTR, _CSTR, _CSTR, ir.IntType(1)],
             )
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.source.bridge.fn"),
             )
@@ -5877,7 +5892,7 @@ class UnsafeIntrinsicMixin:
                 [_CSTR, _CSTR, _CSTR, _CSTR, _CSTR, ir.IntType(1)],
             )
             callee = self.builder.bitcast(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 fnty.as_pointer(),
                 name=self._fresh("unsafe.call.i64.library.bridge.fn"),
             )
@@ -5925,7 +5940,7 @@ class UnsafeIntrinsicMixin:
             flags = 2 | (4 if platform_text == "darwin" else 0)
             return self.builder.call(
                 open_fn,
-                [self._unsafe_ptr_arg(expr.args[0]), ir.Constant(_I32, flags)],
+                [self._unsafe_address_arg(expr.args[0]), ir.Constant(_I32, flags)],
                 name=self._fresh("unsafe.dynamic.library.open"),
             )
         if intrinsic == "dynamic_library_open_global":
@@ -5942,7 +5957,7 @@ class UnsafeIntrinsicMixin:
             flags = 2 | (8 if platform_text == "darwin" else 0x100)
             return self.builder.call(
                 open_fn,
-                [self._unsafe_ptr_arg(expr.args[0]), ir.Constant(_I32, flags)],
+                [self._unsafe_address_arg(expr.args[0]), ir.Constant(_I32, flags)],
                 name=self._fresh("unsafe.dynamic.library.open.global"),
             )
         if intrinsic == "dynamic_library_symbol":
@@ -5953,11 +5968,13 @@ class UnsafeIntrinsicMixin:
             symbol_fn = self._declare_external_function(
                 "dlsym", _CSTR, [_CSTR, _CSTR]
             )
+            # The handle and the symbol name are raw addresses; an untyped
+            # helper parameter carries them as tagged small ints.
             return self.builder.call(
                 symbol_fn,
                 [
-                    self._unsafe_ptr_arg(expr.args[0]),
-                    self._unsafe_ptr_arg(expr.args[1]),
+                    self._unsafe_address_arg(expr.args[0]),
+                    self._unsafe_address_arg(expr.args[1]),
                 ],
                 name=self._fresh("unsafe.dynamic.library.symbol"),
             )
@@ -6145,7 +6162,7 @@ class UnsafeIntrinsicMixin:
             close_fn = self._declare_external_function("dlclose", _I32, [_CSTR])
             result = self.builder.call(
                 close_fn,
-                [self._unsafe_ptr_arg(expr.args[0])],
+                [self._unsafe_address_arg(expr.args[0])],
                 name=self._fresh("unsafe.dynamic.library.close.i32"),
             )
             return self.builder.sext(
@@ -6275,6 +6292,8 @@ class UnsafeIntrinsicMixin:
             return self._unsafe_void_result()
         if intrinsic == "gc_backend_current":
             self._unsafe_expect_arity(intrinsic, expr, 0)
+            if not getattr(self, "_freestanding_module", False):
+                return self._emit_gc_backend_query("pcc_gc_backend")
             backend_fn = self._declare_external_function(
                 "pcc_gc_backend", _I64, []
             )

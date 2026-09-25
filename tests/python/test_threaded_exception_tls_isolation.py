@@ -6,7 +6,6 @@ import subprocess
 import textwrap
 
 from tests.runtime_build_cache import (
-    cached_threaded_c_runtime,
     cached_threaded_pcc_python_runtime,
 )
 
@@ -275,12 +274,12 @@ def test_pcc_python_exception_slot_is_compiler_owned_tls_and_registered_root():
 
 
 def test_raw_pthreads_match_c_oracle_for_exception_tls_isolation(tmp_path: Path):
-    oracle_runtime = cached_threaded_c_runtime()
+    oracle_runtime = cached_threaded_pcc_python_runtime()
     implementation_runtime = cached_threaded_pcc_python_runtime()
     oracle = _link_harness(
         tmp_path,
         name="threaded_exception_c_oracle",
-        archive=oracle_runtime / "libpy_runtime.a",
+        archive=oracle_runtime / "libpy_runtime_pcc_py.a",
         expect_registered_tls_roots=False,
     )
     implementation = _link_harness(

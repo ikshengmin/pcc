@@ -158,51 +158,80 @@ class _InspectedLinkInput:
     section_addrs: tuple[int, ...] = ()
 
 
+# Each accessor tests the concrete classes one at a time.  A tuple isinstance
+# narrows to a union, and pcc1 cannot pick a field offset for a union: every
+# ``symbol.section_index`` became a dynamic getattr -- 9% of a Stage2 link
+# (_symbol_type alone 2%).  Packed inputs come first: they are what the owned
+# link consumes.
+
+
 def _symbol_name(symbol) -> str:
-    if isinstance(symbol, (NativeSymbol, PackedNativeSymbol)):
+    if isinstance(symbol, PackedNativeSymbol):
+        return symbol.name
+    if isinstance(symbol, NativeSymbol):
         return symbol.name
     return symbol["name"]
 
 
+def _native_symbol_type(section_index: int, external: bool, private_external: bool) -> int:
+    if section_index == 0:
+        return spec.N_UNDF | spec.N_EXT
+    value = spec.N_SECT
+    if external:
+        value |= spec.N_EXT
+    if private_external:
+        value |= spec.N_PEXT
+    return value
+
+
 def _symbol_type(symbol) -> int:
-    if isinstance(symbol, (NativeSymbol, PackedNativeSymbol)):
-        if symbol.section_index == 0:
-            return spec.N_UNDF | spec.N_EXT
-        value = spec.N_SECT
-        if symbol.external:
-            value |= spec.N_EXT
-        if symbol.private_external:
-            value |= spec.N_PEXT
-        return value
+    if isinstance(symbol, PackedNativeSymbol):
+        return _native_symbol_type(
+            symbol.section_index, symbol.external, symbol.private_external
+        )
+    if isinstance(symbol, NativeSymbol):
+        return _native_symbol_type(
+            symbol.section_index, symbol.external, symbol.private_external
+        )
     return symbol["n_type"]
 
 
 def _symbol_section_index(symbol) -> int:
-    if isinstance(symbol, (NativeSymbol, PackedNativeSymbol)):
+    if isinstance(symbol, PackedNativeSymbol):
+        return symbol.section_index
+    if isinstance(symbol, NativeSymbol):
         return symbol.section_index
     return symbol["n_sect"]
 
 
 def _section_key(section) -> tuple[str, str]:
-    if isinstance(section, (NativeSection, PackedNativeSection)):
+    if isinstance(section, PackedNativeSection):
+        return section.segname, section.sectname
+    if isinstance(section, NativeSection):
         return section.segname, section.sectname
     return section["segname_str"], section["sectname_str"]
 
 
 def _section_flags(section) -> int:
-    if isinstance(section, (NativeSection, PackedNativeSection)):
+    if isinstance(section, PackedNativeSection):
+        return section.flags
+    if isinstance(section, NativeSection):
         return section.flags
     return section["flags"]
 
 
 def _section_align(section) -> int:
-    if isinstance(section, (NativeSection, PackedNativeSection)):
+    if isinstance(section, PackedNativeSection):
+        return section.align_log2
+    if isinstance(section, NativeSection):
         return section.align_log2
     return section["align"]
 
 
 def _section_size(section) -> int:
-    if isinstance(section, (NativeSection, PackedNativeSection)):
+    if isinstance(section, PackedNativeSection):
+        return section.vm_size
+    if isinstance(section, NativeSection):
         return section.vm_size
     return section["size"]
 

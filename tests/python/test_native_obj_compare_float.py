@@ -98,12 +98,27 @@ def test_runtime_object_comparison_has_one_behavior_owner():
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     }
 
+    # The object-vs-object path moved into ``_emit_owned_string_predicate``
+    # (it adds operand ownership); it must still delegate to the owner rather
+    # than re-select the runtime symbols.
+    predicate_source = textwrap.dedent(
+        inspect.getsource(CompareMembershipLoweringMixin._emit_owned_string_predicate)
+    )
+    predicate_strings = {
+        node.value
+        for node in ast.walk(ast.parse(predicate_source))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
     assert {"py_obj_lt", "py_obj_le", "py_obj_gt", "py_obj_ge"}.issubset(
         owner_strings
     )
     assert not {"py_obj_lt", "py_obj_le", "py_obj_gt", "py_obj_ge"}.intersection(
-        caller_strings
+        caller_strings | predicate_strings
     )
-    assert caller_source.count("_emit_runtime_object_compare(") == 2
+    assert (
+        caller_source.count("_emit_runtime_object_compare(")
+        + predicate_source.count("_emit_runtime_object_compare(")
+    ) == 2
     assert "_emit_post_call_err_check" in owner_source
     assert "_emit_runtime_object_compare" in L1_CODEGEN_HOST_METHODS

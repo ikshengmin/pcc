@@ -14,6 +14,7 @@ from ..py_ast import (
     BytesLit,
     Call,
     ClassType,
+    ComplexType,
     DictExpr,
     DictType,
     DynType,
@@ -493,6 +494,9 @@ class OwnershipLoweringMixin:
             (StrType, ListType, TupleType, DynType),
         ):
             return True
+        if isinstance(expr, UnaryOp) and self._unary_is_dynamic(expr):
+            # py_obj_neg / py_obj_pos / py_obj_invert return a new reference.
+            return True
         if isinstance(expr, Attr):
             return self._attr_expr_returns_owned_object(expr)
         return False
@@ -749,6 +753,17 @@ class OwnershipLoweringMixin:
         """
         return not isinstance(expr, (BoolLit, NoneLit, StrLit))
 
+    def _unary_is_dynamic(self, expr: UnaryOp) -> bool:
+        """Whether ``_emit_unary`` dispatches ``expr`` through py_obj_neg & co.
+
+        Mirrors the lowering: a unary ``-``/``+``/``~`` whose operand is not
+        statically an int, bool, float, complex or class instance.
+        """
+        return expr.op in ("-", "+", "~") and not isinstance(
+            getattr(expr.operand, "ty", None),
+            (IntType, BoolType, FloatType, ComplexType, ClassType),
+        )
+
     def _pcc_pointer_source_is_owned(self, expr: Expr) -> bool:
         """Whether a pointer-form expression result carries a fresh pcc ref.
 
@@ -784,6 +799,10 @@ class OwnershipLoweringMixin:
             # a module whose usual integer lane is raw i64. Pointer-aware
             # callers must consume that owner; the raw-lane callers still
             # reject non-pointer values before considering object cleanup.
+            return True
+        if isinstance(expr, UnaryOp) and self._unary_is_dynamic(expr):
+            # A dynamic unary operator calls py_obj_neg / py_obj_pos /
+            # py_obj_invert, each of which returns a new reference.
             return True
         if isinstance(expr, Call):
             # The raw integer ABI does not turn Python regex results into

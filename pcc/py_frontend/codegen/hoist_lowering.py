@@ -178,6 +178,19 @@ def _hoist_method_kind(fd) -> str:
     return kind
 
 
+def _hoist_method_self_type(fd):
+    """The inferred class type of a method's ``self``, or None."""
+    if not fd.args:
+        return None
+    first = fd.args[0]
+    if first.name != "self":
+        return None
+    annotation = first.annotation
+    if annotation is None or isinstance(annotation, DynType):
+        return None
+    return annotation
+
+
 def _hoist_log(enabled: bool, mod_name: str, label: str) -> None:
     if not enabled:
         return
@@ -236,6 +249,8 @@ class _HoistLoweringPass:
         hoisted_enclosing_method_kind.clear()
         closure_boxed_params = self._closure_boxed_params
         closure_boxed_params.clear()
+        hoisted_qualnames = self._hoisted_qualnames
+        hoisted_qualnames.clear()
         hoist_wrap_caps = self._hoist_wrap_caps
         hoist_wrap_caps.clear()
         generator_func_names = self._generator_func_names
@@ -262,6 +277,12 @@ class _HoistLoweringPass:
             return hoisted
         compute_free_names_cache = {}
         boxed_function_defs = {}
+        # The inferred type of the enclosing method's ``self`` while one
+        # method's body is rewritten.  A mixin method is typed with its
+        # composed host class; a hoisted closure that captures ``self``
+        # must keep that type, or ``self.attr`` lowers against the mixin's
+        # own field layout and reads the wrong slot.
+        enclosing_self_type = [None]
 
         def function_binds_cell(fd):
             return boxed_function_defs.get(id(fd)) is fd
@@ -463,6 +484,7 @@ class _HoistLoweringPass:
             scope_names,
             enclosing_class_name=None,
             enclosing_method_kind=None,
+            qual_prefix="",
         ):
             """Return a new body tuple with nested defs stripped out
             and inner-name Call sites rewritten through rename_map."""
@@ -1098,6 +1120,8 @@ class _HoistLoweringPass:
                             suffix += 1
                             final_name = f"{hoist_name}_{suffix}"
                         hoisted_capture_params[final_name] = ()
+                        # A lambda bound to a name is still ``<lambda>``.
+                        hoisted_qualnames[final_name] = qual_prefix + "<lambda>"
                         hoisted_fd = clone_funcdef(
                             fd_stmt,
                             final_name,
@@ -1310,10 +1334,13 @@ class _HoistLoweringPass:
                         # model for captured variables.
                         cap_args_list = []
                         for fv in free_names:
+                            cap_annotation = _DYN
+                            if fv == "self" and enclosing_self_type[0] is not None:
+                                cap_annotation = enclosing_self_type[0]
                             cap_args_list.append(
                                 Arg(
                                     name=fv,
-                                    annotation=_DYN,
+                                    annotation=cap_annotation,
                                     default=None,
                                     kind="pos",
                                     has_default=True,
@@ -1362,6 +1389,7 @@ class _HoistLoweringPass:
                             inner_scope,
                             enclosing_class_name,
                             enclosing_method_kind,
+                            qual_prefix + st.name + ".<locals>.",
                         )
                         forwarded = []
                         for fv in analyze_names(
@@ -1438,6 +1466,10 @@ class _HoistLoweringPass:
                         # rewrite has already swapped the ident.
                         hoist_wrap_caps[final_name] = cap_entry
                     hoisted_capture_params[final_name] = tuple(free_names)
+                    # CPython's __qualname__ for the nested def, e.g.
+                    # ``outer.<locals>.inner``; the hoisted symbol name is
+                    # internal (``__nested_inner``).
+                    hoisted_qualnames[final_name] = qual_prefix + st.name
                     if enclosing_class_name is not None:
                         hoisted_enclosing_class[final_name] = enclosing_class_name
                     if enclosing_method_kind is not None:
@@ -1488,6 +1520,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     )
                 )
             return tuple(new_stmts)
@@ -1498,6 +1531,7 @@ class _HoistLoweringPass:
             scope_names,
             enclosing_class_name,
             enclosing_method_kind,
+            qual_prefix="",
         ):
             if isinstance(stmt, _If):
                 return _replace(
@@ -1509,6 +1543,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                     else_body=rewrite_body(
                         stmt.else_body,
@@ -1516,6 +1551,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                 )
             if isinstance(stmt, _While):
@@ -1528,6 +1564,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                     else_body=rewrite_body(
                         stmt.else_body,
@@ -1535,6 +1572,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                 )
             if isinstance(stmt, _For):
@@ -1547,6 +1585,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                     else_body=rewrite_body(
                         stmt.else_body,
@@ -1554,6 +1593,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                 )
             if isinstance(stmt, _Try):
@@ -1568,6 +1608,7 @@ class _HoistLoweringPass:
                                 scope_names,
                                 enclosing_class_name,
                                 enclosing_method_kind,
+                                qual_prefix,
                             ),
                         )
                     )
@@ -1579,6 +1620,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                     else_body=rewrite_body(
                         stmt.else_body,
@@ -1586,6 +1628,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                     finally_body=rewrite_body(
                         stmt.finally_body,
@@ -1593,6 +1636,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                     handlers=tuple(new_handlers),
                 )
@@ -1605,6 +1649,7 @@ class _HoistLoweringPass:
                         scope_names,
                         enclosing_class_name,
                         enclosing_method_kind,
+                        qual_prefix,
                     ),
                 )
             if isinstance(stmt, _ExprStmt):
@@ -1825,7 +1870,14 @@ class _HoistLoweringPass:
                         boxed_function_defs,
                     )
                     extend_names_once(scope_names, collect_scope_bindings(boxed_body))
-                    new_body = rewrite_body(boxed_body, {}, scope_names)
+                    new_body = rewrite_body(
+                        boxed_body,
+                        {},
+                        scope_names,
+                        None,
+                        None,
+                        stmt.name + ".<locals>.",
+                    )
                 else:
                     _hoist_log(debug_hoist, mod_name, "func skip " + stmt.name)
                     new_body = stmt.body
@@ -1868,13 +1920,16 @@ class _HoistLoweringPass:
                                 scope_names,
                                 collect_scope_bindings(boxed_body),
                             )
+                            enclosing_self_type[0] = _hoist_method_self_type(m)
                             new_body = rewrite_body(
                                 boxed_body,
                                 {},
                                 scope_names,
                                 stmt.name,
                                 _hoist_method_kind(m),
+                                stmt.name + "." + m.name + ".<locals>.",
                             )
+                            enclosing_self_type[0] = None
                         else:
                             _hoist_log(
                                 debug_hoist,

@@ -168,7 +168,10 @@ def test_dynamic_int_subscript_keeps_python_keys(tmp_path):
     )
     ir_text = _compile_to_ll(tmp_path, source, "dyn_int_subscript_keys")
     assert re.search(r"call[^\n]*@py_obj_subscript\(", ir_text)
-    assert re.search(r"call[^\n]*@py_obj_setitem\(", ir_text)
+    # Statement stores go through ``py_obj_assign_subscript``, which wraps
+    # ``py_obj_setitem`` and guarantees a TypeError on rejection; either way
+    # the key stays a Python object.
+    assert re.search(r"call[^\n]*@py_obj_(?:setitem|assign_subscript)\(", ir_text)
     assert not re.search(r"call[^\n]*@py_obj_(?:subscript|setitem)_i64\(", ir_text)
     out = _run_pcc_program(tmp_path, source)
     assert out.splitlines() == ["5", "7", "one", "9 two"], out

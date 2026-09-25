@@ -45,6 +45,34 @@ def test_cpp_arguments_apply_in_order_and_load_owned_standard_headers(tmp_path):
     assert "typedef long size_t;" not in result
 
 
+@pytest.mark.parametrize(
+    ("option", "expected"),
+    [
+        ("-std=c89", "none"),
+        ("-ansi", "none"),
+        ("-std=gnu99", "199901L"),
+        ("-std=c11", "201112L"),
+        ("-std=c17", "201710L"),
+    ],
+)
+def test_language_standard_sets_stdc_version(option, expected):
+    # The c-testsuite cases compile with -std=c89; the owned preprocessor
+    # rejected every -std option, so all of them failed before parsing.
+    result = preprocess(
+        "#ifdef __STDC_VERSION__\nlong v = __STDC_VERSION__;\n#else\nint none;\n#endif\n",
+        cpp_args=[option],
+    )
+    if expected == "none":
+        assert "int none;" in result
+    else:
+        assert "long v = " + expected + ";" in result
+
+
+def test_unknown_language_standard_fails_closed():
+    with pytest.raises(ValueError, match="-std=c42"):
+        preprocess("int x;\n", cpp_args=["-std=c42"])
+
+
 def test_macro_expansion_respects_literals_and_comments():
     result = preprocess('#define NAME value\nconst char *NAME = "NAME"; /* NAME */\n')
     assert 'const char *value = "NAME";' in result

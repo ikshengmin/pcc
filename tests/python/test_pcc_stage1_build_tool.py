@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -127,11 +130,112 @@ def test_stage1_direct_indexed_mode_is_explicit_and_receipt_bound() -> None:
     assert environment["PCC_PYTHON_IR_PASSES"] == "off"
 
 
-def test_stage1_function_smoke_exercises_compile_and_runtime() -> None:
+def test_stage1_function_smoke_expects_what_cpython_prints(tmp_path: Path) -> None:
+    tool = _load_tool()
+    source = tmp_path / "smoke.py"
+    source.write_text(tool.FUNCTION_SMOKE_SOURCE, encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(source)], capture_output=True, text=True, timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == tool.FUNCTION_SMOKE_EXPECTED_STDOUT
+
+
+class _ScriptedAB:
+    """``_run_process`` stand-in: the compile step creates the program."""
+
+    class CompileABError(RuntimeError):
+        pass
+
+    def __init__(self, compile_rc=0, creates_program=True, run_rc=0, run_stdout="42\n"):
+        self.commands = []
+        self._compile = (compile_rc, creates_program)
+        self._run = (run_rc, run_stdout)
+
+    def _run_process(self, command, *, timeout, env, cwd):
+        self.commands.append(list(command))
+        if len(self.commands) == 1:
+            returncode, creates_program = self._compile
+            if creates_program:
+                Path(command[-1]).write_text("", encoding="utf-8")
+            return subprocess.CompletedProcess(command, returncode, "c-out", "c-err")
+        returncode, stdout = self._run
+        return subprocess.CompletedProcess(command, returncode, stdout, "r-err")
+
+
+def _function_smoke(tool, tmp_path: Path, ab: _ScriptedAB) -> None:
+    work = tmp_path / "work"
+    logs = tmp_path / "logs"
+    work.mkdir()
+    logs.mkdir()
+    tool.run_function_smoke(
+        tmp_path / "pcc1", work_dir=work, output_dir=logs, env={}, timeout=5, ab=ab,
+    )
+
+
+def test_stage1_function_smoke_compiles_then_runs_the_program(tmp_path: Path) -> None:
+    tool = _load_tool()
+    ab = _ScriptedAB()
+
+    _function_smoke(tool, tmp_path, ab)
+
+    work = tmp_path / "work"
+    assert ab.commands == [
+        [str(tmp_path / "pcc1"), "--backend", "self", "--python-libpython", "off",
+         "--ir-scaffold", "on", str(work / "stage1_function_smoke.py"),
+         "-o", str(work / "stage1_function_smoke")],
+        [str(work / "stage1_function_smoke")],
+    ]
+    logs = tmp_path / "logs"
+    assert (logs / "function-smoke-compile.stderr").read_text() == "c-err"
+    assert (logs / "function-smoke-run.stdout").read_text() == "42\n"
+
+
+@pytest.mark.parametrize(
+    "ab_args",
+    [
+        {"compile_rc": 1},
+        {"creates_program": False},
+        {"run_rc": 3},
+        {"run_stdout": "41\n"},
+        {"run_stdout": "42"},
+    ],
+    ids=["compile-fails", "no-program", "run-fails", "wrong-value", "no-newline"],
+)
+def test_stage1_function_smoke_rejects_every_failure(tmp_path: Path, ab_args) -> None:
     tool = _load_tool()
 
-    assert "def add(" in tool.FUNCTION_SMOKE_SOURCE
-    assert "print(add(20, 22))" in tool.FUNCTION_SMOKE_SOURCE
+    with pytest.raises(_ScriptedAB.CompileABError):
+        _function_smoke(tool, tmp_path, _ScriptedAB(**ab_args))
+
+
+@pytest.mark.integration
+def test_stage1_function_smoke_passes_on_native_pcc1(
+    tmp_path: Path, native_pcc1_compiler, pcc_py_runtime_archive,
+) -> None:
+    tool = _load_tool()
+    env = dict(os.environ)
+    env.pop("LC_ALL", None)
+    env.update(
+        PCC_RUNTIME_ARCHIVE=str(pcc_py_runtime_archive),
+        PCC_RUNTIME_CC="/usr/bin/false",
+        PCC_HOST_PYTHON="/usr/bin/false",
+        PCC_HOST_PCC="/usr/bin/false",
+        PCC_NO_AUTO_PCC1="1",
+    )
+    work = tmp_path / "work"
+    logs = tmp_path / "logs"
+    work.mkdir()
+    logs.mkdir()
+
+    tool.run_function_smoke(
+        native_pcc1_compiler, work_dir=work, output_dir=logs, env=env,
+        timeout=300, ab=tool._load_ab_tool(),
+    )
+
+    assert (logs / "function-smoke-run.stdout").read_text() == "42\n"
 
 
 def test_stage1_metric_contract_separates_tree_cpu_from_local_counters() -> None:

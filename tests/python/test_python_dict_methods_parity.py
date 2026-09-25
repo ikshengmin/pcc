@@ -19,8 +19,6 @@ from pathlib import Path
 
 
 def _compile(monkeypatch, src: Path, exe: Path) -> None:
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     compile_python(
@@ -118,8 +116,6 @@ def test_dict_keys_values_items(tmp_path, monkeypatch):
 
 
 def test_dict_items_for_loop_direct_lowering(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "dict_items_for.py"
@@ -188,8 +184,6 @@ def test_dict_update(tmp_path, monkeypatch):
 
 
 def test_dict_union_operator_self_backend(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "dict_union.py"
@@ -218,8 +212,6 @@ def test_dict_union_operator_self_backend(tmp_path, monkeypatch):
 
 
 def test_dict_union_optional_dict_pattern_self_backend(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "dict_union_optional.py"
@@ -252,8 +244,6 @@ def test_dict_union_optional_dict_pattern_self_backend(tmp_path, monkeypatch):
 
 
 def test_chained_assignment_to_dict_subscript_self_backend(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "dict_chain_subscript.py"

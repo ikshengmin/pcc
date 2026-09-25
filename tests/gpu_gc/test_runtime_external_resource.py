@@ -6,7 +6,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
@@ -15,7 +15,7 @@ RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def test_external_device_resources_use_one_runtime_registry_across_gc0_to_gc4(
@@ -172,7 +172,7 @@ def test_external_device_resources_use_one_runtime_registry_across_gc0_to_gc4(
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             *link_args,
             "-o",
@@ -201,31 +201,15 @@ def test_external_device_resources_use_one_runtime_registry_across_gc0_to_gc4(
 
 
 def test_external_resource_registry_is_opaque_and_shared_by_both_runtime_paths():
-    kernel = (RUNTIME_DIR / "src" / "pcc_gc_external_resource.c").read_text(
-        encoding="utf-8"
-    )
     python_kernel = (
         RUNTIME_DIR / "py" / "freestanding_gc_external_resource.py"
     ).read_text(encoding="utf-8")
-    c_runtime = (RUNTIME_DIR / "src" / "py_obj.c").read_text(encoding="utf-8")
     py_runtime = (RUNTIME_DIR / "py" / "py_obj.py").read_text(encoding="utf-8")
     makefile = (RUNTIME_DIR / "Makefile").read_text(encoding="utf-8")
 
-    node = kernel.split("typedef struct PccGcExternalResourceNode", 1)[1].split(
-        "} PccGcExternalResourceNode;", 1
-    )[0]
-    assert "PyObject" not in node
-    assert "pcc_metal_buffer_runtime_release_prebuilt" in kernel
-    assert c_runtime.count("pcc_gc_external_resource_poll()") >= 2
     assert py_runtime.count("pcc_gc_external_resource_poll()") >= 2
     assert "freestanding_gc_external_resource" in makefile.split(
         "FREESTANDING_PY_MODULES =", 1
     )[1].splitlines()[0]
-    assert "pcc_gc_external_resource" in makefile.split(
-        "PY_REPLACED_C_MODULES =", 1
-    )[1].splitlines()[0]
     assert "def pcc_gc_external_resource_register(" in python_kernel
     assert "def pcc_gc_external_resource_poll(" in python_kernel
-    assert "pcc_gc_external_resource.o" not in "\n".join(
-        line for line in makefile.splitlines() if line.startswith("OBJ_PY_CC_HELPERS")
-    )

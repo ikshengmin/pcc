@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
 }
 """
 
-@pytest.mark.parametrize("runtime_fixture", ["pcc_py_runtime_archive", "c_runtime_archive"])
+@pytest.mark.parametrize("runtime_fixture", ["pcc_py_runtime_archive", "pcc_py_runtime_archive"])
 def test_tuple_iterator_runtime_mirrors(tmp_path, request, runtime_fixture):
     archive = request.getfixturevalue(runtime_fixture)
     source = tmp_path / "tuple_runtime.c"

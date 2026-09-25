@@ -29,7 +29,6 @@ def test_collections_abc_mapping_surface_no_libpython(tmp_path):
     executable = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv",
@@ -77,7 +76,6 @@ def test_sys_version_guarded_collections_abc_class_alias_no_libpython(tmp_path):
     executable = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv",

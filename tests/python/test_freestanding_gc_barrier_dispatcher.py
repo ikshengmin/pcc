@@ -36,6 +36,9 @@ OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
     "pcc_gc_dispatch_ptr_can_have_header",
     "pcc_gc_dispatch_selected_backend",
     "pcc_gc_dispatch_tracing_work_pending",
+    # Mark-complete predicate the allocator (py_obj, not the managed backend)
+    # gates its sweeps on.
+    "pcc_gc_sweep_owed",
 }
 RAW_PROVIDER_SYMBOLS = {
     "pcc_gc_backend4_step_generation_aging",
@@ -345,29 +348,21 @@ def _link_barrier_probe(
     ("backend_kind", "expected"),
     [(3, "1,0,0\n"), (4, "1,1,1\n")],
 )
-def test_barrier_dispatcher_matches_c_oracle_for_old_to_young_edges(
+def test_barrier_dispatcher_records_old_to_young_edges(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
     backend_kind: int,
     expected: str,
 ) -> None:
-    oracle = _link_barrier_probe(
-        tmp_path, "barrier_c_" + str(backend_kind), c_runtime_archive, backend_kind
-    )
+    # ``expected`` is what the retired C runtime oracle printed.
     implementation = _link_barrier_probe(
         tmp_path,
         "barrier_pcc_python_" + str(backend_kind),
         pcc_py_runtime_archive,
         backend_kind,
     )
-    oracle_result = subprocess.run(
-        [str(oracle)], capture_output=True, text=True, timeout=30
-    )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert oracle_result.stdout == expected
-    assert result.stdout == oracle_result.stdout
+    assert result.stdout == expected

@@ -4696,6 +4696,30 @@ class ClassLowering:
             builder.call(runtime["py_class_mark_slots_only"], [cls_ptr])
         if self._class_subclasses_dict(info):
             builder.call(runtime["py_class_mark_dict_subclass"], [cls_ptr])
+        # CPython's class body namespace starts with ``__module__`` and
+        # ``__qualname__``; ``repr(cls)``, ``object.__repr__`` and pickling
+        # read them.  The entry module is ``__main__`` as for ``__name__``.
+        if "__module__" not in info.class_attr_values:
+            module_name = "__main__"
+            if self.parent._skip_program_main and self.parent.ast_module.name:
+                module_name = self.parent.ast_module.name
+            builder.call(
+                runtime["py_class_setattr_raw"],
+                [
+                    cls_ptr,
+                    self._cname_ptr("__module__"),
+                    self.parent._emit_str_literal(module_name),
+                ],
+            )
+        if "__qualname__" not in info.class_attr_values:
+            builder.call(
+                runtime["py_class_setattr_raw"],
+                [
+                    cls_ptr,
+                    self._cname_ptr("__qualname__"),
+                    self.parent._emit_str_literal(cd.name),
+                ],
+            )
 
         method_defs_by_name = {mname: fd for mname, fd in info.method_defs}
 
@@ -5050,6 +5074,16 @@ class ClassLowering:
             self.parent.runtime["py_func_new_named"],
             [adapter, wrapped_captures, method_name_ptr],
             name=self._fresh(f"{suffix}.{method_name}.func"),
+        )
+        # CPython's __qualname__ for a method is ``Class.method``; reprs and
+        # argument errors print it.
+        self.parent.builder.call(
+            self.parent.runtime["py_obj_setattr"],
+            [
+                func_obj,
+                self.parent._attr_name_ptr("__qualname__"),
+                self.parent._emit_str_literal(f"{cd.name}.{method_name}"),
+            ],
         )
         self.parent._gc_release(captures)
         self.parent._gc_release(signature)

@@ -6,7 +6,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
 
 from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
@@ -52,7 +51,6 @@ def _compile_and_run(
 
 
 def test_class_lookup_uses_relocation_safe_linear_walk() -> None:
-    c_source = (RUNTIME / "src" / "py_class.c").read_text(encoding="utf-8")
     internal_header = (RUNTIME / "src" / "py_internal.h").read_text(
         encoding="utf-8"
     )
@@ -60,34 +58,20 @@ def test_class_lookup_uses_relocation_safe_linear_walk() -> None:
     substrate_source = (RUNTIME / "py" / "py_substrate.py").read_text(
         encoding="utf-8"
     )
-    c_gc_source = (RUNTIME / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     py_gc_source = (
         RUNTIME / "py" / "freestanding_gc_relocation_copy.py"
     ).read_text(encoding="utf-8")
     normalized_header = " ".join(internal_header.replace("*", " ").split())
 
-    assert "PCC_CLASS_LOOKUP_CACHE_ENTRIES" not in c_source
-    assert "class_lookup_cache_get" not in c_source
-    assert "class_lookup_cache_put" not in c_source
     assert "_class_lookup_cache_block" not in py_source
     assert "_class_lookup_cache_slot" not in py_source
     assert "pcc_class_lookup_cache" not in substrate_source
-    assert "for (int32_t i = 0; i < cls->n_mro; i++)" in c_source
-    assert "for (int32_t j = 0; j < m->n_methods; j++)" in c_source
-    assert "pcc_gc_load_ptr(" in c_source
-    assert "pcc_gc_note_relocation_read(" in c_source
     assert "while i < n_mro_i32:" in py_source
     assert "while j < n_methods_i32:" in py_source
-    assert "m->methods[j].name_hash == name_hash" in c_source
     assert "stored_hash == name_hash" in py_source
-    assert "strcmp(method_name, name) == 0" in c_source
     assert "_strs_eq(m_name, name) != 0" in py_source
     assert "pcc_gc_load_ptr(cls, ptr_add(mro, i * 8))" in py_source
     assert "pcc_gc_note_relocation_read(load_ptr(method_slot, 0))" in py_source
-    assert "from_h->type_tag == PY_TYPE_CLASS" in c_gc_source
-    assert "&py_class_attr_cache_epoch, 1, __ATOMIC_RELEASE" in c_gc_source
     assert "if tag == PY_TYPE_CLASS:" in py_gc_source
     assert 'global_addr("py_class_attr_cache_epoch")' in py_gc_source
     assert "must remain immutable" in normalized_header
@@ -96,7 +80,6 @@ def test_class_lookup_uses_relocation_safe_linear_walk() -> None:
 
 def test_class_lookup_preserves_shadowing_and_delete_epoch(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
@@ -159,7 +142,6 @@ def test_class_lookup_preserves_shadowing_and_delete_epoch(
     for backend in range(5):
         backend_source = source.replace("CACHE_BACKEND", str(backend))
         for runtime_name, archive in (
-            ("c", c_runtime_archive),
             ("pcc_py", pcc_py_runtime_archive),
         ):
             result = _compile_and_run(
@@ -176,7 +158,7 @@ def test_class_lookup_preserves_shadowing_and_delete_epoch(
 
 
 def test_exposing_mutable_class_attrs_invalidates_field_cache_epoch(
-    tmp_path: Path, c_runtime_archive: Path, pcc_py_runtime_archive: Path,
+    tmp_path: Path, pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
         #include "py_internal.h"
@@ -206,7 +188,6 @@ def test_exposing_mutable_class_attrs_invalidates_field_cache_epoch(
     '''
     for backend in range(5):
         for runtime_name, archive in (
-            ("c", c_runtime_archive),
             ("pcc_py", pcc_py_runtime_archive),
         ):
             result = _compile_and_run(
@@ -221,7 +202,7 @@ def test_exposing_mutable_class_attrs_invalidates_field_cache_epoch(
 
 
 def test_instance_field_cache_reloads_values_after_class_dict_exposure(
-    tmp_path: Path, c_runtime_archive: Path, pcc_py_runtime_archive: Path,
+    tmp_path: Path, pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
         #include "py_internal.h"
@@ -262,7 +243,6 @@ def test_instance_field_cache_reloads_values_after_class_dict_exposure(
     '''
     for backend in range(5):
         for runtime_name, archive in (
-            ("c", c_runtime_archive),
             ("pcc_py", pcc_py_runtime_archive),
         ):
             result = _compile_and_run(
@@ -277,7 +257,7 @@ def test_instance_field_cache_reloads_values_after_class_dict_exposure(
 
 
 def test_user_instance_getattr_keeps_field_and_class_attrs(
-    tmp_path: Path, c_runtime_archive: Path, pcc_py_runtime_archive: Path,
+    tmp_path: Path, pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
         #include "py_internal.h"
@@ -312,7 +292,6 @@ def test_user_instance_getattr_keeps_field_and_class_attrs(
     '''
     for backend in range(5):
         for runtime_name, archive in (
-            ("c", c_runtime_archive),
             ("pcc_py", pcc_py_runtime_archive),
         ):
             result = _compile_and_run(
@@ -328,7 +307,6 @@ def test_user_instance_getattr_keeps_field_and_class_attrs(
 
 def test_class_lookup_reloads_relocated_method_and_class(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
@@ -440,7 +418,6 @@ def test_class_lookup_reloads_relocated_method_and_class(
     for backend in (3, 4):
         backend_source = source.replace("RELOC_BACKEND", str(backend))
         for runtime_name, archive in (
-            ("c", c_runtime_archive),
             ("pcc_py", pcc_py_runtime_archive),
         ):
             result = _compile_and_run(
@@ -459,7 +436,6 @@ def test_class_lookup_reloads_relocated_method_and_class(
 
 def test_class_lookup_concurrent_reads_are_stable_for_immutable_classes(
     tmp_path: Path,
-    threaded_c_runtime_archive: Path,
 ) -> None:
     source = r'''
         #include "py_internal.h"
@@ -531,7 +507,6 @@ def test_class_lookup_concurrent_reads_are_stable_for_immutable_classes(
         cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
     )
     for runtime_name, archive in (
-        ("c", threaded_c_runtime_archive),
         ("pcc_py", threaded_pcc_py_archive),
     ):
         result = _compile_and_run(
@@ -545,11 +520,9 @@ def test_class_lookup_concurrent_reads_are_stable_for_immutable_classes(
         )
 
 
-@pytest.mark.parametrize("runtime_kind", ["pcc-python", "c"])
 def test_instance_field_cache_concurrent_reads_keep_name_and_index_together(
     tmp_path: Path,
-    request,
-    runtime_kind,
+    threaded_pcc_py_runtime_archive: Path,
 ) -> None:
     """The external C driver exercises the self-emitted runtime's field ABI."""
     source = r'''
@@ -611,23 +584,16 @@ def test_instance_field_cache_concurrent_reads_keep_name_and_index_together(
             return __atomic_load_n(&failed, __ATOMIC_ACQUIRE) ? 9 : 0;
         }
     '''
-    archive = (
-        cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-        if runtime_kind == "pcc-python"
-        else request.getfixturevalue("threaded_c_runtime_archive")
-    )
     result = _compile_and_run(
         tmp_path, "instance_field_cache_threads", source,
-        archive,
+        threaded_pcc_py_runtime_archive,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("runtime_kind", ["pcc-python", "c"])
 def test_instance_field_cache_does_not_retain_a_borrowed_name_buffer(
     tmp_path: Path,
-    request,
-    runtime_kind,
+    pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
         #include "py_internal.h"
@@ -656,7 +622,6 @@ def test_instance_field_cache_does_not_retain_a_borrowed_name_buffer(
     '''
     result = _compile_and_run(
         tmp_path, "instance_field_cache_borrowed_name", source,
-        request.getfixturevalue("pcc_py_runtime_archive" if runtime_kind == "pcc-python"
-                                else "c_runtime_archive"),
+        pcc_py_runtime_archive,
     )
     assert result.returncode == 0, result.stdout + result.stderr

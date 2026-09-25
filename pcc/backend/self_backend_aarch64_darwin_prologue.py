@@ -12,6 +12,7 @@ from .self_backend_aarch64_darwin_branch_protection import (
 )
 from .self_backend_aarch64_darwin_calls import emit_fixed_stack_arg_load
 from .self_backend_aarch64_darwin_mem import (
+    emitted_fixed_instruction_line,
     emitted_frame_pair_line,
     emitted_move_register_line,
 )
@@ -63,19 +64,26 @@ def emit_function_prologue(
     # emitted in the epilogue after LR is reloaded. See
     # ``self_backend_aarch64_darwin_branch_protection`` for the S-track rationale
     # (self backend must not depend on the LLVM path for CFI hardening).
-    if branch_protection_enabled():
-        lines.extend(prologue_sign_return_address(func))
-    lines.extend(
-        [
-            emitted_frame_pair_line(False),
-            emitted_move_register_line("x29", "sp"),
-        ]
-    )
-    total_frame = func.frame_size + callee_saved_area_size(func)
-    if total_frame:
-        lines.extend(emit_stack_adjust(-total_frame))
-    # Save before any argument is committed into a callee-saved register.
-    lines.extend(emit_callee_saved_stores(func))
+    if func.aarch64_frameless:
+        # No frame record and no stack: LR never leaves x30, so there is
+        # nothing to sign; ``bti c`` keeps the indirect-call landing pad that
+        # ``paciasp`` otherwise provides.
+        if branch_protection_enabled():
+            lines.append(emitted_fixed_instruction_line("bti c"))
+    else:
+        if branch_protection_enabled():
+            lines.extend(prologue_sign_return_address(func))
+        lines.extend(
+            [
+                emitted_frame_pair_line(False),
+                emitted_move_register_line("x29", "sp"),
+            ]
+        )
+        total_frame = func.frame_size + callee_saved_area_size(func)
+        if total_frame:
+            lines.extend(emit_stack_adjust(-total_frame))
+        # Save before any argument is committed into a callee-saved register.
+        lines.extend(emit_callee_saved_stores(func))
     kernel = get_indexed_function_kernel(func)
     if func.indexed_slot_projection and kernel.hidden_sret_slot_id >= 0:
         hidden_slot_id = kernel.hidden_sret_slot_id

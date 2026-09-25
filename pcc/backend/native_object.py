@@ -103,8 +103,12 @@ def _native_payload_reads_available() -> bool:
 _NATIVE_PAYLOAD_READS = _native_payload_reads_available()
 
 
-def _relocation_offset_at(data: bytes, start: int) -> int:
-    """Read only the sort key, after the whole relocation span was checked."""
+def _relocation_offset_at(data: bytes, start: int):
+    """Read only the sort key, after the whole relocation span was checked.
+
+    Unannotated on purpose: the offset is a u64, and a value at or above
+    2**63 cannot leave through pcc's raw ``-> int`` (i64) return lane.
+    """
     if not _NATIVE_PAYLOAD_READS:
         return _U64.unpack_from(data, start)[0]
     if start < 0 or start > len(data) - 8:

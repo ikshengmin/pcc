@@ -256,8 +256,11 @@ def test_zero_iteration_preserves_prior_target_and_owned_root(tmp_path):
     # select here, so anchoring on it tested nothing.  The slot is always
     # owned in this shape, so the optimizer may fold the dynamic ownership
     # flag to a literal true; either representation must retain the release.
+    # mem2reg can also leave the loop's ownership flag as a phi
+    # (``%item.owned.N.phi``) guarding the same release.
     assert "item.for.err.owned" in body or re.search(
-        r"%item\.for\.err\.release\.value[^=]*=\s*select\s+i1\s+true",
+        r"%item\.for\.err\.release\.value[^=]*=\s*select\s+i1\s+"
+        r"(?:true|%item\.owned[\w.]*),",
         body,
     ), body
     assert not re.search(
@@ -344,7 +347,7 @@ def test_range_induction_is_separate_from_python_visible_target(tmp_path):
     # names must nevertheless remain distinct and body rebinding must never
     # publish 100 into compiler induction state.
     assert re.search(
-        r"%index\.range\.addr(?:\.\d+)?(?:\.0)? = (?:alloca|phi) i64",
+        r"%index\.range\.addr(?:\.\d+)?(?:\.0|\.phi)? = (?:alloca|phi) i64",
         body,
     ), body
     assert "index.for.obj.addr" in body or re.search(
@@ -376,7 +379,7 @@ def test_nested_same_name_range_has_independent_induction_counters(tmp_path):
     )
     body = _function_body(ir_text, "probe")
     assert len(re.findall(
-        r"%index\.range\.addr(?:\.\d+)?(?:\.0)? = (?:alloca|phi) i64",
+        r"%index\.range\.addr(?:\.\d+)?(?:\.0|\.phi)? = (?:alloca|phi) i64",
         body,
     )) == 2, body
     assert "index.for.obj.addr" in body or re.search(

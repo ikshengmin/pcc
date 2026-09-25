@@ -208,10 +208,13 @@ entry:
     )[0]
     atomic_body = asm_text.split("_keep_atomic_barrier:", 1)[1]
 
-    assert "  madd x11, x9, x10, x12" in madd_body
-    assert "  mul x11, x9, x10" not in madd_body
-    assert "  msub x11, x9, x10, x12" in msub_body
-    assert "  mul x11, x9, x10" not in msub_body
+    # The fused result may land in a scratch or an allocated register; the
+    # contract is one madd/msub reading the materialized operands and no
+    # separate multiply.
+    assert re.search(r"  madd x\d+, x9, x10, x12", madd_body)
+    assert not re.search(r"  mul x\d+, x\d+, x\d+", madd_body)
+    assert re.search(r"  msub x\d+, x9, x10, x12", msub_body)
+    assert not re.search(r"  mul x\d+, x\d+, x\d+", msub_body)
 
     assert "  madd " not in multi_use_body
     assert "  msub " not in multi_use_body

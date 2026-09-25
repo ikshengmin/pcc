@@ -19,7 +19,7 @@ import pytest
 from test_gc_threading_substrate import REPO_ROOT, _compile_runtime_probe
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_dict_missing_key_raise_leaves_single_tls_reference(
     tmp_path: Path, kind: str
 ) -> None:

@@ -36,12 +36,28 @@ class PrintLoweringMixin:
             return False
         return True
 
+    def _print_kwargs_route_to_file(self, kwargs) -> bool:
+        """True when a ``file=`` kwarg is present and every kwarg is one
+        ``py_print_to_file`` takes (``sep``/``end``/``file``/``flush``)."""
+        has_file = False
+        for k, _vexpr in kwargs:
+            if k == "file":
+                has_file = True
+            elif k not in ("sep", "end", "flush"):
+                return False
+        return has_file
+
     def _print_kwargs_without_flush(self, kwargs):
         # Drop the accepted bool-literal ``flush=`` before delegating to the
         # ``sep``/``end`` emitters so they never emit a dead truthiness value.
+        # With ``file=`` it is kept: a user file object's ``flush()`` runs.
+        routes_to_file = False
+        for k, _vexpr in kwargs:
+            if k == "file":
+                routes_to_file = True
         out = []
         for k, vexpr in kwargs:
-            if self._is_native_print_flush_kw(k, vexpr):
+            if not routes_to_file and self._is_native_print_flush_kw(k, vexpr):
                 continue
             out.append((k, vexpr))
         return out
@@ -118,6 +134,14 @@ class PrintLoweringMixin:
                 self._emit_print_many(call)
                 return
             if self._try_emit_native_file_stream_print(call):
+                return
+            if self._print_kwargs_route_to_file(call.kwargs):
+                # A file object no static type describes (``print(msg,
+                # file=out)``): write through its ``write`` method natively.
+                if self._has_starred_unpack(call.args):
+                    self._emit_print_many_splat(call)
+                else:
+                    self._emit_print_many(call)
                 return
             fn_val = self._load_cpython_builtin("print")
             result = self._finish_cpy_call_kw(
@@ -303,6 +327,8 @@ class PrintLoweringMixin:
 
             sep_obj: Optional[ir.Value] = None
             end_obj: Optional[ir.Value] = None
+            file_obj: Optional[ir.Value] = None
+            flush_obj: Optional[ir.Value] = None
             for k, vexpr in self._print_kwargs_without_flush(call.kwargs):
                 v = self._emit_expr(vexpr)
                 boxed = marshal.marshal_to_object(
@@ -312,19 +338,18 @@ class PrintLoweringMixin:
                     sep_obj = boxed
                 elif k == "end":
                     end_obj = boxed
+                elif k == "file":
+                    file_obj = boxed
+                elif k == "flush":
+                    flush_obj = boxed
         finally:
             if tup_frame_slot is None:
                 self._try_err_block = previous_pcc_target
                 self._cpy_operand_cleanup_block = previous_cpy_cleanup
 
-        if sep_obj is None:
-            sep_obj = self._emit_literal_str(" ")
-        if end_obj is None:
-            end_obj = self._emit_literal_str("\n")
         current_tup = self._load_print_many_tuple(tup, tup_reload_slot)
-        self.builder.call(
-            self.runtime["py_print_many"],
-            [current_tup, sep_obj, end_obj],
+        self._emit_print_many_or_file_call(
+            current_tup, sep_obj, end_obj, file_obj, flush_obj
         )
         if tup_frame_slot is None:
             self._emit_post_call_err_check(
@@ -338,6 +363,37 @@ class PrintLoweringMixin:
                 self.runtime["pcc_gc_store_root"],
                 [tup_frame_slot, self._emit_none_literal()],
             )
+
+    def _emit_print_many_or_file_call(
+        self, args_tuple, sep_obj, end_obj, file_obj, flush_obj
+    ) -> None:
+        """``py_print_many`` for stdout, ``py_print_to_file`` for ``file=``.
+
+        The caller's post-call error check covers both (``py_print_to_file``
+        leaves the write's exception pending).
+        """
+        if file_obj is None:
+            if sep_obj is None:
+                sep_obj = self._emit_literal_str(" ")
+            if end_obj is None:
+                end_obj = self._emit_literal_str("\n")
+            self.builder.call(
+                self.runtime["py_print_many"],
+                [args_tuple, sep_obj, end_obj],
+            )
+            return
+        null = ir.Constant(_CSTR, None)
+        self.builder.call(
+            self.runtime["py_print_to_file"],
+            [
+                file_obj,
+                args_tuple,
+                sep_obj if sep_obj is not None else null,
+                end_obj if end_obj is not None else null,
+                flush_obj if flush_obj is not None else null,
+            ],
+            name=self._fresh("print.file"),
+        )
 
     def _emit_print_many_splat(self, call: Call) -> None:
         """``print(*items)`` / ``print(a, *rest, b)``: build the positional
@@ -401,6 +457,8 @@ class PrintLoweringMixin:
         try:
             sep_obj: Optional[ir.Value] = None
             end_obj: Optional[ir.Value] = None
+            file_obj: Optional[ir.Value] = None
+            flush_obj: Optional[ir.Value] = None
             for k, vexpr in self._print_kwargs_without_flush(call.kwargs):
                 v = self._emit_expr(vexpr)
                 boxed = marshal.marshal_to_object(
@@ -410,18 +468,17 @@ class PrintLoweringMixin:
                     sep_obj = boxed
                 elif k == "end":
                     end_obj = boxed
+                elif k == "file":
+                    file_obj = boxed
+                elif k == "flush":
+                    flush_obj = boxed
         finally:
             self._try_err_block = previous_pcc_target
             self._cpy_operand_cleanup_block = previous_cpy_cleanup
 
-        if sep_obj is None:
-            sep_obj = self._emit_literal_str(" ")
-        if end_obj is None:
-            end_obj = self._emit_literal_str("\n")
         current_tup = self._load_print_many_tuple(tup, tup_root)
-        self.builder.call(
-            self.runtime["py_print_many"],
-            [current_tup, sep_obj, end_obj],
+        self._emit_print_many_or_file_call(
+            current_tup, sep_obj, end_obj, file_obj, flush_obj
         )
         self._emit_post_call_err_check(
             getattr(call, "span", None),

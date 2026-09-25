@@ -25,8 +25,6 @@ def test_function_doc_and_mutable_metadata_persist(tmp_path):
     executable = tmp_path / "function-metadata"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     compile_result = subprocess.run(
         [
             "uv",
@@ -99,8 +97,6 @@ def test_function_code_signature_metadata(tmp_path):
     executable = tmp_path / "function-code-metadata"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     compile_result = subprocess.run(
         [
             "uv",

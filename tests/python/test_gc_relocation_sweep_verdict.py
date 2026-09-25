@@ -37,7 +37,6 @@ import subprocess
 import pytest
 
 from tests.runtime_build_cache import (
-    cached_threaded_c_runtime,
     cached_threaded_pcc_python_runtime,
 )
 
@@ -208,8 +207,6 @@ int main(void) {
 
 
 def _runtime_archive(kind: str) -> Path:
-    if kind == "c":
-        return cached_threaded_c_runtime() / "libpy_runtime.a"
     return cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
 
 
@@ -237,7 +234,7 @@ def _compile_probe(tmp_path: Path, kind: str, backend: int) -> Path:
     return executable
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_relocation_copy_clears_stale_sweep_verdict_backend4(
     tmp_path: Path, kind: str
 ) -> None:
@@ -261,17 +258,6 @@ def test_relocation_copy_clears_stale_sweep_verdict_backend4(
 def test_source_sweep_verdict_clears_only_after_forwarding_commit() -> None:
     """Rollback must retain the source's pre-existing sweep verdict."""
     repo = Path(__file__).absolute().parents[2]
-    c_source = (repo / "pcc/py_runtime/src/py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_body = c_source.split(
-        "static PyObject *pcc_gc_relocate_copy_preallocated_unlocked(", 1
-    )[1].split("static PyObject *pcc_gc_relocate_copy_unlocked(", 1)[0]
-    c_commit = c_body.index("pcc_gc_install_forwarding_preallocated_unlocked(")
-    c_clear = c_body.index(
-        "py_header_flags_and(from_h, ~PY_FLAG_GC_SWEEP_CANDIDATE)"
-    )
-    assert c_commit < c_clear
 
     py_source = (
         repo / "pcc/py_runtime/py/freestanding_gc_relocation_copy.py"

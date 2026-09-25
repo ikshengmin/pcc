@@ -19,10 +19,13 @@ from pcc.py_runtime.py.py_abi_constants import (
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
+    PY_TYPE_CLASS,
     PY_TYPE_COMPLEX,
     PY_TYPE_DICT,
     PY_TYPE_EXC,
     PY_TYPE_FLOAT,
+    PY_TYPE_FUNC,
+    PY_TYPE_INSTANCE,
     PY_TYPE_INT,
     PY_TYPE_LIST,
     PY_TYPE_MEMORYVIEW,
@@ -30,6 +33,9 @@ from pcc.py_runtime.py.py_abi_constants import (
     PY_TYPE_SET,
     PY_TYPE_STR,
     PY_TYPE_TUPLE,
+    PY_TYPE_USER_CLASS_START,
+    PYCLASSOBJECT_NAME_OFFSET,
+    PYINSTANCEOBJECT_CLS_OFFSET,
     PYLISTOBJECT_ITEMS_OFFSET,
     PYLISTOBJECT_LENGTH_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
@@ -63,6 +69,7 @@ from pcc.unsafe import (
     store_i64,
     store_f64,
     store_ptr,
+    strlen,
     untag_int,
 )
 
@@ -93,6 +100,11 @@ py_user_str_dispatch = extern("py_user_str_dispatch", (c_ptr,), c_ptr)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
 pcc_capi_cext_object_repr = extern("pcc_capi_cext_object_repr", (c_ptr,), c_ptr)
 py_user_repr_dispatch = extern("py_user_repr_dispatch", (c_ptr,), c_ptr)
+py_class_attrs_dict = extern("py_class_attrs_dict", (c_ptr, c_int64), c_ptr)
+py_dict_get = extern("py_dict_get", (c_ptr, c_ptr), c_ptr)
+py_type_builtin = extern("py_type_builtin", (c_ptr,), c_ptr)
+py_obj_id = extern("py_obj_id", (c_ptr,), c_int64)
+py_func_display_name = extern("py_func_display_name", (c_ptr,), c_ptr)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
@@ -1216,6 +1228,10 @@ def py_guarded_loop_counter_get(counter: int) -> int:
     return atomic_load_i64(slot, 0, "relaxed")
 
 
+def _raise_int_bytes(kind: int, message) -> None:
+    py_raise_owned(py_exc_new(kind, message))
+
+
 @c_abi_export("py_i64_buffer_new")
 def py_i64_buffer_new(element_count: int):
     if element_count < 1 or element_count > 1048576:
@@ -1946,6 +1962,19 @@ def py_bytearray_insert(o, index, item):
         j = j + 1
     store_i8(dst, total, 0)
     return out
+
+
+@c_abi_export("py_bytearray_clear")
+def py_bytearray_clear(o) -> None:
+    # bytearray.clear(): zero byte_len (offset 16) in place, keeping the
+    # buffer and its NUL terminator.
+    if ptr_is_null(o) != 0 or _type_of(o) != PY_TYPE_BYTEARRAY:
+        py_raise_owned(py_exc_new(3, cstr("clear() requires a bytearray")))
+        return
+    data = _bytes_data(o)
+    store_i64(o, 16, 0)
+    if ptr_is_null(data) == 0:
+        store_i8(data, 0, 0)
 
 
 @c_abi_export("py_bytearray_pop")
@@ -2935,28 +2964,41 @@ def _append_hex_escape(buf, pos: int, prefix: int, value: int, digits: int) -> i
     return pos
 
 
+def _repr_quote(src, byte_len: int) -> int:
+    # CPython's unicode_repr / bytes_repr: single quotes unless the text has
+    # a single quote and no double quote.  ("{'a': 1}" used to print as
+    # '{\'a\': 1}'.)
+    squote: int = 0
+    dquote: int = 0
+    i: int = 0
+    while i < byte_len:
+        c: int = _load_u8(src, i)
+        if c == 39:
+            squote = 1
+        elif c == 34:
+            dquote = 1
+        i = i + 1
+    if squote != 0 and dquote == 0:
+        return 34
+    return 39
+
+
 def _obj_repr_str(o, escape_non_ascii: int):
     byte_len: int = load_i64(o, 16)
     src = ptr_add(o, 40)
-    out_len: int = 2
-    i: int = 0
+    quote: int = _repr_quote(src, byte_len)
+    # Worst case: every byte a 4-byte \xHH escape, or a 10-byte \UHHHHHHHH
+    # escape per 4-byte character under ascii().
+    out_len: int = 2 + byte_len * 4
     if escape_non_ascii != 0:
-        out_len = out_len + byte_len * 10
-    else:
-        while i < byte_len:
-            c: int = _load_u8(src, i)
-            if c == 92 or c == 39 or c == 10 or c == 13 or c == 9:
-                out_len = out_len + 2
-            else:
-                out_len = out_len + 1
-            i = i + 1
+        out_len = 2 + byte_len * 10
     buf = py_mem_alloc(out_len + 1)
     if ptr_is_null(buf):
         return null()
     pos: int = 0
-    store_i8(buf, pos, 39)
+    store_i8(buf, pos, quote)
     pos = pos + 1
-    i = 0
+    i: int = 0
     while i < byte_len:
         c2: int = _load_u8(src, i)
         if c2 == 92:
@@ -2965,10 +3007,10 @@ def _obj_repr_str(o, escape_non_ascii: int):
             store_i8(buf, pos, 92)
             pos = pos + 1
             i = i + 1
-        elif c2 == 39:
+        elif c2 == quote:
             store_i8(buf, pos, 92)
             pos = pos + 1
-            store_i8(buf, pos, 39)
+            store_i8(buf, pos, quote)
             pos = pos + 1
             i = i + 1
         elif c2 == 10:
@@ -2989,7 +3031,8 @@ def _obj_repr_str(o, escape_non_ascii: int):
             store_i8(buf, pos, 116)
             pos = pos + 1
             i = i + 1
-        elif escape_non_ascii != 0 and (c2 < 32 or c2 == 127):
+        elif c2 < 32 or c2 == 127:
+            # Control characters escape in repr() too, not only in ascii().
             pos = _append_hex_escape(buf, pos, 120, c2, 2)
             i = i + 1
         elif escape_non_ascii != 0 and c2 >= 128:
@@ -3039,7 +3082,7 @@ def _obj_repr_str(o, escape_non_ascii: int):
             store_i8(buf, pos, c2)
             pos = pos + 1
             i = i + 1
-    store_i8(buf, pos, 39)
+    store_i8(buf, pos, quote)
     pos = pos + 1
     store_i8(buf, pos, 0)
     out = py_str_new(buf, pos)
@@ -3213,10 +3256,11 @@ def _format_bytes_str(o):
     buf = py_mem_alloc(n * 4 + 8)
     if ptr_is_null(buf):
         return null()
+    quote: int = _repr_quote(data, n)
     pos: int = 0
     store_i8(buf, pos, 98)  # 'b'
     pos = pos + 1
-    store_i8(buf, pos, 39)  # "'"
+    store_i8(buf, pos, quote)
     pos = pos + 1
     i: int = 0
     while i < n:
@@ -3225,9 +3269,9 @@ def _format_bytes_str(o):
             store_i8(buf, pos, 92)
             store_i8(buf, pos + 1, 92)
             pos = pos + 2
-        elif c == 39:  # "'"
+        elif c == quote:
             store_i8(buf, pos, 92)
-            store_i8(buf, pos + 1, 39)
+            store_i8(buf, pos + 1, quote)
             pos = pos + 2
         elif c == 10:
             store_i8(buf, pos, 92)
@@ -3250,7 +3294,7 @@ def _format_bytes_str(o):
             store_i8(buf, pos, c)
             pos = pos + 1
         i = i + 1
-    store_i8(buf, pos, 39)  # "'"
+    store_i8(buf, pos, quote)
     pos = pos + 1
     store_i8(buf, pos, 0)
     out = py_str_new(buf, pos)
@@ -3312,6 +3356,111 @@ def _format_builtin_str(o, tag: int):
     return null()
 
 
+def _class_own_str_attr(cls, name):
+    """NEW str ``name`` from the class's own namespace, or NULL."""
+    attrs = py_class_attrs_dict(cls, 0)
+    if ptr_is_null(attrs):
+        return null()
+    key = py_str_new(name, strlen(name))
+    if ptr_is_null(key):
+        return null()
+    value = py_dict_get(attrs, key)
+    py_decref(key)
+    if ptr_is_null(value):
+        if py_err_occurred() != 0:
+            py_clear_exception()
+        return null()
+    if _type_of(value) != PY_TYPE_STR:
+        py_decref(value)
+        return null()
+    return value
+
+
+def _str_is(s, text) -> int:
+    n: int = strlen(text)
+    if py_str_byte_len(s) != n:
+        return 0
+    data = py_str_utf8(s)
+    i: int = 0
+    while i < n:
+        if load_i8(data, i) != load_i8(text, i):
+            return 0
+        i = i + 1
+    return 1
+
+
+def _class_display_name(cls):
+    """NEW str ``module.qualname`` as type.__repr__ shows it; builtins bare."""
+    qual = _class_own_str_attr(cls, cstr("__qualname__"))
+    if ptr_is_null(qual):
+        name = load_ptr(cls, PYCLASSOBJECT_NAME_OFFSET)
+        if ptr_is_null(name):
+            name = cstr("?")
+        qual = py_str_new(name, strlen(name))
+        if ptr_is_null(qual):
+            return null()
+    module = _class_own_str_attr(cls, cstr("__module__"))
+    if ptr_is_null(module):
+        return qual
+    if _str_is(module, cstr("builtins")) != 0:
+        py_decref(module)
+        return qual
+    return _cat_take(_cat_take(module, _str_lit1(46)), qual)  # '.'
+
+
+def _identity_hex(o):
+    """NEW str of ``hex(id(o))``."""
+    value: int = py_obj_id(o)
+    buf = stack_alloc(24)
+    pos: int = 23
+    store_i8(buf, pos, 0)
+    if value == 0:
+        pos = pos - 1
+        store_i8(buf, pos, 48)
+    while value != 0:
+        digit: int = value & 15
+        value = (value >> 4) & 0x0FFFFFFFFFFFFFFF
+        pos = pos - 1
+        if digit < 10:
+            store_i8(buf, pos, 48 + digit)
+        else:
+            store_i8(buf, pos, 87 + digit)
+    pos = pos - 1
+    store_i8(buf, pos, 120)  # 'x'
+    pos = pos - 1
+    store_i8(buf, pos, 48)  # '0'
+    return py_str_new(ptr_add(buf, pos), 23 - pos)
+
+
+def _default_object_repr(o, tag: int):
+    """CPython's default reprs for objects with no ``__repr__``: classes
+    (``<class 'm.C'>``), functions (``<function f at 0x..>``) and
+    ``object.__repr__`` (``<m.C object at 0x..>``).  NULL when ``o`` has no
+    class to name."""
+    if tag == PY_TYPE_CLASS:
+        shown = _class_display_name(o)
+        if ptr_is_null(shown):
+            return null()
+        head = py_str_new(cstr("<class '"), 8)
+        return _cat_take(_cat_take(head, shown), py_str_new(cstr("'>"), 2))
+    if tag == PY_TYPE_FUNC:
+        head = py_str_new(cstr("<function "), 10)
+        head = _cat_take(head, py_func_display_name(o))
+        head = _cat_take(head, py_str_new(cstr(" at "), 4))
+        return _cat_take(_cat_take(head, _identity_hex(o)), _str_lit1(62))  # '>'
+    cls = null()
+    if tag == PY_TYPE_INSTANCE or tag >= PY_TYPE_USER_CLASS_START:
+        cls = pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
+    if ptr_is_null(cls):
+        return null()
+    shown = _class_display_name(cls)
+    if ptr_is_null(shown):
+        return null()
+    out = _cat_take(_str_lit1(60), shown)  # '<'
+    out = _cat_take(out, py_str_new(cstr(" object at "), 11))
+    return _cat_take(_cat_take(out, _identity_hex(o)), _str_lit1(62))  # '>'
+
+
 @c_abi_export("py_obj_repr")
 def py_obj_repr(o):
     if ptr_is_null(o):
@@ -3332,7 +3481,9 @@ def py_obj_repr(o):
     dunder = py_user_repr_dispatch(o)
     if not ptr_is_null(dunder):
         return dunder
-    return null()
+    if py_err_occurred() != 0:
+        return null()
+    return _default_object_repr(o, tag)
 
 
 @c_abi_export("py_obj_ascii")
@@ -3363,6 +3514,9 @@ def py_obj_str(o):
             # str(KeyError('x')) == "'x'".
             if py_exc_matches(o, py_exc_builtin_class(4)) != 0:  # PY_EXC_KEYERROR
                 return py_obj_repr(msg)
+            if _type_of(msg) != PY_TYPE_STR:
+                # ``str(ValueError(3))`` is ``'3'``: the argument's str.
+                return py_obj_str(msg)
             py_incref(msg)
             return msg
         return null()

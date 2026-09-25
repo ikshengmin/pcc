@@ -140,12 +140,7 @@ def test_negative_aligned_keys_are_never_dropped(tmp_path, kind):
         )
 
 
-_PROBE_SOURCES = (
-    "pcc/py_runtime/py/py_set.py",
-    "pcc/py_runtime/py/py_dict.py",
-    "pcc/py_runtime/src/py_set.c",
-    "pcc/py_runtime/src/py_dict.c",
-)
+_PROBE_SOURCES = ("pcc/py_runtime/py/py_set.py", "pcc/py_runtime/py/py_dict.py")
 
 # ceil(64 / 5): shifts for a 64-bit perturb to reach zero.  Only once it IS
 # zero is `j = (j * 5 + 1) & mask` full-period, so a budget below
@@ -209,7 +204,6 @@ def test_negative_aligned_keys_survive_the_c_mirror(tmp_path, monkeypatch, kind)
     """
     from pcc.py_frontend.pipeline import compile_python
 
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"
     src.write_text(_PROGRAMS[kind].lstrip(), encoding="utf-8")

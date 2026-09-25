@@ -6,8 +6,6 @@ that facade so pytest node ids stay stable.
 from _gc_substrate_common import *  # noqa: F401,F403
 
 
-
-
 def test_tracing_finish_claim_lifts_stw_outside_graph_lock_in_c_and_strict_runtime():
     assert {
         "pcc_gc_tracing_cycle_epoch",
@@ -27,174 +25,6 @@ def test_tracing_finish_claim_lifts_stw_outside_graph_lock_in_c_and_strict_runti
     assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
         "pcc_gc_tracing_finish_claim_clear_unlocked"
     ] == (("c_int64", "c_int64"), "c_void")
-
-    c_src = PY_GC_BACKEND_C.read_text(encoding="utf-8")
-    c_state = c_src.split("static int32_t pcc_gc_mark_active", 1)[1].split(
-        "static int32_t pcc_gc_config_initialized", 1
-    )[0]
-    for name in (
-        "pcc_gc_tracing_cycle_epoch",
-        "pcc_gc_tracing_finish_claim_epoch",
-        "pcc_gc_tracing_finish_claim_backend",
-        "pcc_gc_tracing_finish_commits",
-    ):
-        assert name in c_state
-
-    c_claim_clear = c_src.split(
-        "static void pcc_gc_tracing_finish_claim_clear_unlocked(", 1
-    )[1].split("int64_t pcc_gc_tracing_cycle_epoch_advance_unlocked", 1)[0]
-    c_clear_epoch_guard = c_claim_clear.index(
-        "pcc_gc_tracing_finish_claim_epoch_load() != claim_epoch"
-    )
-    c_clear_backend_guard = c_claim_clear.index(
-        "pcc_gc_tracing_finish_claim_backend_load() != claim_backend"
-    )
-    c_clear_epoch_store = c_claim_clear.index(
-        "&pcc_gc_tracing_finish_claim_epoch, 0"
-    )
-    c_clear_backend_store = c_claim_clear.index(
-        "&pcc_gc_tracing_finish_claim_backend, -1"
-    )
-    c_clear_early_return = c_claim_clear.index("return;")
-    assert max(
-        c_clear_epoch_guard,
-        c_clear_backend_guard,
-        c_clear_early_return,
-    ) < min(c_clear_epoch_store, c_clear_backend_store)
-
-    c_step_unlocked = c_src.split(
-        "static int64_t pcc_gc_step_trace_cycle_unlocked(", 1
-    )[1].split("static int64_t pcc_gc_cms_worker_trace_cycle_unlocked", 1)[0]
-    assert "pcc_stop_the_world" not in c_step_unlocked
-    assert "pcc_resume_world" not in c_step_unlocked
-    assert "pcc_gc_finish_tracing_cycle(" not in c_step_unlocked
-    assert "pcc_gc_tracing_finish_claim_epoch" in c_step_unlocked
-
-    c_finish = c_src.split("static int pcc_gc_finish_tracing_cycle(", 1)[1].split(
-        "static int pcc_gc_complete_claimed_tracing_cycle", 1
-    )[0]
-    c_finish_signature = c_finish.split("{", 1)[0]
-    assert "int64_t claim_epoch" in c_finish_signature
-    assert "int64_t claim_backend" in c_finish_signature
-    for comparison in (
-        "pcc_gc_tracing_finish_claim_epoch_load() != claim_epoch",
-        "pcc_gc_tracing_finish_claim_backend_load() != claim_backend",
-        "pcc_gc_tracing_cycle_epoch_load() != claim_epoch",
-        "pcc_gc_selected_backend != claim_backend",
-        "pcc_gc_mark_active_load() == 0",
-    ):
-        assert comparison in c_finish
-    for forbidden in (
-        "pcc_stop_the_world",
-        "pcc_resume_world",
-        "pcc_gc_graph_lock",
-        "pcc_gc_graph_unlock",
-    ):
-        assert forbidden not in c_finish
-    assert "pcc_gc_gray_current_roots()" not in c_finish
-    assert "pcc_gc_drain_all_gray" not in c_finish
-    assert c_finish.index("PY_FLAG_GC_SWEEP_CANDIDATE") < c_finish.index(
-        "pcc_gc_trace_cursor = NULL"
-    ) < c_finish.index("pcc_gc_mark_active_store(0)")
-    assert "pcc_gc_cycle_requested_store(0)" not in c_finish
-
-    c_complete = c_src.split(
-        "static int pcc_gc_complete_claimed_tracing_cycle", 2
-    )[2].split("static int64_t pcc_gc_step_trace_cycle_unlocked", 1)[0]
-    c_complete_signature = c_complete.split("{", 1)[0]
-    assert "int64_t claim_epoch" in c_complete_signature
-    assert "int64_t claim_backend" in c_complete_signature
-    assert c_complete.count("pcc_stop_the_world()") == 1
-    assert c_complete.index("pcc_thread_owns_stopped_world()") < (
-        c_complete.index("if (owns_stopped_world == 0)")
-    ) < c_complete.index("pcc_stop_the_world()")
-    c_stop_failure = c_complete.split(
-        "if (pcc_stop_the_world() != 0)", 1
-    )[1].split("acquired_stopped_world = 1", 1)[0]
-    assert c_stop_failure.index("pcc_gc_graph_lock()") < (
-        c_stop_failure.index("pcc_gc_tracing_finish_claim_clear_unlocked(")
-    ) < c_stop_failure.index("pcc_gc_graph_unlock()") < c_stop_failure.index(
-        "return 0"
-    )
-    c_failure_clear = c_stop_failure.index(
-        "pcc_gc_tracing_finish_claim_clear_unlocked("
-    )
-    assert "claim_epoch, claim_backend" in c_stop_failure[
-        c_failure_clear : c_failure_clear + 140
-    ]
-    for forbidden in (
-        "pcc_gc_finish_tracing_cycle",
-        "pcc_resume_world",
-        "pcc_gc_mark_active",
-        "pcc_gc_trace_cursor",
-        "pcc_gc_gray_count",
-    ):
-        assert forbidden not in c_stop_failure
-    c_finish_call = c_complete.index("pcc_gc_finish_tracing_cycle(")
-    assert "claim_epoch, claim_backend" in c_complete[
-        c_finish_call : c_finish_call + 120
-    ]
-    assert c_finish_call < c_complete.index(
-        "pcc_gc_graph_unlock()", c_finish_call
-    ) < c_complete.index("if (acquired_stopped_world)") < c_complete.index(
-        "pcc_resume_world()"
-    )
-    c_owns_branch = c_complete.split(
-        "if (owns_stopped_world == 0) {", 1
-    )[1].split("\n    }\n\n    pcc_gc_graph_lock();", 1)[0]
-    assert c_owns_branch.count("pcc_stop_the_world()") == 1
-    assert "acquired_stopped_world = 1" in c_owns_branch
-    c_resume_branch = c_complete.split(
-        "if (acquired_stopped_world) {", 1
-    )[1].split("}", 1)[0]
-    assert c_resume_branch.count("pcc_resume_world()") == 1
-
-    c_step = c_src.split("static int64_t pcc_gc_step_trace_cycle(int64_t budget)", 1)[
-        1
-    ].split("static int64_t pcc_gc_step_generational_promotion", 1)[0]
-    c_step_complete = c_step.index("pcc_gc_complete_claimed_tracing_cycle(")
-    assert c_step.index("pcc_gc_graph_unlock()") < c_step_complete
-    assert "claim_epoch, claim_backend" in c_step[
-        c_step_complete : c_step_complete + 140
-    ]
-    c_cms = c_src.split("static void *pcc_gc_cms_worker_main", 1)[1].split(
-        "static void pcc_gc_cms_maybe_start_worker", 1
-    )[0]
-    assert c_cms.index("pcc_stop_the_world()") < c_cms.index(
-        "pcc_gc_graph_lock()"
-    )
-    c_cms_complete = c_cms.index("pcc_gc_complete_claimed_tracing_cycle(")
-    assert c_cms.rindex(
-        "pcc_gc_graph_unlock()", 0, c_cms_complete
-    ) < c_cms_complete < c_cms.index("pcc_resume_world()", c_cms_complete)
-    assert "claim_epoch, claim_backend" in c_cms[
-        c_cms_complete : c_cms_complete + 140
-    ]
-
-    c_setter = c_src.split("int64_t pcc_gc_set_backend(int64_t backend)", 1)[
-        1
-    ].split("int64_t pcc_gc_telemetry", 1)[0]
-    c_reset_epoch = c_setter.index(
-        "pcc_gc_tracing_cycle_epoch_advance_unlocked()"
-    )
-    c_reset_backend = c_setter.index("pcc_gc_selected_backend = backend")
-    c_reset_active = c_setter.index("pcc_gc_mark_active_store(0)")
-    c_reset_cursor = c_setter.index("pcc_gc_trace_cursor = NULL")
-    c_reset_gray = c_setter.index("pcc_gc_gray_count_store(0)")
-    c_reset_unlock = c_setter.rindex("pcc_gc_graph_unlock()")
-    assert c_reset_epoch < c_reset_backend < c_reset_active < c_reset_unlock
-    assert c_reset_cursor < c_reset_unlock
-    assert c_reset_gray < c_reset_unlock
-    assert "pcc_gc_tracing_finish_claim_clear_unlocked" not in c_setter
-
-    c_epoch_advance = c_src.split(
-        "int64_t pcc_gc_tracing_cycle_epoch_advance_unlocked(void)", 1
-    )[1].split("static void pcc_gc_cms_queue_lock", 1)[0]
-    c_max_guard = c_epoch_advance.index("current == INT64_MAX")
-    assert c_max_guard < c_epoch_advance.index(
-        "abort()", c_max_guard
-    ) < c_epoch_advance.index("current + 1")
-    assert "next = 1" not in c_epoch_advance
 
     strict_state = PY_GC_STATE.read_text(encoding="utf-8")
     for name in (
@@ -353,7 +183,7 @@ def test_tracing_finish_claim_lifts_stw_outside_graph_lock_in_c_and_strict_runti
     assert "next_epoch = 1" not in strict_epoch_advance
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
     tmp_path: Path,
     kind: str,
@@ -816,27 +646,6 @@ def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
 
 
 def test_tracing_gc_finalizer_handles_thread_objects_and_refcount_side_table():
-    c_src = PY_GC_BACKEND_C.read_text(encoding="utf-8")
-    assert "PccGcThreadObject" in c_src
-    fixed_owner = c_src.split("static int pcc_gc_visit_fixed_owner_slots(", 1)[1]
-    fixed_owner = fixed_owner.split(
-        "static int pcc_gc_visit_continuation_owner_slots(",
-        1,
-    )[0]
-    assert "PccGcThreadObject *t = (PccGcThreadObject *)o" in fixed_owner
-    assert "visit(&t->callable, ctx)" in fixed_owner
-    assert "visit(&t->args, ctx)" in fixed_owner
-    assert "visit(&t->result, ctx)" in fixed_owner
-    assert "pcc_refcount_forget(&h->refcount)" in c_src
-    for name in [
-        "py_dealloc_thread_lock",
-        "py_dealloc_thread_rlock",
-        "py_dealloc_thread_event",
-        "py_dealloc_thread_condition",
-        "py_dealloc_thread_semaphore",
-        "py_dealloc_thread_thread",
-    ]:
-        assert name in c_src
 
     py_src = PY_GC_BACKEND_PORT.read_text(encoding="utf-8")
     extern_import = next(
@@ -858,8 +667,9 @@ def test_tracing_gc_finalizer_handles_thread_objects_and_refcount_side_table():
         encoding="utf-8"
     )
     assert '@c_abi_export("py_dealloc_thread_thread")' in thread_port
-    assert "pcc_gc_store_ptr(o, ptr_add(o, 24), callable)" in thread_port
-    assert "pcc_gc_store_ptr(o, ptr_add(o, 32), args)" in thread_port
+    # callable/args default to None before the barriered publication.
+    assert "pcc_gc_store_ptr(o, ptr_add(o, 24), callable_value)" in thread_port
+    assert "pcc_gc_store_ptr(o, ptr_add(o, 32), args_value)" in thread_port
     assert "py_decref_extern(pcc_gc_load_ptr(thread, ptr_add(thread, 24)))" in thread_port
 
 
@@ -981,7 +791,7 @@ def test_pthread_substrate_stop_the_world_stress(tmp_path):
         f"-I{work_runtime / 'include'}",
         f"-I{work_runtime / 'src'}",
         str(src),
-        str(work_runtime / "libpy_runtime.a"),
+        str(work_runtime / "libpy_runtime_pcc_py.a"),
         "-lm",
         "-o",
         str(exe),
@@ -1053,7 +863,7 @@ def test_concurrent_stop_the_world_requesters_are_serialized(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),
@@ -1131,7 +941,7 @@ def test_threaded_allocator_boundary_is_safepoint_for_stw(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),

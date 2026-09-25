@@ -146,7 +146,6 @@ def _compile_and_run_with_package_site(
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(package_site)
     env["PCC_RUNTIME_CC"] = "pcc"
-    env["PCC_RUNTIME_HIGH"] = "py"
     env["PCC_PYTHON_IR_PASSES"] = "off"
     cmd = compiler or ["uv", "run", "pcc"]
     compile_proc = subprocess.run(
@@ -375,21 +374,29 @@ def test_cpython_proxy_runtime_seeds_pcc_package_site(tmp_path):
 
 def test_compiled_module_registry_is_linked_outside_the_capi_shim():
     """libpython mode drops the shim but still needs pcc module imports."""
-    registry = REPO / "pcc" / "py_runtime" / "src" / "py_compiled_module.c"
-    shim = REPO / "pcc" / "py_runtime" / "src" / "py_capi_shim.c"
-    makefile = REPO / "pcc" / "py_runtime" / "Makefile"
-
-    registry_text = registry.read_text(encoding="utf-8")
-    shim_text = shim.read_text(encoding="utf-8")
-    makefile_text = makefile.read_text(encoding="utf-8")
-    for definition in (
-        "int64_t py_compiled_module_register_init(",
-        "PyObject *py_compiled_module_import_by_name(",
+    runtime_py = REPO / "pcc" / "py_runtime" / "py"
+    makefile_text = (REPO / "pcc" / "py_runtime" / "Makefile").read_text(
+        encoding="utf-8"
+    )
+    for symbol in (
+        "py_compiled_module_register_init",
+        "py_compiled_module_import_by_name",
     ):
-        assert definition in registry_text
-        assert definition not in shim_text
-    assert "$(SRCDIR)/py_compiled_module.c" in makefile_text
-    assert "$(OBJDIR_PY)/py_compiled_module.o" in makefile_text
+        owners = sorted(
+            path.name
+            for path in runtime_py.glob("*.py")
+            if f'c_abi_export("{symbol}")' in path.read_text(encoding="utf-8")
+        )
+        assert owners == ["py_compiled_module_runtime.py"], (symbol, owners)
+    py_modules = makefile_text.split("PY_MODULES =", 1)[1].split("\n", 1)[0]
+    assert " py_compiled_module_runtime " in f" {py_modules} "
+    # The libpython bundle swaps only the extension loader for the CPython
+    # bridge; the registry stays in it.
+    libpython_rule = makefile_text.split("$(LIB_PCC_PY_LIBPYTHON): ", 1)[1].split(
+        "\n\n", 1
+    )[0]
+    assert '$(AR) d "$@.tmp" py_extension_loader_runtime.o;' in libpython_rule
+    assert "py_compiled_module_runtime" not in libpython_rule
 
 
 def test_pcc1_real_mlx_core_cpython_proxy_runtime_opt_in(tmp_path):

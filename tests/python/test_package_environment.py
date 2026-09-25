@@ -105,8 +105,6 @@ def test_locked_resource_default_helper_is_callable_in_strict_self_mode(
         encoding="utf-8",
     )
     output = tmp_path / "locked_resource_defaults"
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
 
     compile_python_multi(
         [str(source), "pcc/package_environment.py"],

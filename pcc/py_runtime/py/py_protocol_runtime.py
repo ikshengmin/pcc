@@ -14,6 +14,7 @@ from pcc.py_runtime.py.py_abi_constants import (
     PYINSTANCEOBJECT_FIELDS_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PY_TYPE_BOOL,
+    PY_TYPE_COMPLEX,
     PY_TYPE_FLOAT,
     PY_TYPE_FUNC,
     PY_TYPE_INSTANCE,
@@ -41,6 +42,7 @@ from pcc.unsafe import (
     ptr_is_null,
     ptr_to_int,
     stack_alloc,
+    store_i8,
     store_i32,
     store_i64,
 )
@@ -69,6 +71,12 @@ py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 py_int_cmp = extern("py_int_cmp", (c_ptr, c_ptr), c_int32)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_int_floordiv = extern("py_int_floordiv", (c_ptr, c_ptr), c_ptr)
+py_int_neg = extern("py_int_neg", (c_ptr,), c_ptr)
+py_int_xor = extern("py_int_xor", (c_ptr, c_ptr), c_ptr)
+py_complex_neg = extern("py_complex_neg", (c_ptr,), c_ptr)
+py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
+py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
 py_float_to_f64 = extern("py_float_to_f64", (c_ptr,), c_double)
 py_float_from_f64 = extern("py_float_from_f64", (c_double,), c_ptr)
 floor_c = extern("floor", (c_double,), c_double)
@@ -617,6 +625,104 @@ def py_user_matmul_dispatch(a, b):
         py_decref(result)
     py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for @")))
     return null()
+
+
+def _unary_operand_error(value, op: int):
+    # CPython: "bad operand type for unary -: 'str'".
+    message = stack_alloc(160)
+    prefix = cstr("bad operand type for unary ")
+    length: int = 0
+    while load_i8(prefix, length) != 0:
+        store_i8(message, length, load_i8(prefix, length))
+        length = length + 1
+    store_i8(message, length, op)
+    store_i8(message, length + 1, 58)
+    store_i8(message, length + 2, 32)
+    store_i8(message, length + 3, 39)
+    length = length + 4
+    name = py_obj_type_name(value)
+    if ptr_is_null(name) == 0:
+        text = py_str_utf8(name)
+        count: int = py_str_byte_len(name)
+        if count > 120:
+            count = 120
+        index: int = 0
+        while index < count:
+            store_i8(message, length, load_i8(text, index))
+            length = length + 1
+            index = index + 1
+        py_decref(name)
+    store_i8(message, length, 39)
+    store_i8(message, length + 1, 0)
+    py_raise_owned(py_exc_new(3, message))
+    return null()
+
+
+def _py_obj_unary(value, op: int):
+    # ``-x`` / ``+x`` / ``~x`` (op '-', '+', '~') with CPython's dispatch.
+    # The frontend used to lower a dynamically-typed operand through the i64
+    # lane: the lane read a float object as 0, so ``-f`` on a dyn float was
+    # the int 0 (pcc1's ``_bits_to_float64`` returned 0.0 for every negative
+    # double).
+    if ptr_is_null(value) != 0:
+        return null()
+    tag: int = _type_of(value)
+    if tag == PY_TYPE_INT:
+        if op == 45:
+            return py_int_neg(value)
+        if op == 126:
+            minus_one = py_int_from_i64(-1)
+            result = py_int_xor(value, minus_one)
+            py_decref(minus_one)
+            return result
+        py_incref(value)
+        return value
+    if tag == PY_TYPE_BOOL:
+        bit: int = 0
+        if ptr_eq(value, global_load_ptr("py_True")) != 0:
+            bit = 1
+        if op == 45:
+            return py_int_from_i64(0 - bit)
+        if op == 126:
+            return py_int_from_i64(-1 - bit)
+        return py_int_from_i64(bit)
+    if tag == PY_TYPE_FLOAT and op != 126:
+        if op == 45:
+            number: float = py_float_to_f64(value)
+            return py_float_from_f64(-number)
+        py_incref(value)
+        return value
+    if tag == PY_TYPE_COMPLEX and op != 126:
+        if op == 45:
+            return py_complex_neg(value)
+        py_incref(value)
+        return value
+    if _is_user_instance(value) != 0:
+        method = null()
+        if op == 45:
+            method = _lookup_dunder(value, cstr("__neg__"))
+        elif op == 43:
+            method = _lookup_dunder(value, cstr("__pos__"))
+        else:
+            method = _lookup_dunder(value, cstr("__invert__"))
+        if ptr_is_null(method) == 0:
+            return _call_unary(method, value)
+    return _unary_operand_error(value, op)
+
+
+@c_abi_export("py_obj_neg")
+def py_obj_neg(value):
+    return _py_obj_unary(value, 45)
+
+
+@c_abi_export("py_obj_pos")
+def py_obj_pos(value):
+    return _py_obj_unary(value, 43)
+
+
+@c_abi_export("py_obj_invert")
+def py_obj_invert(value):
+    return _py_obj_unary(value, 126)
 
 
 @c_abi_export("py_user_binop_dispatch")

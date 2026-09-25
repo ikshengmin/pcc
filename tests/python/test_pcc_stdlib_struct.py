@@ -648,3 +648,45 @@ def test_host_pcc_and_current_pcc1_pack_subnormals_without_libpython(
         )
         assert run.returncode == 0, label + ": " + run.stdout + run.stderr
         assert run.stdout == expected, label
+
+
+@pytest.mark.parametrize(
+    "fmt, values",
+    [
+        (">d", (5e-324,)),
+        (">d", (-0.0,)),
+        (">f", (2.0**-149,)),
+        (">e", (2.0**-24,)),
+        ("<fd", (1.5, -2.25)),
+        ("<e", (65504.0,)),
+        (">f", (float("inf"),)),
+        ("d", (3.5,)),
+        ("@if", (7, 0.1)),
+        ("ibq", (1, 2, 3)),
+        ("lP", (-5, 12345)),
+        ("cid", (b"x", 9, 2.5)),
+        ("3h?", (1, -2, 3, True)),
+        ("=l", (-7,)),
+        ("nN", (-1, 2)),
+    ],
+)
+def test_float_codes_and_native_layout_match_cpython(native_struct, fmt, values):
+    packed = native_struct.pack(fmt, *values)
+    assert packed == _cpy_struct.pack(fmt, *values)
+    assert native_struct.calcsize(fmt) == _cpy_struct.calcsize(fmt)
+    assert repr(native_struct.unpack(fmt, packed)) == repr(_cpy_struct.unpack(fmt, packed))
+
+
+@pytest.mark.parametrize(
+    "fmt, value, exc, message",
+    [
+        (">f", 1e40, OverflowError, "float too large to pack with f format"),
+        (">e", 70000.0, OverflowError, "float too large to pack with e format"),
+        (">d", "x", "error", "required argument is not a float"),
+        ("<n", 1, "error", "bad char in struct format"),
+    ],
+)
+def test_float_and_native_errors_match_cpython(native_struct, fmt, value, exc, message):
+    expected = native_struct.error if exc == "error" else exc
+    with pytest.raises(expected, match=message):
+        native_struct.pack(fmt, value)

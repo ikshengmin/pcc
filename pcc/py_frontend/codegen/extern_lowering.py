@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pcc.llvm_capi.compat import ir
 
-from ..py_ast import Assign, BoolLit, Call, DynType, Name, StrLit, TupleExpr
+from ..py_ast import Assign, BoolLit, Call, DynType, IntType, Name, StrLit, TupleExpr
 
 
 _VOID = ir.VoidType()
@@ -13,6 +13,14 @@ _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _DOUBLE = ir.DoubleType()
 _CSTR = _I8.as_pointer()
+
+# The collector choice is parsed once and then read by every allocation,
+# dealloc and container operation in the runtime.  Both symbols return it
+# after an initialized check, so that check is emitted inline and the call
+# (with the callee's frame) remains only for the unparsed configuration.
+# Freestanding GC objects keep the plain call: their raw-symbol closure is an
+# exact contract and the hot callers are ordinary runtime modules.
+_GC_BACKEND_QUERY_SYMBOLS = frozenset({"pcc_gc_backend", "pcc_gc_config_ensure"})
 
 
 class ExternScaffoldMixin:
@@ -113,6 +121,15 @@ class ExternScaffoldMixin:
         args: tuple,
     ) -> ir.Value:
         symbol, argtype_names, restype_name, variadic = decl
+        if (
+            symbol in _GC_BACKEND_QUERY_SYMBOLS
+            and not args
+            and not argtype_names
+            and restype_name in ("c_int64", "c_long")
+            # Freestanding GC objects keep their exact raw-symbol closure.
+            and not getattr(self, "_freestanding_module", False)
+        ):
+            return self._emit_gc_backend_query(symbol)
         # Build / get the declared function.
         param_tys = [self._EXTERN_CTYPE_IR[n] for n in argtype_names]
         ret_ty = self._EXTERN_CTYPE_IR[restype_name]
@@ -163,6 +180,54 @@ class ExternScaffoldMixin:
             self._note_owned_object_value(result)
         return result
 
+    def _emit_gc_backend_query(self, symbol: str) -> ir.Value:
+        """``symbol()`` (``pcc_gc_backend``/``pcc_gc_config_ensure``) with the
+        initialized fast path inline: one flag load, then the selected
+        backend, and the call only while the configuration is unparsed."""
+        fn = self.module.globals.get(symbol)
+        if not isinstance(fn, ir.Function):
+            fn = ir.Function(self.module, ir.FunctionType(_I64, []), name=symbol)
+            fn.linkage = "external"
+        i32_ptr = _I32.as_pointer()
+        ready_gv = self._declare_external_global("pcc_gc_config_initialized", _I8)
+        ready_ptr = self.builder.bitcast(
+            ready_gv, i32_ptr, name=self._fresh("gc.backend.ready.ptr")
+        )
+        ready = self.builder.load(ready_ptr, name=self._fresh("gc.backend.ready"))
+        is_ready = self.builder.icmp_signed(
+            "!=", ready, ir.Constant(_I32, 0), name=self._fresh("gc.backend.is_ready")
+        )
+        fast_block = self.current_function.append_basic_block(
+            self._fresh("gc.backend.fast")
+        )
+        slow_block = self.current_function.append_basic_block(
+            self._fresh("gc.backend.slow")
+        )
+        join_block = self.current_function.append_basic_block(
+            self._fresh("gc.backend.join")
+        )
+        self.builder.cbranch(is_ready, fast_block, slow_block)
+        self.builder.position_at_end(fast_block)
+        selected_gv = self._declare_external_global("pcc_gc_backend_selected", _I8)
+        selected_ptr = self.builder.bitcast(
+            selected_gv, i32_ptr, name=self._fresh("gc.backend.selected.ptr")
+        )
+        selected = self.builder.load(
+            selected_ptr, name=self._fresh("gc.backend.selected")
+        )
+        fast_value = self.builder.sext(
+            selected, _I64, name=self._fresh("gc.backend.selected.i64")
+        )
+        self.builder.branch(join_block)
+        self.builder.position_at_end(slow_block)
+        slow_value = self.builder.call(fn, [], name=self._fresh("gc.backend.parsed"))
+        self.builder.branch(join_block)
+        self.builder.position_at_end(join_block)
+        result = self.builder.phi(_I64, name=self._fresh("gc.backend"))
+        result.add_incoming(fast_value, fast_block)
+        result.add_incoming(slow_value, slow_block)
+        return result
+
     def _pointer_or_address_operand(self, v: ir.Value, ty: "Type") -> ir.Value:
         """Lower a pointer-shaped operand from an object, an int address, or
         a dynamic value that may carry a tagged small-int address."""
@@ -171,6 +236,17 @@ class ExternScaffoldMixin:
             if v_ty.width != 64:
                 v = self.builder.sext(v, _I64, name=self._fresh("extern.addr.sext"))
             return self.builder.inttoptr(v, _CSTR, name=self._fresh("extern.addr.ptr"))
+        if (
+            isinstance(v_ty, ir.PointerType)
+            and isinstance(ty, IntType)
+            and self._raw_addresses_are_ints()
+        ):
+            # A statically ``int`` address in its boxed form (a dyn-ABI helper
+            # return, a local joined from two addresses) converts exactly like
+            # the i64 lane above: its integer value is the address.
+            return self.builder.inttoptr(
+                self._to_int64(v, ty), _CSTR, name=self._fresh("extern.int.addr")
+            )
         if (
             isinstance(v_ty, ir.PointerType)
             and isinstance(ty, DynType)

@@ -79,6 +79,7 @@ from pcc.unsafe import (
     load_i32,
     load_i64,
     load_ptr,
+    logical_shift_left_i64,
     logical_shift_right_i64,
     null,
     ptr_add,
@@ -94,6 +95,7 @@ from pcc.unsafe import (
 py_int_value_i64     = extern("py_int_value_i64",     (c_ptr,),                    c_int64)
 py_int_from_i64      = extern("py_int_from_i64",      (c_int64,),                  c_ptr)
 py_int_cmp           = extern("py_int_cmp",           (c_ptr, c_ptr),              c_int32)
+py_int_f64_cmp       = extern("py_int_f64_cmp",       (c_ptr, c_double),           c_int64)
 py_int_neg           = extern("py_int_neg",           (c_ptr,),                    c_ptr)
 py_float_from_f64    = extern("py_float_from_f64",    (c_double,),                 c_ptr)
 py_float_to_f64      = extern("py_float_to_f64",      (c_ptr,),                    c_double)
@@ -356,6 +358,12 @@ def _hash_f64_bits(bits: int, o) -> int:
     # value = (-1)**sign * mant * 2**e with mant < 2**53, so
     # hash = mant * 2**e mod P, and because 2**61 == 1 (mod P) the power of
     # two is a 61-bit rotation by ``e mod 61``.
+    #
+    # Both rotations shift with the wrapping ``logical_shift_left_i64``, as
+    # CPython does in ``Py_uhash_t``.  A plain ``<<`` on an unbounded lane
+    # compiles to an exact big-int shift: the NaN pointer rotation then
+    # overflowed the i64 lane (``{nan}`` raised OverflowError for any object
+    # address with a low nibble set), and every float hash boxed a big int.
     sign: int = 1
     if bits < 0:
         sign = -1
@@ -366,7 +374,7 @@ def _hash_f64_bits(bits: int, o) -> int:
             return 314159 * sign
         # nan hashes by identity (CPython >= 3.10: _Py_HashPointer).
         p: int = ptr_to_int(o)
-        h: int = logical_shift_right_i64(p, 4) | (p << 60)
+        h: int = logical_shift_right_i64(p, 4) | logical_shift_left_i64(p, 60)
         if h == -1:
             h = -2
         return h
@@ -382,11 +390,20 @@ def _hash_f64_bits(bits: int, o) -> int:
     k: int = ((e % 61) + 61) % 61
     x: int = mant
     if k != 0:
-        x = ((x << k) & 2305843009213693951) | logical_shift_right_i64(x, 61 - k)
+        x = (logical_shift_left_i64(x, k) & 2305843009213693951) | logical_shift_right_i64(
+            x, 61 - k
+        )
     x = x * sign
     if x == -1:
         x = -2
     return x
+
+
+@c_abi_export("pcc_hash_f64_bits")
+def pcc_hash_f64_bits(bits: int, o) -> int:
+    # The C-API ``_Py_HashDouble(o, v)`` for ``bits == f64_bits(v)``.  Sharing
+    # this one implementation keeps ``_Py_HashDouble(NULL, 2.0) == hash(2)``.
+    return _hash_f64_bits(bits, o)
 
 
 def _fnv1a(p, n: int) -> int:
@@ -438,26 +455,32 @@ def _cmp_threeway(a, b) -> int:
                 return 1
             return 0
 
-    # Numeric with at least one float (pure int/int handled above): compare as
-    # doubles. Without this, float vs int / float vs float fell through to the
-    # final ``return 0`` (treated as equal), so boxed-float comparisons via
-    # py_obj_lt/gt were wrong.
-    a_num: int = a_is_int
+    # Numeric with at least one float (pure int/int handled above). Without
+    # this, float vs int / float vs float fell through to the final
+    # ``return 0`` (treated as equal), so boxed-float comparisons via
+    # py_obj_lt/gt were wrong. An int orders against a float by exact value,
+    # as in CPython: converting it to a double first put 2**53 + 1 level with
+    # 2**53.0.
     if ta == PY_TYPE_FLOAT:
-        a_num = 1
-    b_num: int = b_is_int
-    if tb == PY_TYPE_FLOAT:
-        b_num = 1
-    if a_num != 0 and b_num != 0:
         fa: float = py_float_to_f64(a)
-        fb: float = py_float_to_f64(b)
-        if fa != fa or fb != fb:
-            return PY_OBJ_CMP_UNORDERED
-        if fa < fb:
-            return -1
-        if fa > fb:
-            return 1
-        return 0
+        if tb == PY_TYPE_FLOAT:
+            fb: float = py_float_to_f64(b)
+            if fa != fa or fb != fb:
+                return PY_OBJ_CMP_UNORDERED
+            if fa < fb:
+                return -1
+            if fa > fb:
+                return 1
+            return 0
+        if b_is_int != 0:
+            # py_int_f64_cmp orders the int first; flip it back.
+            flipped: int = py_int_f64_cmp(b, fa)
+            if flipped == PY_OBJ_CMP_UNORDERED:
+                return flipped
+            return 0 - flipped
+    elif tb == PY_TYPE_FLOAT:
+        if a_is_int != 0:
+            return py_int_f64_cmp(a, py_float_to_f64(b))
 
     if ta == PY_TYPE_STR:                       # STR
         if tb == PY_TYPE_STR:
@@ -585,9 +608,8 @@ def py_obj_abs(o):
         return o
     if tag == PY_TYPE_FLOAT:                      # FLOAT
         fvalue: float = py_float_to_f64(o)
-        if fvalue < 0.0:
-            return py_float_from_f64(0.0 - fvalue)
-        return py_float_from_f64(fvalue)
+        # Sign-bit clear: -0.0 and a negative NaN compare false against zero.
+        return py_float_from_f64(abs(fvalue))
     if pcc_capi_is_cext_type_tag(tag) != 0:
         return pcc_capi_cext_absolute(o)
     if tag == PY_TYPE_INSTANCE or tag >= PY_TYPE_USER_CLASS_START:
@@ -665,22 +687,25 @@ def py_obj_eq_value(a, b) -> int:
                 return 1
             return 0
 
-    # Numeric with at least one float (pure int/int handled above): compare as
-    # doubles. py_obj_eq had no FLOAT (tag 3) branch, so float==float and
-    # float==int fell through to the default ``return 0`` (not-equal) — e.g.
-    # ``(c.v / c.w) == 2.5`` was False. Mirrors the float arm of _py_obj_cmp.
-    a_num: int = a_int
+    # Numeric with at least one float (pure int/int handled above).
+    # py_obj_eq had no FLOAT (tag 3) branch, so float==float and float==int
+    # fell through to the default ``return 0`` (not-equal) — e.g.
+    # ``(c.v / c.w) == 2.5`` was False. Mirrors the float arm of
+    # _cmp_threeway: an int equals a float only at exactly the same value.
     if ta == PY_TYPE_FLOAT:
-        a_num = 1
-    b_num: int = b_int
-    if tb == PY_TYPE_FLOAT:
-        b_num = 1
-    if a_num != 0 and b_num != 0:
-        fa: float = py_float_to_f64(a)
-        fb: float = py_float_to_f64(b)
-        if fa == fb:
-            return 1
-        return 0
+        if tb == PY_TYPE_FLOAT:
+            if py_float_to_f64(a) == py_float_to_f64(b):
+                return 1
+            return 0
+        if b_int != 0:
+            if py_int_f64_cmp(b, py_float_to_f64(a)) == 0:
+                return 1
+            return 0
+    elif tb == PY_TYPE_FLOAT:
+        if a_int != 0:
+            if py_int_f64_cmp(a, py_float_to_f64(b)) == 0:
+                return 1
+            return 0
 
     if _is_bytes_like_tag(ta) != 0:
         if _is_bytes_like_tag(tb) != 0:

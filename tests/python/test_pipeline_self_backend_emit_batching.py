@@ -162,6 +162,8 @@ def test_native_emitter_materializes_text_for_the_worker_owner(
     expected_path = str(tmp_path / "self_backend_module_0.ll")
     assert observed_paths == [expected_path]
     assert Path(expected_path).read_text(encoding="utf-8") == ir_text
+    # An internally linked native worker writes pcc's own object (``.pco``);
+    # ``.o`` is the external-link artifact.
     assert results == [
-        ("self-aarch64-darwin-v0", str(tmp_path / "self_backend_native_0.s"))
+        ("self-aarch64-darwin-v0", str(tmp_path / "self_backend_native_0.pco"))
     ]

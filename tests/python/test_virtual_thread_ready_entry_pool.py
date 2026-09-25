@@ -5,12 +5,11 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
-THREADS_C = RUNTIME_DIR / "src" / "pcc_threads.c"
 
 
 def _slice_between(src: str, start: str, end: str) -> str:
@@ -19,76 +18,9 @@ def _slice_between(src: str, start: str, end: str) -> str:
     return src[start_idx:end_idx]
 
 
-def test_virtual_thread_ready_entry_pool_source_shape() -> None:
-    src = THREADS_C.read_text(encoding="utf-8")
-
-    assert "#define PCC_VTHREAD_READY_ENTRY_POOL_LIMIT 4096" in src
-    assert "pcc_vthread_ready_entry_free_head" in src
-    assert "pcc_vthread_ready_entry_free_count" in src
-    assert "pcc_vthread_ready_entry_alloc_locked" in src
-    assert "pcc_vthread_ready_entry_recycle_locked" in src
-    assert "calloc(1, sizeof(PccVirtualThreadQueueEntry))" not in src
-    assert "#define PCC_VTHREAD_TIMER_ENTRY_POOL_LIMIT 4096" in src
-    assert "#define PCC_VTHREAD_POLL_ENTRY_POOL_LIMIT 4096" in src
-    assert "pcc_vthread_timer_entry_alloc_locked" in src
-    assert "pcc_vthread_poll_entry_alloc_locked" in src
-    assert "calloc(1, sizeof(PccVirtualThreadTimerEntry))" not in src
-    assert "calloc(1, sizeof(PccVirtualThreadPollEntry))" not in src
-
-    enqueue = _slice_between(
-        src,
-        "static int pcc_vthread_enqueue_locked",
-        "static int pcc_vthread_make_ready_locked",
-    )
-    assert "pcc_vthread_ready_entry_alloc_locked(1)" in enqueue
-
-    recycle = _slice_between(
-        src,
-        "static void pcc_vthread_ready_entry_recycle_locked",
-        "static void pcc_vthread_ready_entry_release_locked",
-    )
-    assert "PCC_VTHREAD_READY_ENTRY_POOL_LIMIT" in recycle
-    assert "free(entry);" in recycle
-
-    release = _slice_between(
-        src,
-        "static void pcc_vthread_ready_entry_release_locked",
-        "static void pcc_vthread_queue_push_entry_locked",
-    )
-    unregister_idx = release.index(
-        "pcc_gc_scheduler_root_unregister_handle(entry->root_handle);"
-    )
-    clear_idx = release.index("pcc_gc_store_root(&entry->thread, NULL);")
-    recycle_idx = release.index("pcc_vthread_ready_entry_recycle_locked(entry);")
-    assert unregister_idx < clear_idx < recycle_idx
-
-    dequeue = _slice_between(
-        src,
-        "static PyObject *pcc_vthread_dequeue_from_queue_locked",
-        "static PyObject *pcc_vthread_dequeue_locked",
-    )
-    assert "pcc_vthread_ready_entry_release_locked(entry);" in dequeue
-
-    timer_release = _slice_between(
-        src,
-        "static void pcc_vthread_timer_entry_release_locked",
-        "static int pcc_vthread_timer_heap_ensure_locked",
-    )
-    assert "pcc_vthread_timer_entry_recycle_locked(entry);" in timer_release
-    assert "pcc_vthread_ready_entry_recycle_locked" not in timer_release
-
-    poll_release = _slice_between(
-        src,
-        "static void pcc_vthread_poll_entry_release_locked",
-        "static int pcc_vthread_timer_add_locked",
-    )
-    assert "pcc_vthread_poll_entry_recycle_locked(entry);" in poll_release
-    assert "pcc_vthread_ready_entry_recycle_locked" not in poll_release
-
-
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess[str]:
@@ -103,7 +35,7 @@ def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),

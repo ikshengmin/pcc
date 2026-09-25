@@ -74,17 +74,14 @@ EXPECTED = [
 ]
 
 
-@pytest.mark.parametrize("runtime_cc", ["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", ["port"])
 def test_list_pop_and_del_raise_indexerror_no_libpython(tmp_path, runtime_cc):
     src = tmp_path / "prog.py"
     src.write_text(PROGRAM, encoding="utf-8")
     exe = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    if runtime_cc == "cc":
-        env["PCC_RUNTIME_CC"] = "cc"
-    else:
-        env.pop("PCC_RUNTIME_CC", None)
+    env.pop("PCC_RUNTIME_CC", None)
     build = subprocess.run(
         [
             "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",

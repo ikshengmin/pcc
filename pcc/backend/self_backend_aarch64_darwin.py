@@ -68,6 +68,9 @@ from .self_backend_aarch64_darwin_tail_calls import (
     aarch64_tail_call_id_for_block,
     plan_aarch64_tail_calls,
 )
+from .self_backend_aarch64_darwin_regalloc import (
+    note_aarch64_reload_destinations,
+)
 from .self_backend_aarch64_darwin_terminators import (
     emit_branch_terminator as _terms_emit_branch_terminator,
     emit_cond_branch_terminator as _terms_emit_cond_branch_terminator,
@@ -748,6 +751,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
         lines = _fold_mov_compare_source(lines)
         lines = _fold_mov_zero_branch_source(lines)
         lines = _fold_mov_arith_self_update(lines)
+        lines = _fold_scratch_def_into_move(lines)
         lines = _fold_mov_mov_chain(lines)
         lines = _fold_zero_test_branch(lines)
         lines = _fold_forwarded_cset_branch(lines)
@@ -1520,6 +1524,102 @@ def _fold_mov_arith_self_update(lines: list[str]) -> list[str]:
     return out
 
 
+def _scratch_dead_after(lines: list[str], start_index: int, reg: str) -> bool:
+    """Whether scratch ``reg`` (x9-x15) is dead from ``start_index`` on.
+
+    Like ``_can_drop_zero_mov_after_store``, but a direct call or a return also
+    ends the scan: AAPCS64 makes x9-x15 caller-saved temporaries that never
+    carry arguments, so nothing after ``bl sym`` or ``ret`` reads the old
+    value.  Indirect calls, branches and labels stay conservative."""
+    index = start_index
+    while index < len(lines):
+        line = lines[index]
+        if (
+            _local_label_name(line) is not None
+            or _is_function_label(line)
+            or line.startswith(".")
+        ):
+            return False
+        if line.startswith(("  bl ", "  ret")):
+            return True
+        if line.startswith(
+            ("  b ", "  b.", "  cbz ", "  cbnz ", "  tbz ", "  tbnz ", "  blr ", "  br ")
+        ):
+            return False
+        if _line_uses_reg_alias(line, reg):
+            return False
+        if _line_defines_reg_alias(line, reg):
+            return True
+        index += 1
+    return True
+
+
+# Instructions whose first operand is a pure destination (never read, the only
+# register written), so the destination can be renamed without changing what
+# the instruction computes.  ``movk``/``bfi``/``bfxil`` read their destination
+# and ``ldp``/pre-index forms write more than one register: never renamed.
+_DEST_RENAMEABLE_OPCODES = frozenset(
+    {
+        "add", "adds", "sub", "subs", "adrp", "orr", "orn", "and", "ands",
+        "eor", "eon", "bic", "mul", "madd", "msub", "smulh", "umulh", "sdiv",
+        "udiv", "lsl", "lsr", "asr", "ror", "lslv", "lsrv", "asrv", "neg",
+        "negs", "mvn", "sxtw", "sxth", "sxtb", "uxtb", "uxth", "ubfx", "sbfx",
+        "ubfiz", "sbfiz", "csel", "csinc", "csinv", "csneg", "cset", "csetm",
+        "cinc", "ldr", "ldur", "ldrb", "ldurb", "ldrh", "ldurh", "ldrsw",
+        "ldursw", "ldrsb", "ldursb", "ldrsh", "ldursh", "mov", "movz", "movn",
+        "fmov", "fcvtzs", "fcvtzu", "clz",
+    }
+)
+
+
+def _rename_destination(line: str, reg: str, new_reg: str) -> str | None:
+    """``line`` with its pure destination ``reg`` renamed to ``new_reg``."""
+    if not line.startswith("  "):
+        return None
+    opcode, sep, rest = line[2:].partition(" ")
+    if not sep or opcode not in _DEST_RENAMEABLE_OPCODES:
+        return None
+    dest, sep2, tail = rest.partition(", ")
+    if dest != reg or not sep2:
+        return None
+    if tail.endswith("]!") or ("], #" in tail):
+        # Pre/post-index loads also write their base register.
+        return None
+    return "  " + opcode + " " + new_reg + ", " + tail
+
+
+def _fold_scratch_def_into_move(lines: list[str]) -> list[str]:
+    """``op x9, ...`` + ``mov xD, x9`` -> ``op xD, ...`` when x9 is dead after.
+
+    The allocator materializes values in scratch registers and then copies
+    them to their home register; computing straight into the home register
+    removes the copy.  Folds cascade (``mov x11, x9; mov x19, x11``) because the
+    rewritten line is re-examined against the next move."""
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        move = _parse_reg_mov(line)
+        if move is not None and out:
+            dest_reg, src_reg = move
+            if (
+                _is_aarch64_scratch_reg(src_reg)
+                and dest_reg[1:] not in ("sp", "zr")
+                and _scratch_dead_after(lines, index + 1, src_reg)
+            ):
+                renamed = _rename_destination(out[-1], src_reg, dest_reg)
+                if renamed is not None:
+                    if renamed == "  mov " + dest_reg + ", " + dest_reg:
+                        out.pop()
+                    else:
+                        out[-1] = renamed
+                    index += 1
+                    continue
+        out.append(line)
+        index += 1
+    return out
+
+
 def _fold_mov_mov_chain(lines: list[str]) -> list[str]:
     out: list[str] = []
     index = 0
@@ -1533,7 +1633,7 @@ def _fold_mov_mov_chain(lines: list[str]) -> list[str]:
                 if (
                     second_src == scratch
                     and _is_aarch64_scratch_reg(scratch)
-                    and _can_drop_zero_mov_after_store(lines, index + 2, scratch)
+                    and _scratch_dead_after(lines, index + 2, scratch)
                 ):
                     replacement = _forward_move(dst_reg, src_reg)
                     if replacement is not None:
@@ -1785,6 +1885,21 @@ def _resolve_trampoline_target(
     return current
 
 
+def _falls_into_next_line(lines: list[str]) -> bool:
+    """Whether control can run off the end of ``lines`` into what follows.
+
+    Blocks may be entered by fallthrough (the terminator emitter omits a
+    branch to the block laid out next), so an unreferenced trampoline is
+    dead only when the code before it ends in an unconditional transfer.
+    """
+    index = len(lines) - 1
+    while index >= 0 and not lines[index]:
+        index -= 1
+    if index < 0:
+        return True
+    return not lines[index].startswith(("  b ", "  br ", "  ret"))
+
+
 def _thread_trampoline_branches(
     lines: list[str], metadata_labels: set[str] | None = None,
 ) -> list[str]:
@@ -1840,7 +1955,12 @@ def _thread_trampoline_branches(
     index = 0
     while index < len(rewritten):
         label = _local_label_name(rewritten[index])
-        if label is not None and label in trampolines and label not in referenced:
+        if (
+            label is not None
+            and label in trampolines
+            and label not in referenced
+            and not _falls_into_next_line(out)
+        ):
             j = index + 1
             while j < len(rewritten):
                 nxt = rewritten[j]
@@ -2010,6 +2130,7 @@ def _emit_function(
     stack_map_plan: FunctionStackMapPlan,
     native_sink: _NativeAArch64Emission | None = None,
 ) -> list[str]:
+    note_aarch64_reload_destinations(func, stack_map_plan)
     lines = _prologue_emit_function_prologue(func, _MODULE_SYMBOLS)
     if native_sink is not None:
         native_sink.extend(lines)
@@ -2328,6 +2449,8 @@ def _emit_indexed_terminator_core(
     block_id: int,
     term: ParsedInstr | None,
     use_value_id: int,
+    next_block_id: int = -1,
+    direct_targets: bool = False,
 ) -> list[str]:
     header: CompilerInt4 = kernel.terminator_header(block_id)
     span: CompilerInt4 = kernel.terminator_span(block_id)
@@ -2356,6 +2479,8 @@ def _emit_indexed_terminator_core(
             true_target_id=header.fourth,
             false_target_id=span.first,
             module_symbols=_MODULE_SYMBOLS,
+            next_block_id=next_block_id,
+            direct_targets=direct_targets,
         )
     if kind_id == PARSED_INSTRUCTION_KIND_BR:
         return _terms_emit_branch_terminator(
@@ -2363,6 +2488,7 @@ def _emit_indexed_terminator_core(
             source_block=kernel.block_names[block_id],
             target=kernel.block_names[header.fourth],
             module_symbols=_MODULE_SYMBOLS,
+            falls_through=header.fourth == next_block_id,
         )
     if kind_id == PARSED_INSTRUCTION_KIND_RET_VOID:
         return _terms_emit_epilogue(func)
@@ -2409,6 +2535,8 @@ def _emit_dense_indexed_terminator(
     kernel: IndexedFunctionKernel,
     block_id: int,
     use_value_id: int,
+    next_block_id: int = -1,
+    direct_targets: bool = False,
 ) -> list[str]:
     return _emit_indexed_terminator_core(
         func,
@@ -2416,7 +2544,29 @@ def _emit_dense_indexed_terminator(
         block_id,
         None,
         use_value_id,
+        next_block_id,
+        direct_targets,
     )
+
+
+# A conditional branch (b.cond, cbz, cbnz) reaches +/-1 MiB, i.e. 262144
+# instructions, and the encoder has no branch relaxation.  Functions whose IR
+# is at most this many instructions stay far inside that range: measured
+# emission is about three machine instructions per IR instruction, and this
+# bound allows thirty-two.
+_DIRECT_BRANCH_TARGET_IR_LIMIT = 8192
+
+
+def _direct_branch_targets_in_range(kernel: IndexedFunctionKernel) -> bool:
+    total = 0
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        block: CompilerInt4 = kernel.block_fact(block_id)
+        total += block.second + 1
+        if total > _DIRECT_BRANCH_TARGET_IR_LIMIT:
+            return False
+        block_id += 1
+    return True
 
 
 def _emit_dense_indexed_function_blocks(
@@ -2434,6 +2584,7 @@ def _emit_dense_indexed_function_blocks(
     layout_count = len(kernel.block_layout_ids)
     block_position = 0
     block_count = layout_count if layout_count else len(kernel.block_names)
+    direct_targets = _direct_branch_targets_in_range(kernel)
     while block_position < block_count:
         block_id = (
             kernel.block_layout_ids.get_unchecked(block_position)
@@ -2589,6 +2740,13 @@ def _emit_dense_indexed_function_blocks(
         terminator_use_id = -1
         if block.third:
             terminator_use_id = block.fourth
+        next_block_id = -1
+        if block_position + 1 < block_count:
+            next_block_id = (
+                kernel.block_layout_ids.get_unchecked(block_position + 1)
+                if layout_count
+                else block_position + 1
+            )
         if native_sink is None:
             lines.extend(
                 _emit_dense_indexed_terminator(
@@ -2596,6 +2754,8 @@ def _emit_dense_indexed_function_blocks(
                     kernel,
                     block_id,
                     terminator_use_id,
+                    next_block_id,
+                    direct_targets,
                 )
             )
         else:
@@ -2605,6 +2765,8 @@ def _emit_dense_indexed_function_blocks(
                     kernel,
                     block_id,
                     terminator_use_id,
+                    next_block_id,
+                    direct_targets,
                 )
             )
         block_position += 1

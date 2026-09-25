@@ -27,7 +27,6 @@ def test_dynamic_module_getattr_inside_generator_is_catchable(tmp_path):
     exe = tmp_path / "main_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv",

@@ -9,7 +9,7 @@ from pcc.tools.runtime_archive_provenance import (
     PRODUCTION_POLICY,
     verify_runtime_archive_manifest,
 )
-from tests.runtime_build_cache import cached_c_runtime, cached_threaded_pcc_python_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime, cached_threaded_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
@@ -45,7 +45,7 @@ def _cc() -> str:
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def _build_pcc_py_runtime(tmp_path: Path) -> Path:
@@ -1275,7 +1275,7 @@ def test_colored_relocating_task_and_scheduler_queue_follow_forwarding(tmp_path)
     _assert_backend_four_task_and_scheduler_queue_follow_forwarding(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -1304,7 +1304,7 @@ def test_colored_relocating_list_copy_owns_item_array(tmp_path):
     _assert_backend_four_list_relocation_copies_owned_items(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -1323,7 +1323,7 @@ def test_colored_relocating_tuple_copy_retains_owned_items(tmp_path):
     _assert_backend_four_tuple_relocation_retain_owned_items(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -1342,7 +1342,7 @@ def test_colored_relocating_task_copy_retains_state_slots(tmp_path):
     _assert_backend_four_task_relocation_retains_state_slots(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -1361,7 +1361,7 @@ def test_colored_relocating_set_copy_retains_owned_entries(tmp_path):
     _assert_backend_four_set_relocation_retains_owned_entries(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -1380,7 +1380,7 @@ def test_colored_relocating_dict_copy_retains_owned_tables(tmp_path):
     _assert_backend_four_dict_relocation_retains_owned_tables(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -1399,7 +1399,7 @@ def test_colored_relocating_instance_copy_retains_owned_fields(tmp_path):
     _assert_backend_four_instance_relocation_retains_owned_fields(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -1418,7 +1418,7 @@ def test_colored_relocating_targets_wait_for_phase_reset(tmp_path):
     _assert_backend_four_targets_wait_for_phase_reset(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 

@@ -13,7 +13,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 STRICT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_generational_promotion.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
-C_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
@@ -183,18 +182,6 @@ def test_generational_promotion_preserves_owned_borrowed_and_stable_root_contrac
     assert backend4.index(
         'atomic_rmw_i32("add", obj, 12, 128, "acq_rel")'
     ) < backend4.index("pcc_gc_backend4_zpage_note_owner_promoted(obj)")
-
-    c_source = C_SOURCE.read_text(encoding="utf-8")
-    c_promote = c_source.split(
-        "static void pcc_gc_promote_young_object(PyObject *o)", 1
-    )[1].split("static void pcc_gc_promote_young_slot_with_mode", 1)[0]
-    c_atomic = c_promote.index("__atomic_add_fetch(")
-    assert c_promote.index("pcc_gc_backend3_young_unlink(") < c_atomic
-    assert c_atomic < c_promote.index(
-        "pcc_gc_backend4_zpage_note_owner_promoted_unlocked(o);"
-    )
-    assert "PY_FLAG_GC_YOUNG," in c_promote[c_atomic:]
-    assert "__ATOMIC_ACQ_REL" in c_promote[c_atomic:]
 
     stale_guard = cached.split("if ptr_is_null(stable_base) == 0:", 1)[1].split(
         "if borrowed != 0:", 1

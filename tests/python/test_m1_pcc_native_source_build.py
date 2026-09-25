@@ -178,8 +178,6 @@ def test_current_pcc1_imports_generic_built_extension_without_host_helpers(tmp_p
     exe = tmp_path / "generic_extension_app"
     compile_env = env.copy()
     compile_env["PCC_PACKAGE_SITE"] = str(site)
-    compile_env["PCC_RUNTIME_CC"] = "cc"
-    compile_env["PCC_RUNTIME_HIGH"] = "c"
     compiled = subprocess.run(
         [
             str(pcc1),

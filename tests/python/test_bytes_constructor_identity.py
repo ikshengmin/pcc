@@ -3,16 +3,11 @@
 import os
 import subprocess
 
-import pytest
 
-
-@pytest.mark.parametrize("runtime_kind", ["c", "py"])
 def test_bytes_constructor_shares_bytes_but_copies_mutable_buffers(
-    tmp_path, request, python_program_compiler, runtime_kind,
+    tmp_path, pcc_py_runtime_archive, python_program_compiler,
 ):
-    archive = request.getfixturevalue(
-        "c_runtime_archive" if runtime_kind == "c" else "pcc_py_runtime_archive"
-    )
+    archive = pcc_py_runtime_archive
     source = tmp_path / "bytes_identity.py"
     source.write_text('''import gc
 def main():

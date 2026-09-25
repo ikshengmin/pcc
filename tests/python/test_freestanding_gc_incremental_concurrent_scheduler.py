@@ -71,6 +71,7 @@ RAW_FUNCTION_IMPORTS = {
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend_selected",
+    "pcc_gc_config_initialized",
     "pcc_gc_cms_mutator_assists",
     "pcc_gc_cms_queue_pushes",
     "pcc_gc_cms_worker_started",
@@ -159,37 +160,6 @@ def test_incremental_concurrent_scheduler_has_one_strict_source_owner() -> None:
 
 
 def test_initial_trace_extension_traversal_runs_outside_graph_lock_source() -> None:
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_gray = c_source.split("static void pcc_gc_gray_current_roots(", 1)[
-        1
-    ].split("static void pcc_gc_subtract_known_child_ref", 1)[0]
-    assert "pcc_capi_visit_extension_module_state_roots" not in c_gray
-
-    c_step = c_source.rsplit("static int64_t pcc_gc_step_trace_cycle(", 1)[
-        1
-    ].split("static int64_t pcc_gc_step_generational_promotion", 1)[0]
-    assert c_step.index("pcc_gc_graph_unlock();") < c_step.index(
-        "pcc_gc_trace_extension_roots_complete(&extension_ctx)"
-    )
-    assert "pcc_gc_trace_extension_roots_claim_unlocked" in c_step
-    c_unlocked = c_source.split(
-        "static int64_t pcc_gc_step_trace_cycle_unlocked(", 1
-    )[1].split("static int64_t pcc_gc_cms_worker_trace_cycle_unlocked", 1)[0]
-    assert "pcc_gc_trace_extension_roots_pending != 0" in c_unlocked
-    c_worker = c_source.split("static void *pcc_gc_cms_worker_main", 1)[
-        1
-    ].split("static void pcc_gc_cms_maybe_start_worker", 1)[0]
-    assert c_worker.index("pcc_gc_graph_unlock();") < c_worker.index(
-        "pcc_gc_step_trace_cycle(followup_budget)"
-    )
-    c_complete = c_source.split(
-        "static int pcc_gc_trace_extension_roots_complete(", 1
-    )[1].split("static void pcc_gc_gray_current_roots(", 1)[0]
-    assert c_complete.index(
-        "pcc_capi_visit_extension_module_state_roots("
-    ) < c_complete.index("pcc_gc_graph_lock();")
 
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     strict_step = _export_body(strict, "pcc_gc_tracing_step_cycle")
@@ -203,26 +173,6 @@ def test_initial_trace_extension_traversal_runs_outside_graph_lock_source() -> N
 
 
 def test_final_trace_extension_traversal_precedes_locked_cut_source() -> None:
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_finish = c_source.split("static int pcc_gc_finish_tracing_cycle(", 1)[
-        1
-    ].split("static int pcc_gc_complete_claimed_tracing_cycle", 1)[0]
-    assert "pcc_capi_visit_extension_module_state_roots(" not in c_finish
-    assert "pcc_gc_gray_current_roots();" not in c_finish
-    assert "pcc_gc_drain_all_gray" not in c_finish
-
-    c_complete = c_source.rsplit(
-        "static int pcc_gc_complete_claimed_tracing_cycle(", 1
-    )[1].split("static int64_t pcc_gc_step_trace_cycle_unlocked", 1)[0]
-    assert c_complete.index("pcc_gc_graph_unlock();") < c_complete.index(
-        "pcc_capi_visit_extension_module_state_roots("
-    )
-    assert c_complete.index(
-        "pcc_capi_visit_extension_module_state_roots("
-    ) < c_complete.index("pcc_gc_finish_tracing_cycle(")
-    assert "pcc_gc_trace_extension_roots_pending = 3" in c_complete
 
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     strict_complete = _export_body(

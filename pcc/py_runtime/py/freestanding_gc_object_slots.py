@@ -534,7 +534,7 @@ def pcc_gc_visit_object_slots_slice(
     ):
         return 0
     tag: i64 = load_i32(o, abi_constant("object.header.type_tag_offset"))
-    if tag < 0:
+    if tag < abi_constant("object.type.none"):
         return 0
     if _has_no_pointer_slots(o) != 0:
         return 1

@@ -38,13 +38,11 @@ SOURCE = r'''
 
 def test_bool_objects_unbox_as_zero_and_one(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
     for backend in range(5):
         backend_source = SOURCE.replace("UNBOX_BACKEND", str(backend))
         for runtime_name, archive in (
-            ("c", c_runtime_archive),
             ("pcc_py", pcc_py_runtime_archive),
         ):
             result = _compile_and_run(

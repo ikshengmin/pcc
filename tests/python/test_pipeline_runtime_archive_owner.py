@@ -11,7 +11,7 @@ from pcc.py_frontend import pipeline
 from pcc.py_frontend import pipeline_runtime_archive as runtime_archive
 
 
-def test_runtime_archive_path_and_mode_helpers_have_one_owner(monkeypatch):
+def test_runtime_archive_path_and_mode_helpers_have_one_owner():
     archive = "/tmp/libpy_runtime_pcc_py.a"
     assert pipeline._runtime_archive_target_stamp(archive) == runtime_archive.target_stamp(
         archive
@@ -23,16 +23,18 @@ def test_runtime_archive_path_and_mode_helpers_have_one_owner(monkeypatch):
     assert pipeline._runtime_archive_capi_inventory(archive) == runtime_archive.capi_inventory(
         archive
     )
-    monkeypatch.setenv("PCC_RUNTIME_CC", "host")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
-    assert pipeline._runtime_cc_mode() == "cc"
-    assert pipeline._runtime_high_mode() == "c"
+    # The C runtime selectors are retired along with the C archives.
+    assert not hasattr(pipeline, "_runtime_cc_mode")
+    assert not hasattr(pipeline, "_runtime_high_mode")
+    assert not hasattr(runtime_archive, "cc_mode")
 
 
 def test_non_production_archive_bundle_policy_is_basename_scoped():
     assert runtime_archive.requires_provenance("/tmp/libpy_runtime_pcc_py.a")
     assert not runtime_archive.requires_provenance("/tmp/foreign.a")
-    assert runtime_archive.requires_c_bundle_validation("/tmp/libpy_runtime.a")
+    assert runtime_archive.requires_c_bundle_validation(
+        "/tmp/libpy_runtime_pcc_py_libpython.a"
+    )
     assert not runtime_archive.requires_c_bundle_validation("/tmp/foreign.a")
 
 
@@ -80,7 +82,7 @@ def test_c_bundle_inventory_is_checked_without_ar_nm_or_python(tmp_path, monkeyp
     sections, undefined = assemble_file(
         ".section __TEXT,__text,regular,pure_instructions\n.globl _PyOwned\n_PyOwned:\n ret\n"
     )
-    archive = tmp_path / "libpy_runtime.a"
+    archive = tmp_path / "libpy_runtime_pcc_py_libpython.a"
     archive.write_bytes(write_archive([("owned.o", emit_object(sections, undefined=undefined))]))
     inventory = Path(str(archive) + ".capi_syms")
     inventory.write_text("_PyOwned\n")

@@ -9,8 +9,7 @@ from unittest import mock
 import pytest
 
 from tests.runtime_build_cache import (
-    cached_c_runtime,
-    cached_threaded_c_runtime,
+    cached_pcc_python_runtime,
     cached_threaded_pcc_python_runtime,
 )
 
@@ -76,12 +75,12 @@ def _cc() -> str:
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def _build_threaded_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_threaded_c_runtime()
+    return cached_threaded_pcc_python_runtime()
 
 
 def _build_pcc_py_runtime(tmp_path: Path) -> Path:
@@ -157,7 +156,7 @@ def test_gc_frame_index_accepts_raw_slot_pointer_keys(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -319,7 +318,7 @@ def test_gc_open_addressed_indexes_preserve_probe_chains_after_delete(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -333,47 +332,6 @@ def test_gc_open_addressed_indexes_preserve_probe_chains_after_delete(tmp_path):
 
 
 def test_gc_frame_registry_hot_path_uses_frame_index_lookup():
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    c_enter_leave = c_src.split("void pcc_gc_note_frame_enter", 1)[1].split(
-        "void pcc_gc_thread_unregister_buffers", 1
-    )[0]
-    assert "pcc_gc_frame_index_plan_capacity" in c_enter_leave
-    assert "pcc_gc_frame_index_plan_commit" in c_enter_leave
-    assert "pcc_gc_frame_index_replace_preallocated" in c_enter_leave
-    assert "pcc_gc_frame_index_remove" in c_enter_leave
-    assert "pcc_gc_note_frame_enter_lifo" in c_enter_leave
-    assert "pcc_gc_note_frame_leave_lifo" in c_enter_leave
-    assert "PCC_GC_FRAME_NODE_FLAG_LIFO" in c_src
-    assert "n->root_count = n_slots" in c_src
-    assert "pcc_gc_frame_node_alloc_unlocked(n_slots)" in c_src
-    assert "pcc_gc_frame_node_release_unlocked(released)" in c_enter_leave
-    assert "pcc_gc_frame_node_release_unlocked(n)" in c_enter_leave
-    assert "free(indexed->stable_values)" not in c_enter_leave
-    assert "free(indexed)" not in c_enter_leave
-    assert "sizeof(PccGcFrameNode) + stable_bytes" in c_src
-    assert "PCC_GC_FRAME_NODE_POOL_MAX_ROOTS 16" in c_src
-    assert "PCC_GC_FRAME_NODE_POOL_LIMIT 1024" in c_src
-    assert "static _Thread_local PccGcFrameNode *pcc_gc_frame_node_free_lists" in c_src
-    assert "static _Thread_local int64_t pcc_gc_frame_node_free_total" in c_src
-    assert "pcc_gc_selected_backend == PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR" in c_src
-    assert "pcc_gc_selected_backend == PCC_GC_KIND_COLORED_RELOCATING" in c_src
-    c_unregister = c_src.split(
-        "void pcc_gc_thread_unregister_buffers(void)", 1
-    )[1].split("void pcc_gc_reset_relocation_set", 1)[0]
-    assert c_unregister.index("pcc_gc_frame_node_tls_pool_drain()") < (
-        c_unregister.index("pcc_gc_backend4_store_buffer_medium_state")
-    )
-    c_promote = c_src.split(
-        "void pcc_gc_generational_promote_frame_roots", 1
-    )[1].split(
-        "void pcc_gc_generational_promote_scheduler_roots", 1
-    )[0]
-    assert "pcc_gc_root_slot_count_from_map" not in c_promote
-    assert "f->root_count" in c_promote
-    assert "c->root_count" in c_promote
-    assert "pcc_gc_promote_mapped_root_slot" in c_promote
-    assert "f->stable_values" in c_promote
-    assert "c->stable_values" in c_promote
 
     scheduler_src = STRICT_GENERATIONAL_SCHEDULER.read_text(encoding="utf-8")
     py_enter_leave = (
@@ -553,7 +511,7 @@ def test_gc_lifo_frame_roots_skip_frame_index_but_remain_roots(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -567,11 +525,6 @@ def test_gc_lifo_frame_roots_skip_frame_index_but_remain_roots(tmp_path):
 
 
 def test_generational_minor_heap_default_is_bootstrap_sized():
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    assert "static int64_t pcc_gc_minor_heap_size = 33554432;" in c_src
-    assert "static int64_t pcc_gc_minor_alloc_max = 16;" in c_src
-    assert '"PCC_GC_MINOR_HEAP_SIZE",\n        33554432,' in c_src
-    assert '"PCC_GC_MINOR_ALLOC_MAX",\n        16,' in c_src
 
     # The env parsing for the generational minor heap moved to the
     # freestanding pcc-Python collector config as GC policy migrated.
@@ -589,15 +542,6 @@ def test_generational_minor_heap_default_is_bootstrap_sized():
 
 
 def test_gc_relocation_read_non_candidate_fast_path_skips_graph_lock():
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    c_note = c_src.split("PyObject *pcc_gc_note_relocation_read", 1)[1].split(
-        "void pcc_gc_note_store", 1
-    )[0]
-    assert "pcc_gc_is_known_object(o)" in c_note
-    assert "PY_FLAG_GC_RELOCATION_CANDIDATE" in c_note
-    assert c_note.index("PY_FLAG_GC_RELOCATION_CANDIDATE") < c_note.index(
-        "pcc_gc_graph_lock()"
-    )
 
     py_src = (
         RUNTIME_DIR / "py" / "freestanding_gc_forwarding_identity.py"
@@ -611,36 +555,6 @@ def test_gc_relocation_read_non_candidate_fast_path_skips_graph_lock():
 
 
 def test_gc_slot_barriers_fast_path_non_relocation_and_non_old_to_young():
-    c_obj = (RUNTIME_DIR / "src" / "py_obj.c").read_text(encoding="utf-8")
-    assert "static int py_gc_relocation_candidate" in c_obj
-    c_load = c_obj.split("PyObject *pcc_gc_load_ptr", 1)[1].split(
-        "PyObject *pcc_gc_load_borrowed_ptr", 1
-    )[0]
-    assert "py_gc_relocation_candidate(value)" in c_load
-    assert "pcc_gc_forwarding_population_load() <= 0" in c_load
-    assert "!py_gc_backend4_should_check_slot(slot)" in c_load
-    assert c_load.index("pcc_gc_forwarding_population_load() <= 0") < c_load.index(
-        "pcc_gc_note_load()"
-    )
-    assert c_load.index("!py_gc_backend4_should_check_slot(slot)") < c_load.index(
-        "pcc_gc_note_load()"
-    )
-    assert c_load.index("py_gc_relocation_candidate(value)") < c_load.index(
-        "pcc_gc_note_relocation_read(value)"
-    )
-
-    c_gc = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    c_barrier = c_gc.split("void pcc_gc_note_slot_write_barrier", 1)[1].split(
-        "void pcc_gc_note_write_barrier", 1
-    )[0]
-    c_gen_barrier = c_barrier.split(
-        "barrier_backend == PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR", 1
-    )[1]
-    assert "(py_header_flags_load(owner_h) & PY_FLAG_GC_OLD) == 0" in c_gen_barrier
-    assert "(py_header_flags_load(value_h) & PY_FLAG_GC_YOUNG) == 0" in c_gen_barrier
-    assert c_gen_barrier.index("PY_FLAG_GC_OLD) == 0") < c_gen_barrier.index(
-        "pcc_gc_graph_lock()"
-    )
 
     py_obj = (RUNTIME_DIR / "py" / "py_obj.py").read_text(encoding="utf-8")
     assert "def _gc_relocation_candidate" in py_obj
@@ -675,38 +589,7 @@ def test_gc_slot_barriers_fast_path_non_relocation_and_non_old_to_young():
     )
 
 
-def test_gc_indexes_use_open_addressed_slots_and_tombstone_delete():
-    src = (RUNTIME_DIR / "src" / "py_gc_index_table.c").read_text(encoding="utf-8")
-    assert "typedef struct PccGcIndexSlot" in src
-    assert "pcc_gc_index_find_slot" in src
-    # Deletion is backward-shift (gap-free probe chains): churn workloads
-    # previously accumulated tombstones whose same-capacity clearing
-    # rehashes (calloc+memset) dominated the GC4 longrun profile. The
-    # engine must never write a tombstone state again.
-    assert "Backward-shift deletion" in src
-    assert "state = PCC_GC_INDEX_SLOT_DELETED" not in src
-    assert "first_deleted" not in src
-    assert "pcc_gc_index_delete_slot" not in src
-    assert "#define PCC_GC_INDEX_DEFAULT_INIT_CAP 256" in src
-    py_init = src.split("static int py_gc_index_init", 1)[1].split(
-        "PyGcNode *py_gc_index_find", 1
-    )[0]
-    assert "py_gc_index_rehash(PCC_GC_INDEX_DEFAULT_INIT_CAP)" in py_init
-    assert "int64_t used" in src
-    assert "py_gc_index_used + 1 > py_gc_index_cap / 2" in src
-    assert "index->used + 1 > index->cap / 2" in src
-    assert "pcc_gc_object_index_rehash(16384)" in src
-    assert "PccGcObjectIndexEntry" not in src
-    assert "PccGcPtrIndexEntry" not in src
-    insert = src.split("int64_t pcc_gc_object_index_insert", 1)[1].split(
-        "void *pcc_gc_object_index_remove", 1
-    )[0]
-    assert "pcc_gc_object_index_find(obj)" not in insert
-    assert "pcc_gc_index_find_slot" in insert
-
-
 def test_default_gc_implementations_share_object_node_index_source_of_truth():
-    c_gc = (RUNTIME_DIR / "src" / "py_obj_gc.c").read_text(encoding="utf-8")
     py_collector = (
         RUNTIME_DIR / "py" / "freestanding_gc_backend0_collector.py"
     ).read_text(encoding="utf-8")
@@ -718,42 +601,14 @@ def test_default_gc_implementations_share_object_node_index_source_of_truth():
     ).read_text(encoding="utf-8")
 
     for symbol in ("py_gc_index_find", "py_gc_index_insert", "py_gc_index_remove"):
-        assert symbol in c_gc
         assert f'@c_abi_export("{symbol}")' in py_index
 
-    for duplicate in (
-        "PyGcNodeSlot",
-        "py_gc_node_index",
-        "py_gc_node_hash",
-        "py_gc_node_index_rehash",
-    ):
-        assert duplicate not in c_gc
-
-    c_find = c_gc.split("static PyGcNode *py_gc_find_node", 1)[1].split(
-        "static void py_gc_unlink_node", 1
-    )[0]
-    assert "return py_gc_index_find(o);" in c_find
     assert 'extern("py_gc_index_remove"' in py_collector
     assert 'extern("py_gc_index_insert"' in py_tracking
     assert 'extern("py_gc_index_remove"' in py_tracking
 
 
 def test_generational_minor_refill_uses_intrusive_young_worklist():
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    assert "(void)pcc_gc_step_generational_promotion(1024, 0);" in c_src
-    assert "processed += pcc_gc_step_generational_promotion(budget, 1);" in c_src
-    c_step = c_src.split("static int64_t pcc_gc_step_generational_promotion", 1)[
-        1
-    ].split("static int64_t pcc_gc_step_colored_remembered_roots", 1)[0]
-    assert "int promote_all_young" in c_step
-    assert "if (promote_all_young)" in c_step
-    assert "pcc_gc_backend3_drain_remembered_owners" in c_step
-    assert "pcc_gc_backend3_young_head != NULL" in c_step
-    assert "processed < batch_budget" in c_step
-    assert "PccGcObjectNode *n = pcc_gc_backend3_young_head" in c_step
-    assert "pcc_gc_backend3_young_unlink(n)" in c_step
-    assert "pcc_gc_backend3_young_link_head(n)" in c_step
-    assert "pcc_gc_backend3_remember_owner_unlocked(owner, owner_h)" in c_src
 
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     assert "_step_generational_promotion(1024, 0)" in py_src
@@ -853,7 +708,7 @@ def test_generational_budgeted_young_worklist_advances_without_rescan(tmp_path):
     _assert_generational_budgeted_young_worklist_advances_without_rescan(
         tmp_path,
         _build_runtime(tmp_path),
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -866,51 +721,6 @@ def test_generational_pcc_python_budgeted_young_worklist_advances_without_rescan
         "libpy_runtime_pcc_py.a",
         extra_link_args=["-pthread"],
     )
-
-
-def test_c_runtime_core_container_promotion_reuses_owner_slot_walker_source():
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    helper_name = "pcc_gc_visit_core_container_owner_slots"
-    helper_start = c_src.index(f"static int {helper_name}(")
-    visit_start = c_src.index("int py_obj_visit_slots(", helper_start)
-    visit_end = c_src.index(
-        "typedef struct {\n    void (*visit)(PyObject *child);",
-        visit_start,
-    )
-    visit_body = c_src[visit_start:visit_end]
-    promote_start = c_src.index(
-        "static void pcc_gc_promote_owner_referents(",
-        visit_end,
-    )
-    promote_end = c_src.index(
-        "static void pcc_gc_promote_remembered_owner_referents(",
-        promote_start,
-    )
-    promote_body = c_src[promote_start:promote_end]
-    assert "pcc_gc_visit_object_slots_slice(" in visit_body
-    assert "pcc_gc_backend3_enqueue_promotion_owner" in promote_body
-    assert "py_obj_visit_slots(" not in promote_body
-    drain_body = c_src.split(
-        "static int64_t pcc_gc_backend3_drain_promotion_worklist(int64_t budget) {",
-        1,
-    )[1].split("static void pcc_gc_promote_owner_referents", 1)[0]
-    assert "pcc_gc_visit_object_slots_slice" in drain_body
-    assert "pcc_gc_promote_owner_slot" in drain_body
-    slice_body = c_src.split(
-        "int64_t pcc_gc_visit_object_slots_slice(", 1
-    )[1].split("typedef struct {\n    int recurse;", 1)[0]
-
-    for token in (
-        "PY_TYPE_LIST",
-        "PY_TYPE_TUPLE",
-        "PY_TYPE_DICT",
-        "PY_TYPE_SET",
-        "PY_TYPE_CONTINUATION",
-        "PY_TYPE_CLASS",
-        "PY_TYPE_INSTANCE",
-    ):
-        assert token not in promote_body
-        assert token in slice_body
 
 
 def _assert_pcc_python_covered_slot_dispatch(py_src: str) -> None:
@@ -1196,27 +1006,8 @@ def test_pcc_python_subtract_referents_reuses_slot_walkers_source():
 
 
 def test_clear_referents_reuses_slot_contract_source():
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     sweep_src = STRICT_SWEEP_SLOTS.read_text(encoding="utf-8")
-
-    c_clear_slot_start = c_src.index("static void pcc_gc_clear_owned_slot(")
-    c_clear_slot_body = c_src[
-        c_clear_slot_start : c_src.index(
-            "static void pcc_gc_clear_referents(", c_clear_slot_start
-        )
-    ]
-    assert "role != PY_OBJ_SLOT_OWNED" in c_clear_slot_body
-    assert "pcc_gc_clear_slot(slot)" in c_clear_slot_body
-
-    c_clear_start = c_src.index("static void pcc_gc_clear_referents(")
-    c_clear_body = c_src[
-        c_clear_start : c_src.index("/* PASS-1 of the two-phase sweep", c_clear_start)
-    ]
-    assert "py_obj_visit_slots(o, pcc_gc_clear_owned_slot, NULL)" in c_clear_body
-    assert "pcc_gc_clear_slot(&" not in c_clear_body
-    assert "pcc_gc_clear_slot((" not in c_clear_body
-    assert "pcc_gc_visit_class_slots(" not in c_clear_body
 
     py_slot_adapter = sweep_src.split(
         "def pcc_gc_tracing_clear_slot(", 1
@@ -1458,8 +1249,6 @@ def _assert_backend_three_extension_traverse_runs_after_graph_unlock(
     archive_name: str,
     *,
     extra_link_args: list[str] | None = None,
-    runtime_root_visit: bool = False,
-    join_in_root_visitor: bool = False,
     trace_backend: bool = False,
 ):
     src = tmp_path / f"{archive_name}_extension_traverse_unlock_probe.c"
@@ -1476,11 +1265,6 @@ def _assert_backend_three_extension_traverse_runs_after_graph_unlock(
             );
             int64_t pcc_thread_join(PccThreadHandle *thread, void **result);
             int64_t pcc_gc_object_is_known(PyObject *obj);
-            typedef void (*PccGcRootVisitor)(PyObject *root, void *ctx);
-            void pcc_gc_visit_runtime_roots(
-                PccGcRootVisitor visit,
-                void *ctx
-            );
 
             typedef struct {
                 PyObject *root;
@@ -1488,12 +1272,10 @@ def _assert_backend_three_extension_traverse_runs_after_graph_unlock(
 
             static PccThreadHandle *contender;
             static PyObject *anchor;
-            static void *root_handle;
             static int64_t worker_ready;
             static int64_t worker_go;
             static int64_t worker_acquired;
             static int64_t traverse_joined;
-            static int64_t join_from_root;
 
             static void *lock_contender(void *arg) {
                 (void)arg;
@@ -1544,23 +1326,10 @@ def _assert_backend_three_extension_traverse_runs_after_graph_unlock(
                 void *arg
             ) {
                 ProbeState *state = (ProbeState *)PyModule_GetState(module);
-                if (join_from_root == 0) join_contender_once();
+                join_contender_once();
                 if (state == 0) return 0;
                 Py_VISIT(state->root);
                 return 0;
-            }
-
-            static void probe_root(PyObject *root, void *ctx) {
-                (void)ctx;
-                if (join_from_root != 0 && root == anchor) {
-                    join_contender_once();
-                    if (root_handle != 0) {
-                        pcc_gc_scheduler_root_unregister_handle(root_handle);
-                        root_handle = 0;
-                        py_decref(anchor);
-                        anchor = 0;
-                    }
-                }
             }
 
             static PyModuleDef ProbeModule = {
@@ -1598,7 +1367,6 @@ def _assert_backend_three_extension_traverse_runs_after_graph_unlock(
                     __atomic_load_n(&worker_ready, __ATOMIC_ACQUIRE) == 0
                 ) {}
 
-                join_from_root = 0;
                 (void)pcc_gc_step(1024);
                 if (
                     __atomic_load_n(&traverse_joined, __ATOMIC_ACQUIRE) != 1
@@ -1609,22 +1377,10 @@ def _assert_backend_three_extension_traverse_runs_after_graph_unlock(
                 return 0;
             }
             ''').lstrip()
-    if runtime_root_visit:
-        source_text = source_text.replace(
-            "(void)pcc_gc_step(1024);",
-            "pcc_gc_visit_runtime_roots(probe_root, 0);",
-        )
     if trace_backend:
         source_text = source_text.replace(
             "PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR",
             "PCC_GC_KIND_INCREMENTAL_TRICOLOR",
-        )
-    if join_in_root_visitor:
-        source_text = source_text.replace(
-            "join_from_root = 0;",
-            "join_from_root = 1; root_handle = "
-            "pcc_gc_scheduler_root_register_handle(&anchor); "
-            "if (root_handle == 0) return 9;",
         )
     src.write_text(source_text, encoding="utf-8")
     link_cmd = [
@@ -1657,58 +1413,35 @@ def _assert_final_trace_extension_traverse_runs_after_graph_unlock(
     work_runtime: Path,
     archive_name: str,
 ) -> None:
+    """The final-cut extension traverse runs outside the graph lock.
+
+    It runs with the world stopped by the collector -- extension module
+    state is raw C memory with no write barrier, so the final scan must not
+    race mutators -- but with the graph lock released: the traverse sees a
+    zero lock depth and can take and release the lock itself.  (A traverse
+    that waited for another runtime thread could never finish there: that
+    thread is parked at a safepoint until the world resumes.)
+    """
     src = tmp_path / f"{archive_name}_final_extension_unlock_probe.c"
     exe = tmp_path / f"{archive_name}_final_extension_unlock_probe.out"
     src.write_text(
-        textwrap.dedent(r'''
+        textwrap.dedent(r"""
             #include "Python.h"
-            #include <pthread.h>
             #include <stdint.h>
-            #include <unistd.h>
 
-            int64_t pcc_gc_object_is_known(PyObject *obj);
+            int64_t pcc_py_gc_minor_graph_lock_depth(void);
             void pcc_py_gc_minor_graph_lock(void);
             void pcc_py_gc_minor_graph_unlock(void);
+            int64_t pcc_thread_owns_stopped_world(void);
 
             typedef struct {
                 PyObject *root;
             } ProbeState;
 
-            static pthread_t contender;
-            static PyObject *anchor;
-            static int64_t worker_go;
-            static int64_t worker_acquired;
             static int64_t traverse_calls;
-            static int64_t final_joined;
-            static int use_high_graph;
-
-            static void mark(char value) {
-                (void)write(2, &value, 1);
-            }
-
-            static void *raw_lock_contender(void *arg) {
-                (void)arg;
-                mark('W');
-                while (__atomic_load_n(&worker_go, __ATOMIC_ACQUIRE) == 0) {}
-                mark('L');
-                pcc_py_gc_minor_graph_lock();
-                mark('K');
-                pcc_py_gc_minor_graph_unlock();
-                mark('U');
-                if (use_high_graph) {
-                    __atomic_store_n(
-                        &worker_acquired, 1, __ATOMIC_RELEASE
-                    );
-                    return 0;
-                }
-                mark('G');
-                if (pcc_gc_object_is_known(anchor) != 1) {
-                    return (void *)(uintptr_t)2;
-                }
-                mark('A');
-                __atomic_store_n(&worker_acquired, 1, __ATOMIC_RELEASE);
-                return 0;
-            }
+            static int64_t final_depth = -1;
+            static int64_t final_owns_world = -1;
+            static int64_t final_relocked;
 
             static int probe_traverse(
                 PyObject *module,
@@ -1718,23 +1451,12 @@ def _assert_final_trace_extension_traverse_runs_after_graph_unlock(
                 int64_t call = __atomic_add_fetch(
                     &traverse_calls, 1, __ATOMIC_ACQ_REL
                 );
-                mark(call == 1 ? 'I' : 'F');
                 if (call == 2) {
-                    __atomic_store_n(&worker_go, 1, __ATOMIC_RELEASE);
-                    void *result = 0;
-                    mark('J');
-                    if (
-                        pthread_join(contender, &result) == 0
-                        && result == 0
-                        && __atomic_load_n(
-                            &worker_acquired, __ATOMIC_ACQUIRE
-                        ) == 1
-                    ) {
-                        __atomic_store_n(
-                            &final_joined, 1, __ATOMIC_RELEASE
-                        );
-                        mark('D');
-                    }
+                    final_depth = pcc_py_gc_minor_graph_lock_depth();
+                    final_owns_world = pcc_thread_owns_stopped_world();
+                    pcc_py_gc_minor_graph_lock();
+                    final_relocked = pcc_py_gc_minor_graph_lock_depth();
+                    pcc_py_gc_minor_graph_unlock();
                 }
                 ProbeState *state = (ProbeState *)PyModule_GetState(module);
                 if (state == 0) return 0;
@@ -1761,57 +1483,25 @@ def _assert_final_trace_extension_traverse_runs_after_graph_unlock(
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_INCREMENTAL_TRICOLOR
                     ) != 0) return 2;
-                anchor = py_list_new(0);
-                if (anchor == 0) return 3;
                 PyObject *module = PyModule_Create(&ProbeModule);
-                if (module == 0) return 4;
+                if (module == 0) return 3;
                 ProbeState *state = (ProbeState *)PyModule_GetState(module);
-                if (state == 0) return 5;
+                if (state == 0) return 4;
                 state->root = py_str_new("final-extension-root", 20);
-                if (state->root == 0) return 6;
-                if (pthread_create(
-                        &contender, 0, raw_lock_contender, 0
-                    ) != 0) return 7;
-
-                use_high_graph = 0;
-                for (int i = 0; i < 8 && final_joined == 0; i++) {
-                    mark('S');
+                if (state->root == 0) return 5;
+                for (int i = 0; i < 8 && traverse_calls < 2; i++) {
                     (void)pcc_gc_step(1024);
                 }
-                if (
-                    __atomic_load_n(&traverse_calls, __ATOMIC_ACQUIRE) < 2
-                    || __atomic_load_n(&final_joined, __ATOMIC_ACQUIRE) != 1
-                    || __atomic_load_n(
-                        &worker_acquired, __ATOMIC_ACQUIRE
-                    ) != 1
-                ) return 8;
+                if (traverse_calls < 2) return 6;
+                if (final_depth != 0) return 7;
+                if (final_owns_world != 1) return 8;
+                if (final_relocked != 1) return 9;
+                if (pcc_py_gc_minor_graph_lock_depth() != 0) return 10;
                 return 0;
             }
-            ''').lstrip(),
+            """).lstrip(),
         encoding="utf-8",
     )
-    source_text = src.read_text(encoding="utf-8")
-    if archive_name == "libpy_runtime_pcc_py.a":
-        source_text = source_text.replace(
-            "use_high_graph = 0;", "use_high_graph = 1;"
-        )
-    else:
-        source_text = source_text.replace(
-            "mark('L');\n"
-            "    pcc_py_gc_minor_graph_lock();\n"
-            "    mark('K');\n"
-            "    pcc_py_gc_minor_graph_unlock();\n"
-            "    mark('U');\n"
-            "    if (use_high_graph) {\n"
-            "        __atomic_store_n(\n"
-            "            &worker_acquired, 1, __ATOMIC_RELEASE\n"
-            "        );\n"
-            "        return 0;\n"
-            "    }\n"
-            "    ",
-            "",
-        )
-    src.write_text(source_text, encoding="utf-8")
     build = subprocess.run(
         [
             _cc(),
@@ -1831,17 +1521,9 @@ def _assert_final_trace_extension_traverse_runs_after_graph_unlock(
         timeout=30,
     )
     assert build.returncode == 0, build.stdout + build.stderr
-    try:
-        result = subprocess.run(
-            [str(exe)], capture_output=True, text=True, timeout=20
-        )
-    except subprocess.TimeoutExpired as exc:
-        pytest.fail(
-            "final extension probe timeout; stdout="
-            + repr(exc.stdout)
-            + " stderr="
-            + repr(exc.stderr)
-        )
+    result = subprocess.run(
+        [str(exe)], capture_output=True, text=True, timeout=20
+    )
     assert result.returncode == 0, (
         f"rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
@@ -3412,7 +3094,7 @@ def test_generational_backend_c_runtime_uses_minor_bump_arena(tmp_path):
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -3476,7 +3158,7 @@ def test_generational_backend_c_runtime_skips_graph_leaf_tracking(tmp_path):
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -3545,7 +3227,7 @@ def test_generational_backend_c_runtime_reuses_retained_empty_minor_blocks(
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -3621,7 +3303,7 @@ def test_generational_backend_c_runtime_frees_minor_object_by_index_when_flag_cl
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -3674,7 +3356,7 @@ def test_generational_backend_c_runtime_retains_empty_minor_span_for_stale_relea
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -3739,7 +3421,7 @@ def test_tracing_backends_ignore_zero_flag_unknown_shell_on_release(tmp_path):
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -4229,7 +3911,7 @@ def test_generational_backend_minor_refill_promotes_tls_exception_root(
     _assert_backend_three_minor_refill_promotes_tls_exception_root(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -4240,7 +3922,7 @@ def test_generational_backend_tls_foreign_owner_moves_to_oldified_target(
     _assert_backend_three_tls_foreign_owner_moves_to_oldified_target(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
         extra_link_args=["-pthread"],
     )
 
@@ -4264,48 +3946,8 @@ def test_generational_backend_extension_traverse_runs_after_graph_unlock(
     _assert_backend_three_extension_traverse_runs_after_graph_unlock(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
         extra_link_args=["-pthread"],
-    )
-
-
-def test_runtime_root_extension_traverse_runs_after_graph_unlock(
-    tmp_path,
-):
-    work_runtime = _build_threaded_runtime(tmp_path)
-    _assert_backend_three_extension_traverse_runs_after_graph_unlock(
-        tmp_path,
-        work_runtime,
-        "libpy_runtime.a",
-        extra_link_args=["-pthread"],
-        runtime_root_visit=True,
-    )
-
-
-def test_runtime_registered_root_visitor_runs_after_graph_unlock(
-    tmp_path,
-):
-    work_runtime = _build_threaded_runtime(tmp_path)
-    _assert_backend_three_extension_traverse_runs_after_graph_unlock(
-        tmp_path,
-        work_runtime,
-        "libpy_runtime.a",
-        extra_link_args=["-pthread"],
-        runtime_root_visit=True,
-        join_in_root_visitor=True,
-    )
-
-
-def test_initial_trace_extension_traverse_runs_after_graph_unlock(
-    tmp_path,
-):
-    work_runtime = _build_threaded_runtime(tmp_path)
-    _assert_backend_three_extension_traverse_runs_after_graph_unlock(
-        tmp_path,
-        work_runtime,
-        "libpy_runtime.a",
-        extra_link_args=["-pthread"],
-        trace_backend=True,
     )
 
 
@@ -4319,17 +3961,6 @@ def test_pcc_python_initial_trace_extension_traverse_runs_after_graph_unlock(
         "libpy_runtime_pcc_py.a",
         extra_link_args=["-pthread"],
         trace_backend=True,
-    )
-
-
-def test_final_trace_extension_traverse_runs_after_graph_unlock(
-    tmp_path,
-):
-    work_runtime = _build_threaded_runtime(tmp_path)
-    _assert_final_trace_extension_traverse_runs_after_graph_unlock(
-        tmp_path,
-        work_runtime,
-        "libpy_runtime.a",
     )
 
 
@@ -4434,7 +4065,7 @@ def test_generational_backend_minor_refill_promotes_remembered_young_child(
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -4536,7 +4167,7 @@ def test_generational_backend_minor_refill_oldifies_copy_for_remembered_child(
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -4633,7 +4264,7 @@ def test_generational_backend_minor_refill_rewrites_remembered_list_slot_to_oldi
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -4969,7 +4600,7 @@ def test_generational_backend_young_owner_promotion_rewrites_list_referent_to_ol
     _assert_backend_three_young_owner_promotion_rewrites_list_referent(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -4980,7 +4611,7 @@ def test_generational_backend_safepoint_does_not_promote_frame_roots(
     _assert_backend_three_safepoint_does_not_promote_frame_roots(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -4991,7 +4622,7 @@ def test_generational_backend_remembered_overflow_scans_examined_nodes_in_batche
     _assert_backend_three_remembered_overflow_scans_examined_nodes_in_batches(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5002,7 +4633,7 @@ def test_generational_backend_minor_refill_rewrites_non_list_owned_slots_to_oldi
     _assert_backend_three_non_list_slots_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5013,7 +4644,7 @@ def test_generational_backend_minor_refill_rewrites_frame_root_slot_to_oldified_
     _assert_backend_three_frame_root_slot_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5024,7 +4655,7 @@ def test_generational_backend_borrowed_frame_root_rewrite_preserves_source_ref(
     _assert_backend_three_borrowed_frame_root_rewrite_preserves_source_ref(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5035,7 +4666,7 @@ def test_generational_backend_minor_refill_rewrites_suspended_generator_frame_sl
     _assert_backend_three_suspended_generator_frame_slot_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5046,7 +4677,7 @@ def test_generational_backend_minor_refill_rewrites_generator_coroutine_state_sl
     _assert_backend_three_generator_coroutine_state_slot_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5057,7 +4688,7 @@ def test_generational_backend_minor_refill_rewrites_task_state_slots_to_oldified
     _assert_backend_three_task_state_slot_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5068,7 +4699,7 @@ def test_generational_backend_minor_refill_rewrites_scheduler_root_slot_to_oldif
     _assert_backend_three_scheduler_root_slot_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5079,7 +4710,7 @@ def test_generational_backend_minor_refill_rewrites_scheduler_queue_entry_to_old
     _assert_backend_three_scheduler_queue_entry_slot_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5090,7 +4721,7 @@ def test_generational_backend_minor_refill_rewrites_class_metadata_slots_to_oldi
     _assert_backend_three_class_metadata_slots_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5101,7 +4732,7 @@ def test_generational_backend_forwarded_minor_source_is_inactive_after_oldify(
     _assert_backend_three_forwarded_minor_source_cleanup(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5481,7 +5112,7 @@ def test_generational_backend_release_of_forwarded_source_consumes_source_ref(
     _assert_backend_three_forwarded_source_release_consumes_source_ref(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5490,7 +5121,7 @@ def test_generational_backend_cross_domain_remembered_slot_rewrite(tmp_path):
     _assert_backend_three_cross_domain_remembered_slot_rewrite(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
         extra_link_args=["-pthread"],
     )
 
@@ -5980,7 +5611,7 @@ def test_generational_backend_oldified_tuple_retains_old_child_ref(
     _assert_backend_three_oldified_tuple_retains_old_child(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -5991,7 +5622,7 @@ def test_generational_backend_minor_arena_tuple_cycle_promotes_in_place(
     _assert_backend_three_minor_arena_tuple_cycle_promotes_in_place(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 
@@ -6002,7 +5633,7 @@ def test_generational_backend_string_loop_owned_root_cleanup(
     _assert_backend_three_string_loop_owned_root_cleanup(
         tmp_path,
         work_runtime,
-        "libpy_runtime.a",
+        "libpy_runtime_pcc_py.a",
     )
 
 

@@ -13,8 +13,6 @@ from pcc.py_frontend import pipeline
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 PORT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_external_resource.py"
-ORACLE_SOURCE = RUNTIME_DIR / "src" / "pcc_gc_external_resource.c"
-METAL_ORACLE_SOURCE = RUNTIME_DIR / "src" / "pcc_metal_runtime.c"
 
 PUBLIC_SYMBOLS = {
     "pcc_gc_external_resource_register",
@@ -412,7 +410,7 @@ def test_self_external_resource_phase_boundaries(
 
 
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
-def test_freestanding_external_resource_matches_c_oracle_under_gc0_to_gc4(
+def test_freestanding_external_resource_under_gc0_to_gc4(
     tmp_path: Path, emitter: str
 ):
     supported = (
@@ -421,12 +419,6 @@ def test_freestanding_external_resource_matches_c_oracle_under_gc0_to_gc4(
     assert supported
     driver = _build_driver(tmp_path)
     obj = _build_object(tmp_path, emitter)
-    oracle = _build_and_run(
-        tmp_path,
-        "external_resource_oracle_" + emitter,
-        [str(ORACLE_SOURCE), str(METAL_ORACLE_SOURCE)],
-        driver,
-    )
     port = _build_and_run(
         tmp_path,
         "external_resource_port_" + emitter,
@@ -434,9 +426,8 @@ def test_freestanding_external_resource_matches_c_oracle_under_gc0_to_gc4(
         driver,
         expected_metal_release_error=_port_metal_release_error(),
     )
-    assert oracle.returncode == 0, oracle.stdout + oracle.stderr
     assert port.returncode == 0, port.stdout + port.stderr
-    assert port.stdout == oracle.stdout == _expected_output()
+    assert port.stdout == _expected_output()
 
 
 def test_linux_external_resource_ir_has_no_dynamic_loader_boundary(
@@ -537,17 +528,8 @@ def test_freestanding_external_resource_object_has_only_explicit_boundaries(
 
 def test_production_archive_plan_uses_python_external_resource_owner():
     makefile = (RUNTIME_DIR / "Makefile").read_text(encoding="utf-8")
-    assert "pcc_gc_external_resource" in makefile.split(
-        "PY_REPLACED_C_MODULES =", 1
-    )[1].splitlines()[0]
     freestanding_line = makefile.split("FREESTANDING_PY_MODULES =", 1)[1].splitlines()[0]
     assert "freestanding_gc_external_resource" in freestanding_line
-    helper_lines = [
-        line for line in makefile.splitlines() if line.startswith("OBJ_PY_CC_HELPERS")
-    ]
-    assert all("pcc_gc_external_resource.o" not in line for line in helper_lines)
-    assert "$(OBJDIR_PCC)/pcc_gc_external_resource.o:" not in makefile
-    assert "$(SRCDIR)/pcc_gc_external_resource.c" in makefile
 
     plan = subprocess.run(
         ["make", "-B", "-n", "libpy_runtime_pcc_py.a"],

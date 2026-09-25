@@ -1,32 +1,19 @@
-"""Regression tests for the runtime IO-waitset structure (C + pcc-Python).
+"""Regression tests for the runtime IO-waitset structure.
 
 This is the structure/mirror gate for the CPU-only IO-waitset oracle
-(``pcc/vthread/io_waitset_oracle.py``). The same C structure is now wired into
-the live scheduler; this file continues to test the structure independently,
-mirroring the oracle's ``PollWaitSet`` (the level-triggered poll fallback) plus
-the real Darwin ``kqueue`` readiness backend:
+(``pcc/vthread/io_waitset_oracle.py``), mirroring the oracle's
+``PollWaitSet`` (the level-triggered poll fallback) plus the real Darwin
+``kqueue`` readiness backend:
 
-  * ``pcc/py_runtime/src/py_io_waitset.c`` / ``.h`` -- the C runtime structure
-    (poll fallback + ``kevent(2)`` backend, ``__APPLE__``/BSD only);
-  * ``pcc/py_runtime/py/py_io_waitset.py`` -- the pcc-Python port (poll fallback
-    only; the real kqueue path is a C-only capability reported as skipped).
-
-Both reproduce the oracle's readiness delivery / interest-filtering / timeout /
-add-remove semantics exactly. The tests diff each mirror against the oracle in
-the same oracle-diff style used by ``tests/vthread/test_timer_heap_mirror.py``:
-
-  * the pcc-Python port runs in-process (also valid CPython) and is diffed
-    against the oracle on scripted cases + a randomized parity sequence;
-  * the C structure is compiled standalone with ``cc`` (it is deliberately
-    dependency-free for the poll fallback: no PyObject, no GC, no libpython) and
-    a small harness diffs the poll fallback against a dataset generated from the
-    same oracle, and additionally exercises the real ``kqueue`` backend over
-    live pipe fds when this platform provides it.
-
-The C part is skipped (not failed) when no C compiler is available. It compiles
-ONLY the single new ``py_io_waitset.c`` file, so it does not touch the shared
-runtime archive. The real-kqueue path is explicitly ``SKIPPED_WITH_REASON`` off
-Darwin/BSD, mirroring the oracle's ``real_kqueue_backend()``.
+  * ``pcc/py_runtime/py/py_io_waitset.py`` -- the pcc-Python port, run
+    in-process (also valid CPython) on scripted cases + a randomized parity
+    sequence (poll fallback only);
+  * the production ``freestanding_io_waitset`` members of the runtime
+    archive, driven through their C ABI (``src/py_io_waitset.h``) by a small
+    harness that diffs the poll fallback against a dataset generated from the
+    same oracle and exercises the real ``kqueue`` backend over live pipe fds
+    when this platform provides it (``SKIPPED_WITH_REASON`` off Darwin/BSD,
+    mirroring the oracle's ``real_kqueue_backend()``).
 """
 
 from __future__ import annotations
@@ -271,16 +258,15 @@ def _oracle_poll_dataset(script):
     return _drive_oracle(script)
 
 
-def test_c_io_waitset_poll_matches_oracle_dataset(tmp_path):
+def test_c_abi_io_waitset_poll_matches_oracle_dataset(tmp_path, pcc_py_runtime_archive):
     cc = _c_compiler()
     if cc is None:
         pytest.fail("no C compiler available")
 
     root = _repo_root()
     src_dir = root / "pcc" / "py_runtime" / "src"
-    ws_c = src_dir / "py_io_waitset.c"
     ws_h = src_dir / "py_io_waitset.h"
-    assert ws_c.is_file() and ws_h.is_file()
+    assert ws_h.is_file()
 
     # Deterministic scripted + randomized sequence, encoded as an opcode stream
     # the C harness replays step-by-step against the same oracle output.
@@ -455,7 +441,7 @@ def test_c_io_waitset_poll_matches_oracle_dataset(tmp_path):
     exe = tmp_path / "io_waitset_diff.out"
     build = subprocess.run(
         [cc, "-std=c11", "-Wall", "-Wextra", f"-I{src_dir}",
-         str(harness), str(ws_c), "-o", str(exe)],
+         str(harness), str(pcc_py_runtime_archive), "-lm", "-o", str(exe)],
         capture_output=True, text=True, timeout=60,
     )
     assert build.returncode == 0, build.stdout + build.stderr
@@ -464,7 +450,7 @@ def test_c_io_waitset_poll_matches_oracle_dataset(tmp_path):
     assert run.stdout.strip() == "dataset-ok"
 
 
-def test_c_io_waitset_semantics_and_capability(tmp_path):
+def test_c_abi_io_waitset_semantics_and_capability(tmp_path, pcc_py_runtime_archive):
     """Scripted C semantics for the poll fallback + capability/skip probe, and
     (on kqueue platforms) the real kevent(2) backend over live pipe fds."""
     cc = _c_compiler()
@@ -473,7 +459,6 @@ def test_c_io_waitset_semantics_and_capability(tmp_path):
 
     root = _repo_root()
     src_dir = root / "pcc" / "py_runtime" / "src"
-    ws_c = src_dir / "py_io_waitset.c"
 
     harness = tmp_path / "io_waitset_semantics.c"
     harness.write_text(textwrap.dedent(r"""
@@ -481,6 +466,7 @@ def test_c_io_waitset_semantics_and_capability(tmp_path):
         #include <stdio.h>
         #include <string.h>
         #include <fcntl.h>
+        #include <time.h>
         #include <unistd.h>
         static int fail(const char *m){ fprintf(stderr,"FAIL: %s\n", m); return 1; }
         int main(void){
@@ -561,12 +547,17 @@ def test_c_io_waitset_semantics_and_capability(tmp_path):
                 pcc_io_waitset_wait(&kq,0,&r);
                 if(r.ready_len!=1 || !(r.ready[0].events & (PCC_IO_POLLIN|PCC_IO_POLLHUP))) return fail("kq-eof");
                 close(rfd);
-                /* kqueue timeout path */
+                /* kqueue timeout path: the kernel backends re-read the
+                 * monotonic clock after waiting, so deadlines are real
+                 * CLOCK_MONOTONIC milliseconds, not the poll tick. */
                 int fds2[2]; if(pipe(fds2)!=0) return fail("pipe2");
-                pcc_io_waitset_add(&kq, fds2[0], PCC_IO_POLLIN, 100, 0);
-                pcc_io_waitset_wait(&kq,50,&r);
+                struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+                int64_t t0 = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+                pcc_io_waitset_add(&kq, fds2[0], PCC_IO_POLLIN, t0 + 100, 0);
+                pcc_io_waitset_wait(&kq,t0,&r);
                 if(r.timeout_len!=0) return fail("kq-early");
-                pcc_io_waitset_wait(&kq,100,&r);
+                usleep(120000);
+                pcc_io_waitset_wait(&kq,t0 + 120,&r);
                 if(r.timeout_len!=1 || r.timed_out[0]!=fds2[0]) return fail("kq-timeout");
                 close(fds2[0]); close(fds2[1]);
                 pcc_io_waitset_dispose(&kq);
@@ -582,7 +573,7 @@ def test_c_io_waitset_semantics_and_capability(tmp_path):
     exe = tmp_path / "io_waitset_semantics.out"
     build = subprocess.run(
         [cc, "-std=c11", "-Wall", "-Wextra", f"-I{src_dir}",
-         str(harness), str(ws_c), "-o", str(exe)],
+         str(harness), str(pcc_py_runtime_archive), "-lm", "-o", str(exe)],
         capture_output=True, text=True, timeout=60,
     )
     assert build.returncode == 0, build.stdout + build.stderr
@@ -591,13 +582,9 @@ def test_c_io_waitset_semantics_and_capability(tmp_path):
     assert run.stdout.strip().endswith("semantics-ok")
 
 
-def test_c_source_registered_in_makefile():
-    """The new C file must be wired into the runtime build (main reviews the
-    SRCS edit). This guards against the mirror never being compiled."""
+def test_io_waitset_port_is_in_the_production_archive():
+    """The production archive carries the waitset the C ABI tests link."""
     makefile = (_repo_root() / "pcc" / "py_runtime" / "Makefile").read_text(
         encoding="utf-8"
     )
-    assert "$(SRCDIR)/py_io_waitset.c" in makefile
-    # And it must land in the default (pcc-Python port) archive so the
-    # py_asyncio_io.o cross-reference resolves in no-libpython mode.
-    assert "$(OBJDIR_PY)/py_io_waitset.o" in makefile
+    assert "freestanding_io_waitset" in makefile.split("PY_MODULES =", 1)[1].splitlines()[0]

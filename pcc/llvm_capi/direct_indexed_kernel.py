@@ -1992,6 +1992,9 @@ def build_direct_indexed_function(function: _ir.Function) -> ParsedFunction:
         indexed_slot_projection=False,
         aarch64_tail_call_ids=[],
         aarch64_callee_saved=[],
+        aarch64_reload_slot_offsets=[],
+        aarch64_fused_branch_values={},
+        aarch64_frameless=False,
     )
     try:
         get_indexed_function_kernel(parsed)

@@ -27,6 +27,7 @@ from pcc.unsafe import (
     memset,
     null,
     ptr_add,
+    ptr_eq,
     ptr_is_null,
     stack_alloc,
     store_i32,
@@ -218,7 +219,7 @@ def _match_method_call(captures, args):
             if lo >= 0 and hi >= 0:
                 item = py_str_byte_slice_i64(text, lo, hi)
             py_tuple_set_item(out, group - 1, item)
-            if ptr_is_null(item) == 0 and item != none:
+            if ptr_is_null(item) == 0 and ptr_eq(item, none) == 0:
                 py_decref(item)
             group = group + 1
         py_decref(text)
@@ -231,7 +232,7 @@ def _match_method_call(captures, args):
         group = 1
         while group <= ngroups and ptr_is_null(out) == 0:
             name = py_tuple_get(names, group - 1)
-            if ptr_is_null(name) == 0 and name != none:
+            if ptr_is_null(name) == 0 and ptr_eq(name, none) == 0:
                 lo = _span_at(spans, group * 2)
                 hi = _span_at(spans, group * 2 + 1)
                 value = none
@@ -239,7 +240,7 @@ def _match_method_call(captures, args):
                     value = py_str_byte_slice_i64(text, lo, hi)
                 if ptr_is_null(value) == 0:
                     py_dict_set(out, name, value)
-                    if value != none:
+                    if ptr_eq(value, none) == 0:
                         py_decref(value)
             if ptr_is_null(name) == 0:
                 py_decref(name)
@@ -270,7 +271,7 @@ def _match_method_call(captures, args):
                 group = 1
                 while group <= ngroups and ptr_is_null(want) == 0:
                     name = py_tuple_get(names, group - 1)
-                    if ptr_is_null(name) == 0 and name != none:
+                    if ptr_is_null(name) == 0 and ptr_eq(name, none) == 0:
                         have = py_str_utf8(name)
                         if _cstr_equal(have, want) != 0:
                             selected = group
@@ -387,7 +388,7 @@ def _new_match(pattern, text, caps, ngroups: int, flags: int):
         if ptr_is_null(name_obj) != 0:
             name_obj = none
         py_tuple_set_item(names, group - 1, name_obj)
-        if name_obj != none:
+        if ptr_eq(name_obj, none) == 0:
             py_decref(name_obj)
         group = group + 1
     _add_match_method(instance, cstr("group"), text, spans, names, 0)

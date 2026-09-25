@@ -14,7 +14,6 @@ from pathlib import Path
 
 
 def _compile(monkeypatch, src: Path, exe: Path) -> None:
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     compile_python(

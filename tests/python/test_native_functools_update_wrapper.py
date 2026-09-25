@@ -23,7 +23,6 @@ def test_functools_update_wrapper_default_form_no_libpython(tmp_path):
     executable = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv",
@@ -74,7 +73,6 @@ def test_functools_update_wrapper_from_returned_nested_function_no_libpython(
     executable = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv",

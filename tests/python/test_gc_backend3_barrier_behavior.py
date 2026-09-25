@@ -5,7 +5,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 def _repo_root() -> Path:
@@ -25,7 +25,7 @@ def _cc() -> str:
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess[str]:
@@ -40,7 +40,7 @@ def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),

@@ -134,6 +134,37 @@ define_global_cstr("PY_EXC_NAME_30", "UnicodeWarning")
 define_global_cstr("PY_EXC_NAME_31", "BytesWarning")
 define_global_cstr("PY_EXC_NAME_32", "EncodingWarning")
 define_global_cstr("PY_EXC_NAME_33", "ResourceWarning")
+define_global_cstr("PY_EXC_NAME_34", "FileNotFoundError")
+define_global_cstr("PY_EXC_NAME_35", "FileExistsError")
+define_global_cstr("PY_EXC_NAME_36", "PermissionError")
+define_global_cstr("PY_EXC_NAME_37", "IsADirectoryError")
+define_global_cstr("PY_EXC_NAME_38", "NotADirectoryError")
+define_global_cstr("PY_EXC_NAME_39", "ProcessLookupError")
+define_global_cstr("PY_EXC_NAME_40", "ChildProcessError")
+define_global_cstr("PY_EXC_NAME_41", "TimeoutError")
+define_global_cstr("PY_EXC_NAME_42", "InterruptedError")
+define_global_cstr("PY_EXC_NAME_43", "BlockingIOError")
+define_global_cstr("PY_EXC_NAME_44", "ConnectionError")
+define_global_cstr("PY_EXC_NAME_45", "BrokenPipeError")
+define_global_cstr("PY_EXC_NAME_46", "ConnectionAbortedError")
+define_global_cstr("PY_EXC_NAME_47", "ConnectionRefusedError")
+define_global_cstr("PY_EXC_NAME_48", "ConnectionResetError")
+define_global_cstr("PY_EXC_NAME_49", "SyntaxError")
+define_global_cstr("PY_EXC_NAME_50", "IndentationError")
+define_global_cstr("PY_EXC_NAME_51", "TabError")
+define_global_cstr("PY_EXC_NAME_52", "EOFError")
+define_global_cstr("PY_EXC_NAME_53", "SystemExit")
+define_global_cstr("PY_EXC_NAME_54", "KeyboardInterrupt")
+define_global_cstr("PY_EXC_NAME_55", "GeneratorExit")
+define_global_cstr("PY_EXC_NAME_56", "RecursionError")
+define_global_cstr("PY_EXC_NAME_57", "UnicodeError")
+define_global_cstr("PY_EXC_NAME_58", "UnicodeDecodeError")
+define_global_cstr("PY_EXC_NAME_59", "UnicodeEncodeError")
+define_global_cstr("PY_EXC_NAME_60", "UnicodeTranslateError")
+define_global_cstr("PY_EXC_NAME_61", "FloatingPointError")
+define_global_cstr("PY_EXC_NAME_62", "BufferError")
+define_global_cstr("PY_EXC_NAME_63", "UnboundLocalError")
+define_global_cstr("PY_EXC_NAME_64", "SystemError")
 define_global_ptr_array(
     "PY_EXC_BUILTIN_NAMES",
     "PY_EXC_NAME_0",
@@ -170,6 +201,37 @@ define_global_ptr_array(
     "PY_EXC_NAME_31",
     "PY_EXC_NAME_32",
     "PY_EXC_NAME_33",
+    "PY_EXC_NAME_34",
+    "PY_EXC_NAME_35",
+    "PY_EXC_NAME_36",
+    "PY_EXC_NAME_37",
+    "PY_EXC_NAME_38",
+    "PY_EXC_NAME_39",
+    "PY_EXC_NAME_40",
+    "PY_EXC_NAME_41",
+    "PY_EXC_NAME_42",
+    "PY_EXC_NAME_43",
+    "PY_EXC_NAME_44",
+    "PY_EXC_NAME_45",
+    "PY_EXC_NAME_46",
+    "PY_EXC_NAME_47",
+    "PY_EXC_NAME_48",
+    "PY_EXC_NAME_49",
+    "PY_EXC_NAME_50",
+    "PY_EXC_NAME_51",
+    "PY_EXC_NAME_52",
+    "PY_EXC_NAME_53",
+    "PY_EXC_NAME_54",
+    "PY_EXC_NAME_55",
+    "PY_EXC_NAME_56",
+    "PY_EXC_NAME_57",
+    "PY_EXC_NAME_58",
+    "PY_EXC_NAME_59",
+    "PY_EXC_NAME_60",
+    "PY_EXC_NAME_61",
+    "PY_EXC_NAME_62",
+    "PY_EXC_NAME_63",
+    "PY_EXC_NAME_64",
 )
 define_global_i32_array(
     "PY_EXC_PARENT",
@@ -207,8 +269,40 @@ define_global_i32_array(
     22,
     22,
     22,
+
+    14,
+    14,
+    14,
+    14,
+    14,
+    14,
+    14,
+    14,
+    14,
+    14,
+    14,
+    44,
+    44,
+    44,
+    44,
+    1,
+    49,
+    50,
+    1,
+    0,
+    0,
+    0,
+    7,
+    2,
+    57,
+    57,
+    57,
+    12,
+    1,
+    10,
+    1,
 )
-define_global_null_ptr_array("py_exc_classes", 34)
+define_global_null_ptr_array("py_exc_classes", 65)  # PY_EXC_N_BUILTIN
 
 define_global_i8("py_set_dummy_storage", 0)
 define_global_ptr_to_global("py_set_dummy", "py_set_dummy_storage")
@@ -354,40 +448,40 @@ def py_subs_false():
 
 @c_abi_export("py_subs_exc_name")
 def py_subs_exc_name(tag: int):
-    if tag < 0 or tag >= 22:
+    if tag < 0 or tag >= 65:  # PY_EXC_N_BUILTIN
         return null()
     return load_ptr(global_addr("PY_EXC_BUILTIN_NAMES"), tag * 8)
 
 
 @c_abi_export("py_subs_exc_parent")
 def py_subs_exc_parent(tag: int) -> int:
-    if tag < 0 or tag >= 22:
+    if tag < 0 or tag >= 65:  # PY_EXC_N_BUILTIN
         return -1
     return load_i32(global_addr("PY_EXC_PARENT"), tag * 4)
 
 
 @c_abi_export("py_subs_exc_n_builtin")
 def py_subs_exc_n_builtin() -> int:
-    return 34
+    return 65  # PY_EXC_N_BUILTIN
 
 
 @c_abi_export("py_subs_exc_cache_get")
 def py_subs_exc_cache_get(tag: int):
-    if tag < 0 or tag >= 22:
+    if tag < 0 or tag >= 65:  # PY_EXC_N_BUILTIN
         return null()
     return load_ptr(global_addr("py_exc_classes"), tag * 8)
 
 
 @c_abi_export("py_subs_exc_cache_set")
 def py_subs_exc_cache_set(tag: int, cls) -> None:
-    if tag < 0 or tag >= 22:
+    if tag < 0 or tag >= 65:  # PY_EXC_N_BUILTIN
         return
     store_ptr(global_addr("py_exc_classes"), tag * 8, cls)
 
 
 @c_abi_export("py_subs_exc_cache_slot")
 def py_subs_exc_cache_slot(tag: int):
-    if tag < 0 or tag >= 22:
+    if tag < 0 or tag >= 65:  # PY_EXC_N_BUILTIN
         return null()
     return ptr_add(global_addr("py_exc_classes"), tag * 8)
 

@@ -78,7 +78,6 @@ def test_print_operand_errors_leave_lifo_roots_and_reach_handler(
     environment = os.environ.copy()
     environment.pop("LC_ALL", None)
     environment["PCC_RUNTIME_CC"] = "pcc"
-    environment["PCC_RUNTIME_HIGH"] = "py"
     environment["PCC_RUNTIME_ARCHIVE"] = str(pcc_py_runtime_archive)
 
     compiled = subprocess.run(

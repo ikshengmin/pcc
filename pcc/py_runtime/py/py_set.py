@@ -1160,6 +1160,27 @@ def py_set_items(s):
     return out
 
 
+@c_abi_export("py_set_clear")
+def py_set_clear(s) -> None:
+    # set.clear(): tombstone and release every live key in place, keeping the
+    # receiver and its entries array (the first half of _replace_contents).
+    # A key's finalizer may add to the set and rehash it, so the table is
+    # re-read after every release.
+    if not _ptr_is_set(s):
+        return
+    dummy = global_load_ptr("py_set_dummy")
+    i: int = 0
+    while i < load_i64(s, 24):
+        entries = load_ptr(s, 40)
+        slot_off: int = i * 16
+        key = _entry_key(s, entries, slot_off)
+        if ptr_is_null(key) == 0 and ptr_eq(key, dummy) == 0:
+            store_ptr(entries, slot_off + 8, dummy)
+            store_i64(s, 16, load_i64(s, 16) - 1)
+            py_decref(key)
+        i = i + 1
+
+
 @c_abi_export("py_set_pop")
 def py_set_pop(s):
     if not _ptr_is_set(s):

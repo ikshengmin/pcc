@@ -19,8 +19,15 @@ def _sign_bit(f: float) -> int:
     return 1 if math.copysign(1.0, f) < 0.0 else 0
 
 
-def _float64_to_bits(f: float) -> int:
-    """Return the IEEE 754 binary64 bit pattern of ``f`` as uint64."""
+def _float64_to_bits(f: float):
+    """Return the IEEE 754 binary64 bit pattern of ``f`` as uint64.
+
+    Deliberately unannotated: the pattern of a negative double is >= 2**63,
+    and in pcc's own raw-int build an ``-> int`` return is an i64 lane.  The
+    lane unboxed such a pattern to 0 (every negative double constant pcc1
+    rendered became +0.0); it now raises OverflowError.  The unannotated
+    return keeps the exact int.
+    """
     sign = _sign_bit(f)
     if f != f:
         return (sign << 63) | 0x7FF8000000000000
@@ -51,7 +58,10 @@ def _float64_to_bits(f: float) -> int:
     return (sign << 63) | (biased_exp << 52) | mantissa_bits
 
 
-def _bits_to_float64(bits: int) -> float:
+def _bits_to_float64(bits) -> float:
+    # ``bits`` is unannotated for the same reason as ``_float64_to_bits``'s
+    # return: a uint64 pattern does not fit the i64 lane.  Both that and the
+    # signed i64 spelling of the pattern decode correctly below.
     sign = (bits >> 63) & 1
     biased_exp = (bits >> 52) & 0x7FF
     mantissa = bits & ((1 << 52) - 1)

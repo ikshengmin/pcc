@@ -377,26 +377,19 @@ def _link_zpage_tail_reuse_probe(
     return executable
 
 
-def test_zpage_lifecycle_matches_c_oracle_for_cache_limit_reuse_and_large_retire(
+def test_zpage_lifecycle_for_cache_limit_reuse_and_large_retire(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
-    oracle = _link_zpage_lifecycle_probe(
-        tmp_path, "zpage_lifecycle_c_oracle", c_runtime_archive
-    )
     implementation = _link_zpage_lifecycle_probe(
         tmp_path, "zpage_lifecycle_pcc_python", pcc_py_runtime_archive
-    )
-    oracle_result = subprocess.run(
-        [str(oracle)], capture_output=True, text=True, timeout=30
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert oracle_result.stdout == (
+    # What the retired C runtime oracle printed.
+    assert result.stdout == (
         "9,0\n"
         "0,8,32768\n"
         "1,7\n"
@@ -404,32 +397,23 @@ def test_zpage_lifecycle_matches_c_oracle_for_cache_limit_reuse_and_large_retire
         "1,1,8\n"
         "0,8\n"
     )
-    assert result.stdout == oracle_result.stdout
 
 
-def test_zpage_lifecycle_matches_c_oracle_for_owner_payload_tail_reuse(
+def test_zpage_lifecycle_for_owner_payload_tail_reuse(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
-    oracle = _link_zpage_tail_reuse_probe(
-        tmp_path, "zpage_tail_reuse_c_oracle", c_runtime_archive
-    )
     implementation = _link_zpage_tail_reuse_probe(
         tmp_path, "zpage_tail_reuse_pcc_python", pcc_py_runtime_archive
-    )
-    oracle_result = subprocess.run(
-        [str(oracle)], capture_output=True, text=True, timeout=30
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert oracle_result.stdout == (
+    # What the retired C runtime oracle printed.
+    assert result.stdout == (
         "1,376,376\n"
         "1,128,128\n"
         "1,376,376\n"
         "0,0,0\n"
     )
-    assert result.stdout == oracle_result.stdout

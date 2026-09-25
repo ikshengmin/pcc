@@ -669,7 +669,7 @@ def test_capi_export_anchor_nm_fallback_keeps_native_stdout_contract(
     """The nm fallback must capture output without ``CompletedProcess``."""
     from pcc.py_frontend import pipeline
 
-    archive = tmp_path / "libpy_runtime.a"
+    archive = tmp_path / "libpy_runtime_pcc_py_libpython.a"
     observed = {}
 
     def fake_check_output(command, **kwargs):

@@ -1,12 +1,12 @@
-"""Backend-4 remap plumbing: pcc_gc_update_referents (C harness).
+"""Backend-4 remap plumbing: pcc_gc_visit_object_slots (C harness).
 
 Stage-2 plumbing from docs/plans/gc4-relocation-remap-plan.md: the
-slot-ADDRESS flavored sibling of pcc_gc_trace_referents. The probe
-builds containers through the public C API, counts the slots the
-walker hands out, and proves in-place rewrite through a public
-accessor. Coverage parity with the trace walker is a review
-obligation (same per-type switch); this gate covers the
-representative container types end-to-end.
+slot-ADDRESS walker that relocation remap, tracing and sweeping share.
+The probe builds containers through the public C API, counts the slots
+the walker hands out per role (owned / borrowed / update-only), and
+proves in-place rewrite through a public accessor. Coverage parity with
+the trace walker is a review obligation (same per-type switch); this
+gate covers the representative container types end-to-end.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
@@ -47,17 +47,7 @@ STRICT_TRACING_SWEEP_COLLECTOR = (
 
 
 def test_backend4_relocation_reuses_shared_slot_contract():
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_source = STRICT_RELOCATION_PAYLOAD.read_text(encoding="utf-8")
-
-    c_contract = c_source.split("typedef struct {\n    PyObject **from_slot;", 1)[1]
-    c_contract = c_contract.split("static int pcc_gc_backend_uses_forwarding", 1)[0]
-    assert "py_obj_visit_slots(from" in c_contract
-    assert "py_obj_visit_slots(to" in c_contract
-    assert "py_obj_update_slot" in c_contract
-    c_payload = c_contract.split("static int pcc_gc_relocate_copy_payload(", 1)[1]
-    assert "py_incref(" not in c_payload
-    assert "pcc_gc_backend4_remembered_set_retarget_slot_unlocked(" not in c_payload
 
     assert "pcc_gc_visit_object_slots(from_obj, _relocate_count_slot" in py_source
     assert "pcc_gc_visit_object_slots(from_obj, _relocate_from_slot" in py_source
@@ -74,7 +64,7 @@ def _cc() -> str:
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def test_pyclass_layout_matches_pcc_python_mirror(tmp_path):
@@ -228,27 +218,18 @@ def test_pyclass_layout_matches_pcc_python_mirror(tmp_path):
 
 
 def test_del_method_is_update_only_in_both_runtime_sources():
-    c_dunder = (RUNTIME_DIR / "src" / "py_dunder.c").read_text(encoding="utf-8")
     py_dunder = (RUNTIME_DIR / "py" / "py_dunder.py").read_text(encoding="utf-8")
-    c_class = (RUNTIME_DIR / "src" / "py_class.c").read_text(encoding="utf-8")
     py_class = (RUNTIME_DIR / "py" / "py_class.py").read_text(encoding="utf-8")
     py_gc = STRICT_OBJECT_SLOTS.read_text(encoding="utf-8")
 
-    c_dispatch = c_dunder.split("void py_user_del_dispatch(PyObject *o)", 1)[1]
-    c_dispatch = c_dispatch.split("\n}", 1)[0]
     py_dispatch = py_dunder.split("def py_user_del_dispatch(o) -> None:", 1)[1]
     py_dispatch = py_dispatch.split("\n@c_abi_export", 1)[0]
-    assert 'py_class_lookup(cls, "__del__")' in c_dispatch
     assert 'py_class_lookup(cls, cstr("__del__"))' in py_dispatch
-    assert "cls->del_method" not in c_dispatch
     assert "load_ptr(cls, 96)" not in py_dispatch
     assert "store_ptr(cls, 96" not in py_dispatch
 
-    c_add = c_class.split("void py_class_add_method(", 1)[1].split("\n}", 1)[0]
     py_add = py_class.split("def py_class_add_method(cls, name, func) -> None:", 1)[1]
     py_add = py_add.split("\n@c_abi_export", 1)[0]
-    assert "cls->del_method = func" in c_add
-    assert "class_note_borrowed_metadata_slot_store" in c_add
     assert "store_ptr(cls, PYCLASSOBJECT_DEL_METHOD_OFFSET, func)" in py_add
     assert "_class_note_borrowed_metadata_slot_store" in py_add
 
@@ -318,7 +299,7 @@ def test_c_finalizer_ignores_stale_update_only_del_alias(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -339,32 +320,53 @@ _PROBE = """
 #include <stdlib.h>
 #include <string.h>
 
-void pcc_gc_update_referents(PyObject *o, void (*update)(PyObject **slot));
+int64_t pcc_gc_visit_object_slots(
+    PyObject *o,
+    void (*visit)(PyObject **slot, int64_t role, void *ctx),
+    void *ctx
+);
 
-static int64_t g_count = 0;
+/* Slot roles: 1 owned (traced and updated), 2 borrowed (traced, not
+ * owned), 3 update-only metadata (rewritten on relocation, never a mark
+ * edge).  Index 0 counts any other role, which must never appear. */
+static int64_t g_roles[4];
 static PyObject *g_sentinel = NULL;
 static PyObject *g_rewrite_target = NULL;
 
-static void count_and_rewrite(PyObject **slot) {
-    g_count++;
+static void count_and_rewrite(PyObject **slot, int64_t role, void *ctx) {
+    (void)ctx;
+    if (role >= 1 && role <= 3) {
+        g_roles[role]++;
+    } else {
+        g_roles[0]++;
+    }
     if (g_rewrite_target != NULL && *slot == g_rewrite_target) {
         *slot = g_sentinel;
     }
 }
 
+static int visit_expect(
+    PyObject *o, int64_t owned, int64_t borrowed, int64_t update_only
+) {
+    memset(g_roles, 0, sizeof g_roles);
+    if (pcc_gc_visit_object_slots(o, count_and_rewrite, NULL) != 1) return 0;
+    return g_roles[0] == 0
+        && g_roles[1] == owned
+        && g_roles[2] == borrowed
+        && g_roles[3] == update_only;
+}
+
 int main(void) {
     g_sentinel = py_str_new("SENTINEL", 8);
 
-    /* list [10, 20, 30]: 3 slots; rewrite the 20 in place */
+    /* list [10, 20, 30]: 3 owned slots; rewrite the 20 in place */
     PyObject *lst = py_list_new(4);
     PyObject *twenty = py_str_new("twenty", 6);
     py_list_append(lst, py_int_from_i64(10));
     py_list_append(lst, twenty);
     py_list_append(lst, py_int_from_i64(30));
-    g_count = 0;
     g_rewrite_target = twenty;
-    pcc_gc_update_referents(lst, count_and_rewrite);
-    printf("%d\\n", g_count == 3);
+    printf("%d\\n", visit_expect(lst, 3, 0, 0));
     PyObject *got = py_list_getitem(lst, 1);
     printf("%d\\n", got == g_sentinel);
 
@@ -372,30 +374,22 @@ int main(void) {
     PyObject *tup = py_tuple_new(2);
     py_tuple_set_item(tup, 0, py_int_from_i64(1));
     py_tuple_set_item(tup, 1, py_int_from_i64(2));
-    g_count = 0;
     g_rewrite_target = NULL;
-    pcc_gc_update_referents(tup, count_and_rewrite);
-    printf("%d\\n", g_count == 2);
+    printf("%d\\n", visit_expect(tup, 2, 0, 0));
 
     /* dict {"a": 1, "b": 2}: 2 entries -> 4 slots */
     PyObject *d = py_dict_new();
     py_dict_set(d, py_str_new("a", 1), py_int_from_i64(1));
     py_dict_set(d, py_str_new("b", 1), py_int_from_i64(2));
-    g_count = 0;
-    pcc_gc_update_referents(d, count_and_rewrite);
-    printf("%d\\n", g_count == 4);
+    printf("%d\\n", visit_expect(d, 4, 0, 0));
 
     /* set {"x"}: 1 occupied key slot */
     PyObject *s = py_set_new();
     py_set_add(s, py_str_new("x", 1));
-    g_count = 0;
-    pcc_gc_update_referents(s, count_and_rewrite);
-    printf("%d\\n", g_count == 1);
+    printf("%d\\n", visit_expect(s, 1, 0, 0));
 
-    /* non-container (str): zero slots, no crash */
-    g_count = 0;
-    pcc_gc_update_referents(g_sentinel, count_and_rewrite);
-    printf("%d\\n", g_count == 0);
+    /* non-container (str): handled with zero slots, no crash */
+    printf("%d\\n", visit_expect(g_sentinel, 0, 0, 0));
 
     /* instance: borrowed cls + declared fields + dynamic attrs slot */
     const char *field_names[2] = {"a", "b"};
@@ -405,14 +399,13 @@ int main(void) {
     PyObject *field_value = py_str_new("field", 5);
     py_instance_set_field(inst, 0, field_value);
     py_instance_setattr(inst, "dyn", py_str_new("dyn", 3));
-    g_count = 0;
     g_rewrite_target = field_value;
-    pcc_gc_update_referents(inst_obj, count_and_rewrite);
-    printf("%d\\n", g_count == 4);
+    printf("%d\\n", visit_expect(inst_obj, 3, 1, 0));
     PyObject *field_got = py_instance_get_field(inst, 0);
     printf("%d\\n", field_got == g_sentinel);
 
-    /* class: borrowed traced + borrowed update-only + owned attrs */
+    /* class: borrowed bases/mro/metaclass + update-only method and
+     * __del__ metadata + owned attrs */
     PyClassObject *base_cls = py_class_new("Base", NULL, 0, NULL, 0);
     PyClassObject *meta_cls = py_class_new("Meta", NULL, 0, NULL, 0);
     PyClassObject *klass = (PyClassObject *)pcc_gc_alloc(
@@ -436,20 +429,18 @@ int main(void) {
     klass->del_method = py_str_new("del", 3);
     klass->attrs = py_dict_new();
     klass->metaclass = meta_cls;
-    g_count = 0;
     g_rewrite_target = klass->attrs;
-    pcc_gc_update_referents((PyObject *)klass, count_and_rewrite);
-    printf("%d\\n", g_count == 6);
+    printf("%d\\n", visit_expect((PyObject *)klass, 1, 3, 2));
     printf("%d\\n", klass->attrs == g_sentinel);
     return 0;
 }
 """
 
 
-def test_update_referents_counts_and_rewrites(tmp_path):
+def test_object_slot_visitor_counts_roles_and_rewrites(tmp_path):
     work_runtime = _build_runtime(tmp_path)
-    src = tmp_path / "update_referents_probe.c"
-    exe = tmp_path / "update_referents_probe.out"
+    src = tmp_path / "object_slot_visitor_probe.c"
+    exe = tmp_path / "object_slot_visitor_probe.out"
     src.write_text(textwrap.dedent(_PROBE).lstrip(), encoding="utf-8")
     build = subprocess.run(
         [
@@ -458,7 +449,7 @@ def test_update_referents_counts_and_rewrites(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -483,17 +474,21 @@ def test_update_referents_counts_and_rewrites(tmp_path):
     ]
 
 
-def test_update_referents_routes_capi_extension_object_slots(tmp_path):
+def test_object_slot_visitor_routes_capi_extension_object_slots(tmp_path):
     work_runtime = _build_runtime(tmp_path)
-    src = tmp_path / "update_referents_cext_probe.c"
-    exe = tmp_path / "update_referents_cext_probe.out"
+    src = tmp_path / "object_slot_visitor_cext_probe.c"
+    exe = tmp_path / "object_slot_visitor_cext_probe.out"
     src.write_text(
         textwrap.dedent("""
         #include "Python.h"
         #include <stdio.h>
         #include <stddef.h>
 
-        void pcc_gc_update_referents(PyObject *o, void (*update)(PyObject **slot));
+        int64_t pcc_gc_visit_object_slots(
+            PyObject *o,
+            void (*visit)(PyObject **slot, int64_t role, void *ctx),
+            void *ctx
+        );
 
         typedef struct ProbeCextObject {
             PyObject ob_base;
@@ -514,11 +509,14 @@ def test_update_referents_routes_capi_extension_object_slots(tmp_path):
         };
 
         static int64_t g_count = 0;
+        static int64_t g_role = 0;
         static PyObject *g_sentinel = NULL;
         static PyObject *g_rewrite_target = NULL;
 
-        static void count_and_rewrite(PyObject **slot) {
+        static void count_and_rewrite(PyObject **slot, int64_t role, void *ctx) {
+            (void)ctx;
             g_count++;
+            g_role = role;
             if (g_rewrite_target != NULL && *slot == g_rewrite_target) {
                 *slot = g_sentinel;
             }
@@ -536,9 +534,11 @@ def test_update_referents_routes_capi_extension_object_slots(tmp_path):
             pcc_gc_store_ptr((PyObject *)obj, &obj->child, child);
             g_count = 0;
             g_rewrite_target = child;
-            pcc_gc_update_referents((PyObject *)obj, count_and_rewrite);
+            int64_t handled = pcc_gc_visit_object_slots(
+                (PyObject *)obj, count_and_rewrite, NULL
+            );
 
-            printf("%d\\n", g_count == 1);
+            printf("%d\\n", handled == 1 && g_count == 1 && g_role == 1);
             printf("%d\\n", obj->child == g_sentinel);
             printf("%d\\n", obj->ob_base.ob_type == &ProbeType);
             return 0;
@@ -554,7 +554,7 @@ def test_update_referents_routes_capi_extension_object_slots(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -630,7 +630,7 @@ def test_capi_extension_dynamic_object_finalizer_and_dealloc_dispatch(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -645,79 +645,25 @@ def test_capi_extension_dynamic_object_finalizer_and_dealloc_dispatch(tmp_path):
 
 
 def test_capi_extension_object_slot_contract_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     header = (RUNTIME_DIR / "src" / "py_internal.h").read_text(encoding="utf-8")
-    shim_source = (RUNTIME_DIR / "src" / "py_capi_shim.c").read_text(encoding="utf-8")
     visit_port = (RUNTIME_DIR / "py" / "py_capi_visit_runtime.py").read_text(
         encoding="utf-8"
     )
 
     assert "int pcc_capi_visit_cext_object_slots(" in header
 
-    visit_start = source.index("int py_obj_visit_slots(")
-    visit_end = source.index(
-        "typedef struct {\n    void (*visit)(PyObject *child);",
-        visit_start,
-    )
-    visit_body = source[visit_start:visit_end]
     cext_visit = "pcc_capi_visit_cext_object_slots(o, visit, ctx)"
-    assert cext_visit in visit_body
-    assert visit_body.index("pcc_gc_visit_object_slots_slice(") < (
-        visit_body.index(cext_visit)
-    )
-    slice_body = source.split(
-        "int64_t pcc_gc_visit_object_slots_slice(", 1
-    )[1].split("typedef struct {\n    int recurse;", 1)[0]
-    assert slice_body.index("pcc_capi_is_cext_type_tag") < slice_body.index(
-        "tag == PY_TYPE_INSTANCE"
-    )
 
-    instance_start = source.index("static int pcc_gc_visit_instance_owner_slots(")
-    instance_end = source.index(
-        "static int pcc_gc_visit_class_slots(",
-        instance_start,
-    )
-    instance_body = source[instance_start:instance_end]
-    assert "pcc_capi_is_cext_type_tag((int64_t)tag) != 0" in instance_body
-
-    relocate_start = source.index(
-        "static int pcc_gc_colored_relocate_copy_supported_tag("
-    )
-    relocate_end = source.index(
-        "return pcc_gc_relocate_copy_supported_tag(tag);",
-        relocate_start,
-    )
-    relocate_body = source[relocate_start:relocate_end]
     cext_exclude = "pcc_capi_is_cext_type_tag((int64_t)tag) != 0"
     user_instance_catchall = (
         "tag == PY_TYPE_INSTANCE || tag >= PY_TYPE_USER_CLASS_START"
     )
-    assert cext_exclude in relocate_body
-    assert relocate_body.index(cext_exclude) < relocate_body.index(
-        user_instance_catchall
-    )
-
-    adapter_start = shim_source.index("static int pcc_capi_visit_cext_object_slot_ref(")
-    shim_start = shim_source.index(
-        "int pcc_capi_visit_cext_object_slots(",
-        adapter_start,
-    )
-    shim_end = shim_source.index(
-        "typedef struct PccCapiModuleStateVisitCtx",
-        shim_start,
-    )
-    adapter_body = shim_source[adapter_start:shim_start]
-    shim_body = shim_source[shim_start:shim_end]
-    assert "type->tp_traverse" in shim_body
-    assert "pcc_capi_visit_cext_object_slot_ref" in shim_body
-    assert "PY_OBJ_SLOT_OWNED" in adapter_body
 
     assert '@c_abi_typed_export("pcc_capi_visit_cext_object_slots"' in visit_port
 
 
 def test_pcc_python_cext_object_slot_bridge_source():
     header = (RUNTIME_DIR / "src" / "py_internal.h").read_text(encoding="utf-8")
-    shim_source = (RUNTIME_DIR / "src" / "py_capi_shim.c").read_text(encoding="utf-8")
     visit_port = (RUNTIME_DIR / "py" / "py_capi_visit_runtime.py").read_text(
         encoding="utf-8"
     )
@@ -728,8 +674,6 @@ def test_pcc_python_cext_object_slot_bridge_source():
 
     assert "PccPyObjSlotVisitorI64" in header
     assert "int pcc_capi_visit_cext_object_slots_i64(" in header
-    assert "int pcc_capi_visit_cext_object_slots_i64(" in shim_source
-    assert "pcc_capi_visit_cext_object_slot_i64_adapter" in shim_source
     assert '@c_abi_typed_export("pcc_capi_visit_cext_object_slots_i64"' in visit_port
     assert "pcc_capi_visit_cext_object_slot_i64_adapter" in visit_port
     strict_i64_bridge = visit_port.split(
@@ -778,9 +722,6 @@ def test_pcc_python_cext_object_slot_bridge_source():
 
 
 def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
-    gc_backend_c = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    obj_gc_c = (RUNTIME_DIR / "src" / "py_obj_gc.c").read_text(encoding="utf-8")
-    dunder_c = (RUNTIME_DIR / "src" / "py_dunder.c").read_text(encoding="utf-8")
     gc_backend_py = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
     )
@@ -796,55 +737,13 @@ def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
     strict_slots_py = STRICT_OBJECT_SLOTS.read_text(encoding="utf-8")
     relocation_payload = STRICT_RELOCATION_PAYLOAD.read_text(encoding="utf-8")
 
-    obj_maybe_body = obj_gc_c[
-        obj_gc_c.index("static int py_gc_maybe_finalize_unreachable(") : obj_gc_c.index(
-            "static void py_gc_clear_slot(",
-        )
-    ]
     obj_maybe_guard = "pcc_capi_is_cext_type_tag((int64_t)tag) != 0"
-    assert obj_maybe_guard in obj_maybe_body
-    assert obj_maybe_body.index(obj_maybe_guard) < obj_maybe_body.index(
-        "py_user_del_dispatch(obj)"
-    )
 
-    obj_dealloc_body = obj_gc_c[
-        obj_gc_c.index("static void py_gc_dealloc_unreachable(") : obj_gc_c.index(
-            "void py_gc_init(void)",
-        )
-    ]
     obj_dealloc_cext = "pcc_capi_dealloc_cext_object(o, (int64_t)h->type_tag) != 0"
-    assert obj_dealloc_cext in obj_dealloc_body
-    assert obj_dealloc_body.index(obj_dealloc_cext) < obj_dealloc_body.index(
-        "h->type_tag >= PY_TYPE_USER_CLASS_START"
-    )
 
-    tracing_dealloc_body = gc_backend_c[
-        gc_backend_c.index(
-            "static void pcc_gc_finalize_unreachable("
-        ) : gc_backend_c.index(
-            "static void pcc_gc_recheck_reachability_after_finalizers"
-        )
-    ]
     tracing_cext = "pcc_capi_dealloc_cext_object(o, (int64_t)h->type_tag) != 0"
-    assert tracing_cext in tracing_dealloc_body
-    assert tracing_dealloc_body.index(tracing_cext) < tracing_dealloc_body.index(
-        "h->type_tag >= PY_TYPE_USER_CLASS_START"
-    )
 
-    sweep_body = gc_backend_c[
-        gc_backend_c.index(
-            "static int64_t pcc_gc_sweep_unreachable("
-        ) : gc_backend_c.index("pcc_gc_recheck_reachability_after_finalizers();")
-    ]
     sweep_guard = "pcc_capi_is_cext_type_tag((int64_t)py_header(o)->type_tag) == 0"
-    assert sweep_guard in sweep_body
-    assert sweep_body.index(sweep_guard) < sweep_body.index("py_user_del_dispatch(o)")
-
-    c_del_start = dunder_c.index("void py_user_del_dispatch(PyObject *o)")
-    c_del_body = dunder_c[
-        c_del_start : dunder_c.index("PyInstanceObject *inst =", c_del_start)
-    ]
-    assert obj_maybe_guard in c_del_body
 
     assert "pcc_capi_is_cext_type_tag = extern(" in gc_backend_py
     assert "pcc_capi_dealloc_cext_object = extern(" in tracing_collector_py
@@ -895,27 +794,6 @@ def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
     assert "_relocate_slot_pairs_prepare(from_obj, to_obj, size)" in py_wrapper
     assert "pcc_gc_relocate_copy_payload_prepared_locked(" in py_wrapper
     assert "_relocate_slot_pairs_dispose(ctx)" in py_wrapper
-
-    c_relocate_start = gc_backend_c.index(
-        "static int pcc_gc_relocate_copy_payload_prepared_locked"
-    )
-    c_relocate_body = gc_backend_c[
-        c_relocate_start : gc_backend_c.index(
-            "/* GC3 oldification still owns", c_relocate_start
-        )
-    ]
-    assert "PyClassObject *cls = (PyClassObject *)pcc_gc_load_ptr(" in c_relocate_body
-    assert "pcc_gc_relocate_copy_slots(from, to, pairs)" in c_relocate_body
-    assert "PyObject *child = pcc_gc_load_ptr(from, &src->fields[i])" not in (
-        c_relocate_body
-    )
-    c_wrapper = gc_backend_c.split(
-        "static int pcc_gc_relocate_copy_payload(\n", 1
-    )[1].split("static int pcc_gc_backend_uses_forwarding", 1)[0]
-    assert "pcc_gc_relocate_slot_count_locked(from)" in c_wrapper
-    assert "pcc_gc_relocate_slot_pairs_prepare(count, &pairs)" in c_wrapper
-    assert "pcc_gc_relocate_copy_payload_prepared_locked(" in c_wrapper
-    assert "pcc_gc_relocate_slot_pairs_finish(&pairs)" in c_wrapper
 
     py_finalize_body = tracing_collector_py[
         tracing_collector_py.index(
@@ -988,337 +866,10 @@ def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
     assert "pcc_capi_is_cext_type_tag(tag) != 0" in py_del_body
 
 
-def test_trace_and_update_share_core_container_slot_walker_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    helper_name = "pcc_gc_visit_core_container_owner_slots"
-    helper_start = source.index(f"static int {helper_name}(")
-    promote_start = source.index(
-        "static void pcc_gc_promote_owner_referents(",
-        helper_start,
-    )
-    helper_body = source[helper_start:promote_start]
-    for tag in (
-        "PY_TYPE_LIST",
-        "PY_TYPE_TUPLE",
-        "PY_TYPE_DICT",
-        "PY_TYPE_SET",
-    ):
-        assert tag in helper_body
-
-    trace_start = source.index(
-        "static void pcc_gc_trace_referents(",
-        promote_start,
-    )
-    update_comment_start = source.index(
-        "/* Slot-ADDRESS flavored sibling of pcc_gc_trace_referents"
-    )
-    visit_start = source.index("int py_obj_visit_slots(", helper_start)
-    visit_body = source[
-        visit_start : source.index(
-            "typedef struct {\n    void (*visit)(PyObject *child);", visit_start
-        )
-    ]
-    assert "pcc_gc_visit_object_slots_slice(" in visit_body
-
-    trace_body = source[trace_start:update_comment_start]
-    assert "py_obj_visit_slots(" in trace_body
-    assert "pcc_gc_trace_owner_slot" in trace_body
-    assert "&trace_ctx" in trace_body
-
-    update_start = source.index("void pcc_gc_update_referents(")
-    next_fn_start = source.index(
-        "static int64_t pcc_gc_cms_trace_gray_object_unlocked",
-        update_start,
-    )
-    update_body = source[update_start:next_fn_start]
-    assert "py_obj_visit_slots(" in update_body
-    assert "pcc_gc_update_owner_slot" in update_body
-    assert "&update_ctx" in update_body
-
-
-def test_trace_update_and_promotion_share_fixed_owner_slot_walker_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    helper_name = "pcc_gc_visit_fixed_owner_slots"
-    helper_start = source.index(f"static int {helper_name}(")
-    trace_adapter_start = source.index(
-        "static int pcc_gc_visit_weakref_slots(", helper_start
-    )
-    helper_body = source[helper_start:trace_adapter_start]
-    for tag in (
-        "PY_TYPE_FUNC",
-        "PY_TYPE_ITER",
-        "PY_TYPE_GEN",
-        "PY_TYPE_COROUTINE",
-        "PY_TYPE_TASK",
-        "PY_TYPE_VIRTUAL_THREAD",
-        "PY_TYPE_EXC",
-        "PY_TYPE_PROPERTY",
-        "PY_TYPE_CLASSMETHOD",
-        "PY_TYPE_STATICMETHOD",
-        "PY_TYPE_MEMORYVIEW",
-        "PY_TYPE_THREAD",
-    ):
-        assert tag in helper_body
-    for intentionally_excluded in (
-        "PY_TYPE_CLASS",
-        "PY_TYPE_INSTANCE",
-        "PY_TYPE_CONTINUATION",
-        "PY_TYPE_WEAKREF",
-        "PY_TYPE_USER_CLASS_START",
-    ):
-        assert f"if (tag == {intentionally_excluded})" not in helper_body
-
-    promote_start = source.index(
-        "static void pcc_gc_promote_owner_referents(",
-        helper_start,
-    )
-    trace_start = source.index(
-        "static void pcc_gc_trace_referents(",
-        promote_start,
-    )
-    update_start = source.index("void pcc_gc_update_referents(")
-    promote_body = source[promote_start:trace_start]
-    trace_body = source[
-        trace_start : source.index("/* Slot-ADDRESS flavored sibling", trace_start)
-    ]
-    update_body = source[
-        update_start : source.index(
-            "static int64_t pcc_gc_cms_trace_gray_object_unlocked",
-            update_start,
-        )
-    ]
-    visit_start = source.index("int py_obj_visit_slots(", helper_start)
-    visit_body = source[
-        visit_start : source.index(
-            "typedef struct {\n    void (*visit)(PyObject *child);", visit_start
-        )
-    ]
-    assert "pcc_gc_visit_object_slots_slice(" in visit_body
-    assert "pcc_gc_backend3_enqueue_promotion_owner" in promote_body
-    assert "py_obj_visit_slots(" not in promote_body
-    for body in (trace_body, update_body):
-        assert "py_obj_visit_slots(" in body
-    slice_body = source.split(
-        "int64_t pcc_gc_visit_object_slots_slice(", 1
-    )[1].split("typedef struct {\n    int recurse;", 1)[0]
-    for tag in (
-        "PY_TYPE_FUNC",
-        "PY_TYPE_ITER",
-        "PY_TYPE_GEN",
-        "PY_TYPE_COROUTINE",
-        "PY_TYPE_TASK",
-        "PY_TYPE_VIRTUAL_THREAD",
-        "PY_TYPE_EXC",
-        "PY_TYPE_PROPERTY",
-        "PY_TYPE_CLASSMETHOD",
-        "PY_TYPE_STATICMETHOD",
-        "PY_TYPE_MEMORYVIEW",
-        "PY_TYPE_THREAD",
-    ):
-        assert tag in slice_body
-
-
-def test_trace_update_and_promotion_share_continuation_slot_walker_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    helper_name = "pcc_gc_visit_continuation_owner_slots"
-    helper_start = source.index(f"static int {helper_name}(")
-    trace_adapter_start = source.index(
-        "static int pcc_gc_visit_instance_owner_slots(", helper_start
-    )
-    helper_body = source[helper_start:trace_adapter_start]
-    assert "PY_TYPE_CONTINUATION" in helper_body
-    assert "stack_chunk" in helper_body
-    assert "slot_count" in helper_body
-    assert "&chunk->slots[i]" in helper_body
-
-    promote_start = source.index(
-        "static void pcc_gc_promote_owner_referents(",
-        helper_start,
-    )
-    trace_start = source.index(
-        "static void pcc_gc_trace_referents(",
-        promote_start,
-    )
-    update_start = source.index("void pcc_gc_update_referents(")
-    promote_body = source[promote_start:trace_start]
-    trace_body = source[
-        trace_start : source.index("/* Slot-ADDRESS flavored sibling", trace_start)
-    ]
-    update_body = source[
-        update_start : source.index(
-            "static int64_t pcc_gc_cms_trace_gray_object_unlocked",
-            update_start,
-        )
-    ]
-    visit_start = source.index("int py_obj_visit_slots(", helper_start)
-    visit_body = source[
-        visit_start : source.index(
-            "typedef struct {\n    void (*visit)(PyObject *child);", visit_start
-        )
-    ]
-    assert "pcc_gc_visit_object_slots_slice(" in visit_body
-    assert "pcc_gc_backend3_enqueue_promotion_owner" in promote_body
-    assert "py_obj_visit_slots(" not in promote_body
-    for body in (trace_body, update_body):
-        assert "py_obj_visit_slots(" in body
-        assert "if (tag == PY_TYPE_CONTINUATION)" not in body
-    slice_body = source.split(
-        "int64_t pcc_gc_visit_object_slots_slice(", 1
-    )[1].split("typedef struct {\n    int recurse;", 1)[0]
-    assert "tag == PY_TYPE_CONTINUATION" in slice_body
-    assert "chunk->slots[cursor]" in slice_body
-
-
-def test_trace_update_and_promotion_share_instance_owner_slot_walker_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    helper_name = "pcc_gc_visit_instance_owner_slots"
-    helper_start = source.index(f"static int {helper_name}(")
-    trace_adapter_start = source.index(
-        "static int pcc_gc_visit_class_slots(", helper_start
-    )
-    helper_body = source[helper_start:trace_adapter_start]
-    assert "PY_TYPE_INSTANCE" in helper_body
-    assert "PY_TYPE_VALUEBOX" in helper_body
-    assert "PY_TYPE_USER_CLASS_START" in helper_body
-    assert "(PyObject **)&inst->cls" in helper_body
-    assert "&inst->fields[i]" in helper_body
-    assert "&inst->fields[n_fields]" in helper_body
-
-    promote_start = source.index(
-        "static void pcc_gc_promote_owner_referents(",
-        helper_start,
-    )
-    trace_start = source.index(
-        "static void pcc_gc_trace_referents(",
-        promote_start,
-    )
-    update_start = source.index("void pcc_gc_update_referents(")
-    promote_body = source[promote_start:trace_start]
-    trace_body = source[
-        trace_start : source.index("/* Slot-ADDRESS flavored sibling", trace_start)
-    ]
-    update_body = source[
-        update_start : source.index(
-            "static int64_t pcc_gc_cms_trace_gray_object_unlocked",
-            update_start,
-        )
-    ]
-    visit_start = source.index("int py_obj_visit_slots(", helper_start)
-    visit_body = source[
-        visit_start : source.index(
-            "typedef struct {\n    void (*visit)(PyObject *child);", visit_start
-        )
-    ]
-    assert "pcc_gc_visit_object_slots_slice(" in visit_body
-    assert "pcc_gc_backend3_enqueue_promotion_owner" in promote_body
-    assert "py_obj_visit_slots(" not in promote_body
-    for body in (trace_body, update_body):
-        assert "py_obj_visit_slots(" in body
-        assert "tag == PY_TYPE_INSTANCE || tag >= PY_TYPE_USER_CLASS_START" not in body
-    slice_body = source.split(
-        "int64_t pcc_gc_visit_object_slots_slice(", 1
-    )[1].split("typedef struct {\n    int recurse;", 1)[0]
-    assert "tag == PY_TYPE_INSTANCE" in slice_body
-    assert "slot = &inst->fields[cursor - 1]" in slice_body
-
-
-def test_trace_update_and_promotion_share_class_slot_walker_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    helper_name = "pcc_gc_visit_class_slots"
-    helper_start = source.index(f"static int {helper_name}(")
-    trace_adapter_start = source.index(
-        "typedef struct {\n    PyObjSlotVisitor visit;", helper_start
-    )
-    helper_body = source[helper_start:trace_adapter_start]
-    assert "PY_TYPE_CLASS" in helper_body
-    assert "visit_owned" in helper_body
-    assert "visit_borrowed_traced" in helper_body
-    assert "visit_borrowed_update_only" in helper_body
-    assert "(PyObject **)&cls->bases[i]" in helper_body
-    assert "(PyObject **)&cls->mro[i]" in helper_body
-    assert "&cls->methods[i].func" in helper_body
-    assert "&cls->del_method" in helper_body
-    assert "&cls->attrs" in helper_body
-    assert "(PyObject **)&cls->metaclass" in helper_body
-
-    promote_start = source.index(
-        "static void pcc_gc_promote_owner_referents(",
-        helper_start,
-    )
-    trace_start = source.index(
-        "static void pcc_gc_trace_referents(",
-        promote_start,
-    )
-    update_start = source.index("void pcc_gc_update_referents(")
-    promote_body = source[promote_start:trace_start]
-    trace_body = source[
-        trace_start : source.index("/* Slot-ADDRESS flavored sibling", trace_start)
-    ]
-    update_body = source[
-        update_start : source.index(
-            "static int64_t pcc_gc_cms_trace_gray_object_unlocked",
-            update_start,
-        )
-    ]
-    visit_start = source.index("int py_obj_visit_slots(", helper_start)
-    visit_body = source[
-        visit_start : source.index(
-            "typedef struct {\n    void (*visit)(PyObject *child);", visit_start
-        )
-    ]
-    assert "pcc_gc_visit_object_slots_slice(" in visit_body
-    assert "pcc_gc_backend3_enqueue_promotion_owner" in promote_body
-    assert "py_obj_visit_slots(" not in promote_body
-    for body in (trace_body, update_body):
-        assert "py_obj_visit_slots(" in body
-        assert "if (tag == PY_TYPE_CLASS)" not in body
-
-    drain_body = source.split(
-        "static int64_t pcc_gc_backend3_drain_promotion_worklist(int64_t budget) {",
-        1,
-    )[1].split("static void pcc_gc_promote_owner_referents", 1)[0]
-    assert "pcc_gc_promote_owner_slot" in drain_body
-    assert "pcc_gc_visit_object_slots_slice" in drain_body
-    assert "pcc_gc_update_owner_slot" in update_body
-    assert "visit(cls->methods[i].func)" not in trace_body
-    assert "visit(cls->del_method)" not in trace_body
-
-
 def test_weakref_target_is_update_only_slot_contract_source():
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_source = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     py_obj_gc_source = (RUNTIME_DIR / "py" / "py_obj_gc.py").read_text(encoding="utf-8")
     strict_source = STRICT_OBJECT_SLOTS.read_text(encoding="utf-8")
-
-    c_helper_start = c_source.index("static int pcc_gc_visit_weakref_slots(")
-    c_helper_end = c_source.index(
-        "typedef struct {\n    PyObjSlotVisitor visit;", c_helper_start
-    )
-    c_helper_body = c_source[c_helper_start:c_helper_end]
-    assert "PY_TYPE_WEAKREF" in c_helper_body
-    assert "visit_borrowed_update_only(&wr->target" in c_helper_body
-    assert "visit_owned(&wr->callback" in c_helper_body
-
-    c_fixed_start = c_source.index("static int pcc_gc_visit_fixed_owner_slots(")
-    c_fixed_end = c_source.index(
-        "static int pcc_gc_visit_weakref_slots(",
-        c_fixed_start,
-    )
-    c_fixed_body = c_source[c_fixed_start:c_fixed_end]
-    assert "PY_TYPE_WEAKREF" not in c_fixed_body
-
-    c_visit_start = c_source.index("int py_obj_visit_slots(")
-    c_visit_end = c_source.index(
-        "typedef struct {\n    void (*visit)(PyObject *child);",
-        c_visit_start,
-    )
-    c_visit_body = c_source[c_visit_start:c_visit_end]
-    assert "pcc_gc_visit_object_slots_slice(" in c_visit_body
-    c_slice = c_source.split(
-        "int64_t pcc_gc_visit_object_slots_slice(", 1
-    )[1].split("typedef struct {\n    int recurse;", 1)[0]
-    assert "tag == PY_TYPE_WEAKREF" in c_slice
-    assert "PY_OBJ_SLOT_BORROWED_UPDATE_ONLY" in c_slice
 
     weak_body = strict_source.split(
         "def _visit_weakref_slots(o, visitor, context)", 1
@@ -1368,145 +919,30 @@ def test_weakref_target_is_update_only_slot_contract_source():
 
 
 def test_object_slot_contract_has_named_visit_and_update_entrypoints_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     header = (RUNTIME_DIR / "src" / "py_internal.h").read_text(encoding="utf-8")
 
     assert "typedef void (*PyObjSlotVisitor)(" in header
     assert "PY_OBJ_SLOT_OWNED" in header
     assert "PY_OBJ_SLOT_BORROWED_TRACED" in header
     assert "PY_OBJ_SLOT_BORROWED_UPDATE_ONLY" in header
-    assert "int py_obj_visit_slots(" in header
     assert "int64_t pcc_gc_visit_object_slots_slice(" in header
-    assert "void py_obj_update_slot(PyObject **slot)" in header
-
-    visit_start = source.index("int py_obj_visit_slots(")
-    trace_ctx_start = source.index(
-        "typedef struct {\n    void (*visit)(PyObject *child);",
-        visit_start,
+    # The named visit entrypoint hands out every slot with its role; the
+    # named update entrypoint is the remap visitor that heals one slot.
+    object_slots = STRICT_OBJECT_SLOTS.read_text(encoding="utf-8")
+    assert '@c_abi_export("pcc_gc_visit_object_slots")' in object_slots
+    remap = STRICT_RELOCATION_REMAP.read_text(encoding="utf-8")
+    assert '@c_abi_export("pcc_gc_backend4_remap_slot")' in remap
+    update_body = remap.split(
+        "def pcc_gc_backend4_remap_referents(obj) -> None:", 1
+    )[1].split("\n@c_abi_export", 1)[0]
+    assert "pcc_gc_visit_object_slots(obj, pcc_gc_backend4_remap_slot, null())" in (
+        update_body
     )
-    visit_body = source[visit_start:trace_ctx_start]
-    assert "pcc_gc_visit_object_slots_slice(" in visit_body
-    assert "INT64_MAX" in visit_body
-    role_adapter_start = source.index("static void py_obj_visit_role_slot(")
-    role_adapter_body = source[role_adapter_start:visit_start]
-    for role in (
-        "PY_OBJ_SLOT_OWNED",
-        "PY_OBJ_SLOT_BORROWED_TRACED",
-        "PY_OBJ_SLOT_BORROWED_UPDATE_ONLY",
-    ):
-        assert role in role_adapter_body
-
-    promote_start = source.index(
-        "static void pcc_gc_promote_owner_referents(",
-        visit_start,
-    )
-    trace_start = source.index("static void pcc_gc_trace_referents(", promote_start)
-    update_start = source.index("void pcc_gc_update_referents(")
-    promote_body = source[promote_start:trace_start]
-    trace_body = source[
-        trace_start : source.index("/* Slot-ADDRESS flavored sibling", trace_start)
-    ]
-    update_body = source[
-        update_start : source.index(
-            "static int64_t pcc_gc_cms_trace_gray_object_unlocked",
-            update_start,
-        )
-    ]
-    assert "pcc_gc_backend3_enqueue_promotion_owner" in promote_body
-    assert "py_obj_visit_slots(" not in promote_body
-    for body in (trace_body, update_body):
-        assert "py_obj_visit_slots(" in body
-    drain_body = source.split(
-        "static int64_t pcc_gc_backend3_drain_promotion_worklist(int64_t budget) {",
-        1,
-    )[1].split("static void pcc_gc_promote_owner_referents", 1)[0]
-    assert "pcc_gc_visit_object_slots_slice(" in drain_body
-
-    update_slot_start = source.index("void py_obj_update_slot(PyObject **slot)")
-    remap_start = source.index(
-        "static void pcc_gc_backend4_remap_and_retire_unlocked(",
-        update_slot_start,
-    )
-    update_slot_body = source[update_slot_start:remap_start]
-    assert "pcc_gc_backend4_remap_heal_slot(slot)" in update_slot_body
-    remap_body = source[
-        remap_start : source.index("static void pcc_gc_seed_roots(", remap_start)
-    ]
-    assert "pcc_gc_update_referents(n->obj, py_obj_update_slot)" in remap_body
-
-
-def test_backend0_cycle_collector_consumes_object_slot_contract_source():
-    source = (RUNTIME_DIR / "src" / "py_obj_gc.c").read_text(encoding="utf-8")
-
-    visit_helper_start = source.index("static void py_gc_visit_referent_slot(")
-    visit_start = source.index(
-        "static void py_gc_visit_referents(",
-        visit_helper_start,
-    )
-    visit_helper_body = source[visit_helper_start:visit_start]
-    assert "role == PY_OBJ_SLOT_BORROWED_UPDATE_ONLY" in visit_helper_body
-    assert "pcc_gc_load_ptr(NULL, slot)" in visit_helper_body
-    assert "visit_ctx->visit(child, visit_ctx->ctx)" in visit_helper_body
-
-    subtract_start = source.index("static void py_gc_subtract_child", visit_start)
-    visit_body = source[visit_start:subtract_start]
-    assert "py_obj_visit_slots(o, py_gc_visit_referent_slot, &visit_ctx)" in visit_body
-    for old_direct_case in (
-        "PY_TYPE_LIST",
-        "PY_TYPE_TUPLE",
-        "PY_TYPE_DICT",
-        "PY_TYPE_SET",
-        "PY_TYPE_FUNC",
-        "PY_TYPE_CONTINUATION",
-        "PY_TYPE_INSTANCE",
-    ):
-        assert old_direct_case not in visit_body
-
-    clear_slot_start = source.index("static void py_gc_clear_slot(")
-    clear_start = source.index(
-        "static void py_gc_clear_referents(",
-        clear_slot_start,
-    )
-    clear_helper_body = source[clear_slot_start:clear_start]
-    assert "static void py_gc_clear_owned_slot(" in clear_helper_body
-    assert "role != PY_OBJ_SLOT_OWNED" in clear_helper_body
-    assert "py_gc_clear_slot(slot)" in clear_helper_body
-
-    dealloc_start = source.index(
-        "static void py_gc_dealloc_unreachable(",
-        clear_start,
-    )
-    clear_body = source[clear_start:dealloc_start]
-    assert "py_obj_visit_slots(o, py_gc_clear_owned_slot, NULL)" in clear_body
-    assert "py_gc_clear_slot(&" not in clear_body
-    for old_direct_case in (
-        "PY_TYPE_FUNC",
-        "PY_TYPE_ITER",
-        "PY_TYPE_GEN",
-        "PY_TYPE_COROUTINE",
-        "PY_TYPE_CONTINUATION",
-        "PY_TYPE_TASK",
-        "PY_TYPE_VIRTUAL_THREAD",
-        "PY_TYPE_EXC",
-        "PY_TYPE_INSTANCE",
-    ):
-        assert old_direct_case not in clear_body
 
 
 def test_trace_and_subtract_slot_visitors_read_through_load_barrier_source():
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_source = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     mark_source = STRICT_COMMON_MARK_CYCLE.read_text(encoding="utf-8")
-
-    c_trace_start = c_source.index("static void pcc_gc_trace_owner_slot(")
-    c_update_start = c_source.index(
-        "typedef struct {\n    void (*update)(PyObject **slot);",
-        c_trace_start,
-    )
-    c_trace_body = c_source[c_trace_start:c_update_start]
-    assert "PyObject *child = pcc_gc_load_ptr(NULL, slot)" in c_trace_body
-    assert "trace_ctx->visit(child)" in c_trace_body
-    assert "trace_ctx->visit(*slot)" not in c_trace_body
 
     trace_case = mark_source.split("def pcc_gc_trace_slot(", 1)[1].split(
         "@c_abi_export", 1
@@ -1529,43 +965,9 @@ def test_trace_and_subtract_slot_visitors_read_through_load_barrier_source():
 
 
 def test_no_pointer_slot_families_are_explicitly_classified_source():
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_source = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     strict_source = STRICT_OBJECT_SLOTS.read_text(encoding="utf-8")
     mark_source = STRICT_COMMON_MARK_CYCLE.read_text(encoding="utf-8")
-
-    c_helper_start = c_source.index("static int py_obj_has_no_pointer_slots(")
-    c_helper_end = c_source.index("int py_obj_visit_slots(", c_helper_start)
-    c_helper_body = c_source[c_helper_start:c_helper_end]
-    for token in (
-        "PY_TYPE_NONE",
-        "PY_TYPE_BOOL",
-        "PY_TYPE_INT",
-        "PY_TYPE_FLOAT",
-        "PY_TYPE_STR",
-        "PY_TYPE_COMPLEX",
-        "PY_TYPE_BYTES",
-        "PY_TYPE_BYTEARRAY",
-        "PY_TYPE_FILE",
-        "PY_TYPE_THREAD_LOCK",
-        "PY_TYPE_THREAD_RLOCK",
-        "PY_TYPE_THREAD_EVENT",
-        "PY_TYPE_THREAD_CONDITION",
-        "PY_TYPE_THREAD_SEMAPHORE",
-        "PY_TYPE_CPY_HANDLE",
-    ):
-        assert token in c_helper_body
-
-    c_visit_start = c_source.index("int py_obj_visit_slots(")
-    c_visit_end = c_source.index(
-        "typedef struct {\n    void (*visit)(PyObject *child);", c_visit_start
-    )
-    c_visit_body = c_source[c_visit_start:c_visit_end]
-    assert "pcc_gc_visit_object_slots_slice(" in c_visit_body
-    c_slice = c_source.split(
-        "int64_t pcc_gc_visit_object_slots_slice(", 1
-    )[1].split("typedef struct {\n    int recurse;", 1)[0]
-    assert "if (py_obj_has_no_pointer_slots(o)) return 1;" in c_slice
 
     py_helper_start = strict_source.index("def _has_no_pointer_slots(o)")
     py_helper_end = strict_source.index(
@@ -1639,9 +1041,6 @@ def test_current_runtime_type_tags_have_a_finite_slot_classification_source():
     internal_header = (RUNTIME_DIR / "src" / "py_internal.h").read_text(
         encoding="utf-8"
     )
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
 
     type_enum = public_header.split("enum {", 1)[1].split("};", 1)[0]
     current_tags = set(re.findall(r"\b(PY_TYPE_[A-Z0-9_]+)\s*=", type_enum))
@@ -1694,22 +1093,16 @@ def test_current_runtime_type_tags_have_a_finite_slot_classification_source():
         # exactly what it should report.
         "PY_TYPE_VTHREAD_CHANNEL",
     }
-    # These names mark the reserved user-tag range; descriptors and concrete
-    # user-class tags are classified separately above / by the instance walker.
-    dynamic_boundaries = {"PY_TYPE_USER", "PY_TYPE_USER_CLASS_START"}
+    # These names mark the reserved user-tag range and the start of the
+    # C-extension registry's dynamic tags; descriptors, concrete user-class
+    # tags and C-extension objects are classified separately above / by the
+    # instance walker / by the extension's tp_traverse bridge.
+    dynamic_boundaries = {
+        "PY_TYPE_USER",
+        "PY_TYPE_USER_CLASS_START",
+        "PY_TYPE_CEXT_TAG_BASE",
+    }
     assert current_tags == pointerless | slot_bearing | dynamic_boundaries
-
-    no_pointer_body = c_source.split(
-        "static int py_obj_has_no_pointer_slots(", 1
-    )[1].split("int py_obj_visit_slots(", 1)[0]
-    for token in pointerless:
-        assert token in no_pointer_body
-
-    visit_contract = c_source.split("int py_obj_visit_slots(", 1)[1].split(
-        "typedef struct {\n    void (*visit)(PyObject *child);", 1
-    )[0]
-    assert "pcc_gc_visit_object_slots_slice(" in visit_contract
-    assert "pcc_capi_visit_cext_object_slots(" in visit_contract
 
     for descriptor_tag in (
         "PY_TYPE_PROPERTY",
@@ -1717,19 +1110,11 @@ def test_current_runtime_type_tags_have_a_finite_slot_classification_source():
         "PY_TYPE_STATICMETHOD",
     ):
         assert descriptor_tag in type_enum
-        assert descriptor_tag in c_source
     assert "PY_TYPE_USER_CLASS_START" in type_enum
-    assert "tag < PY_TYPE_USER_CLASS_START" in c_source
 
 
 def test_unreachable_file_uses_file_deallocator_in_c_and_python_mirror():
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_source = STRICT_TRACING_SWEEP_COLLECTOR.read_text(encoding="utf-8")
-
-    c_start = c_source.index("static void pcc_gc_finalize_unreachable(")
-    c_end = c_source.index("static void pcc_gc_seed_roots(", c_start)
-    c_body = c_source[c_start:c_end]
-    assert "case PY_TYPE_FILE:      py_dealloc_file(o);" in c_body
 
     py_start = py_source.index(
         "def pcc_gc_tracing_finalize_unreachable(obj) -> None:"
@@ -1945,175 +1330,6 @@ def test_pcc_python_backend0_runtime_roots_reuse_root_slot_helpers_source():
     assert "_mark_reachable(load_ptr(slot, 0))" not in runtime_body
 
 
-def test_frame_and_continuation_roots_share_mapped_root_slot_walker_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    helper_name = "pcc_gc_visit_mapped_root_slots_unlocked"
-    helper_start = source.index(f"static int64_t {helper_name}(")
-    gray_adapter_start = source.index(
-        "static void pcc_gc_gray_mapped_root_slot",
-        helper_start,
-    )
-    helper_body = source[helper_start:gray_adapter_start]
-    assert "int64_t root_count" in helper_body
-    assert "int64_t n_slots = root_count" in helper_body
-    assert "&slots[i]" in helper_body
-    assert "stable_values == NULL ? NULL : &stable_values[i]" in helper_body
-    assert "borrowed" in helper_body
-
-    promote_start = source.index(
-        "void pcc_gc_generational_promote_frame_roots("
-    )
-    scheduler_promote_start = source.index(
-        "void pcc_gc_generational_promote_scheduler_roots(",
-        promote_start,
-    )
-    promote_body = source[promote_start:scheduler_promote_start]
-    assert "f->root_count" in promote_body
-    assert "c->root_count" in promote_body
-    assert "pcc_gc_promote_mapped_root_slot" in promote_body
-    assert "pcc_gc_promote_cached_frame_slot(" not in promote_body
-
-    gray_start = source.index("static void pcc_gc_gray_current_roots(")
-    subtract_start = source.index(
-        "static void pcc_gc_subtract_known_child_ref",
-        gray_start,
-    )
-    gray_body = source[gray_start:subtract_start]
-    assert helper_name in gray_body
-    assert "pcc_gc_gray_mapped_root_slot" in gray_body
-    assert "pcc_gc_gray_mapped_roots_unlocked" not in gray_body
-
-    visit_start = source.index("void pcc_gc_visit_runtime_roots(")
-    remap_comment_start = source.index(
-        "/* ----- backend-4 remap phase",
-        visit_start,
-    )
-    visit_body = source[visit_start:remap_comment_start]
-    assert "pcc_gc_runtime_root_snapshot_fill_batch_unlocked" in visit_body
-    assert "PCC_GC_SAFEPOINT_BATCH" in visit_body
-    assert visit_body.index("pcc_gc_graph_unlock();") < visit_body.index(
-        "visit(roots[index], ctx);"
-    )
-    assert "pcc_gc_visit_mapped_roots_unlocked" not in visit_body
-
-    remap_start = source.index(
-        "static void pcc_gc_backend4_remap_and_retire_unlocked("
-    )
-    seed_start = source.index("static void pcc_gc_seed_roots(", remap_start)
-    remap_body = source[remap_start:seed_start]
-    assert helper_name in remap_body
-    assert "pcc_gc_rewrite_mapped_root_slot" in remap_body
-    assert "pcc_gc_rewrite_mapped_roots_unlocked" not in remap_body
-
-
-def test_scheduler_roots_share_single_root_slot_walker_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    helper_name = "pcc_gc_visit_scheduler_root_slots_unlocked"
-    helper_start = source.index(f"static int64_t {helper_name}(")
-    promote_start = source.index(
-        "void pcc_gc_generational_promote_frame_roots(",
-        helper_start,
-    )
-    helper_body = source[helper_start:promote_start]
-    assert "pcc_gc_scheduler_roots" in helper_body
-    assert "r->slot" in helper_body
-    assert "visit(r->slot, NULL, 0, ctx)" in helper_body
-
-    scheduler_promote_start = source.index(
-        "void pcc_gc_generational_promote_scheduler_roots("
-    )
-    remembered_start = source.index(
-        "static void pcc_gc_promote_remembered_owner_referents",
-        scheduler_promote_start,
-    )
-    promote_body = source[scheduler_promote_start:remembered_start]
-    assert "pcc_gc_promote_mapped_root_slot" in promote_body
-    assert "pcc_gc_promote_young_slot(r->slot)" not in promote_body
-
-    gray_start = source.index("static void pcc_gc_gray_current_roots(")
-    subtract_start = source.index(
-        "static void pcc_gc_subtract_known_child_ref",
-        gray_start,
-    )
-    gray_body = source[gray_start:subtract_start]
-    assert helper_name in gray_body
-    assert "pcc_gc_gray_mapped_root_slot" in gray_body
-    assert "pcc_gc_resolve_root_slot_unlocked(r->slot)" not in gray_body
-
-    visit_start = source.index("void pcc_gc_visit_runtime_roots(")
-    remap_comment_start = source.index(
-        "/* ----- backend-4 remap phase",
-        visit_start,
-    )
-    visit_body = source[visit_start:remap_comment_start]
-    assert "pcc_gc_runtime_root_snapshot_fill_batch_unlocked" in visit_body
-    assert "PCC_GC_SAFEPOINT_BATCH" in visit_body
-    assert "visit(*r->slot, ctx)" not in visit_body
-
-    remap_start = source.index(
-        "static void pcc_gc_backend4_remap_and_retire_unlocked("
-    )
-    seed_start = source.index("static void pcc_gc_seed_roots(", remap_start)
-    remap_body = source[remap_start:seed_start]
-    assert helper_name in remap_body
-    assert "pcc_gc_rewrite_mapped_root_slot" in remap_body
-    assert "pcc_gc_resolve_root_slot_unlocked(r->slot)" not in remap_body
-
-
-def test_runtime_root_extension_traversal_runs_after_graph_unlock_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    visit = source.split("void pcc_gc_visit_runtime_roots(", 1)[1].split(
-        "/* ----- backend-4 remap phase", 1
-    )[0]
-    assert visit.index("pcc_gc_graph_unlock();") < visit.index(
-        "pcc_capi_visit_extension_module_state_roots(visit, ctx);"
-    )
-
-
-def test_runtime_root_caller_visitor_uses_unlocked_owned_snapshot_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    visit = source.split("void pcc_gc_visit_runtime_roots(", 1)[1].split(
-        "/* ----- backend-4 remap phase", 1
-    )[0]
-    assert "pcc_gc_runtime_root_snapshot_reset_unlocked()" in visit
-    assert "pcc_gc_runtime_root_snapshot_fill_batch_unlocked(" in visit
-    assert visit.index("pcc_gc_graph_unlock();") < visit.index("malloc(")
-    final_unlock = visit.rindex("pcc_gc_graph_unlock();")
-    assert final_unlock < visit.index("visit(roots[index], ctx);")
-    assert final_unlock < visit.index("py_decref(roots[index]);")
-    assert "pcc_runtime_tripwire_fail(" in visit
-
-
-def test_runtime_root_snapshot_fill_has_bounded_graph_tenures_source():
-    source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    visit = source.split("void pcc_gc_visit_runtime_roots(", 1)[1].split(
-        "/* ----- backend-4 remap phase", 1
-    )[0]
-    assert "pcc_gc_runtime_root_snapshot_fill_batch_unlocked(" in visit
-    assert "PCC_GC_SAFEPOINT_BATCH" in visit
-    assert "pcc_gc_runtime_root_snapshot_count_unlocked()" not in visit
-    assert visit.count("pcc_gc_graph_lock();") >= 2
-    assert visit.count("pcc_gc_graph_unlock();") >= 2
-    assert visit.index("pcc_gc_graph_unlock();") < visit.index(
-        "pcc_gc_runtime_root_snapshot_probe_wait();"
-    )
-    assert visit.rindex("pcc_gc_graph_unlock();") < visit.index(
-        "visit(roots[index], ctx);"
-    )
-
-    fill = source.split(
-        "static int64_t pcc_gc_runtime_root_snapshot_fill_batch_unlocked(", 1
-    )[1].split("void pcc_gc_visit_runtime_roots(", 1)[0]
-    assert "examined < budget" in fill
-    assert "pcc_gc_runtime_root_snapshot_owner" in fill
-
-
 def test_capi_py_visit_routes_native_module_state_slots_through_load_barrier_source():
     python_h = (REPO_ROOT / "utils" / "fake_libc_include" / "Python.h").read_text(
         encoding="utf-8"
@@ -2146,43 +1362,9 @@ def test_capi_py_visit_routes_native_module_state_slots_through_load_barrier_sou
 
 
 def test_builtin_exception_cache_uses_the_shared_runtime_root_slot_contract():
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     mapped_source = (
         RUNTIME_DIR / "py" / "freestanding_gc_mapped_roots.py"
     ).read_text(encoding="utf-8")
-
-    c_helper = c_source.split(
-        "static int64_t pcc_gc_visit_builtin_exception_cache_slots_unlocked(",
-        1,
-    )[1].split("void pcc_gc_generational_promote_frame_roots", 1)[0]
-    assert "py_subs_exc_cache_slot(tag)" in c_helper
-    assert (
-        "pcc_gc_visit_builtin_exception_cache_slots_unlocked("
-        in c_source.split("static void pcc_gc_gray_current_roots(", 1)[1].split(
-            "static void pcc_gc_subtract_known_child_ref", 1
-        )[0]
-    )
-    assert (
-        "py_subs_exc_cache_slot("
-        in c_source.split(
-            "void pcc_gc_generational_promote_scheduler_roots(", 1
-        )[1].split(
-            "static void pcc_gc_promote_remembered_owner_referents", 1
-        )[0]
-    )
-    snapshot_fill = c_source.split(
-        "static int64_t pcc_gc_runtime_root_snapshot_fill_batch_unlocked(", 1
-    )[1].split("void pcc_gc_visit_runtime_roots(", 1)[0]
-    assert "py_subs_exc_cache_slot(" in snapshot_fill
-    assert "pcc_gc_snapshot_runtime_mapped_root_slot(" in snapshot_fill
-    assert (
-        "pcc_gc_visit_builtin_exception_cache_slots_unlocked("
-        in c_source.split(
-            "static void pcc_gc_backend4_remap_and_retire_unlocked(", 1
-        )[
-            1
-        ].split("static void pcc_gc_seed_roots", 1)[0]
-    )
 
     py_helper = mapped_source.split(
         "def pcc_gc_visit_builtin_exception_cache_slots(", 1
@@ -2211,28 +1393,34 @@ def test_builtin_exception_cache_is_visible_as_a_runtime_root(tmp_path):
         textwrap.dedent(r"""
             #include "py_internal.h"
 
-            static PyObject *expected = NULL;
-            static int seen = 0;
-
-            static void find_expected(PyObject *root, void *ctx) {
-                (void)ctx;
-                if (root == expected) seen++;
-            }
+            int64_t pcc_gc_visit_builtin_exception_cache_slots(
+                int64_t mode, int64_t resolve
+            );
 
             int main(void) {
                 pcc_gc_set_backend(PCC_GC_KIND_INCREMENTAL_TRICOLOR);
-                expected = (PyObject *)py_exc_builtin_class(
+                PyObject *expected = (PyObject *)py_exc_builtin_class(
                     PY_EXC_STOPITERATION
                 );
                 if (expected == NULL) return 10;
-                pcc_gc_visit_runtime_roots(find_expected, NULL);
-                if (seen != 1) return 11;
+                /* The cached class lives in the table slot the collector
+                 * walks, and mode 0 (visit, no action) walks the whole
+                 * PY_EXC_N_BUILTIN table plus the builtin type roots. */
+                PyObject **slot = (PyObject **)py_subs_exc_cache_slot(
+                    PY_EXC_STOPITERATION
+                );
+                if (slot == NULL || *slot != expected) return 11;
+                if (
+                    pcc_gc_visit_builtin_exception_cache_slots(0, 0)
+                    < PY_EXC_N_BUILTIN
+                ) return 12;
                 (void)pcc_gc_collect(0);
                 PyObject *cached = (PyObject *)py_exc_builtin_class(
                     PY_EXC_STOPITERATION
                 );
-                if (cached != expected) return 12;
-                if (py_header(cached)->type_tag != PY_TYPE_CLASS) return 13;
+                if (cached != expected) return 13;
+                if (pcc_gc_object_is_known(cached) != 1) return 14;
+                if (py_header(cached)->type_tag != PY_TYPE_CLASS) return 15;
                 return 0;
             }
             """).lstrip(),
@@ -2245,7 +1433,7 @@ def test_builtin_exception_cache_is_visible_as_a_runtime_root(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],
@@ -2258,43 +1446,54 @@ def test_builtin_exception_cache_is_visible_as_a_runtime_root(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_runtime_root_snapshot_heap_preserves_all_scheduler_roots(tmp_path):
+def test_scheduler_root_walk_visits_every_registered_root(tmp_path):
     work_runtime = _build_runtime(tmp_path)
-    src = tmp_path / "runtime_root_snapshot_heap_probe.c"
-    exe = tmp_path / "runtime_root_snapshot_heap_probe.out"
+    src = tmp_path / "scheduler_root_walk_probe.c"
+    exe = tmp_path / "scheduler_root_walk_probe.out"
     src.write_text(
         textwrap.dedent(r"""
             #include "py_internal.h"
 
+            int64_t pcc_gc_visit_scheduler_root_slots(
+                int64_t mode, int64_t resolve
+            );
+
+            /* More roots than any fixed-size snapshot a walker might use. */
             static PyObject *roots[80];
             static void *handles[80];
-            static int seen[80];
-
-            static void observe_root(PyObject *root, void *ctx) {
-                (void)ctx;
-                for (int i = 0; i < 80; i++) {
-                    if (root == roots[i]) seen[i]++;
-                }
-            }
 
             int main(void) {
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_INCREMENTAL_TRICOLOR
                     ) != 0) return 2;
+                int64_t base = pcc_gc_scheduler_root_count();
+                if (pcc_gc_visit_scheduler_root_slots(0, 0) != base) return 3;
                 for (int i = 0; i < 80; i++) {
                     roots[i] = py_list_new(0);
-                    if (roots[i] == 0) return 10 + i;
+                    if (roots[i] == 0) return 10;
                     handles[i] = pcc_gc_scheduler_root_register_handle(
                         &roots[i]
                     );
-                    if (handles[i] == 0) return 100 + i;
+                    if (handles[i] == 0) return 11;
                 }
-                pcc_gc_visit_runtime_roots(observe_root, 0);
+                if (pcc_gc_scheduler_root_count() != base + 80) return 12;
+                if (pcc_gc_visit_scheduler_root_slots(0, 0) != base + 80) {
+                    return 13;
+                }
+                /* Fixed exit codes: 200 + i would wrap to 0 at i == 56. */
                 for (int i = 0; i < 80; i++) {
-                    if (seen[i] != 1) return 200 + i;
+                    if (pcc_gc_slot_is_runtime_root(&roots[i]) != 1) {
+                        return 16;
+                    }
+                }
+                (void)pcc_gc_collect(0);
+                for (int i = 0; i < 80; i++) {
+                    if (pcc_gc_object_is_known(roots[i]) != 1) return 17;
                     pcc_gc_scheduler_root_unregister_handle(handles[i]);
                     py_decref(roots[i]);
                 }
+                if (pcc_gc_scheduler_root_count() != base) return 14;
+                if (pcc_gc_visit_scheduler_root_slots(0, 0) != base) return 15;
                 return 0;
             }
             """).lstrip(),
@@ -2307,7 +1506,7 @@ def test_runtime_root_snapshot_heap_preserves_all_scheduler_roots(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],

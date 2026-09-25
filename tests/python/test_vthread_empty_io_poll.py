@@ -8,11 +8,8 @@ import pytest
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="interposes Darwin kevent")
-@pytest.mark.parametrize("runtime_kind", ["c", "py"])
-def test_empty_nonblocking_io_poll_avoids_kevent(tmp_path: Path, request, runtime_kind):
-    archive = request.getfixturevalue(
-        "c_runtime_archive" if runtime_kind == "c" else "pcc_py_runtime_archive"
-    )
+def test_empty_nonblocking_io_poll_avoids_kevent(tmp_path: Path, pcc_py_runtime_archive):
+    archive = pcc_py_runtime_archive
     root = Path(__file__).resolve().parents[2]
     source = tmp_path / "empty_io.c"
     source.write_text('''#include "py_runtime.h"

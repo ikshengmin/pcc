@@ -204,6 +204,11 @@ def pcc_gc_backend4_zpage_reset(page, owner, size: i64) -> None:
     store_i32(page, 104, 0)
     store_i32(page, 108, 0)
     store_ptr(page, 112, null())
+    # 64 i32 remembered-card refcounts at +120 (page+48 counts non-zero ones).
+    card: i64 = 0
+    while card < 32:
+        store_i64(page, 120 + card * 8, 0)
+        card = card + 1
     span = load_ptr(page, 72)
     span_capacity: i64 = load_i64(page, 80)
     if ptr_is_null(span) != 0 or span_capacity < capacity:

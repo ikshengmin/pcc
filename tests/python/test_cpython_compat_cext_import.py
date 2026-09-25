@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import marshal as host_marshal
 import shutil
+import re
 import subprocess
 import sys
 import textwrap
@@ -188,11 +189,21 @@ def test_libpython_program_main_initializes_cpython_before_module_code(tmp_path)
     main_start = ir_text.index("define i32 @main(")
     main_end = ir_text.index("\n}", main_start)
     main_ir = ir_text[main_start:main_end]
-    args_call = main_ir.index("call void @py_set_program_args")
-    init_call = main_ir.index("call void @py_cpy_ensure_init")
-    print_call = main_ir.index("call void @py_print")
+
+    def calls(name):
+        # The IR printer spells a call's function type: "call void (ptr) @f(".
+        return [
+            match.start()
+            for match in re.finditer(
+                r"call void (?:\([^)]*\) )?@" + name + r"\(", main_ir
+            )
+        ]
+
+    args_call = calls("py_set_program_args")[0]
+    init_call = calls("py_cpy_ensure_init")[0]
+    print_call = calls("py_print")[0]
     assert args_call < init_call < print_call
-    assert main_ir.count("call void @py_cpy_ensure_init") == 1
+    assert len(calls("py_cpy_ensure_init")) == 1
 
 
 def test_chained_cpython_call_method_dispatches_via_libpython(tmp_path):

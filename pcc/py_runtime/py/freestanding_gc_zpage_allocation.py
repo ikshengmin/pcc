@@ -208,7 +208,7 @@ def pcc_gc_backend4_try_zpage_alloc(size: i64, flags: i64):
             prepared_from_free = 1
         else:
             pcc_py_gc_minor_graph_unlock()
-            page = malloc(120)
+            page = malloc(376)
             if ptr_is_null(page) != 0:
                 return null()
             memset(page, 0, 120)
@@ -245,7 +245,7 @@ def pcc_gc_backend4_zpage_track_alloc(owner, size: i64):
     if ptr_is_null(page) != 0:
         page = pcc_gc_backend4_zpage_pop_free_page(size)
     if ptr_is_null(page) != 0:
-        page = malloc(120)
+        page = malloc(376)
         if ptr_is_null(page) != 0:
             pcc_gc_backend4_zpage_node_release(node)
             return null()
@@ -281,7 +281,7 @@ def pcc_gc_backend4_zpage_track_page_prepare(page, owner, size: i64):
     if size <= 0:
         return null()
     if ptr_is_null(page) != 0:
-        page = malloc(120)
+        page = malloc(376)
         if ptr_is_null(page) != 0:
             return null()
         memset(page, 0, 120)

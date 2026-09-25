@@ -20,6 +20,8 @@ from pcc.py_runtime.py.py_abi_constants import (
     PYBYTESOBJECT_DATA_OFFSET,
     PYLISTOBJECT_ITEMS_OFFSET,
     PYLISTOBJECT_LENGTH_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PYOBJECTHEADER_REFCOUNT_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYSTROBJECT_BYTE_LEN_OFFSET,
     PYSTROBJECT_CP_LEN_OFFSET,
@@ -28,6 +30,8 @@ from pcc.py_runtime.py.py_abi_constants import (
     PYSTROBJECT_SIZE,
     PYTUPLEOBJECT_ITEMS_OFFSET,
     PYTUPLEOBJECT_LEN_OFFSET,
+    PY_FLAG_GC_MALLOC_ALLOC,
+    PY_FLAG_IMMORTAL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_INT,
@@ -37,8 +41,10 @@ from pcc.py_runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     cstr,
+    define_global_ptr_null,
     free,
     global_load_ptr,
+    global_store_ptr,
     is_tagged_int,
     load_i8,
     load_i32,
@@ -46,12 +52,15 @@ from pcc.unsafe import (
     load_ptr,
     malloc,
     memmove,
+    memset,
     null,
     ptr_add,
     ptr_eq,
     ptr_is_null,
     store_i8,
+    store_i32,
     store_i64,
+    store_ptr,
 )
 
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
@@ -81,6 +90,7 @@ py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_pointer_register = extern("pcc_gc_pointer_register", (c_ptr,), c_int64)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_note_relocation_read = extern(
     "pcc_gc_note_relocation_read",
@@ -1681,6 +1691,50 @@ def py_str_repeat(s, n):
     return out
 
 
+define_global_ptr_null("pcc_str_ascii_chars")
+
+
+@c_abi_export("pcc_str_ascii_char")
+def _ascii_char_str(c: int):
+    """The shared immortal one-character string for ASCII code point ``c``.
+
+    CPython hands out cached objects for one-character latin-1 strings, and
+    character-scanning loops (lexers, IR text passes, ``for ch in s``) build
+    one per step: they were over half of all allocations in a pcc1 compile.
+    The table and its strings are malloc'd immortal objects registered as
+    managed pointers, like the ``sys`` stream objects, so no collector moves,
+    traces or frees them.  A lost race only leaks one equivalent string.
+    """
+    table = global_load_ptr("pcc_str_ascii_chars")
+    if ptr_is_null(table) != 0:
+        table = malloc(128 * 8)
+        if ptr_is_null(table) != 0:
+            return null()
+        memset(table, 0, 128 * 8)
+        global_store_ptr("pcc_str_ascii_chars", table)
+    cached = load_ptr(table, c * 8)
+    if ptr_is_null(cached) == 0:
+        return cached
+    out = malloc(PYSTROBJECT_SIZE + 2)
+    if ptr_is_null(out) != 0:
+        return null()
+    memset(out, 0, PYSTROBJECT_SIZE + 2)
+    store_i64(out, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
+    store_i32(out, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_STR)
+    store_i32(
+        out, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC
+    )
+    if pcc_gc_pointer_register(out) < 0:
+        free(out)
+        return null()
+    store_i64(out, PYSTROBJECT_BYTE_LEN_OFFSET, 1)
+    store_i64(out, PYSTROBJECT_CP_LEN_OFFSET, 1)
+    store_i64(out, PYSTROBJECT_HASH_OFFSET, -1)
+    store_i8(out, PYSTROBJECT_DATA_OFFSET, c)
+    store_ptr(table, c * 8, out)
+    return out
+
+
 @c_abi_export("py_str_index")
 def py_str_index(s, idx_obj):
     if ptr_is_null(s) != 0:
@@ -1693,10 +1747,84 @@ def py_str_index(s, idx_obj):
         return null()
     bo: int = _utf8_byte_offset_for_codepoint(s, real)
     w: int = _utf8_codepoint_byte_len(s, bo)
+    if w == 1:
+        c: int = load_i8(s, PYSTROBJECT_DATA_OFFSET + bo) & 0xFF
+        if c < 128:
+            cached = _ascii_char_str(c)
+            if ptr_is_null(cached) == 0:
+                return cached
     out = _str_from_range(ptr_add(ptr_add(s, PYSTROBJECT_DATA_OFFSET), bo), w)
     if ptr_is_null(out) == 0:
         store_i64(out, PYSTROBJECT_CP_LEN_OFFSET, 1)
     return out
+
+
+@c_abi_export("py_str_codepoint_at")
+def py_str_codepoint_at(s, idx: int) -> int:
+    """Code point of ``s[idx]`` without building the one-character string.
+
+    The value-model projection of a character: compiled ``s[i] == "c"`` and
+    ``s[i] in "abc"`` only need the code point.  Index normalisation and the
+    IndexError are ``py_str_index``'s; out of range returns -1 with the
+    exception set.
+    """
+    if ptr_is_null(s) != 0:
+        return -1
+    real: int = _normalise_index(idx, _str_cp_len(s))
+    if real < 0:
+        py_raise_owned(py_exc_new(5, cstr("string index out of range")))  # PY_EXC_INDEXERROR
+        return -1
+    return _utf8_ord_at_byte(s, _utf8_byte_offset_for_codepoint(s, real))
+
+
+@c_abi_export("py_str_contains_codepoint")
+def py_str_contains_codepoint(t, cp: int) -> int:
+    """``c in t`` for a one-character ``c`` with code point ``cp``.
+
+    UTF-8 is self-synchronizing, so a byte-sequence match of ``cp``'s encoding
+    always starts on a code point boundary; ASCII is a plain byte scan.
+    """
+    if ptr_is_null(t) != 0 or cp < 0:
+        return 0
+    n: int = load_i64(t, PYSTROBJECT_BYTE_LEN_OFFSET)
+    data = ptr_add(t, PYSTROBJECT_DATA_OFFSET)
+    i: int = 0
+    if cp < 128:
+        while i < n:
+            if (load_i8(data, i) & 255) == cp:
+                return 1
+            i = i + 1
+        return 0
+    b0: int = 0
+    b1: int = 0
+    b2: int = 0
+    b3: int = 0
+    width: int = 0
+    if cp < 0x800:
+        b0 = 0xC0 | (cp >> 6)
+        b1 = 0x80 | (cp & 63)
+        width = 2
+    elif cp < 0x10000:
+        b0 = 0xE0 | (cp >> 12)
+        b1 = 0x80 | ((cp >> 6) & 63)
+        b2 = 0x80 | (cp & 63)
+        width = 3
+    else:
+        b0 = 0xF0 | (cp >> 18)
+        b1 = 0x80 | ((cp >> 12) & 63)
+        b2 = 0x80 | ((cp >> 6) & 63)
+        b3 = 0x80 | (cp & 63)
+        width = 4
+    while i + width <= n:
+        if (
+            (load_i8(data, i) & 255) == b0
+            and (load_i8(data, i + 1) & 255) == b1
+            and (width < 3 or (load_i8(data, i + 2) & 255) == b2)
+            and (width < 4 or (load_i8(data, i + 3) & 255) == b3)
+        ):
+            return 1
+        i = i + 1
+    return 0
 
 
 @c_abi_export("py_str_count")

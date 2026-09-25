@@ -38,8 +38,6 @@ def test_call_to_function_with_unused_varargs_does_not_overrun_abi(tmp_path):
 def test_generator_forward_unpack_with_kwonly_separator_compiles(tmp_path, monkeypatch):
     from pcc.py_frontend.pipeline import compile_python
 
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     src = tmp_path / "generator_forward_kwonly.py"
     src.write_text(
         textwrap.dedent("""

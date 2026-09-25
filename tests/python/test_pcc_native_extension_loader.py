@@ -13427,7 +13427,6 @@ def test_pcc_native_extension_import_runs_under_self_backend_no_libpython(tmp_pa
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -13764,7 +13763,6 @@ def test_pcc_native_builtin_py_type_mapping_under_self_backend_no_libpython(tmp_
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -13805,7 +13803,6 @@ def test_pcc_native_subtype_check_under_self_backend_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -13894,7 +13891,6 @@ def test_pcc_native_link_symbols_behave_under_self_backend_no_libpython(tmp_path
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -13946,7 +13942,6 @@ def test_pcc_native_contextvar_get_under_self_backend_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14021,7 +14016,6 @@ def test_pcc_native_vaparse_tuple_and_keywords_under_self_backend_no_libpython(
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14103,7 +14097,6 @@ def test_pcc_native_uniquely_referenced_under_self_backend_no_libpython(tmp_path
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14243,7 +14236,6 @@ def test_pcc_native_sys_getobject_flags_under_self_backend_no_libpython(tmp_path
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14284,7 +14276,6 @@ def test_pcc_native_generic_getdict_under_self_backend_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14364,7 +14355,6 @@ def test_pcc_native_pymethod_new_under_self_backend_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14405,7 +14395,6 @@ def test_pcc_native_batch18_host_symbols_under_self_backend_no_libpython(tmp_pat
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14446,7 +14435,6 @@ def test_pcc_native_batch19_host_symbols_under_self_backend_no_libpython(tmp_pat
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14488,7 +14476,6 @@ def test_pcc_native_batch2021_host_symbols_under_self_backend_no_libpython(tmp_p
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14526,7 +14513,6 @@ def test_pcc_native_unicode_writer_under_self_backend_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14565,7 +14551,6 @@ def test_pcc_native_decode_heaptype_batch_under_self_backend_no_libpython(tmp_pa
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14610,7 +14595,6 @@ def test_pcc_native_simplejson_final_api_batch_under_self_backend_no_libpython(
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14653,8 +14637,6 @@ def test_capi_import_sees_compiled_python_module_under_self_backend_no_libpython
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     proc = subprocess.run(
         [
             "uv",
@@ -14697,8 +14679,6 @@ def test_capi_import_sees_native_math_module_under_self_backend_no_libpython(
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     proc = subprocess.run(
         [
             "uv",
@@ -14741,8 +14721,6 @@ def test_capi_import_sees_explicit_pcc_python_math_port_under_self_backend(
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     proc = subprocess.run(
         [
             "uv",
@@ -14795,8 +14773,6 @@ def test_capi_import_sees_pcc_python_builtin_module_graph_under_self_backend(
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     proc = subprocess.run(
         [
             "uv",
@@ -14837,7 +14813,6 @@ def test_pcc_native_batch22_host_symbols_under_self_backend_no_libpython(tmp_pat
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14877,7 +14852,6 @@ def test_pcc_native_set_type_under_self_backend_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14918,7 +14892,6 @@ def test_pcc_native_multiphase_init_under_self_backend_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -14963,7 +14936,6 @@ def test_pcc_native_extension_capsule_roundtrip_under_self_backend_no_libpython(
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",
@@ -15010,7 +14982,6 @@ def test_pcc_native_extension_capsule_import_loads_provider_under_self_backend_n
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_SELF_LINK"] = "cc"
-    env["PCC_RUNTIME_CC"] = "cc"
     proc = subprocess.run(
         [
             "uv",

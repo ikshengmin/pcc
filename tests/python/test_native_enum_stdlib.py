@@ -23,8 +23,6 @@ def test_compiled_enum_provider_publishes_member_name_and_value(tmp_path, monkey
     provider = tmp_path / "enum.py"
     shutil.copyfile(REPO / "pcc" / "py_stdlib" / "enum.py", provider)
     executable = tmp_path / "enum-provider"
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     compile_python_multi(
         [str(main), str(provider)],
         str(executable),
@@ -59,8 +57,6 @@ def test_native_enum_module_alias_supports_dotted_base(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     executable = tmp_path / "enum-module-alias"
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     compile_python_multi(
         [str(main)],
         str(executable),

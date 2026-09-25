@@ -1,10 +1,10 @@
-"""Differential tests for the E0 regex engine subset (py_re_engine.c).
+"""Differential tests for the E0 regex engine subset (freestanding_re_engine.py).
 
-The engine is standalone C (not yet in the runtime archive or any lowering
-path); these tests build it as a dylib and compare byte-offset results
-against CPython ``re`` for every supported construct, plus assert that the
-strict parser REJECTS everything outside the step-1 subset instead of
-guessing (the engine must never silently diverge).
+The production runtime archive's engine members are linked into a dylib and
+their byte-offset results compared against CPython ``re`` for every
+supported construct, plus assert that the strict parser REJECTS everything
+outside the step-1 subset instead of guessing (the engine must never
+silently diverge).
 """
 
 from __future__ import annotations
@@ -12,21 +12,16 @@ from __future__ import annotations
 import ctypes
 import re
 import subprocess
-from pathlib import Path
 
 import pytest
 
 
-def _find_engine_src() -> Path:
-    p = Path(__file__).resolve()
-    for parent in p.parents:
-        candidate = parent / "pcc" / "py_runtime" / "src" / "py_re_engine.c"
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError("py_re_engine.c not found above test file")
-
-
-ENGINE_SRC = _find_engine_src()
+ENGINE_SYMBOLS = (
+    "pcc_re_engine_compile_count",
+    "pcc_re_engine_run",
+    "pcc_re_engine_run_flags",
+    "pcc_re_engine_supported",
+)
 
 MATCH = 1
 NOMATCH = 0
@@ -39,17 +34,18 @@ MAX_GROUPS = 32
 
 
 @pytest.fixture(scope="session")
-def engine(tmp_path_factory):
+def engine(tmp_path_factory, pcc_py_runtime_archive):
     out_dir = tmp_path_factory.mktemp("re_engine")
     dylib = out_dir / "libpccre.dylib"
+    # Pull only the archive members the engine entry points need.
+    undefined = [f"-Wl,-u,_{symbol}" for symbol in ENGINE_SYMBOLS]
     proc = subprocess.run(
         [
             "cc",
-            "-O1",
-            "-Wall",
-            "-Werror",
             "-dynamiclib",
-            str(ENGINE_SRC),
+            *undefined,
+            str(pcc_py_runtime_archive),
+            "-lm",
             "-o",
             str(dylib),
         ],
@@ -157,6 +153,14 @@ def cpython_spans(pattern: str, text: str, search: bool):
 
 # Every entry is differentially compared for BOTH match and search.
 SUPPORTED_CASES = [
+    # Backreferences and lookahead are supported by the production engine.
+    (r"(a)\1", "aa"),
+    (r"(a)\1", "ab"),
+    (r"(ab)\1c", "xababc"),
+    (r"(?=a)", "ba"),
+    (r"(?=a)a", "a"),
+    (r"(?!a)", "ab"),
+    (r"x(?!a)", "xaxb"),
     # literals
     ("abc", "abc"),
     ("abc", "abcd"),
@@ -293,13 +297,10 @@ UNSUPPORTED_PATTERNS = [
     r"(.{,3}){,3}?[a]",
     # a VALID brace with nothing to repeat is a CPython re.error
     r"{3}",
-    r"(a)\1",
     r"(?P<a>x)(?P<a>y)",
     r"(?P=name)",
     r"(?P<1bad>x)",
     r"(?P<>x)",
-    r"(?=a)",
-    r"(?!a)",
     r"(?<=a)b",
     r"(?i)abc",
     r"a**",

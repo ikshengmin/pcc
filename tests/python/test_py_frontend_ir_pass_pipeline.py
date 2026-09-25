@@ -1311,7 +1311,7 @@ def test_compile_python_link_args_reach_only_the_final_native_link(
 ):
     src = tmp_path / "main.py"
     src.write_text("print(1)\n", encoding="utf-8")
-    runtime = tmp_path / "libpy_runtime.a"
+    runtime = tmp_path / "fake_runtime.a"
     runtime.write_bytes(b"")
     executable = tmp_path / "main.out"
     emitted_ir = tmp_path / "main.ll"
@@ -1364,7 +1364,7 @@ def test_compile_python_package_link_args_reach_the_multi_file_link(
         "print(value())\n",
         encoding="utf-8",
     )
-    runtime = tmp_path / "libpy_runtime.a"
+    runtime = tmp_path / "fake_runtime.a"
     runtime.write_bytes(b"")
     executable = tmp_path / "pkg.out"
     emitted_ir = tmp_path / "pkg.ll"
@@ -1729,7 +1729,7 @@ def test_parallel_frontend_codegen_uses_shared_export_context(tmp_path, monkeypa
     monkeypatch.setattr(
         pipeline,
         "_ensure_runtime",
-        lambda verbose, *, needs_libpython=False: "/tmp/libpy_runtime.a",
+        lambda verbose, *, needs_libpython=False: "/tmp/fake_runtime.a",
     )
     monkeypatch.setattr(
         pipeline,
@@ -1786,7 +1786,7 @@ def test_self_backend_native_compile_defaults_to_bounded_python_ir_pass_manifest
     monkeypatch.setattr(
         pipeline,
         "_ensure_runtime",
-        lambda verbose, *, needs_libpython=False: "/tmp/libpy_runtime.a",
+        lambda verbose, *, needs_libpython=False: "/tmp/fake_runtime.a",
     )
     monkeypatch.setattr(
         pipeline,

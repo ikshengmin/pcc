@@ -65,7 +65,7 @@ STRUCT_FIELDS: dict[str, tuple[str, ...]] = {
         "methods", "n_fields", "field_names", "instance_size",
         "type_tag_alloc", "del_method", "attrs", "metaclass",
     ),
-    "PyClassMethod": ("name", "func"),
+    "PyClassMethod": ("name", "func", "name_hash", "name_length"),
     "PyInstanceObject": ("cls", "fields"),
     "PyPropertyObject": ("fget", "fset", "fdel"),
     "PyClassMethodObject": ("func",),
@@ -125,6 +125,7 @@ FLAGS: tuple[str, ...] = (
 
 RUNTIME_ABI_CONSTANTS: tuple[str, ...] = (
     "PY_OBJ_CMP_UNORDERED",
+    "PY_EXC_N_BUILTIN",
     "PCC_VTHREAD_WAIT_CHANNEL_SEND",
     "PCC_VTHREAD_WAIT_CHANNEL_RECV",
     "PCC_VTHREAD_WAIT_CHANNEL_SELECT2",

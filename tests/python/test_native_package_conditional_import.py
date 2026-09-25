@@ -49,7 +49,6 @@ def _compile_run(
     env["PCC_PACKAGE_SITE"] = str(site)
     env["PCC_DISABLE_PY_RUN_CACHE"] = "1"
     if runtime_high is not None:
-        env["PCC_RUNTIME_CC"] = "cc"
         env["PCC_RUNTIME_HIGH"] = runtime_high
     b = subprocess.run(
         [

@@ -16,11 +16,13 @@ from pcc.py_runtime.py.py_abi_constants import (
     PY_TYPE_DICT,
     PY_TYPE_EXC,
     PY_TYPE_FLOAT,
+    PY_TYPE_INSTANCE,
     PY_TYPE_INT,
     PY_TYPE_MEMORYVIEW,
     PY_TYPE_NONE,
     PY_TYPE_STR,
     PY_TYPE_TUPLE,
+    PY_TYPE_USER_CLASS_START,
 )
 
 from pcc.extern import c_abi_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
@@ -76,12 +78,14 @@ py_float_to_f64 = extern("py_float_to_f64", (c_ptr,), c_double)
 py_float_from_f64 = extern("py_float_from_f64", (c_double,), c_ptr)
 py_bigint_to_double = extern("py_bigint_to_double", (c_ptr,), c_double)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
-py_int_format_decimal = extern(
-    "py_int_format_decimal", (c_ptr, c_int64, c_int64, c_int64), c_ptr
-)
-py_int_format_hex = extern(
-    "py_int_format_hex", (c_ptr, c_int64, c_int64), c_ptr
-)
+py_int_to_i64 = extern("py_int_to_i64", (c_ptr, c_ptr), c_int64)
+py_bigint_to_cstr = extern("py_bigint_to_cstr", (c_ptr,), c_ptr)
+py_bigint_to_base_cstr = extern("py_bigint_to_base_cstr", (c_ptr, c_int32, c_int32), c_ptr)
+py_chr_from_i64 = extern("py_chr_from_i64", (c_int64,), c_ptr)
+py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
+py_exc_new_with_value = extern("py_exc_new_with_value", (c_int64, c_ptr), c_ptr)
+py_int_from_f64_exact = extern("py_int_from_f64_exact", (c_double,), c_ptr)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
@@ -98,6 +102,15 @@ pcc_stdio_format_float_raw = extern(
     "pcc_stdio_format_float_raw",
     (c_ptr, c_double, c_int64, c_int64, c_int64, c_int64, c_int64),
     c_int64,
+)
+pcc_stdio_float_raw_capacity = extern(
+    "pcc_stdio_float_raw_capacity", (c_int64,), c_int64
+)
+pcc_stdio_float_exact_digits = extern(
+    "pcc_stdio_float_exact_digits", (c_int64, c_ptr, c_ptr), c_int64
+)
+pcc_stdio_float_round_digits = extern(
+    "pcc_stdio_float_round_digits", (c_ptr, c_int64, c_ptr, c_int64), c_int64
 )
 strtod_c = extern("strtod", (c_ptr, c_ptr), c_double)
 pow_c = extern("pow", (c_double, c_double), c_double)
@@ -534,6 +547,53 @@ def _write_exact_float_text(
     return position
 
 
+def _float_shortest_digits(absolute: float, meta) -> int:
+    """Shortest round-tripping digits of a finite, positive double.
+
+    Returns them as an integer of ``meta[0]`` significant digits and stores
+    the decimal exponent of the first digit at ``meta[8]``.  Each candidate is
+    the exact expansion rounded half to even to one more digit; strtod is only
+    the acceptance oracle.  (This used to rebuild the value as a bignum
+    fraction whose denominator reached 1 << 1074.)
+    """
+    exact = stack_alloc(800)
+    work = stack_alloc(800)
+    point_box = stack_alloc(8)
+    total: int = pcc_stdio_float_exact_digits(f64_bits(absolute), exact, point_box)
+    point: int = load_i64(point_box, 0)
+    candidate = stack_alloc(96)
+    significant: int = 1
+    digits: int = 0
+    exponent: int = point - 1
+    found: int = 0
+    while significant <= 17 and found == 0:
+        index: int = 0
+        while index < total:
+            store_i8(work, index, load_i8(exact, index))
+            index = index + 1
+        store_i64(point_box, 0, point)
+        count: int = pcc_stdio_float_round_digits(work, total, point_box, significant)
+        digits = 0
+        index = 0
+        while index < significant:
+            digit: int = 0
+            if index < count:
+                digit = load_i8(work, index)
+            digits = digits * 10 + digit
+            index = index + 1
+        exponent = load_i64(point_box, 0) - 1
+        _write_exact_scientific(candidate, 0, digits, significant, exponent)
+        if strtod_c(candidate, null()) == absolute:
+            found = 1
+        else:
+            significant = significant + 1
+    if significant > 17:
+        significant = 17
+    store_i64(meta, 0, significant)
+    store_i64(meta, 8, exponent)
+    return digits
+
+
 @c_abi_export("py_float_repr_shortest")
 def py_float_repr_shortest(value_obj):
     value: float = py_float_to_f64(value_obj)
@@ -553,94 +613,15 @@ def py_float_repr_shortest(value_obj):
     if value < 0.0:
         negative = 1
         absolute = 0.0 - value
-
-    # Recover the exact binary rational m * 2**exp2.  ``num`` and ``den``
-    # deliberately live in semantic Python-int projection: the denominator of
-    # the smallest subnormal is 1 << 1074 and cannot be represented by i64.
-    bits: int = f64_bits(absolute)
-    exponent_bits: int = (bits >> 52) & 2047
-    mantissa: int = bits & 4503599627370495
-    exp2: int = -1074
-    if exponent_bits != 0:
-        mantissa = mantissa + 4503599627370496
-        exp2 = exponent_bits - 1075
-    num: int = mantissa
-    den: int = 1
-    if exp2 >= 0:
-        num = mantissa << exp2
-    else:
-        shift_amount: int = 0 - exp2
-        den = 1 << shift_amount
-
-    # Exact floor(log10(value)) without floating-point normalisation.
-    exponent: int = 0
-    probe_num: int = num
-    probe_den: int = den
-    if probe_num >= probe_den:
-        while probe_num >= probe_den * 10:
-            probe_den = probe_den * 10
-            exponent = exponent + 1
-    else:
-        while probe_num < probe_den:
-            probe_num = probe_num * 10
-            exponent = exponent - 1
-
-    # Scale once for a one-significant-digit candidate.  Each failed
-    # round-trip adds one exact decimal digit by multiplying the numerator by
-    # ten.  Round-half-even matches conversion semantics; strtod is used only
-    # as the independent acceptance oracle, never to generate digits.
-    scaled_num: int = num
-    scaled_den: int = den
-    scale: int = 0 - exponent
-    while scale > 0:
-        scaled_num = scaled_num * 10
-        scale = scale - 1
-    while scale < 0:
-        scaled_den = scaled_den * 10
-        scale = scale + 1
-
-    candidate = stack_alloc(96)
-    significant: int = 1
-    found: int = 0
-    digits: int = 0
-    candidate_exponent: int = exponent
-    while significant <= 17 and found == 0:
-        quotient: int = scaled_num // scaled_den
-        remainder: int = scaled_num % scaled_den
-        twice: int = remainder * 2
-        if twice > scaled_den or (
-            twice == scaled_den and (quotient & 1) != 0
-        ):
-            quotient = quotient + 1
-        digits = quotient
-        candidate_exponent = exponent
-        digit_limit: int = _pow10_i64(significant)
-        if digits >= digit_limit:
-            digits = digits // 10
-            candidate_exponent = candidate_exponent + 1
-        _write_exact_scientific(
-            candidate,
-            negative,
-            digits,
-            significant,
-            candidate_exponent,
-        )
-        parsed: float = strtod_c(candidate, null())
-        if parsed == value:
-            found = 1
-        else:
-            scaled_num = scaled_num * 10
-            significant = significant + 1
-
-    if significant > 17:
-        significant = 17
+    meta = stack_alloc(16)
+    digits: int = _float_shortest_digits(absolute, meta)
     output = stack_alloc(800)
     length: int = _write_exact_float_text(
         output,
         negative,
         digits,
-        significant,
-        candidate_exponent,
+        load_i64(meta, 0),
+        load_i64(meta, 8),
     )
     return py_str_new(output, length)
 
@@ -740,319 +721,976 @@ def _skip_digits(text, position: int) -> int:
     return position
 
 
-def _pad_text(text, length: int, width: int, align: int, fill: int, zero: int):
-    if width < length:
-        width = length
-    padding: int = width - length
-    left: int = 0
-    right: int = 0
-    if align == 60:
-        right = padding
-    elif align == 94:
-        left = padding // 2
-        right = padding - left
-    else:
-        left = padding
-    pad: int = fill
-    if zero != 0:
-        pad = 48
-    state = _buffer_new(width + 1)
-    if ptr_is_null(state) != 0:
-        return null()
-    _buffer_repeat(state, pad, left)
-    _buffer_append(state, text, length)
-    _buffer_repeat(state, pad, right)
-    result = _buffer_string(state)
-    _buffer_free(state)
-    return result
+# --- format() mini-language (CPython Python/formatter_unicode.c) -----------
+#
+# A parsed spec is CPython's InternalFormatSpec in i64 slots.  The fill
+# character is a byte range of the spec text (-1: a space).
+_SPEC_FILL = 0
+_SPEC_FILL_LEN = 8
+_SPEC_ALIGN = 16
+_SPEC_SIGN = 24
+_SPEC_NO_NEG_0 = 32
+_SPEC_ALT = 40
+_SPEC_WIDTH = 48
+_SPEC_GROUPING = 56
+_SPEC_PRECISION = 64
+_SPEC_FRAC_GROUPING = 72
+_SPEC_TYPE = 80
+_SPEC_BYTES = 88
+
+# The pieces of a formatted number (CPython's NumberFieldWidths inputs):
+# [sign][prefix][digits][.][fraction][tail], e.g. "-0x" "ff", or "1" "." "5"
+# "e+10".  Pointer slots hold byte ranges; lengths are bytes (all ASCII except
+# a %c tail, whose character count is kept separately).
+_NUM_NEGATIVE = 0
+_NUM_PREFIX = 8
+_NUM_PREFIX_LEN = 16
+_NUM_DIGITS = 24
+_NUM_DIGITS_LEN = 32
+_NUM_UPPER = 40
+_NUM_DECIMAL = 48
+_NUM_FRAC = 56
+_NUM_FRAC_LEN = 64
+_NUM_TAIL = 72
+_NUM_TAIL_LEN = 80
+_NUM_TAIL_CHARS = 88
+_NUM_GROUP = 96
+_NUM_SEPARATOR = 104
+_NUM_FRAC_SEPARATOR = 112
+_NUM_BYTES = 120
 
 
-def _pad_signed_text(text, length: int, width: int, align: int, fill: int, zero: int):
-    if zero == 0 or align != 62 or length >= width:
-        return _pad_text(text, length, width, align, fill, 0)
-    state = _buffer_new(width + 1)
-    if ptr_is_null(state) != 0:
-        return null()
-    start: int = 0
-    if length > 0 and (load_i8(text, 0) == 45 or load_i8(text, 0) == 43 or load_i8(text, 0) == 32):
-        _buffer_char(state, load_i8(text, 0))
-        start = 1
-    if length >= start + 2 and load_i8(text, start) == 48:
-        prefix: int = load_i8(text, start + 1)
-        if prefix == 120 or prefix == 88 or prefix == 111 or prefix == 98:
-            _buffer_char(state, 48)
-            _buffer_char(state, prefix)
-            start = start + 2
-    _buffer_repeat(state, 48, width - length)
-    _buffer_append(state, ptr_add(text, start), length - start)
-    result = _buffer_string(state)
-    _buffer_free(state)
-    return result
+def _utf8_width(lead: int) -> int:
+    byte: int = lead & 255
+    if byte >= 240:
+        return 4
+    if byte >= 224:
+        return 3
+    if byte >= 192:
+        return 2
+    return 1
 
 
-def _format_string_builtin(value, spec):
-    position: int = 0
-    align: int = 60
-    fill: int = 32
-    first: int = load_i8(spec, position)
-    second: int = load_i8(spec, position + 1)
-    if first != 0 and (second == 60 or second == 62 or second == 94):
-        fill = first
-        align = second
-        position = position + 2
-    elif first == 60 or first == 62 or first == 94:
-        align = first
-        position = position + 1
-    width: int = _parse_digits(spec, position)
-    position = _skip_digits(spec, position)
-    precision: int = -1
-    if load_i8(spec, position) == 46:
-        position = position + 1
-        if load_i8(spec, position) < 48 or load_i8(spec, position) > 57:
-            return null()
-        precision = _parse_digits(spec, position)
-        position = _skip_digits(spec, position)
-    if load_i8(spec, position) != 0:
-        return null()
-    text = py_str_utf8(value)
-    length: int = py_str_byte_len(value)
-    if precision >= 0 and precision < length:
-        length = precision
-    return _pad_text(text, length, width, align, fill, 0)
+def _utf8_decode(text, position: int, width: int) -> int:
+    first: int = load_i8(text, position) & 255
+    if width == 1:
+        return first
+    second: int = load_i8(text, position + 1) & 63
+    if width == 2:
+        return ((first & 31) << 6) | second
+    third: int = load_i8(text, position + 2) & 63
+    if width == 3:
+        return ((first & 15) << 12) | (second << 6) | third
+    fourth: int = load_i8(text, position + 3) & 63
+    return ((first & 7) << 18) | (second << 12) | (third << 6) | fourth
 
 
-def _int_raw_base(value, conversion: int, alternate: int):
-    if conversion == 100:
-        return py_int_format_decimal(value, 0, 0, 0)
-    if conversion == 120 or conversion == 88:
-        rendered = py_int_format_hex(value, 0, 0)
-        if ptr_is_null(rendered) != 0:
-            return null()
-        source = py_str_utf8(rendered)
-        length: int = py_str_byte_len(rendered)
-        state = _buffer_new(length + 4)
-        negative: int = 0
-        start: int = 0
-        if length > 0 and load_i8(source, 0) == 45:
-            negative = 1
-            start = 1
-            _buffer_char(state, 45)
-        if alternate != 0:
-            _buffer_char(state, 48)
-            _buffer_char(state, 88 if conversion == 88 else 120)
-        i: int = start
-        while i < length:
-            byte: int = load_i8(source, i)
-            if conversion == 88 and byte >= 97 and byte <= 102:
-                byte = byte - 32
-            _buffer_char(state, byte)
-            i = i + 1
-        result = _buffer_string(state)
-        _buffer_free(state)
-        py_decref(rendered)
-        return result
-    integer: int = py_int_value_i64(value)
-    negative: int = 0
-    if integer < 0:
-        negative = 1
-        integer = 0 - integer
-    base: int = 8
-    if conversion == 98:
-        base = 2
-    reverse = stack_alloc(80)
+def _utf8_char_count(text, length: int) -> int:
     count: int = 0
-    if integer == 0:
-        store_i8(reverse, 0, 48)
-        count = 1
-    while integer > 0:
-        store_i8(reverse, count, 48 + integer % base)
-        integer = integer // base
-        count = count + 1
-    state = _buffer_new(count + 4)
+    index: int = 0
+    while index < length:
+        if (load_i8(text, index) & 192) != 128:
+            count = count + 1
+        index = index + 1
+    return count
+
+
+def _utf8_prefix_bytes(text, length: int, chars: int) -> int:
+    # Byte length of the first ``chars`` characters of ``text``.
+    seen: int = 0
+    index: int = 0
+    while index < length:
+        if (load_i8(text, index) & 192) != 128:
+            if seen == chars:
+                return index
+            seen = seen + 1
+        index = index + 1
+    return length
+
+
+def _buffer_cstr(state, text) -> int:
+    return _buffer_append(state, text, strlen(text))
+
+
+def _buffer_fill(state, fill, fill_len: int, count: int) -> int:
+    if count <= 0:
+        return 0
+    if fill_len == 1:
+        return _buffer_repeat(state, load_i8(fill, 0), count)
+    index: int = 0
+    while index < count:
+        if _buffer_append(state, fill, fill_len) != 0:
+            return -1
+        index = index + 1
+    return 0
+
+
+def _buffer_code_label(state, code: int) -> None:
+    # CPython names a presentation type as 'c', or '\xNN' outside ASCII.
+    _buffer_char(state, 39)
+    if code > 32 and code < 128:
+        _buffer_char(state, code)
+    else:
+        _buffer_char(state, 92)
+        _buffer_char(state, 120)
+        hex_digits = stack_alloc(8)
+        count: int = 0
+        value: int = code
+        while value != 0 or count == 0:
+            digit: int = value & 15
+            if digit < 10:
+                store_i8(hex_digits, count, 48 + digit)
+            else:
+                store_i8(hex_digits, count, 87 + digit)
+            value = value >> 4
+            count = count + 1
+        while count > 0:
+            count = count - 1
+            _buffer_char(state, load_i8(hex_digits, count))
+    _buffer_char(state, 39)
+
+
+def _raise_buffer_error(state, kind: int):
+    # Raise ``kind`` with the buffer's (NUL-terminated) text; frees it.
+    if ptr_is_null(state) == 0:
+        py_raise_owned(py_exc_new(kind, load_ptr(state, 0)))
+        _buffer_free(state)
+    return null()
+
+
+def _raise_format_error(message):
+    py_raise_owned(py_exc_new(2, message))
+    return null()
+
+
+def _raise_unknown_code(code: int, type_name):
+    # "Unknown format code 'q' for object of type 'int'"
+    state = _buffer_new(96)
+    _buffer_cstr(state, cstr("Unknown format code "))
+    _buffer_code_label(state, code)
+    _buffer_cstr(state, cstr(" for object of type '"))
+    _buffer_cstr(state, type_name)
+    _buffer_char(state, 39)
+    return _raise_buffer_error(state, 2)
+
+
+def _is_align_byte(byte: int) -> int:
+    if byte == 60 or byte == 62 or byte == 61 or byte == 94:
+        return 1
+    return 0
+
+
+def _is_digit_byte(byte: int) -> int:
+    if byte >= 48 and byte <= 57:
+        return 1
+    return 0
+
+
+def _spec_fail(message) -> int:
+    py_raise_owned(py_exc_new(2, message))
+    return -1
+
+
+def _parse_format_spec(spec, length: int, parsed, default_type: int, default_align: int, type_name) -> int:
+    # CPython parse_internal_render_format_spec: 0, or -1 with ValueError set.
+    store_i64(parsed, _SPEC_FILL, -1)
+    store_i64(parsed, _SPEC_FILL_LEN, 1)
+    store_i64(parsed, _SPEC_ALIGN, default_align)
+    store_i64(parsed, _SPEC_SIGN, 0)
+    store_i64(parsed, _SPEC_NO_NEG_0, 0)
+    store_i64(parsed, _SPEC_ALT, 0)
+    store_i64(parsed, _SPEC_WIDTH, -1)
+    store_i64(parsed, _SPEC_GROUPING, 0)
+    store_i64(parsed, _SPEC_PRECISION, -1)
+    store_i64(parsed, _SPEC_FRAC_GROUPING, 0)
+    store_i64(parsed, _SPEC_TYPE, default_type)
+    position: int = 0
+    fill_given: int = 0
+    align_given: int = 0
+    if length > 0:
+        first_width: int = _utf8_width(load_i8(spec, 0))
+        if first_width < length and _is_align_byte(load_i8(spec, first_width)) != 0:
+            store_i64(parsed, _SPEC_FILL, 0)
+            store_i64(parsed, _SPEC_FILL_LEN, first_width)
+            store_i64(parsed, _SPEC_ALIGN, load_i8(spec, first_width))
+            fill_given = 1
+            align_given = 1
+            position = first_width + 1
+        elif _is_align_byte(load_i8(spec, 0)) != 0:
+            store_i64(parsed, _SPEC_ALIGN, load_i8(spec, 0))
+            align_given = 1
+            position = 1
+    if position < length:
+        sign: int = load_i8(spec, position)
+        if sign == 43 or sign == 45 or sign == 32:
+            store_i64(parsed, _SPEC_SIGN, sign)
+            position = position + 1
+    if position < length and load_i8(spec, position) == 122:
+        store_i64(parsed, _SPEC_NO_NEG_0, 1)
+        position = position + 1
+    if position < length and load_i8(spec, position) == 35:
+        store_i64(parsed, _SPEC_ALT, 1)
+        position = position + 1
+    if fill_given == 0 and position < length and load_i8(spec, position) == 48:
+        # Sign-aware zero padding: '0' becomes the fill, and '=' the
+        # alignment unless one was given (numbers default to '>').
+        store_i64(parsed, _SPEC_FILL, position)
+        store_i64(parsed, _SPEC_FILL_LEN, 1)
+        if align_given == 0 and default_align == 62:
+            store_i64(parsed, _SPEC_ALIGN, 61)
+        position = position + 1
+    width_start: int = position
+    width: int = 0
+    while position < length and _is_digit_byte(load_i8(spec, position)) != 0:
+        if width > 100000000000:
+            return _spec_fail(cstr("Too many decimal digits in format string"))
+        width = width * 10 + load_i8(spec, position) - 48
+        position = position + 1
+    if position > width_start:
+        store_i64(parsed, _SPEC_WIDTH, width)
+    grouping: int = 0
+    if position < length and load_i8(spec, position) == 44:
+        grouping = 44
+        position = position + 1
+    if position < length and load_i8(spec, position) == 95:
+        if grouping != 0:
+            return _spec_fail(cstr("Cannot specify both ',' and '_'."))
+        grouping = 95
+        position = position + 1
+    if position < length and load_i8(spec, position) == 44 and grouping == 95:
+        return _spec_fail(cstr("Cannot specify both ',' and '_'."))
+    store_i64(parsed, _SPEC_GROUPING, grouping)
+    if position < length and load_i8(spec, position) == 46:
+        position = position + 1
+        precision_start: int = position
+        precision: int = 0
+        while position < length and _is_digit_byte(load_i8(spec, position)) != 0:
+            if precision > 100000000000:
+                return _spec_fail(cstr("Too many decimal digits in format string"))
+            precision = precision * 10 + load_i8(spec, position) - 48
+            position = position + 1
+        if position > precision_start:
+            store_i64(parsed, _SPEC_PRECISION, precision)
+        frac: int = 0
+        if position < length and load_i8(spec, position) == 44:
+            frac = 44
+            position = position + 1
+        if position < length and load_i8(spec, position) == 95:
+            if frac != 0:
+                return _spec_fail(cstr("Cannot specify both ',' and '_'."))
+            frac = 95
+            position = position + 1
+        if position < length and load_i8(spec, position) == 44 and frac == 95:
+            return _spec_fail(cstr("Cannot specify both ',' and '_'."))
+        if position == precision_start:
+            return _spec_fail(cstr("Format specifier missing precision"))
+        store_i64(parsed, _SPEC_FRAC_GROUPING, frac)
+    if position < length:
+        code_width: int = _utf8_width(load_i8(spec, position))
+        if position + code_width < length:
+            state = _buffer_new(length + 64)
+            _buffer_cstr(state, cstr("Invalid format specifier '"))
+            _buffer_append(state, spec, length)
+            _buffer_cstr(state, cstr("' for object of type '"))
+            _buffer_cstr(state, type_name)
+            _buffer_char(state, 39)
+            _raise_buffer_error(state, 2)
+            return -1
+        store_i64(parsed, _SPEC_TYPE, _utf8_decode(spec, position, code_width))
+    if grouping != 0:
+        code: int = load_i64(parsed, _SPEC_TYPE)
+        allowed: int = 0
+        if (
+            code == 0
+            or code == 100
+            or code == 101
+            or code == 102
+            or code == 103
+            or code == 69
+            or code == 70
+            or code == 71
+            or code == 37
+        ):
+            allowed = 1
+        elif grouping == 95 and (code == 98 or code == 111 or code == 120 or code == 88):
+            # Underscores group bin/oct/hex digits by four (PEP 515).
+            allowed = 1
+        if allowed == 0:
+            state = _buffer_new(64)
+            _buffer_cstr(state, cstr("Cannot specify '"))
+            _buffer_char(state, grouping)
+            _buffer_cstr(state, cstr("' with "))
+            _buffer_code_label(state, code)
+            _buffer_char(state, 46)
+            _raise_buffer_error(state, 2)
+            return -1
+    return 0
+
+
+def _group_digits(digits, count: int, min_width: int, group: int, separator: int, upper: int, meta):
+    # CPython _PyUnicode_InsertThousandsGrouping, written right to left.  With
+    # sign-aware zero padding ``min_width`` asks for leading zeros, which are
+    # grouped too ("0,001,234").  Returns a malloc'd buffer; the text is at
+    # meta[0] for meta[8] bytes.
+    if min_width < 0:
+        min_width = 0
+    capacity: int = 2 * (count + min_width) + 8
+    out = malloc(capacity)
+    if ptr_is_null(out) != 0:
+        return out
+    write: int = capacity
+    remaining: int = count
+    source: int = count
+    use_separator: int = 0
+    finished: int = 0
+    while finished == 0:
+        size: int = remaining
+        if min_width > size:
+            size = min_width
+        if size < 1:
+            size = 1
+        if group > 0 and size > group:
+            size = group
+        zeros: int = size - remaining
+        if zeros < 0:
+            zeros = 0
+        chars: int = remaining
+        if chars > size:
+            chars = size
+        if use_separator != 0:
+            write = write - 1
+            store_i8(out, write, separator)
+        index: int = 0
+        while index < chars:
+            write = write - 1
+            source = source - 1
+            byte: int = load_i8(digits, source)
+            if upper != 0 and byte >= 97 and byte <= 102:
+                byte = byte - 32
+            store_i8(out, write, byte)
+            index = index + 1
+        index = 0
+        while index < zeros:
+            write = write - 1
+            store_i8(out, write, 48)
+            index = index + 1
+        use_separator = 1
+        remaining = remaining - chars
+        min_width = min_width - size
+        if group <= 0:
+            finished = 1
+        elif remaining <= 0 and min_width <= 0:
+            finished = 1
+        else:
+            min_width = min_width - 1
+    store_i64(meta, 0, write)
+    store_i64(meta, 8, capacity - write)
+    return out
+
+
+def _layout_number(parsed, spec, parts):
+    # CPython calc_number_widths + fill_number:
+    # [lpad][sign][prefix][spad][grouped digits][.][fraction][tail][rpad]
+    sign_option: int = load_i64(parsed, _SPEC_SIGN)
+    sign_char: int = 0
+    if load_i64(parts, _NUM_NEGATIVE) != 0:
+        sign_char = 45
+    elif sign_option == 43:
+        sign_char = 43
+    elif sign_option == 32:
+        sign_char = 32
+    sign_count: int = 0
+    if sign_char != 0:
+        sign_count = 1
+    prefix_len: int = load_i64(parts, _NUM_PREFIX_LEN)
+    decimal: int = load_i64(parts, _NUM_DECIMAL)
+    frac_len: int = load_i64(parts, _NUM_FRAC_LEN)
+    frac_separator: int = load_i64(parts, _NUM_FRAC_SEPARATOR)
+    frac_chars: int = frac_len
+    if frac_separator != 0 and frac_len > 0:
+        frac_chars = frac_len + (frac_len - 1) // 3
+    tail_chars: int = load_i64(parts, _NUM_TAIL_CHARS)
+    other: int = sign_count + prefix_len + decimal + frac_chars + tail_chars
+    width: int = load_i64(parsed, _SPEC_WIDTH)
+    align: int = load_i64(parsed, _SPEC_ALIGN)
+    fill_offset: int = load_i64(parsed, _SPEC_FILL)
+    fill_len: int = load_i64(parsed, _SPEC_FILL_LEN)
+    fill = cstr(" ")
+    if fill_offset >= 0:
+        fill = ptr_add(spec, fill_offset)
+    min_width: int = 0
+    if fill_len == 1 and load_i8(fill, 0) == 48 and align == 61:
+        min_width = width - other
+    digit_len: int = load_i64(parts, _NUM_DIGITS_LEN)
+    grouped_meta = stack_alloc(16)
+    store_i64(grouped_meta, 0, 0)
+    store_i64(grouped_meta, 8, 0)
+    grouped = null()
+    if digit_len > 0:
+        # Only %c and inf/nan have no digits; CPython pads those with the
+        # fill instead of inserting zeros.
+        grouped = _group_digits(
+            load_ptr(parts, _NUM_DIGITS),
+            digit_len,
+            min_width,
+            load_i64(parts, _NUM_GROUP),
+            load_i64(parts, _NUM_SEPARATOR),
+            load_i64(parts, _NUM_UPPER),
+            grouped_meta,
+        )
+        if ptr_is_null(grouped) != 0:
+            py_raise_owned(py_exc_new(19, cstr("out of memory")))
+            return null()
+    grouped_len: int = load_i64(grouped_meta, 8)
+    padding: int = width - (other + grouped_len)
+    left: int = 0
+    middle: int = 0
+    right: int = 0
+    if padding > 0:
+        if align == 60:
+            right = padding
+        elif align == 94:
+            left = padding // 2
+            right = padding - left
+        elif align == 61:
+            middle = padding
+        else:
+            left = padding
+    state = _buffer_new(other + grouped_len + load_i64(parts, _NUM_TAIL_LEN) + (left + middle + right) * fill_len + 8)
+    if ptr_is_null(state) != 0:
+        if ptr_is_null(grouped) == 0:
+            free(grouped)
+        return null()
+    _buffer_fill(state, fill, fill_len, left)
+    if sign_char != 0:
+        _buffer_char(state, sign_char)
+    if prefix_len > 0:
+        _buffer_append(state, load_ptr(parts, _NUM_PREFIX), prefix_len)
+    _buffer_fill(state, fill, fill_len, middle)
+    if grouped_len > 0:
+        _buffer_append(state, ptr_add(grouped, load_i64(grouped_meta, 0)), grouped_len)
+    if decimal != 0:
+        _buffer_char(state, 46)
+    if frac_len > 0:
+        frac = load_ptr(parts, _NUM_FRAC)
+        index: int = 0
+        while index < frac_len:
+            # 3.14+: fraction digits group left to right ("567,8").
+            if frac_separator != 0 and index > 0 and index % 3 == 0:
+                _buffer_char(state, frac_separator)
+            _buffer_char(state, load_i8(frac, index))
+            index = index + 1
+    tail_len: int = load_i64(parts, _NUM_TAIL_LEN)
+    if tail_len > 0:
+        _buffer_append(state, load_ptr(parts, _NUM_TAIL), tail_len)
+    _buffer_fill(state, fill, fill_len, right)
+    if ptr_is_null(grouped) == 0:
+        free(grouped)
+    result = _buffer_string(state)
+    _buffer_free(state)
+    return result
+
+
+def _clear_number_parts(parts) -> None:
+    offset: int = 0
+    while offset < _NUM_BYTES:
+        store_i64(parts, offset, 0)
+        offset = offset + 8
+
+
+def _int_digit_text(value, base: int, meta):
+    # |value| in ``base`` (lowercase) for a tagged, bool or heap int.  Returns
+    # a malloc'd NUL-terminated buffer; meta[0] = negative, meta[8] = offset
+    # of the first digit, meta[16] = digit count.
+    small: int = 0
+    use_big: int = 0
+    if is_tagged_int(value) != 0:
+        small = untag_int(value)
+    elif _type_of(value) == PY_TYPE_BOOL:
+        if ptr_eq(value, global_load_ptr("py_True")) != 0:
+            small = 1
+    else:
+        overflow = stack_alloc(8)
+        store_i64(overflow, 0, 0)
+        small = py_int_to_i64(value, overflow)
+        min_i64: int = -9223372036854775807
+        min_i64 = min_i64 - 1
+        if load_i32(overflow, 0) != 0 or small == min_i64:
+            use_big = 1
+    negative: int = 0
+    if use_big != 0:
+        text = null()
+        if base == 10:
+            text = py_bigint_to_cstr(value)
+        else:
+            text = py_bigint_to_base_cstr(value, base, 120)
+        if ptr_is_null(text) != 0:
+            return text
+        if load_i8(text, 0) == 45:
+            negative = 1
+        start: int = negative
+        if base != 10:
+            start = start + 2
+        store_i64(meta, 0, negative)
+        store_i64(meta, 8, start)
+        store_i64(meta, 16, strlen(text) - start)
+        return text
+    buffer = malloc(72)
+    if ptr_is_null(buffer) != 0:
+        return buffer
+    magnitude: int = small
+    if small < 0:
+        negative = 1
+        magnitude = 0 - small
+    write: int = 71
+    store_i8(buffer, write, 0)
+    done: int = 0
+    while done == 0:
+        write = write - 1
+        digit: int = magnitude % base
+        if digit < 10:
+            store_i8(buffer, write, 48 + digit)
+        else:
+            store_i8(buffer, write, 87 + digit)
+        magnitude = magnitude // base
+        if magnitude == 0:
+            done = 1
+    store_i64(meta, 0, negative)
+    store_i64(meta, 8, write)
+    store_i64(meta, 16, 71 - write)
+    return buffer
+
+
+def _int_to_double(value) -> float:
+    # PyNumber_Float for an int or bool: OverflowError when out of range.
+    if is_tagged_int(value) != 0:
+        return float(untag_int(value))
+    if _type_of(value) == PY_TYPE_BOOL:
+        if ptr_eq(value, global_load_ptr("py_True")) != 0:
+            return 1.0
+        return 0.0
+    converted: float = py_bigint_to_double(value)
+    if converted != 0.0 and converted == converted * 2.0:
+        py_raise_owned(py_exc_new(15, cstr("int too large to convert to float")))
+        return 0.0
+    return converted
+
+
+def _is_float_code(code: int) -> int:
+    if code == 101 or code == 69 or code == 102 or code == 70 or code == 103 or code == 71 or code == 37:
+        return 1
+    return 0
+
+
+def _format_int_value(value, spec, length: int, type_name):
+    # int.__format__ / bool.__format__ with a non-empty spec.
+    parsed = stack_alloc(_SPEC_BYTES)
+    if _parse_format_spec(spec, length, parsed, 100, 62, type_name) != 0:
+        return null()
+    code: int = load_i64(parsed, _SPEC_TYPE)
+    if _is_float_code(code) != 0:
+        converted: float = _int_to_double(value)
+        if py_err_occurred() != 0:
+            return null()
+        return _format_float_parsed(converted, parsed, spec)
+    base: int = 0
+    if code == 100 or code == 110:
+        base = 10
+    elif code == 120 or code == 88:
+        base = 16
+    elif code == 111:
+        base = 8
+    elif code == 98:
+        base = 2
+    elif code != 99:
+        return _raise_unknown_code(code, type_name)
+    if load_i64(parsed, _SPEC_PRECISION) != -1:
+        return _raise_format_error(cstr("Precision not allowed in integer format specifier"))
+    if load_i64(parsed, _SPEC_NO_NEG_0) != 0:
+        return _raise_format_error(
+            cstr("Negative zero coercion (z) not allowed in integer format specifier")
+        )
+    parts = stack_alloc(_NUM_BYTES)
+    _clear_number_parts(parts)
+    if code == 99:
+        if load_i64(parsed, _SPEC_SIGN) != 0:
+            return _raise_format_error(cstr("Sign not allowed with integer format specifier 'c'"))
+        if load_i64(parsed, _SPEC_ALT) != 0:
+            return _raise_format_error(
+                cstr("Alternate form (#) not allowed with integer format specifier 'c'")
+            )
+        point: int = 0
+        if is_tagged_int(value) != 0:
+            point = untag_int(value)
+        elif _type_of(value) == PY_TYPE_BOOL:
+            if ptr_eq(value, global_load_ptr("py_True")) != 0:
+                point = 1
+        else:
+            overflow = stack_alloc(8)
+            store_i64(overflow, 0, 0)
+            point = py_int_to_i64(value, overflow)
+            if load_i32(overflow, 0) != 0:
+                py_raise_owned(py_exc_new(15, cstr("Python int too large to convert to C long")))
+                return null()
+        if point < 0 or point > 1114111:
+            py_raise_owned(py_exc_new(15, cstr("%c arg not in range(0x110000)")))
+            return null()
+        character = py_chr_from_i64(point)
+        if ptr_is_null(character) != 0:
+            return null()
+        store_ptr(parts, _NUM_TAIL, py_str_utf8(character))
+        store_i64(parts, _NUM_TAIL_LEN, py_str_byte_len(character))
+        store_i64(parts, _NUM_TAIL_CHARS, 1)
+        result = _layout_number(parsed, spec, parts)
+        py_decref(character)
+        return result
+    meta = stack_alloc(24)
+    text = _int_digit_text(value, base, meta)
+    if ptr_is_null(text) != 0:
+        py_raise_owned(py_exc_new(19, cstr("out of memory")))
+        return null()
+    store_i64(parts, _NUM_NEGATIVE, load_i64(meta, 0))
+    store_ptr(parts, _NUM_DIGITS, ptr_add(text, load_i64(meta, 8)))
+    store_i64(parts, _NUM_DIGITS_LEN, load_i64(meta, 16))
+    if code == 88:
+        store_i64(parts, _NUM_UPPER, 1)
+    if load_i64(parsed, _SPEC_ALT) != 0 and base != 10:
+        prefix = cstr("0b")
+        if code == 120:
+            prefix = cstr("0x")
+        elif code == 88:
+            prefix = cstr("0X")
+        elif code == 111:
+            prefix = cstr("0o")
+        store_ptr(parts, _NUM_PREFIX, prefix)
+        store_i64(parts, _NUM_PREFIX_LEN, 2)
+    grouping: int = load_i64(parsed, _SPEC_GROUPING)
+    if grouping != 0:
+        store_i64(parts, _NUM_SEPARATOR, grouping)
+        if base == 10:
+            store_i64(parts, _NUM_GROUP, 3)
+        else:
+            store_i64(parts, _NUM_GROUP, 4)
+    result = _layout_number(parsed, spec, parts)
+    free(text)
+    return result
+
+
+def _float_dtoa(absolute: float, mode: int, ndigits: int, digits, meta) -> int:
+    # CPython's _Py_dg_dtoa for a finite, non-negative double: ASCII digits
+    # with no trailing zeros into ``digits`` (800 bytes), the decimal point
+    # position at meta[0]; returns the digit count.  Mode 0 is the shortest
+    # round-tripping string, mode 2 ``ndigits`` significant digits (at least
+    # one) and mode 3 ``ndigits`` digits past the decimal point.
+    if absolute == 0.0:
+        store_i8(digits, 0, 48)
+        store_i64(meta, 0, 1)
+        return 1
+    count: int = 0
+    if mode == 0:
+        shortest = stack_alloc(16)
+        value: int = _float_shortest_digits(absolute, shortest)
+        significant: int = load_i64(shortest, 0)
+        store_i64(meta, 0, load_i64(shortest, 8) + 1)
+        position: int = significant
+        while position > 0:
+            position = position - 1
+            store_i8(digits, position, 48 + value % 10)
+            value = value // 10
+        count = significant
+    else:
+        total: int = pcc_stdio_float_exact_digits(f64_bits(absolute), digits, meta)
+        requested: int = ndigits
+        if mode == 3:
+            requested = load_i64(meta, 0) + ndigits
+        elif requested < 1:
+            requested = 1
+        count = pcc_stdio_float_round_digits(digits, total, meta, requested)
+        if count == 0:
+            # Rounded away entirely: dtoa reports no digits with the point
+            # just past the requested position.
+            store_i64(meta, 0, 0 - ndigits)
+        index: int = 0
+        while index < count:
+            store_i8(digits, index, 48 + load_i8(digits, index))
+            index = index + 1
+    while count > 0 and load_i8(digits, count - 1) == 48:
+        count = count - 1
+    return count
+
+
+def _format_float_short(
+    state,
+    value: float,
+    code: int,
+    mode: int,
+    precision: int,
+    always_sign: int,
+    add_dot_0: int,
+    alt: int,
+    no_neg_0: int,
+    upper: int,
+) -> int:
+    # CPython pystrtod.c format_float_short: append the text of ``value``.
+    # ``code`` is 'e', 'f', 'g' or 'r'; ``precision`` is already adjusted the
+    # way PyOS_double_to_string does it ('e' + 1, 'g' at least 1).
+    negative: int = f64_signbit(value)
+    if value != value:
+        if always_sign != 0:
+            _buffer_char(state, 43)
+        if upper != 0:
+            return _buffer_cstr(state, cstr("NAN"))
+        return _buffer_cstr(state, cstr("nan"))
+    absolute: float = value
+    if negative != 0:
+        absolute = 0.0 - value
+    if absolute != 0.0 and absolute == absolute * 2.0:
+        if negative != 0:
+            _buffer_char(state, 45)
+        elif always_sign != 0:
+            _buffer_char(state, 43)
+        if upper != 0:
+            return _buffer_cstr(state, cstr("INF"))
+        return _buffer_cstr(state, cstr("inf"))
+    digits = stack_alloc(800)
+    meta = stack_alloc(8)
+    count: int = _float_dtoa(absolute, mode, precision, digits, meta)
+    decpt: int = load_i64(meta, 0)
+    if no_neg_0 != 0 and negative != 0:
+        if count == 0 or (count == 1 and load_i8(digits, 0) == 48):
+            negative = 0
+    vdigits_end: int = count
+    use_exp: int = 0
+    if code == 101:
+        use_exp = 1
+        vdigits_end = precision
+    elif code == 102:
+        vdigits_end = decpt + precision
+    elif code == 103:
+        limit: int = precision
+        if add_dot_0 != 0:
+            limit = precision - 1
+        if decpt <= -4 or decpt > limit:
+            use_exp = 1
+        if alt != 0:
+            vdigits_end = precision
+    elif decpt <= -4 or decpt > 16:
+        use_exp = 1
+    exponent: int = 0
+    if use_exp != 0:
+        exponent = decpt - 1
+        decpt = 1
+    vdigits_start: int = 0
+    if decpt <= 0:
+        vdigits_start = decpt - 1
+    if use_exp == 0 and add_dot_0 != 0:
+        if vdigits_end <= decpt:
+            vdigits_end = decpt + 1
+    elif vdigits_end < decpt:
+        vdigits_end = decpt
     if negative != 0:
         _buffer_char(state, 45)
-    if alternate != 0:
-        _buffer_char(state, 48)
-        _buffer_char(state, 111 if conversion == 111 else 98)
-    i = count - 1
-    while i >= 0:
-        _buffer_char(state, load_i8(reverse, i))
-        i = i - 1
-    result = _buffer_string(state)
-    _buffer_free(state)
-    return result
-
-
-def _add_grouping(rendered, separator: int):
-    if separator == 0 or ptr_is_null(rendered) != 0:
-        return rendered
-    text = py_str_utf8(rendered)
-    length: int = py_str_byte_len(rendered)
-    dot: int = _find_byte(text, 46)
-    exponent: int = _find_byte(text, 101)
-    if exponent < 0:
-        exponent = _find_byte(text, 69)
-    integer_end: int = length
-    if dot >= 0:
-        integer_end = dot
-    elif exponent >= 0:
-        integer_end = exponent
-    start: int = 0
-    if length > 0 and (load_i8(text, 0) == 45 or load_i8(text, 0) == 43 or load_i8(text, 0) == 32):
-        start = 1
-    digits: int = integer_end - start
-    groups: int = 0
-    if digits > 3:
-        groups = (digits - 1) // 3
-    if groups == 0:
-        return rendered
-    state = _buffer_new(length + groups + 1)
-    if start != 0:
-        _buffer_char(state, load_i8(text, 0))
-    i: int = 0
-    while i < digits:
-        if i > 0 and ((digits - i) % 3) == 0:
-            _buffer_char(state, separator)
-        _buffer_char(state, load_i8(text, start + i))
-        i = i + 1
-    _buffer_append(state, ptr_add(text, integer_end), length - integer_end)
-    result = _buffer_string(state)
-    _buffer_free(state)
-    py_decref(rendered)
-    return result
-
-
-def _format_int_builtin(value, spec):
-    position: int = 0
-    align: int = 62
-    fill: int = 32
-    first: int = load_i8(spec, position)
-    second: int = load_i8(spec, position + 1)
-    if first != 0 and (second == 60 or second == 62 or second == 94):
-        fill = first
-        align = second
-        position = position + 2
-    elif first == 60 or first == 62 or first == 94:
-        align = first
-        position = position + 1
-    plus: int = 0
-    space: int = 0
-    if load_i8(spec, position) == 43:
-        plus = 1
-        position = position + 1
-    elif load_i8(spec, position) == 32:
-        space = 1
-        position = position + 1
-    alternate: int = 0
-    if load_i8(spec, position) == 35:
-        alternate = 1
-        position = position + 1
-    zero: int = 0
-    if load_i8(spec, position) == 48:
-        zero = 1
-        position = position + 1
-    width: int = _parse_digits(spec, position)
-    position = _skip_digits(spec, position)
-    separator: int = 0
-    if load_i8(spec, position) == 44 or load_i8(spec, position) == 95:
-        separator = load_i8(spec, position)
-        position = position + 1
-    conversion: int = 100
-    current: int = load_i8(spec, position)
-    if current == 100 or current == 120 or current == 88 or current == 111 or current == 98:
-        conversion = current
-        position = position + 1
-    if load_i8(spec, position) != 0:
-        return null()
-    if alternate != 0 and conversion == 100:
-        return null()
-    rendered = _int_raw_base(value, conversion, alternate)
-    if ptr_is_null(rendered) != 0:
-        return null()
-    if conversion == 100:
-        rendered = _add_grouping(rendered, separator)
-    text = py_str_utf8(rendered)
-    length: int = py_str_byte_len(rendered)
-    signed = rendered
-    if length > 0 and load_i8(text, 0) != 45 and (plus != 0 or space != 0):
-        state = _buffer_new(length + 2)
-        _buffer_char(state, 43 if plus != 0 else 32)
-        _buffer_append(state, text, length)
-        signed = _buffer_string(state)
-        _buffer_free(state)
-        py_decref(rendered)
-        text = py_str_utf8(signed)
-        length = py_str_byte_len(signed)
-    result = _pad_signed_text(text, length, width, align, fill, zero)
-    py_decref(signed)
-    return result
-
-
-def _format_float_builtin(value, spec):
-    position: int = 0
-    align: int = 62
-    fill: int = 32
-    first: int = load_i8(spec, position)
-    second: int = load_i8(spec, position + 1)
-    if first != 0 and (second == 60 or second == 62 or second == 94):
-        fill = first
-        align = second
-        position = position + 2
-    elif first == 60 or first == 62 or first == 94:
-        align = first
-        position = position + 1
-    plus: int = 0
-    space: int = 0
-    if load_i8(spec, position) == 43:
-        plus = 1
-        position = position + 1
-    elif load_i8(spec, position) == 32:
-        space = 1
-        position = position + 1
-    zero: int = 0
-    if load_i8(spec, position) == 48:
-        zero = 1
-        position = position + 1
-    width: int = _parse_digits(spec, position)
-    position = _skip_digits(spec, position)
-    separator: int = 0
-    if load_i8(spec, position) == 44 or load_i8(spec, position) == 95:
-        separator = load_i8(spec, position)
-        position = position + 1
-    precision: int = 6
-    has_precision: int = 0
-    if load_i8(spec, position) == 46:
-        position = position + 1
-        if load_i8(spec, position) < 48 or load_i8(spec, position) > 57:
-            return null()
-        precision = _parse_digits(spec, position)
-        position = _skip_digits(spec, position)
-        has_precision = 1
-    conversion: int = 0
-    current: int = load_i8(spec, position)
-    if current == 102 or current == 70 or current == 101 or current == 69 or current == 103 or current == 71:
-        conversion = current
-        position = position + 1
-    if load_i8(spec, position) != 0:
-        return null()
-    rendered = null()
-    if conversion == 0 and has_precision == 0:
-        rendered = py_float_repr_shortest(value)
+    elif always_sign != 0:
+        _buffer_char(state, 43)
+    if decpt <= 0:
+        _buffer_repeat(state, 48, decpt - vdigits_start)
+        _buffer_char(state, 46)
+        _buffer_repeat(state, 48, 0 - decpt)
     else:
-        if conversion == 0:
-            conversion = 102
-        output = stack_alloc(800)
-        length: int = pcc_stdio_format_float_raw(
-            output, py_float_to_f64(value), conversion, precision, 0, plus, space
-        )
-        rendered = py_str_new(output, length)
-    rendered = _add_grouping(rendered, separator)
-    if ptr_is_null(rendered) != 0:
+        _buffer_repeat(state, 48, 0 - vdigits_start)
+    if decpt > 0 and decpt <= count:
+        _buffer_append(state, digits, decpt)
+        _buffer_char(state, 46)
+        _buffer_append(state, ptr_add(digits, decpt), count - decpt)
+    else:
+        _buffer_append(state, digits, count)
+    if count < decpt:
+        _buffer_repeat(state, 48, decpt - count)
+        _buffer_char(state, 46)
+        _buffer_repeat(state, 48, vdigits_end - decpt)
+    else:
+        _buffer_repeat(state, 48, vdigits_end - count)
+    # A trailing decimal point goes unless '#'.
+    length: int = load_i64(state, 8)
+    data = load_ptr(state, 0)
+    if alt == 0 and length > 0 and load_i8(data, length - 1) == 46:
+        store_i64(state, 8, length - 1)
+        store_i8(data, length - 1, 0)
+    if use_exp != 0:
+        if upper != 0:
+            _buffer_char(state, 69)
+        else:
+            _buffer_char(state, 101)
+        if exponent < 0:
+            _buffer_char(state, 45)
+            exponent = 0 - exponent
+        else:
+            _buffer_char(state, 43)
+        if exponent >= 100:
+            _buffer_char(state, 48 + exponent // 100)
+            exponent = exponent % 100
+            _buffer_char(state, 48 + exponent // 10)
+        else:
+            _buffer_char(state, 48 + exponent // 10)
+        _buffer_char(state, 48 + exponent % 10)
+    return 0
+
+
+def _float_text(state, value: float, code: int, precision: int, always_sign: int, add_dot_0: int, alt: int, no_neg_0: int) -> int:
+    # PyOS_double_to_string: ``code`` is e/E/f/F/g/G/r.
+    upper: int = 0
+    if code == 69 or code == 70 or code == 71:
+        upper = 1
+        code = code + 32
+    mode: int = 2
+    if code == 101:
+        precision = precision + 1
+    elif code == 102:
+        mode = 3
+    elif code == 103:
+        if precision == 0:
+            precision = 1
+    else:
+        mode = 0
+        precision = 0
+    return _format_float_short(
+        state, value, code, mode, precision, always_sign, add_dot_0, alt, no_neg_0, upper
+    )
+
+
+def _format_float_parsed(value: float, parsed, spec):
+    # CPython format_float_internal on an already-parsed spec.
+    code: int = load_i64(parsed, _SPEC_TYPE)
+    precision: int = load_i64(parsed, _SPEC_PRECISION)
+    add_dot_0: int = 0
+    default_precision: int = 6
+    if code == 0:
+        add_dot_0 = 1
+        code = 114
+        default_precision = 0
+    if code == 110:
+        code = 103
+    add_pct: int = 0
+    if code == 37:
+        code = 102
+        value = value * 100.0
+        add_pct = 1
+    if precision < 0:
+        precision = default_precision
+    elif code == 114:
+        code = 103
+    text = _buffer_new(precision + 64)
+    if ptr_is_null(text) != 0:
         return null()
-    text = py_str_utf8(rendered)
-    length = py_str_byte_len(rendered)
-    result = _pad_signed_text(text, length, width, align, fill, zero)
-    py_decref(rendered)
+    _float_text(
+        text,
+        value,
+        code,
+        precision,
+        0,
+        add_dot_0,
+        load_i64(parsed, _SPEC_ALT),
+        load_i64(parsed, _SPEC_NO_NEG_0),
+    )
+    if add_pct != 0:
+        _buffer_char(text, 37)
+    # Split "[-]digits[.fraction]tail" (parse_number).
+    data = load_ptr(text, 0)
+    length: int = load_i64(text, 8)
+    parts = stack_alloc(_NUM_BYTES)
+    _clear_number_parts(parts)
+    position: int = 0
+    if length > 0 and load_i8(data, 0) == 45:
+        store_i64(parts, _NUM_NEGATIVE, 1)
+        position = 1
+    digits_start: int = position
+    while position < length and _is_digit_byte(load_i8(data, position)) != 0:
+        position = position + 1
+    store_ptr(parts, _NUM_DIGITS, ptr_add(data, digits_start))
+    store_i64(parts, _NUM_DIGITS_LEN, position - digits_start)
+    if position < length and load_i8(data, position) == 46:
+        store_i64(parts, _NUM_DECIMAL, 1)
+        position = position + 1
+    frac_start: int = position
+    while position < length and _is_digit_byte(load_i8(data, position)) != 0:
+        position = position + 1
+    store_ptr(parts, _NUM_FRAC, ptr_add(data, frac_start))
+    store_i64(parts, _NUM_FRAC_LEN, position - frac_start)
+    store_ptr(parts, _NUM_TAIL, ptr_add(data, position))
+    store_i64(parts, _NUM_TAIL_LEN, length - position)
+    store_i64(parts, _NUM_TAIL_CHARS, length - position)
+    grouping: int = load_i64(parsed, _SPEC_GROUPING)
+    if grouping != 0 and load_i64(parsed, _SPEC_TYPE) != 110:
+        store_i64(parts, _NUM_GROUP, 3)
+        store_i64(parts, _NUM_SEPARATOR, grouping)
+    store_i64(parts, _NUM_FRAC_SEPARATOR, load_i64(parsed, _SPEC_FRAC_GROUPING))
+    result = _layout_number(parsed, spec, parts)
+    _buffer_free(text)
+    return result
+
+
+def _format_float_value(value, spec, length: int):
+    parsed = stack_alloc(_SPEC_BYTES)
+    if _parse_format_spec(spec, length, parsed, 0, 62, cstr("float")) != 0:
+        return null()
+    code: int = load_i64(parsed, _SPEC_TYPE)
+    if code != 0 and code != 110 and _is_float_code(code) == 0:
+        return _raise_unknown_code(code, cstr("float"))
+    return _format_float_parsed(py_float_to_f64(value), parsed, spec)
+
+
+def _format_str_value(value, spec, length: int):
+    # str.__format__ (format_string_internal).
+    parsed = stack_alloc(_SPEC_BYTES)
+    if _parse_format_spec(spec, length, parsed, 115, 60, cstr("str")) != 0:
+        return null()
+    code: int = load_i64(parsed, _SPEC_TYPE)
+    if code != 115:
+        return _raise_unknown_code(code, cstr("str"))
+    sign: int = load_i64(parsed, _SPEC_SIGN)
+    if sign == 32:
+        return _raise_format_error(cstr("Space not allowed in string format specifier"))
+    if sign != 0:
+        return _raise_format_error(cstr("Sign not allowed in string format specifier"))
+    if load_i64(parsed, _SPEC_NO_NEG_0) != 0:
+        return _raise_format_error(
+            cstr("Negative zero coercion (z) not allowed in string format specifier")
+        )
+    if load_i64(parsed, _SPEC_ALT) != 0:
+        return _raise_format_error(cstr("Alternate form (#) not allowed in string format specifier"))
+    align: int = load_i64(parsed, _SPEC_ALIGN)
+    if align == 61:
+        return _raise_format_error(cstr("'=' alignment not allowed in string format specifier"))
+    text = py_str_utf8(value)
+    byte_len: int = py_str_byte_len(value)
+    chars: int = _utf8_char_count(text, byte_len)
+    precision: int = load_i64(parsed, _SPEC_PRECISION)
+    if precision >= 0 and chars > precision:
+        byte_len = _utf8_prefix_bytes(text, byte_len, precision)
+        chars = precision
+    width: int = load_i64(parsed, _SPEC_WIDTH)
+    total: int = chars
+    if width > chars:
+        total = width
+    left: int = 0
+    if align == 62:
+        left = total - chars
+    elif align == 94:
+        left = (total - chars) // 2
+    right: int = total - chars - left
+    fill_offset: int = load_i64(parsed, _SPEC_FILL)
+    fill_len: int = load_i64(parsed, _SPEC_FILL_LEN)
+    fill = cstr(" ")
+    if fill_offset >= 0:
+        fill = ptr_add(spec, fill_offset)
+    state = _buffer_new(byte_len + (left + right) * fill_len + 8)
+    if ptr_is_null(state) != 0:
+        return null()
+    _buffer_fill(state, fill, fill_len, left)
+    _buffer_append(state, text, byte_len)
+    _buffer_fill(state, fill, fill_len, right)
+    result = _buffer_string(state)
+    _buffer_free(state)
     return result
 
 
@@ -1093,7 +1731,10 @@ def _call_format_method(method, spec):
 def py_obj_format(value, spec):
     if ptr_is_null(value) != 0:
         return null()
-    if is_tagged_int(value) == 0:
+    tag: int = _type_of(value)
+    if tag != PY_TYPE_INT and tag != PY_TYPE_BOOL and tag != PY_TYPE_FLOAT and tag != PY_TYPE_STR:
+        # Builtin scalars format below; everything else may define
+        # __format__ (a failed lookup is not an error).
         method = py_obj_getattr(value, cstr("__format__"))
         if ptr_is_null(method) == 0:
             result = _call_format_method(method, spec)
@@ -1103,276 +1744,481 @@ def py_obj_format(value, spec):
         if py_err_occurred() != 0:
             py_clear_exception()
     text = cstr("")
+    length: int = 0
     none_obj = global_load_ptr("py_None")
     if ptr_is_null(spec) == 0 and ptr_eq(spec, none_obj) == 0 and _type_of(spec) == PY_TYPE_STR:
         text = py_str_utf8(spec)
-    if load_i8(text, 0) == 0:
+        length = py_str_byte_len(spec)
+    if length == 0:
         return py_obj_str(value)
-    tag: int = _type_of(value)
-    result = null()
     if tag == PY_TYPE_INT:
-        result = _format_int_builtin(value, text)
-    elif tag == PY_TYPE_STR:
-        result = _format_string_builtin(value, text)
-    elif tag == PY_TYPE_FLOAT:
-        result = _format_float_builtin(value, text)
-    if ptr_is_null(result) == 0:
-        return result
-    py_raise_owned(py_exc_new(2, cstr("unsupported format specifier")))
-    return null()
+        return _format_int_value(value, text, length, cstr("int"))
+    if tag == PY_TYPE_BOOL:
+        return _format_int_value(value, text, length, cstr("bool"))
+    if tag == PY_TYPE_FLOAT:
+        return _format_float_value(value, text, length)
+    if tag == PY_TYPE_STR:
+        return _format_str_value(value, text, length)
+    # object.__format__ rejects any non-empty spec.
+    state = _buffer_new(96)
+    _buffer_cstr(state, cstr("unsupported format string passed to "))
+    name = py_obj_type_name(value)
+    if ptr_is_null(name) == 0:
+        _append_pystr(state, name)
+        py_decref(name)
+    _buffer_cstr(state, cstr(".__format__"))
+    return _raise_buffer_error(state, 3)
 
 
-def _percent_next_argument(arguments, state):
-    index: int = load_i64(state, 0)
-    if _type_of(arguments) == PY_TYPE_TUPLE:
-        store_i64(state, 8, 1)
-        length: int = py_tuple_len(arguments)
-        if index >= length:
-            py_raise_owned(py_exc_new(3, cstr("not enough arguments for format string")))
-            return null()
-        item = py_tuple_get(arguments, index)
-        store_i64(state, 0, index + 1)
-        store_i64(state, 16, 1)
-        return item
-    store_i64(state, 8, 0)
-    if index != 0:
-        py_raise_owned(py_exc_new(3, cstr("not enough arguments for format string")))
-        return null()
-    store_i64(state, 0, 1)
-    store_i64(state, 16, 0)
-    return arguments
+# --- printf-style % formatting (CPython 3.15 unicodeobject.c / bytesobject.c)
+
+_PCT_LJUST = 1
+_PCT_SIGN = 2
+_PCT_BLANK = 4
+_PCT_ALT = 8
+_PCT_ZERO = 16
+
+# Argument cursor slots.  The label names the argument in error messages:
+# 0 = the single non-tuple argument, 1 = tuple position, 2 = mapping key.
+_ARG_INDEX = 0
+_ARG_TUPLE = 8
+_ARG_OWNED = 16
+_ARG_LABEL = 24
+_ARG_NUMBER = 32
+_ARG_KEY = 40
+_ARG_KEY_LEN = 48
+_ARG_SINGLE_USED = 56
+_ARG_BYTES = 64
 
 
-def _percent_release_argument(argument, state) -> None:
-    if load_i64(state, 16) != 0 and ptr_is_null(argument) == 0:
-        py_decref(argument)
-    store_i64(state, 16, 0)
+def _buffer_decimal(state, value: int) -> None:
+    if value < 0:
+        _buffer_char(state, 45)
+        value = 0 - value
+    digits = stack_alloc(24)
+    count: int = 0
+    done: int = 0
+    while done == 0:
+        store_i8(digits, count, 48 + value % 10)
+        value = value // 10
+        count = count + 1
+        if value == 0:
+            done = 1
+    while count > 0:
+        count = count - 1
+        _buffer_char(state, load_i8(digits, count))
 
 
-def _scan_percent_conversion(data, position: int, length: int) -> int:
-    while position < length:
-        byte: int = load_i8(data, position)
-        if byte == 35 or byte == 48 or byte == 45 or byte == 32 or byte == 43:
-            position = position + 1
-        else:
-            break
-    while position < length and load_i8(data, position) >= 48 and load_i8(data, position) <= 57:
-        position = position + 1
-    if position < length and load_i8(data, position) == 46:
-        position = position + 1
-        while position < length and load_i8(data, position) >= 48 and load_i8(data, position) <= 57:
-            position = position + 1
-    while position < length:
-        byte = load_i8(data, position)
-        if byte == 104 or byte == 108 or byte == 76 or byte == 122 or byte == 106 or byte == 116:
-            position = position + 1
-        else:
-            break
-    return position
+def _append_type_name(state, value) -> None:
+    name = py_obj_type_name(value)
+    if ptr_is_null(name) == 0:
+        _append_pystr(state, name)
+        py_decref(name)
 
 
-def _percent_width(data, start: int, conversion_pos: int) -> int:
-    position: int = start
-    while position < conversion_pos:
-        byte: int = load_i8(data, position)
-        if byte >= 48 and byte <= 57:
-            return _parse_digits(data, position)
-        if byte == 46:
-            return 0
-        position = position + 1
-    return 0
+def _percent_not_enough(count: int) -> None:
+    state = _buffer_new(64)
+    _buffer_cstr(state, cstr("not enough arguments for format string (got "))
+    _buffer_decimal(state, count)
+    _buffer_char(state, 41)
+    _raise_buffer_error(state, 3)
 
 
-def _percent_precision(data, start: int, conversion_pos: int) -> int:
-    position: int = start
-    while position < conversion_pos:
-        if load_i8(data, position) == 46:
-            position = position + 1
-            return _parse_digits(data, position)
-        position = position + 1
+def _percent_error_at(message, position: int) -> int:
+    # ValueError "<message> at position N" (N = the '%' offset).
+    state = _buffer_new(96)
+    _buffer_cstr(state, message)
+    _buffer_cstr(state, cstr(" at position "))
+    _buffer_decimal(state, position)
+    _raise_buffer_error(state, 2)
     return -1
 
 
-def _percent_has_flag(data, start: int, conversion_pos: int, flag: int) -> int:
-    position: int = start
-    while position < conversion_pos:
-        if load_i8(data, position) == flag:
-            return 1
-        if load_i8(data, position) >= 48 and load_i8(data, position) <= 57:
-            return 0
-        if load_i8(data, position) == 46:
-            return 0
-        position = position + 1
+def _percent_arg_error(kind: int, data, cursor, message) -> int:
+    # Raise ``kind`` with "format argument N: <message>"; frees ``message``.
+    state = _buffer_new(96 + load_i64(message, 8))
+    _buffer_cstr(state, cstr("format argument"))
+    label: int = load_i64(cursor, _ARG_LABEL)
+    if label == 1:
+        _buffer_char(state, 32)
+        _buffer_decimal(state, load_i64(cursor, _ARG_NUMBER))
+    elif label == 2:
+        _buffer_cstr(state, cstr(" '"))
+        _buffer_append(
+            state,
+            ptr_add(data, load_i64(cursor, _ARG_KEY)),
+            load_i64(cursor, _ARG_KEY_LEN),
+        )
+        _buffer_char(state, 39)
+    _buffer_cstr(state, cstr(": "))
+    _buffer_append(state, load_ptr(message, 0), load_i64(message, 8))
+    _buffer_free(message)
+    _raise_buffer_error(state, kind)
+    return -1
+
+
+def _percent_type_error(data, cursor, conversion: int, requirement, value) -> int:
+    # "format argument 2: %x requires an integer, not float"
+    message = _buffer_new(96)
+    _buffer_char(message, 37)
+    _buffer_char(message, conversion)
+    _buffer_cstr(message, cstr(" requires "))
+    _buffer_cstr(message, requirement)
+    _buffer_cstr(message, cstr(", not "))
+    _append_type_name(message, value)
+    return _percent_arg_error(3, data, cursor, message)
+
+
+def _percent_next_argument(arguments, cursor):
+    # The next positional argument; owned when cursor[_ARG_OWNED] is set.
+    store_i64(cursor, _ARG_OWNED, 0)
+    if load_i64(cursor, _ARG_TUPLE) != 0:
+        index: int = load_i64(cursor, _ARG_INDEX)
+        count: int = py_tuple_len(arguments)
+        if index >= count:
+            _percent_not_enough(count)
+            return null()
+        item = py_tuple_get(arguments, index)
+        store_i64(cursor, _ARG_INDEX, index + 1)
+        store_i64(cursor, _ARG_OWNED, 1)
+        store_i64(cursor, _ARG_LABEL, 1)
+        store_i64(cursor, _ARG_NUMBER, index + 1)
+        return item
+    if load_i64(cursor, _ARG_SINGLE_USED) != 0:
+        _percent_not_enough(1)
+        return null()
+    store_i64(cursor, _ARG_SINGLE_USED, 1)
+    store_i64(cursor, _ARG_LABEL, 0)
+    return arguments
+
+
+def _percent_release_argument(argument, cursor) -> None:
+    if load_i64(cursor, _ARG_OWNED) != 0 and ptr_is_null(argument) == 0:
+        py_decref(argument)
+    store_i64(cursor, _ARG_OWNED, 0)
+
+
+def _percent_star(arguments, cursor, data, spec, slot: int) -> int:
+    # A '*' width (slot 8) or precision (slot 16) from the next argument.
+    argument = _percent_next_argument(arguments, cursor)
+    if ptr_is_null(argument) != 0:
+        return -1
+    tag: int = _type_of(argument)
+    if tag != PY_TYPE_INT and tag != PY_TYPE_BOOL:
+        message = _buffer_new(64)
+        _buffer_cstr(message, cstr("* requires int, not "))
+        _append_type_name(message, argument)
+        _percent_release_argument(argument, cursor)
+        return _percent_arg_error(3, data, cursor, message)
+    value: int = 0
+    too_big: int = 0
+    if tag == PY_TYPE_BOOL:
+        if ptr_eq(argument, global_load_ptr("py_True")) != 0:
+            value = 1
+    else:
+        overflow = stack_alloc(8)
+        store_i64(overflow, 0, 0)
+        value = py_int_to_i64(argument, overflow)
+        if load_i32(overflow, 0) != 0:
+            too_big = 1
+        elif slot == 16 and (value > 2147483647 or value < -2147483648):
+            too_big = 1
+    _percent_release_argument(argument, cursor)
+    if too_big != 0:
+        message = _buffer_new(32)
+        if slot == 8:
+            _buffer_cstr(message, cstr("too big for width"))
+        else:
+            _buffer_cstr(message, cstr("too big for precision"))
+        return _percent_arg_error(15, data, cursor, message)
+    store_i64(spec, slot, value)
     return 0
 
 
-def _append_percent_text(state, rendered, data, start: int, conversion_pos: int) -> int:
-    if ptr_is_null(rendered) != 0 or _type_of(rendered) != PY_TYPE_STR:
-        if py_err_occurred() == 0:
-            py_raise_owned(py_exc_new(3, cstr("format argument cannot be converted to string")))
-        return -1
-    text = py_str_utf8(rendered)
-    length: int = py_str_byte_len(rendered)
-    width: int = _percent_width(data, start, conversion_pos)
-    precision: int = _percent_precision(data, start, conversion_pos)
-    left: int = _percent_has_flag(data, start, conversion_pos, 45)
-    if precision >= 0 and precision < length:
+def _percent_output_number(output, text, length: int, flags: int, width: int, conversion: int) -> int:
+    # unicode_format_arg_output for a numeric conversion: the sign (and a
+    # '#' base prefix) precede zero padding but follow space padding.
+    fill: int = 32
+    if (flags & _PCT_ZERO) != 0:
+        fill = 48
+    position: int = 0
+    sign_char: int = 0
+    has_sign: int = 1
+    first: int = 0
+    if length > 0:
+        first = load_i8(text, 0)
+    if first == 45 or first == 43:
+        sign_char = first
+        length = length - 1
+        position = 1
+    elif (flags & _PCT_SIGN) != 0:
+        sign_char = 43
+    elif (flags & _PCT_BLANK) != 0:
+        sign_char = 32
+    else:
+        has_sign = 0
+    if width < length:
+        width = length
+    if has_sign != 0:
+        if fill != 32:
+            _buffer_char(output, sign_char)
+        if width > length:
+            width = width - 1
+    prefixed: int = 0
+    if (flags & _PCT_ALT) != 0 and (conversion == 120 or conversion == 88 or conversion == 111):
+        prefixed = 1
+        if fill != 32:
+            _buffer_append(output, ptr_add(text, position), 2)
+            position = position + 2
+        width = width - 2
+        if width < 0:
+            width = 0
+        length = length - 2
+    if width > length and (flags & _PCT_LJUST) == 0:
+        _buffer_repeat(output, fill, width - length)
+        width = length
+    if fill == 32:
+        if has_sign != 0:
+            _buffer_char(output, sign_char)
+        if prefixed != 0:
+            _buffer_append(output, ptr_add(text, position), 2)
+            position = position + 2
+    _buffer_append(output, ptr_add(text, position), length)
+    if width > length:
+        _buffer_repeat(output, 32, width - length)
+    return 0
+
+
+def _percent_output_text(output, text, byte_len: int, flags: int, width: int, precision: int, count_chars: int) -> int:
+    # %s / %r / %a / %c: precision truncates, width pads with spaces; both
+    # count characters in str formatting and bytes in bytes formatting.
+    length: int = byte_len
+    if count_chars != 0:
+        length = _utf8_char_count(text, byte_len)
+    if precision >= 0 and length > precision:
+        if count_chars != 0:
+            byte_len = _utf8_prefix_bytes(text, byte_len, precision)
+        else:
+            byte_len = precision
         length = precision
     padding: int = 0
     if width > length:
         padding = width - length
-    if left == 0:
-        _buffer_repeat(state, 32, padding)
-    rc: int = _buffer_append(state, text, length)
-    if left != 0:
-        _buffer_repeat(state, 32, padding)
+    if (flags & _PCT_LJUST) == 0:
+        _buffer_repeat(output, 32, padding)
+    _buffer_append(output, text, byte_len)
+    if (flags & _PCT_LJUST) != 0:
+        _buffer_repeat(output, 32, padding)
+    return 0
+
+
+def _percent_integer(output, argument, data, cursor, conversion: int, flags: int, width: int, precision: int) -> int:
+    # mainformatlong + _PyUnicode_FormatLong.
+    hexish: int = 0
+    if conversion == 120 or conversion == 88 or conversion == 111:
+        hexish = 1
+    tag: int = _type_of(argument)
+    value = argument
+    owned: int = 0
+    if tag == PY_TYPE_FLOAT and hexish == 0:
+        value = py_int_from_f64_exact(py_float_to_f64(argument))
+        if ptr_is_null(value) != 0:
+            return -1
+        owned = 1
+    elif tag != PY_TYPE_INT and tag != PY_TYPE_BOOL:
+        if hexish != 0:
+            return _percent_type_error(data, cursor, conversion, cstr("an integer"), argument)
+        return _percent_type_error(data, cursor, conversion, cstr("a real number"), argument)
+    base: int = 10
+    if conversion == 120 or conversion == 88:
+        base = 16
+    elif conversion == 111:
+        base = 8
+    meta = stack_alloc(24)
+    digits_text = _int_digit_text(value, base, meta)
+    if owned != 0:
+        py_decref(value)
+    if ptr_is_null(digits_text) != 0:
+        py_raise_owned(py_exc_new(19, cstr("out of memory")))
+        return -1
+    count: int = load_i64(meta, 16)
+    body = _buffer_new(count + precision + 8)
+    if load_i64(meta, 0) != 0:
+        _buffer_char(body, 45)
+    if (flags & _PCT_ALT) != 0 and base != 10:
+        _buffer_char(body, 48)
+        if conversion == 111:
+            _buffer_char(body, 111)
+        else:
+            _buffer_char(body, conversion)
+    if precision > count:
+        _buffer_repeat(body, 48, precision - count)
+    source = ptr_add(digits_text, load_i64(meta, 8))
+    index: int = 0
+    while index < count:
+        byte: int = load_i8(source, index)
+        if conversion == 88 and byte >= 97 and byte <= 102:
+            byte = byte - 32
+        _buffer_char(body, byte)
+        index = index + 1
+    free(digits_text)
+    _percent_output_number(output, load_ptr(body, 0), load_i64(body, 8), flags, width, conversion)
+    _buffer_free(body)
+    return 0
+
+
+def _percent_float(output, argument, data, cursor, conversion: int, flags: int, width: int, precision: int) -> int:
+    # formatfloat: PyOS_double_to_string(x, conversion, precision, alt).
+    tag: int = _type_of(argument)
+    value: float = 0.0
+    if tag == PY_TYPE_FLOAT:
+        value = py_float_to_f64(argument)
+    elif tag == PY_TYPE_INT or tag == PY_TYPE_BOOL:
+        value = _int_to_double(argument)
+        if py_err_occurred() != 0:
+            return -1
+    else:
+        return _percent_type_error(data, cursor, conversion, cstr("a real number"), argument)
+    if precision < 0:
+        precision = 6
+    body = _buffer_new(precision + 64)
+    alt: int = 0
+    if (flags & _PCT_ALT) != 0:
+        alt = 1
+    _float_text(body, value, conversion, precision, 0, 0, alt, 0)
+    _percent_output_number(output, load_ptr(body, 0), load_i64(body, 8), flags, width, conversion)
+    _buffer_free(body)
+    return 0
+
+
+def _percent_char(output, argument, data, cursor, flags: int, width: int, bytes_mode: int) -> int:
+    tag: int = _type_of(argument)
+    if bytes_mode != 0:
+        payload = _bytes_payload(argument)
+        if ptr_is_null(payload) == 0 and tag != PY_TYPE_MEMORYVIEW:
+            payload_length: int = _bytes_payload_length(argument)
+            if payload_length != 1:
+                message = _buffer_new(96)
+                _buffer_cstr(
+                    message,
+                    cstr("%c requires an integer in range(256) or a single byte, not a bytes object of length "),
+                )
+                _buffer_decimal(message, payload_length)
+                return _percent_arg_error(3, data, cursor, message)
+            return _percent_output_text(output, payload, 1, flags, width, -1, 0)
+        if tag != PY_TYPE_INT and tag != PY_TYPE_BOOL:
+            return _percent_type_error(
+                data, cursor, 99, cstr("an integer in range(256) or a single byte"), argument
+            )
+        overflow = stack_alloc(8)
+        store_i64(overflow, 0, 0)
+        byte_value: int = py_int_to_i64(argument, overflow)
+        if load_i32(overflow, 0) != 0 or byte_value < 0 or byte_value > 255:
+            message = _buffer_new(48)
+            _buffer_cstr(message, cstr("%c argument not in range(256)"))
+            return _percent_arg_error(15, data, cursor, message)
+        one = stack_alloc(1)
+        store_i8(one, 0, byte_value)
+        return _percent_output_text(output, one, 1, flags, width, -1, 0)
+    if tag == PY_TYPE_STR:
+        text = py_str_utf8(argument)
+        byte_len: int = py_str_byte_len(argument)
+        chars: int = _utf8_char_count(text, byte_len)
+        if chars != 1:
+            message = _buffer_new(96)
+            _buffer_cstr(
+                message,
+                cstr("%c requires an integer or a unicode character, not a string of length "),
+            )
+            _buffer_decimal(message, chars)
+            return _percent_arg_error(3, data, cursor, message)
+        return _percent_output_text(output, text, byte_len, flags, width, -1, 1)
+    if tag != PY_TYPE_INT and tag != PY_TYPE_BOOL:
+        return _percent_type_error(data, cursor, 99, cstr("an integer or a unicode character"), argument)
+    overflow2 = stack_alloc(8)
+    store_i64(overflow2, 0, 0)
+    point: int = py_int_to_i64(argument, overflow2)
+    if load_i32(overflow2, 0) != 0 or point < 0 or point > 1114111:
+        message = _buffer_new(48)
+        _buffer_cstr(message, cstr("%c argument not in range(0x110000)"))
+        return _percent_arg_error(15, data, cursor, message)
+    character = py_chr_from_i64(point)
+    if ptr_is_null(character) != 0:
+        return -1
+    rc: int = _percent_output_text(
+        output, py_str_utf8(character), py_str_byte_len(character), flags, width, -1, 1
+    )
+    py_decref(character)
     return rc
 
 
-def _i64_render(value: int, base: int, uppercase: int, alternate: int):
-    negative: int = 0
-    if value < 0:
-        negative = 1
-        value = 0 - value
-    reverse = stack_alloc(80)
-    count: int = 0
-    if value == 0:
-        store_i8(reverse, 0, 48)
-        count = 1
-    while value > 0:
-        digit: int = value % base
-        byte: int = 48 + digit
-        if digit >= 10:
-            byte = (65 if uppercase != 0 else 97) + digit - 10
-        store_i8(reverse, count, byte)
-        count = count + 1
-        value = value // base
-    state = _buffer_new(count + 5)
-    if negative != 0:
-        _buffer_char(state, 45)
-    if alternate != 0 and base != 10:
-        _buffer_char(state, 48)
-        if base == 16:
-            _buffer_char(state, 88 if uppercase != 0 else 120)
-        elif base == 8:
-            _buffer_char(state, 111)
-        else:
-            _buffer_char(state, 98)
-    i: int = count - 1
-    while i >= 0:
-        _buffer_char(state, load_i8(reverse, i))
-        i = i - 1
-    result = _buffer_string(state)
-    _buffer_free(state)
-    return result
-
-
-def _append_percent_integer(state, argument, data, start: int, conversion_pos: int, conversion: int) -> int:
-    tag: int = _type_of(argument)
-    if tag != PY_TYPE_BOOL and tag != PY_TYPE_INT:
-        py_raise_owned(py_exc_new(3, cstr("integer format requires a number")))
-        return -1
-    integer: int = 0
-    if tag == PY_TYPE_BOOL:
-        if ptr_eq(argument, global_load_ptr("py_True")) != 0:
-            integer = 1
+def _percent_text(output, argument, data, cursor, conversion: int, flags: int, width: int, precision: int, bytes_mode: int) -> int:
+    if bytes_mode != 0 and (conversion == 115 or conversion == 98):
+        payload = _bytes_payload(argument)
+        if ptr_is_null(payload) == 0:
+            return _percent_output_text(
+                output, payload, _bytes_payload_length(argument), flags, width, precision, 0
+            )
+        # Only an object with __bytes__ converts; bytes(5) would be five NULs.
+        converted = null()
+        tag: int = _type_of(argument)
+        if tag == PY_TYPE_INSTANCE or tag >= PY_TYPE_USER_CLASS_START:
+            method = py_obj_getattr(argument, cstr("__bytes__"))
+            if ptr_is_null(method) == 0:
+                empty = py_tuple_new(0)
+                converted = py_obj_call(method, empty, global_load_ptr("py_None"))
+                py_decref(empty)
+                py_decref(method)
+                if ptr_is_null(converted) != 0:
+                    return -1
+            elif py_err_occurred() != 0:
+                py_clear_exception()
+        if ptr_is_null(converted) != 0 or _bytes_payload_length(converted) < 0:
+            if ptr_is_null(converted) == 0:
+                py_decref(converted)
+            message = _buffer_new(96)
+            _buffer_cstr(
+                message,
+                cstr("%b requires a bytes-like object, or an object that implements __bytes__, not "),
+            )
+            _append_type_name(message, argument)
+            return _percent_arg_error(3, data, cursor, message)
+        rc: int = _percent_output_text(
+            output,
+            _bytes_payload(converted),
+            _bytes_payload_length(converted),
+            flags,
+            width,
+            precision,
+            0,
+        )
+        py_decref(converted)
+        return rc
+    rendered = null()
+    if conversion == 115 and _type_of(argument) == PY_TYPE_STR:
+        py_incref(argument)
+        rendered = argument
+    elif conversion == 115:
+        rendered = py_obj_str(argument)
+    elif conversion == 114 and bytes_mode == 0:
+        rendered = py_obj_repr(argument)
     else:
-        integer = py_int_value_i64(argument)
-    base: int = 10
-    uppercase: int = 0
-    if conversion == 120 or conversion == 88:
-        base = 16
-        if conversion == 88:
-            uppercase = 1
-    elif conversion == 111:
-        base = 8
-    alternate: int = _percent_has_flag(data, start, conversion_pos, 35)
-    rendered = _i64_render(integer, base, uppercase, alternate)
-    if ptr_is_null(rendered) != 0:
+        rendered = py_obj_ascii(argument)
+    if ptr_is_null(rendered) != 0 or _type_of(rendered) != PY_TYPE_STR:
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(3, cstr("format argument cannot be converted to string")))
         return -1
-    text = py_str_utf8(rendered)
-    length: int = py_str_byte_len(rendered)
-    plus: int = _percent_has_flag(data, start, conversion_pos, 43)
-    space: int = _percent_has_flag(data, start, conversion_pos, 32)
-    signed = rendered
-    if length > 0 and load_i8(text, 0) != 45 and (plus != 0 or space != 0):
-        signed_state = _buffer_new(length + 2)
-        _buffer_char(signed_state, 43 if plus != 0 else 32)
-        _buffer_append(signed_state, text, length)
-        signed = _buffer_string(signed_state)
-        _buffer_free(signed_state)
-        py_decref(rendered)
-        text = py_str_utf8(signed)
-        length = py_str_byte_len(signed)
-    width: int = _percent_width(data, start, conversion_pos)
-    precision: int = _percent_precision(data, start, conversion_pos)
-    left: int = _percent_has_flag(data, start, conversion_pos, 45)
-    zero: int = _percent_has_flag(data, start, conversion_pos, 48)
-    if precision >= 0:
-        zero = 0
-    padding: int = 0
-    if width > length:
-        padding = width - length
-    if left == 0 and zero == 0:
-        _buffer_repeat(state, 32, padding)
-    prefix: int = 0
-    if length > 0 and (load_i8(text, 0) == 45 or load_i8(text, 0) == 43 or load_i8(text, 0) == 32):
-        prefix = 1
-        _buffer_char(state, load_i8(text, 0))
-    if left == 0 and zero != 0:
-        _buffer_repeat(state, 48, padding)
-    digit_start: int = prefix
-    if length >= prefix + 2 and load_i8(text, prefix) == 48:
-        next_byte: int = load_i8(text, prefix + 1)
-        if next_byte == 120 or next_byte == 88 or next_byte == 111 or next_byte == 98:
-            _buffer_char(state, 48)
-            _buffer_char(state, next_byte)
-            digit_start = prefix + 2
-    digits: int = length - digit_start
-    if precision > digits:
-        _buffer_repeat(state, 48, precision - digits)
-    _buffer_append(state, ptr_add(text, digit_start), digits)
-    if left != 0:
-        _buffer_repeat(state, 32, padding)
-    py_decref(signed)
-    return 0
-
-
-def _append_percent_float(state, argument, data, start: int, conversion_pos: int, conversion: int) -> int:
-    precision: int = _percent_precision(data, start, conversion_pos)
-    if precision < 0:
-        precision = 6
-    alternate: int = _percent_has_flag(data, start, conversion_pos, 35)
-    plus: int = _percent_has_flag(data, start, conversion_pos, 43)
-    space: int = _percent_has_flag(data, start, conversion_pos, 32)
-    output = stack_alloc(800)
-    length: int = pcc_stdio_format_float_raw(
+    rc2: int = _percent_output_text(
         output,
-        py_float_to_f64(argument),
-        conversion,
+        py_str_utf8(rendered),
+        py_str_byte_len(rendered),
+        flags,
+        width,
         precision,
-        alternate,
-        plus,
-        space,
+        1 - bytes_mode,
     )
-    width: int = _percent_width(data, start, conversion_pos)
-    left: int = _percent_has_flag(data, start, conversion_pos, 45)
-    zero: int = _percent_has_flag(data, start, conversion_pos, 48)
-    padding: int = 0
-    if width > length:
-        padding = width - length
-    if left == 0 and zero == 0:
-        _buffer_repeat(state, 32, padding)
-    source: int = 0
-    if left == 0 and zero != 0:
-        if length > 0 and (load_i8(output, 0) == 45 or load_i8(output, 0) == 43 or load_i8(output, 0) == 32):
-            _buffer_char(state, load_i8(output, 0))
-            source = 1
-        _buffer_repeat(state, 48, padding)
-    _buffer_append(state, ptr_add(output, source), length - source)
-    if left != 0:
-        _buffer_repeat(state, 32, padding)
-    return 0
+    py_decref(rendered)
+    return rc2
 
 
 def _bytes_payload(value):
@@ -1396,9 +2242,6 @@ def _bytes_payload_length(value) -> int:
 
 
 def _mapping_argument(arguments, data, key_start: int, key_length: int, bytes_key: int):
-    if _type_of(arguments) != PY_TYPE_DICT:
-        py_raise_owned(py_exc_new(3, cstr("format requires a mapping")))
-        return null()
     key = null()
     if bytes_key != 0:
         key = py_bytes_new(ptr_add(data, key_start), key_length)
@@ -1407,152 +2250,221 @@ def _mapping_argument(arguments, data, key_start: int, key_length: int, bytes_ke
     if ptr_is_null(key) != 0:
         return null()
     value = py_dict_get(arguments, key)
-    py_decref(key)
     if ptr_is_null(value) != 0:
-        py_raise_owned(py_exc_new(4, cstr("format key not found")))
+        # KeyError('a'): the missing key itself, as CPython raises it.
+        py_raise_owned(py_exc_new_with_value(4, key))
+    py_decref(key)
     return value
 
 
 def _format_percent(data, length: int, arguments, bytes_mode: int):
     output = _buffer_new(length + 64)
     if ptr_is_null(output) != 0:
-        py_raise_owned(py_exc_new(7, cstr("out of memory")))
+        py_raise_owned(py_exc_new(19, cstr("out of memory")))
         return null()
-    arg_state = stack_alloc(24)
-    store_i64(arg_state, 0, 0)
-    store_i64(arg_state, 8, 0)
-    store_i64(arg_state, 16, 0)
+    cursor = stack_alloc(_ARG_BYTES)
+    offset: int = 0
+    while offset < _ARG_BYTES:
+        store_i64(cursor, offset, 0)
+        offset = offset + 8
+    spec = stack_alloc(24)
+    arguments_tag: int = _type_of(arguments)
+    is_mapping: int = 0
+    if arguments_tag == PY_TYPE_DICT:
+        is_mapping = 1
+    if arguments_tag == PY_TYPE_TUPLE:
+        store_i64(cursor, _ARG_TUPLE, 1)
+    used_key: int = 0
     failed: int = 0
     position: int = 0
     while position < length and failed == 0:
         byte: int = load_i8(data, position)
         if byte != 37:
-            if _buffer_char(output, byte) != 0:
-                failed = 1
+            run: int = position
+            while run < length and load_i8(data, run) != 37:
+                run = run + 1
+            _buffer_append(output, ptr_add(data, position), run - position)
+            position = run
+            continue
+        percent: int = position
+        position = position + 1
+        if position < length and load_i8(data, position) == 37:
+            _buffer_char(output, 37)
             position = position + 1
-        elif position + 1 < length and load_i8(data, position + 1) == 37:
-            if _buffer_char(output, 37) != 0:
+            continue
+        argument = null()
+        keyed: int = 0
+        if position < length and load_i8(data, position) == 40:
+            if is_mapping == 0:
+                message = _buffer_new(64)
+                _buffer_cstr(message, cstr("format requires a mapping, not "))
+                _append_type_name(message, arguments)
+                _raise_buffer_error(message, 3)
                 failed = 1
-            position = position + 2
+                break
+            depth: int = 1
+            key_start: int = position + 1
+            scan: int = key_start
+            while scan < length and depth > 0:
+                key_byte: int = load_i8(data, scan)
+                if key_byte == 40:
+                    depth = depth + 1
+                elif key_byte == 41:
+                    depth = depth - 1
+                scan = scan + 1
+            if depth > 0:
+                _percent_error_at(cstr("stray % or incomplete format key"), percent)
+                failed = 1
+                break
+            argument = _mapping_argument(
+                arguments, data, key_start, scan - 1 - key_start, bytes_mode
+            )
+            if ptr_is_null(argument) != 0:
+                failed = 1
+                break
+            store_i64(cursor, _ARG_OWNED, 1)
+            store_i64(cursor, _ARG_LABEL, 2)
+            store_i64(cursor, _ARG_KEY, key_start)
+            store_i64(cursor, _ARG_KEY_LEN, scan - 1 - key_start)
+            keyed = 1
+            used_key = 1
+            position = scan
+        flags: int = 0
+        scanning: int = 1
+        while scanning != 0 and position < length:
+            flag_byte: int = load_i8(data, position)
+            if flag_byte == 45:
+                flags = flags | _PCT_LJUST
+            elif flag_byte == 43:
+                flags = flags | _PCT_SIGN
+            elif flag_byte == 32:
+                flags = flags | _PCT_BLANK
+            elif flag_byte == 35:
+                flags = flags | _PCT_ALT
+            elif flag_byte == 48:
+                flags = flags | _PCT_ZERO
+            else:
+                scanning = 0
+            if scanning != 0:
+                position = position + 1
+        store_i64(spec, 8, -1)
+        store_i64(spec, 16, -1)
+        if position < length and load_i8(data, position) == 42:
+            if keyed != 0:
+                _percent_release_argument(argument, cursor)
+                _percent_error_at(cstr("* cannot be used with a parenthesised mapping key"), percent)
+                failed = 1
+                break
+            if _percent_star(arguments, cursor, data, spec, 8) != 0:
+                failed = 1
+                break
+            if load_i64(spec, 8) < 0:
+                flags = flags | _PCT_LJUST
+                store_i64(spec, 8, 0 - load_i64(spec, 8))
+            position = position + 1
+        elif position < length and _is_digit_byte(load_i8(data, position)) != 0:
+            store_i64(spec, 8, _parse_digits(data, position))
+            position = _skip_digits(data, position)
+        if position < length and load_i8(data, position) == 46:
+            position = position + 1
+            if position < length and load_i8(data, position) == 42:
+                if keyed != 0:
+                    _percent_release_argument(argument, cursor)
+                    _percent_error_at(cstr("* cannot be used with a parenthesised mapping key"), percent)
+                    failed = 1
+                    break
+                if _percent_star(arguments, cursor, data, spec, 16) != 0:
+                    failed = 1
+                    break
+                if load_i64(spec, 16) < 0:
+                    store_i64(spec, 16, 0)
+                position = position + 1
+            else:
+                store_i64(spec, 16, _parse_digits(data, position))
+                position = _skip_digits(data, position)
+        if position < length:
+            modifier: int = load_i8(data, position)
+            if modifier == 104 or modifier == 108 or modifier == 76:
+                position = position + 1
+        if position >= length:
+            _percent_release_argument(argument, cursor)
+            _percent_error_at(cstr("stray %"), percent)
+            failed = 1
+            break
+        conversion: int = load_i8(data, position)
+        position = position + 1
+        if keyed == 0:
+            if is_mapping != 0 and used_key != 0:
+                _percent_error_at(cstr("format requires a parenthesised mapping key"), percent)
+                failed = 1
+                break
+            argument = _percent_next_argument(arguments, cursor)
+            if ptr_is_null(argument) != 0:
+                failed = 1
+                break
+        width: int = load_i64(spec, 8)
+        precision: int = load_i64(spec, 16)
+        rc: int = 0
+        if (
+            conversion == 115
+            or conversion == 114
+            or conversion == 97
+            or (bytes_mode != 0 and conversion == 98)
+        ):
+            rc = _percent_text(output, argument, data, cursor, conversion, flags, width, precision, bytes_mode)
+        elif (
+            conversion == 100
+            or conversion == 105
+            or conversion == 117
+            or conversion == 120
+            or conversion == 88
+            or conversion == 111
+        ):
+            rc = _percent_integer(output, argument, data, cursor, conversion, flags, width, precision)
+        elif (
+            conversion == 101
+            or conversion == 69
+            or conversion == 102
+            or conversion == 70
+            or conversion == 103
+            or conversion == 71
+        ):
+            rc = _percent_float(output, argument, data, cursor, conversion, flags, width, precision)
+        elif conversion == 99:
+            rc = _percent_char(output, argument, data, cursor, flags, width, bytes_mode)
         else:
-            spec_start: int = position + 1
-            scan_start: int = spec_start
-            argument = null()
-            owned: int = 0
-            if spec_start < length and load_i8(data, spec_start) == 40:
-                key_start: int = spec_start + 1
-                key_end: int = key_start
-                while key_end < length and load_i8(data, key_end) != 41:
-                    key_end = key_end + 1
-                if key_end >= length:
-                    py_raise_owned(py_exc_new(2, cstr("incomplete format key")))
-                    failed = 1
-                else:
-                    argument = _mapping_argument(
-                        arguments, data, key_start, key_end - key_start, bytes_mode
-                    )
-                    owned = 1
-                    scan_start = key_end + 1
-            conversion_pos: int = scan_start
-            if failed == 0:
-                conversion_pos = _scan_percent_conversion(data, scan_start, length)
-                if conversion_pos >= length:
-                    py_raise_owned(py_exc_new(2, cstr("incomplete format")))
-                    failed = 1
-            if failed == 0 and ptr_is_null(argument) != 0:
-                argument = _percent_next_argument(arguments, arg_state)
-                owned = load_i64(arg_state, 16)
-                if ptr_is_null(argument) != 0:
-                    failed = 1
-            if failed == 0:
-                conversion: int = load_i8(data, conversion_pos)
-                if conversion == 115 or conversion == 114 or (bytes_mode != 0 and (conversion == 98 or conversion == 97)):
-                    rendered = null()
-                    if bytes_mode != 0 and (conversion == 115 or conversion == 98):
-                        payload = _bytes_payload(argument)
-                        payload_length: int = _bytes_payload_length(argument)
-                        if ptr_is_null(payload) != 0:
-                            py_raise_owned(py_exc_new(3, cstr("%b requires a bytes-like object")))
-                            failed = 1
-                        else:
-                            width: int = _percent_width(data, scan_start, conversion_pos)
-                            precision: int = _percent_precision(data, scan_start, conversion_pos)
-                            left: int = _percent_has_flag(data, scan_start, conversion_pos, 45)
-                            if precision >= 0 and precision < payload_length:
-                                payload_length = precision
-                            padding: int = 0
-                            if width > payload_length:
-                                padding = width - payload_length
-                            if left == 0:
-                                _buffer_repeat(output, 32, padding)
-                            _buffer_append(output, payload, payload_length)
-                            if left != 0:
-                                _buffer_repeat(output, 32, padding)
-                    else:
-                        if conversion == 114:
-                            rendered = py_obj_repr(argument)
-                        elif bytes_mode != 0 and conversion == 97:
-                            rendered = py_obj_ascii(argument)
-                        else:
-                            rendered = py_obj_str(argument)
-                            if ptr_is_null(rendered) != 0:
-                                rendered = py_obj_repr(argument)
-                        if ptr_is_null(rendered) != 0:
-                            failed = 1
-                        elif _append_percent_text(
-                            output, rendered, data, scan_start, conversion_pos
-                        ) != 0:
-                            failed = 1
-                        if ptr_is_null(rendered) == 0:
-                            py_decref(rendered)
-                elif conversion == 100 or conversion == 105 or conversion == 117 or conversion == 120 or conversion == 88 or conversion == 111:
-                    if _append_percent_integer(
-                        output, argument, data, scan_start, conversion_pos, conversion
-                    ) != 0:
-                        failed = 1
-                elif conversion == 101 or conversion == 69 or conversion == 102 or conversion == 70 or conversion == 103 or conversion == 71:
-                    if _append_percent_float(
-                        output, argument, data, scan_start, conversion_pos, conversion
-                    ) != 0:
-                        failed = 1
-                elif conversion == 99:
-                    payload = _bytes_payload(argument)
-                    payload_length = _bytes_payload_length(argument)
-                    if bytes_mode != 0 and ptr_is_null(payload) == 0:
-                        if payload_length != 1:
-                            py_raise_owned(py_exc_new(3, cstr("%c requires a single byte")))
-                            failed = 1
-                        else:
-                            _buffer_char(output, load_i8(payload, 0))
-                    elif bytes_mode == 0 and _type_of(argument) == PY_TYPE_STR:
-                        if py_str_byte_len(argument) != 1:
-                            py_raise_owned(py_exc_new(3, cstr("%c requires int or char")))
-                            failed = 1
-                        else:
-                            _buffer_char(output, load_i8(py_str_utf8(argument), 0))
-                    elif _type_of(argument) == PY_TYPE_BOOL or _type_of(argument) == PY_TYPE_INT:
-                        integer: int = py_int_value_i64(argument)
-                        if bytes_mode != 0 and (integer < 0 or integer > 255):
-                            py_raise_owned(py_exc_new(2, cstr("%c arg not in range(256)")))
-                            failed = 1
-                        else:
-                            _buffer_char(output, integer & 255)
-                    else:
-                        py_raise_owned(py_exc_new(3, cstr("%c requires int or char")))
-                        failed = 1
-                else:
-                    py_raise_owned(py_exc_new(2, cstr("unsupported format character")))
-                    failed = 1
-                position = conversion_pos + 1
-            if owned != 0 and ptr_is_null(argument) == 0:
-                py_decref(argument)
-            store_i64(arg_state, 16, 0)
+            message = _buffer_new(64)
+            _buffer_cstr(message, cstr("unsupported format %"))
+            _buffer_char(message, conversion)
+            _buffer_cstr(message, cstr(" at position "))
+            _buffer_decimal(message, percent)
+            _raise_buffer_error(message, 2)
+            rc = -1
+        _percent_release_argument(argument, cursor)
+        if rc != 0:
+            failed = 1
+    if failed == 0 and is_mapping == 0:
+        required: int = 0
+        given: int = 0
+        if load_i64(cursor, _ARG_TUPLE) != 0:
+            required = load_i64(cursor, _ARG_INDEX)
+            given = py_tuple_len(arguments)
+        elif load_i64(cursor, _ARG_SINGLE_USED) == 0:
+            given = 1
+        if required < given:
+            message = _buffer_new(96)
+            _buffer_cstr(message, cstr("not all arguments converted during "))
+            if bytes_mode != 0:
+                _buffer_cstr(message, cstr("bytes formatting (required "))
+            else:
+                _buffer_cstr(message, cstr("string formatting (required "))
+            _buffer_decimal(message, required)
+            _buffer_cstr(message, cstr(", got "))
+            _buffer_decimal(message, given)
+            _buffer_char(message, 41)
+            _raise_buffer_error(message, 3)
+            failed = 1
     result = null()
-    if failed == 0:
-        if load_i64(arg_state, 8) != 0 and _type_of(arguments) == PY_TYPE_TUPLE:
-            if load_i64(arg_state, 0) < py_tuple_len(arguments):
-                py_raise_owned(py_exc_new(3, cstr("not all arguments converted during formatting")))
-                failed = 1
     if failed == 0:
         if bytes_mode != 0:
             result = _buffer_bytes(output)

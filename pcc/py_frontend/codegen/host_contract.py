@@ -28,6 +28,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_class_attr_runtime_state",
     "_class_type_export_cache",
     "_closure_boxed_params",
+    "_hoisted_qualnames",
     "_cpy_env_flags",
     "_cpy_init_emitted_fns",
     "_cpy_module_env",

@@ -48,10 +48,8 @@ main()
 """
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_dyn_valuebox_weakref_raises_typeerror(tmp_path, monkeypatch, runtime_cc):
-    if runtime_cc:
-        monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     src = tmp_path / "weak_dyn_probe.py"
     exe = tmp_path / "weak_dyn_probe"
     src.write_text(dedent(_SOURCE), encoding="utf-8")
@@ -101,15 +99,13 @@ main()
 """
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_weak_dicts_reject_valueclass_payloads(tmp_path, monkeypatch, runtime_cc):
     # Weak*Dictionary set paths inherit the py_weakref_new rejection;
     # the subscript-store emission sites needed the same post-call
     # err-check as weakref.ref (the TypeError otherwise skipped the
     # enclosing try/except). CPython analogue: d[3] = 5 on a
     # WeakKeyDictionary raises TypeError.
-    if runtime_cc:
-        monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     src = tmp_path / "weak_dict_probe.py"
     exe = tmp_path / "weak_dict_probe"
     src.write_text(dedent(_WEAK_DICT_SOURCE), encoding="utf-8")

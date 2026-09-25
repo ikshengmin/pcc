@@ -31,6 +31,22 @@ def pcc_platform_monotonic_us() -> i64:
     return load_i64(value, 0) * 1000000 + unsigned_div_i64(load_i64(value, 8), 1000)
 
 
+@c_abi_export("pcc_platform_wall_time_ns")
+def pcc_platform_wall_time_ns() -> i64:
+    value = stack_alloc(16)
+    if clock_gettime(0, value) != 0:
+        return 0
+    return load_i64(value, 0) * 1000000000 + load_i64(value, 8)
+
+
+@c_abi_export("pcc_platform_monotonic_ns")
+def pcc_platform_monotonic_ns() -> i64:
+    value = stack_alloc(16)
+    if clock_gettime(1, value) != 0:
+        return 0
+    return load_i64(value, 0) * 1000000000 + load_i64(value, 8)
+
+
 @c_abi_export("pcc_platform_sleep_ns")
 def pcc_platform_sleep_ns(delay_ns: i64) -> i64:
     if delay_ns <= 0:

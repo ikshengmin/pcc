@@ -26,57 +26,12 @@ class RuntimeArchiveError(RuntimeError):
     """Runtime archive selection or construction failed closed."""
 
 
-def makefile_variable_words(runtime_dir: str, name: str) -> list[str]:
-    makefile = os.path.join(str(runtime_dir), "Makefile")
-    if not os.path.isfile(makefile):
-        return []
-    try:
-        with open(makefile, "r", encoding="utf-8") as stream:
-            lines = stream.read().splitlines()
-    except OSError:
-        return []
-    out: list[str] = []
-    index = 0
-    while index < len(lines):
-        line = lines[index].strip()
-        if not (line.startswith(name + " =") or line.startswith(name + " +=")):
-            index += 1
-            continue
-        line = line.split("=", 1)[1].strip()
-        while True:
-            continued = line.endswith("\\")
-            if continued:
-                line = line[:-1].strip()
-            if line:
-                out.extend(line.split())
-            if not continued:
-                break
-            index += 1
-            if index >= len(lines):
-                break
-            line = lines[index].strip()
-        index += 1
-    return out
-
-
-def pcc_python_replaced_c_modules(runtime_dir: str) -> set[str]:
-    py_modules = set(makefile_variable_words(runtime_dir, "PY_MODULES"))
-    replaced: set[str] = set()
-    for word in makefile_variable_words(runtime_dir, "PY_REPLACED_C_MODULES"):
-        if word == "$(PY_MODULES)":
-            replaced.update(py_modules)
-        else:
-            replaced.add(word)
-    return replaced
-
-
 def compiler_sources_newer_than(
     pcc_dir: str,
     archive_base: str,
     archive_mtime: float,
 ) -> bool:
     if archive_base not in (
-        "libpy_runtime_pcc.a",
         "libpy_runtime_pcc_py.a",
         "libpy_runtime_pcc_py_libpython.a",
     ):
@@ -163,12 +118,9 @@ def requires_provenance(archive: str) -> bool:
 
 
 def requires_c_bundle_validation(archive: str) -> bool:
-    return os.path.basename(archive) in (
-        "libpy_runtime.a",
-        "libpy_runtime_libpython.a",
-        "libpy_runtime_pcc.a",
-        "libpy_runtime_pcc_py_libpython.a",
-    )
+    # The libpython archive carries a C-API inventory instead of a provenance
+    # manifest (it adds the cc-built CPython bridge to the pcc-Python archive).
+    return os.path.basename(archive) == "libpy_runtime_pcc_py_libpython.a"
 
 
 def c_bundle_valid(archive: str, *, host_python_command) -> bool:
@@ -470,24 +422,6 @@ def run_runtime_make(runtime_dir: str, make_cmd, *, verbose: bool) -> None:
         _remove_runtime_build_lock(lock_dir, owner_path)
 
 
-def cc_mode(raw: str) -> str:
-    value = str(raw or "").strip().lower()
-    if value in ("cc", "c", "host"):
-        return "cc"
-    if value in ("pcc", "self"):
-        return "pcc"
-    return "pcc"
-
-
-def high_mode(raw: str) -> str:
-    value = str(raw or "").strip().lower()
-    if value in ("c", "cc"):
-        return "c"
-    if value in ("py", "python"):
-        return "py"
-    return "py"
-
-
 def host_python_for_make(executable: str) -> str:
     executable = str(executable)
     if executable and not os.path.isabs(executable):
@@ -511,7 +445,6 @@ def archive_stale(
     archive_codegen_stale,
     wheel_matches,
     compiler_sources_newer,
-    replaced_c_modules,
 ) -> bool:
     if not os.path.isfile(archive):
         return True
@@ -528,28 +461,13 @@ def archive_stale(
     archive_mtime = os.path.getmtime(archive)
     if compiler_sources_newer(archive_base, archive_mtime):
         return True
-    archive_uses_libpython = archive_base in (
-        "libpy_runtime_libpython.a",
-        "libpy_runtime_pcc_py_libpython.a",
-    )
-    archive_uses_pcc_python = archive_base in (
-        "libpy_runtime_pcc_py.a",
-        "libpy_runtime_pcc_py_libpython.a",
-    )
-    replaced = replaced_c_modules() if archive_uses_pcc_python else set()
-    header = os.path.join(runtime_dir, "include", "py_runtime.h")
-    if os.path.isfile(header) and os.path.getmtime(header) > archive_mtime:
-        return True
-    src_dir = os.path.join(runtime_dir, "src")
-    if os.path.isdir(src_dir):
-        for name in os.listdir(src_dir):
-            if not name.endswith(".c"):
-                continue
-            if name == "py_libpython.c" and not archive_uses_libpython:
-                continue
-            if name[:-2] in replaced:
-                continue
-            path = os.path.join(src_dir, name)
+    if archive_base == "libpy_runtime_pcc_py_libpython.a":
+        # The CPython bridge is the only C object in any runtime archive.
+        for path in (
+            os.path.join(runtime_dir, "src", "py_libpython.c"),
+            os.path.join(runtime_dir, "src", "py_internal.h"),
+            os.path.join(runtime_dir, "include", "py_runtime.h"),
+        ):
             if os.path.isfile(path) and os.path.getmtime(path) > archive_mtime:
                 return True
     if archive_base in (
@@ -579,14 +497,9 @@ def ensure_runtime(
     *,
     needs_libpython: bool,
     runtime_dir_default: str,
-    archive_default: str,
-    archive_libpython: str,
-    archive_pcc: str,
     archive_pcc_py: str,
     archive_pcc_py_libpython: str,
     archive_stale_check,
-    selected_cc_mode,
-    selected_high_mode,
     c_bundle_valid,
     archive_requires_provenance,
     archive_provenance_valid,
@@ -633,17 +546,9 @@ def ensure_runtime(
         raise RuntimeArchiveError(
             "explicit runtime directory not found: " + runtime_dir
         )
-    cc = selected_cc_mode()
-    high = selected_high_mode()
-    if cc == "pcc":
-        if high == "py":
-            archive = archive_pcc_py_libpython if needs_libpython else archive_pcc_py
-        elif needs_libpython:
-            archive = archive_libpython
-        else:
-            archive = archive_pcc
-    else:
-        archive = archive_libpython if needs_libpython else archive_default
+    # The runtime is the pcc-Python archive; libpython mode adds the CPython
+    # bridge object to it.  The host-cc and pcc-C runtime archives are retired.
+    archive = archive_pcc_py_libpython if needs_libpython else archive_pcc_py
     if runtime_dir != runtime_dir_default:
         archive = os.path.join(runtime_dir, os.path.basename(archive))
 
@@ -653,8 +558,6 @@ def ensure_runtime(
         logger(True, "[runtime] archive=" + str(archive))
         logger(True, "[runtime] makefile=" + os.path.join(runtime_dir, "Makefile"))
         logger(True, "[runtime] needs_libpython=" + str(needs_libpython))
-        logger(True, "[runtime] cc_mode=" + str(cc))
-        logger(True, "[runtime] high_mode=" + str(high))
         logger(True, "[runtime] archive_exists=" + str(os.path.isfile(archive)))
         if os.path.isfile(archive):
             logger(
@@ -735,39 +638,12 @@ def ensure_runtime(
                 _runtime_make_jobs = 4
             make_cmd.insert(1, "-B")
             make_cmd.insert(2, "-j" + str(_runtime_make_jobs))
-        if cc == "pcc":
-            if high == "py":
-                make_cmd.append(
-                    "libpy_runtime_pcc_py_libpython.a"
-                    if needs_libpython
-                    else "libpy_runtime_pcc_py.a"
-                )
-            else:
-                if needs_libpython:
-                    make_cmd.extend(
-                        [
-                            "PCC_WITH_LIBPYTHON=1",
-                            "LIB=libpy_runtime_libpython.a",
-                            "OBJDIR=build_libpython",
-                        ]
-                    )
-                else:
-                    make_cmd.append("libpy_runtime_pcc.a")
-            pcc_binary = resolve_pcc_binary()
-            if pcc_binary and high == "py":
-                make_cmd.append(f"PCC={pcc_binary}")
-                make_cmd.append(f"PYTHON={runtime_host_python()}")
-                make_cmd.append(
-                    "PCC_PYTHON_IR_PASSES=" + runtime_python_ir_pass_mode()
-                )
-        elif needs_libpython:
-            make_cmd.extend(
-                [
-                    "PCC_WITH_LIBPYTHON=1",
-                    "LIB=libpy_runtime_libpython.a",
-                    "OBJDIR=build_libpython",
-                ]
-            )
+        make_cmd.append(os.path.basename(archive))
+        pcc_binary = resolve_pcc_binary()
+        if pcc_binary:
+            make_cmd.append(f"PCC={pcc_binary}")
+            make_cmd.append(f"PYTHON={runtime_host_python()}")
+            make_cmd.append("PCC_PYTHON_IR_PASSES=" + runtime_python_ir_pass_mode())
         logger(verbose, "building runtime: " + join_strings(make_cmd, " "))
         try:
             run_make(make_cmd, verbose=verbose)

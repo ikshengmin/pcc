@@ -10,7 +10,12 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_move_register_line,
     emitted_movewide_instruction_line,
 )
-from .self_backend_float_bits import bits_to_float64, float32_to_bits, float64_to_bits
+from .self_backend_float_bits import (
+    bits_to_float64,
+    float32_to_bits,
+    float64_to_bits,
+    u64_as_i64,
+)
 from .self_backend_aarch64_fragments import AArch64EmissionFragments
 from .self_backend_ir import TypeDesc
 from .self_backend_value_arena import CompilerInt2
@@ -152,7 +157,7 @@ def emit_fp_hex_constant(value_type: TypeDesc, reg: str, token: str) -> list[str
     immediate = direct_fp_immediate_literal(bits_to_float64(bits))
     if immediate is not None:
         return [f"  fmov {reg}, #{immediate}"]
-    lines = emit_const_to_reg(TypeDesc("int", 64), "x12", bits)
+    lines = emit_const_to_reg(TypeDesc("int", 64), "x12", u64_as_i64(bits))
     lines.append(f"  fmov {reg}, x12")
     return lines
 
@@ -173,7 +178,7 @@ def emit_fp_constant(value_type: TypeDesc, reg: str, token: str) -> list[str]:
         lines.append(f"  fmov {reg}, w12")
         return lines
     bits = float64_to_bits(float(token))
-    lines = emit_const_to_reg(TypeDesc("int", 64), "x12", bits)
+    lines = emit_const_to_reg(TypeDesc("int", 64), "x12", u64_as_i64(bits))
     lines.append(f"  fmov {reg}, x12")
     return lines
 

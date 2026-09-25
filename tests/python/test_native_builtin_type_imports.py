@@ -77,7 +77,6 @@ def test_super_type_value_is_stable_and_hashable_without_libpython(tmp_path):
     executable = tmp_path / "super_type_value_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     compile_result = subprocess.run(
         [
             "uv",

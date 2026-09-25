@@ -15,7 +15,6 @@ import subprocess
 from pathlib import Path
 from textwrap import dedent
 
-import pytest
 
 from pcc.py_frontend.pipeline import compile_python
 
@@ -54,9 +53,7 @@ _EXPECTED = [
 ]
 
 
-def _build(tmp_path: Path, monkeypatch, runtime_cc: bool) -> Path:
-    if runtime_cc:
-        monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
+def _build(tmp_path: Path) -> Path:
     src = tmp_path / "sorted_probe.py"
     exe = tmp_path / "sorted_probe"
     src.write_text(dedent(_SOURCE), encoding="utf-8")
@@ -70,11 +67,10 @@ def _build(tmp_path: Path, monkeypatch, runtime_cc: bool) -> Path:
     return exe
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
-def test_sorted_merge_matches_cpython(tmp_path, monkeypatch, runtime_cc):
+def test_sorted_merge_matches_cpython(tmp_path):
     # _EXPECTED is the captured CPython output of _SOURCE; the boolean
     # line also pins STABILITY (1 == True keeps input order 1, True).
-    exe = _build(tmp_path, monkeypatch, runtime_cc)
+    exe = _build(tmp_path)
     proc = subprocess.run(
         [str(exe)], text=True, capture_output=True, check=True, timeout=30
     )
@@ -85,7 +81,7 @@ def test_sorted_merge_gc_relocating_backends(tmp_path, monkeypatch):
     # The ping-pong move design must keep every element GC-visible in a
     # live list slot; backends 3 (generational forwarding) and 4
     # (colored relocating) are the slot-visibility-sensitive ones.
-    exe = _build(tmp_path, monkeypatch, runtime_cc=False)
+    exe = _build(tmp_path)
     for backend in ("3", "4"):
         proc = subprocess.run(
             [str(exe)],
@@ -131,8 +127,7 @@ main()
 """
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
-def test_sorted_merge_releases_all_elements(tmp_path, monkeypatch, runtime_cc):
+def test_sorted_merge_releases_all_elements(tmp_path):
     # Refcount-balance regression for the merge sort: the ping-pong
     # reset and the C fill path MUST go through balanced slot stores
     # (pcc_gc_store_ptr increfs new / decrefs old). The original cut
@@ -141,8 +136,6 @@ def test_sorted_merge_releases_all_elements(tmp_path, monkeypatch, runtime_cc):
     # detected by this __del__-count probe (count must reach 64 once
     # the lists are cleared). Tuple keys keep CPython comparability
     # (unique first elements never compare the T payloads).
-    if runtime_cc:
-        monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     src = tmp_path / "sorted_leak_probe.py"
     exe = tmp_path / "sorted_leak_probe"
     src.write_text(dedent(_LEAK_SOURCE), encoding="utf-8")

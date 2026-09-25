@@ -5,6 +5,7 @@ __pcc_runtime_port__ = True
 from pcc.py_runtime.py.py_abi_constants import (
     PYINSTANCEOBJECT_CLS_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
+    PYOBJECTHEADER_REFCOUNT_OFFSET,
     PY_TYPE_CLASS,
     PY_TYPE_FUNC,
     PY_TYPE_GEN,
@@ -34,6 +35,7 @@ from pcc.unsafe import (
     ptr_eq,
     ptr_is_null,
     ptr_to_int,
+    stack_alloc,
     store_i8,
     store_i32,
     store_i64,
@@ -60,6 +62,10 @@ py_raise = extern("py_raise", (c_ptr,), c_void)
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+py_obj_format = extern("py_obj_format", (c_ptr, c_ptr), c_ptr)
+py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
+py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_func_call = extern("py_func_call", (c_ptr, c_ptr), c_ptr)
@@ -71,6 +77,8 @@ pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_object_id = extern("pcc_gc_object_id", (c_ptr,), c_int64)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 py_tls_exc_set = extern("py_tls_exc_set", (c_ptr,), c_void)
+pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
+pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
 
 
 def _type_of(obj) -> int:
@@ -202,178 +210,79 @@ def py_int_to_str_obj(o):
     return out
 
 
-def _store_rev_hex_digits(rev, mag: int) -> int:
-    ndigits: int = 0
-    while True:
-        digit: int = mag & 15
-        ch: int = 0
-        if digit < 10:
-            ch = 48 + digit
-        else:
-            ch = 97 + digit - 10
-        store_i8(rev, ndigits, ch)
-        ndigits = ndigits + 1
-        mag = mag >> 4
-        if mag == 0 or ndigits >= 32:
-            break
-    return ndigits
-
-
-def _store_min_i64_hex_digits(rev) -> int:
-    i: int = 0
-    while i < 15:
-        store_i8(rev, i, 48)
-        i = i + 1
-    store_i8(rev, 15, 56)
-    return 16
+def _int_format_spec(o, width: int, zero_pad: int, grouping: int, code: int):
+    # f"{o:[0][width][grouping]<code>}" through py_obj_format, the one
+    # CPython-compatible implementation: bignums print in the requested base
+    # and zero padding is grouped ("0,001,234").  The i64-only bodies these
+    # entry points used to have printed a bignum's hex format in DECIMAL.
+    spec = stack_alloc(40)
+    position: int = 0
+    if zero_pad != 0:
+        store_i8(spec, position, 48)
+        position = position + 1
+    if width > 0:
+        digits = stack_alloc(24)
+        count: int = 0
+        value: int = width
+        while value > 0:
+            store_i8(digits, count, 48 + value % 10)
+            value = value // 10
+            count = count + 1
+        while count > 0:
+            count = count - 1
+            store_i8(spec, position, load_i8(digits, count))
+            position = position + 1
+    if grouping != 0:
+        store_i8(spec, position, grouping)
+        position = position + 1
+    store_i8(spec, position, code)
+    position = position + 1
+    spec_obj = py_str_new(spec, position)
+    if ptr_is_null(spec_obj):
+        return null()
+    result = py_obj_format(o, spec_obj)
+    py_decref(spec_obj)
+    return result
 
 
 @c_abi_export("py_int_format_hex")
 def py_int_format_hex(o, width: int, zero_pad: int):
-    overflow = malloc(4)
-    if ptr_is_null(overflow):
-        return null()
-    store_i32(overflow, 0, 0)
-    v: int = py_int_to_i64(o, overflow)
-    overflowed: int = load_i32(overflow, 0)
-    free(overflow)
-    if overflowed != 0:
-        return py_int_to_str_obj(o)
-
-    neg: int = 0
-    mag: int = v
-    min_i64: int = -9223372036854775807
-    min_i64 = min_i64 - 1
-    if v < 0:
-        neg = 1
-        if v != min_i64:
-            mag = 0 - v
-
-    rev = malloc(32)
-    if ptr_is_null(rev):
-        return null()
-    ndigits: int = 0
-    if v == min_i64:
-        ndigits = _store_min_i64_hex_digits(rev)
-    else:
-        ndigits = _store_rev_hex_digits(rev, mag)
-
-    if width < 0:
-        width = 0
-    if width > 120:
-        width = 120
-    min_len: int = ndigits + neg
-    pad: int = width - min_len
-    if pad < 0:
-        pad = 0
-
-    buf = malloc(128)
-    if ptr_is_null(buf):
-        free(rev)
-        return null()
-    pos: int = 0
-    if neg != 0 and zero_pad != 0:
-        store_i8(buf, pos, 45)
-        pos = pos + 1
-    pad_ch: int = 32
-    if zero_pad != 0:
-        pad_ch = 48
-    i: int = 0
-    while i < pad and pos < 128:
-        store_i8(buf, pos, pad_ch)
-        pos = pos + 1
-        i = i + 1
-    if neg != 0 and zero_pad == 0 and pos < 128:
-        store_i8(buf, pos, 45)
-        pos = pos + 1
-    i = ndigits - 1
-    while i >= 0 and pos < 128:
-        store_i8(buf, pos, load_i8(rev, i) & 0xFF)
-        pos = pos + 1
-        i = i - 1
-    out = py_str_new(buf, pos)
-    free(buf)
-    free(rev)
-    return out
+    return _int_format_spec(o, width, zero_pad, 0, 120)
 
 
 @c_abi_export("py_int_format_decimal")
 def py_int_format_decimal(o, width: int, zero_pad: int, comma: int):
-    overflow = malloc(4)
-    if ptr_is_null(overflow):
-        return null()
-    store_i32(overflow, 0, 0)
-    v: int = py_int_to_i64(o, overflow)
-    overflowed: int = load_i32(overflow, 0)
-    free(overflow)
-    if overflowed != 0:
-        return py_int_to_str_obj(o)
+    # ``comma`` is the grouping byte: 0, ',' (44) or '_' (95).
+    return _int_format_spec(o, width, zero_pad, comma, 100)
 
-    neg: int = 0
-    mag: int = v
-    min_i64: int = -9223372036854775807
-    min_i64 = min_i64 - 1
-    if v < 0:
-        neg = 1
-        if v == min_i64:
-            return py_int_to_str_obj(o)
-        mag = 0 - v
 
-    rev = malloc(32)
-    if ptr_is_null(rev):
-        return null()
-    ndigits: int = 0
-    while True:
-        digit: int = mag % 10
-        store_i8(rev, ndigits, 48 + digit)
-        ndigits = ndigits + 1
-        mag = mag // 10
-        if mag == 0 or ndigits >= 32:
-            break
-
-    comma_count: int = 0
-    if comma != 0 and ndigits > 3:
-        comma_count = (ndigits - 1) // 3
-    if width < 0:
-        width = 0
-    if width > 120:
-        width = 120
-    min_len: int = ndigits + comma_count + neg
-    pad: int = width - min_len
-    if pad < 0:
-        pad = 0
-
-    buf = malloc(160)
-    if ptr_is_null(buf):
-        free(rev)
-        return null()
-    pos: int = 0
-    if neg != 0 and zero_pad != 0:
-        store_i8(buf, pos, 45)
-        pos = pos + 1
-    pad_ch: int = 32
-    if zero_pad != 0:
-        pad_ch = 48
-    i: int = 0
-    while i < pad and pos < 160:
-        store_i8(buf, pos, pad_ch)
-        pos = pos + 1
-        i = i + 1
-    if neg != 0 and zero_pad == 0 and pos < 160:
-        store_i8(buf, pos, 45)
-        pos = pos + 1
-    i = ndigits - 1
-    while i >= 0 and pos < 160:
-        store_i8(buf, pos, load_i8(rev, i) & 0xFF)
-        pos = pos + 1
-        if comma != 0 and i > 0 and (i % 3) == 0 and pos < 160:
-            store_i8(buf, pos, comma & 0xFF)
-            pos = pos + 1
-        i = i - 1
-    out = py_str_new(buf, pos)
-    free(buf)
-    free(rev)
-    return out
+def _raise_not_integer(o):
+    # CPython: "'float' object cannot be interpreted as an integer".
+    message = stack_alloc(160)
+    length: int = 0
+    store_i8(message, length, 39)
+    length = length + 1
+    name = py_obj_type_name(o)
+    if not ptr_is_null(name):
+        text = py_str_utf8(name)
+        count: int = py_str_byte_len(name)
+        if count > 100:
+            count = 100
+        index: int = 0
+        while index < count:
+            store_i8(message, length, load_i8(text, index))
+            length = length + 1
+            index = index + 1
+        py_decref(name)
+    suffix = cstr("' object cannot be interpreted as an integer")
+    index2: int = 0
+    while load_i8(suffix, index2) != 0:
+        store_i8(message, length, load_i8(suffix, index2))
+        length = length + 1
+        index2 = index2 + 1
+    store_i8(message, length, 0)
+    py_raise_owned(py_exc_new(3, message))
+    return null()
 
 
 def _int_based_repr(o, base: int, prefix_ch: int):
@@ -388,6 +297,11 @@ def _int_based_repr(o, base: int, prefix_ch: int):
     overflowed: int = load_i32(overflow, 0)
     free(overflow)
     if overflowed != 0:
+        if ptr_is_null(o) or _type_of(o) != PY_TYPE_INT:
+            # Not an int (py_int_to_i64 flags every non-number): hex(1.5) is
+            # a TypeError.  The bignum converter below would read a float's
+            # payload as bigint limbs.
+            return _raise_not_integer(o)
         # Bignum exceeding i64: full base-N conversion (was: wrongly returned
         # the DECIMAL value -> the C<->port drift; C raised). Mirrors
         # py_dunder.c py_int_based_repr.
@@ -533,6 +447,23 @@ def py_user_repr_dispatch(o):
     return _call_user_unary_method(func, o)
 
 
+@c_abi_export("py_obj_id")
+def py_obj_id(o) -> int:
+    """``id(o)``: the address, stable for the object's lifetime.
+
+    The forwarding collectors (GC3/GC4) move objects, so an address is not an
+    identity there; they report the stable object id instead (as
+    ``object.__hash__`` does), scaled by 16 so it never equals a tagged int's
+    odd value.
+    """
+    if ptr_is_null(o) or is_tagged_int(o):
+        return ptr_to_int(o)
+    backend: int = pcc_gc_backend()
+    if backend == 3 or backend == 4:
+        return pcc_gc_object_id(o) * 16
+    return ptr_to_int(o)
+
+
 def _identity_hash(o) -> int:
     # object.__hash__: identity.  The forwarding collectors move objects, so
     # they hash the stable object id instead of the address.
@@ -668,9 +599,19 @@ def py_user_del_dispatch(o) -> None:
     if ptr_is_null(saved_exc) == 0:
         py_incref(saved_exc)
         py_tls_exc_set(null())
+    # CPython's PyObject_CallFinalizerFromDealloc: resurrect the object for
+    # the call.  py_instance_dealloc runs this at refcount 0, and __del__'s
+    # argument tuple takes and drops a reference to self; without the extra
+    # count that drop hit zero and freed self inside the call, and the outer
+    # dealloc then re-tracked the freed cell (GC0's cycle collector later
+    # visited it).  Undo with the raw counter, not py_decref: returning to
+    # zero here is the caller's normal dealloc path, not a second one.
+    refcount_slot = ptr_add(o, PYOBJECTHEADER_REFCOUNT_OFFSET)
+    pcc_refcount_incref(refcount_slot)
     pcc_runtime_log_event_code(5, 2, tag, 0, o)
     _call_user_unary_method_void(func, o)
     pcc_runtime_log_event_code(5, 3, tag, 0, o)
+    pcc_refcount_decref(refcount_slot)
     py_clear_exception()
     if ptr_is_null(saved_exc) == 0:
         py_tls_exc_set(saved_exc)

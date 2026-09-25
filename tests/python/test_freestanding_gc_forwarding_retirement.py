@@ -25,7 +25,6 @@ STRICT_DISPATCHER_SOURCE = (
 STRICT_IDENTITY_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_forwarding_identity.py"
 STRICT_OBJECT_NODES_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_object_nodes.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
-C_ORACLE_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
 RUNTIME_ABI_SOURCE = REPO_ROOT / "pcc" / "py_frontend" / "codegen" / "runtime_abi.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
@@ -249,7 +248,6 @@ def test_forwarding_retirement_preserves_one_epoch_and_park_contract() -> None:
 
 def test_forwarding_retirement_releases_only_after_two_remap_epochs() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
-    oracle = C_ORACLE_SOURCE.read_text(encoding="utf-8")
 
     release_start = strict.index("def _release_retained_pages")
     release_end = strict.index(
@@ -268,40 +266,11 @@ def test_forwarding_retirement_releases_only_after_two_remap_epochs() -> None:
     assert "free(span)" not in release
     assert "free(page)" not in release
 
-    oracle_remap = oracle[
-        oracle.index(
-            "static void pcc_gc_backend4_remap_and_retire_unlocked(\n"
-            "    PccGcBackend4RemapFinish *finish\n"
-            ") {"
-        ) :
-    ]
-    assert oracle_remap.index(
-        "pcc_gc_backend4_release_retained_pages_unlocked();"
-    ) < oracle_remap.index("pcc_gc_backend4_drain_parked_pages_unlocked();")
-    assert "page->pending_forwardings > 0" in oracle
-    assert "free(page->span_base);" in oracle
-    assert "free(page);" in oracle
-
-    oracle_target = oracle[
-        oracle.index("static void pcc_gc_forwarding_remove_target") :
-        oracle.index("static void pcc_gc_forwarding_clear_all")
-    ]
-    assert oracle_target.index(
-        "pcc_gc_relocation_retire_source_payload_for_target_death_into_finish("
-    ) < oracle_target.index("pcc_gc_forwarding_index_remove(from)")
-    assert oracle_remap.index(
-        "pcc_gc_relocation_retire_source_payload_into_finish(old, finish)"
-    ) < oracle_remap.index("py_header_flags_and(")
-    assert oracle_remap.index(
-        "pcc_gc_relocation_retire_source_payload_into_finish(old, finish)"
-    ) < oracle_remap.index("pcc_gc_forwarding_detach(old)")
-
 
 def test_forwarding_retirement_defers_retained_page_free_after_graph_unlock() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     drain = STRICT_DRAIN_SOURCE.read_text(encoding="utf-8")
     dispatcher = STRICT_DISPATCHER_SOURCE.read_text(encoding="utf-8")
-    oracle = C_ORACLE_SOURCE.read_text(encoding="utf-8")
     runtime_abi = RUNTIME_ABI_SOURCE.read_text(encoding="utf-8")
 
     release = strict.split("def _release_retained_pages()", 1)[1].split(
@@ -350,42 +319,6 @@ def test_forwarding_retirement_defers_retained_page_free_after_graph_unlock() ->
     for caller in (strict_step,):
         assert "pcc_gc_backend4_remap_and_retire_stopped_world()" in caller
 
-    c_release = oracle.split(
-        "static PccGcZPage *pcc_gc_backend4_release_retained_pages_unlocked(", 1
-    )[1].split(
-        "static void pcc_gc_backend4_finish_retained_page_releases(", 1
-    )[0]
-    assert "free(" not in c_release
-    c_finish = oracle.split(
-        "static void pcc_gc_backend4_finish_retained_page_releases(\n"
-        "    PccGcZPage *pages\n"
-        ") {",
-        1,
-    )[1].split(
-        "static void pcc_gc_backend4_remap_heal_slot(", 1
-    )[0]
-    assert c_finish.index("free(page->span_base);") < c_finish.index("free(page);")
-    c_object = oracle.split(
-        "static int64_t pcc_gc_relocate_selected(int64_t budget)", 1
-    )[1].split(
-        "int64_t pcc_gc_backend4_evacuation_drain(int64_t budget)", 1
-    )[0]
-    c_page = oracle.split(
-        "int64_t pcc_gc_backend4_evacuation_page_drain(int64_t page_budget)", 1
-    )[1].split("struct PccGcForwardingInstallPlan", 1)[0]
-    c_step = oracle.split("int64_t pcc_gc_step(int64_t budget)", 1)[1].split(
-        "int64_t pcc_gc_has_tracing_sweep(void)", 1
-    )[0]
-    for caller in (c_object, c_page, c_step):
-        assert "pcc_gc_backend4_remap_and_retire_stopped_world()" in caller
-    c_wrapper = oracle.split(
-        "int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void) {",
-        1,
-    )[1].split("static void pcc_gc_backend4_remap_and_retire_unlocked", 1)[0]
-    assert c_wrapper.index("pcc_resume_world()") < c_wrapper.index(
-        "pcc_gc_backend4_finish_remap_retirement(&finish);"
-    )
-
     assert (
         '"pcc_gc_backend4_remap_and_retire_unlocked": (_VOID, [_PTR], False)'
         in runtime_abi
@@ -420,7 +353,6 @@ def test_forwarding_retirement_defers_normal_remap_target_decref_after_unlock() 
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     drain = STRICT_DRAIN_SOURCE.read_text(encoding="utf-8")
     dispatcher = STRICT_DISPATCHER_SOURCE.read_text(encoding="utf-8")
-    oracle = C_ORACLE_SOURCE.read_text(encoding="utf-8")
     runtime_abi = RUNTIME_ABI_SOURCE.read_text(encoding="utf-8")
 
     strict_remap = strict.split(
@@ -477,58 +409,6 @@ def test_forwarding_retirement_defers_normal_remap_target_decref_after_unlock() 
     )
     assert strict_plan < strict_remap_call < strict_unlock < strict_finish_call
 
-    c_remap = oracle.split(
-        "static void pcc_gc_backend4_remap_and_retire_unlocked(\n"
-        "    PccGcBackend4RemapFinish *finish\n"
-        ") {",
-        1,
-    )[1].split("static void pcc_gc_seed_roots(", 1)[0]
-    assert "pcc_gc_forwarding_remove(old);" not in c_remap
-    assert "pcc_gc_forwarding_detach(old)" in c_remap
-    assert "dead->next = finish->forwardings;" in c_remap
-    assert "finish->forwardings = dead;" in c_remap
-    c_detach = oracle.split(
-        "static PccGcForwardNode *pcc_gc_forwarding_detach(", 1
-    )[1].split("static void pcc_gc_forwarding_finish_detached(", 1)[0]
-    assert "py_decref(" not in c_detach
-    assert "free(" not in c_detach
-    c_edge_finish = oracle.split(
-        "static void pcc_gc_forwarding_finish_detached(", 1
-    )[1].split("static void pcc_gc_forwarding_remove(", 1)[0]
-    assert c_edge_finish.index("py_decref(node->to);") < c_edge_finish.index(
-        "free(node);"
-    )
-    assert "sizeof(PccGcBackend4RemapFinish) == 48" in oracle
-    assert "offsetof(PccGcBackend4RemapFinish, released_pages) == 0" in oracle
-    assert "offsetof(PccGcBackend4RemapFinish, forwardings) == 8" in oracle
-
-    c_object = oracle.split(
-        "static int64_t pcc_gc_relocate_selected(int64_t budget)", 1
-    )[1].split(
-        "int64_t pcc_gc_backend4_evacuation_drain(int64_t budget)", 1
-    )[0]
-    c_page = oracle.split(
-        "int64_t pcc_gc_backend4_evacuation_page_drain(int64_t page_budget)", 1
-    )[1].split("struct PccGcForwardingInstallPlan", 1)[0]
-    c_step = oracle.split("int64_t pcc_gc_step(int64_t budget)", 1)[1].split(
-        "int64_t pcc_gc_has_tracing_sweep(void)", 1
-    )[0]
-    for caller in (c_object, c_page, c_step):
-        assert "pcc_gc_backend4_remap_and_retire_stopped_world()" in caller
-    c_wrapper = oracle.split(
-        "int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void) {",
-        1,
-    )[1].split("static void pcc_gc_backend4_remap_and_retire_unlocked", 1)[0]
-    c_plan = c_wrapper.index("PccGcBackend4RemapFinish finish = {0};")
-    c_remap_call = c_wrapper.index(
-        "pcc_gc_backend4_remap_and_retire_unlocked(&finish)"
-    )
-    c_unlock = c_wrapper.index("pcc_gc_graph_unlock();", c_remap_call)
-    c_finish_call = c_wrapper.index(
-        "pcc_gc_backend4_finish_remap_retirement(&finish);", c_unlock
-    )
-    assert c_plan < c_remap_call < c_unlock < c_finish_call
-
     assert (
         '"pcc_gc_backend4_remap_and_retire_unlocked": '
         "(_VOID, [_PTR], False)" in runtime_abi
@@ -553,7 +433,6 @@ def test_forwarding_retirement_defers_normal_remap_metadata_node_free_after_unlo
     object_nodes = STRICT_OBJECT_NODES_SOURCE.read_text(encoding="utf-8")
     drain = STRICT_DRAIN_SOURCE.read_text(encoding="utf-8")
     dispatcher = STRICT_DISPATCHER_SOURCE.read_text(encoding="utf-8")
-    oracle = C_ORACLE_SOURCE.read_text(encoding="utf-8")
     runtime_abi = RUNTIME_ABI_SOURCE.read_text(encoding="utf-8")
 
     strict_remap = strict.split(
@@ -599,46 +478,6 @@ def test_forwarding_retirement_defers_normal_remap_metadata_node_free_after_unlo
     plan = strict_wrapper.index("finish = stack_alloc(48)")
     assert plan < strict_wrapper.index("pcc_py_gc_minor_graph_lock()", plan)
 
-    c_remap = oracle.split(
-        "static void pcc_gc_backend4_remap_and_retire_unlocked(\n"
-        "    PccGcBackend4RemapFinish *finish\n"
-        ") {",
-        1,
-    )[1].split("static void pcc_gc_seed_roots(", 1)[0]
-    assert "pcc_gc_retire_forwarded_source_unlocked(old);" not in c_remap
-    assert "pcc_gc_retire_forwarded_source_into_finish_unlocked(old, finish);" in c_remap
-    c_metadata = oracle.split(
-        "static void pcc_gc_retire_forwarded_source_into_finish_unlocked(\n"
-        "    PyObject *from,\n"
-        "    PccGcBackend4RemapFinish *finish\n"
-        ") {",
-        1,
-    )[1].split("static void pcc_gc_retire_forwarded_source_unlocked(", 1)[0]
-    assert "pcc_gc_identity_remove(" not in c_metadata
-    assert "pcc_gc_object_node_release(" not in c_metadata
-    assert "free(" not in c_metadata
-    assert "pcc_gc_identity_detach(from)" in c_metadata
-    assert "identity->next = finish->identities;" in c_metadata
-    assert "finish->identities = identity;" in c_metadata
-    assert "dead->next = finish->object_nodes;" in c_metadata
-    assert "finish->object_nodes = dead;" in c_metadata
-    assert "sizeof(PccGcBackend4RemapFinish) == 48" in oracle
-    assert "offsetof(PccGcBackend4RemapFinish, identities) == 16" in oracle
-    assert "offsetof(PccGcBackend4RemapFinish, object_nodes) == 24" in oracle
-
-    c_identity_detach = oracle.split(
-        "static PccGcIdentityNode *pcc_gc_identity_detach(", 1
-    )[1].split("static void pcc_gc_identity_finish_detached(", 1)[0]
-    assert "free(" not in c_identity_detach
-    c_identity_finish = oracle.split(
-        "static void pcc_gc_identity_finish_detached(", 1
-    )[1].split("static void pcc_gc_identity_remove(", 1)[0]
-    assert "free(node);" in c_identity_finish
-    c_object_finish = oracle.split(
-        "static void pcc_gc_object_node_finish_detached(", 1
-    )[1].split("static int64_t pcc_gc_gray_count_load(", 1)[0]
-    assert "free(node);" in c_object_finish
-
     for symbol in (
         "pcc_gc_identity_detach",
         "pcc_gc_identity_finish_detached",
@@ -652,7 +491,6 @@ def test_forwarding_retirement_defers_normal_remap_payload_finish_after_unlock()
     payload = STRICT_PAYLOAD_SOURCE.read_text(encoding="utf-8")
     drain = STRICT_DRAIN_SOURCE.read_text(encoding="utf-8")
     dispatcher = STRICT_DISPATCHER_SOURCE.read_text(encoding="utf-8")
-    oracle = C_ORACLE_SOURCE.read_text(encoding="utf-8")
     runtime_abi = RUNTIME_ABI_SOURCE.read_text(encoding="utf-8")
 
     strict_remap = strict.split(
@@ -711,49 +549,6 @@ def test_forwarding_retirement_defers_normal_remap_payload_finish_after_unlock()
     plan = strict_wrapper.index("finish = stack_alloc(48)")
     assert plan < strict_wrapper.index("pcc_py_gc_minor_graph_lock()", plan)
 
-    c_remap = oracle.split(
-        "static void pcc_gc_backend4_remap_and_retire_unlocked(\n"
-        "    PccGcBackend4RemapFinish *finish\n"
-        ") {",
-        1,
-    )[1].split("static void pcc_gc_seed_roots(", 1)[0]
-    assert "pcc_gc_relocation_retire_source_payload(old)" not in c_remap
-    assert (
-        "pcc_gc_relocation_retire_source_payload_into_finish(old, finish)"
-        in c_remap
-    )
-    c_payload_commit = oracle.rsplit(
-        "static int64_t pcc_gc_relocation_retire_source_payload_into_finish_impl(", 1
-    )[1].split(
-        "static void pcc_gc_relocation_finish_source_payloads(", 1
-    )[0]
-    assert "pcc_gc_backend4_source_side_table_plan_commit(side_plan)" in (
-        c_payload_commit
-    )
-    assert "free(raw_payloads[" not in c_payload_commit
-    assert "pcc_gc_backend4_source_side_table_plan_finish(side_plan)" not in (
-        c_payload_commit
-    )
-    assert "py_decref(" not in c_payload_commit
-    assert (
-        "plan->next = (PccGcRetirePayloadPlan *)finish->payload_plans;"
-        in c_payload_commit
-    )
-    assert "finish->payload_plans = plan;" in c_payload_commit
-
-    c_payload_finish = oracle.rsplit(
-        "static void pcc_gc_relocation_finish_source_payloads(", 1
-    )[1].split(
-        "int64_t pcc_gc_relocation_retire_source_payload(PyObject *from)", 1
-    )[0]
-    assert "free(plan->raw_payloads[i]);" in c_payload_finish
-    c_side_finish = c_payload_finish.index(
-        "pcc_gc_backend4_source_side_table_plan_finish("
-    )
-    assert c_side_finish < c_payload_finish.index("py_decref(")
-    assert "sizeof(PccGcBackend4RemapFinish) == 48" in oracle
-    assert "offsetof(PccGcBackend4RemapFinish, payload_plans) == 32" in oracle
-
     for symbol in (
         "pcc_gc_relocation_retire_source_payload_into_finish",
         "pcc_gc_relocation_finish_source_payloads",
@@ -765,7 +560,6 @@ def test_target_death_detaches_edge_before_deferred_payload_finish() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     payload = STRICT_PAYLOAD_SOURCE.read_text(encoding="utf-8")
     managed = MANAGED_SOURCE.read_text(encoding="utf-8")
-    oracle = C_ORACLE_SOURCE.read_text(encoding="utf-8")
     runtime_abi = RUNTIME_ABI_SOURCE.read_text(encoding="utf-8")
 
     strict_target = strict.split(
@@ -821,44 +615,6 @@ def test_target_death_detaches_edge_before_deferred_payload_finish() -> None:
     finish = strict_note.index("_backend4_finish_remap_retirement(finish)", unlock)
     assert plan < lock < target_remove < unlock < finish
 
-    c_target = oracle.split(
-        "static void pcc_gc_forwarding_remove_target(\n"
-        "    PyObject *target,\n"
-        "    PccGcBackend4RemapFinish *finish\n"
-        ") {",
-        1,
-    )[1].split("static void pcc_gc_forwarding_clear_all", 1)[0]
-    c_prepare = c_target.index(
-        "pcc_gc_relocation_retire_source_payload_for_target_death_into_finish("
-    )
-    c_source_index = c_target.index("pcc_gc_forwarding_index_remove(from)")
-    c_main_unlink = c_target.index("pcc_gc_forwarding_unlink_main(n)")
-    c_metadata = c_target.index(
-        "pcc_gc_retire_forwarded_source_into_finish_unlocked(from, finish)"
-    )
-    c_chain = c_target.index("finish->dead_target_forwardings = n;")
-    assert c_prepare < c_source_index < c_main_unlink < c_metadata < c_chain
-    assert "pcc_gc_relocation_retire_source_payload(from)" not in c_target
-    assert "pcc_gc_retire_forwarded_source_unlocked(from)" not in c_target
-    assert "free(n)" not in c_target
-
-    assert "sizeof(PccGcBackend4RemapFinish) == 48" in oracle
-    assert (
-        "offsetof(PccGcBackend4RemapFinish, dead_target_forwardings) == 40"
-        in oracle
-    )
-    c_note = oracle.split("void pcc_gc_note_object_freeing(PyObject *o)", 1)[
-        1
-    ].split("int64_t pcc_gc_visit_managed_pointer_slots", 1)[0]
-    c_plan = c_note.index("PccGcBackend4RemapFinish finish = {0};")
-    c_lock = c_note.index("pcc_gc_graph_lock();", c_plan)
-    c_remove = c_note.index("pcc_gc_forwarding_remove_target(o, &finish);", c_lock)
-    c_unlock = c_note.index("pcc_gc_graph_unlock();", c_remove)
-    c_finish = c_note.index(
-        "pcc_gc_backend4_finish_remap_retirement(&finish);", c_unlock
-    )
-    assert c_plan < c_lock < c_remove < c_unlock < c_finish
-
     assert (
         '"pcc_gc_forwarding_remove_target": (("c_ptr", "c_ptr"), "c_void")'
         in runtime_abi
@@ -871,7 +627,6 @@ def test_target_death_detaches_edge_before_deferred_payload_finish() -> None:
 def test_source_death_defers_live_target_decref_after_graph_unlock() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     managed = MANAGED_SOURCE.read_text(encoding="utf-8")
-    oracle = C_ORACLE_SOURCE.read_text(encoding="utf-8")
     runtime_abi = RUNTIME_ABI_SOURCE.read_text(encoding="utf-8")
 
     strict_detach = strict.split(
@@ -893,34 +648,6 @@ def test_source_death_defers_live_target_decref_after_graph_unlock() -> None:
     finish = strict_note.index("_backend4_finish_remap_retirement(finish)", unlock)
     assert plan < lock < detach < unlock < finish
     assert "_forwarding_remove(o)" not in strict_note
-
-    c_detach = oracle.split(
-        "static void pcc_gc_forwarding_detach_into_finish(\n"
-        "    PyObject *from,\n"
-        "    PccGcBackend4RemapFinish *finish\n"
-        ") {",
-        1,
-    )[1].split("static void pcc_gc_forwarding_remove(", 1)[0]
-    c_edge = c_detach.index("pcc_gc_forwarding_detach(from)")
-    c_chain = c_detach.index("finish->forwardings = dead;")
-    assert c_edge < c_chain
-    assert "py_decref(" not in c_detach
-    assert "free(" not in c_detach
-
-    c_note = oracle.split("void pcc_gc_note_object_freeing(PyObject *o)", 1)[
-        1
-    ].split("int64_t pcc_gc_visit_managed_pointer_slots", 1)[0]
-    c_plan = c_note.index("PccGcBackend4RemapFinish finish = {0};")
-    c_lock = c_note.index("pcc_gc_graph_lock();", c_plan)
-    c_edge = c_note.index(
-        "pcc_gc_forwarding_detach_into_finish(o, &finish);", c_lock
-    )
-    c_unlock = c_note.index("pcc_gc_graph_unlock();", c_edge)
-    c_finish = c_note.index(
-        "pcc_gc_backend4_finish_remap_retirement(&finish);", c_unlock
-    )
-    assert c_plan < c_lock < c_edge < c_unlock < c_finish
-    assert "pcc_gc_forwarding_remove(o);" not in c_note
 
     assert (
         '"pcc_gc_forwarding_detach_into_finish": '
@@ -1242,18 +969,13 @@ def _link_source_death_target_finish_probe(
     return executable
 
 
-@pytest.mark.parametrize("runtime_kind", ["c", "pcc_python"])
 def test_target_death_payload_finish_handles_owned_self_reference(
     tmp_path: Path,
-    runtime_kind: str,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
-    archive = (
-        c_runtime_archive if runtime_kind == "c" else pcc_py_runtime_archive
-    )
+    archive = pcc_py_runtime_archive
     executable = _link_target_death_payload_probe(
-        tmp_path, "target_death_payload_" + runtime_kind, archive
+        tmp_path, "target_death_payload_pcc_python", archive
     )
     control = subprocess.run(
         [str(executable), "control"], capture_output=True, text=True, timeout=30
@@ -1267,18 +989,13 @@ def test_target_death_payload_finish_handles_owned_self_reference(
     assert self_ref.stdout == "0,0,0,1\n"
 
 
-@pytest.mark.parametrize("runtime_kind", ["c", "pcc_python"])
 def test_source_death_finish_handles_last_owned_target_after_detach(
     tmp_path: Path,
-    runtime_kind: str,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
-    archive = (
-        c_runtime_archive if runtime_kind == "c" else pcc_py_runtime_archive
-    )
+    archive = pcc_py_runtime_archive
     executable = _link_source_death_target_finish_probe(
-        tmp_path, "source_death_target_" + runtime_kind, archive
+        tmp_path, "source_death_target_pcc_python", archive
     )
     control = subprocess.run(
         [str(executable), "control"], capture_output=True, text=True, timeout=30
@@ -1292,24 +1009,16 @@ def test_source_death_finish_handles_last_owned_target_after_detach(
     assert last.stdout == "0,1\n"
 
 
-def test_forwarding_retirement_matches_c_oracle_across_three_remap_epochs(
+def test_forwarding_retirement_across_three_remap_epochs(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
-    oracle = _link_forwarding_retirement_probe(
-        tmp_path, "forwarding_retirement_c_oracle", c_runtime_archive
-    )
     implementation = _link_forwarding_retirement_probe(
         tmp_path, "forwarding_retirement_pcc_python", pcc_py_runtime_archive
-    )
-    oracle_result = subprocess.run(
-        [str(oracle)], capture_output=True, text=True, timeout=30
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert oracle_result.stdout == "2\n0\n0\n0,1\n2,3,2,1\n"
-    assert result.stdout == oracle_result.stdout
+    # What the retired C runtime oracle printed.
+    assert result.stdout == "2\n0\n0\n0,1\n2,3,2,1\n"

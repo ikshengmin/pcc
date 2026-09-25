@@ -8,19 +8,10 @@ import textwrap
 from pathlib import Path
 
 
-def _build_runtime(repo: Path) -> Path:
-    runtime = repo / "pcc" / "py_runtime"
-    make = subprocess.run(
-        ["make", "-C", str(runtime), "libpy_runtime.a"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert make.returncode == 0, make.stdout + make.stderr
-    return runtime
+RUNTIME_DIR = Path(__file__).absolute().parents[2] / "pcc" / "py_runtime"
 
 
-def _compile_harness(tmp_path: Path, runtime: Path, source: str) -> Path:
+def _compile_harness(tmp_path: Path, archive: Path, source: str) -> Path:
     src = tmp_path / "probe.c"
     exe = tmp_path / "probe"
     src.write_text(textwrap.dedent(source), encoding="utf-8")
@@ -28,9 +19,9 @@ def _compile_harness(tmp_path: Path, runtime: Path, source: str) -> Path:
     cmd = [
         cc,
         "-std=c11",
-        f"-I{runtime / 'include'}",
+        f"-I{RUNTIME_DIR / 'include'}",
         str(src),
-        str(runtime / "libpy_runtime.a"),
+        str(archive),
         "-lm",
         "-pthread",
         "-o",
@@ -57,10 +48,8 @@ def _run_with_log(exe: Path, tmp_path: Path, channel: str) -> list[dict[str, obj
     return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def test_exception_runtime_log_channel_records_lifecycle(tmp_path):
-    repo = Path(__file__).absolute().parents[2]
-    runtime = _build_runtime(repo)
-    exe = _compile_harness(tmp_path, runtime, r'''
+def test_exception_runtime_log_channel_records_lifecycle(tmp_path, pcc_py_runtime_archive):
+    exe = _compile_harness(tmp_path, pcc_py_runtime_archive, r'''
         #include "py_runtime.h"
 
         int main(void) {
@@ -88,10 +77,8 @@ def test_exception_runtime_log_channel_records_lifecycle(tmp_path):
     assert ("exception", "dealloc") in names
 
 
-def test_dispatch_runtime_log_channel_records_generic_operations(tmp_path):
-    repo = Path(__file__).absolute().parents[2]
-    runtime = _build_runtime(repo)
-    exe = _compile_harness(tmp_path, runtime, r'''
+def test_dispatch_runtime_log_channel_records_generic_operations(tmp_path, pcc_py_runtime_archive):
+    exe = _compile_harness(tmp_path, pcc_py_runtime_archive, r'''
         #include "py_runtime.h"
 
         int main(void) {

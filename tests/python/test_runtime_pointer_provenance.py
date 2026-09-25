@@ -13,11 +13,7 @@ RUNTIME = REPO / "pcc" / "py_runtime"
 
 def test_runtime_has_one_exact_managed_pointer_provenance_decision():
     header = (RUNTIME / "include" / "py_runtime.h").read_text(encoding="utf-8")
-    backend = (RUNTIME / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     port = (RUNTIME / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
-    c_index = (RUNTIME / "src" / "py_gc_index_table.c").read_text(
-        encoding="utf-8"
-    )
     py_index = (RUNTIME / "py" / "freestanding_gc_index_table.py").read_text(
         encoding="utf-8"
     )
@@ -28,32 +24,17 @@ def test_runtime_has_one_exact_managed_pointer_provenance_decision():
         "pcc_gc_pointer_unregister",
     ):
         assert symbol in header
-        assert symbol in backend
         assert f'@c_abi_export("{symbol}")' in port
     for symbol in (
         "pcc_gc_managed_pointer_index_contains",
         "pcc_gc_managed_pointer_index_insert",
         "pcc_gc_managed_pointer_index_remove",
     ):
-        assert symbol in c_index
         assert f'@c_abi_export("{symbol}")' in py_index
 
     # These were mutually inconsistent guesses in the runtime ports.  An
     # address ceiling, alignment test, or magic low-address cutoff is not
     # provenance and must not creep back into the semantic boundary.
-    candidate_files = (
-        "py_context.c",
-        "py_class_attrs.c",
-        "py_obj_ops_dispatch.c",
-        "py_dunder.c",
-        "py_obj.c",
-        "py_dict.c",
-        "py_format.c",
-        "py_protocol.c",
-        "py_class.c",
-        "py_pickle_copy.c",
-        "pcc_threads.c",
-    )
     candidate_ports = (
         "py_tuple.py",
         "py_list_set_slice.py",
@@ -69,8 +50,7 @@ def test_runtime_has_one_exact_managed_pointer_provenance_decision():
         "py_gc_backend.py",
         "freestanding_runtime_debug.py",
     )
-    sources = [RUNTIME / "src" / name for name in candidate_files]
-    sources.extend(RUNTIME / "py" / name for name in candidate_ports)
+    sources = [RUNTIME / "py" / name for name in candidate_ports]
     forbidden = re.compile(
         r"140737488355328|281474976710656|17592186044416|"
         r"35184372088832|bits\s*<\s*(?:2048|4096)|"
@@ -87,27 +67,17 @@ def test_runtime_has_one_exact_managed_pointer_provenance_decision():
 
 
 def test_manual_object_publication_paths_register_before_header_consumers():
-    c_obj = (RUNTIME / "src" / "py_obj.c").read_text(encoding="utf-8")
     py_obj = (RUNTIME / "py" / "py_obj.py").read_text(encoding="utf-8")
-    assert c_obj.index("pcc_gc_pointer_register") < c_obj.index(
-        "pcc_gc_note_object_allocated_sized"
-    )
     assert py_obj.index("pcc_gc_pointer_register(obj)") < py_obj.index(
         "pcc_gc_note_object_allocated_sized(obj, size)"
     )
 
-    for path in (
-        RUNTIME / "src" / "py_iter.c",
-        RUNTIME / "src" / "py_int_ops.c",
-        RUNTIME / "py" / "py_iter.py",
-        RUNTIME / "py" / "py_int_ops.py",
-    ):
+    for path in (RUNTIME / "py" / "py_iter.py", RUNTIME / "py" / "py_int_ops.py"):
         source = path.read_text(encoding="utf-8")
         assert "pcc_gc_alloc" in source
 
-    c_int = (RUNTIME / "src" / "py_int_core.c").read_text(encoding="utf-8")
     py_int = (RUNTIME / "py" / "py_int_core.py").read_text(encoding="utf-8")
-    for source in (c_int, py_int):
+    for source in (py_int,):
         assert "pcc_gc_pointer_register" in source
         assert "PY_FLAG_GC_MALLOC_ALLOC" in source
 
@@ -252,12 +222,6 @@ def _assert_all_backends(executable: Path) -> None:
             f"GC{backend}:\n{result.stdout}{result.stderr}"
         )
         assert result.stdout == "pointer-provenance:ok\n"
-
-
-def test_pointer_provenance_c_runtime_gc0_through_gc4(
-    tmp_path: Path, c_runtime_archive: Path
-):
-    _assert_all_backends(_link_harness(tmp_path, c_runtime_archive, "c"))
 
 
 def test_pointer_provenance_pcc_python_runtime_gc0_through_gc4(

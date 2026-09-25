@@ -30,8 +30,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME = REPO_ROOT / "pcc" / "py_runtime"
 PY_OBJ_PORT = (RUNTIME / "py" / "py_obj.py").read_text(encoding="utf-8")
-PY_OBJ_C = (RUNTIME / "src" / "py_obj.c").read_text(encoding="utf-8")
-THREADS_C = (RUNTIME / "src" / "pcc_threads.c").read_text(encoding="utf-8")
 HEADER = (RUNTIME / "include" / "py_runtime.h").read_text(encoding="utf-8")
 
 CLASS_COUNT = 620
@@ -39,11 +37,7 @@ CLASS_COUNT = 620
 
 def test_no_mirror_still_spells_the_boundary_as_500() -> None:
     assert "PY_TYPE_CEXT_TAG_BASE = 0x10000" in HEADER
-    for source, name in (
-        (PY_OBJ_PORT, "py_obj.py"),
-        (PY_OBJ_C, "py_obj.c"),
-        (THREADS_C, "pcc_threads.c"),
-    ):
+    for source, name in ((PY_OBJ_PORT, "py_obj.py"),):
         assert "> 500" not in source, name
     # The C mirrors use the header constant.  The pcc-Python mirror spells it
     # as the literal 0x10000, like py_capi_type_runtime.py: comparing against
@@ -53,8 +47,6 @@ def test_no_mirror_still_spells_the_boundary_as_500() -> None:
     assert PY_OBJ_PORT.count("tag >= (0x10000)") + PY_OBJ_PORT.count(
         "tag_dbg >= (0x10000)"
     ) >= 4
-    assert "PY_TYPE_CEXT_TAG_BASE" in PY_OBJ_C
-    assert "PY_TYPE_CEXT_TAG_BASE" in THREADS_C
 
 
 def _program() -> str:
@@ -76,13 +68,11 @@ def _program() -> str:
                 # built, which is where a missing incref surfaces.
                 return item.n
 
-
             def call_through_tuple(items, function) -> int:
                 total = 0
                 for index in range(len(items)):
                     total += function(items[index])
                 return total
-
 
             def main() -> None:
                 before = pcc_gc_telemetry(116)
@@ -98,7 +88,6 @@ def _program() -> str:
                 print(total)
                 print(pcc_gc_telemetry(116) - before)
                 print(pcc_gc_telemetry(118))
-
 
             main()
             """

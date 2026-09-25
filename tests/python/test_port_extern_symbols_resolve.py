@@ -41,17 +41,14 @@ def _archive_defined_symbols(archive: Path) -> set[str]:
     return syms
 
 
-def test_port_extern_names_resolve_in_runtime_archives(
-    c_runtime_archive, pcc_py_runtime_archive
-):
+def test_port_extern_names_resolve_in_runtime_archive(pcc_py_runtime_archive):
     externed: dict[str, list[str]] = {}
     for src in sorted(PORT_DIR.glob("*.py")):
         for name in _EXTERN_RE.findall(src.read_text()):
             externed.setdefault(name, []).append(src.name)
     assert externed, "no extern() bindings found — regex or layout drift"
 
-    defined = _archive_defined_symbols(Path(c_runtime_archive))
-    defined |= _archive_defined_symbols(Path(pcc_py_runtime_archive))
+    defined = _archive_defined_symbols(Path(pcc_py_runtime_archive))
 
     missing = {
         name: files for name, files in externed.items() if name not in defined

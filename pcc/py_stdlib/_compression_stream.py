@@ -8,7 +8,9 @@ for the lifetime of the stream.
 """
 from __future__ import annotations
 
-import builtins
+# ``open`` below is the builtin: this module defines no ``open`` of its own,
+# and a plain name keeps the file path native (``builtins.open`` would bind
+# CPython's ``builtins`` module at import time).
 
 
 _COMPRESSED_CHUNK = 64 * 1024
@@ -46,7 +48,7 @@ class CompressionWriter:
         self.mode = mode
         self.name = None
         if self._owns_destination:
-            self._destination = builtins.open(destination, mode)
+            self._destination = open(destination, mode)
         else:
             self._destination = destination
         self.name = getattr(self._destination, "name", None)
@@ -159,7 +161,7 @@ class DecompressReader:
     ):
         self._owns_source = not hasattr(source, "read")
         if self._owns_source:
-            self._source = builtins.open(source, "rb")
+            self._source = open(source, "rb")
         else:
             self._source = source
         self._decoder_factory = decoder_factory

@@ -28,12 +28,16 @@ from pcc.py_runtime.py.py_abi_constants import (
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_CLASS,
+    PY_TYPE_THREAD_CONDITION,
+    PY_TYPE_THREAD_EVENT,
     PY_TYPE_THREAD_LOCK,
     PY_TYPE_THREAD_RLOCK,
+    PY_TYPE_THREAD_SEMAPHORE,
     PY_TYPE_COMPLEX,
     PY_TYPE_COROUTINE,
     PY_TYPE_DICT,
     PY_TYPE_EXC,
+    PY_TYPE_FILE,
     PY_TYPE_FLOAT,
     PY_TYPE_FUNC,
     PY_TYPE_INSTANCE,
@@ -55,6 +59,7 @@ from pcc.unsafe import (
     define_global_ptr_null,
     define_global_struct_words,
     free,
+    global_addr,
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
@@ -76,6 +81,7 @@ from pcc.unsafe import (
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 strcmp = extern("strcmp", (c_ptr, c_ptr), c_int32)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
+py_obj_as_int_object = extern("py_obj_as_int_object", (c_ptr, c_int64), c_ptr)
 py_obj_index_i64 = extern("py_obj_index_i64", (c_ptr,), c_int64)
 
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
@@ -127,6 +133,16 @@ py_threading_rlock_acquire = extern(
 py_threading_rlock_release = extern(
     "py_threading_rlock_release", (c_ptr,), c_int64
 )
+py_threading_semaphore_acquire = extern("py_threading_semaphore_acquire", (c_ptr,), c_int64)
+py_threading_semaphore_release = extern("py_threading_semaphore_release", (c_ptr,), c_int64)
+py_threading_event_set = extern("py_threading_event_set", (c_ptr,), c_int64)
+py_threading_event_clear = extern("py_threading_event_clear", (c_ptr,), c_int64)
+py_threading_event_is_set = extern("py_threading_event_is_set", (c_ptr,), c_int64)
+py_threading_event_wait = extern("py_threading_event_wait", (c_ptr,), c_int64)
+py_threading_condition_acquire = extern("py_threading_condition_acquire", (c_ptr,), c_int64)
+py_threading_condition_release = extern("py_threading_condition_release", (c_ptr,), c_int64)
+py_threading_condition_wait = extern("py_threading_condition_wait", (c_ptr,), c_int64)
+py_threading_condition_notify = extern("py_threading_condition_notify", (c_ptr,), c_int64)
 py_set_symmetric_difference = extern(
     "py_set_symmetric_difference", (c_ptr, c_ptr), c_ptr
 )
@@ -145,6 +161,13 @@ py_instance_setattr = extern("py_instance_setattr", (c_ptr, c_ptr, c_ptr), c_int
 py_instance_delattr = extern("py_instance_delattr", (c_ptr, c_ptr), c_int64)
 py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
+py_exc_traceback_object = extern("py_exc_traceback_object", (c_ptr,), c_ptr)
+py_file_getattr = extern("py_file_getattr", (c_ptr, c_ptr), c_ptr)
+py_exc_new_with_class = extern("py_exc_new_with_class", (c_ptr, c_ptr), c_ptr)
+py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
+py_file_type_kind = extern("py_file_type_kind", (c_ptr,), c_int64)
+py_class_attrs_dict = extern("py_class_attrs_dict", (c_ptr, c_int64), c_ptr)
+py_class_setattr_raw = extern("py_class_setattr_raw", (c_ptr, c_ptr, c_ptr), c_int64)
 py_user_len_dispatch = extern("py_user_len_dispatch", (c_ptr, c_ptr), c_int64)
 py_user_bool_dispatch = extern("py_user_bool_dispatch", (c_ptr, c_ptr), c_int64)
 py_user_getitem_dispatch = extern("py_user_getitem_dispatch", (c_ptr, c_ptr), c_ptr)
@@ -287,6 +310,10 @@ define_global_ptr_null("pcc_type_cls_memoryview")
 define_global_ptr_null("pcc_type_cls_coroutine")
 define_global_ptr_null("pcc_type_cls_object")
 define_global_ptr_null("pcc_type_cls_super")
+define_global_ptr_null("pcc_type_cls_textiowrapper")
+define_global_ptr_null("pcc_type_cls_bufferedreader")
+define_global_ptr_null("pcc_type_cls_bufferedwriter")
+define_global_ptr_null("pcc_type_cls_bufferedrandom")
 define_global_ptr_null("pcc_slice_cls")
 
 
@@ -309,6 +336,10 @@ define_global_struct_words(
     "pcc_type_cls_coroutine",
     "pcc_type_cls_object",
     "pcc_type_cls_super",
+    "pcc_type_cls_textiowrapper",
+    "pcc_type_cls_bufferedreader",
+    "pcc_type_cls_bufferedwriter",
+    "pcc_type_cls_bufferedrandom",
     "pcc_slice_cls",
     0,
 )
@@ -1192,6 +1223,15 @@ def py_obj_type_name(o):
             cls_name = load_ptr(cls, PYCLASSOBJECT_NAME_OFFSET)
             if ptr_is_null(cls_name) == 0:
                 return py_str_new(cls_name, strlen(cls_name))
+    if tag == PY_TYPE_FILE:
+        kind: int = py_file_type_kind(o)
+        if kind == 1:
+            return py_str_new(cstr("BufferedReader"), 14)
+        if kind == 2:
+            return py_str_new(cstr("BufferedWriter"), 14)
+        if kind == 3:
+            return py_str_new(cstr("BufferedRandom"), 14)
+        return py_str_new(cstr("TextIOWrapper"), 13)
     name = _type_name_cstr_for_tag(tag)
     return py_str_new(name, strlen(name))
 
@@ -1705,6 +1745,57 @@ def _builtin_type_class_for_tag(tag: int):
     return _return_builtin_type(cls)
 
 
+def _file_type_class(o):
+    """``type(f)`` for a file object: io's concrete class names."""
+    kind: int = py_file_type_kind(o)
+    cls = null()
+    if kind == 0:
+        cls = global_load_ptr("pcc_type_cls_textiowrapper")
+        if ptr_is_null(cls) != 0:
+            cls = py_class_new(cstr("TextIOWrapper"), null(), 0, null(), 0)
+            if ptr_is_null(cls) == 0:
+                global_store_ptr("pcc_type_cls_textiowrapper", cls)
+    elif kind == 1:
+        cls = global_load_ptr("pcc_type_cls_bufferedreader")
+        if ptr_is_null(cls) != 0:
+            cls = py_class_new(cstr("BufferedReader"), null(), 0, null(), 0)
+            if ptr_is_null(cls) == 0:
+                global_store_ptr("pcc_type_cls_bufferedreader", cls)
+    elif kind == 2:
+        cls = global_load_ptr("pcc_type_cls_bufferedwriter")
+        if ptr_is_null(cls) != 0:
+            cls = py_class_new(cstr("BufferedWriter"), null(), 0, null(), 0)
+            if ptr_is_null(cls) == 0:
+                global_store_ptr("pcc_type_cls_bufferedwriter", cls)
+    else:
+        cls = global_load_ptr("pcc_type_cls_bufferedrandom")
+        if ptr_is_null(cls) != 0:
+            cls = py_class_new(cstr("BufferedRandom"), null(), 0, null(), 0)
+            if ptr_is_null(cls) == 0:
+                global_store_ptr("pcc_type_cls_bufferedrandom", cls)
+    if ptr_is_null(cls) == 0 and ptr_is_null(_class_own_module(cls)) != 0:
+        module = py_str_new(cstr("_io"), 3)
+        if ptr_is_null(module) == 0:
+            py_class_setattr_raw(cls, cstr("__module__"), module)
+            py_decref(module)
+    return _return_builtin_type(cls)
+
+
+def _class_own_module(cls):
+    """Borrowed-or-NULL probe: does ``cls`` already carry ``__module__``?"""
+    attrs = py_class_attrs_dict(cls, 0)
+    if ptr_is_null(attrs) != 0:
+        return null()
+    key = py_str_new(cstr("__module__"), 10)
+    if ptr_is_null(key) != 0:
+        return null()
+    value = py_dict_get(attrs, key)
+    py_decref(key)
+    if ptr_is_null(value) == 0:
+        py_decref(value)
+    return value
+
+
 @c_abi_export("py_type_builtin")
 def py_type_builtin(o):
     if ptr_is_null(o) != 0:
@@ -1722,6 +1813,8 @@ def py_type_builtin(o):
         if ptr_is_null(cls) == 0:
             py_incref(cls)
             return cls
+    if tag == PY_TYPE_FILE:
+        return _file_type_class(o)
     return _builtin_type_class_for_tag(tag)
 
 
@@ -1816,6 +1909,14 @@ def _raise_attribute_error(o, name):
             resolved: int = 0
             if _is_instance_tag(tag) != 0:
                 cls = pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
+                if ptr_is_null(cls) == 0:
+                    cls_name = load_ptr(cls, PYCLASSOBJECT_NAME_OFFSET)
+                    if ptr_is_null(cls_name) == 0:
+                        type_name = cls_name
+                        resolved = 1
+            elif tag == PY_TYPE_EXC:
+                # Every exception shares one tag; its class names the type.
+                cls = pcc_gc_load_ptr(o, ptr_add(o, 16))
                 if ptr_is_null(cls) == 0:
                     cls_name = load_ptr(cls, PYCLASSOBJECT_NAME_OFFSET)
                     if ptr_is_null(cls_name) == 0:
@@ -2001,6 +2102,173 @@ def _py_lock_exit_entry(captures, args):
     else:
         py_threading_lock_release(lock)
     return global_load_ptr("py_None")
+
+
+# ``threading`` Semaphore / Event / Condition methods on a dynamically typed
+# receiver.  The static lowering (native_threading) covers a receiver whose
+# type is proven; one that arrives as a plain parameter reached this getattr
+# and raised AttributeError.  Results follow that lowering: return code 0 is
+# True, a positive code (a wait that did not complete) is False, and a
+# negative code is a failed primitive.
+
+_SYNC_ACQUIRE = 0
+_SYNC_RELEASE = 1
+_SYNC_ENTER = 2
+_SYNC_EXIT = 3
+_SYNC_SET = 4
+_SYNC_CLEAR = 5
+_SYNC_IS_SET = 6
+_SYNC_WAIT = 7
+_SYNC_NOTIFY = 8
+
+
+def _py_sync_rc_bool(rc: int):
+    if rc < 0:
+        py_raise_owned(py_exc_new(7, cstr("threading primitive failed")))
+        return null()
+    if rc == 0:
+        return global_load_ptr("py_True")
+    return global_load_ptr("py_False")
+
+
+def _py_sync_invoke(o, op: int):
+    tag: int = load_i32(o, 8)
+    none = global_load_ptr("py_None")
+    if tag == PY_TYPE_THREAD_SEMAPHORE:
+        if op == _SYNC_ACQUIRE:
+            return _py_sync_rc_bool(py_threading_semaphore_acquire(o))
+        if op == _SYNC_ENTER:
+            if ptr_is_null(_py_sync_rc_bool(py_threading_semaphore_acquire(o))):
+                return null()
+            return o
+        py_threading_semaphore_release(o)
+        return none
+    if tag == PY_TYPE_THREAD_EVENT:
+        if op == _SYNC_SET:
+            py_threading_event_set(o)
+            return none
+        if op == _SYNC_CLEAR:
+            py_threading_event_clear(o)
+            return none
+        if op == _SYNC_IS_SET:
+            if py_threading_event_is_set(o) != 0:
+                return global_load_ptr("py_True")
+            return global_load_ptr("py_False")
+        return _py_sync_rc_bool(py_threading_event_wait(o))
+    if op == _SYNC_ACQUIRE:
+        return _py_sync_rc_bool(py_threading_condition_acquire(o))
+    if op == _SYNC_ENTER:
+        if ptr_is_null(_py_sync_rc_bool(py_threading_condition_acquire(o))):
+            return null()
+        return o
+    if op == _SYNC_WAIT:
+        return _py_sync_rc_bool(py_threading_condition_wait(o))
+    if op == _SYNC_NOTIFY:
+        py_threading_condition_notify(o)
+        return none
+    py_threading_condition_release(o)
+    return none
+
+
+def _py_sync_captured(captures):
+    return py_tuple_get(captures, 0)
+
+
+def _py_sync_acquire_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_ACQUIRE)
+
+
+def _py_sync_release_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_RELEASE)
+
+
+def _py_sync_enter_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_ENTER)
+
+
+def _py_sync_exit_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_EXIT)
+
+
+def _py_sync_set_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_SET)
+
+
+def _py_sync_clear_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_CLEAR)
+
+
+def _py_sync_is_set_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_IS_SET)
+
+
+def _py_sync_wait_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_WAIT)
+
+
+def _py_sync_notify_entry(captures, args):
+    return _py_sync_invoke(_py_sync_captured(captures), _SYNC_NOTIFY)
+
+
+def _py_sync_method_op(tag: int, name) -> int:
+    if tag != PY_TYPE_THREAD_EVENT:
+        if _cstr_is_dunder_enter(name) != 0:
+            return _SYNC_ENTER
+        if _cstr_is_dunder_exit(name) != 0:
+            return _SYNC_EXIT
+        if _cstr_is_acquire(name) != 0:
+            return _SYNC_ACQUIRE
+        if _cstr_is_release(name) != 0:
+            return _SYNC_RELEASE
+    if tag == PY_TYPE_THREAD_EVENT:
+        if strcmp(name, cstr("set")) == 0:
+            return _SYNC_SET
+        if strcmp(name, cstr("clear")) == 0:
+            return _SYNC_CLEAR
+        if strcmp(name, cstr("is_set")) == 0:
+            return _SYNC_IS_SET
+    if tag != PY_TYPE_THREAD_SEMAPHORE and strcmp(name, cstr("wait")) == 0:
+        return _SYNC_WAIT
+    if tag == PY_TYPE_THREAD_CONDITION:
+        # Same primitive as the static lowering's notify/notify_all.
+        if strcmp(name, cstr("notify")) == 0:
+            return _SYNC_NOTIFY
+        if strcmp(name, cstr("notify_all")) == 0:
+            return _SYNC_NOTIFY
+    return -1
+
+
+def _py_sync_method_bound(o, tag: int, name):
+    """The bound method for ``name`` on a sync primitive, NULL if none."""
+    op: int = _py_sync_method_op(tag, name)
+    if op < 0:
+        return null()
+    captures = py_tuple_new(1)
+    if ptr_is_null(captures) != 0:
+        return null()
+    py_tuple_set_item(captures, 0, o)
+    # Each entry is named directly in the extern call: that is what lowers a
+    # function to its code address (as a pcc argument it becomes an object).
+    if op == _SYNC_ENTER:
+        fn = py_func_new_bound(_py_sync_enter_entry, captures, cstr("__enter__"), o)
+    elif op == _SYNC_EXIT:
+        fn = py_func_new_bound(_py_sync_exit_entry, captures, cstr("__exit__"), o)
+    elif op == _SYNC_ACQUIRE:
+        fn = py_func_new_bound(_py_sync_acquire_entry, captures, cstr("acquire"), o)
+    elif op == _SYNC_RELEASE:
+        fn = py_func_new_bound(_py_sync_release_entry, captures, cstr("release"), o)
+    elif op == _SYNC_SET:
+        fn = py_func_new_bound(_py_sync_set_entry, captures, cstr("set"), o)
+    elif op == _SYNC_CLEAR:
+        fn = py_func_new_bound(_py_sync_clear_entry, captures, cstr("clear"), o)
+    elif op == _SYNC_IS_SET:
+        fn = py_func_new_bound(_py_sync_is_set_entry, captures, cstr("is_set"), o)
+    elif op == _SYNC_WAIT:
+        fn = py_func_new_bound(_py_sync_wait_entry, captures, cstr("wait"), o)
+    else:
+        fn = py_func_new_bound(_py_sync_notify_entry, captures, cstr("notify"), o)
+    py_decref(captures)
+    return fn
 
 
 def _py_lock_context_bound(o, want_exit: int):
@@ -2261,6 +2529,14 @@ def py_obj_getattr(o, name):
             return _py_lock_method_bound(o, 0)
         if _cstr_is_release(name) != 0:
             return _py_lock_method_bound(o, 1)
+    if (
+        tag == PY_TYPE_THREAD_SEMAPHORE
+        or tag == PY_TYPE_THREAD_EVENT
+        or tag == PY_TYPE_THREAD_CONDITION
+    ):
+        sync_method = _py_sync_method_bound(o, tag, name)
+        if ptr_is_null(sync_method) == 0:
+            return sync_method
     if _cstr_is_pop(name) != 0:
         if tag == PY_TYPE_LIST:  # PY_TYPE_LIST
             return _py_list_pop_bound(o)
@@ -2374,6 +2650,11 @@ def py_obj_getattr(o, name):
         if py_err_occurred() != 0:
             return result
         return _raise_attribute_error(o, name)
+    if tag == PY_TYPE_FILE:
+        result = py_file_getattr(o, name)
+        if ptr_is_null(result) == 0 or py_err_occurred() != 0:
+            return result
+        return _raise_attribute_error(o, name)
     if tag == PY_TYPE_COMPLEX:  # PY_TYPE_COMPLEX
         if _cstr_is_real(name) != 0:
             return py_complex_real(o)
@@ -2390,6 +2671,16 @@ def py_obj_getattr(o, name):
                 result = global_load_ptr("py_None")
         elif _cstr_is_dunder_context(name) != 0:
             result = pcc_gc_load_ptr(o, ptr_add(o, 40))
+            if ptr_is_null(result) != 0:
+                result = global_load_ptr("py_None")
+        elif strcmp(name, cstr("__traceback__")) == 0:
+            # A NEW reference already (built from the frame records).
+            return py_exc_traceback_object(o)
+        elif strcmp(name, cstr("code")) == 0 and py_exc_matches(
+            o, py_exc_builtin_class(53)  # PY_EXC_SYSTEMEXIT
+        ) != 0:
+            # SystemExit.code: its argument (None when raised bare).
+            result = pcc_gc_load_ptr(o, ptr_add(o, 24))
             if ptr_is_null(result) != 0:
                 result = global_load_ptr("py_None")
         elif _cstr_is_value(name) != 0:
@@ -2649,6 +2940,38 @@ def _instance_is_of_class(obj, cls) -> int:
     return 0
 
 
+def _builtin_exception_class_tag(cls) -> int:
+    """Index of ``cls`` in the builtin exception class table, or -1.
+
+    Reads the cache directly so the probe never materializes a class.
+    """
+    tag: int = 0
+    while tag < 65:  # PY_EXC_N_BUILTIN
+        if ptr_eq(load_ptr(global_addr("py_exc_classes"), tag * 8), cls) != 0:
+            return tag
+        tag = tag + 1
+    return -1
+
+
+def _builtin_exception_call(cls, args, nargs: int):
+    """``category(message)`` for a builtin exception class value.
+
+    Builds the same exception object as the static ``ValueError("x")``
+    constructor (only ``args[0]`` is stored); the generic class path made a
+    plain instance with no message and no ``args``, so ``warnings.warn``
+    printed an empty ``UserWarning:``.
+    """
+    if nargs == 0:
+        return py_exc_new_with_class(cls, cstr(""))
+    e = py_exc_new_with_class(cls, null())
+    if ptr_is_null(e) != 0:
+        return null()
+    value = py_tuple_get(args, 0)
+    pcc_gc_store_ptr(e, ptr_add(e, 24), value)
+    py_decref(value)
+    return e
+
+
 def _class_call_new(callable_obj, args, kwargs):
     """``cls.__new__(cls, *args)``, or a plain allocation when undefined.
 
@@ -2765,19 +3088,10 @@ def py_obj_call(callable, args, kwargs):
             elif ptr_eq(callable, global_load_ptr("pcc_type_cls_int")) != 0:
                 if ptr_is_null(arg) != 0:
                     out = py_int_from_i64(0)
-                elif _type_of(arg) == PY_TYPE_INT:
-                    py_incref(arg)
-                    out = arg
-                elif _type_of(arg) == PY_TYPE_BOOL:
-                    out = py_int_from_i64(py_obj_truthy(arg))
-                elif _type_of(arg) == PY_TYPE_STR:
-                    out = py_int_from_cstr_or_raise(py_str_utf8(arg), 10)
                 else:
-                    py_raise_owned(
-                        py_exc_new(
-                            3, cstr("int() argument must be a string or a real number")
-                        )
-                    )
+                    # One owner for int(x): exact floats, __int__/__index__
+                    # and CPython's TypeError (floats used to be rejected).
+                    out = py_obj_as_int_object(arg, 10)
             elif ptr_eq(callable, global_load_ptr("pcc_type_cls_float")) != 0:
                 value: float = 0.0
                 if ptr_is_null(arg) == 0:
@@ -2832,6 +3146,8 @@ def py_obj_call(callable, args, kwargs):
             if ptr_is_null(arg) == 0:
                 py_decref(arg)
             return out
+        if nkwargs == 0 and _builtin_exception_class_tag(callable) >= 0:
+            return _builtin_exception_call(callable, args, nargs)
         # CPython: ``obj = cls.__new__(cls, *args)`` first.  Going straight
         # to py_instance_new skipped every user ``__new__``, so interning and
         # singleton classes handed back a fresh object each call -- and a

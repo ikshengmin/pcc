@@ -114,7 +114,7 @@ def _compile_extension(tmp_path: Path) -> Path:
     return site
 
 
-def test_len_and_str_use_cext_slots(tmp_path, c_runtime_archive):
+def test_len_and_str_use_cext_slots(tmp_path, pcc_py_runtime_archive):
     site = _compile_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text(MAIN_SOURCE, encoding="utf-8")
@@ -123,8 +123,7 @@ def test_len_and_str_use_cext_slots(tmp_path, c_runtime_archive):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_ARCHIVE"] = str(c_runtime_archive)
+    env["PCC_RUNTIME_ARCHIVE"] = str(pcc_py_runtime_archive)
     # Keep the program self-backend/no-libpython while selecting the explicit
     # system final-link oracle for native-extension export anchors.  The
     # pcc-owned final linker correctly rejects that public surface until it is

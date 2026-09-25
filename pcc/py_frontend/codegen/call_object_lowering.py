@@ -124,16 +124,21 @@ class CallObjectLoweringMixin:
         kwargs_expr: Optional[Expr],
         span: SourceSpan,
     ) -> ir.Value:
+        # Call keywords: every merge rejects a repeated key and a non-mapping
+        # ``**`` operand with CPython's TypeError (py_call_merge_kwargs_unique).
+        self._reject_kwargs_merge_with_explicit_keywords(kwargs_expr, kwargs)
         if kwargs_expr is None and not kwargs:
             none_gv = declare_runtime_global(self.module, "py_None")
             return self.builder.load(none_gv, name=self._fresh("none"))
         if kwargs_expr is not None and not kwargs:
             star = self._emit_as_object(kwargs_expr)
-            return self.builder.call(
-                self.runtime["py_call_merge_kwargs"],
+            cloned = self.builder.call(
+                self.runtime["py_call_merge_kwargs_unique"],
                 [ir.Constant(_CSTR, None), star],
                 name=self._fresh("call.kwargs.clone"),
             )
+            self._emit_post_call_err_check(span)
+            return cloned
 
         current: Optional[ir.Value] = None
         pairs: list[tuple[Expr, Expr]] = []
@@ -150,10 +155,11 @@ class CallObjectLoweringMixin:
                         span,
                     )
                     merged_explicit = self.builder.call(
-                        self.runtime["py_call_merge_kwargs"],
+                        self.runtime["py_call_merge_kwargs_unique"],
                         [current, explicit],
                         name=self._fresh("call.kwargs.merge.explicit"),
                     )
+                    self._emit_post_call_err_check(span)
                     self._gc_release(current)
                     self._gc_release(explicit)
                     base = merged_explicit
@@ -162,10 +168,11 @@ class CallObjectLoweringMixin:
                 pairs = []
                 star = self._emit_as_object(kw_expr)
                 current = self.builder.call(
-                    self.runtime["py_call_merge_kwargs"],
+                    self.runtime["py_call_merge_kwargs_unique"],
                     [base, star],
                     name=self._fresh("call.kwargs.merge"),
                 )
+                self._emit_post_call_err_check(span)
                 self._gc_release(base)
                 continue
             pairs.append(
@@ -190,10 +197,11 @@ class CallObjectLoweringMixin:
                     span,
                 )
                 merged_explicit = self.builder.call(
-                    self.runtime["py_call_merge_kwargs"],
+                    self.runtime["py_call_merge_kwargs_unique"],
                     [current, explicit],
                     name=self._fresh("call.kwargs.merge.explicit"),
                 )
+                self._emit_post_call_err_check(span)
                 self._gc_release(current)
                 self._gc_release(explicit)
                 base = merged_explicit
@@ -202,10 +210,11 @@ class CallObjectLoweringMixin:
             pairs = []
             star = self._emit_as_object(kwargs_expr)
             merged = self.builder.call(
-                self.runtime["py_call_merge_kwargs"],
+                self.runtime["py_call_merge_kwargs_unique"],
                 [base, star],
                 name=self._fresh("call.kwargs.merge"),
             )
+            self._emit_post_call_err_check(span)
             self._gc_release(base)
             return merged
         if current is not None:
@@ -215,10 +224,11 @@ class CallObjectLoweringMixin:
                     span,
                 )
                 merged = self.builder.call(
-                    self.runtime["py_call_merge_kwargs"],
+                    self.runtime["py_call_merge_kwargs_unique"],
                     [current, explicit],
                     name=self._fresh("call.kwargs.merge.explicit"),
                 )
+                self._emit_post_call_err_check(span)
                 self._gc_release(current)
                 self._gc_release(explicit)
                 return merged

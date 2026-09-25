@@ -146,7 +146,7 @@ def test_script_exit_status_is_preserved(monkeypatch, tmp_path):
     assert cli.bootstrap_cli_main([str(source)]) == 7
 
 
-def test_runtime_strips_private_logical_argv_envelope(tmp_path):
+def test_runtime_strips_private_logical_argv_envelope(tmp_path, pcc_py_runtime_archive):
     repo = Path(__file__).resolve().parents[2]
     harness = tmp_path / "argv_contract.c"
     executable = tmp_path / "argv_contract"
@@ -177,8 +177,9 @@ def test_runtime_strips_private_logical_argv_envelope(tmp_path):
             "-std=c11",
             "-I",
             str(repo / "pcc" / "py_runtime" / "include"),
-            str(repo / "pcc" / "py_runtime" / "src" / "py_process.c"),
             str(harness),
+            str(pcc_py_runtime_archive),
+            "-lm",
             "-o",
             str(executable),
         ],

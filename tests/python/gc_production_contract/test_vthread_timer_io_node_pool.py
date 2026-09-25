@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).absolute().parents[3]
@@ -120,7 +120,7 @@ int main(int argc, char **argv) {
 @pytest.fixture(scope="module")
 def _timer_io_pool_exe(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gc_vthread_timer_io_pool")
-    work_runtime = cached_c_runtime()
+    work_runtime = cached_pcc_python_runtime()
     src = tmp / "vthread_timer_io_node_pool.c"
     src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")
     exe = tmp / "vthread_timer_io_node_pool_bin"
@@ -130,7 +130,7 @@ def _timer_io_pool_exe(tmp_path_factory):
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),

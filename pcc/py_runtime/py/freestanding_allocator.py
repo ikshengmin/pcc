@@ -954,6 +954,11 @@ define_global_ptr_null("pcc_allocator_span_arena")
 define_global_i64("pcc_allocator_span_arena_used", 0)
 define_global_ptr_null("pcc_allocator_granule_radix_root")
 define_global_i64("pcc_allocator_granule_radix_node_count", 0)
+# Bump arena for object-slab side arrays (see
+# ``pcc_allocator_object_side_slot``).  Like span arenas these are immortal
+# metadata: object spans are never retired, so neither is their side array.
+define_global_ptr_null("pcc_allocator_side_arena")
+define_global_i64("pcc_allocator_side_arena_used", 0)
 
 
 @c_abi_export("pcc_allocator_granule_stride_count")
@@ -987,7 +992,7 @@ def _granule_stride_count(stride: i64) -> i64:
 def _span_new(kind: i64, stride: i64, base) -> c_ptr:
     arena = global_load_ptr("pcc_allocator_span_arena")
     used: i64 = load_i64(global_addr("pcc_allocator_span_arena_used"), 0)
-    if ptr_is_null(arena) != 0 or used + 40 > 65536:
+    if ptr_is_null(arena) != 0 or used + 48 > 65536:
         arena = page_alloc(65536)
         if ptr_is_null(arena):
             return null()
@@ -1007,7 +1012,7 @@ def _span_new(kind: i64, stride: i64, base) -> c_ptr:
         global_store_ptr("pcc_allocator_span_arena", arena)
         used = 0
     span = ptr_add(arena, used)
-    store_i64(global_addr("pcc_allocator_span_arena_used"), 0, used + 40)
+    store_i64(global_addr("pcc_allocator_span_arena_used"), 0, used + 48)
     store_i64(span, 0, kind)
     store_i64(span, 8, stride)
     store_ptr(span, 16, base)
@@ -1017,6 +1022,9 @@ def _span_new(kind: i64, stride: i64, base) -> c_ptr:
     # Per-slab free-cell counter for empty-slab reclamation (raw kind-2
     # slabs only); kind-1 readers never read offset 32.
     store_i64(span, 32, 0)
+    # Object slabs: per-cell side words, allocated on first use (see
+    # pcc_allocator_object_side_slot).
+    store_ptr(span, 40, null())
     return span
 
 
@@ -1234,6 +1242,23 @@ def _granule_radix_leaf_slot_locked(key: i64) -> c_ptr:
 def _granule_radix_span_key(key: i64) -> c_ptr:
     if key <= 0 or logical_shift_right_i64(key, 48) != 0:
         return null()
+    # The object-start probe's direct-mapped span cache, consulted here too so
+    # free(), publish and retire stop walking four radix levels per object.
+    # Any reader may cache an object (kind 1) span -- those are never retired
+    # and a key is never rebound.  Raw (kind 2) spans are cached only by
+    # allocator-lock holders (``_granule_span_locked``) and retirement clears
+    # them before the address can be reused, so a hit is exactly what the
+    # radix leaf would answer.  A hit is accepted only when the cached slab's
+    # sixteen granules cover this page.
+    cache = global_addr("pcc_allocator_granule_span_cache")
+    cache_slot: i64 = (logical_shift_right_i64(key, 4) & 255) * 8
+    cached_bits: i64 = load_i64(cache, cache_slot)
+    if cached_bits != 0:
+        cached_page: i64 = key - logical_shift_right_i64(
+            ptr_diff(load_ptr(ptr_add(null(), cached_bits), 16), null()), 12
+        )
+        if cached_page >= 0 and cached_page < 16:
+            return ptr_add(null(), cached_bits)
     root_bits: i64 = atomic_load_i64(
         global_addr("pcc_allocator_granule_radix_root"), 0, "acquire"
     )
@@ -1262,6 +1287,9 @@ def _granule_radix_span_key(key: i64) -> c_ptr:
     span_bits: i64 = atomic_load_i64(
         ptr_add(null(), leaf_bits), (key & 4095) * 8, "acquire"
     )
+    if span_bits != 0 and load_i64(ptr_add(null(), span_bits), 0) == 1:
+        if load_i32(global_addr("pcc_allocator_granule_span_cache_fill"), 0) != 0:
+            store_i64(cache, cache_slot, span_bits)
     return ptr_add(null(), span_bits)
 
 
@@ -1271,6 +1299,27 @@ def pcc_gc_granule_span(ptr) -> c_ptr:
         return null()
     key: i64 = logical_shift_right_i64(ptr_diff(ptr, null()), 12)
     return _granule_radix_span_key(key)
+
+
+@c_abi_export("pcc_allocator_granule_span_locked")
+def _granule_span_locked(ptr) -> c_ptr:
+    """``pcc_gc_granule_span`` for a caller holding the allocator lock.
+
+    Raw (kind 2) spans may be cached only here: retirement and every raw
+    lookup (malloc/free) serialize on the allocator lock, and
+    ``_granule_retire_slab_locked`` clears a retired span's entries before its
+    address can be reused.  Lock-free readers cache object spans only.
+    """
+    span = pcc_gc_granule_span(ptr)
+    if ptr_is_null(span) == 0 and load_i64(span, 0) == 2:
+        if load_i32(global_addr("pcc_allocator_granule_span_cache_fill"), 0) != 0:
+            key: i64 = logical_shift_right_i64(ptr_diff(ptr, null()), 12)
+            store_i64(
+                global_addr("pcc_allocator_granule_span_cache"),
+                (logical_shift_right_i64(key, 4) & 255) * 8,
+                ptr_diff(span, null()),
+            )
+    return span
 
 
 @c_abi_export("pcc_gc_granule_kind")
@@ -1371,6 +1420,18 @@ def _granule_retire_slab_locked(slab) -> i64:
         leaf_slot = _granule_radix_leaf_slot_locked(base_key + page_index)
         if ptr_is_null(leaf_slot) == 0:
             atomic_store_i64(leaf_slot, 0, 0, "release")
+        page_index = page_index + 1
+    # Drop this span from the span cache (raw entries are written only under
+    # this lock) so a later slab at the same address cannot hit it.
+    span_cache = global_addr("pcc_allocator_granule_span_cache")
+    span_bits: i64 = ptr_diff(span, null())
+    page_index = 0
+    while page_index < 16:
+        cache_slot: i64 = (
+            logical_shift_right_i64(base_key + page_index, 4) & 255
+        ) * 8
+        if load_i64(span_cache, cache_slot) == span_bits:
+            store_i64(span_cache, cache_slot, 0)
         page_index = page_index + 1
     table = global_load_ptr("pcc_allocator_granule_table")
     if ptr_is_null(table) == 0:
@@ -1807,6 +1868,88 @@ def _granule_object_slot(ptr) -> c_ptr:
     return ptr
 
 
+@c_abi_export("pcc_allocator_object_side_array_new_locked")
+def _object_side_array_new_locked(count: i64) -> c_ptr:
+    """Carve ``count`` zeroed words from the side arena (allocator lock held)."""
+    size: i64 = count * 8
+    if count <= 0 or size > 65536:
+        return null()
+    arena = global_load_ptr("pcc_allocator_side_arena")
+    used: i64 = load_i64(global_addr("pcc_allocator_side_arena_used"), 0)
+    if ptr_is_null(arena) != 0 or used + size > 65536:
+        # A fresh anonymous mapping is zero-filled, which is the "no tracked
+        # node" state of every side word.
+        arena = page_alloc(65536)
+        if ptr_is_null(arena):
+            return null()
+        atomic_rmw_i64(
+            "add", global_addr("pcc_allocator_mapped"), 0, 65536, "relaxed"
+        )
+        atomic_rmw_i64(
+            "add",
+            global_addr("pcc_allocator_metadata_mapped"),
+            0,
+            65536,
+            "relaxed",
+        )
+        global_store_ptr("pcc_allocator_side_arena", arena)
+        used = 0
+    store_i64(global_addr("pcc_allocator_side_arena_used"), 0, used + size)
+    return ptr_add(arena, used)
+
+
+@c_abi_export("pcc_allocator_object_side_slot")
+def pcc_allocator_object_side_slot(ptr, create: i64) -> c_ptr:
+    """Address of an object-family cell's side word, or NULL.
+
+    Each object slab can carry one word per cell, allocated when first
+    requested with ``create``.  The GC tracked-object index keeps a cell's
+    tracked node there, so tracking and untracking are one slot store instead
+    of a hash insert/remove.  NULL means ``ptr`` is not an exact object-family
+    cell, or that the slab has no side array yet and ``create`` is 0 (or the
+    array could not be mapped).  Side words belong to their user: the GC
+    reads and writes them under its table lock.
+    """
+    if ptr_is_null(ptr) != 0:
+        return null()
+    span = _granule_radix_span_key(
+        logical_shift_right_i64(ptr_diff(ptr, null()), 12)
+    )
+    if ptr_is_null(span) != 0 or load_i64(span, 0) != 1:
+        return null()
+    # Same exact-cell validation as ``_granule_object_slot``: an interior or
+    # foreign pointer must never alias another cell's side word.
+    stride: i64 = load_i64(span, 8)
+    count: i64 = load_i64(span, 24)
+    if count <= 0 or stride <= 0:
+        return null()
+    base = load_ptr(span, 16)
+    if ptr_is_null(base) != 0 or (ptr_diff(base, null()) & 4095) != 0:
+        return null()
+    slab_offset: i64 = ptr_diff(ptr, base)
+    if slab_offset < 48 or slab_offset >= 65536:
+        return null()
+    carve_offset: i64 = slab_offset - 48
+    cell: i64 = carve_offset // stride
+    if cell * stride != carve_offset or cell >= count:
+        return null()
+    side_bits: i64 = atomic_load_i64(span, 40, "acquire")
+    if side_bits == 0:
+        if create == 0:
+            return null()
+        pcc_allocator_lock_acquire()
+        side_bits = load_i64(span, 40)
+        if side_bits == 0:
+            side = _object_side_array_new_locked(count)
+            if ptr_is_null(side) == 0:
+                side_bits = ptr_diff(side, null())
+                atomic_store_i64(span, 40, side_bits, "release")
+        pcc_allocator_lock_release()
+        if side_bits == 0:
+            return null()
+    return ptr_add(ptr_add(null(), side_bits), cell * 8)
+
+
 @c_abi_export("pcc_gc_granule_object_publish")
 def pcc_gc_granule_object_publish(ptr) -> i64:
     """Publish a fully initialized object-family slot.
@@ -2035,7 +2178,7 @@ def pcc_allocator_granule_span_cache_set_fill(enabled: i64) -> i64:
     while index < 256:
         store_i64(cache, index * 8, 0)
         index = index + 1
-    value: i32 = 0
+    value: i64 = 0
     if enabled != 0:
         value = 1
     store_i32(global_addr("pcc_allocator_granule_span_cache_fill"), 0, value)
@@ -2079,7 +2222,7 @@ def pcc_malloc(size: i64) -> c_ptr:
         pcc_allocator_lock_acquire()
         user = pcc_allocator_take_small(usable)
         if ptr_is_null(user) == 0:
-            reclaim_span = pcc_gc_granule_span(user)
+            reclaim_span = _granule_span_locked(user)
             if ptr_is_null(reclaim_span) == 0:
                 reclaim_free: i64 = load_i64(reclaim_span, 32)
                 if reclaim_free == load_i64(reclaim_span, 24):
@@ -2118,7 +2261,7 @@ def pcc_free(ptr) -> None:
         # fully-free slab can later be reclaimed; a fallback slab has no span
         # and is simply not tracked.  This reuses the one span lookup free()
         # already needed to route object vs raw, so it adds no extra lookup.
-        reclaim_span = pcc_gc_granule_span(ptr)
+        reclaim_span = _granule_span_locked(ptr)
         reclaim_kind: i64 = 0
         if ptr_is_null(reclaim_span) == 0:
             reclaim_kind = load_i64(reclaim_span, 0)

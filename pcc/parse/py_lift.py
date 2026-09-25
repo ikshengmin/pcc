@@ -605,7 +605,7 @@ class _Lifter:
     def _e_Bytes(self, e: pp._Bytes) -> pa.BytesLit:
         cooked: list[str] = []
         for raw_text, is_raw in e.parts:
-            cooked.append(raw_text if is_raw else _decode_escapes(raw_text))
+            cooked.append(raw_text if is_raw else _decode_escapes(raw_text, True))
         return pa.BytesLit(
             self._span(e.line),
             pa.BytesType("bytes"),
@@ -1240,9 +1240,8 @@ def _lift_type(node) -> pa.Type:
     return _DYN
 
 
-# Python-style escape processing. We only handle the escapes the parser
-# tokens might contain — ``\n``, ``\t``, ``\\``, ``\'``, ``\"``, ``\xNN``,
-# ``\uNNNN``. The parser strips quotes; escapes remain literal.
+# Python escape processing (CPython's string and bytes literal rules).  The
+# parser strips quotes and prefixes; escapes reach the lifter literally.
 _ESCAPES = {
     "n": "\n",
     "t": "\t",
@@ -1250,37 +1249,99 @@ _ESCAPES = {
     "\\": "\\",
     "'": "'",
     '"': '"',
-    "0": "\0",
     "a": "\a",
     "b": "\b",
     "f": "\f",
     "v": "\v",
 }
+_OCTAL_DIGITS = "01234567"
+_HEX_DIGITS = "0123456789abcdefABCDEF"
 
 
-def _decode_escapes(raw: str) -> str:
+def _hex_escape_value(raw: str, start: int, width: int, escape: str) -> int:
+    digits = raw[start : start + width]
+    if len(digits) != width:
+        raise SyntaxError("truncated \\" + escape + " escape")
+    for digit in digits:
+        if digit not in _HEX_DIGITS:
+            raise SyntaxError("truncated \\" + escape + " escape")
+    return int(digits, 16)
+
+
+def _unicode_named_char(name: str) -> str:
+    """``\\N{name}`` through the host's Unicode name database.
+
+    Kept out of ``_decode_escapes`` so a compiler without the database fails
+    only this escape, loudly, instead of every string literal.
+    """
+    import unicodedata
+
+    lookup = getattr(unicodedata, "lookup", None)
+    if lookup is None:
+        raise SyntaxError("\\N{...} escapes need a Unicode name database: " + name)
+    try:
+        return lookup(name)
+    except KeyError:
+        raise SyntaxError("unknown Unicode character name " + repr(name))
+
+
+def _decode_escapes(raw: str, is_bytes: bool = False) -> str:
+    """Decode one literal body like CPython.
+
+    ``\\<newline>`` continues the line; octal takes up to three digits;
+    ``\\x`` takes exactly two hex digits; ``\\u``/``\\U``/``\\N{}`` exist
+    only in str literals (a bytes literal keeps them).  An unknown escape keeps
+    its backslash, as CPython does (with a warning).
+    """
     out: list[str] = []
     i = 0
-    while i < len(raw):
+    n = len(raw)
+    while i < n:
         c = raw[i]
-        if c != "\\" or i + 1 >= len(raw):
+        if c != "\\" or i + 1 >= n:
             out.append(c)
             i += 1
             continue
         nxt = raw[i + 1]
+        if nxt == "\n":
+            i += 2
+            continue
         if nxt in _ESCAPES:
             out.append(_ESCAPES[nxt])
             i += 2
             continue
-        if nxt == "x" and i + 3 < len(raw):
-            out.append(chr(int(raw[i + 2 : i + 4], 16)))
+        if nxt in _OCTAL_DIGITS:
+            j = i + 1
+            while j < n and j < i + 4 and raw[j] in _OCTAL_DIGITS:
+                j += 1
+            value = int(raw[i + 1 : j], 8)
+            out.append(chr(value & 0xFF) if is_bytes else chr(value))
+            i = j
+            continue
+        if nxt == "x":
+            out.append(chr(_hex_escape_value(raw, i + 2, 2, "xXX")))
             i += 4
             continue
-        if nxt == "u" and i + 5 < len(raw):
-            out.append(chr(int(raw[i + 2 : i + 6], 16)))
+        if not is_bytes and nxt == "u":
+            out.append(chr(_hex_escape_value(raw, i + 2, 4, "uXXXX")))
             i += 6
             continue
-        # Unknown escape: keep literal (Python does the same with a warning).
+        if not is_bytes and nxt == "U":
+            value = _hex_escape_value(raw, i + 2, 8, "UXXXXXXXX")
+            if value > 0x10FFFF:
+                raise SyntaxError("illegal Unicode character in \\U escape")
+            out.append(chr(value))
+            i += 10
+            continue
+        if not is_bytes and nxt == "N":
+            if i + 2 >= n or raw[i + 2] != "{":
+                raise SyntaxError("malformed \\N character escape")
+            close = raw.find("}", i + 3)
+            if close < 0:
+                raise SyntaxError("malformed \\N character escape")
+            out.append(_unicode_named_char(raw[i + 3 : close]))
+            i = close + 1
+            continue
         out.append(c)
         i += 1
     return "".join(out)

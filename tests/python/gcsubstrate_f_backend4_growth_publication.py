@@ -6,9 +6,7 @@ that facade so pytest node ids stay stable.
 from _gc_substrate_common import *  # noqa: F401,F403
 
 
-
-
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_capi_borrowed_items_are_lifetime_pinned(
     tmp_path: Path,
     kind: str,
@@ -95,7 +93,7 @@ def test_backend4_capi_borrowed_items_are_lifetime_pinned(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_container_constructor_publication_excludes_partial_objects(
     tmp_path: Path,
     kind: str,
@@ -181,7 +179,7 @@ def test_backend4_container_constructor_publication_excludes_partial_objects(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_wrapper_constructor_publication_excludes_partial_objects(
     tmp_path: Path,
     kind: str,
@@ -269,7 +267,7 @@ def test_backend4_wrapper_constructor_publication_excludes_partial_objects(
 # to the seven tags listed in py_obj.c, while backend 4 will relocate ITER.
 # Tracked as GC-P1-BACKEND4-RELOCATABLE-TAGS-LACK-FRESH-ALLOC; left visible
 # rather than skipped, per the repo's run-or-deselect rule.
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_iterator_constructor_publication_excludes_partial_objects(
     tmp_path: Path,
     kind: str,
@@ -335,7 +333,7 @@ def test_backend4_iterator_constructor_publication_excludes_partial_objects(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_selector_skips_fresh_pages_with_counter(
     tmp_path: Path,
     kind: str,
@@ -401,7 +399,7 @@ def test_backend4_selector_skips_fresh_pages_with_counter(
 # Was @pytest.mark.skip(reason="strict GC4 suspended-execution ... blocker").
 # The reason was backwards: the strict arm PASSES and the C arm fails (rc=24).
 # Tracked as GC-P1-BACKEND4-SUSPENDED-EXECUTION-C-ARM-PUBLICATION.
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_suspended_execution_constructor_publication(
     tmp_path: Path,
     kind: str,
@@ -484,7 +482,7 @@ def test_backend4_suspended_execution_constructor_publication(
                 py_decref(frame);
                 return 0;
             }
-        '''.replace("PCC_PROBE_RAW", "1" if kind == "c" else "0"),
+        '''.replace("PCC_PROBE_RAW", "0"),
     )
     run = subprocess.run(
         [str(executable)], capture_output=True, text=True, timeout=30
@@ -496,11 +494,6 @@ def test_backend4_suspended_execution_constructor_publication(
 
 
 def test_strict_decref_does_not_accept_unmanaged_cext_tags_by_range_alone():
-    c_src = PY_OBJ_C.read_text(encoding="utf-8")
-    c_prepare = c_src.rsplit("static void pcc_decref_prepare(", 1)[1].split(
-        "static void pcc_decref_finish", 1
-    )[0]
-    assert "pcc_capi_is_cext_type_tag((int64_t)h->type_tag) == 0" in c_prepare
 
     py_src = PY_OBJ_PORT.read_text(encoding="utf-8")
     assert "pcc_capi_is_cext_type_tag = extern(" not in py_src
@@ -512,7 +505,7 @@ def test_strict_decref_does_not_accept_unmanaged_cext_tags_by_range_alone():
     assert invalid_range < invalid_return
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_store_ptr_shades_white_child_during_real_incremental_cycle(
     tmp_path: Path,
     kind: str,
@@ -627,33 +620,6 @@ def test_backend4_mutator_payload_retarget_is_one_locked_metadata_transaction():
     ).read_text(encoding="utf-8")
     assert symbol in internal_header
 
-    c_src = PY_GC_BACKEND_C.read_text(encoding="utf-8")
-    c_body = c_src.split(f"int64_t {symbol}(", 1)[1].split(
-        "int64_t pcc_gc_backend4_zpage_register_owner_payload_span(", 1
-    )[0]
-    for forbidden in (
-        "malloc(",
-        "calloc(",
-        "free(",
-        "py_incref(",
-        "py_decref(",
-        "pcc_gc_graph_lock(",
-        "pcc_gc_graph_unlock(",
-        "pcc_thread_safepoint(",
-    ):
-        assert forbidden not in c_body
-    assert c_body.index("pcc_gc_backend4_store_buffer_medium_states") < (
-        c_body.index(
-            "PccGcStoreBufferNode *entry = pcc_gc_backend4_store_buffer"
-        )
-    ) < c_body.index("pcc_gc_backend4_remembered_slots")
-    old_accounting = c_body.index("pcc_gc_backend4_remembered_page_remove_slot(")
-    span_publish = c_body.index("payload_span->base = (uint8_t *)new_base")
-    new_accounting = c_body.index(
-        "pcc_gc_backend4_remembered_page_add(", span_publish
-    )
-    assert old_accounting < span_publish < new_accounting
-
     strict_src = PY_GC_BACKEND_PORT.read_text(encoding="utf-8")
     strict_body = strict_src.split(f'@c_abi_export("{symbol}")', 1)[1].split(
         '@c_abi_export("pcc_gc_backend4_zpage_fragmentation_per_mille")', 1
@@ -676,7 +642,7 @@ def test_backend4_mutator_payload_retarget_is_one_locked_metadata_transaction():
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_dict_set_rehash_retargets_pending_raw_slots(
     tmp_path: Path,
     kind: str,
@@ -862,7 +828,7 @@ def test_backend4_dict_set_rehash_retargets_pending_raw_slots(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_list_growth_retargets_pending_raw_slots(
     tmp_path: Path,
     kind: str,
@@ -980,7 +946,7 @@ def test_backend4_list_growth_retargets_pending_raw_slots(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_list_growth_reloads_forwarded_item_and_source_roots(
     tmp_path: Path,
     kind: str,
@@ -1113,7 +1079,7 @@ def test_backend4_list_growth_reloads_forwarded_item_and_source_roots(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_list_get_pop_reverse_reload_forwarded_owner(
     tmp_path: Path,
     kind: str,
@@ -1193,7 +1159,7 @@ def test_backend4_list_get_pop_reverse_reload_forwarded_owner(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_list_remove_equality_callback_relocates_and_mutates_current_index(
     tmp_path: Path,
     kind: str,
@@ -1310,7 +1276,7 @@ def test_backend4_list_remove_equality_callback_relocates_and_mutates_current_in
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_list_clear_native_finalizer_relocates_and_reenters_published_empty_list(
     tmp_path: Path,
     kind: str,
@@ -1399,7 +1365,7 @@ def test_backend4_list_clear_native_finalizer_relocates_and_reenters_published_e
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_list_delete_slice_finalizer_relocates_and_reenters_compacted_list(
     tmp_path: Path,
     kind: str,
@@ -1500,7 +1466,7 @@ def test_backend4_list_delete_slice_finalizer_relocates_and_reenters_compacted_l
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_list_set_slice_finalizer_relocates_and_reenters_published_payload(
     tmp_path: Path,
     kind: str,
@@ -1626,7 +1592,7 @@ def test_backend4_list_set_slice_finalizer_relocates_and_reenters_published_payl
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 @pytest.mark.parametrize("container_kind", ["set", "list"])
 def test_backend4_real_container_growth_blocks_stw_until_commit_and_retires_source(
     tmp_path: Path,
@@ -1640,7 +1606,7 @@ def test_backend4_real_container_growth_blocks_stw_until_commit_and_retires_sour
         stem=f"backend4_{container_kind}_growth_stw_relocation",
         source_text=(
             "#define PCC_PROBE_STRICT "
-            + ("1\n" if kind == "pcc_python" else "0\n")
+            + ("1\n")
             + "#define PCC_PROBE_LIST "
             + ("1\n" if container_kind == "list" else "0\n")
             + r'''
@@ -1928,7 +1894,7 @@ def test_backend4_real_container_growth_blocks_stw_until_commit_and_retires_sour
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_generational_owner_referent_worklist_unlocks_between_slot_batches(
     tmp_path: Path,
     kind: str,
@@ -2046,7 +2012,7 @@ def test_generational_owner_referent_worklist_unlocks_between_slot_batches(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_colored_owner_wide_barrier_drains_through_logical_slot_worklist(
     tmp_path: Path,
     kind: str,

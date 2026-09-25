@@ -211,9 +211,26 @@ def test_gc_control_object_has_exact_raw_cross_object_closure(
     assert defined == PUBLIC_SYMBOLS
 
 
-def test_production_archive_uniquely_owns_gc_control_and_matches_c_oracle_gc0_to_gc4(
+# What the harness printed against the retired C runtime oracle.
+CONTROL_EXPECTED = (
+    "enabled:1\n"
+    "disabled:0\n"
+    "reenabled:1\n"
+    "threshold-default:700,10,10,0\n"
+    "threshold-set:17,18,19\n"
+    "threshold-negative-preserve:17,20,19\n"
+    "count:0,0\n"
+    "freeze:1\n"
+    "unfreeze:0\n"
+    "tracked-null:0\n"
+    "tracked-tagged:0\n"
+    "tracked-clear:0\n"
+    "tracked-set:1\n"
+)
+
+
+def test_production_archive_uniquely_owns_gc_control_gc0_to_gc4(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     members_result = subprocess.run(
@@ -251,14 +268,9 @@ def test_production_archive_uniquely_owns_gc_control_and_matches_c_oracle_gc0_to
         for line in lines
     )
 
-    oracle = _link_control_harness(tmp_path, "gc_control_c_oracle", c_runtime_archive)
     implementation = _link_control_harness(
         tmp_path, "gc_control_pcc_python", pcc_py_runtime_archive
     )
-    oracle_result = subprocess.run(
-        [str(oracle)], capture_output=True, text=True, timeout=30
-    )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     for backend in range(5):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
         result = subprocess.run(
@@ -269,4 +281,4 @@ def test_production_archive_uniquely_owns_gc_control_and_matches_c_oracle_gc0_to
             timeout=30,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == oracle_result.stdout
+        assert result.stdout == CONTROL_EXPECTED

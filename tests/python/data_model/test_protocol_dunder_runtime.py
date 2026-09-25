@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 
-def test_user_protocol_dunders_native(tmp_path, c_runtime_archive):
+def test_user_protocol_dunders_native(tmp_path, pcc_py_runtime_archive):
     src = tmp_path / "protocol_probe.c"
     exe = tmp_path / "protocol_probe"
     src.write_text(
@@ -82,9 +82,9 @@ def test_user_protocol_dunders_native(tmp_path, c_runtime_archive):
     subprocess.run(
         [
             os.environ.get("CC", "cc"),
-            "-I", str(c_runtime_archive.parent / "include"),
-            "-I", str(c_runtime_archive.parent / "src"),
-            str(src), str(c_runtime_archive),
+            "-I", str(pcc_py_runtime_archive.parent / "include"),
+            "-I", str(pcc_py_runtime_archive.parent / "src"),
+            str(src), str(pcc_py_runtime_archive),
             "-lm", "-o", str(exe),
         ],
         check=True,
@@ -94,15 +94,8 @@ def test_user_protocol_dunders_native(tmp_path, c_runtime_archive):
 
 
 def test_protocol_dunder_sources_are_wired():
-    proto = Path("pcc/py_runtime/src/py_protocol.c").read_text(encoding="utf-8")
-    dispatch_c = Path("pcc/py_runtime/src/py_obj_ops_dispatch.c").read_text(encoding="utf-8")
-    compare_c = Path("pcc/py_runtime/src/py_obj_ops_compare.c").read_text(encoding="utf-8")
     dispatch_py = Path("pcc/py_runtime/py/py_obj_ops_dispatch.py").read_text(encoding="utf-8")
     compare_py = Path("pcc/py_runtime/py/py_obj_ops_compare.py").read_text(encoding="utf-8")
 
-    assert "py_user_len_dispatch" in proto
-    assert "py_user_setitem_dispatch" in proto
-    assert "py_user_bool_dispatch(o, &handled)" in dispatch_c
-    assert "py_user_contains_dispatch(container, item, &handled)" in compare_c
     assert "py_user_getitem_dispatch" in dispatch_py
     assert "py_user_contains_dispatch" in compare_py

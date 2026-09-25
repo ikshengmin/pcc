@@ -14,7 +14,7 @@ except ImportError:
     # pcc publishes this provider as the top-level stdlib module ``lzma``.
     from _compression_stream import CompressionWriter, DecompressReader
 
-from pcc.extern import c_int64, c_ptr, extern, c_obj
+from pcc.extern import c_int64, c_ptr, c_rawptr, extern, c_obj
 from pcc.unsafe import (
     call_i32_ptr1,
     call_i32_ptr_i32,
@@ -40,7 +40,8 @@ from pcc.unsafe import (
 )
 
 
-_py_bytes_new: "extern" = extern("py_bytes_new", (c_ptr, c_int64), c_obj)
+# The data operand is a raw native buffer address, never an object.
+_py_bytes_new: "extern" = extern("py_bytes_new", (c_rawptr, c_int64), c_obj)
 
 FORMAT_AUTO = 0
 FORMAT_XZ = 1
@@ -91,7 +92,7 @@ def _validate_decoder_options(format, memlimit, filters):
         )
 
 
-def _open_liblzma():
+def _open_liblzma() -> int:
     handle = dynamic_library_open(
         cstr("/usr/local/lib/liblzma.5.dylib"), "darwin"
     )
@@ -114,7 +115,7 @@ def _open_liblzma():
     return handle
 
 
-def _decoder_symbols(handle):
+def _decoder_symbols(handle: int) -> tuple[int, int, int, int]:
     init_fn = dynamic_library_symbol(handle, cstr("lzma_auto_decoder"))
     code_fn = dynamic_library_symbol(handle, cstr("lzma_code"))
     end_fn = dynamic_library_symbol(handle, cstr("lzma_end"))
@@ -129,7 +130,7 @@ def _decoder_symbols(handle):
     return init_fn, code_fn, end_fn, check_fn
 
 
-def _encoder_symbols(handle):
+def _encoder_symbols(handle: int) -> tuple[int, int, int]:
     init_fn = dynamic_library_symbol(handle, cstr("lzma_easy_encoder"))
     code_fn = dynamic_library_symbol(handle, cstr("lzma_code"))
     end_fn = dynamic_library_symbol(handle, cstr("lzma_end"))
@@ -138,7 +139,7 @@ def _encoder_symbols(handle):
     return init_fn, code_fn, end_fn
 
 
-def _bytes_data(data):
+def _bytes_data(data) -> int:
     return ptr_add(data, 24)
 
 

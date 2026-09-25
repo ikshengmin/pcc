@@ -104,7 +104,7 @@ class AArch64EmissionFragments:
     ) -> None:
         word = encode_emitted_load_store_parts(mnemonic, register, base, offset)
         family = EMITTED_INSTRUCTION_SCALAR
-        if mnemonic in ("ldur", "stur", "ldurb", "sturb"):
+        if mnemonic in ("ldur", "stur", "ldurb", "sturb", "ldurh", "sturh"):
             family = EMITTED_INSTRUCTION_UNSCALED
         self.append_word(fragment, word, family)
 

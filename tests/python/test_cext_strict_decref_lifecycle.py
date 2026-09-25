@@ -18,22 +18,22 @@ from pathlib import Path
 
 import pytest
 
-from tests.runtime_build_cache import cached_c_runtime, cached_pcc_python_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _runtime(kind: str) -> Path:
-    return cached_c_runtime() if kind == "c" else cached_pcc_python_runtime()
+    return cached_pcc_python_runtime()
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_dynamic_cext_object_retains_and_deallocs_through_strict_refcount(
     kind: str, tmp_path: Path
 ) -> None:
     runtime = _runtime(kind)
     archive = runtime / (
-        "libpy_runtime.a" if kind == "c" else "libpy_runtime_pcc_py.a"
+        "libpy_runtime_pcc_py.a"
     )
     src = tmp_path / f"cext_strict_lifecycle_{kind}.c"
     exe = tmp_path / f"cext_strict_lifecycle_{kind}.out"
@@ -111,7 +111,7 @@ def test_dynamic_cext_object_retains_and_deallocs_through_strict_refcount(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_dynamic_cext_object_list_retain_release_deallocs(
     kind: str, tmp_path: Path
 ) -> None:
@@ -121,7 +121,7 @@ def test_dynamic_cext_object_list_retain_release_deallocs(
     scenario, proven equal on both mirrors."""
     runtime = _runtime(kind)
     archive = runtime / (
-        "libpy_runtime.a" if kind == "c" else "libpy_runtime_pcc_py.a"
+        "libpy_runtime_pcc_py.a"
     )
     src = tmp_path / f"cext_list_split_store_{kind}.c"
     exe = tmp_path / f"cext_list_split_store_{kind}.out"

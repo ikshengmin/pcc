@@ -26,7 +26,6 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 WRAPPER_SOURCE = RUNTIME_DIR / "py" / "py_obj.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 STATE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_state.py"
-THREADS_SOURCE = RUNTIME_DIR / "src" / "pcc_threads.c"
 
 PUBLIC_SYMBOLS = {
     "pcc_gc_note_frame_enter",
@@ -121,17 +120,9 @@ def test_frame_registry_has_one_strict_source_owner():
     managed = MANAGED_SOURCE.read_text(encoding="utf-8")
     wrappers = WRAPPER_SOURCE.read_text(encoding="utf-8")
     state = STATE_SOURCE.read_text(encoding="utf-8")
-    threads = THREADS_SOURCE.read_text(encoding="utf-8")
     makefile = MAKEFILE.read_text(encoding="utf-8")
 
     assert "__pcc_freestanding__ = True" in strict
-    c_oracle = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    assert (
-        '_Static_assert(sizeof(PccGcFrameNode) == 64, "PccGcFrameNode ABI drift")'
-        in c_oracle
-    )
     assert "return 64 + root_count * 8" in strict
     assert _exported_symbols(strict) == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS
     assert _exported_symbols(managed).isdisjoint(PUBLIC_SYMBOLS | INTERNAL_SYMBOLS)
@@ -167,14 +158,6 @@ def test_frame_registry_has_one_strict_source_owner():
         '@c_abi_export("pcc_gc_thread_unregister_buffers")', 1
     )[1].split("\n@c_abi_export", 1)[0]
     assert "pcc_gc_frame_node_tls_pool_drain()" in unregister
-    trampoline = threads.split("static void *pcc_thread_trampoline", 1)[1].split(
-        "\n}", 1
-    )[0]
-    assert "pcc_thread_unregister_current()" in trampoline
-    unregister_current = threads.split(
-        "void pcc_thread_unregister_current", 1
-    )[1].split("\n}", 1)[0]
-    assert "pcc_gc_thread_unregister_buffers()" in unregister_current
     assert "freestanding_gc_frame_registry" in makefile
     for symbol in PUBLIC_SYMBOLS:
         assert f'"{symbol}"' in wrappers
@@ -182,9 +165,6 @@ def test_frame_registry_has_one_strict_source_owner():
 
 def test_frame_registry_allocator_and_release_tails_are_outside_graph_lock():
     strict = FRAME_SOURCE.read_text(encoding="utf-8")
-    oracle = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
 
     for name in ("pcc_gc_note_frame_enter", "pcc_gc_note_frame_enter_lifo"):
         strict_body = strict.split(f"def {name}", 1)[1].split("\n\n@", 1)[0]
@@ -196,12 +176,6 @@ def test_frame_registry_allocator_and_release_tails_are_outside_graph_lock():
         strict_body = strict.split(f"def {name}", 1)[1].split("\n\n@", 1)[0]
         assert strict_body.rindex("pcc_py_gc_minor_graph_unlock()") < (
             strict_body.rindex("pcc_gc_frame_node_release(")
-        )
-
-    for name in ("pcc_gc_note_frame_enter", "pcc_gc_note_frame_enter_lifo"):
-        oracle_body = oracle.split(f"void {name}", 1)[1].split("\n}\n", 1)[0]
-        assert oracle_body.index("pcc_gc_frame_node_create_unlocked(") < (
-            oracle_body.index("pcc_gc_graph_lock();")
         )
 
     strict_enter = strict.split("def pcc_gc_note_frame_enter", 1)[1].split(
@@ -222,31 +196,6 @@ def test_frame_registry_allocator_and_release_tails_are_outside_graph_lock():
             )
             assert preceding_lock < preceding_unlock
             start = position + len(forbidden)
-
-    oracle_enter = oracle.split("void pcc_gc_note_frame_enter", 1)[1].split(
-        "\n}\n", 1
-    )[0]
-    assert "pcc_gc_frame_index_plan_capacity(1)" in oracle_enter
-    assert "pcc_gc_frame_index_plan_commit(" in oracle_enter
-    assert "pcc_gc_frame_index_replace_preallocated(" in oracle_enter
-    assert "pcc_gc_frame_index_replace(" not in oracle_enter
-    for forbidden in ("calloc(", "free("):
-        start = 0
-        while (position := oracle_enter.find(forbidden, start)) >= 0:
-            preceding_lock = oracle_enter.rfind(
-                "pcc_gc_graph_lock();", 0, position
-            )
-            preceding_unlock = oracle_enter.rfind(
-                "pcc_gc_graph_unlock();", 0, position
-            )
-            assert preceding_lock < preceding_unlock
-            start = position + len(forbidden)
-
-    for name in ("pcc_gc_note_frame_leave", "pcc_gc_note_frame_leave_lifo"):
-        oracle_body = oracle.split(f"void {name}", 1)[1].split("\n}\n", 1)[0]
-        assert oracle_body.rindex("pcc_gc_graph_unlock();") < (
-            oracle_body.rindex("pcc_gc_frame_node_release_unlocked(")
-        )
 
 
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
@@ -445,9 +394,11 @@ static void *mutate(void *raw) {
 
 static void *observe(void *raw) {
     (void)raw;
+    /* Worker i holds up to i + 1 two-slot frames at once in its extra-frame
+     * phase, so every worker there together is 2 * (1 + ... + THREADS). */
     for (int i = 0; i < THREADS * ROUNDS; i++) {
         int64_t count = pcc_gc_frame_root_slot_count();
-        if (count < 0 || count > THREADS * 2) return (void *)1;
+        if (count < 0 || count > THREADS * (THREADS + 1)) return (void *)1;
     }
     return NULL;
 }
@@ -498,22 +449,34 @@ def _link_harness(tmp_path: Path, name: str, source_text: str, archive: Path) ->
     return executable
 
 
-def _assert_same_output(oracle: Path, implementation: Path, env: dict[str, str]):
-    oracle_result = subprocess.run(
-        [str(oracle)], env=env, capture_output=True, text=True, timeout=30
-    )
+def _run_ok(implementation: Path, env: dict[str, str]) -> str:
     result = subprocess.run(
         [str(implementation)], env=env, capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == oracle_result.stdout
     return result.stdout
 
 
-def test_archive_owns_frame_registry_and_matches_gc0_to_gc4_oracle(
+def _frame_expected(pool_cap: int) -> str:
+    # What the harness printed against the retired C runtime oracle; GC3/GC4
+    # keep a thread-local pool of 1024 cached frame nodes.
+    return (
+        "duplicate:4,1,1\n"
+        "duplicate-pop:2,1\n"
+        "duplicate-empty:0\n"
+        "lifo:4\n"
+        "lifo-nonhead:2\n"
+        "lifo-empty:0\n"
+        "invalid:0\n"
+        "pool-small:1\n"
+        "pool-large:0\n"
+        f"pool-cap:{pool_cap}\n"
+        "pool-drain:0\n"
+    )
+
+
+def test_archive_owns_frame_registry_gc0_to_gc4(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     symbols_result = subprocess.run(
@@ -536,9 +499,6 @@ def test_archive_owns_frame_registry_and_matches_gc0_to_gc4_oracle(
         for lines in owners.values()
     )
 
-    oracle = _link_harness(
-        tmp_path, "frame_registry_c_oracle", _frame_harness_source(), c_runtime_archive
-    )
     implementation = _link_harness(
         tmp_path,
         "frame_registry_pcc_python",
@@ -546,30 +506,15 @@ def test_archive_owns_frame_registry_and_matches_gc0_to_gc4_oracle(
         pcc_py_runtime_archive,
     )
     for backend in range(5):
-        output = _assert_same_output(
-            oracle,
-            implementation,
-            {**os.environ, "PCC_GC_BACKEND": str(backend)},
-        )
-        assert "pool-small:1\n" in output
-        assert "pool-large:0\n" in output
-        expected_cached = 1024 if backend in {3, 4} else 0
-        assert f"pool-cap:{expected_cached}\n" in output
-        assert output.endswith("pool-drain:0\n")
+        output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
+        assert output == _frame_expected(1024 if backend in {3, 4} else 0)
 
 
 def test_frame_registry_survives_threaded_mutation_and_observation(
     tmp_path: Path,
-    threaded_c_runtime_archive: Path,
 ):
     threaded_pcc_python_archive = (
         cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-    )
-    oracle = _link_harness(
-        tmp_path,
-        "frame_registry_threads_c_oracle",
-        _thread_harness_source(),
-        threaded_c_runtime_archive,
     )
     implementation = _link_harness(
         tmp_path,
@@ -578,9 +523,5 @@ def test_frame_registry_survives_threaded_mutation_and_observation(
         threaded_pcc_python_archive,
     )
     for backend in range(5):
-        output = _assert_same_output(
-            oracle,
-            implementation,
-            {**os.environ, "PCC_GC_BACKEND": str(backend)},
-        )
+        output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
         assert output == "final:0\n"

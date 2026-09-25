@@ -396,6 +396,19 @@ def py_tuple_set_item(tuple_ptr, i: int, item) -> None:
         backend = pcc_gc_backend()
     if backend != 4:
         return
+    # Nothing waits on a published tuple (publication only clears the
+    # pending bit, PY_FLAG_GC_FRESH_ALLOC = 16384).  While pending, probe the last slot before the prefix
+    # scan: a sequential fill stores it last and a reverse fill first, so
+    # both stay O(1) per store.  Scanning every slot on every store made each
+    # n-item tuple O(n^2) load barriers under GC4 -- the bulk of a GC4 pcc1
+    # compile.
+    if (load_i32(tuple_ptr, PYOBJECTHEADER_FLAGS_OFFSET) & 16384) == 0:
+        return
+    if ptr_is_null(pcc_gc_load_ptr(
+        tuple_ptr,
+        ptr_add(tuple_ptr, PYTUPLEOBJECT_ITEMS_OFFSET + (tuple_len - 1) * 8),
+    )) != 0:
+        return
     complete: int = 1
     slot_index: int = 0
     while slot_index < tuple_len:

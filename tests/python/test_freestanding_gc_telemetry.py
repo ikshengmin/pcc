@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pcc.py_frontend import pipeline
 from pcc.py_frontend.codegen.runtime_abi import (
+    FREESTANDING_GC_I64_GLOBALS,
     FREESTANDING_GC_RUNTIME_GLOBALS,
     RUNTIME_SIGNATURES,
 )
@@ -16,7 +17,8 @@ from pcc.py_frontend.codegen.runtime_abi import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 TELEMETRY_SOURCE = RUNTIME_DIR / "py" / "py_gc_telemetry.py"
-C_ORACLE_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
+# The retired C runtime's pcc_gc_telemetry(), frozen as the reference mapping.
+C_ORACLE_SOURCE = REPO_ROOT / "tests" / "data" / "gc_telemetry_counter_oracle.c"
 PUBLIC_SYMBOLS = {
     "pcc_gc_telemetry",
     "pcc_gc_backend2_worker_buffer_score",
@@ -140,7 +142,10 @@ def _differential_source() -> str:
         "static void pcc_gc_init_config(void) {}",
     ]
     for name in globals_:
-        lines.append(f"int32_t {name} = {global_values[name]};")
+        # Declare each counter at its registered width: reading an i64
+        # counter out of a 4-byte harness global returns neighbouring bytes.
+        ctype = "int64_t" if name in FREESTANDING_GC_I64_GLOBALS else "int32_t"
+        lines.append(f"{ctype} {name} = {global_values[name]};")
     pause_values = [
         global_values[f"pcc_gc_metric_pause_hist{index}"] for index in range(4)
     ]
@@ -167,7 +172,7 @@ def _differential_source() -> str:
             oracle,
             "extern int64_t pcc_gc_telemetry(int64_t metric);",
             "int main(void) {",
-            "  for (int64_t metric = -1; metric <= 116; metric++) {",
+            "  for (int64_t metric = -1; metric <= 117; metric++) {",
             "    int64_t expected = pcc_gc_telemetry_oracle(metric);",
             "    int64_t actual = pcc_gc_telemetry(metric);",
             "    if (actual != expected) {",
@@ -286,20 +291,30 @@ def test_production_archive_owns_and_runs_freestanding_gc_telemetry(
     assert all(len(lines) == 1 for lines in owners.values())
     assert all(":py_gc_telemetry.o:" in lines[0] for lines in owners.values())
 
+    # Every declared counter id answers >= 0; the first id past the last
+    # declared counter answers -1.
+    header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(encoding="utf-8")
+    last_metric = max(
+        int(value) for value in re.findall(r"PCC_GC_COUNTER_\w+\s*=\s*(\d+)", header)
+    )
     harness = tmp_path / "production_telemetry.c"
     executable = tmp_path / "production_telemetry"
     harness.write_text(
         '#include "py_runtime.h"\n'
+        "#include <stdio.h>\n"
         "int main(void) {\n"
-        "  for (int64_t metric = 0; metric <= 115; metric++) {\n"
-        "    if (pcc_gc_telemetry(metric) < 0) return (int)(metric + 1);\n"
+        f"  for (int64_t metric = 0; metric <= {last_metric}; metric++) {{\n"
+        "    if (pcc_gc_telemetry(metric) < 0) {\n"
+        '      fprintf(stderr, "metric %lld < 0\\n", (long long)metric);\n'
+        "      return 1;\n"
+        "    }\n"
         "  }\n"
         "  if (pcc_gc_backend2_worker_buffer_score() != pcc_gc_telemetry(29)) return 117;\n"
         "  if (pcc_gc_backend2_production_score() != pcc_gc_telemetry(28)) return 118;\n"
         "  if (pcc_gc_backend3_minor_productivity_score() != pcc_gc_telemetry(30)) return 119;\n"
         "  if (pcc_gc_backend3_remembered_update_score() != pcc_gc_telemetry(31)) return 120;\n"
         "  if (pcc_gc_telemetry(-1) != -1) return 121;\n"
-        "  if (pcc_gc_telemetry(116) != -1) return 122;\n"
+        f"  if (pcc_gc_telemetry({last_metric + 1}) != -1) return 122;\n"
         "  return 0;\n"
         "}\n",
         encoding="utf-8",

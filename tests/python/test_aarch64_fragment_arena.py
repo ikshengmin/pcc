@@ -6,6 +6,7 @@ import re
 from pcc.backend import self_backend_aarch64_fragments as fragments
 from pcc.backend.arm64_encode import (
     EMITTED_INSTRUCTION_SCALAR,
+    EMITTED_INSTRUCTION_UNSCALED,
     EncodeError,
     encode_emitted_move_register_parts,
     encode_emitted_nop_parts,
@@ -49,12 +50,33 @@ def test_rejected_operand_preserves_populated_fragment():
         span = owner.new_fragment()
         owner.append_nop(span)
         before = _read(owner, span)
-        for mnemonic in ("ldurh", "sturh"):
+        # One operand per rejection reason: offset range, register width,
+        # mnemonic, base register.
+        for mnemonic, register, base, offset in (
+            ("ldur", "x1", "x29", -300),
+            ("ldurh", "x1", "x29", -8),
+            ("ldursw", "x1", "x29", -8),
+            ("stur", "w1", "x31", -8),
+        ):
             with pytest.raises(EncodeError):
-                owner.append_memory(span, mnemonic, "w1", "x29", -8)
+                owner.append_memory(span, mnemonic, register, base, offset)
         with pytest.raises(EncodeError):
             owner.append_word(span, 1 << 32, EMITTED_INSTRUCTION_SCALAR)
         assert _read(owner, span) == before
+    finally:
+        owner.close()
+
+
+def test_halfword_unscaled_accesses_are_unscaled_records():
+    # The direct-capture path already classifies ldurh/sturh as unscaled;
+    # fragments must agree so both emission paths report the same families.
+    owner = fragments.AArch64EmissionFragments()
+    try:
+        span = owner.new_fragment()
+        owner.append_memory(span, "ldurh", "w1", "x29", -8)
+        owner.append_memory(span, "sturh", "w1", "x29", -8)
+        families = [row[2] for row in _read(owner, span)]
+        assert families == [EMITTED_INSTRUCTION_UNSCALED, EMITTED_INSTRUCTION_UNSCALED]
     finally:
         owner.close()
 

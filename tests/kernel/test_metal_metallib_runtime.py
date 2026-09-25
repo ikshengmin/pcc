@@ -36,8 +36,6 @@ _TILELANG_LOCAL_REASON = (
 )
 
 
-
-
 TILELANG_METAL_MATMUL = """
 import tilelang
 import tilelang.language as T

@@ -22,7 +22,6 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     exe = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",

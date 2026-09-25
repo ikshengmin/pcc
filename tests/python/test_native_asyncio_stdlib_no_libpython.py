@@ -211,6 +211,11 @@ def test_asyncio_accepted_socket_waits_for_second_client_write_no_libpython(tmp_
         with s:
             s.sendall(b"PING")
             assert s.recv(2) == b"OK"
+            # Hold the second write so the server's readexactly(3) reaches
+            # recv before the bytes do.  The accepted socket inherits
+            # O_NONBLOCK on Darwin; recv used to fail with EAGAIN here, which
+            # an idle machine hit and a loaded one usually did not.
+            time.sleep(0.2)
             s.sendall(b"END")
             assert s.recv(4) == b"DONE"
     finally:

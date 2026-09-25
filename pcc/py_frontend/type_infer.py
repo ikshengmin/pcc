@@ -1446,7 +1446,11 @@ def _infer_expr(ctx: _InferCtx, scope: _Scope, expr: Expr) -> Expr:
                 ty=value.ty,
             )
         callee = _infer_expr(ctx, scope, expr.func)
-        new_args = tuple(_infer_expr(ctx, scope, a) for a in expr.args)
+        comprehension_args = _infer_comprehension_args(ctx, scope, expr)
+        if comprehension_args is not None:
+            new_args = comprehension_args
+        else:
+            new_args = tuple(_infer_expr(ctx, scope, a) for a in expr.args)
         new_kwargs = tuple((k, _infer_expr(ctx, scope, v)) for (k, v) in expr.kwargs)
         callee_ident = _name_ident(expr.func) if isinstance(expr.func, Name) else None
         if ctx.freestanding and callee_ident in ctx.unsafe_intrinsic_aliases:
@@ -2872,7 +2876,13 @@ def _bind_for_tuple_target(
     # pcc1 could no longer compile even the two-line smoke -- a host-green/
     # pcc1-red divergence typed-int lane changes are known to cause.  Slot
     # precision is its own slice with its own stage gate, not a rider.
+    # Class-typed slots are precise (pointers stay pointers); every other
+    # slot keeps the dyn binding described above.
     slot_types: tuple[Type, ...] = tuple(TYPE_DYN for _ in target.elems)
+    if isinstance(resolved, TupleType) and len(resolved.elems) == len(target.elems):
+        slot_types = tuple(
+            _class_only(ctx.resolve_type_refs(e)) for e in resolved.elems
+        )
     new_elems: list[Expr] = []
     for element, slot_ty in zip(target.elems, slot_types):
         if isinstance(element, Name):
@@ -2968,6 +2978,16 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
         elem_ty = ctx.resolve_type_refs(
             _element_type_of(ctx.resolve_type_refs(iter_e.ty))
         )
+        if isinstance(elem_ty, DynType):
+            # Call forms (enumerate/zip/dict views): adopt class-typed
+            # results only -- tuple targets keep class slots, names classes.
+            call_elem = ctx.resolve_type_refs(
+                _iteration_element_type(ctx, scope, iter_e)
+            )
+            if isinstance(stmt.target, TupleExpr):
+                elem_ty = _class_only_slots(call_elem)
+            else:
+                elem_ty = _class_only(call_elem)
         if (
             isinstance(iter_e, Call)
             and isinstance(iter_e.func, Name)
@@ -3316,6 +3336,8 @@ def _infer_handler(
 def _element_type_of(ty: Type) -> Type:
     if isinstance(ty, ListType):
         return ty.elem
+    if isinstance(ty, SetType):
+        return ty.elem
     if isinstance(ty, DictType):
         return ty.key
     if isinstance(ty, TupleType):
@@ -3327,6 +3349,154 @@ def _element_type_of(ty: Type) -> Type:
     if isinstance(ty, StrType):
         return TYPE_STR
     return TYPE_DYN
+
+
+def _class_only(ty: Type) -> Type:
+    """``ty`` when it is a class, else dyn (class-typed precision only)."""
+    if isinstance(ty, ClassType):
+        return ty
+    return TYPE_DYN
+
+
+def _class_only_slots(ty: Type) -> Type:
+    """A tuple element type with only its class-typed slots kept precise."""
+    if isinstance(ty, TupleType) and ty.elems:
+        return TupleType(name="tuple", elems=tuple(_class_only(e) for e in ty.elems))
+    return _class_only(ty)
+
+
+def _iteration_element_type(ctx: "_InferCtx", scope: "_Scope", iter_e: Expr) -> Type:
+    """Element type of iterating ``iter_e`` (already inferred).
+
+    Beyond ``_element_type_of``: ``enumerate``/``zip`` yield tuples of their
+    arguments' elements, dict views yield keys/values/(key, value), and
+    ``reversed``/``sorted`` yield their argument's elements.  The call forms
+    were plain dyn, so ``for i, section in enumerate(sections)`` read every
+    ``section.field`` through a dynamic getattr in pcc1.  Only class-typed
+    results are used by the callers (see ``_class_only``).
+    """
+    base = _element_type_of(ctx.resolve_type_refs(iter_e.ty))
+    if not isinstance(iter_e, Call) or iter_e.kwargs:
+        return base
+    func = iter_e.func
+    if isinstance(func, Name):
+        name = _name_ident(func)
+        if name is None or scope.lookup(name) is not None:
+            return base
+        args = iter_e.args
+        if name == "enumerate" and 1 <= len(args) <= 2:
+            inner = _element_type_of(ctx.resolve_type_refs(args[0].ty))
+            return TupleType(name="tuple", elems=(TYPE_INT, inner))
+        if name == "zip" and args:
+            return TupleType(
+                name="tuple",
+                elems=tuple(
+                    _element_type_of(ctx.resolve_type_refs(a.ty)) for a in args
+                ),
+            )
+        if name in ("reversed", "sorted") and len(args) == 1:
+            return _element_type_of(ctx.resolve_type_refs(args[0].ty))
+        return base
+    if isinstance(func, Attr) and not iter_e.args:
+        receiver = ctx.resolve_type_refs(func.obj.ty)
+        if isinstance(receiver, DictType):
+            if func.name == "items":
+                return TupleType(name="tuple", elems=(receiver.key, receiver.value))
+            if func.name == "keys":
+                return receiver.key
+            if func.name == "values":
+                return receiver.value
+    return base
+
+
+_CPY_COMPREHENSION_SENTINELS = ("__listcomp__", "__setcomp__", "__genexpr__", "__dictcomp__")
+_NATIVE_COMPREHENSION_SENTINELS = ("_list_comp", "_set_comp", "_gen_comp", "_dict_comp")
+
+
+def _bind_comprehension_target(
+    ctx: "_InferCtx", comp_scope: "_Scope", target: Expr, iter_typed: Expr
+) -> Expr:
+    elem = ctx.resolve_type_refs(_iteration_element_type(ctx, comp_scope, iter_typed))
+    if isinstance(target, Name):
+        ident = _name_ident(target)
+        bound = _class_only(elem)
+        if ident is not None:
+            comp_scope.define(ident, bound)
+        return _with_ty(target, bound)
+    if isinstance(target, TupleExpr):
+        return _bind_for_tuple_target(ctx, comp_scope, target, elem)
+    return _infer_expr(ctx, comp_scope, target)
+
+
+def _infer_comprehension_args(
+    ctx: "_InferCtx", scope: "_Scope", expr: Call
+) -> Optional[tuple[Expr, ...]]:
+    """Infer a comprehension sentinel's arguments in the comprehension scope.
+
+    Generator targets were never bound, so the element expression resolved a
+    target through the enclosing scope: dyn at best (every ``p.field`` a
+    dynamic getattr in pcc1), an unrelated outer binding of the same name at
+    worst.  Iterables and targets are inferred first, in a child scope, then
+    the element.  Both the CPython-AST form (host) and the native parser's
+    ``_gen_clause`` form (pcc1) take the same route, so the fixed point holds.
+    Targets gain class types only (``_class_only``).
+    """
+    if not isinstance(expr.func, Name):
+        return None
+    sentinel = _name_ident(expr.func)
+    if sentinel is None or scope.lookup(sentinel) is not None:
+        return None
+    comp_scope = _Scope(parent=scope)
+    if sentinel in _CPY_COMPREHENSION_SENTINELS:
+        element_count = 2 if sentinel == "__dictcomp__" else 1
+        if len(expr.args) != element_count + 1:
+            return None
+        generators = expr.args[element_count]
+        if not isinstance(generators, TupleExpr):
+            return None
+        for clause in generators.elems:
+            if not isinstance(clause, TupleExpr) or len(clause.elems) != 4:
+                return None
+        new_clauses = []
+        for clause in generators.elems:
+            target, iter_e, ifs, is_async = clause.elems
+            iter_typed = _infer_expr(ctx, comp_scope, iter_e)
+            target_typed = _bind_comprehension_target(ctx, comp_scope, target, iter_typed)
+            new_clauses.append(replace(clause, elems=(
+                target_typed,
+                iter_typed,
+                _infer_expr(ctx, comp_scope, ifs),
+                _infer_expr(ctx, comp_scope, is_async),
+            )))
+        elements = tuple(
+            _infer_expr(ctx, comp_scope, a) for a in expr.args[:element_count]
+        )
+        return elements + (replace(generators, elems=tuple(new_clauses)),)
+    if sentinel in _NATIVE_COMPREHENSION_SENTINELS:
+        if len(expr.args) < 2:
+            return None
+        for clause in expr.args[1:]:
+            if not (
+                isinstance(clause, Call)
+                and isinstance(clause.func, Name)
+                and _name_ident(clause.func) == "_gen_clause"
+                and len(clause.args) == 3
+                and not clause.kwargs
+            ):
+                return None
+        new_clauses = []
+        for clause in expr.args[1:]:
+            target, iter_e, ifs = clause.args
+            iter_typed = _infer_expr(ctx, comp_scope, iter_e)
+            target_typed = _bind_comprehension_target(ctx, comp_scope, target, iter_typed)
+            new_clauses.append(replace(
+                clause,
+                func=_with_ty(clause.func, TYPE_DYN),
+                args=(target_typed, iter_typed, _infer_expr(ctx, comp_scope, ifs)),
+            ))
+        element = _infer_expr(ctx, comp_scope, expr.args[0])
+        return (element,) + tuple(new_clauses)
+    return None
 
 
 def _type_from_isinstance_arg(
@@ -4935,7 +5105,10 @@ def _bind_ir_compat_module_alias(
         return
     memo: dict[tuple[str, str], ClassType] = {}
     for attr_name, as_name in names:
-        if attr_name != "ir":
+        # ``ir_c`` / ``ir_py`` / ``ir_passes`` are the per-subsystem spellings
+        # (the C codegen imports ``ir_c as ir``); ON mode links the same
+        # provider for all of them.
+        if attr_name not in ("ir", "ir_c", "ir_py", "ir_passes"):
             continue
         local_name = as_name or attr_name
         for info in module_exports.values():

@@ -34,20 +34,15 @@ def test_os_makedirs_emits_native_no_libpython_call(tmp_path):
     assert count_py_cpy_fallback_calls(ir_text) == 0
 
 
-@pytest.mark.parametrize("runtime_kind", ["cc", "pcc-py"])
+@pytest.mark.parametrize("runtime_kind", ["pcc-py"])
 def test_os_makedirs_runtime_and_exist_ok(
     tmp_path,
     monkeypatch,
     pcc_py_runtime_archive,
     runtime_kind,
 ):
-    if runtime_kind == "cc":
-        monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-        monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
-    else:
-        monkeypatch.setenv("PCC_RUNTIME_CC", "pcc")
-        monkeypatch.setenv("PCC_RUNTIME_HIGH", "py")
-        monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_py_runtime_archive))
+    monkeypatch.setenv("PCC_RUNTIME_CC", "pcc")
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_py_runtime_archive))
 
     target = tmp_path / runtime_kind / "nested" / "leaf"
     src = tmp_path / f"makedirs_{runtime_kind}.py"

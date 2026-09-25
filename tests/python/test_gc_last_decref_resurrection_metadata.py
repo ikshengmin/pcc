@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from tests.runtime_build_cache import (
-    cached_threaded_c_runtime,
     cached_threaded_pcc_python_runtime,
 )
 
@@ -19,12 +18,10 @@ RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 
 def _compile_probe(tmp_path: Path, kind: str, backend: int) -> Path:
     runtime = (
-        cached_threaded_c_runtime()
-        if kind == "c"
-        else cached_threaded_pcc_python_runtime()
+        cached_threaded_pcc_python_runtime()
     )
     archive = runtime / (
-        "libpy_runtime.a" if kind == "c" else "libpy_runtime_pcc_py.a"
+        "libpy_runtime_pcc_py.a"
     )
     source = tmp_path / f"resurrection_metadata_{kind}_{backend}.c"
     executable = tmp_path / f"resurrection_metadata_{kind}_{backend}"
@@ -116,23 +113,6 @@ def _compile_probe(tmp_path: Path, kind: str, backend: int) -> Path:
 
 
 def test_last_decref_resurrection_delays_metadata_removal_in_both_mirrors():
-    c_obj = (RUNTIME_DIR / "src" / "py_obj.c").read_text(encoding="utf-8")
-    c_finish = c_obj.split(
-        "static void pcc_decref_finish(const PccRefcountPrepared *prepared) {",
-        1,
-    )[1].split("void py_decref", 1)[0]
-    assert "delay_instance_metadata" in c_finish
-    assert "!delay_zpage_freeing_note && !delay_instance_metadata" in c_finish
-    assert "if (!delay_instance_metadata) py_gc_untrack(o);" in c_finish
-
-    c_class = (RUNTIME_DIR / "src" / "py_class.c").read_text(encoding="utf-8")
-    c_dealloc = c_class.split("void py_instance_dealloc(PyObject *o) {", 1)[
-        1
-    ].split("PyObject *py_dataclass_replace", 1)[0]
-    metadata = c_dealloc.index("metadata_valid = pcc_gc_pointer_is_managed(o)")
-    clear = c_dealloc.index("~PY_FLAG_GC_DEALLOCATING")
-    assert metadata < clear
-    assert c_dealloc.index("pcc_gc_note_object_freeing(o);") > clear
 
     py_obj = (RUNTIME_DIR / "py" / "py_obj.py").read_text(encoding="utf-8")
     py_finish = py_obj.split("def _py_decref_finish(prepared) -> None:", 1)[
@@ -152,7 +132,7 @@ def test_last_decref_resurrection_delays_metadata_removal_in_both_mirrors():
 
 
 @pytest.mark.parametrize("backend", [3, 4], ids=["gc3", "gc4"])
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_last_decref_resurrection_restores_live_metadata_and_frees_once(
     tmp_path: Path,
     kind: str,

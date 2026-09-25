@@ -88,21 +88,15 @@ def test_dict_fromkeys_native_no_libpython(tmp_path):
 
 
 def test_dict_fromkeys_mirrors_reject_iterator_errors_before_returning_dict():
-    c_source = (REPO / "pcc" / "py_runtime" / "src" / "py_dict.c").read_text(
-        encoding="utf-8"
-    )
     py_source = (
         REPO / "pcc" / "py_runtime" / "py" / "py_dict.py"
     ).read_text(encoding="utf-8")
 
-    c_body = c_source.split("PyObject *py_dict_fromkeys", 1)[1].split(
-        "PyObject *py_dict_pop", 1
-    )[0]
     py_body = py_source.split("def py_dict_fromkeys", 1)[1].split(
         "def py_dict_pop", 1
     )[0]
 
-    for body in (c_body, py_body):
+    for body in (py_body,):
         assert "py_runtime_error_if_unset" in body
         assert "dict.fromkeys could not create an iterator" in body
         assert "dict.fromkeys iterator returned NULL without an exception" in body

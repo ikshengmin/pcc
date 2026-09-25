@@ -160,7 +160,7 @@ def _part_10(out):
     _append_method(out, '_emit_inline_tagged_int_binop_or_call', (('self', 'pos', False), ('op', 'pos', False), ('lhs_obj', 'pos', False), ('rhs_obj', 'pos', False), ('fn_name', 'pos', False), ('', 'kw_only', False), ('slow_pins', 'pos', True), ('slow_err_check', 'pos', True), ('slow_err_cleanup', 'pos', True)))
     _append_method(out, '_emit_ir_scaffold_isinstance', (('self', 'pos', False), ('obj_val', 'pos', False), ('class_name', 'pos', False)))
     _append_method(out, '_emit_isinstance_call', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_emit_runtime_object_compare', (('self', 'pos', False), ('expr', 'pos', False), ('lhs_obj', 'pos', False), ('rhs_obj', 'pos', False), ('name_prefix', 'pos', False)))
+    _append_method(out, '_emit_runtime_object_compare', (('self', 'pos', False), ('expr', 'pos', False), ('lhs_obj', 'pos', False), ('rhs_obj', 'pos', False), ('name_prefix', 'pos', False), ('pinned_release_on_error', 'pos', True)))
     _append_method(out, '_emit_module_global_root_enters', (('self', 'pos', False),))
     _append_method(out, '_emit_module_root_enters', (('self', 'pos', False),))
 

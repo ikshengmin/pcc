@@ -49,6 +49,7 @@ py_current_exception = extern("py_current_exception", (), c_ptr)
 py_clear_exception   = extern("py_clear_exception",   (), c_void)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_matches       = extern("py_exc_matches",       (c_ptr, c_ptr), c_int64)
+py_exc_get_message   = extern("py_exc_get_message",   (c_ptr,),       c_ptr)
 py_gc_track          = extern("py_gc_track",          (c_ptr,),         c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
@@ -405,6 +406,51 @@ def py_gen_take_completed(gen):
     store_i64(gen, 40, 1)
     # Borrowed from gen. The caller captures this owner before releasing gen.
     return pcc_gc_load_ptr(gen, ptr_add(gen, 24))
+
+
+@c_abi_export("py_gen_run_may_park_sync")
+def py_gen_run_may_park_sync(gen):
+    # Effect analysis gives every transitively parking callable the generator
+    # ABI.  A resumable caller forwards the child's suspensions; a synchronous
+    # caller (the module body, or any function that is not itself resumable)
+    # has no parent to forward them to.  Outside a virtual thread each parking
+    # primitive blocks the carrier instead of suspending, so the child
+    # finishes within one resume.  Returns a new reference to its return
+    # value, or NULL with the exception set.
+    completed = py_gen_take_completed(gen)
+    if not ptr_is_null(completed):
+        py_incref(completed)
+        return completed
+    if not ptr_is_null(py_current_exception()):
+        return null()
+    yielded = py_gen_next(gen)
+    if not ptr_is_null(yielded):
+        # A suspension with nowhere to go: this synchronous call site runs on
+        # a virtual thread that effect analysis could not see.  Close the
+        # child before raising so its teardown cannot replace the error.
+        py_decref(yielded)
+        closed = py_gen_close(gen)
+        if not ptr_is_null(closed):
+            py_decref(closed)
+        py_clear_exception()
+        py_raise_owned(
+            py_exc_new(
+                7,
+                cstr("a parking call suspended outside a resumable caller"),
+            )
+        )
+        return null()
+    exc = py_current_exception()
+    if ptr_is_null(exc):
+        return null()
+    if py_exc_matches(exc, py_exc_builtin_class(8)) == 0:
+        return null()
+    value = py_exc_get_message(exc)
+    if ptr_is_null(value):
+        value = global_load_ptr("py_None")
+    py_incref(value)
+    py_clear_exception()
+    return value
 
 
 @c_abi_export("py_gen_next")

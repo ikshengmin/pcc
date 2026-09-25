@@ -24,7 +24,6 @@ def test_ast_literal_eval_integer_tuple_subset_no_libpython(tmp_path):
     executable = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv",

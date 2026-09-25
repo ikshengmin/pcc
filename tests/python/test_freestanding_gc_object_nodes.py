@@ -176,27 +176,13 @@ def test_object_registration_prepares_node_and_index_before_graph_lock() -> None
     strict_registration = managed.split(
         "def pcc_gc_note_object_allocated_sized", 1
     )[1].split('@c_abi_export("pcc_gc_note_object_allocated")', 1)[0]
-    c_oracle = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_registration = c_oracle.split(
-        "void pcc_gc_note_object_allocated_sized", 1
-    )[1].split("void pcc_gc_note_object_allocated(", 1)[0]
 
-    for registration, prepare, lock, unlock in (
-        (
+    for registration, prepare, lock, unlock in ((
             strict_registration,
             "_object_node_prepare()",
             "_object_graph_lock()",
             "_object_graph_unlock()",
-        ),
-        (
-            c_registration,
-            "pcc_gc_object_node_prepare()",
-            "pcc_gc_graph_lock();",
-            "pcc_gc_graph_unlock();",
-        ),
-    ):
+        ),):
         prepare_at = registration.index(prepare)
         assert registration[:prepare_at].rfind(unlock) > (
             registration[:prepare_at].rfind(lock)

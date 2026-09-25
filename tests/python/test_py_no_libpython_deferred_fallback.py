@@ -7,8 +7,6 @@ from pcc.py_frontend.pipeline import compile_python
 
 
 def test_deferred_cpython_fallback_becomes_native_error_stub(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     src = tmp_path / "deferred_fallback.py"
     src.write_text(
         textwrap.dedent("""
@@ -49,8 +47,6 @@ def test_deferred_cpython_fallback_becomes_native_error_stub(tmp_path, monkeypat
 def test_deferred_method_and_generator_fallbacks_become_native_stubs(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     src = tmp_path / "deferred_shapes.py"
     src.write_text(
         textwrap.dedent("""

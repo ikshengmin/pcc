@@ -16,7 +16,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 STRICT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_relocation_drain.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
-C_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
@@ -191,73 +190,6 @@ def test_relocation_drain_preserves_budget_lock_and_handoff_contract() -> None:
     assert "pcc_gc_backend4_remap_and_retire_stopped_world()" in strict
     assert "pcc_gc_backend4_evacuation_incomplete_batches_count" in strict
 
-    c_src = C_SOURCE.read_text(encoding="utf-8")
-    c_object_snapshot = c_src.split(
-        "static int64_t pcc_gc_backend4_snapshot_relocation_batch_unlocked(",
-        1,
-    )[1].split("static int64_t pcc_gc_relocate_selected(", 1)[0]
-    assert "captured < source_capacity" in c_object_snapshot
-    assert "sources[captured] = n->obj;" in c_object_snapshot
-    for forbidden in (
-        "pcc_gc_alloc(",
-        "pcc_gc_relocate_copy(",
-        "py_decref(",
-        "pcc_thread_safepoint(",
-        "malloc(",
-        "free(",
-    ):
-        assert forbidden not in c_object_snapshot
-    c_object = c_src.split(
-        "static int64_t pcc_gc_relocate_selected(int64_t budget)", 1
-    )[1].split(
-        "int64_t pcc_gc_backend4_evacuation_drain(int64_t budget)", 1
-    )[0]
-    snapshot_unlock = c_object.index("pcc_gc_graph_unlock();")
-    public_copy = c_object.index("pcc_gc_relocate_copy(sources[i], size)")
-    tail_drop = c_object.index("py_decref(to)", public_copy)
-    tail_poll = c_object.index("pcc_thread_safepoint();", tail_drop)
-    assert snapshot_unlock < public_copy < tail_drop < tail_poll
-    assert "pcc_gc_relocate_copy_unlocked(" not in c_object
-    final_lock = c_object.rindex("pcc_gc_graph_lock();")
-    note_incomplete = c_object.index(
-        "pcc_gc_backend4_evacuation_incomplete_batches_count"
-    )
-    final_unlock = c_object.rindex("pcc_gc_graph_unlock();")
-    remap = c_object.index(
-        "pcc_gc_backend4_remap_and_retire_stopped_world()", final_unlock
-    )
-    assert tail_poll < final_lock < note_incomplete < final_unlock < remap
-
-    c_snapshot = c_src.split(
-        "static int64_t pcc_gc_backend4_snapshot_selected_page_batch_unlocked(",
-        1,
-    )[1].split(
-        "int64_t pcc_gc_backend4_evacuation_page_drain(", 1
-    )[0]
-    assert "examined < PCC_GC_SAFEPOINT_BATCH" in c_snapshot
-    assert "captured < source_capacity" in c_snapshot
-    for forbidden in (
-        "pcc_gc_alloc(",
-        "pcc_gc_relocate_copy(",
-        "py_decref(",
-        "pcc_thread_safepoint(",
-        "malloc(",
-        "free(",
-    ):
-        assert forbidden not in c_snapshot
-    c_page = c_src.split(
-        "int64_t pcc_gc_backend4_evacuation_page_drain(int64_t page_budget)",
-        1,
-    )[1].split(
-        "static int64_t pcc_gc_install_forwarding_unlocked", 1
-    )[0]
-    snapshot_unlock = c_page.index("pcc_gc_graph_unlock();")
-    public_copy = c_page.index("pcc_gc_relocate_copy(sources[i], size)")
-    tail_drop = c_page.index("py_decref(to)", public_copy)
-    tail_poll = c_page.index("pcc_thread_safepoint();", tail_drop)
-    assert snapshot_unlock < public_copy < tail_drop < tail_poll
-    assert "pcc_gc_relocate_copy_unlocked(" not in c_page
-
 
 def test_production_archive_has_one_relocation_drain_owner(
     pcc_py_runtime_archive: Path,
@@ -370,24 +302,18 @@ def _link_drain_probe(tmp_path: Path, name: str, archive: Path) -> Path:
         ("step", "2,0,0,0,0,0,1000\n"),
     ],
 )
-def test_relocation_drain_matches_c_oracle_for_object_page_and_step_budgets(
+def test_relocation_drain_for_object_page_and_step_budgets(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
     argument: str,
     expected: str,
 ) -> None:
-    oracle = _link_drain_probe(tmp_path, "drain_c_oracle_" + argument, c_runtime_archive)
+    # ``expected`` is what the retired C runtime oracle printed.
     implementation = _link_drain_probe(
         tmp_path, "drain_pcc_python_" + argument, pcc_py_runtime_archive
-    )
-    oracle_result = subprocess.run(
-        [str(oracle), argument], capture_output=True, text=True, timeout=30
     )
     result = subprocess.run(
         [str(implementation), argument], capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert oracle_result.stdout == expected
-    assert result.stdout == oracle_result.stdout
+    assert result.stdout == expected

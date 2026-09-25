@@ -27,6 +27,11 @@ from ..py_ast import (
 )
 
 
+def _literal_fits_i64(value) -> bool:
+    # ``value`` is unannotated so a literal beyond i64 stays an exact int.
+    return value >= -(1 << 63) and value <= (1 << 63) - 1
+
+
 _I1 = ir.IntType(1)
 _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
@@ -615,7 +620,23 @@ class IrScaffoldLoweringMixin:
             return None
         symbol = self._ir_module_symbol_target(attr)
         if symbol is None:
-            return None
+            # Any other provider export (``isinstance(t, ir.Type)``,
+            # ``ir.PhiInstr``, the ``ir.Undefined`` singleton in the C
+            # codegen) loads through the provider's export table; a plain
+            # name lookup of the elided ``ir`` binding is a NameError.
+            if not (
+                _is_scaffold_attr(attr)
+                and _is_scaffold_name(attr.obj)
+                and attr.obj.ident == "ir"
+            ):
+                return None
+            provider = "pcc.llvm_capi.ir"
+            info = (self._native_module_exports or {}).get(provider, {}).get(
+                attr.name
+            )
+            if not isinstance(info, dict):
+                return None
+            return self._emit_native_module_export_value(provider, attr.name, info)
         g_name = ".class.pcc_llvm_capi_ir." + symbol
         existing = self.module.globals.get(g_name)
         if existing is None:
@@ -1543,6 +1564,13 @@ class IrScaffoldLoweringMixin:
                 [ty, value],
                 name=self._fresh("scaffold.Constant"),
             )
+        if isinstance(value_expr, IntLit) and not _literal_fits_i64(
+            getattr(value_expr, "value")
+        ):
+            # ``getattr`` keeps the literal's exact object: a typed field read
+            # can be inferred as ``int`` (``(IntLit, BoolLit)`` narrowing
+            # yields ``bool``) and would unbox it through the i64 lane first.
+            return self._emit_scaffold_constant_exact(ty, value_expr)
         if isinstance(value_expr, (IntLit, BoolLit)):
             value = self._emit_expr_as_i64(value_expr)
             fn = self._declare_external_function(
@@ -1556,6 +1584,11 @@ class IrScaffoldLoweringMixin:
                 name=self._fresh("scaffold.Constant"),
             )
         if isinstance(value_expr.ty, (IntType, BoolType)):
+            if self._int_expr_needs_exact_object_boundary(value_expr):
+                # ``ir.Constant(_I64, int(literal.value))`` in pcc's own
+                # frontend: the value is exact and may exceed the i64 lane
+                # that scaffold_Constant_i64 takes.
+                return self._emit_scaffold_constant_exact(ty, value_expr)
             value = self._emit_expr_as_i64(value_expr)
             fn = self._declare_external_function(
                 f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_i64",
@@ -1628,6 +1661,30 @@ class IrScaffoldLoweringMixin:
             [ty, value],
             name=self._fresh("scaffold.Constant"),
         )
+
+    def _emit_scaffold_constant_exact(self, ty: ir.Value, value_expr) -> ir.Value:
+        """``ir.Constant(ty, <int beyond i64>)`` through the object helper."""
+        if isinstance(value_expr, IntLit):
+            obj = self._emit_int_literal_object(getattr(value_expr, "value"))
+        else:
+            obj = self._emit_exact_int_operand_object(value_expr)
+        owned = (
+            obj not in getattr(self, "_cpy_values", ())
+            and self._pcc_pointer_source_is_owned(value_expr)
+        )
+        fn = self._declare_external_function(
+            f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_obj",
+            _CSTR,
+            [_CSTR, _CSTR],
+        )
+        result = self.builder.call(
+            fn,
+            [ty, self.builder.bitcast(obj, _CSTR)],
+            name=self._fresh("scaffold.Constant"),
+        )
+        if owned:
+            self._gc_release(obj)
+        return result
 
     def _emit_scaffold_value(self, expr: Call) -> ir.Value:
         if expr.kwargs or len(expr.args) != 2:

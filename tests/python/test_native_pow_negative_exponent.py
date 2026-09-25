@@ -15,7 +15,6 @@ import textwrap
 
 
 def test_pow_negative_exponent_matches_cpython(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "pow.py"
@@ -52,7 +51,6 @@ def test_pow_negative_exponent_matches_cpython(tmp_path, monkeypatch):
 
 
 def test_int_literal_pow_folds_without_runtime_pow(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "pow_literal_fold.py"

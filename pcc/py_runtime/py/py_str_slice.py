@@ -36,6 +36,7 @@ from pcc.unsafe import (
 )
 
 
+pcc_str_ascii_char = extern("pcc_str_ascii_char", (c_int64,), c_ptr)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
@@ -184,6 +185,13 @@ def py_str_slice(s, lo, hi, step):
         if step_v == 1:
             bo_lo: int = _utf8_byte_offset_for_codepoint(s, lo_v)
             bo_hi: int = _utf8_byte_offset_for_codepoint(s, hi_v)
+            if bo_hi - bo_lo == 1:
+                c: int = load_i8(s, PYSTROBJECT_DATA_OFFSET + bo_lo) & 0xFF
+                if c < 128:
+                    # The shared immortal one-character string, as for s[i].
+                    cached = pcc_str_ascii_char(c)
+                    if ptr_is_null(cached) == 0:
+                        return cached
             return _str_from_range(ptr_add(ptr_add(s, PYSTROBJECT_DATA_OFFSET), bo_lo), bo_hi - bo_lo)
 
         bo_lo2: int = _utf8_byte_offset_for_codepoint(s, lo_v)

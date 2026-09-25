@@ -6,8 +6,6 @@ that facade so pytest node ids stay stable.
 from _gc_substrate_common import *  # noqa: F401,F403
 
 
-
-
 def test_threading_substrate_public_surface_is_in_header_and_runtime_abi():
     header = RUNTIME_HEADER.read_text(encoding="utf-8")
     for name in THREADING_SURFACE:
@@ -31,120 +29,8 @@ def test_threading_substrate_public_surface_is_in_header_and_runtime_abi():
 
 
 def test_thread_no_park_source_order_and_newcomer_lock_contracts():
-    c_src = THREADS_C.read_text(encoding="utf-8")
     # The host-C oracle/transition TU deliberately uses the host libc sink;
     # only the strict pcc-Python production archive owns pcc_platform_abort.
-    assert "pcc_platform_abort" not in c_src
-    assert c_src.count("abort();") == 9
-    c_safepoint = c_src.split("void pcc_thread_safepoint(void)", 1)[1].split(
-        "int64_t pcc_stop_the_world", 1
-    )[0]
-    assert c_safepoint.index("pcc_tls_no_park_depth") < c_safepoint.index(
-        "pcc_current_thread_id()"
-    )
-    c_stop_acquire = c_src.split(
-        "int64_t pcc_thread_stop_requested_acquire(void)", 1
-    )[1].split("/* A no-park region", 1)[0]
-    assert "__atomic_load_n" in c_stop_acquire
-    assert "__ATOMIC_ACQUIRE" in c_stop_acquire
-    for forbidden in ["pcc_current_thread_id", "pcc_thread_safepoint", "mutex"]:
-        assert forbidden not in c_stop_acquire
-    c_stop = c_src.split("int64_t pcc_stop_the_world(void)", 1)[1].split(
-        "int64_t pcc_resume_world", 1
-    )[0]
-    c_resume = c_src.split("int64_t pcc_resume_world(void)", 1)[1].split(
-        "int64_t pcc_thread_owns_stopped_world", 1
-    )[0]
-    assert (
-        "&pcc_thread_stop_requested, 1, __ATOMIC_RELEASE" in c_stop
-    )
-    assert (
-        "&pcc_thread_stop_requested, 0, __ATOMIC_RELEASE" in c_resume
-    )
-    assert c_src.count("pcc_thread_stop_requested =") == 1
-    c_current = c_src.split("int64_t pcc_current_thread_id(void)", 1)[1].split(
-        "void pcc_thread_safepoint", 1
-    )[0]
-    assert c_current.index("while (pcc_tls_thread_id == 0") < c_current.index(
-        "pcc_tls_thread_id = pcc_next_thread_id++"
-    )
-    assert c_current.index("pcc_registration_waiter_count++") < c_current.index(
-        "pthread_cond_wait"
-    ) < c_current.index("pcc_registration_waiter_count--") < c_current.index(
-        "pcc_tls_thread_id = pcc_next_thread_id++"
-    )
-    c_unregister = c_src.split(
-        "void pcc_thread_unregister_current(void)", 1
-    )[1].split("int64_t pcc_current_thread_id", 1)[0]
-    assert c_unregister.count("abort();") == 4
-    assert c_unregister.index("pcc_tls_no_park_depth") < c_unregister.index(
-        "pcc_gc_thread_unregister_buffers()"
-    )
-    assert c_unregister.index("pcc_tls_thread_id == 0") < c_unregister.index(
-        "pcc_gc_thread_unregister_buffers()"
-    )
-    assert c_unregister.index("pcc_tls_unregister_in_progress") < (
-        c_unregister.index("pcc_tls_thread_id == 0")
-    )
-    assert c_unregister.index("pcc_tls_unregister_in_progress = 1") < (
-        c_unregister.index("pcc_gc_thread_unregister_buffers()")
-    ) < c_unregister.index("pcc_tls_unregister_in_progress = 0")
-    assert c_unregister.index("pcc_thread_owns_stopped_world()") < c_unregister.index(
-        "pcc_gc_thread_unregister_buffers()"
-    )
-    c_cleanup = c_unregister.index("pcc_gc_thread_unregister_buffers()")
-    c_commit_lock = c_unregister.index("pthread_mutex_lock", c_cleanup)
-    assert c_cleanup < c_commit_lock < c_unregister.rindex(
-        "pcc_tls_no_park_depth"
-    ) < c_unregister.index("pcc_tls_thread_id = 0")
-    assert c_commit_lock < c_unregister.index(
-        "pcc_stop_owner_thread_id == pcc_tls_thread_id"
-    ) < c_unregister.index("pcc_tls_thread_id = 0")
-    c_enter = c_src.split("void pcc_thread_no_park_enter(void)", 1)[1].split(
-        "void pcc_thread_no_park_exit", 1
-    )[0]
-    assert c_enter.count("abort();") == 1
-    assert "pcc_thread_safepoint" not in c_enter
-    assert c_enter.index("pcc_current_thread_id()") < c_enter.rindex(
-        "pcc_tls_no_park_depth++"
-    )
-    c_exit = c_src.split("void pcc_thread_no_park_exit(void)", 1)[1].split(
-        "int64_t pcc_thread_no_park_depth", 1
-    )[0]
-    assert c_exit.count("abort();") == 1
-    assert c_exit.index("pcc_tls_no_park_depth--") < c_exit.index(
-        "pcc_thread_safepoint()"
-    )
-
-    refmeta_find = c_src.split("static PccRefcountMeta *pcc_refmeta_find_locked", 1)[
-        1
-    ].split("static int64_t pcc_refmeta_sync_locked", 1)[0]
-    assert "pcc_current_thread_id" not in refmeta_find
-    for marker in [
-        "static int64_t pcc_refcount_biased_delta",
-        "static int64_t pcc_refcount_deferred_delta",
-    ]:
-        body = c_src.split(marker, 1)[1].split("static int64_t", 1)[0]
-        assert body.index("pcc_current_thread_id()") < body.index(
-            "pcc_refmeta_lock()"
-        )
-
-    c_trampoline = c_src.split(
-        "static void *pcc_thread_trampoline", 1
-    )[1].split("int64_t pcc_thread_start", 1)[0]
-    assert c_trampoline.count("abort();") == 1
-    assert c_trampoline.index("pcc_thread_handle_state_lock_for_teardown") < (
-        c_trampoline.index("handle->result")
-    ) < c_trampoline.index("pcc_thread_unregister_current()") < c_trampoline.rindex(
-        "return result"
-    )
-    c_teardown_lock = c_src.split(
-        "static void pcc_thread_handle_state_lock_for_teardown", 1
-    )[1].split("static void *pcc_thread_trampoline", 1)[0]
-    assert c_teardown_lock.count("abort();") == 1
-    assert c_teardown_lock.index("pthread_mutex_trylock") < c_teardown_lock.index(
-        "pcc_thread_safepoint()"
-    )
 
     py_src = THREAD_KERNEL_PTHREAD.read_text(encoding="utf-8")
     py_stop_acquire = py_src.split(
@@ -260,46 +146,25 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
         "pcc_thread_safepoint()"
     )
 
-    for path in [RUNTIME_LOG_C, RUNTIME_LOG_PORT]:
-        log_src = path.read_text(encoding="utf-8")
-        if path == RUNTIME_LOG_C:
-            enabled = log_src.split("int pcc_runtime_log_enabled", 1)[1].split(
-                "static int pcc_runtime_log_code_enabled", 1
-            )[0]
-            code_enabled = log_src.split(
-                "static int pcc_runtime_log_code_enabled", 1
-            )[1].split("static FILE *pcc_runtime_log_open_stream", 1)[0]
-            event = log_src.split("void pcc_runtime_log_event(", 1)[1].split(
-                "static const char *pcc_runtime_log_category_from_code", 1
-            )[0]
-            assert enabled.index("pcc_current_thread_id()") < enabled.index(
-                "pcc_runtime_log_init_once()"
-            )
-            assert code_enabled.index("pcc_current_thread_id()") < (
-                code_enabled.index("pcc_runtime_log_init_once()")
-            )
-            assert event.index("pcc_current_thread_id()") < event.index(
-                "pcc_runtime_log_open_stream"
-            )
-        else:
-            enabled = log_src.split("def pcc_runtime_log_enabled", 1)[1].split(
-                "def _code_enabled", 1
-            )[0]
-            code_enabled = log_src.split("def _code_enabled", 1)[1].split(
-                "def _write_lock_acquire", 1
-            )[0]
-            event = log_src.split("def pcc_runtime_log_event(", 1)[1].split(
-                '@c_abi_export("pcc_runtime_log_event_code")', 1
-            )[0]
-            assert enabled.index("pcc_current_thread_id()") < enabled.index(
-                "_init_once()"
-            )
-            assert code_enabled.index("pcc_current_thread_id()") < (
-                code_enabled.index("_init_once()")
-            )
-            assert event.index("pcc_current_thread_id()") < event.index(
-                "_write_lock_acquire()"
-            )
+    log_src = RUNTIME_LOG_PORT.read_text(encoding="utf-8")
+    enabled = log_src.split("def pcc_runtime_log_enabled", 1)[1].split(
+        "def _code_enabled", 1
+    )[0]
+    code_enabled = log_src.split("def _code_enabled", 1)[1].split(
+        "def _write_lock_acquire", 1
+    )[0]
+    event = log_src.split("def pcc_runtime_log_event(", 1)[1].split(
+        '@c_abi_export("pcc_runtime_log_event_code")', 1
+    )[0]
+    assert enabled.index("pcc_current_thread_id()") < enabled.index(
+        "_init_once()"
+    )
+    assert code_enabled.index("pcc_current_thread_id()") < (
+        code_enabled.index("_init_once()")
+    )
+    assert event.index("pcc_current_thread_id()") < event.index(
+        "_write_lock_acquire()"
+    )
 
     nonthread = THREAD_KERNEL.read_text(encoding="utf-8")
     assert 'define_thread_local_i32("pcc_tls_no_park_depth_py", 0)' in nonthread
@@ -317,7 +182,7 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     assert "return 0" in nonthread_stop_acquire
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_thread_no_park_nonthread_depth_and_world_owner_contract(
     tmp_path: Path,
     kind: str,
@@ -361,7 +226,7 @@ def test_thread_no_park_nonthread_depth_and_world_owner_contract(
     assert run.returncode == 0, run.stdout + run.stderr
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_thread_no_park_and_stopped_world_newcomers_use_real_pthreads(
     tmp_path: Path,
     kind: str,
@@ -649,55 +514,32 @@ def test_thread_no_park_and_stopped_world_newcomers_use_real_pthreads(
     assert run.returncode == 0, run.stdout + run.stderr
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_thread_trampoline_commits_handle_before_final_unregister(
     tmp_path: Path,
     kind: str,
 ) -> None:
-    if kind == "c":
-        handle_access = r'''
-            typedef struct {
-                pthread_t thread;
-                pthread_mutex_t state_lock;
-                int32_t done;
-                int32_t detached;
-                void *result;
-            } TestThreadHandle;
+    handle_access = r'''
+        typedef struct {
+            void *thread;
+            PccMutex *state_lock;
+            int32_t done;
+            int32_t detached;
+            void *result;
+        } TestThreadHandle;
 
-            static int test_handle_lock(PccThreadHandle *handle) {
-                TestThreadHandle *view = (TestThreadHandle *)handle;
-                return pthread_mutex_lock(&view->state_lock);
-            }
-            static int test_handle_unlock(PccThreadHandle *handle) {
-                TestThreadHandle *view = (TestThreadHandle *)handle;
-                return pthread_mutex_unlock(&view->state_lock);
-            }
-            static int test_handle_done(PccThreadHandle *handle) {
-                return ((TestThreadHandle *)handle)->done;
-            }
-        '''
-    else:
-        handle_access = r'''
-            typedef struct {
-                void *thread;
-                PccMutex *state_lock;
-                int32_t done;
-                int32_t detached;
-                void *result;
-            } TestThreadHandle;
-
-            static int test_handle_lock(PccThreadHandle *handle) {
-                TestThreadHandle *view = (TestThreadHandle *)handle;
-                return (int)pcc_mutex_lock(view->state_lock);
-            }
-            static int test_handle_unlock(PccThreadHandle *handle) {
-                TestThreadHandle *view = (TestThreadHandle *)handle;
-                return (int)pcc_mutex_unlock(view->state_lock);
-            }
-            static int test_handle_done(PccThreadHandle *handle) {
-                return ((TestThreadHandle *)handle)->done;
-            }
-        '''
+        static int test_handle_lock(PccThreadHandle *handle) {
+            TestThreadHandle *view = (TestThreadHandle *)handle;
+            return (int)pcc_mutex_lock(view->state_lock);
+        }
+        static int test_handle_unlock(PccThreadHandle *handle) {
+            TestThreadHandle *view = (TestThreadHandle *)handle;
+            return (int)pcc_mutex_unlock(view->state_lock);
+        }
+        static int test_handle_done(PccThreadHandle *handle) {
+            return ((TestThreadHandle *)handle)->done;
+        }
+    '''
     source_text = r'''
         #include "py_internal.h"
         #include <pthread.h>
@@ -762,7 +604,7 @@ def test_thread_trampoline_commits_handle_before_final_unregister(
     assert run.returncode == 0, run.stdout + run.stderr
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_thread_unregister_with_live_no_park_depth_fails_stop(
     tmp_path: Path,
     kind: str,
@@ -878,20 +720,25 @@ def test_strict_thread_unregister_cleanup_reentry_fails_stop(tmp_path: Path) -> 
 
 def test_threading_c_oracle_is_not_linked_into_pcc_python_archive():
     makefile = RUNTIME_MAKEFILE.read_text(encoding="utf-8")
-    assert "$(SRCDIR)/pcc_threads.c" in makefile
-    assert "OBJ_PY_CC_HELPERS" not in makefile
     assert "freestanding_thread_kernel_pthread" in makefile
     assert "freestanding_thread_kernel" in makefile
     assert "PCC_WITH_THREADS" in makefile
-    assert "PCC_REFCOUNT_KIND" in makefile
+    # The retired C runtime's refcount-strategy knob is gone: the linked
+    # thread kernel owns the strategy (0 non-atomic, 1 atomic).
+    assert "PCC_REFCOUNT_KIND" not in makefile
+    assert "pcc_threads.c" not in makefile
+    runtime_py = RUNTIME_MAKEFILE.parent / "py"
+    for kernel, strategy in (
+        ("freestanding_thread_kernel.py", 0),
+        ("freestanding_thread_kernel_pthread.py", 1),
+    ):
+        source = (runtime_py / kernel).read_text(encoding="utf-8")
+        body = source.split('@c_abi_export("pcc_refcount_strategy")', 1)[1]
+        body = body.split("\n@c_abi_export", 1)[0]
+        assert f"return {strategy}" in body, kernel
 
 
 def test_refcount_paths_go_through_strategy_helpers():
-    c_src = PY_OBJ_C.read_text(encoding="utf-8")
-    assert "pcc_refcount_incref(&h->refcount)" in c_src
-    assert "pcc_refcount_decref(&h->refcount)" in c_src
-    assert "h->refcount++" not in c_src
-    assert "--h->refcount" not in c_src
 
     py_src = PY_OBJ_PORT.read_text(encoding="utf-8")
     assert 'extern("pcc_refcount_incref"' in py_src
@@ -903,31 +750,3 @@ def test_refcount_paths_go_through_strategy_helpers():
     assert "pcc_refcount_decref(o)" in py_src
 
 
-def test_public_valid_refcount_paths_defer_debug_predicate_until_invalid_finish():
-    c_src = PY_OBJ_C.read_text(encoding="utf-8")
-    assert "pcc_debug_maybe_abort_bad_decref" not in c_src
-    validity = c_src.split("static int py_type_tag_is_valid(", 1)[1].split(
-        "PyObject *py_bool_from_bit", 1
-    )[0]
-    assert "tag == PY_TYPE_CPY_HANDLE" in validity
-    c_incref = c_src.split("void py_incref(PyObject *o)", 1)[1].split(
-        "typedef struct PccTrashNode", 1
-    )[0]
-    c_decref = c_src.split("void py_decref(PyObject *o)", 1)[1]
-    for body, prepare in [
-        (c_incref, "pcc_incref_prepare(o, -1, &prepared)"),
-        (c_decref, "pcc_decref_prepare(o, -1, &prepared)"),
-    ]:
-        assert prepare in body
-        assert "pcc_obj_debug_runtime_enabled(" not in body
-        assert "pcc_debug_maybe_abort_bad_decref(" not in body
-
-    for start, end in [
-        ("static void pcc_incref_finish(", "void py_incref("),
-        ("static void pcc_decref_finish(", "void py_decref("),
-    ]:
-        finish = c_src.rsplit(start, 1)[1].split(end, 1)[0]
-        deferred = finish.index("if (prepared->debug_check_deferred)")
-        predicate = finish.index("pcc_obj_debug_runtime_enabled()")
-        sink = finish.index("pcc_debug_bad_incref(")
-        assert deferred < predicate < sink

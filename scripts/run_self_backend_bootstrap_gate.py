@@ -483,10 +483,7 @@ def _runtime_archive_symbol_sources(archive: str) -> dict[str, str]:
 
 def _runtime_archive_for_symbol_sources() -> str:
     runtime_dir = os.path.join(_repo_root(), "pcc", "py_runtime")
-    preferred = os.path.join(runtime_dir, "libpy_runtime_pcc_py.a")
-    if os.path.exists(preferred):
-        return preferred
-    return os.path.join(runtime_dir, "libpy_runtime.a")
+    return os.path.join(runtime_dir, "libpy_runtime_pcc_py.a")
 
 
 def _source_attribution_for_top_symbols(

@@ -607,12 +607,12 @@ def test_exact_int_rebind_pins_replacement_before_releasing_previous_value(
     # the relocation-aware root-store atomically retains the replacement and
     # releases the previous slot owner; then unpin and consume the temporary.
     assert re.search(
-        r"(?s)call ptr @py_int_shl.*?"
-        r"call void @pcc_gc_pin.*?"
+        r"(?s)call ptr (?:\([^)]*\) )?@py_int_shl.*?"
+        r"call void (?:\([^)]*\) )?@pcc_gc_pin.*?"
         r"bitcast ptr %value\.addr.*?"
-        r"call void @pcc_gc_store_root.*?"
-        r"call void @pcc_gc_unpin.*?"
-        r"call void @pcc_gc_release",
+        r"call void (?:\([^)]*\) )?@pcc_gc_store_root.*?"
+        r"call void (?:\([^)]*\) )?@pcc_gc_unpin.*?"
+        r"call void (?:\([^)]*\) )?@pcc_gc_release",
         body,
     ), body
 
@@ -680,7 +680,7 @@ def test_exact_int_branch_and_zero_iteration_runtime_behavior(
 def test_proven_bounded_typed_int_loop_defaults_to_unboxed_shape(tmp_path):
     ir_text = _compile_to_ll(tmp_path, _TYPED_LOOP, "typed_loop_tagged")
     assert re.search(
-        r"define\s+i64\s+@user_[A-Za-z0-9_]*_bench\s*\(i64\s+%n\)",
+        r"define\s+(?:external\s+)?i64\s+@user_[A-Za-z0-9_]*_bench\s*\(i64\s+%n\)",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "bench")
@@ -702,7 +702,7 @@ def test_unsafe_i64_typed_int_loop_uses_unboxed_function_abi(
     _enable_unsafe_i64(monkeypatch)
     ir_text = _compile_to_ll(tmp_path, _TYPED_LOOP, "typed_loop_unboxed")
     assert re.search(
-        r"define\s+i64\s+@user_[A-Za-z0-9_]*_bench\s*\(i64\s+%n\)",
+        r"define\s+(?:external\s+)?i64\s+@user_[A-Za-z0-9_]*_bench\s*\(i64\s+%n\)",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "bench")
@@ -721,7 +721,7 @@ def test_unsafe_i64_typed_int_loop_uses_unboxed_function_abi(
 def test_proven_literal_list_accumulator_defaults_to_unboxed_shape(tmp_path):
     ir_text = _compile_to_ll(tmp_path, _TYPED_LIST_LOOP, "typed_list_int_tagged")
     assert re.search(
-        r"define\s+i64\s+@user_[A-Za-z0-9_]*_sum_ints\s*\(ptr\s+%xs\)",
+        r"define\s+(?:external\s+)?i64\s+@user_[A-Za-z0-9_]*_sum_ints\s*\(ptr\s+%xs\)",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "sum_ints")
@@ -742,7 +742,7 @@ def test_unsafe_i64_typed_list_int_loop_keeps_accumulator_unboxed(
     _enable_unsafe_i64(monkeypatch)
     ir_text = _compile_to_ll(tmp_path, _TYPED_LIST_LOOP, "typed_list_int_loop")
     assert re.search(
-        r"define\s+i64\s+@user_[A-Za-z0-9_]*_sum_ints\s*\(ptr\s+%xs\)",
+        r"define\s+(?:external\s+)?i64\s+@user_[A-Za-z0-9_]*_sum_ints\s*\(ptr\s+%xs\)",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "sum_ints")
@@ -770,7 +770,7 @@ def test_proven_direct_call_accumulator_defaults_to_unboxed_calls(tmp_path):
         ("bench", "n"),
     ):
         assert re.search(
-            rf"define\s+i64\s+@user_[A-Za-z0-9_]*_{fn_name}\s*\(i64\s+%{arg_name}\)",
+            rf"define\s+(?:external\s+)?i64\s+@user_[A-Za-z0-9_]*_{fn_name}\s*\(i64\s+%{arg_name}\)",
             ir_text,
         ), ir_text
     bump_body = _fn_body(ir_text, "bump")
@@ -782,11 +782,11 @@ def test_proven_direct_call_accumulator_defaults_to_unboxed_calls(tmp_path):
     assert "@py_int_add" not in bump_body, bump_body
     assert "@py_int_mod" not in step_body, step_body
     assert re.search(
-        r"call\s+i64\s+@user_[A-Za-z0-9_]*_bump\s*\(i64\s+%",
+        r"call\s+i64\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_bump\s*\(i64\s+%",
         step_body,
     ), step_body
     assert re.search(
-        r"call\s+i64\s+@user_[A-Za-z0-9_]*_step\s*\(i64\s+%",
+        r"call\s+i64\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_step\s*\(i64\s+%",
         bench_body,
     ), bench_body
     for body in (bump_body, step_body, bench_body):
@@ -821,7 +821,7 @@ def test_unproven_scalar_loop_keeps_arbitrary_precision_boxed_abi(
 ):
     ir_text = _compile_to_ll(tmp_path, source, "typed_loop_" + case_name)
     assert re.search(
-        r"define\s+ptr\s+@user_[A-Za-z0-9_]*_bench\s*\(ptr\s+%n\)",
+        r"define\s+(?:external\s+)?ptr\s+@user_[A-Za-z0-9_]*_bench\s*\(ptr\s+%n\)",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "bench")
@@ -857,7 +857,7 @@ def test_unsafe_i64_typed_function_call_loop_uses_unboxed_direct_calls(
         ("bench", "n"),
     ):
         assert re.search(
-            rf"define\s+i64\s+@user_[A-Za-z0-9_]*_{fn_name}\s*\(i64\s+%{arg_name}\)",
+            rf"define\s+(?:external\s+)?i64\s+@user_[A-Za-z0-9_]*_{fn_name}\s*\(i64\s+%{arg_name}\)",
             ir_text,
         ), ir_text
     bump_body = _fn_body(ir_text, "bump")
@@ -867,11 +867,11 @@ def test_unsafe_i64_typed_function_call_loop_uses_unboxed_direct_calls(
     assert step_body is not None, ir_text
     assert bench_body is not None, ir_text
     assert re.search(
-        r"call\s+i64\s+@user_[A-Za-z0-9_]*_bump\s*\(i64\s+%",
+        r"call\s+i64\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_bump\s*\(i64\s+%",
         step_body,
     ), step_body
     assert re.search(
-        r"call\s+i64\s+@user_[A-Za-z0-9_]*_step\s*\(i64\s+%",
+        r"call\s+i64\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_step\s*\(i64\s+%",
         bench_body,
     ), bench_body
     for body in (bump_body, step_body, bench_body):
@@ -971,7 +971,7 @@ def test_typed_float_only_signature_uses_unboxed_low_ir_function_abi(tmp_path):
         "typed_pure_float_unboxed",
     )
     assert re.search(
-        r"define\s+double\s+@user_[A-Za-z0-9_]*_scale\s*"
+        r"define\s+(?:external\s+)?double\s+@user_[A-Za-z0-9_]*_scale\s*"
         r"\(double\s+%x,\s*double\s+%y\)",
         ir_text,
     ), ir_text
@@ -989,7 +989,7 @@ def test_unsafe_i64_typed_float_loop_uses_int_counter_param(tmp_path, monkeypatc
     _enable_unsafe_i64(monkeypatch)
     ir_text = _compile_to_ll(tmp_path, _TYPED_FLOAT_LOOP, "typed_float_loop_unboxed")
     assert re.search(
-        r"define\s+double\s+@user_[A-Za-z0-9_]*_bench\s*\(i64\s+%n\)",
+        r"define\s+(?:external\s+)?double\s+@user_[A-Za-z0-9_]*_bench\s*\(i64\s+%n\)",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "bench")
@@ -1049,7 +1049,7 @@ def test_typed_int_abi_off_matches_boxed_tagged_shape(tmp_path, monkeypatch):
     monkeypatch.setenv("PCC_PYTHON_TYPED_INT_ABI", "off")
     ir_text = _compile_to_ll(tmp_path, _TYPED_LOOP, "typed_loop_boxed")
     assert re.search(
-        r"define\s+ptr\s+@user_[A-Za-z0-9_]*_bench\s*\(ptr\s+%n\)",
+        r"define\s+(?:external\s+)?ptr\s+@user_[A-Za-z0-9_]*_bench\s*\(ptr\s+%n\)",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "bench")
@@ -1137,11 +1137,11 @@ _TYPED_TAGGED_MUL = textwrap.dedent("""
 def test_typed_int_annotations_default_to_boxed_tagged_abi(tmp_path):
     ir_text = _compile_to_ll(tmp_path, _TYPED_DIRECT_CALL, "typed_direct_call_boxed")
     assert re.search(
-        r"define\s+ptr\s+@user_[A-Za-z0-9_]*_add\s*" r"\(ptr\s+%a,\s*ptr\s+%b\)",
+        r"define\s+(?:external\s+)?ptr\s+@user_[A-Za-z0-9_]*_add\s*" r"\(ptr\s+%a,\s*ptr\s+%b\)",
         ir_text,
     ), ir_text
     assert not re.search(
-        r"define\s+i64\s+@user_[A-Za-z0-9_]*_add\s*\(",
+        r"define\s+(?:external\s+)?i64\s+@user_[A-Za-z0-9_]*_add\s*\(",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "add")
@@ -1161,7 +1161,7 @@ def test_typed_int_direct_call_defaults_to_boxed_tagged_shape_and_runs(tmp_path)
     assert "tag.add" in add_body, add_body
     assert "@py_int_add" in add_body, add_body
     assert re.search(
-        r"call\s+ptr\s+@user_[A-Za-z0-9_]*_add\s*\(ptr\s+%n,",
+        r"call\s+ptr\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_add\s*\(ptr\s+%n,",
         bench_body,
     ), bench_body
     assert "low.call" not in bench_body, bench_body
@@ -1191,7 +1191,7 @@ def test_typed_int_direct_call_defaults_to_boxed_tagged_shape_and_runs(tmp_path)
 def test_for_range_induction_keeps_raw_i64_lane_under_boxed_int_mode(tmp_path):
     ir_text = _compile_to_ll(tmp_path, _TYPED_RANGE_LOOP, "typed_range_induction")
     assert re.search(
-        r"define\s+ptr\s+@user_[A-Za-z0-9_]*_sum_range\s*\(ptr\s+%n\)",
+        r"define\s+(?:external\s+)?ptr\s+@user_[A-Za-z0-9_]*_sum_range\s*\(ptr\s+%n\)",
         ir_text,
     ), ir_text
     body = _fn_body(ir_text, "sum_range")
@@ -1215,15 +1215,15 @@ def test_for_range_raw_lane_reboxes_before_dyn_and_typed_calls(tmp_path):
     assert "range.int.obj" in body, body
     assert "@py_int_from_i64" in body, body
     assert re.search(
-        r"call\s+ptr\s+@user_[A-Za-z0-9_]*_keep\s*\(ptr\s+%",
+        r"call\s+ptr\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_keep\s*\(ptr\s+%",
         body,
     ), body
     assert re.search(
-        r"call\s+ptr\s+@user_[A-Za-z0-9_]*_bump\s*\(ptr\s+%",
+        r"call\s+ptr\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_bump\s*\(ptr\s+%",
         body,
     ), body
     assert not re.search(
-        r"call\s+i64\s+@user_[A-Za-z0-9_]*_(?:keep|bump)\s*\(",
+        r"call\s+i64\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_(?:keep|bump)\s*\(",
         body,
     ), body
     assert "@py_cpy_" not in body, body
@@ -1295,7 +1295,7 @@ def test_unsafe_i64_typed_int_direct_call_uses_low_ir_and_runs_without_libpython
     body = _fn_body(ir_text, "bench")
     assert body is not None, ir_text
     assert "low.call" in body, body
-    assert re.search(r"call\s+i64\s+@user_[A-Za-z0-9_]*_add", body), body
+    assert re.search(r"call\s+i64\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_add", body), body
     assert "@py_int_add" not in body, body
 
     src = tmp_path / "typed_direct_call.py"

@@ -20,6 +20,12 @@ from pathlib import Path
 import os
 
 
+if os.environ.get("PCC_TEST_COMPILER"):
+    # Installed before any test module binds ``compile_python``; see
+    # tests/pcc1_route.py.
+    from tests.pcc1_route import install as _install_pcc1_route
+
+    _install_pcc1_route()
 
 
 _SELF_HOST_WARMUP_NODEID = (
@@ -37,6 +43,66 @@ _SELF_HOST_WARMUP_NODEID = (
 # in-test branches behind these gates use pytest.fail, not pytest.skip.
 
 _TSAN_PROBE_CACHE: dict[str, str | None] = {}
+
+
+import pytest  # noqa: E402
+
+from pcc.tools.runtime_archive_provenance import (  # noqa: E402
+    PRODUCTION_POLICY,
+    verify_runtime_archive_manifest,
+)
+from tests.runtime_build_cache import (  # noqa: E402
+    cached_pcc_python_runtime,
+    cached_threaded_pcc_python_runtime,
+)
+
+
+@pytest.fixture(scope="session")
+def pcc_py_runtime_archive(tmp_path_factory):
+    """Return the immutable pcc-Python archive required by pcc1 tests.
+
+    Consumers pass this path through ``PCC_RUNTIME_ARCHIVE``.  The fixture
+    never rebuilds the repository's shared ``libpy_runtime_pcc_py.a`` under
+    xdist.
+    """
+
+    explicit = os.environ.get("PCC_RUNTIME_ARCHIVE")
+    if explicit:
+        archive = Path(explicit).resolve()
+        assert archive.name == "libpy_runtime_pcc_py.a"
+        manifest = Path(str(archive) + ".provenance.json")
+        records = verify_runtime_archive_manifest(
+            archive,
+            runtime_root=Path(__file__).resolve().parents[1] / "pcc" / "py_runtime",
+            manifest_path=manifest,
+        )
+        assert records["policy"] == PRODUCTION_POLICY
+        assert all(
+            member["source_kind"] == "pcc-python"
+            and member["producer_kind"] == "pcc-python-library-ir-to-obj"
+            and member["uses_host_cc"] is False
+            for member in records["members"]
+        )
+        return archive
+
+    del tmp_path_factory
+    return cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
+
+
+@pytest.fixture(scope="session")
+def threaded_pcc_py_runtime_archive() -> Path:
+    """Return the ``PCC_WITH_THREADS=1`` pcc-Python archive.
+
+    ``PCC_THREADED_RUNTIME_ARCHIVE`` names a prebuilt one; otherwise one
+    content-addressed build is shared by every worker.
+    """
+
+    explicit = os.environ.get("PCC_THREADED_RUNTIME_ARCHIVE")
+    if explicit:
+        archive = Path(explicit).resolve(strict=True)
+        assert archive.name == "libpy_runtime_pcc_py.a"
+        return archive
+    return cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
 
 
 def _tsan_unavailable_reason() -> str | None:
@@ -242,3 +308,32 @@ def pytest_collection_modifyitems(config, items):
         return
     remaining = [item for item in items if item not in warmup]
     items[:] = warmup + remaining
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """With PCC_TEST_COMPILER, report native compiles against host fallbacks."""
+    if not os.environ.get("PCC_TEST_COMPILER") or hasattr(config, "workerinput"):
+        return
+    from tests.pcc1_route import LOG_ENV, summarize
+
+    summary = summarize(os.environ.get(LOG_ENV, ""))
+    counts = summary["counts"]
+    terminalreporter.write_sep("=", "pcc1 compile routing")
+    terminalreporter.write_line(
+        f"native: {counts.get('native', 0)}  host fallback: {counts.get('host', 0)}"
+        f"  (log: {os.environ.get(LOG_ENV, '')})"
+    )
+    for reason, count in sorted(summary["host_reasons"].items(), key=lambda kv: -kv[1]):
+        terminalreporter.write_line(f"  {count:6d}  {reason}")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """PCC_TEST_COMPILER_STRICT=1: a host fallback fails the session."""
+    config = session.config
+    if not os.environ.get("PCC_TEST_COMPILER") or hasattr(config, "workerinput"):
+        return
+    from tests.pcc1_route import LOG_ENV, STRICT_ENV, summarize
+
+    if os.environ.get(STRICT_ENV) == "1":
+        if summarize(os.environ.get(LOG_ENV, ""))["counts"].get("host", 0):
+            session.exitstatus = 1

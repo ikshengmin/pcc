@@ -311,25 +311,37 @@ def _seed_package_site_for_python_entry(src_path: str) -> None:
 # getattr bridges worth 47 fallbacks. The duplication is pinned instead:
 # tests/python/test_cli_shared_helpers_contract.py fails if this copy and
 # pcc/cli_shared_paths.py ever diverge (AUD-P2-CLI-SHARED-HELPER-DUPLICATION).
-def _fnv1a_update_u64(value: int, text: str) -> int:
-    h = value & 0xFFFFFFFFFFFFFFFF
+def _fnv1a_update_u64(value: object, text: str) -> object:
+    # The state is a u64, often 2**63 or more, which pcc's raw i64 int lane
+    # cannot hold (pcc1 read it as 0, and now raises OverflowError).  It
+    # crosses calls as an int object; the loop runs on two 32-bit halves.
+    # The FNV prime is 2**40 + 435, so every intermediate stays below 2**42
+    # and the result equals ``(h * 1099511628211) & 0xFFFFFFFFFFFFFFFF``.
+    hi: int = (value >> 32) & 0xFFFFFFFF
+    lo: int = value & 0xFFFFFFFF
     data = str(text or "")
     i = 0
     while i < len(data):
-        h = h ^ (ord(data[i]) & 0xFF)
-        h = (h * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+        lo = lo ^ (ord(data[i]) & 0xFF)
+        t: int = lo * 435
+        hi = (hi * 435 + (t >> 32) + ((lo & 0xFFFFFF) << 8)) & 0xFFFFFFFF
+        lo = t & 0xFFFFFFFF
         i += 1
-    return h
+    return int(format(hi, "08x") + format(lo, "08x"), 16)
 
 
-def _fnv1a_update_bytes_u64(value: int, data) -> int:
-    h = value & 0xFFFFFFFFFFFFFFFF
+def _fnv1a_update_bytes_u64(value: object, data) -> object:
+    # See _fnv1a_update_u64.
+    hi: int = (value >> 32) & 0xFFFFFFFF
+    lo: int = value & 0xFFFFFFFF
     i = 0
     while i < len(data):
-        h = h ^ (data[i] & 0xFF)
-        h = (h * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+        lo = lo ^ (data[i] & 0xFF)
+        t: int = lo * 435
+        hi = (hi * 435 + (t >> 32) + ((lo & 0xFFFFFF) << 8)) & 0xFFFFFFFF
+        lo = t & 0xFFFFFFFF
         i += 1
-    return h
+    return int(format(hi, "08x") + format(lo, "08x"), 16)
 
 
 def _iter_py_sources_under(root: str):

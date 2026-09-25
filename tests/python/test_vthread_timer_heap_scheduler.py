@@ -53,7 +53,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.runtime_build_cache import cached_c_runtime, cached_threaded_pcc_python_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime, cached_threaded_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
@@ -77,7 +77,7 @@ def _build_runtime(
             ["-pthread"],
         )
     del tmp_path
-    return cached_c_runtime(), "libpy_runtime.a", []
+    return cached_pcc_python_runtime(), "libpy_runtime_pcc_py.a", []
 
 
 # The probe drives the scheduler timer path directly. Each virtual thread

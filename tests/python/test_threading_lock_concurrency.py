@@ -44,8 +44,6 @@ def _compile_threaded(
     exe_path: Path,
 ) -> None:
     """Compile against an isolated ``PCC_WITH_THREADS=1`` archive."""
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(runtime_archive))
     from pcc.py_frontend.pipeline import compile_python
@@ -59,7 +57,7 @@ def _compile_threaded(
 
 
 def test_pthread_lock_disjoint_slot_writes_succeed(
-    tmp_path, monkeypatch, threaded_c_runtime_archive
+    tmp_path, monkeypatch, threaded_pcc_py_runtime_archive
 ):
     """Control: 4 threads each write to their own slot under one Lock.
 
@@ -98,7 +96,7 @@ def test_pthread_lock_disjoint_slot_writes_succeed(
             main()
         """).lstrip(), encoding="utf-8")
 
-    _compile_threaded(monkeypatch, threaded_c_runtime_archive, src, exe)
+    _compile_threaded(monkeypatch, threaded_pcc_py_runtime_archive, src, exe)
 
     for _ in range(3):
         result = subprocess.run(
@@ -113,7 +111,7 @@ def test_pthread_lock_disjoint_slot_writes_succeed(
 
 
 def test_pthread_lock_low_iter_count_succeeds(
-    tmp_path, monkeypatch, threaded_c_runtime_archive
+    tmp_path, monkeypatch, threaded_pcc_py_runtime_archive
 ):
     """Control: 8 threads × 1 iter each. Contention window is too
     small to trigger the lost-update bug; the canonical case at
@@ -156,7 +154,7 @@ def test_pthread_lock_low_iter_count_succeeds(
             main()
         """).lstrip(), encoding="utf-8")
 
-    _compile_threaded(monkeypatch, threaded_c_runtime_archive, src, exe)
+    _compile_threaded(monkeypatch, threaded_pcc_py_runtime_archive, src, exe)
 
     for _ in range(3):
         result = subprocess.run(
@@ -172,7 +170,7 @@ def test_pthread_lock_low_iter_count_succeeds(
 
 
 def test_pthread_lock_list_append_under_contention(
-    tmp_path, monkeypatch, threaded_c_runtime_archive
+    tmp_path, monkeypatch, threaded_pcc_py_runtime_archive
 ):
     """4 threads × 1000 iters of ``shared.append(1)`` under one Lock.
 
@@ -214,7 +212,7 @@ def test_pthread_lock_list_append_under_contention(
             main()
         """).lstrip(), encoding="utf-8")
 
-    _compile_threaded(monkeypatch, threaded_c_runtime_archive, src, exe)
+    _compile_threaded(monkeypatch, threaded_pcc_py_runtime_archive, src, exe)
 
     for _ in range(3):
         result = subprocess.run(

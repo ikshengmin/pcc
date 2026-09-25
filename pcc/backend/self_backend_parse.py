@@ -1713,6 +1713,9 @@ def _parse_functions(ir_text: str) -> list[ParsedFunction]:
                 indexed_slot_projection=False,
                 aarch64_tail_call_ids=[],
                 aarch64_callee_saved=[],
+                aarch64_reload_slot_offsets=[],
+                aarch64_fused_branch_values={},
+                aarch64_frameless=False,
             )
         # Freeze/adopt the complete function plane at the parser boundary.
         # Downstream consumers never need the construction seed or a block
@@ -1722,27 +1725,91 @@ def _parse_functions(ir_text: str) -> list[ParsedFunction]:
     return functions
 
 
+def _scan_function_line(line: str, paren_depth: int, brace_depth: int) -> list[int]:
+    """Scan one header/body line outside quoted strings.
+
+    Returns ``[paren_depth, brace_depth, open_index, close_index]``: the
+    depths after the line, the index of the ``{`` that opens the body (the
+    first brace at parenthesis depth 0 while no body is open) and the index
+    of the ``}`` that closes it, each -1 when the line has none.
+    """
+    open_index = -1
+    close_index = -1
+    in_quote = False
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if char == '"':
+            in_quote = not in_quote
+        elif not in_quote:
+            if char == "(":
+                paren_depth += 1
+            elif char == ")":
+                paren_depth -= 1
+            elif char == "{":
+                if brace_depth == 0 and paren_depth == 0 and open_index < 0:
+                    open_index = index
+                brace_depth += 1
+            elif char == "}":
+                brace_depth -= 1
+                if brace_depth == 0 and open_index >= 0:
+                    close_index = index
+                    break
+        index += 1
+    return [paren_depth, brace_depth, open_index, close_index]
+
+
 def _iter_function_defs(ir_text: str) -> list[tuple[str, str]]:
+    """Split ``define`` bodies from module text.
+
+    The emitted layout opens the body at the end of the header line and
+    closes it on a line of its own; that stays a line-at-a-time scan.  A
+    header line that does not end in ``{`` is scanned for braces outside
+    quoted strings, so a body opened mid-line, or written on the same line
+    (``define i32 @f() { ret i32 42 }``), is found; a struct type in the
+    parameter list sits inside parentheses and is not mistaken for it.
+    """
     defs: list[tuple[str, str]] = []
     header_lines: list[str] = []
     body_lines: list[str] = []
     in_header = False
     in_body = False
+    paren_depth = 0
     for line in ir_text.splitlines():
         if not in_header and not in_body:
             if not line.startswith("define "):
                 continue
-            header_lines = [line]
+            header_lines = []
+            paren_depth = 0
             in_header = True
-            if line.rstrip().endswith("{"):
-                in_header = False
-                in_body = True
-            continue
         if in_header:
-            header_lines.append(line)
             if line.rstrip().endswith("{"):
+                header_lines.append(line)
                 in_header = False
                 in_body = True
+                continue
+            scanned = _scan_function_line(line, paren_depth, 0)
+            paren_depth = scanned[0]
+            open_index = scanned[2]
+            if open_index < 0:
+                header_lines.append(line)
+                continue
+            header_lines.append(line[: open_index + 1])
+            close_index = scanned[3]
+            if close_index >= 0:
+                defs.append(
+                    (
+                        "\n".join(header_lines),
+                        line[open_index + 1 : close_index].strip(),
+                    )
+                )
+                header_lines = []
+                in_header = False
+                continue
+            rest = line[open_index + 1 :].strip()
+            body_lines = [rest] if rest else []
+            in_header = False
+            in_body = True
             continue
         if line == "}":
             defs.append(("\n".join(header_lines), "\n".join(body_lines)))

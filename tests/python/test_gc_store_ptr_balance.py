@@ -7,7 +7,7 @@ The migration is supposed to be refcount-equivalent for backend 0
 heap corruption while compiling itself, which strongly suggests one
 of the migrated helpers has skewed refcount accounting somewhere.
 
-These tests build a small C harness against ``libpy_runtime.a`` and
+These tests build a small C harness against the pcc-Python runtime and
 run it under default (production) malloc — the same allocator setting
 that triggers the pcc1 crash.  If a refcount is off by one, default
 malloc's nano allocator will reuse freed chunks aggressively and the
@@ -26,7 +26,7 @@ import textwrap
 
 import pytest
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).absolute().parents[2]
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def _compile_run(tmp_path: Path, c_src: str, name: str) -> subprocess.CompletedProcess:
@@ -47,7 +47,7 @@ def _compile_run(tmp_path: Path, c_src: str, name: str) -> subprocess.CompletedP
         [
             cc, "-std=c11",
             f"-I{runtime / 'include'}",
-            str(src), str(runtime / "libpy_runtime.a"),
+            str(src), str(runtime / "libpy_runtime_pcc_py.a"),
             "-o", str(exe),
         ],
         capture_output=True, text=True, timeout=30,

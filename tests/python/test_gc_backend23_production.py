@@ -5,7 +5,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
@@ -18,7 +18,7 @@ def _cc() -> str:
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def _compile_and_run(tmp_path: Path, source: str, env: dict[str, str] | None = None):
@@ -33,7 +33,7 @@ def _compile_and_run(tmp_path: Path, source: str, env: dict[str, str] | None = N
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),
@@ -136,14 +136,11 @@ def test_backend3_minor_productivity_and_remembered_update_score(tmp_path):
 
 def test_backend23_public_symbols_are_wired():
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(encoding="utf-8")
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_src = (RUNTIME_DIR / "py" / "py_gc_telemetry.py").read_text(encoding="utf-8")
     abi = (REPO_ROOT / "pcc" / "py_frontend" / "codegen" / "runtime_abi.py").read_text(encoding="utf-8")
 
     assert "PCC_GC_COUNTER_CMS_PRODUCTION_SCORE" in header
     assert "PCC_GC_COUNTER_GEN_MINOR_PRODUCTIVITY_SCORE" in header
-    assert "pcc_gc_backend2_production_score" in c_src
-    assert "pcc_gc_backend3_minor_productivity_score" in c_src
     assert '@c_abi_export("pcc_gc_backend2_production_score")' in py_src
     assert '@c_abi_export("pcc_gc_backend3_minor_productivity_score")' in py_src
     assert '"pcc_gc_backend2_production_score": (_I64, [], False)' in abi

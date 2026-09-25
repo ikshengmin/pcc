@@ -21,45 +21,20 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-import pytest
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 
 
-def test_cc_trashcan_state_is_thread_local():
-    source = (RUNTIME_DIR / "src" / "py_obj_dealloc.c").read_text(
-        encoding="utf-8"
-    )
-    for declaration in (
-        "static _Thread_local int pcc_dealloc_depth",
-        "static _Thread_local PccDeallocTrashNode *pcc_dealloc_trash_head",
-        "static _Thread_local PccDeallocTrashNode *pcc_dealloc_trash_tail",
-    ):
-        assert declaration in source
-
-
 def _compile_and_run(
-    tmp_path, source: str, *, runtime_cc: bool = False, env=None
+    tmp_path, source: str, *, env=None
 ) -> subprocess.CompletedProcess[str]:
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"
     src.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
-    if runtime_cc:
-        # cc tier links the C runtime (py_obj.c trash queue) instead of the
-        # pcc-Python port; the two must agree on which type tags defer.
-        import os
-
-        os.environ["PCC_RUNTIME_CC"] = "cc"
-    try:
-        compile_python(str(src), str(exe), ir_scaffold_mode="on")
-    finally:
-        if runtime_cc:
-            import os
-
-            os.environ.pop("PCC_RUNTIME_CC", None)
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     return subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=120, env=env,
     )
@@ -323,12 +298,11 @@ def test_trashcan_with_del_no_overflow(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# cc tier: trash-defer type-tag set must match the pcc-Python port
+# Several finalizable instances cleared together
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
-def test_list_of_finalizable_instances_cleared(tmp_path, runtime_cc):
+def test_list_of_finalizable_instances_cleared(tmp_path):
     """A list holding >= 2 ``__del__`` instances, then cleared.
 
     Regression for a switch fall-through in the C runtime's
@@ -358,7 +332,6 @@ def test_list_of_finalizable_instances_cleared(tmp_path, runtime_cc):
         if __name__ == "__main__":
             main()
         """,
-        runtime_cc=runtime_cc,
     )
     assert result.returncode == 0, result.stderr
     lines = [l for l in result.stdout.splitlines() if l]
@@ -374,42 +347,9 @@ def test_trash_defer_helpers_match_port_and_exclude_cext_tags_source():
     catch-all. The split C dealloc helper also needs explicit per-case returns;
     otherwise container tags fall through to the default expression.
     """
-    py_obj_c = (RUNTIME_DIR / "src" / "py_obj.c").read_text(encoding="utf-8")
-    py_obj_dealloc_c = (RUNTIME_DIR / "src" / "py_obj_dealloc.c").read_text(
-        encoding="utf-8"
-    )
     py_obj_dealloc_py = (RUNTIME_DIR / "py" / "py_obj_dealloc.py").read_text(
         encoding="utf-8"
     )
-
-    trash_start = py_obj_c.index("static int pcc_trash_should_defer(")
-    trash_body = py_obj_c[trash_start:py_obj_c.index("static void pcc_dealloc_dispatch", trash_start)]
-    assert "pcc_capi_is_cext_type_tag((int64_t)type_tag) != 0" in trash_body
-    assert trash_body.index("pcc_capi_is_cext_type_tag") < trash_body.index("switch (type_tag)")
-    assert (
-        # Both the C helper and the pcc-Python mirror (_dealloc_should_defer in
-        # py_obj_dealloc.py) compare against PY_TYPE_USER_CLASS_START (104), not
-        # PY_TYPE_USER (100).  The reserved range between them is not a concrete
-        # user class, so deferring on it would be wrong; the test still pinned
-        # the older boundary.
-        "default:\n            return type_tag >= PY_TYPE_USER_CLASS_START;"
-    ) in trash_body
-
-    split_start = py_obj_dealloc_c.index("static int pcc_dealloc_should_defer(")
-    split_body = py_obj_dealloc_c[
-        split_start:py_obj_dealloc_c.index("static void pcc_dealloc_dispatch", split_start)
-    ]
-    assert "pcc_capi_is_cext_type_tag((int64_t)type_tag) != 0" in split_body
-    assert split_body.index("pcc_capi_is_cext_type_tag") < split_body.index("switch (type_tag)")
-    assert "return 1;" in split_body
-    assert (
-        # Both the C helper and the pcc-Python mirror (_dealloc_should_defer in
-        # py_obj_dealloc.py) compare against PY_TYPE_USER_CLASS_START (104), not
-        # PY_TYPE_USER (100).  The reserved range between them is not a concrete
-        # user class, so deferring on it would be wrong; the test still pinned
-        # the older boundary.
-        "default:\n            return type_tag >= PY_TYPE_USER_CLASS_START;"
-    ) in split_body
 
     port_start = py_obj_dealloc_py.index("def _dealloc_should_defer(tag: int) -> bool:")
     port_body = py_obj_dealloc_py[

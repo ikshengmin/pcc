@@ -16,7 +16,6 @@ RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 TRACKING_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_tracking.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_obj_gc.py"
 COLLECTOR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_backend0_collector.py"
-ORACLE_SOURCE = RUNTIME_DIR / "src" / "py_obj_gc.c"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 PUBLIC_SYMBOLS = {"py_gc_track", "py_gc_untrack"}
@@ -225,7 +224,6 @@ def test_gc_tracking_has_one_strict_source_owner_and_one_unlink_rule():
     tracking = TRACKING_SOURCE.read_text(encoding="utf-8")
     managed = MANAGED_SOURCE.read_text(encoding="utf-8")
     collector = COLLECTOR_SOURCE.read_text(encoding="utf-8")
-    oracle = ORACLE_SOURCE.read_text(encoding="utf-8")
     makefile = MAKEFILE.read_text(encoding="utf-8")
 
     assert "__pcc_freestanding__ = True" in tracking
@@ -241,19 +239,12 @@ def test_gc_tracking_has_one_strict_source_owner_and_one_unlink_rule():
     assert 'global_addr("pcc_gc_table_lock_owner_token")' in tracking
     assert "pcc_current_native_thread_token()" in tracking
     assert "pcc_thread_safepoint()" in tracking
-    assert "__atomic_test_and_set" in oracle
-    assert "__atomic_clear" in oracle
     assert "count >= 4096" in tracking
-    assert "PCC_GC_TRACKED_NODE_POOL_LIMIT 4096" in oracle
     for name in ("py_gc_track", "py_gc_untrack"):
         port_body = tracking.split("def " + name, 1)[1].split("\n\n@", 1)[0]
-        oracle_body = oracle.split("void " + name, 1)[1].split("\n}", 1)[0]
         assert "collector_owns_lock" in port_body
         assert "pcc_gc_default_table_lock()" in port_body
         assert "pcc_gc_default_table_unlock()" in port_body
-        assert "collector_owns_lock" in oracle_body
-        assert "py_gc_table_lock();" in oracle_body
-        assert "py_gc_table_unlock();" in oracle_body
 
 
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
@@ -292,9 +283,20 @@ def test_gc_tracking_object_has_exact_raw_closure_and_atomic_lock(
     assert "release" in ir_text
 
 
-def test_production_archive_uniquely_owns_tracking_and_matches_c_oracle_gc0_to_gc4(
+# What the harness printed under every collector against the retired C
+# runtime oracle.
+TRACKING_EXPECTED = (
+    "ignored:0\n"
+    "first:1,1\n"
+    "duplicate:1\n"
+    "second:2,1\n"
+    "untrack-first:1,0,1\n"
+    "empty:0\n"
+)
+
+
+def test_production_archive_uniquely_owns_tracking_gc0_to_gc4(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     members_result = subprocess.run(
@@ -328,15 +330,11 @@ def test_production_archive_uniquely_owns_tracking_and_matches_c_oracle_gc0_to_g
         ":py_obj_gc.o:" in line for lines in owners.values() for line in lines
     )
 
-    oracle = _link_harness(tmp_path, "gc_tracking_c_oracle", c_runtime_archive)
     implementation = _link_harness(
         tmp_path, "gc_tracking_pcc_python", pcc_py_runtime_archive
     )
     for backend in range(5):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
-        oracle_result = subprocess.run(
-            [str(oracle)], env=env, capture_output=True, text=True, timeout=30
-        )
         result = subprocess.run(
             [str(implementation)],
             env=env,
@@ -344,19 +342,14 @@ def test_production_archive_uniquely_owns_tracking_and_matches_c_oracle_gc0_to_g
             text=True,
             timeout=30,
         )
-        assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == oracle_result.stdout
+        assert result.stdout == TRACKING_EXPECTED
 
 
 def test_production_archive_tracking_lock_survives_real_pthread_contention(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
-    oracle = _link_harness(
-        tmp_path, "gc_tracking_threads_c_oracle", c_runtime_archive, concurrent=True
-    )
     implementation = _link_harness(
         tmp_path,
         "gc_tracking_threads_pcc_python",
@@ -364,13 +357,8 @@ def test_production_archive_tracking_lock_survives_real_pthread_contention(
         concurrent=True,
     )
     env = {**os.environ, "PCC_GC_BACKEND": "0"}
-    oracle_result = subprocess.run(
-        [str(oracle)], env=env, capture_output=True, text=True, timeout=30
-    )
     result = subprocess.run(
         [str(implementation)], env=env, capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == oracle_result.stdout
     assert result.stdout == "tracked:1024,1024\nuntracked:0,0\n"

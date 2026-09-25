@@ -4,8 +4,6 @@ from pathlib import Path
 import subprocess
 import re
 
-import pytest
-
 
 def test_direct_generator_spawn_omits_only_its_redundant_continuation(tmp_path, monkeypatch):
     from pcc.py_frontend.pipeline import compile_python
@@ -32,9 +30,8 @@ print(vt.result(left), vt.result(right))
     assert counts == [2, 1], "ordinary callbacks still need their typed captured slots"
 
 
-@pytest.mark.parametrize("runtime_kind", ["c", "py"])
-def test_direct_generator_task_yield_result_cancel_and_failure(tmp_path, request, runtime_kind):
-    archive = request.getfixturevalue("c_runtime_archive" if runtime_kind == "c" else "pcc_py_runtime_archive")
+def test_direct_generator_task_yield_result_cancel_and_failure(tmp_path, pcc_py_runtime_archive):
+    archive = pcc_py_runtime_archive
     root = Path(__file__).resolve().parents[2]
     source = tmp_path / "direct_generator.c"
     source.write_text('''#include "py_runtime.h"

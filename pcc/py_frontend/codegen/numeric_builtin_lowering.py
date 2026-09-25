@@ -92,6 +92,17 @@ class NumericBuiltinLoweringMixin:
             self._emit_post_call_err_check(getattr(expr, "span", None))
             self._note_owned_dynamic_call_value(got)
             return got
+        if isinstance(arg.ty, FloatType) and len(expr.args) == 1:
+            # Exact: int(1e20) is a bignum, NaN/inf raise CPython's errors.
+            value = self._emit_expr(arg)
+            got = self.builder.call(
+                self.runtime["py_int_from_f64_exact"],
+                [value],
+                name=self._fresh("int.obj.float"),
+            )
+            self._emit_post_call_err_check(getattr(expr, "span", None))
+            self._note_owned_dynamic_call_value(got)
+            return got
         if not isinstance(arg.ty, StrType):
             return None
         s_obj = self._emit_expr(arg)
@@ -108,6 +119,48 @@ class NumericBuiltinLoweringMixin:
         self._emit_post_call_err_check(getattr(expr, "span", None))
         self._note_owned_dynamic_call_value(boxed)
         return boxed
+
+    def _emit_float_to_i64_lane(self, v: ir.Value, expr) -> ir.Value:
+        """``int(<float>)`` into the i64 lane.
+
+        A bare ``fptosi`` saturated ``int(1e20)`` and read NaN as 0.  The
+        in-range case stays one compare pair and an ``fptosi``; NaN, the
+        infinities and |x| >= 2**63 take a runtime call that raises CPython's
+        error (the lane cannot hold the exact result; the object projection,
+        ``emit_int_builtin_as_object``, returns it).
+        """
+        fn = self.builder.function
+        in_low = self.builder.fcmp_ordered(
+            ">=", v, ir.Constant(_DOUBLE, -9223372036854775808.0),
+            name=self._fresh("int.f.lo"),
+        )
+        in_high = self.builder.fcmp_ordered(
+            "<", v, ir.Constant(_DOUBLE, 9223372036854775808.0),
+            name=self._fresh("int.f.hi"),
+        )
+        in_range = self.builder.and_(in_low, in_high, name=self._fresh("int.f.ok"))
+        fast_bb = fn.append_basic_block(name=self._fresh("int.f.fast"))
+        slow_bb = fn.append_basic_block(name=self._fresh("int.f.slow"))
+        join_bb = fn.append_basic_block(name=self._fresh("int.f.join"))
+        self.builder.cbranch(in_range, fast_bb, slow_bb)
+        self.builder.position_at_end(fast_bb)
+        fast = self.builder.fptosi(v, _I64, name=self._fresh("int.from_float"))
+        fast_end = self.builder.block
+        self.builder.branch(join_bb)
+        self.builder.position_at_end(slow_bb)
+        slow = self.builder.call(
+            self.runtime["py_float_to_i64_checked"],
+            [v],
+            name=self._fresh("int.from_float.checked"),
+        )
+        self._emit_post_call_err_check(getattr(expr, "span", None))
+        slow_end = self.builder.block
+        self.builder.branch(join_bb)
+        self.builder.position_at_end(join_bb)
+        result = self.builder.phi(_I64, name=self._fresh("int.from_float.join"))
+        result.add_incoming(fast, fast_end)
+        result.add_incoming(slow, slow_end)
+        return result
 
     def _emit_int_dyn_as_object(self, expr, arg) -> Optional[ir.Value]:
         """``int(<dyn>)`` as an OBJECT: dispatch on the tag, phi the objects.
@@ -254,11 +307,7 @@ class NumericBuiltinLoweringMixin:
             return v
         if isinstance(arg_ty, FloatType):
             v = self._emit_expr(arg)
-            return self.builder.fptosi(
-                v,
-                _I64,
-                name=self._fresh("int.from_float"),
-            )
+            return self._emit_float_to_i64_lane(v, expr)
         if isinstance(arg_ty, StrType):
             s_obj = self._emit_expr(arg)
             cstr = self.builder.call(
@@ -420,7 +469,7 @@ class NumericBuiltinLoweringMixin:
 
             self.builder.position_at_end(int_bb)
             int_val = self.builder.call(
-                self.runtime["py_int_to_i64"],
+                self.runtime["py_int_to_i64_lane"],
                 [obj, ir.Constant(_I32.as_pointer(), None)],
                 name=self._fresh("int.dyn.from_int"),
             )
@@ -1910,24 +1959,12 @@ class NumericBuiltinLoweringMixin:
                 name=self._fresh("abs"),
             )
         if isinstance(a_ty, FloatType):
+            # Clear the sign bit, as CPython does: -0.0 and a negative NaN
+            # compare false against zero, so compare-and-negate kept their
+            # sign.  One ``fabs`` instruction.
             v = self._emit_expr(a_expr)
-            zero = ir.Constant(_DOUBLE, 0.0)
-            neg = self.builder.fcmp_ordered(
-                "<",
-                v,
-                zero,
-                name=self._fresh("abs.neg"),
-            )
-            negated = self.builder.fsub(
-                zero,
-                v,
-                name=self._fresh("abs.negate"),
-            )
-            return self.builder.select(
-                neg,
-                negated,
-                v,
-                name=self._fresh("abs"),
+            return self.builder.call(
+                self._get_fabs_intrinsic(), [v], name=self._fresh("abs")
             )
         if isinstance(a_ty, ComplexType):
             # abs(complex) is the magnitude sqrt(re**2 + im**2) -> float.

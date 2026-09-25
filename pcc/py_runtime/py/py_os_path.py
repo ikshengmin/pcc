@@ -358,15 +358,10 @@ def py_os_path_basename(path):
             py_decref(owned)
         return null()
 
+    # posixpath.basename: everything after the last "/", so a trailing
+    # slash yields "" (unlike the shell's basename, which strips it first).
     data = ptr_add(item, 40)
     end: int = load_i64(item, 16)
-    while end > 0 and load_i8(data, end - 1) == 47:
-        end = end - 1
-    if end == 0:
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return py_str_new(null(), 0)
-
     start: int = end
     while start > 0 and load_i8(data, start - 1) != 47:
         start = start - 1

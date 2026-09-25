@@ -189,6 +189,20 @@ _CODECS_BOM_CONSTANTS: dict[str, bytes] = {
 }
 
 
+# ``time`` functions with a native lowering (clock reads build NEW objects).
+_NATIVE_TIME_CALLS = (
+    "monotonic",
+    "perf_counter",
+    "time",
+    "strftime",
+    "sleep",
+    "monotonic_ns",
+    "perf_counter_ns",
+    "time_ns",
+)
+# ``from time import ...`` names resolved natively (``sleep`` only as ``time.sleep``).
+_NATIVE_TIME_IMPORTS = tuple(name for name in _NATIVE_TIME_CALLS if name != "sleep")
+
 class NativeModuleAliasMixin:
     def _extern_user_function_return_ir_type(
         self,
@@ -415,7 +429,7 @@ class NativeModuleAliasMixin:
             and isinstance(expr.obj, Name)
             and self._native_builtin_module_for_name(expr.obj.ident) == "time"
             and expr.name
-            in ("monotonic", "perf_counter", "time", "strftime", "sleep")
+            in _NATIVE_TIME_CALLS
         ):
             return "time." + expr.name
         if (
@@ -457,12 +471,9 @@ class NativeModuleAliasMixin:
                     kwargs=kwargs,
                 )
             )
-        if builtin_value in (
-            "time.monotonic",
-            "time.perf_counter",
-            "time.time",
-            "time.strftime",
-            "time.sleep",
+        if (
+            builtin_value.startswith("time.")
+            and builtin_value[len("time."):] in _NATIVE_TIME_CALLS
         ):
             return self._emit_native_time_call(
                 builtin_value,
@@ -540,13 +551,7 @@ class NativeModuleAliasMixin:
             and attr.obj.ident in getattr(self, "_cpy_module_env", {})
         ):
             module_name = "functools"
-        if module_name == "time" and attr.name in (
-            "monotonic",
-            "perf_counter",
-            "time",
-            "strftime",
-            "sleep",
-        ):
+        if module_name == "time" and attr.name in _NATIVE_TIME_CALLS:
             return self._emit_native_time_call(
                 "time." + attr.name,
                 expr.args,
@@ -995,6 +1000,9 @@ class NativeModuleAliasMixin:
             "time.monotonic": "py_time_monotonic",
             "time.perf_counter": "py_time_perf_counter",
             "time.time": "py_time_time",
+            "time.monotonic_ns": "py_time_monotonic_ns",
+            "time.perf_counter_ns": "py_time_perf_counter_ns",
+            "time.time_ns": "py_time_time_ns",
         }.get(builtin_value)
         if runtime_name is None:
             return None
@@ -1224,7 +1232,7 @@ class NativeModuleAliasMixin:
             )
         if import_module == "time":
             return all(
-                attr_name in ("monotonic", "perf_counter", "time", "strftime")
+                attr_name in _NATIVE_TIME_IMPORTS
                 for attr_name, _as_name in stmt.names
             )
         if import_module == "string":
@@ -1406,7 +1414,7 @@ class NativeModuleAliasMixin:
                 )
                 continue
             if (
-                attr_name in ("monotonic", "perf_counter", "time", "strftime")
+                attr_name in _NATIVE_TIME_IMPORTS
                 and import_module == "time"
             ):
                 self._register_native_builtin_value_alias(

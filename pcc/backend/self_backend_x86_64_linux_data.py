@@ -7,6 +7,7 @@ import struct
 
 from . import BackendUnavailable
 from .self_backend_ir import GlobalDef, TypeDesc, _align_to
+from .self_backend_literals import fp_bitcast_initializer_bits
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_parse import (
     decode_global_name,
@@ -140,6 +141,13 @@ def emit_scalar_initializer(
                 fp32_bits = struct.unpack("<I", struct.pack("<f", value))[0]
                 return [f"  .long {fp32_bits}"]
             if ty.width <= 64:
+                return [f"  .quad {bits}"]
+        bitcast = fp_bitcast_initializer_bits(init)
+        if bitcast is not None:
+            width, bits = bitcast
+            if width == 32 and ty.width <= 32:
+                return [f"  .long {bits}"]
+            if width == 64 and ty.width == 64:
                 return [f"  .quad {bits}"]
         if ty.width <= 32:
             return [f"  .float {init}"]

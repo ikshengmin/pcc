@@ -16,7 +16,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 ROOT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_root_introspection.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
-ORACLE_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 PUBLIC_SYMBOLS = {
@@ -73,7 +72,6 @@ def _compile_object(tmp_path: Path, emitter: str) -> tuple[Path, str]:
 def test_root_introspection_has_one_strict_source_owner_and_shared_lock():
     strict = ROOT_SOURCE.read_text(encoding="utf-8")
     managed = MANAGED_SOURCE.read_text(encoding="utf-8")
-    oracle = ORACLE_SOURCE.read_text(encoding="utf-8")
     makefile = MAKEFILE.read_text(encoding="utf-8")
 
     assert "__pcc_freestanding__ = True" in strict
@@ -87,11 +85,8 @@ def test_root_introspection_has_one_strict_source_owner_and_shared_lock():
         "pcc_gc_slot_is_runtime_root",
     ):
         strict_body = strict.split("def " + name, 1)[1].split("\n\n@", 1)[0]
-        oracle_body = oracle.split("int64_t " + name + "(", 1)[1].split("\n}", 1)[0]
         assert "pcc_py_gc_minor_graph_lock()" in strict_body
         assert "pcc_py_gc_minor_graph_unlock()" in strict_body
-        assert "pcc_gc_graph_lock();" in oracle_body
-        assert "pcc_gc_graph_unlock();" in oracle_body
 
 
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
@@ -236,9 +231,15 @@ def _link_harness(
     return executable
 
 
-def test_production_archive_uniquely_owns_root_introspection_and_matches_c_oracle(
+# What the harness printed against the retired C runtime oracle.
+ROOTS_EXPECTED = (
+    # GC0 keeps no frame roots unless backend0 frame roots are enabled.
+    "counts:1,0,3,4\nroots:1,0,1,0\nempty:0,0,0,0\n",
+) + ("counts:1,2,3,6\nroots:1,1,1,0\nempty:0,0,0,0\n",) * 4
+
+
+def test_production_archive_uniquely_owns_root_introspection(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
     members_result = subprocess.run(
@@ -273,35 +274,23 @@ def test_production_archive_uniquely_owns_root_introspection_and_matches_c_oracl
         ":py_gc_backend.o:" in line for lines in owners.values() for line in lines
     )
 
-    oracle = _link_harness(tmp_path, "gc_roots_c_oracle", c_runtime_archive)
     implementation = _link_harness(
         tmp_path, "gc_roots_pcc_python", pcc_py_runtime_archive
     )
     for backend in range(5):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
-        oracle_result = subprocess.run(
-            [str(oracle)], env=env, capture_output=True, text=True, timeout=30
-        )
         result = subprocess.run(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30
         )
-        assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == oracle_result.stdout
+        assert result.stdout == ROOTS_EXPECTED[backend]
 
 
 def test_root_introspection_survives_pthread_registry_contention(
     tmp_path: Path,
-    threaded_c_runtime_archive: Path,
 ):
     threaded_pcc_python_archive = (
         cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-    )
-    oracle = _link_harness(
-        tmp_path,
-        "gc_roots_threads_c_oracle",
-        threaded_c_runtime_archive,
-        concurrent=True,
     )
     implementation = _link_harness(
         tmp_path,
@@ -311,12 +300,8 @@ def test_root_introspection_survives_pthread_registry_contention(
     )
     for backend in range(5):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
-        oracle_result = subprocess.run(
-            [str(oracle)], env=env, capture_output=True, text=True, timeout=30
-        )
         result = subprocess.run(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30
         )
-        assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == oracle_result.stdout == "final:0\n"
+        assert result.stdout == "final:0\n"

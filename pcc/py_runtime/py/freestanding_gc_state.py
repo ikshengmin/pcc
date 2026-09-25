@@ -145,9 +145,18 @@ define_global_i32(
 define_global_i32(
     "pcc_gc_backend4_store_buffer_medium_full_flushes_count", 0
 )
+define_global_i32(
+    "pcc_gc_backend4_store_buffer_cross_thread_medium_flushes_count", 0
+)
+define_global_i32(
+    "pcc_gc_backend4_store_buffer_cross_thread_medium_flushed_entries_count", 0
+)
 define_global_i32("pcc_gc_backend4_remembered_set_entries_count", 0)
 define_global_i32("pcc_gc_backend4_remembered_set_duplicate_skips_count", 0)
 define_global_i32("pcc_gc_backend4_remembered_set_high_water_count", 0)
+define_global_i32("pcc_gc_backend4_remembered_page_entries_count", 0)
+define_global_i32("pcc_gc_backend4_remembered_page_slot_entries_count", 0)
+define_global_i32("pcc_gc_backend4_remembered_page_high_water_count", 0)
 define_global_i32("pcc_gc_backend3_remembered_overflow", 0)
 define_global_i64("pcc_gc_backend3_remembered_owner_allocation_limit", -1)
 define_global_i32("pcc_gc_next_object_id", 1)
@@ -203,6 +212,7 @@ define_global_ptr_null("pcc_gc_backend4_active_small_old_page")
 define_global_ptr_null("pcc_gc_backend4_active_medium_young_page")
 define_global_ptr_null("pcc_gc_backend4_active_medium_old_page")
 define_global_ptr_null("pcc_gc_backend4_remembered_slots_head")
+define_global_ptr_null("pcc_gc_backend4_remembered_page_head")
 define_global_ptr_null("pcc_gc_object_node_free_head")
 define_global_i32("pcc_gc_object_node_free_count", 0)
 define_global_ptr_null("pcc_gc_backend4_zpage_node_free_head")

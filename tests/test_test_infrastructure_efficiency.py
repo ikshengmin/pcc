@@ -1,6 +1,6 @@
 """Structural guards against repeating native-runtime builds in pytest.
 
-The runtime probes intentionally compile real C and pcc-Python archives.  The
+The runtime probes intentionally compile real pcc-Python archives.  The
 guard is about build ownership: a configuration is built once per pytest
 process/fixture, probe sources remain per-test, and no test deletes shared
 repository build products to force a rebuild.
@@ -9,20 +9,16 @@ repository build products to force a rebuild.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).absolute().parents[1]
 TESTS = ROOT / "tests"
 THIS_FILE = Path(__file__).absolute()
 
-_RUNTIME_COPY_BUILD_STRATEGIES = {
-    # These are real build variants, not copies of the default archives:
-    # per-strategy refcount macros, optional TSan instrumentation, and the
-    # runtime-tripwire macro. Each is cached at the narrowest safe module/file
-    # scope while preserving its distinct compile contract.
-    "tests/python/test_gc_concurrent_collection.py": "@cache_runtime_build",
-    "tests/python/test_gc_refcount_strategies.py": "@cache_runtime_build",
-    "tests/python/test_runtime_tripwires.py": 'fixture(scope="module")',
-}
+# Runtime variants are built only by tests/runtime_build_cache.py; a test that
+# copies the runtime tree and force-rebuilds it must be listed here with the
+# marker that bounds how often it runs.
+_RUNTIME_COPY_BUILD_STRATEGIES: dict[str, str] = {}
 
 _STATELESS_GC_COMPILE_SUITES = (
     "tests/python/test_gc_api.py",
@@ -47,14 +43,18 @@ _FULL_BOOTSTRAP_INTEGRATION_GATES = tuple(
 
 _RUNTIME_SOURCE_COPY_SUITES = (
     *_RUNTIME_COPY_BUILD_STRATEGIES,
-    "tests/python/test_runtime_oracle_diff.py",
     "tests/runtime_build_cache.py",
 )
 
 _NESTED_PYTEST_STRATEGIES = {
     "tests/python/test_gc_backend_under_env.py": "One inner pytest owns the complete frontend/GC slice",
     "tests/test_gc_bootstrap_xdist_group.py": "test_full_gc_bootstraps_remain_independently_schedulable",
+    # Inner runs over a two-test temporary file under ``-c /dev/null``.
+    "tests/python/test_pytest_live_report_tool.py": '"/dev/null"',
+    # Inner runs only collect a temporary source tree, bounded by timeout=15.
+    "tests/python/test_install_pcc1_toolchain.py": '"--collect-only"',
 }
+_NESTED_PYTEST_ARGV = re.compile(r"""["']-m["'],\s*["']pytest["']""")
 
 
 def _python_test_sources():
@@ -81,8 +81,7 @@ def test_nested_pytest_invocations_are_finite_and_audited():
     discovered = {
         path.relative_to(ROOT).as_posix()
         for path, source in _python_test_sources()
-        if "subprocess.run(" in source
-        and ('"pytest",' in source or "'pytest'," in source)
+        if "subprocess.run(" in source and _NESTED_PYTEST_ARGV.search(source)
     }
 
     assert discovered == set(_NESTED_PYTEST_STRATEGIES)
@@ -163,13 +162,6 @@ def test_runtime_source_copies_exclude_repository_build_products():
     assert violations == []
 
 
-def test_runtime_oracle_cache_key_tracks_fake_libc_headers():
-    source = (ROOT / "tests/python/test_runtime_oracle_diff.py").read_text(
-        encoding="utf-8"
-    )
-    assert 'REPO_ROOT / "utils" / "fake_libc_include"' in source
-
-
 def test_tests_do_not_delete_shared_runtime_archives_or_skip_under_xdist():
     forbidden = (
         "_wipe_repo_runtime_archive",
@@ -186,36 +178,39 @@ def test_tests_do_not_delete_shared_runtime_archives_or_skip_under_xdist():
     assert violations == []
 
 
-def test_tests_do_not_build_or_link_mutable_repository_c_runtime_archive():
-    """Native probes must consume the immutable content-addressed fixture."""
+def test_tests_use_only_the_content_addressed_pcc_python_runtime():
+    """The C runtime is retired: no test builds, links or names its archives.
 
-    forbidden = (
-        "pcc/py_runtime/" + "libpy_runtime.a",
-        'RUNTIME_DIR / "' + 'libpy_runtime.a"',
-        '["make", "-C", "pcc/py_runtime", "' + 'libpy_runtime.a"]',
-        '["make", "-C", str(RUNTIME), "' + 'libpy_runtime.a"]',
-        'str(RUNTIME / "' + 'libpy_runtime.a")',
+    Native probes consume the immutable content-addressed pcc-Python fixtures.
+    """
+
+    retired = re.compile(
+        r"\b(?:libpy_runtime|libpy_runtime_pcc|libpy_runtime_libpython)\.a\b"
+        r"|\b(?:threaded_)?c_runtime_archive\b"
+        r"|\bcached_(?:threaded_)?c_runtime\b"
     )
-    violations = []
-    for path, source in _python_test_sources():
-        if path == ROOT / "tests/runtime_build_cache.py":
-            continue
-        for token in forbidden:
-            if token in source:
-                violations.append(f"{path.relative_to(ROOT)}: {token}")
+    violations = [
+        f"{path.relative_to(ROOT)}: {match.group(0)}"
+        for path, source in _python_test_sources()
+        for match in retired.finditer(source)
+    ]
     assert violations == []
 
-    fixtures = (ROOT / "tests/python/conftest.py").read_text(encoding="utf-8")
+    # One definition, in the root conftest, visible to every test tree.
+    fixtures = (ROOT / "tests/conftest.py").read_text(encoding="utf-8")
+    python_fixtures = (ROOT / "tests/python/conftest.py").read_text(encoding="utf-8")
     cache = (ROOT / "tests/runtime_build_cache.py").read_text(encoding="utf-8")
-    assert "def c_runtime_archive" in fixtures
-    assert "def cached_c_runtime" in cache
-    assert "def cached_threaded_c_runtime" in cache
+    assert "def pcc_py_runtime_archive" in fixtures
+    assert "def threaded_pcc_py_runtime_archive" in fixtures
+    assert "def pcc_py_runtime_archive" not in python_fixtures
+    assert "def threaded_pcc_py_runtime_archive" not in python_fixtures
     assert "def cached_pcc_python_runtime" in cache
-    assert cache.count('f"PCC_WITH_THREADS={1 if threaded else 0}"') == 2
+    assert "def cached_threaded_pcc_python_runtime" in cache
+    assert cache.count('f"PCC_WITH_THREADS={1 if threaded else 0}"') == 1
     assert '_PCC_RUNTIME_CACHE_MARKER_SCHEMA = "pcc.runtime-build-cache.v4"' in cache
-    assert '_C_RUNTIME_CACHE_KEY_SCHEMA = "pcc.c-runtime-build-cache.v2"' in cache
-    assert "_runtime_archive_stale" not in fixtures
-    assert "_PCC_PY_RUNTIME_ARCHIVE" not in fixtures
+    for source in (fixtures, python_fixtures):
+        assert "_runtime_archive_stale" not in source
+        assert "_PCC_PY_RUNTIME_ARCHIVE" not in source
     assert "fcntl.flock" in cache
     assert "os.replace(work_runtime, runtime)" in cache
 
@@ -366,18 +361,6 @@ def test_full_three_stage_gc_bootstraps_are_in_the_integration_gate():
     assert all("-m integration" in line for line in commands)
 
 
-def test_full_runtime_c_source_emit_gate_is_integration_only():
-    relative = "tests/python/test_py_runtime_pcc_emit.py"
-    source = (ROOT / relative).read_text(encoding="utf-8")
-    assert "pytest.mark.integration" in source
-    assert "pcc_runtime_emit" in source
-
-    # The task board this used to cross-check retired on 2026-09-06 (its
-    # unfinished rows became GitHub issues).  The property that matters is the
-    # marker in the test itself, asserted above: the gate cannot run outside
-    # an explicit ``-m integration`` selection.
-
-
 def test_gc_root_graph_fixture_is_not_rebuilt_by_every_xdist_worker():
     source = (
         ROOT / "tests/python/gc_production_contract/test_root_graphs.py"
@@ -414,7 +397,7 @@ def test_self_host_oracle_stages_are_shared_across_xdist_workers():
     assert "os.replace(temporary, pcc1)" in source
     assert "os.replace(temporary, pcc2)" in source
     assert "os.replace(temporary, pcc3)" in source
-    assert "pcc.self-host-test-artifact.v1" in cache
+    assert "pcc.self-host-test-artifact.v2" in cache
     assert "self-host-oracle" in cache
     assert "test_000_self_host_oracle_stage_cache_warmup" in conftest
 

@@ -54,7 +54,6 @@ def test_float_unary_minus_uses_ieee_fneg_and_preserves_negative_zero(tmp_path):
 
 
 def test_float_literal_precision_matches_cpython(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "fl.py"

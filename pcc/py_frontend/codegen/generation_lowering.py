@@ -15,6 +15,7 @@ from ..py_ast import (
     AugAssign,
     ClassDef,
     Delete,
+    Raise,
     DynType,
     ExprStmt,
     For,
@@ -687,7 +688,8 @@ class GenerationLoweringMixin:
                 # stripped by the runtime Makefile.
                 pass
             elif isinstance(
-                stmt, (ExprStmt, Assign, AugAssign, If, While, For, Try, With, Delete)
+                stmt,
+                (ExprStmt, Assign, AugAssign, If, While, For, Try, With, Delete, Raise),
             ):
                 if self._freestanding_module:
                     raise RuntimeError(
@@ -748,7 +750,7 @@ class GenerationLoweringMixin:
                 raise NotImplementedError(
                     "Layer 1 only supports top-level FuncDef / ClassDef / "
                     f"Import / Assign / AugAssign / ExprStmt / If / While / "
-                    f"For / Try / With at module scope; got {type(stmt).__name__}"
+                    f"For / Try / With / Raise at module scope; got {type(stmt).__name__}"
                     f" (in module {mod_name!r}, stmt_index={stmt_index})"
                 )
             if debug_codegen:

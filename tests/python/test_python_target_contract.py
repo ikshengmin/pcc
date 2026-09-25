@@ -136,8 +136,6 @@ def test_host_pcc_emits_native_python_target_contract_with_c_runtime(
 
     # This is the cheap host->native semantic gate; fresh pcc1/runtime ownership
     # and bootstrap are separate release gates using the identical program.
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     monkeypatch.delenv("PCC_RUNTIME_ARCHIVE", raising=False)
     source = tmp_path / "semantic_target.py"
     output = tmp_path / "semantic_target"

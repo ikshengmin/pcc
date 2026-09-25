@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 
-def test_native_class_level_variable_read_write_and_delete(tmp_path, c_runtime_archive):
+def test_native_class_level_variable_read_write_and_delete(tmp_path, pcc_py_runtime_archive):
     src = tmp_path / "classvar_probe.c"
     exe = tmp_path / "classvar_probe"
     src.write_text(
@@ -49,11 +49,11 @@ def test_native_class_level_variable_read_write_and_delete(tmp_path, c_runtime_a
         [
             os.environ.get("CC", "cc"),
             "-I",
-            str(c_runtime_archive.parent / "include"),
+            str(pcc_py_runtime_archive.parent / "include"),
             "-I",
-            str(c_runtime_archive.parent / "src"),
+            str(pcc_py_runtime_archive.parent / "src"),
             str(src),
-            str(c_runtime_archive),
+            str(pcc_py_runtime_archive),
             "-lm",
             "-o",
             str(exe),
@@ -65,15 +65,6 @@ def test_native_class_level_variable_read_write_and_delete(tmp_path, c_runtime_a
 
 
 def test_classvar_uses_dedicated_attr_dict_not_method_table():
-    py_class = Path("pcc/py_runtime/src/py_class.c").read_text(encoding="utf-8")
-    py_class_attrs = Path("pcc/py_runtime/src/py_class_attrs.c").read_text(encoding="utf-8")
     internal = Path("pcc/py_runtime/src/py_internal.h").read_text(encoding="utf-8")
-    dispatch = Path("pcc/py_runtime/src/py_obj_ops_dispatch.c").read_text(encoding="utf-8")
 
     assert "PyObject               *attrs;" in internal
-    assert "py_class_attrs_dispose" in py_class
-    assert "py_class_attrs_dict" in py_class_attrs
-    assert "py_class_setattr" in py_class_attrs
-    assert "py_class_getattr" in dispatch
-    assert "py_class_add_method" in py_class
-    assert "py_dict_set(attrs" in py_class_attrs

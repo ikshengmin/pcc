@@ -18,9 +18,7 @@ from pcc.py_frontend.codegen.runtime_abi import (
     RUNTIME_SIGNATURES,
 )
 from tests.runtime_build_cache import (
-    cached_c_runtime,
     cached_pcc_python_runtime,
-    cached_threaded_c_runtime,
     cached_threaded_pcc_python_runtime,
 )
 
@@ -29,9 +27,7 @@ REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_HEADER = REPO_ROOT / "pcc" / "py_runtime" / "include" / "py_runtime.h"
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 RUNTIME_MAKEFILE = REPO_ROOT / "pcc" / "py_runtime" / "Makefile"
-PY_OBJ_C = REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_obj.c"
 PY_OBJ_PORT = REPO_ROOT / "pcc" / "py_runtime" / "py" / "py_obj.py"
-THREADS_C = REPO_ROOT / "pcc" / "py_runtime" / "src" / "pcc_threads.c"
 THREAD_KERNEL = (
     REPO_ROOT / "pcc" / "py_runtime" / "py" / "freestanding_thread_kernel.py"
 )
@@ -42,9 +38,7 @@ THREAD_KERNEL_PTHREAD = (
     / "py"
     / "freestanding_thread_kernel_pthread.py"
 )
-RUNTIME_LOG_C = REPO_ROOT / "pcc" / "py_runtime" / "src" / "pcc_runtime_log.c"
 RUNTIME_LOG_PORT = REPO_ROOT / "pcc" / "py_runtime" / "py" / "py_runtime_log.py"
-PY_OBJ_GC_C = REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_obj_gc.c"
 PY_OBJ_GC_PORT = (
     REPO_ROOT
     / "pcc"
@@ -52,7 +46,6 @@ PY_OBJ_GC_PORT = (
     / "py"
     / "freestanding_gc_backend0_collector.py"
 )
-PY_GC_BACKEND_C = REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_gc_backend.c"
 PY_GC_BACKEND_PORT = REPO_ROOT / "pcc" / "py_runtime" / "py" / "py_gc_backend.py"
 PY_GC_BARRIER_DISPATCHER = (
     REPO_ROOT
@@ -120,13 +113,10 @@ USER_FUNCTION_LOWERING = (
 
 def _build_threaded_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_threaded_c_runtime()
+    return cached_threaded_pcc_python_runtime()
 
 
 def _runtime_variant(kind: str, *, threaded: bool) -> tuple[Path, Path]:
-    if kind == "c":
-        runtime = cached_threaded_c_runtime() if threaded else cached_c_runtime()
-        return runtime, runtime / "libpy_runtime.a"
     runtime = (
         cached_threaded_pcc_python_runtime()
         if threaded
@@ -203,24 +193,18 @@ __all__ = [
     "FREESTANDING_GC_CROSS_OBJECT_SIGNATURES",
     "FREESTANDING_GC_I64_GLOBALS",
     "RUNTIME_SIGNATURES",
-    "cached_c_runtime",
     "cached_pcc_python_runtime",
-    "cached_threaded_c_runtime",
+    "cached_threaded_pcc_python_runtime",
     "cached_threaded_pcc_python_runtime",
     "REPO_ROOT",
     "RUNTIME_HEADER",
     "RUNTIME_DIR",
     "RUNTIME_MAKEFILE",
-    "PY_OBJ_C",
     "PY_OBJ_PORT",
-    "THREADS_C",
     "THREAD_KERNEL",
     "THREAD_KERNEL_PTHREAD",
-    "RUNTIME_LOG_C",
     "RUNTIME_LOG_PORT",
-    "PY_OBJ_GC_C",
     "PY_OBJ_GC_PORT",
-    "PY_GC_BACKEND_C",
     "PY_GC_BACKEND_PORT",
     "PY_GC_BARRIER_DISPATCHER",
     "PY_GC_GENERATIONAL_SCHEDULER",

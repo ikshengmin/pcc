@@ -15,7 +15,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 STRICT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_public_collection.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
-C_ORACLE_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
@@ -47,6 +46,7 @@ RAW_FUNCTION_IMPORTS = {
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend_selected",
+    "pcc_gc_refcount_fast",
     "pcc_gc_cms_worker_started",
     "pcc_gc_cms_worker_starts",
     "pcc_gc_cms_worker_handle",
@@ -196,13 +196,6 @@ def test_public_collection_preserves_config_and_collection_order():
     assert collect.index("pcc_stop_the_world()") < collect.index(full_sweep)
     assert collect.index(full_sweep) < collect.index("pcc_resume_world()")
     assert "pcc_gc_tracing_sweep_unreachable(1024)" not in collect
-
-    c_oracle = C_ORACLE_SOURCE.read_text(encoding="utf-8")
-    c_collect = c_oracle.split("int64_t pcc_gc_collect_tracing(void)", 1)[1].split(
-        "\n}", 1
-    )[0]
-    assert "pcc_gc_sweep_unreachable(INT64_MAX)" in c_collect
-    assert "pcc_gc_sweep_unreachable(1024)" not in c_collect
 
     begin = strict.split(
         '@c_abi_export("pcc_gc_begin_explicit_tracing_collect")', 1

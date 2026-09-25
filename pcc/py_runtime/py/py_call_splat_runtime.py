@@ -6,6 +6,7 @@ from pcc.py_runtime.py.py_abi_constants import (
     PY_TYPE_DICT,
     PY_TYPE_INT,
     PY_TYPE_LIST,
+    PY_TYPE_STR,
     PY_TYPE_TUPLE,
 )
 
@@ -23,6 +24,22 @@ py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_dict_new = extern("py_dict_new", (), c_ptr)
 py_dict_update = extern("py_dict_update", (c_ptr, c_ptr), c_void)
+py_dict_keys = extern("py_dict_keys", (c_ptr,), c_ptr)
+py_dict_contains = extern("py_dict_contains", (c_ptr, c_ptr), c_int64)
+py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
+py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
+py_obj_iter = extern("py_obj_iter", (c_ptr,), c_ptr)
+py_obj_next = extern("py_obj_next", (c_ptr,), c_ptr)
+py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
+py_str_concat = extern("py_str_concat", (c_ptr, c_ptr), c_ptr)
+py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
+py_obj_repr = extern("py_obj_repr", (c_ptr,), c_ptr)
+py_err_occurred = extern("py_err_occurred", (), c_int64)
+py_current_exception = extern("py_current_exception", (), c_ptr)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
+py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_obj_len = extern("py_obj_len", (c_ptr,), c_int64)
 py_obj_getitem = extern("py_obj_getitem", (c_ptr, c_ptr), c_ptr)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
@@ -284,6 +301,104 @@ def py_call_merge_kwargs(base_kwargs, star_kwargs):
         return null()
     py_dict_update(out, star_kwargs)
     return out
+
+
+def _cat_owned(acc, piece):
+    if ptr_is_null(acc) or ptr_is_null(piece):
+        if not ptr_is_null(acc):
+            py_decref(acc)
+        if not ptr_is_null(piece):
+            py_decref(piece)
+        return null()
+    out = py_str_concat(acc, piece)
+    py_decref(acc)
+    py_decref(piece)
+    return out
+
+
+def _raise_type_error_text(text) -> None:
+    if not ptr_is_null(text):
+        py_raise_owned(py_exc_new(3, py_str_utf8(text)))  # 3 == PY_EXC_TYPEERROR
+        py_decref(text)
+
+
+def _merge_one_keyword(out, key, value) -> int:
+    """Add ``key=value`` to the keyword dict; CPython's TypeErrors otherwise."""
+    if _type_of(key) != PY_TYPE_STR:
+        py_raise_owned(py_exc_new(3, cstr("keywords must be strings")))
+        return -1
+    if py_dict_contains(out, key) != 0:
+        text = py_str_new(cstr("got multiple values for keyword argument "), 41)
+        text = _cat_owned(text, py_obj_repr(key))
+        _raise_type_error_text(text)
+        return -1
+    py_dict_set(out, key, value)
+    return 0
+
+
+@c_abi_export("py_call_merge_kwargs_unique")
+def py_call_merge_kwargs_unique(base_kwargs, star_kwargs):
+    """``f(**a, **b)``: the keyword dict with ``b`` merged into ``a``'s.
+
+    A key already present is a TypeError, as in CPython (``py_call_merge_kwargs``
+    updates silently); a non-mapping operand is the "Value after ** must be
+    a mapping" TypeError (CPython 3.15 wording).  NEW reference, NULL with an exception set.
+    """
+    out = _dict_clone(base_kwargs)
+    if ptr_is_null(out):
+        return null()
+    if _is_none(star_kwargs):
+        text = py_str_new(cstr("Value after ** must be a mapping, not NoneType"), 46)
+        _raise_type_error_text(text)
+        py_decref(out)
+        return null()
+    keys = null()
+    if _type_of(star_kwargs) == PY_TYPE_DICT:
+        keys = py_dict_keys(star_kwargs)
+    else:
+        keys_method = py_obj_getattr(star_kwargs, cstr("keys"))
+        if ptr_is_null(keys_method):
+            py_clear_exception()
+            text = py_str_new(cstr("Value after ** must be a mapping, not "), 38)
+            text = _cat_owned(text, py_obj_type_name(star_kwargs))
+            _raise_type_error_text(text)
+            py_decref(out)
+            return null()
+        no_args = py_tuple_new(0)
+        keys = py_obj_call(keys_method, no_args, null())
+        py_decref(no_args)
+        py_decref(keys_method)
+    if ptr_is_null(keys):
+        py_decref(out)
+        return null()
+    it = py_obj_iter(keys)
+    py_decref(keys)
+    if ptr_is_null(it):
+        py_decref(out)
+        return null()
+    while True:
+        key = py_obj_next(it)
+        if ptr_is_null(key):
+            py_decref(it)
+            if py_err_occurred() != 0:
+                if py_exc_matches(py_current_exception(), py_exc_builtin_class(8)) == 0:
+                    py_decref(out)
+                    return null()
+                py_clear_exception()
+            return out
+        value = py_obj_getitem(star_kwargs, key)
+        if ptr_is_null(value):
+            py_decref(key)
+            py_decref(it)
+            py_decref(out)
+            return null()
+        rc: int = _merge_one_keyword(out, key, value)
+        py_decref(key)
+        py_decref(value)
+        if rc != 0:
+            py_decref(it)
+            py_decref(out)
+            return null()
 
 
 @c_abi_export("py_obj_call_splat")

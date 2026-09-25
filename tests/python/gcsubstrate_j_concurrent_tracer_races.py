@@ -6,10 +6,8 @@ that facade so pytest node ids stay stable.
 from _gc_substrate_common import *  # noqa: F401,F403
 
 
-
-
 @pytest.mark.parametrize("gc_kind", ALL_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_concurrent_tracer_overlaps_container_mutation(
     tmp_path: Path,
     kind: str,
@@ -385,7 +383,7 @@ def test_concurrent_tracer_overlaps_container_mutation(
 
 
 @pytest.mark.parametrize("gc_kind", TRACER_RACE_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_concurrent_tracer_races_dict_hash_commit_paths(
     tmp_path: Path,
     kind: str,
@@ -776,7 +774,7 @@ def test_concurrent_tracer_races_dict_hash_commit_paths(
 
 
 @pytest.mark.parametrize("gc_kind", TRACER_RACE_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_concurrent_tracer_races_set_add_remove(
     tmp_path: Path,
     kind: str,
@@ -1078,7 +1076,7 @@ def test_concurrent_tracer_races_set_add_remove(
 
 
 @pytest.mark.parametrize("gc_kind", TRACER_RACE_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_concurrent_tracer_races_dict_update_walk(
     tmp_path: Path,
     kind: str,
@@ -1406,7 +1404,7 @@ def test_concurrent_tracer_races_dict_update_walk(
 
 
 @pytest.mark.parametrize("gc_kind", ALL_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_instance_eq_collapses_container_keys(
     tmp_path: Path,
     kind: str,
@@ -1532,7 +1530,7 @@ def test_instance_eq_collapses_container_keys(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_instance_eq_reflects_notimplemented_to_right_operand(
     tmp_path: Path,
     kind: str,
@@ -1619,7 +1617,7 @@ def test_instance_eq_reflects_notimplemented_to_right_operand(
 
 
 @pytest.mark.parametrize("gc_kind", TRACER_RACE_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_concurrent_tracer_races_eq_key_preserved(
     tmp_path: Path,
     kind: str,

@@ -29,10 +29,8 @@ PROGRAM = textwrap.dedent("""
     """).lstrip()
 
 
-@pytest.mark.parametrize("runtime_cc", [None, "cc"], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [None], ids=["port"])
 def test_bytes_partition_matches_cpython(tmp_path, monkeypatch, runtime_cc):
-    if runtime_cc is not None:
-        monkeypatch.setenv("PCC_RUNTIME_CC", runtime_cc)
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "bp.py"

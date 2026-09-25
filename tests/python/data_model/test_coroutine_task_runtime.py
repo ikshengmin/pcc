@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 
-def test_coroutine_and_task_done_result_runtime(tmp_path, c_runtime_archive):
+def test_coroutine_and_task_done_result_runtime(tmp_path, pcc_py_runtime_archive):
     src = tmp_path / "coro_task_probe.c"
     exe = tmp_path / "coro_task_probe"
     src.write_text(
@@ -58,8 +58,8 @@ def test_coroutine_and_task_done_result_runtime(tmp_path, c_runtime_archive):
     subprocess.run(
         [
             os.environ.get("CC", "cc"),
-            "-I", str(c_runtime_archive.parent / "include"),
-            str(src), str(c_runtime_archive),
+            "-I", str(pcc_py_runtime_archive.parent / "include"),
+            str(src), str(pcc_py_runtime_archive),
             "-lm", "-o", str(exe),
         ],
         check=True,
@@ -69,9 +69,6 @@ def test_coroutine_and_task_done_result_runtime(tmp_path, c_runtime_archive):
 
 
 def test_coroutine_pointer_results_guard_silent_null_before_cleanup():
-    c_source = Path("pcc/py_runtime/src/py_coroutine.c").read_text(
-        encoding="utf-8"
-    )
     py_source = Path("pcc/py_runtime/py/py_coroutine.py").read_text(
         encoding="utf-8"
     )
@@ -84,25 +81,17 @@ def test_coroutine_pointer_results_guard_silent_null_before_cleanup():
         "__await__ could not allocate its argument tuple",
         "__await__ returned NULL without setting an exception",
     )
-    for source in (c_source, py_source):
+    for source in (py_source,):
         assert "coroutine_require_result" in source
         for message in messages:
             assert message in source
 
-    for source, call, guard, cleanup in (
-        (
-            c_source,
-            "PyObject *iter = py_obj_call(method, args, py_None);",
-            "coroutine_require_result(",
-            "py_decref(args);",
-        ),
-        (
+    for source, call, guard, cleanup in ((
             py_source,
             "iterator = py_obj_call(method, args, global_load_ptr(\"py_None\"))",
             "_coroutine_require_result(",
             "py_decref(args)",
-        ),
-    ):
+        ),):
         call_pos = source.index(call)
         guard_pos = source.index(guard, call_pos)
         cleanup_pos = source.index(cleanup, call_pos)

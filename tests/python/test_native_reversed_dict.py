@@ -13,7 +13,6 @@ import textwrap
 
 
 def test_reversed_dict_matches_cpython(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "revdict.py"

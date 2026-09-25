@@ -62,6 +62,18 @@ py_obj_repr = extern("py_obj_repr", (c_ptr,), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 fflush = extern("fflush", (c_ptr,), c_int32)
+py_incref = extern("py_incref", (c_ptr,), c_void)
+py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
+py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_truthy = extern("py_obj_truthy", (c_ptr,), c_int64)
+py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_str_concat = extern("py_str_concat", (c_ptr, c_ptr), c_ptr)
+py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
+py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
+py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
+py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
+py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
+py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 # Returns 1 if the unknown-tag object was a CPython PyObject and was
 # rendered via PyObject_Str (libpython mode). Returns 0 in strict
 # no-libpython mode (the hook variable is NULL there) so the caller
@@ -160,17 +172,45 @@ def _format_str(o) -> None:
         write(1, ptr_add(o, 40), n)
 
 
+def _repr_quote(data, n: int) -> int:
+    # Single quotes unless the text has a single quote and no double quote
+    # (CPython unicode_repr / bytes_repr).
+    squote: int = 0
+    dquote: int = 0
+    i: int = 0
+    while i < n:
+        c: int = load_i8(data, i) & 255
+        if c == 39:
+            squote = 1
+        elif c == 34:
+            dquote = 1
+        i = i + 1
+    if squote != 0 and dquote == 0:
+        return 34
+    return 39
+
+
+def _write_quote(quote: int) -> None:
+    if quote == 34:
+        _write_lit(cstr("\""), 1)
+    else:
+        _write_lit(cstr("'"), 1)
+
+
 def _format_str_repr(o) -> None:
-    _write_lit(cstr("'"), 1)
     data = ptr_add(o, 40)
     n: int = load_i64(o, 16)
+    quote: int = _repr_quote(data, n)
+    _write_quote(quote)
     i: int = 0
     while i < n:
         c: int = load_i8(data, i) & 255
         if c == 92:                  # '\\'
             _write_lit(cstr("\\\\"), 2)
-        elif c == 39:                # "'"
+        elif c == quote and c == 39:
             _write_lit(cstr("\\'"), 2)
+        elif c == quote:
+            _write_lit(cstr("\\\""), 2)
         elif c == 10:
             _write_lit(cstr("\\n"), 2)
         elif c == 13:
@@ -183,20 +223,24 @@ def _format_str_repr(o) -> None:
         else:
             write(1, ptr_add(data, i), 1)
         i = i + 1
-    _write_lit(cstr("'"), 1)
+    _write_quote(quote)
 
 
 def _format_bytes(o) -> None:
-    _write_lit(cstr("b'"), 2)
     data = ptr_add(o, 24)
     n: int = load_i64(o, 16)
+    quote: int = _repr_quote(data, n)
+    _write_lit(cstr("b"), 1)
+    _write_quote(quote)
     i: int = 0
     while i < n:
         c: int = load_i8(data, i) & 255
         if c == 92:                  # '\\'
             _write_lit(cstr("\\\\"), 2)
-        elif c == 39:                # "'"
+        elif c == quote and c == 39:
             _write_lit(cstr("\\'"), 2)
+        elif c == quote:
+            _write_lit(cstr("\\\""), 2)
         elif c == 10:
             _write_lit(cstr("\\n"), 2)
         elif c == 13:
@@ -212,7 +256,7 @@ def _format_bytes(o) -> None:
         else:
             write(1, ptr_add(data, i), 1)
         i = i + 1
-    _write_lit(cstr("'"), 1)
+    _write_quote(quote)
 
 
 def _format_bytearray(o) -> None:
@@ -462,3 +506,116 @@ def py_print_many(args_tuple, sep, end) -> None:
         _format(pcc_gc_load_ptr(args_tuple, ptr_add(args_tuple, 24 + i * 8)))
         i = i + 1
     write(1, end_data, end_len)
+
+
+def _print_file_text_arg(value, default, which):
+    """NEW str for print's ``sep``/``end``: None means the default; any other
+    non-str raises CPython's TypeError.  NULL on error."""
+    none = global_load_ptr("py_None")
+    if ptr_is_null(value) != 0 or ptr_eq(value, none) != 0:
+        return py_str_new(default, 1)
+    if _type_of(value) == PY_TYPE_STR:
+        py_incref(value)
+        return value
+    name = py_obj_type_name(value)
+    msg = py_str_new(which, _cstr_len(which))
+    msg = _print_cat(msg, py_str_new(cstr(" must be None or a string, not "), 31))
+    msg = _print_cat(msg, name)
+    if ptr_is_null(msg) == 0:
+        py_raise_owned(py_exc_new(3, py_str_utf8(msg)))  # 3 == PY_EXC_TYPEERROR
+        py_decref(msg)
+    return null()
+
+
+def _cstr_len(p) -> int:
+    n: int = 0
+    while load_i8(p, n) != 0:
+        n = n + 1
+    return n
+
+
+def _print_cat(acc, piece):
+    """Concatenate two owned strs; releases both.  NULL if either is NULL."""
+    if ptr_is_null(acc) != 0 or ptr_is_null(piece) != 0:
+        if ptr_is_null(acc) == 0:
+            py_decref(acc)
+        if ptr_is_null(piece) == 0:
+            py_decref(piece)
+        return null()
+    out = py_str_concat(acc, piece)
+    py_decref(acc)
+    py_decref(piece)
+    return out
+
+
+def _print_call_method(obj, name, arg) -> int:
+    """``obj.name(arg)`` (``obj.name()`` when ``arg`` is NULL); -1 on error."""
+    method = py_obj_getattr(obj, name)
+    if ptr_is_null(method) != 0:
+        return -1
+    n: int = 1
+    if ptr_is_null(arg) != 0:
+        n = 0
+    call_args = py_tuple_new(n)
+    if ptr_is_null(call_args) != 0:
+        py_decref(method)
+        return -1
+    if n == 1:
+        py_tuple_set_item(call_args, 0, arg)
+    result = py_obj_call(method, call_args, null())
+    py_decref(call_args)
+    py_decref(method)
+    if ptr_is_null(result) != 0:
+        return -1
+    py_decref(result)
+    return 0
+
+
+@c_abi_export("py_print_to_file")
+def py_print_to_file(file, args_tuple, sep, end, flush) -> int:
+    """``print(*args, sep=, end=, file=, flush=)`` for a file that is not a
+    statically known standard stream.  Like CPython, each ``str(arg)``, each
+    separator and the end string is a separate ``file.write`` call, then
+    ``file.flush()`` when ``flush`` is truthy.  ``file=None`` is stdout.
+    -1 with an exception set on failure.
+    """
+    none = global_load_ptr("py_None")
+    sep_s = _print_file_text_arg(sep, cstr(" "), cstr("sep"))
+    if ptr_is_null(sep_s) != 0:
+        return -1
+    end_s = _print_file_text_arg(end, cstr("\n"), cstr("end"))
+    if ptr_is_null(end_s) != 0:
+        py_decref(sep_s)
+        return -1
+    if ptr_is_null(file) != 0 or ptr_eq(file, none) != 0:
+        py_print_many(args_tuple, sep_s, end_s)
+        py_decref(sep_s)
+        py_decref(end_s)
+        return 0
+    length: int = 0
+    if ptr_is_null(args_tuple) == 0:
+        length = load_i64(args_tuple, 16)
+    rc: int = 0
+    i: int = 0
+    while i < length and rc == 0:
+        if i > 0:
+            rc = _print_call_method(file, cstr("write"), sep_s)
+        if rc == 0:
+            item = pcc_gc_load_ptr(args_tuple, ptr_add(args_tuple, 24 + i * 8))
+            text = py_obj_str(item)
+            if ptr_is_null(text) != 0:
+                rc = -1
+            else:
+                rc = _print_call_method(file, cstr("write"), text)
+                py_decref(text)
+        i = i + 1
+    if rc == 0:
+        rc = _print_call_method(file, cstr("write"), end_s)
+    py_decref(sep_s)
+    py_decref(end_s)
+    if rc != 0:
+        return -1
+    if ptr_is_null(flush) == 0 and ptr_eq(flush, none) == 0:
+        if py_obj_truthy(flush) != 0:
+            return _print_call_method(file, cstr("flush"), null())
+    return 0

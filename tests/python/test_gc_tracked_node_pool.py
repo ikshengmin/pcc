@@ -65,22 +65,16 @@ def _build(tmp_path: Path, name: str, archive: Path) -> Path:
     return executable
 
 
-def test_tracking_node_pool_is_bounded_and_reusable_in_both_runtime_owners(
+def test_tracking_node_pool_is_bounded_and_reusable(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ):
-    oracle = _build(tmp_path, "tracked_pool_c", c_runtime_archive)
     port = _build(tmp_path, "tracked_pool_port", pcc_py_runtime_archive)
     expected = "pool:4096,drain:0,reuse:1\n"
     for backend in range(5):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
-        oracle_result = subprocess.run(
-            [str(oracle)], capture_output=True, text=True, timeout=30, env=env
-        )
         port_result = subprocess.run(
             [str(port)], capture_output=True, text=True, timeout=30, env=env
         )
-        assert oracle_result.returncode == 0, oracle_result.stderr
         assert port_result.returncode == 0, port_result.stderr
-        assert oracle_result.stdout == port_result.stdout == expected
+        assert port_result.stdout == expected

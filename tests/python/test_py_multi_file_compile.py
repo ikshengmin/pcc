@@ -13,7 +13,7 @@ import textwrap
 import unittest
 from unittest import mock
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 class MultiFileCompileTests(unittest.TestCase):
@@ -193,7 +193,7 @@ class MultiFileCompileTests(unittest.TestCase):
         exe = os.path.join(td, "a.out")
         with mock.patch(
             "pcc.py_frontend.pipeline._ensure_runtime",
-            return_value="/tmp/libpy_runtime.a",
+            return_value="/tmp/fake_runtime.a",
         ):
             with mock.patch("pcc.py_frontend.pipeline._link_with_clang") as clang_link:
                 with mock.patch(
@@ -236,7 +236,7 @@ class MultiFileCompileTests(unittest.TestCase):
             "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND": "1",
             "PCC_PYTHON_IR_PASSES": "off",
             "PCC_SELF_LINK": "pcc",
-            "PCC_RUNTIME_ARCHIVE": str(cached_c_runtime() / "libpy_runtime.a"),
+            "PCC_RUNTIME_ARCHIVE": str(cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"),
         }
         with mock.patch.dict(os.environ, direct_env):
             compile_python_multi(
@@ -295,7 +295,7 @@ class MultiFileCompileTests(unittest.TestCase):
             "PCC_DIRECT_INDEXED_NATIVE_OBJECT": "0",
             "PCC_PYTHON_IR_PASSES": "off",
             "PCC_SELF_LINK": "pcc",
-            "PCC_RUNTIME_ARCHIVE": str(cached_c_runtime() / "libpy_runtime.a"),
+            "PCC_RUNTIME_ARCHIVE": str(cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"),
         }
         with mock.patch.dict(os.environ, direct_env):
             compile_python_multi(
@@ -347,7 +347,7 @@ class MultiFileCompileTests(unittest.TestCase):
             "PCC_DEFER_SELF_LINK_PLAN": plan,
             "PCC_PYTHON_IR_PASSES": "off",
             "PCC_SELF_LINK": "pcc",
-            "PCC_RUNTIME_ARCHIVE": str(cached_c_runtime() / "libpy_runtime.a"),
+            "PCC_RUNTIME_ARCHIVE": str(cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"),
         }
         with mock.patch.dict(os.environ, direct_env):
             compile_python_multi(
@@ -401,7 +401,7 @@ class MultiFileCompileTests(unittest.TestCase):
             "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND": "1",
             "PCC_PYTHON_IR_PASSES": "off",
             "PCC_SELF_LINK": "pcc",
-            "PCC_RUNTIME_ARCHIVE": str(cached_c_runtime() / "libpy_runtime.a"),
+            "PCC_RUNTIME_ARCHIVE": str(cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"),
         }
         with mock.patch.dict(os.environ, direct_env):
             compile_python(

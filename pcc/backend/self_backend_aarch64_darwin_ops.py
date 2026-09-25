@@ -456,6 +456,25 @@ def aarch64_cc(cond: str) -> str:
     return mapping[cond]
 
 
+def aarch64_inverse_cc(cond: str) -> str:
+    """The AArch64 condition that holds when icmp ``cond`` is false."""
+    mapping = {
+        "eq": "ne",
+        "ne": "eq",
+        "slt": "ge",
+        "sle": "gt",
+        "sgt": "le",
+        "sge": "lt",
+        "ult": "hs",
+        "ule": "hi",
+        "ugt": "ls",
+        "uge": "lo",
+    }
+    if cond not in mapping:
+        raise BackendUnavailable(f"self backend does not support icmp {cond!r}")
+    return mapping[cond]
+
+
 def emit_fcmp_result(cond: str) -> list[str]:
     direct = {
         "oeq": "eq",

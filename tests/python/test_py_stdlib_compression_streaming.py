@@ -319,16 +319,14 @@ def _assert_no_libpython(executable: Path) -> None:
 
 @pytest.mark.integration
 def test_large_streaming_decompression_matches_cpython_under_pcc1_no_libpython(
-    tmp_path,
+    tmp_path, native_pcc1_compiler,
 ):
     paths = _write_fixtures(tmp_path)
     source = tmp_path / "compression_streaming_probe.py"
     source.write_text(_probe_source(paths), encoding="utf-8")
     executable = tmp_path / "compression_streaming_probe"
-    pcc1 = Path(
-        os.environ.get("PCC1_BINARY", str(REPO / "build" / "bootstrap" / "pcc1"))
-    ).expanduser()
-    assert pcc1.is_file(), f"current pcc1 is required: {pcc1}"
+    # The shared selection (PCC_CURRENT_PCC1 first) every pcc1 test honors.
+    pcc1 = native_pcc1_compiler
 
     env = os.environ.copy()
     env.pop("LC_ALL", None)

@@ -168,7 +168,6 @@ def test_container_retain_paths_c_mirror(tmp_path, monkeypatch):
     """The C runtime mirror must agree with the pcc-Python port."""
     from pcc.py_frontend.pipeline import compile_python
 
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     monkeypatch.setenv("PCC_GC_BACKEND", "0")
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"

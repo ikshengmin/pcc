@@ -44,7 +44,6 @@ def _select_installed_bundle(
     from pcc.py_frontend import pipeline
 
     monkeypatch.setenv("PCC_RUNTIME_CC", "pcc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "py")
     monkeypatch.delenv("PCC_RUNTIME_ARCHIVE", raising=False)
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_DIR", str(archive.parent))
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_ARCHIVE_PCC_PY", str(archive))

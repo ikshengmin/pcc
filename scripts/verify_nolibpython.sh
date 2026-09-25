@@ -7,7 +7,11 @@ TMPDIR="${TMPDIR:-/tmp}"
 WORK="$(mktemp -d "$TMPDIR/pcc-nolibpython.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
-make -C "$ROOT/pcc/py_runtime" libpy_runtime.a libpy_runtime_pcc_py.a >/dev/null
+PYTHON_BIN="${PYTHON:-python3}"
+PCC_BIN="${PCC:-pcc}"
+if [[ -x "$ROOT/.venv/bin/python" ]]; then PYTHON_BIN="${PYTHON:-$ROOT/.venv/bin/python}"; fi
+if [[ -x "$ROOT/.venv/bin/pcc" ]]; then PCC_BIN="${PCC:-$ROOT/.venv/bin/pcc}"; fi
+make -C "$ROOT/pcc/py_runtime" PCC="$PCC_BIN" PYTHON="$PYTHON_BIN" libpy_runtime_pcc_py.a >/dev/null
 
 cat > "$WORK/nolibpython_smoke.c" <<'C'
 #include "py_runtime.h"
@@ -28,7 +32,7 @@ C
 "$CC_BIN" -std=c11 \
   -I"$ROOT/pcc/py_runtime/include" \
   "$WORK/nolibpython_smoke.c" \
-  "$ROOT/pcc/py_runtime/libpy_runtime.a" \
+  "$ROOT/pcc/py_runtime/libpy_runtime_pcc_py.a" \
   -lm -ldl -lpthread \
   -o "$WORK/nolibpython_smoke"
 

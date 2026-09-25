@@ -21,12 +21,6 @@ def test_one_million_requires_explicit_manual_gate() -> None:
 
 
 def test_gc3_malloc_ownership_is_explicit_after_minor_block_address_scan() -> None:
-    c_obj = (REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_obj.c").read_text(
-        encoding="utf-8"
-    )
-    c_gc = (
-        REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_gc_backend.c"
-    ).read_text(encoding="utf-8")
     py_oldification = (
         REPO_ROOT
         / "pcc"
@@ -34,23 +28,6 @@ def test_gc3_malloc_ownership_is_explicit_after_minor_block_address_scan() -> No
         / "py"
         / "freestanding_gc_generational_oldification.py"
     ).read_text(encoding="utf-8")
-
-    alloc = c_obj.split("PyObject *pcc_gc_alloc", 1)[1].split(
-        "PyObject *pcc_gc_retain", 1
-    )[0]
-    assert "PY_FLAG_GC_MALLOC_ALLOC" in alloc
-
-    oldify = c_gc.split("pcc_gc_generational_oldify_copy", 1)[1].split(
-        "static void pcc_gc_promote_owner_referents", 1
-    )[0]
-    assert ") | PY_FLAG_GC_OLD | PY_FLAG_GC_MALLOC_ALLOC;" in oldify
-    free_path = c_gc.split("void pcc_gc_free_object_memory", 1)[1].split(
-        "void pcc_gc_note_load", 1
-    )[0]
-    assert free_path.index("pcc_gc_minor_block_containing_unlocked") < free_path.index(
-        "Only an explicit allocation-origin bit authorizes system free()."
-    )
-    assert "if ((flags & PY_FLAG_GC_MALLOC_ALLOC) == 0)" in free_path
 
     assert '@c_abi_export("pcc_gc_generational_oldify_copy")' in py_oldification
     assert (

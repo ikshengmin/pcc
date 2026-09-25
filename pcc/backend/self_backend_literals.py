@@ -66,6 +66,26 @@ def is_hex_literal(value: str) -> bool:
     return _is_hex_token(value)
 
 
+def fp_bitcast_initializer_bits(value: str) -> tuple[int, int] | None:
+    """``(width, bits)`` for ``bitcast (i64 N to double)`` / ``(i32 N to float)``.
+
+    The C frontend spells a non-finite floating constant (``1e309``,
+    ``__builtin_inf()``) by its bit pattern, which the assembler's ``.double``
+    directive cannot read.
+    """
+    if not value.startswith("bitcast (i") or not value.endswith(")"):
+        return None
+    parts = value[len("bitcast (i"):-1].split(" ")
+    if len(parts) != 4 or parts[2] != "to" or parts[3] not in ("float", "double"):
+        return None
+    if parts[0] not in ("32", "64") or not _is_int_token(parts[1]):
+        return None
+    width = int(parts[0])
+    if (width == 32) != (parts[3] == "float"):
+        return None
+    return width, int(parts[1]) & ((1 << width) - 1)
+
+
 def is_float_literal(value: str) -> bool:
     return _is_float_token(value) and not value.startswith(".")
 
@@ -76,6 +96,7 @@ def is_aggregate_literal_value(value: str) -> bool:
 
 __all__ = [
     "const_int_from_value",
+    "fp_bitcast_initializer_bits",
     "is_aggregate_literal_value",
     "is_float_literal",
     "is_hex_literal",

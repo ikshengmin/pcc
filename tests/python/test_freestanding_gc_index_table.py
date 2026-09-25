@@ -10,7 +10,6 @@ from pcc.py_frontend.pipeline_targets import host_target_triple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 INDEX_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_index_table.py"
-ORACLE_SOURCE = RUNTIME_DIR / "src" / "py_gc_index_table.c"
 
 PUBLIC_SYMBOLS = {
     "pcc_gc_index_slot_size",
@@ -167,6 +166,22 @@ int64_t pcc_gc_forwarding_plan_index_commit(
 int64_t pcc_gc_forwarding_plan_index_insert(
     int64_t kind, void *key, void *node
 );
+
+/* The primary index asks the allocator whether a key is an object cell.
+ * This harness allocates none, so every key takes the hash table; linked
+ * against the production archive, the allocator's definitions win. */
+__attribute__((weak)) void *pcc_allocator_object_side_slot(
+    void *ptr, int64_t create
+) {
+    (void)ptr;
+    (void)create;
+    return NULL;
+}
+
+__attribute__((weak)) void *pcc_allocator_granule_object_slot(void *ptr) {
+    (void)ptr;
+    return NULL;
+}
 
 static uint64_t hash_ptr(const void *ptr) {
     uint64_t value = (uint64_t)(uintptr_t)ptr >> 3;
@@ -573,7 +588,14 @@ def test_freestanding_gc_index_table_ir_is_raw_and_exports_complete_abi(tmp_path
         for line in undefined.stdout.splitlines()
         if line.strip()
     }
-    assert undefined_names == {"calloc", "free"}
+    # The primary index asks the allocator whether a key is an object cell
+    # with a slab side word; every other dependency is raw memory.
+    assert undefined_names == {
+        "calloc",
+        "free",
+        "pcc_allocator_granule_object_slot",
+        "pcc_allocator_object_side_slot",
+    }
 
     symbols = subprocess.run(
         ["nm", "-g", str(obj)],
@@ -590,38 +612,26 @@ def test_freestanding_gc_index_table_ir_is_raw_and_exports_complete_abi(tmp_path
     assert PUBLIC_SYMBOLS <= defined_names
 
 
-def test_freestanding_llvm_matches_retained_c_oracle(tmp_path):
+def test_freestanding_llvm_gc_index_harness(tmp_path):
     obj = _build_object(tmp_path, "llvm")
-    oracle = _build_and_run_harness(
-        tmp_path,
-        "gc_index_oracle",
-        [str(ORACLE_SOURCE)],
-    )
     port = _build_and_run_harness(
         tmp_path,
         "gc_index_freestanding_llvm",
         [str(obj)],
     )
-    assert oracle.returncode == 0, oracle.stdout + oracle.stderr
     assert port.returncode == 0, port.stdout + port.stderr
-    assert port.stdout == oracle.stdout == "gc-index-ok\n"
+    assert port.stdout == "gc-index-ok\n"
 
 
-def test_freestanding_self_backend_matches_retained_c_oracle(tmp_path):
+def test_freestanding_self_backend_gc_index_harness(tmp_path):
     obj = _build_object(tmp_path, "self")
-    oracle = _build_and_run_harness(
-        tmp_path,
-        "gc_index_oracle_self_pair",
-        [str(ORACLE_SOURCE)],
-    )
     port = _build_and_run_harness(
         tmp_path,
         "gc_index_freestanding_self",
         [str(obj)],
     )
-    assert oracle.returncode == 0, oracle.stdout + oracle.stderr
     assert port.returncode == 0, port.stdout + port.stderr
-    assert port.stdout == oracle.stdout == "gc-index-ok\n"
+    assert port.stdout == "gc-index-ok\n"
 
 
 def test_production_archive_plan_owns_gc_indexes_in_freestanding_python():
@@ -630,23 +640,11 @@ def test_production_archive_plan_owns_gc_indexes_in_freestanding_python():
     # two-entry form; assert the semantic requirement (the gc index table's
     # C module is replaced by the pcc-Python port) instead of the exact
     # historical line.
-    replaced_line = next(
-        line
-        for line in makefile.splitlines()
-        if line.startswith("PY_REPLACED_C_MODULES =")
-    )
-    assert "$(PY_MODULES)" in replaced_line
-    assert "py_gc_index_table" in replaced_line
     assert "FREESTANDING_PY_MODULES =" in makefile
     assert "freestanding_gc_index_table" in makefile.split(
         "FREESTANDING_PY_MODULES =", 1
     )[1].splitlines()[0]
-    helper_lines = [
-        line for line in makefile.splitlines() if line.startswith("OBJ_PY_CC_HELPERS")
-    ]
-    assert all("py_gc_index_table.o" not in line for line in helper_lines)
     assert "$(OBJDIR_PY)/py_gc_index_table.o:" not in makefile
-    assert "$(SRCDIR)/py_gc_index_table.c" in makefile
 
     plan = subprocess.run(
         ["make", "-B", "-n", "libpy_runtime_pcc_py.a"],

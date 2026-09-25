@@ -249,6 +249,16 @@ class ExprHelperLoweringMixin:
         fn.linkage = "external"
         return fn
 
+    def _get_fabs_intrinsic(self) -> ir.Function:
+        name = "llvm.fabs.f64"
+        existing = self.module.globals.get(name)
+        if isinstance(existing, ir.Function):
+            return existing
+        fnty = ir.FunctionType(_DOUBLE, [_DOUBLE])
+        fn = ir.Function(self.module, fnty, name=name)
+        fn.linkage = "external"
+        return fn
+
     def _get_rint_function(self) -> ir.Function:
         # libm rint(): round to nearest, ties to even (the default FP rounding
         # mode), which matches CPython's round() banker's rounding. Used

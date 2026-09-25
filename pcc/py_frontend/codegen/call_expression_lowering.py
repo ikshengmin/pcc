@@ -39,7 +39,11 @@ from . import marshal
 from .method_call_lowering import _method_pointer_provenance
 from .builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
 from .errors import L1CodegenError
-from .generator_lowering import emit_generator_may_park_call
+from .generator_lowering import (
+    emit_generator_may_park_call,
+    emit_generator_may_park_sync,
+    funcdef_has_source_yield,
+)
 from .guarded_loop_lowering import (
     emit_guarded_i64_dot,
     emit_guarded_loop_counter,
@@ -797,6 +801,80 @@ class CallExpressionLoweringMixin:
                         pass
         return False
 
+    def _call_needs_runtime_keyword_binding(self, expr: Call, ast_func_def) -> bool:
+        """True for ``f(**m)`` when ``f`` has named parameters.
+
+        Which of them ``m`` supplies, which fall back to defaults, what is
+        left for ``**rest`` and which keys collide are runtime facts; the
+        static resolution subscripted ``m[name]`` for every unfilled
+        parameter (KeyError for a defaulted one) and handed ``**rest`` the
+        keys already bound.  The function object's own binding is exact.
+        """
+        has_mapping = False
+        for arg in expr.args:
+            if (
+                isinstance(arg, Call)
+                and isinstance(arg.func, Name)
+                and arg.func.ident == "**"
+            ):
+                has_mapping = True
+        for kw_name, _kw_expr in expr.kwargs:
+            if kw_name == "**":
+                has_mapping = True
+        if not has_mapping:
+            return False
+        for formal in ast_func_def.args:
+            if formal.name != "" and formal.kind not in ("*args", "**kwargs"):
+                return True
+        return False
+
+    def _emit_runtime_bound_user_call(self, expr: Call, name: str, fn) -> ir.Value:
+        """Call a known user function through its function object, so the
+        runtime binds ``**`` keywords; the result takes the direct call's
+        return representation."""
+        span = self._expr_span_or_none(expr)
+        fn_val = self._emit_name(Name(span=span, ty=DynType(name="dyn"), ident=name))
+        kwdict_unpack = self._split_starstar_kwargs_unpack(expr.args)
+        arg_exprs = expr.args
+        kwargs_expr = None
+        if kwdict_unpack is not None:
+            arg_exprs, kwargs_expr = kwdict_unpack
+        args_tuple = self._emit_dynamic_call_args_tuple(arg_exprs)
+        kwargs_obj = self._emit_dynamic_call_kwargs_object(
+            expr.kwargs,
+            kwargs_expr,
+            span,
+        )
+        result = self.builder.call(
+            self.runtime["py_obj_call"],
+            [fn_val, args_tuple, kwargs_obj],
+            name=self._fresh(f"{name}.kw.call"),
+        )
+        self._gc_release(args_tuple)
+        if expr.kwargs or kwargs_expr is not None:
+            self._gc_release(kwargs_obj)
+        self._emit_post_call_err_check(span)
+        ret_ty = fn.function_type.return_type
+        scalar_ty = None
+        if isinstance(ret_ty, ir.DoubleType):
+            scalar_ty = FloatType(name="float")
+        elif isinstance(ret_ty, ir.IntType) and ret_ty.width == 1:
+            scalar_ty = BoolType(name="bool")
+        elif isinstance(ret_ty, ir.IntType):
+            scalar_ty = IntType(name="int")
+        if scalar_ty is None:
+            self._note_owned_dynamic_call_value(result)
+            return result
+        value = marshal.marshal_from_object(
+            self.builder,
+            self.module,
+            self.runtime,
+            result,
+            scalar_ty,
+        )
+        self._gc_release(result)
+        return value
+
     def _emit_call(self, expr: Call) -> ir.Value:
         if bootstrap_trace_enabled(self.module.name):
             import os
@@ -1079,6 +1157,8 @@ class CallExpressionLoweringMixin:
             return self._emit_range_value_call(expr)
         if name in ("_walrus", "__walrus__"):
             return self._emit_walrus(expr)
+        if name == "__pcc_kwargs_merge__":
+            return self._emit_kwargs_merge(expr)
         if name == "__pcc_format_spec":
             result = self._emit_format_spec_builtin(expr)
             if result is not None:
@@ -1848,12 +1928,16 @@ class CallExpressionLoweringMixin:
             self._gc_release_if_owned(arg_obj, expr.args[0])
             return result
         if name == "id" and len(expr.args) == 1:
+            # Not ptrtoint: the forwarding collectors move objects, and id()
+            # must stay the same for the object's lifetime.
             v = self._emit_as_object(expr.args[0])
-            return self.builder.ptrtoint(
-                v,
-                _I64,
+            result = self.builder.call(
+                self.runtime["py_obj_id"],
+                [v],
                 name=self._fresh("id"),
             )
+            self._gc_release_if_owned(v, expr.args[0])
+            return result
         if name == "hasattr" and len(expr.args) == 2:
             native_module_hasattr = self._maybe_emit_native_module_hasattr(expr)
             if native_module_hasattr is not None:
@@ -2535,6 +2619,8 @@ class CallExpressionLoweringMixin:
             self._emit_post_call_err_check(self._expr_span_or_none(expr))
             return result
         ast_func_def = self._find_user_funcdef(name)
+        if self._call_needs_runtime_keyword_binding(expr, ast_func_def):
+            return self._emit_runtime_bound_user_call(expr, name, fn)
         if ast_func_def.is_async:
             return self._emit_async_user_function_call(
                 name,
@@ -2697,6 +2783,16 @@ class CallExpressionLoweringMixin:
                     arg_value,
                     self._release_context_label("direct_call_arg"),
                 )
+        if (
+            not returns_cpython
+            and id(ast_func_def)
+            in getattr(self, "_vthread_may_park_func_ids", set())
+            and not funcdef_has_source_yield(ast_func_def)
+        ):
+            # A parking callee this caller could not delegate to (it is not
+            # resumable): run the child here rather than hand user code the
+            # callee's generator as the call's value.
+            return emit_generator_may_park_sync(self, expr, name, result)
         if returns_cpython:
             # Python/C-API call convention: a successful function result is
             # a new reference owned by the caller.  The callee promotes any

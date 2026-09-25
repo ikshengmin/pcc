@@ -978,8 +978,27 @@ class ExactIntLoweringMixin:
                 arg_ty = expr.args[0].ty
                 if isinstance(arg_ty, (StrType, DynType)):
                     return True
+                if isinstance(arg_ty, FloatType) and self._int_exprs_are_boxed():
+                    # A float's integer value is unbounded (int(1e20)); boxed
+                    # ints take the exact object, the raw lane keeps its
+                    # checked conversion (``_emit_float_to_i64_lane``).
+                    return True
                 return self._int_expr_needs_exact_object_boundary(expr.args[0])
             return False
+        if (
+            isinstance(expr, Call)
+            and isinstance(expr.func, Name)
+            and expr.func.ident == "pow"
+            and expr.func.ident not in self.functions
+            and len(expr.args) == 2
+            and not expr.kwargs
+        ):
+            # Two-argument ``pow`` is ``**`` spelled as a call: its range is
+            # unbounded, and the call lowering already returns the py_int_pow
+            # object.  Planned into the i64 lane, ``folded = pow(10, 30)``
+            # unboxed that object to 0 (``py_int_to_i64`` above 2**63-1), so
+            # pcc1's own ``**`` literal folder emitted ``10 ** 30`` as 0.
+            return True
         if isinstance(expr, Call) and isinstance(expr.func, Name):
             fn = self.functions.get(expr.func.ident)
             if fn is not None and isinstance(
@@ -989,6 +1008,17 @@ class ExactIntLoweringMixin:
         if isinstance(expr, IntLit):
             value = int(expr.value)
             return value < -(1 << 63) or value > (1 << 63) - 1
+        if isinstance(expr, UnaryOp) and expr.op in ("-", "~"):
+            # ``-x`` / ``~x`` of an exact operand is exact: the object
+            # emitter above negates it with py_int_neg / py_int_xor, while
+            # the i64 lane would unbox the operand first and raise (formerly
+            # read 0) for anything outside the lane.  A literal operand folds
+            # first: ``-0x8000000000000000`` is i64 min and stays in the lane.
+            if isinstance(expr.operand, (IntLit, BoolLit)):
+                literal = int(expr.operand.value)
+                folded = -literal if expr.op == "-" else ~literal
+                return folded < -(1 << 63) or folded > (1 << 63) - 1
+            return self._int_expr_needs_exact_object_boundary(expr.operand)
         if isinstance(expr, IfExpr):
             return self._int_expr_needs_exact_object_boundary(
                 expr.then_e
@@ -1360,7 +1390,8 @@ class ExactIntLoweringMixin:
         if exact is not None:
             return exact
         if isinstance(expr, IntLit):
-            return self._emit_int_literal_object(int(expr.value))
+            # ``getattr``: the literal's exact object, never an i64-lane read.
+            return self._emit_int_literal_object(getattr(expr, "value"))
         if isinstance(expr, BoolLit):
             return self.builder.call(
                 self.runtime["py_int_from_i64"],

@@ -4,16 +4,14 @@ py_list_set is intentionally an internal non-raising setter (sort/insert
 shifts, generator frames index within bounds by construction), but the
 user-visible exact and generic list subscript assignments routed through it,
 so an out-of-range ``items[index] = value`` returned silently. The public
-raising store contract is ``py_list_setitem`` (C) mirrored in ``py_list.py``
-(port), wired through:
+raising store contract is ``py_list_setitem`` in ``py_list.py``, wired
+through:
 
 - the exact-ListType store branch in subscript_lowering,
 - ``py_obj_setitem`` / ``py_obj_setitem_i64`` list branches (dyn receivers),
 
 covering ordinary assignment, unpack-target assignment, and augmented
-assignment. Both runtime tiers are exercised: the default build links the
-pcc-Python ports, ``PCC_RUNTIME_CC=cc`` links the C runtime — a fix mirrored
-in only one tier passes the other and regresses silently.
+assignment.
 """
 from __future__ import annotations
 
@@ -21,21 +19,13 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
 
-_TIERS = ("port", "cc")
-
-
-def _run_pcc_program(tmp_path: Path, source: str, tier: str) -> str:
+def _run_pcc_program(tmp_path: Path, source: str) -> str:
     src = tmp_path / "prog.py"
     src.write_text(source, encoding="utf-8")
     exe = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    if tier == "cc":
-        env["PCC_RUNTIME_CC"] = "cc"
-    else:
-        env.pop("PCC_RUNTIME_CC", None)
     build = subprocess.run(
         [
             "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
@@ -96,9 +86,8 @@ _STORE_EXPECTED = [
 ]
 
 
-@pytest.mark.parametrize("tier", _TIERS)
-def test_exact_list_store_out_of_range_raises_indexerror(tmp_path, tier):
-    out = _run_pcc_program(tmp_path, _STORE_PROGRAM, tier)
+def test_exact_list_store_out_of_range_raises_indexerror(tmp_path):
+    out = _run_pcc_program(tmp_path, _STORE_PROGRAM)
     assert out.split("\n")[: len(_STORE_EXPECTED)] == _STORE_EXPECTED, out
 
 
@@ -126,9 +115,8 @@ _DYN_EXPECTED = [
 ]
 
 
-@pytest.mark.parametrize("tier", _TIERS)
-def test_dyn_receiver_list_store_out_of_range_raises_indexerror(tmp_path, tier):
-    out = _run_pcc_program(tmp_path, _DYN_PROGRAM, tier)
+def test_dyn_receiver_list_store_out_of_range_raises_indexerror(tmp_path):
+    out = _run_pcc_program(tmp_path, _DYN_PROGRAM)
     assert out.split("\n")[: len(_DYN_EXPECTED)] == _DYN_EXPECTED, out
 
 
@@ -149,7 +137,6 @@ _INTERNAL_EXPECTED = [
 ]
 
 
-@pytest.mark.parametrize("tier", _TIERS)
-def test_internal_list_setters_unbroken_by_raising_store(tmp_path, tier):
-    out = _run_pcc_program(tmp_path, _INTERNAL_PROGRAM, tier)
+def test_internal_list_setters_unbroken_by_raising_store(tmp_path):
+    out = _run_pcc_program(tmp_path, _INTERNAL_PROGRAM)
     assert out.split("\n")[: len(_INTERNAL_EXPECTED)] == _INTERNAL_EXPECTED, out

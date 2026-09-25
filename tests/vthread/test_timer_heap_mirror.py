@@ -1,25 +1,15 @@
-"""Regression tests for the runtime timer min-heap structure (C + pcc-Python).
+"""Regression tests for the runtime timer min-heap structure.
 
 This is the runtime-structure mirror slice of the CPU-only timer oracle
-(``pcc/vthread/timer_oracle.py``). It lands and tests, but does NOT yet wire
-into the live scheduler, two mirrors of the oracle's ``MinHeapTimerQueue``:
+(``pcc/vthread/timer_oracle.py``). Two views of the oracle's
+``MinHeapTimerQueue`` are diffed against it:
 
-  * ``pcc/py_runtime/src/py_timer_heap.c`` / ``.h`` -- the C runtime structure;
-  * ``pcc/py_runtime/py/py_timer_heap.py`` -- the pcc-Python port.
-
-Both must reproduce the oracle's expiry ordering / cancellation / retention
-semantics exactly. The tests diff each mirror against the oracle in the same
-oracle-diff style used by ``tests/vthread/test_timer_oracle.py``:
-
-  * the pcc-Python port runs in-process (also valid CPython) and is diffed
-    against the oracle on scripted cases + a randomized parity sequence;
-  * the C structure is compiled standalone with ``cc`` (it is deliberately
-    dependency-free: no PyObject, no GC, no libpython) and a small harness
-    diffs it against a dataset generated from the same oracle.
-
-The C part is skipped (not failed) when no C compiler is available. It compiles
-ONLY the single new ``py_timer_heap.c`` file, so it does not touch the shared
-runtime archive.
+  * ``pcc/py_runtime/py/py_timer_heap.py`` -- the pcc-Python port, run
+    in-process (also valid CPython) on scripted cases + a randomized parity
+    sequence;
+  * the production ``freestanding_timer_heap`` members of the runtime
+    archive, driven through their C ABI (``src/py_timer_heap.h``) by a small
+    harness that diffs them against a dataset generated from the same oracle.
 """
 
 from __future__ import annotations
@@ -242,16 +232,15 @@ def _oracle_dataset(n: int, ncancel: int, steps):
     return inserts, cancels, seq
 
 
-def test_c_timer_heap_matches_oracle_dataset(tmp_path):
+def test_c_abi_timer_heap_matches_oracle_dataset(tmp_path, pcc_py_runtime_archive):
     if not CC_VERDICT.available:
         pytest.fail(CC_VERDICT.skip_reason())
     cc = CC_VERDICT.resolved_path
 
     root = _repo_root()
     src_dir = root / "pcc" / "py_runtime" / "src"
-    heap_c = src_dir / "py_timer_heap.c"
     heap_h = src_dir / "py_timer_heap.h"
-    assert heap_c.is_file() and heap_h.is_file()
+    assert heap_h.is_file()
 
     n, ncancel = 200, 30
     steps = (1000, 2500, 4000, 5000)
@@ -318,7 +307,8 @@ def test_c_timer_heap_matches_oracle_dataset(tmp_path):
             "-Wextra",
             f"-I{src_dir}",
             str(harness),
-            str(heap_c),
+            str(pcc_py_runtime_archive),
+            "-lm",
             "-o",
             str(exe),
         ],
@@ -332,14 +322,13 @@ def test_c_timer_heap_matches_oracle_dataset(tmp_path):
     assert run.stdout.strip() == "dataset-ok"
 
 
-def test_c_timer_heap_scripted_semantics(tmp_path):
+def test_c_abi_timer_heap_scripted_semantics(tmp_path, pcc_py_runtime_archive):
     if not CC_VERDICT.available:
         pytest.fail(CC_VERDICT.skip_reason())
     cc = CC_VERDICT.resolved_path
 
     root = _repo_root()
     src_dir = root / "pcc" / "py_runtime" / "src"
-    heap_c = src_dir / "py_timer_heap.c"
 
     harness = tmp_path / "timer_heap_semantics.c"
     harness.write_text(textwrap.dedent(r"""
@@ -411,7 +400,7 @@ def test_c_timer_heap_scripted_semantics(tmp_path):
     exe = tmp_path / "timer_heap_semantics.out"
     build = subprocess.run(
         [cc, "-std=c11", "-Wall", "-Wextra", f"-I{src_dir}",
-         str(harness), str(heap_c), "-o", str(exe)],
+         str(harness), str(pcc_py_runtime_archive), "-lm", "-o", str(exe)],
         capture_output=True, text=True, timeout=60,
     )
     assert build.returncode == 0, build.stdout + build.stderr
@@ -420,10 +409,11 @@ def test_c_timer_heap_scripted_semantics(tmp_path):
     assert run.stdout.strip() == "semantics-ok"
 
 
-def test_c_source_registered_in_makefile():
-    """The new C file must be wired into the runtime build (main reviews the
-    SRCS edit). This guards against the mirror never being compiled."""
+def test_timer_heap_port_is_in_the_production_archive():
+    """The production archive carries the timer heap the C ABI tests link."""
     makefile = (_repo_root() / "pcc" / "py_runtime" / "Makefile").read_text(
         encoding="utf-8"
     )
-    assert "$(SRCDIR)/py_timer_heap.c" in makefile
+    assert "freestanding_timer_heap" in makefile.split(
+        "FREESTANDING_PY_MODULES =", 1
+    )[1].splitlines()[0]

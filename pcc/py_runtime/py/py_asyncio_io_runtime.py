@@ -602,6 +602,13 @@ def py_asyncio_fd_recv(fd_object, max_bytes: int):
             return result
         if count == -4:
             continue
+        if count == -11 or count == -35:
+            # An accepted socket inherits O_NONBLOCK from its listener on
+            # Darwin, so a read that outruns the peer sees EAGAIN.  Wait for
+            # readability as _send_all_raw does for writability; failing here
+            # made ``await reader.readexactly()`` depend on packet timing.
+            if pcc_platform_poll_fd(fd, 1, -1) >= 0:
+                continue
         free(buffer)
         _raise_oserror(cstr("TCP recv failed"))
         return null()

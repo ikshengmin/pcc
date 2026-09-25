@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import os
-import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -14,32 +13,6 @@ RUNTIME = REPO / "pcc" / "py_runtime"
 
 def test_reserved_descriptor_tags_never_enter_instance_layout_dispatch():
     """Only tag 11 and allocated class tags (104+) have ``inst->cls``."""
-    c_allowed = {
-        (
-            "pcc_threads.c",
-            "|| tag >= PY_TYPE_USER",
-        ),
-        (
-            "py_obj.c",
-            "|| tag >= PY_TYPE_USER",
-        ),
-        (
-            "py_tuple.c",
-            "if (tag >= PY_TYPE_USER) return 1;",
-        ),
-    }
-    c_seen: list[tuple[str, str]] = []
-    c_violations: list[str] = []
-    comparison = re.compile(r"(?:>=|<)\s*PY_TYPE_USER\b")
-    for path in sorted((RUNTIME / "src").glob("*.c")):
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if comparison.search(line):
-                occurrence = (path.name, line.strip())
-                if occurrence in c_allowed:
-                    c_seen.append(occurrence)
-                else:
-                    c_violations.append(f"{path.name}:{lineno}: {line.strip()}")
-
     py_allowed = {
         # These preparation helpers share the refcount header-validity check;
         # accepting a descriptor header does not access an instance layout.
@@ -71,9 +44,7 @@ def test_reserved_descriptor_tags_never_enter_instance_layout_dispatch():
                             f"{path.name}:{node.lineno}: {function.name}"
                         )
 
-    assert not c_violations, "instance layout still starts at tag 100:\n  " + "\n  ".join(c_violations)
     assert not py_violations, "port instance layout still starts at tag 100:\n  " + "\n  ".join(py_violations)
-    assert set(c_seen) == c_allowed
     assert set(py_seen) == py_allowed
 
 
@@ -95,22 +66,6 @@ def test_descriptor_dealloc_is_a_signature_exact_freestanding_boundary():
 
 
 def test_every_refcount_and_gc_dispatch_owns_descriptor_deallocation():
-    c_dispatchers = (
-        "py_obj.c",
-        "py_obj_dealloc.c",
-        "py_obj_gc.c",
-        "py_gc_backend.c",
-    )
-    for filename in c_dispatchers:
-        source = (RUNTIME / "src" / filename).read_text(encoding="utf-8")
-        for tag in (
-            "PY_TYPE_PROPERTY",
-            "PY_TYPE_CLASSMETHOD",
-            "PY_TYPE_STATICMETHOD",
-        ):
-            assert f"case {tag}:" in source, filename + " omits " + tag
-        assert "py_descriptor_dealloc" in source
-
     py_dispatchers = (
         "py_obj_dealloc.py",
         "freestanding_gc_backend0_collector.py",
@@ -121,11 +76,6 @@ def test_every_refcount_and_gc_dispatch_owns_descriptor_deallocation():
         for tag in ("property", "classmethod", "staticmethod"):
             assert tag in source.lower(), filename + " omits " + tag
         assert "py_descriptor_dealloc" in source
-
-    c_class = (RUNTIME / "src" / "py_class.c").read_text(encoding="utf-8")
-    c_release = c_class.split("static void descriptor_release_slot", 1)[1]
-    c_release = c_release.split("void py_descriptor_dealloc", 1)[0]
-    assert c_release.index("*slot = NULL") < c_release.index("py_decref(value)")
 
     py_class = (RUNTIME / "py" / "py_class.py").read_text(encoding="utf-8")
     py_release = py_class.split("def _descriptor_release_slot", 1)[1]
@@ -215,13 +165,6 @@ def _assert_descriptor_harness(tmp_path: Path, archive: Path, label: str) -> Non
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == "descriptor-dealloc:ok\n"
-
-
-def test_descriptor_dealloc_releases_owned_slots_in_c_runtime(
-    tmp_path: Path,
-    c_runtime_archive: Path,
-):
-    _assert_descriptor_harness(tmp_path, c_runtime_archive, "c")
 
 
 def test_descriptor_dealloc_releases_owned_slots_in_pcc_python_runtime(

@@ -10,10 +10,17 @@ shift deletion leaves no tombstones, so a separate occupancy byte is redundant.
 They deliberately depend only on ``pcc.unsafe`` raw memory operations and the
 freestanding allocator ABI.  ``src/py_gc_index_table.c`` remains a host-C
 differential oracle; the production pcc-Python archive links this module.
+
+The primary (tracked-object) index is split by key provenance: an exact
+object-family allocator cell keeps its node in that slab's side array
+(``pcc_allocator_object_side_slot``), a constant-time slot, and only other
+keys -- large or raw allocations, static objects -- use the hash table.  A
+key's provenance never changes while it is live, so each key lives in exactly
+one of the two places.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_ptr
+from pcc.extern import c_abi_export, c_int64, c_ptr, extern
 from pcc.unsafe import (
     calloc,
     define_global_i64,
@@ -37,6 +44,13 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+
+pcc_allocator_object_side_slot = extern(
+    "pcc_allocator_object_side_slot", (c_ptr, c_int64), c_ptr
+)
+pcc_allocator_granule_object_slot = extern(
+    "pcc_allocator_granule_object_slot", (c_ptr,), c_ptr
+)
 
 define_global_ptr_null("pcc_py_gc_primary_slots")
 define_global_i64("pcc_py_gc_primary_cap", 0)
@@ -582,6 +596,11 @@ def pcc_gc_managed_pointer_index_remove(obj) -> i64:
 
 @c_abi_export("py_gc_index_find")
 def py_gc_index_find(obj: c_ptr) -> c_ptr:
+    side = pcc_allocator_object_side_slot(obj, 0)
+    if ptr_is_null(side) == 0:
+        return load_ptr(side, 0)
+    # Not an object cell, or its slab never tracked anything: in the latter
+    # case the hash table cannot hold the key either and the probe misses.
     return pcc_gc_index_py_find(
         global_addr("pcc_py_gc_primary_slots"),
         global_addr("pcc_py_gc_primary_cap"),
@@ -592,6 +611,22 @@ def py_gc_index_find(obj: c_ptr) -> c_ptr:
 
 @c_abi_export("py_gc_index_insert")
 def py_gc_index_insert(obj: c_ptr, node: c_ptr) -> i64:
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj):
+        return -1
+    side = pcc_allocator_object_side_slot(obj, 1)
+    if ptr_is_null(side) == 0:
+        if ptr_is_null(load_ptr(side, 0)) == 0:
+            return 0
+        # A side word uses NULL for "not tracked", so it cannot hold one.
+        if ptr_is_null(node):
+            return -1
+        store_ptr(side, 0, node)
+        return 1
+    # An object cell whose slab side array could not be mapped fails like a
+    # hash growth failure; it must never land in the hash table, where
+    # lookups through a later side array would not see it.
+    if ptr_is_null(pcc_allocator_granule_object_slot(obj)) == 0:
+        return -1
     return pcc_gc_index_py_insert(
         global_addr("pcc_py_gc_primary_slots"),
         global_addr("pcc_py_gc_primary_cap"),
@@ -607,6 +642,11 @@ def py_gc_index_insert(obj: c_ptr, node: c_ptr) -> i64:
 
 @c_abi_export("py_gc_index_remove")
 def py_gc_index_remove(obj: c_ptr) -> c_ptr:
+    side = pcc_allocator_object_side_slot(obj, 0)
+    if ptr_is_null(side) == 0:
+        node = load_ptr(side, 0)
+        store_ptr(side, 0, null())
+        return node
     return pcc_gc_index_py_remove(
         global_addr("pcc_py_gc_primary_slots"),
         global_addr("pcc_py_gc_primary_cap"),

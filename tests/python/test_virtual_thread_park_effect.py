@@ -182,8 +182,6 @@ def _compile_host(
     *,
     emit_llvm_only: bool = False,
 ) -> Path:
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     source = tmp_path / f"{name}.py"
@@ -375,14 +373,9 @@ def test_generator_close_reloads_gc4_roots_across_cleanup_safepoints() -> None:
     py_source = (REPO / "pcc" / "py_runtime" / "py" / "py_gen.py").read_text(
         encoding="utf-8"
     )
-    c_source = (REPO / "pcc" / "py_runtime" / "src" / "py_gen.c").read_text(
-        encoding="utf-8"
-    )
 
     assert "gen = load_ptr(gen_slot, 0)" in py_source
     assert "closed = py_gen_close(load_ptr(gen_slot, 0))" in py_source
-    assert "PyObject *closed = py_gen_close(rooted_gen);" in c_source
-    assert "pcc_gc_store_root(&rooted_gen, gen);" in c_source
 
 
 def test_dynamic_callback_delegates_parking_but_preserves_plain_generator(
@@ -1093,8 +1086,6 @@ def test_cross_module_may_park_uses_generator_abi_and_resumes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python_multi
 
     leaf = tmp_path / "park_effect_leaf.py"
@@ -1124,8 +1115,6 @@ def test_cross_module_may_park_method_uses_generator_abi_and_resumes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python_multi
 
     leaf = tmp_path / "park_method_leaf.py"
@@ -1156,8 +1145,6 @@ def test_parallel_cross_shard_two_init_reexports_preserve_function_and_method_ab
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The parent export pass must join effects after both facades converge."""
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "4")
     # The effect fixed point owns AST transport; correctness cannot depend on
     # the historical performance opt-in being set by the caller.

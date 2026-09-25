@@ -2380,11 +2380,36 @@ class UserFunctionLoweringMixin:
             self.runtime["py_tuple_set_item"],
             [wrapped_captures, ir.Constant(_I64, 1), signature],
         )
+        # A hoisted nested def is emitted as ``__nested_<name>``; the function
+        # object still reports CPython's ``__name__`` and ``__qualname__``
+        # (``outer.<locals>.inner``), which reprs and argument errors show.
+        hoisted_qualnames = getattr(self, "_hoisted_qualnames", {})
+        qualname = hoisted_qualnames.get(resolved_name) or hoisted_qualnames.get(
+            orig_name
+        )
+        display_name = orig_name
+        if qualname:
+            display_name = qualname.rsplit(".", 1)[-1]
+        if display_name.isidentifier():
+            display_name_ptr = self._attr_name_ptr(display_name)
+        else:
+            # ``<lambda>`` is not a valid symbol suffix for ``.pyattr.*``.
+            display_name_ptr = self._pooled_cstr_ptr(display_name, ".pyfunc.name")
         fn_obj = self.builder.call(
             self.runtime["py_func_new_named"],
-            [adapter, wrapped_captures, self._attr_name_ptr(orig_name)],
+            [adapter, wrapped_captures, display_name_ptr],
             name=self._fresh(f"{orig_name}.func"),
         )
+        if qualname and qualname != display_name:
+            self.builder.call(
+                self.runtime["py_obj_setattr"],
+                [
+                    fn_obj,
+                    self._attr_name_ptr("__qualname__"),
+                    self._emit_str_literal(qualname),
+                ],
+            )
+            self._emit_post_call_err_check(fd.span)
         if (
             fd.body
             and isinstance(fd.body[0], ExprStmt)

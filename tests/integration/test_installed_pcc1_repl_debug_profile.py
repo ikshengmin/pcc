@@ -89,7 +89,6 @@ def installed_python3(tmp_path_factory: pytest.TempPathFactory):
     env["PCC_COMPAT_PYTHON"] = "/usr/bin/false"
     env["PCC_RUNTIME_ARCHIVE"] = str(runtime)
     env["PCC_RUNTIME_CC"] = "pcc"
-    env["PCC_RUNTIME_HIGH"] = "py"
     env["PCC_PY_RUN_CACHE_DIR"] = str(root / "run-cache")
     env["TMPDIR"] = str(root / "tmp")
     Path(env["TMPDIR"]).mkdir()

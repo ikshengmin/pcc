@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from pcc.llvm_capi.compat import ir
 
-from ..py_ast import Call, Expr, Name
+from ..py_ast import Call, DictType, DynType, Expr, Name, StrType
 from . import marshal
 
 
 _I64 = ir.IntType(64)
+_CSTR = ir.IntType(8).as_pointer()
+_KWARGS_MERGE = "__pcc_kwargs_merge__"
 
 
 class CallArgLoweringMixin:
@@ -102,15 +104,61 @@ class CallArgLoweringMixin:
         if not kwargs_exprs:
             return None
         if len(kwargs_exprs) != 1:
-            # Folding several ** operands through a normal pcc dict update
-            # silently overwrites duplicate keys.  CPython must instead raise
-            # TypeError across mapping boundaries, so reject this shape until
-            # the bridge has an ordered duplicate-detecting merge ABI.
-            raise NotImplementedError(
-                "CPython fallback call cannot yet preserve duplicate-key "
-                "semantics for multiple **mapping operands"
+            # Several ** operands merge left to right into one keyword dict.
+            # A key repeated across them is CPython's TypeError, not the
+            # silent overwrite a plain dict update would give, so they go
+            # through the duplicate-checking merge (``__pcc_kwargs_merge__``).
+            span = kwargs_exprs[0].span
+            merged = Call(
+                span=span,
+                ty=DictType(
+                    name="dict",
+                    key=StrType(name="str"),
+                    value=DynType(name="dyn"),
+                ),
+                func=Name(span=span, ty=DynType(name="dyn"), ident=_KWARGS_MERGE),
+                args=tuple(kwargs_exprs),
+                kwargs=(),
             )
+            return tuple(positional), merged
         return tuple(positional), kwargs_exprs[0]
+
+    def _is_kwargs_merge(self, expr) -> bool:
+        return (
+            isinstance(expr, Call)
+            and isinstance(expr.func, Name)
+            and expr.func.ident == _KWARGS_MERGE
+        )
+
+    def _reject_kwargs_merge_with_explicit_keywords(self, kwargs_expr, kwargs) -> None:
+        """Several ``**`` operands merge left to right before any explicit
+        keyword value is evaluated, which is source order only when there is
+        no explicit keyword to interleave; otherwise fail closed as before."""
+        if not self._is_kwargs_merge(kwargs_expr):
+            return
+        for kw_name, _kw_expr in kwargs:
+            if kw_name != "**":
+                raise NotImplementedError(
+                    "call cannot yet preserve source order for multiple "
+                    "**mapping operands interleaved with explicit keywords"
+                )
+
+    def _emit_kwargs_merge(self, expr: Call) -> ir.Value:
+        """Lower ``__pcc_kwargs_merge__(m1, m2, ...)`` to one owned dict."""
+        acc = ir.Constant(_CSTR, None)
+        for operand in expr.args:
+            mapping = self._emit_as_object(operand)
+            merged = self.builder.call(
+                self.runtime["py_call_merge_kwargs_unique"],
+                [acc, mapping],
+                name=self._fresh("call.kwargs.merge.unique"),
+            )
+            if not isinstance(acc, ir.Constant):
+                self._gc_release(acc)
+            self._gc_release_if_owned(mapping, operand)
+            self._emit_post_call_err_check(getattr(expr, "span", None))
+            acc = merged
+        return acc
 
     def _emit_pcc_args_list(
         self,

@@ -13,7 +13,6 @@ from pcc.py_frontend.codegen.runtime_abi import (
     FREESTANDING_GC_CROSS_OBJECT_SIGNATURES,
     FREESTANDING_GC_RUNTIME_GLOBALS,
 )
-from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -63,11 +62,6 @@ def _exported_symbols(source: str) -> set[str]:
     return set(re.findall(r'@c_abi_export\("([^"]+)"\)', source))
 
 
-@pytest.fixture(scope="session")
-def zpage_threaded_pcc_py_runtime_archive() -> Path:
-    return cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-
-
 def _literal_global_imports() -> set[str]:
     globals_: set[str] = set()
     tree = ast.parse(STRICT_SOURCE.read_text(encoding="utf-8"))
@@ -114,28 +108,13 @@ def test_zpage_allocation_prepares_and_clears_storage_outside_graph_lock() -> No
     strict_alloc = strict.split("def pcc_gc_backend4_try_zpage_alloc", 1)[1].split(
         '@c_abi_export("pcc_gc_backend4_zpage_track_alloc")', 1
     )[0]
-    c_oracle = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_alloc = c_oracle.split(
-        "void *pcc_gc_backend4_try_zpage_alloc", 1
-    )[1].split(
-        "static int64_t pcc_gc_backend4_free_page_count_for_class_unlocked", 1
-    )[0]
 
     assert "prepared_page" in strict_alloc
-    assert "prepared_page" in c_alloc
     _assert_calls_follow_latest_unlock(
         strict_alloc,
         "pcc_gc_backend4_zpage_reset(",
         "pcc_py_gc_minor_graph_lock()",
         "pcc_py_gc_minor_graph_unlock()",
-    )
-    _assert_calls_follow_latest_unlock(
-        c_alloc,
-        "pcc_gc_backend4_zpage_reset_unlocked(",
-        "pcc_gc_graph_lock();",
-        "pcc_gc_graph_unlock();",
     )
     _assert_calls_follow_latest_unlock(
         strict_alloc,
@@ -144,16 +123,10 @@ def test_zpage_allocation_prepares_and_clears_storage_outside_graph_lock() -> No
         "pcc_py_gc_minor_graph_unlock()",
     )
     _assert_calls_follow_latest_unlock(
-        c_alloc, "calloc(", "pcc_gc_graph_lock();", "pcc_gc_graph_unlock();"
-    )
-    _assert_calls_follow_latest_unlock(
         strict_alloc,
         "memset(obj",
         "pcc_py_gc_minor_graph_lock()",
         "pcc_py_gc_minor_graph_unlock()",
-    )
-    _assert_calls_follow_latest_unlock(
-        c_alloc, "memset(ptr", "pcc_gc_graph_lock();", "pcc_gc_graph_unlock();"
     )
 
 
@@ -238,29 +211,14 @@ def test_object_registration_prepares_zpage_tracking_before_graph_lock() -> None
     strict_registration = managed.split(
         "def pcc_gc_note_object_allocated_sized", 1
     )[1].split('@c_abi_export("pcc_gc_note_object_allocated")', 1)[0]
-    c_oracle = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_registration = c_oracle.split(
-        "void pcc_gc_note_object_allocated_sized", 1
-    )[1].split("void pcc_gc_note_object_allocated(", 1)[0]
 
-    for registration, prepare, lock, unlock, preallocated in (
-        (
+    for registration, prepare, lock, unlock, preallocated in ((
             strict_registration,
             "_backend4_zpage_node_prepare()",
             "_object_graph_lock()",
             "_object_graph_unlock()",
             "_backend4_zpage_track_alloc_preallocated(",
-        ),
-        (
-            c_registration,
-            "pcc_gc_backend4_zpage_node_prepare()",
-            "pcc_gc_graph_lock();",
-            "pcc_gc_graph_unlock();",
-            "pcc_gc_backend4_zpage_track_alloc_preallocated(",
-        ),
-    ):
+        ),):
         prepare_at = registration.index(prepare)
         assert registration[:prepare_at].rfind(unlock) > (
             registration[:prepare_at].rfind(lock)
@@ -407,33 +365,24 @@ def _link_zpage_allocation_probe(
         (70000, "2,262144,140000,0,0\n0,0,0\n"),
     ],
 )
-def test_zpage_allocation_matches_c_oracle_across_page_classes(
+def test_zpage_allocation_across_page_classes(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
     size: int,
     expected: str,
 ) -> None:
-    suffix = str(size)
-    oracle = _link_zpage_allocation_probe(
-        tmp_path, "zpage_alloc_c_oracle_" + suffix, c_runtime_archive, size
-    )
+    # ``expected`` is what the retired C runtime oracle printed.
     implementation = _link_zpage_allocation_probe(
         tmp_path,
-        "zpage_alloc_pcc_python_" + suffix,
+        "zpage_alloc_pcc_python_" + str(size),
         pcc_py_runtime_archive,
         size,
-    )
-    oracle_result = subprocess.run(
-        [str(oracle)], capture_output=True, text=True, timeout=30
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30
     )
-    assert oracle_result.returncode == 0, oracle_result.stdout + oracle_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    assert oracle_result.stdout == expected
-    assert result.stdout == oracle_result.stdout
+    assert result.stdout == expected
 
 
 def _link_zpage_prepare_probe(
@@ -464,7 +413,6 @@ def _link_zpage_prepare_probe(
 
 def test_zpage_allocation_failure_does_not_publish_partial_page(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
@@ -490,25 +438,18 @@ def test_zpage_allocation_failure_does_not_publish_partial_page(
             return p == NULL ? 0 : 3;
         }
     '''
-    outputs = []
-    for runtime, archive in (
-        ("c", c_runtime_archive),
-        ("pcc_python", pcc_py_runtime_archive),
-    ):
-        executable = _link_zpage_prepare_probe(
-            tmp_path, "zpage_prepare_failure_" + runtime, archive, source
-        )
-        result = subprocess.run(
-            [str(executable)], capture_output=True, text=True, timeout=30
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        outputs.append(result.stdout)
-    assert outputs == ["1,0,0,0\n", "1,0,0,0\n"]
+    executable = _link_zpage_prepare_probe(
+        tmp_path, "zpage_prepare_failure", pcc_py_runtime_archive, source
+    )
+    result = subprocess.run(
+        [str(executable)], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "1,0,0,0\n"
 
 
-def test_zpage_tracking_fallback_admission_and_prepare_failure_match_oracle(
+def test_zpage_tracking_fallback_admission_and_prepare_failure(
     tmp_path: Path,
-    c_runtime_archive: Path,
     pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
@@ -576,26 +517,19 @@ def test_zpage_tracking_fallback_admission_and_prepare_failure_match_oracle(
                 && registration_rolled_back ? 0 : 4;
         }
     '''
-    outputs = []
-    for runtime, archive in (
-        ("c", c_runtime_archive),
-        ("pcc_python", pcc_py_runtime_archive),
-    ):
-        executable = _link_zpage_prepare_probe(
-            tmp_path, "zpage_track_fallback_" + runtime, archive, source
-        )
-        result = subprocess.run(
-            [str(executable)], capture_output=True, text=True, timeout=30
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        outputs.append(result.stdout)
-    assert outputs == ["1,1,1,1,1\n", "1,1,1,1,1\n"]
+    executable = _link_zpage_prepare_probe(
+        tmp_path, "zpage_track_fallback", pcc_py_runtime_archive, source
+    )
+    result = subprocess.run(
+        [str(executable)], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "1,1,1,1,1\n"
 
 
-def test_zpage_first_page_race_publishes_one_page_in_c_and_strict_runtime(
+def test_zpage_first_page_race_publishes_one_page(
     tmp_path: Path,
-    threaded_c_runtime_archive: Path,
-    zpage_threaded_pcc_py_runtime_archive: Path,
+    threaded_pcc_py_runtime_archive: Path,
 ) -> None:
     source = r'''
         #include "py_runtime.h"
@@ -664,17 +598,11 @@ def test_zpage_first_page_race_publishes_one_page_in_c_and_strict_runtime(
             return errors == 0 ? 0 : 5;
         }
     '''
-    outputs = []
-    for runtime, archive in (
-        ("c", threaded_c_runtime_archive),
-        ("pcc_python", zpage_threaded_pcc_py_runtime_archive),
-    ):
-        executable = _link_zpage_prepare_probe(
-            tmp_path, "zpage_prepare_race_" + runtime, archive, source
-        )
-        result = subprocess.run(
-            [str(executable)], capture_output=True, text=True, timeout=30
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        outputs.append(result.stdout)
-    assert outputs == ["1,4096,2048,0,0\n", "1,4096,2048,0,0\n"]
+    executable = _link_zpage_prepare_probe(
+        tmp_path, "zpage_prepare_race", threaded_pcc_py_runtime_archive, source
+    )
+    result = subprocess.run(
+        [str(executable)], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "1,4096,2048,0,0\n"

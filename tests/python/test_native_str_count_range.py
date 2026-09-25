@@ -12,7 +12,6 @@ import textwrap
 
 
 def test_str_count_range_matches_cpython(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "cnt.py"
@@ -58,8 +57,6 @@ def test_dynamic_str_count_bound_method_no_libpython(tmp_path, monkeypatch):
     The compiled pcc1 module-closure scanner reaches this path for source
     fragments whose precise string type is lost across helper boundaries.
     """
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "dynamic_count.py"

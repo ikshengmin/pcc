@@ -119,10 +119,8 @@ def test_handler_codegen_scopes_active_context_to_function_boundary():
     assert len(context_calls) == 1
 
 
-@pytest.mark.parametrize("runtime_cc", [None, "cc"], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [None], ids=["port"])
 def test_exception_context_chaining_matches_cpython(tmp_path, monkeypatch, runtime_cc):
-    if runtime_cc is not None:
-        monkeypatch.setenv("PCC_RUNTIME_CC", runtime_cc)
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "exc_ctx.py"

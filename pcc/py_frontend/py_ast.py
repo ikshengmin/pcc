@@ -153,7 +153,12 @@ class Expr:
 
 @dataclass(frozen=True)
 class IntLit(Expr):
-    value: int
+    # A source literal has no bound (``0xFFFFFFFFFFFFFFFF``, ``10 ** 30``
+    # folded), so this is deliberately not ``int``: in pcc's own raw-int
+    # build an ``int`` field reads through the i64 lane, which raised on
+    # (and formerly zeroed) every literal beyond it -- Stage2 stopped in
+    # ``_emit_expr_as_i64`` on c_codegen.py's 64-bit masks.
+    value: object
 
 
 @dataclass(frozen=True)

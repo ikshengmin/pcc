@@ -18,8 +18,10 @@ from pcc.py_runtime.py.py_abi_constants import (
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     cstr,
+    define_global_ptr_null,
     free,
     global_load_ptr,
+    global_store_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -54,6 +56,18 @@ py_clear_exception = extern("py_clear_exception", (), c_void)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
+py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int64, c_ptr, c_int64), c_ptr)
+py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
+py_instance_setattr = extern("py_instance_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
+py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
+py_dict_new = extern("py_dict_new", (), c_ptr)
+py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
+py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
+py_instance_getattr = extern("py_instance_getattr", (c_ptr, c_ptr), c_ptr)
+
+define_global_ptr_null("py_traceback_class_cache")
+define_global_ptr_null("py_frame_class_cache")
+define_global_ptr_null("py_code_class_cache")
 
 
 def _type_of(obj) -> int:
@@ -141,18 +155,36 @@ def _write_heading(e) -> None:
         if ptr_is_null(name) == 0:
             cls_name = name
 
-    msg = pcc_gc_load_ptr(e, ptr_add(e, 24))
-    none = global_load_ptr("py_None")
-    if ptr_is_null(msg) == 0:
-        if ptr_eq(msg, none) == 0:
-            if _type_of(msg) == PY_TYPE_STR:          # PY_TYPE_STR
-                _write_raw(cls_name)
-                write(2, cstr(": "), 2)
-                _write_raw(ptr_add(msg, 40))
-                write(2, cstr("\n"), 1)
-                return
+    text = _exc_display_text(e)
+    if ptr_is_null(text) == 0:
+        _write_raw(cls_name)
+        write(2, cstr(": "), 2)
+        _write_raw(py_str_utf8(text))
+        write(2, cstr("\n"), 1)
+        py_decref(text)
+        return
     _write_raw(cls_name)
     write(2, cstr("\n"), 1)
+
+
+def _exc_display_text(e):
+    """NEW non-empty ``str(e)`` of a builtin exception object, or NULL.
+
+    Non-str arguments (``ValueError(3)``, ``KeyError(('a', 1))``) render as
+    CPython's ``str(exc)`` does instead of being dropped from the heading.
+    """
+    msg = pcc_gc_load_ptr(e, ptr_add(e, 24))
+    if ptr_is_null(msg) != 0 or ptr_eq(msg, global_load_ptr("py_None")) != 0:
+        return null()
+    text = py_obj_str(e)
+    if ptr_is_null(text) != 0:
+        if py_err_occurred() != 0:
+            py_clear_exception()
+        return null()
+    if _type_of(text) != PY_TYPE_STR or strlen(py_str_utf8(text)) == 0:
+        py_decref(text)
+        return null()
+    return text
 
 
 def _write_user_exception_heading(exc) -> None:
@@ -422,16 +454,14 @@ def _tb_append_exc_heading(b, e) -> None:
         if ptr_is_null(name) == 0:
             cls_name = name
 
-    msg = pcc_gc_load_ptr(e, ptr_add(e, 24))
-    none = global_load_ptr("py_None")
-    if ptr_is_null(msg) == 0:
-        if ptr_eq(msg, none) == 0:
-            if _type_of(msg) == PY_TYPE_STR:          # PY_TYPE_STR
-                _tb_append(b, cls_name)
-                _tb_append_n(b, cstr(": "), 2)
-                _tb_append(b, ptr_add(msg, 40))
-                _tb_append_n(b, cstr("\n"), 1)
-                return
+    text = _exc_display_text(e)
+    if ptr_is_null(text) == 0:
+        _tb_append(b, cls_name)
+        _tb_append_n(b, cstr(": "), 2)
+        _tb_append(b, py_str_utf8(text))
+        _tb_append_n(b, cstr("\n"), 1)
+        py_decref(text)
+        return
     _tb_append(b, cls_name)
     _tb_append_n(b, cstr("\n"), 1)
 
@@ -574,3 +604,184 @@ def py_exc_traceback_print_exc(exc) -> None:
             write(2, buf, length)
         free(buf)
     free(b)
+
+
+def _traceback_class():
+    cls = global_load_ptr("py_traceback_class_cache")
+    if ptr_is_null(cls) == 0:
+        return cls
+    cls = py_class_new(cstr("traceback"), null(), 0, null(), 0)
+    if ptr_is_null(cls) == 0:
+        global_store_ptr("py_traceback_class_cache", cls)
+    return cls
+
+
+def _frame_class():
+    cls = global_load_ptr("py_frame_class_cache")
+    if ptr_is_null(cls) == 0:
+        return cls
+    cls = py_class_new(cstr("frame"), null(), 0, null(), 0)
+    if ptr_is_null(cls) == 0:
+        global_store_ptr("py_frame_class_cache", cls)
+    return cls
+
+
+def _code_class():
+    cls = global_load_ptr("py_code_class_cache")
+    if ptr_is_null(cls) == 0:
+        return cls
+    cls = py_class_new(cstr("code"), null(), 0, null(), 0)
+    if ptr_is_null(cls) == 0:
+        global_store_ptr("py_code_class_cache", cls)
+    return cls
+
+
+def _tb_set_owned(obj, name, value) -> int:
+    """Store a NEW reference as ``obj.name`` and drop it; -1 on failure."""
+    if ptr_is_null(value) != 0:
+        return -1
+    rc: int = py_instance_setattr(obj, name, value)
+    py_decref(value)
+    if rc != 0:
+        return -1
+    return 0
+
+
+def _tb_cstr_or(p, fallback):
+    if ptr_is_null(p) != 0:
+        return py_str_new(fallback, strlen(fallback))
+    return py_str_new(p, strlen(p))
+
+
+def _tb_new_entry(fr, tb_cls, frame_cls, code_cls, tb_next):
+    """One traceback object (with its frame and code) for frame record ``fr``."""
+    func_name = load_ptr(fr, 0)
+    filename = load_ptr(fr, 8)
+    line: int = load_i32(fr, 24)
+    code = py_instance_new(code_cls)
+    if ptr_is_null(code) != 0:
+        return null()
+    ok: int = _tb_set_owned(code, cstr("co_filename"), _tb_cstr_or(filename, cstr("<unknown>")))
+    if ok == 0:
+        ok = _tb_set_owned(code, cstr("co_name"), _tb_cstr_or(func_name, cstr("<module>")))
+    if ok == 0:
+        ok = _tb_set_owned(code, cstr("co_qualname"), _tb_cstr_or(func_name, cstr("<module>")))
+    if ok == 0:
+        ok = _tb_set_owned(code, cstr("co_firstlineno"), py_int_from_i64(line))
+    if ok != 0:
+        py_decref(code)
+        return null()
+    frame = py_instance_new(frame_cls)
+    if ptr_is_null(frame) != 0:
+        py_decref(code)
+        return null()
+    ok = _tb_set_owned(frame, cstr("f_code"), code)
+    none = global_load_ptr("py_None")
+    if ok == 0:
+        ok = _tb_set_owned(frame, cstr("f_lineno"), py_int_from_i64(line))
+    if ok == 0:
+        ok = _tb_set_owned(frame, cstr("f_lasti"), py_int_from_i64(-1))
+    if ok == 0:
+        ok = _tb_set_owned(frame, cstr("f_globals"), py_dict_new())
+    if ok == 0:
+        ok = _tb_set_owned(frame, cstr("f_locals"), py_dict_new())
+    if ok == 0:
+        py_incref(none)
+        ok = _tb_set_owned(frame, cstr("f_back"), none)
+    if ok != 0:
+        py_decref(frame)
+        return null()
+    tb = py_instance_new(tb_cls)
+    if ptr_is_null(tb) != 0:
+        py_decref(frame)
+        return null()
+    ok = _tb_set_owned(tb, cstr("tb_frame"), frame)
+    if ok == 0:
+        ok = _tb_set_owned(tb, cstr("tb_lineno"), py_int_from_i64(line))
+    if ok == 0:
+        ok = _tb_set_owned(tb, cstr("tb_lasti"), py_int_from_i64(-1))
+    if ok == 0:
+        py_incref(tb_next)
+        ok = _tb_set_owned(tb, cstr("tb_next"), tb_next)
+    if ok != 0:
+        py_decref(tb)
+        return null()
+    return tb
+
+
+@c_abi_export("py_exc_traceback_object")
+def py_exc_traceback_object(exc):
+    """``exc.__traceback__``: NEW reference, None when no frame was recorded.
+
+    Frame records are appended as the exception leaves each function, so
+    record 0 is the innermost frame.  CPython's chain starts at the outermost
+    frame and follows ``tb_next`` inward, so it is built from record 0 up.
+    """
+    none = global_load_ptr("py_None")
+    if ptr_is_null(exc) != 0 or _is_exception(exc) == 0:
+        py_incref(none)
+        return none
+    records = load_ptr(exc, 48)
+    n_frames: int = load_i32(exc, 56)
+    if n_frames <= 0 or ptr_is_null(records) != 0:
+        py_incref(none)
+        return none
+    tb_cls = _traceback_class()
+    frame_cls = _frame_class()
+    code_cls = _code_class()
+    if ptr_is_null(tb_cls) != 0 or ptr_is_null(frame_cls) != 0 or ptr_is_null(code_cls) != 0:
+        return null()
+    chain = none
+    py_incref(chain)
+    i: int = 0
+    while i < n_frames:
+        tb = _tb_new_entry(ptr_add(records, i * 32), tb_cls, frame_cls, code_cls, chain)
+        py_decref(chain)
+        if ptr_is_null(tb) != 0:
+            return null()
+        chain = tb
+        i = i + 1
+    return chain
+
+
+@c_abi_export("py_exc_handle_uncaught")
+def py_exc_handle_uncaught(exc) -> int:
+    """Exit status for an exception that reached the top of the program.
+
+    As in CPython: ``SystemExit(code)`` exits silently with ``code`` (None is
+    0, an int is itself, anything else is printed to stderr and exits 1);
+    ``KeyboardInterrupt`` prints its traceback and exits 130; every other
+    exception prints its traceback and exits 1.
+    """
+    system_exit = py_exc_builtin_class(53)  # PY_EXC_SYSTEMEXIT
+    if ptr_is_null(exc) == 0 and ptr_is_null(system_exit) == 0:
+        if py_exc_matches(exc, system_exit) != 0:
+            code = null()
+            if _is_exception(exc) != 0:
+                code = pcc_gc_load_ptr(exc, ptr_add(exc, 24))
+            else:
+                args = py_instance_getattr(exc, cstr("code"))
+                if ptr_is_null(args) != 0:
+                    py_clear_exception()
+                else:
+                    code = args
+                    py_decref(args)
+            none = global_load_ptr("py_None")
+            if ptr_is_null(code) != 0 or ptr_eq(code, none) != 0:
+                return 0
+            if is_tagged_int(code) or _type_of(code) == PY_TYPE_INT:
+                return py_int_value_i64(code)
+            text = py_obj_str(code)
+            if ptr_is_null(text) == 0:
+                raw = py_str_utf8(text)
+                if ptr_is_null(raw) == 0:
+                    _write_raw(raw)
+                write(2, cstr("\n"), 1)
+                py_decref(text)
+            return 1
+    keyboard_interrupt = py_exc_builtin_class(54)  # PY_EXC_KEYBOARDINTERRUPT
+    py_exc_print_unhandled(exc)
+    if ptr_is_null(exc) == 0 and ptr_is_null(keyboard_interrupt) == 0:
+        if py_exc_matches(exc, keyboard_interrupt) != 0:
+            return 130
+    return 1

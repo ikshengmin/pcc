@@ -440,7 +440,9 @@ class NameLoweringMixin:
                         name="chr.result",
                     )
                 elif name == "id":
-                    address = builder.ptrtoint(arg0, _I64, name="id.address")
+                    address = builder.call(
+                        self.runtime["py_obj_id"], [arg0], name="id.address"
+                    )
                     result = builder.call(
                         self.runtime["py_int_from_i64"],
                         [address],
@@ -590,108 +592,17 @@ class NameLoweringMixin:
                 )
                 builder.ret(result)
             else:
-                tag = builder.call(
-                    self.runtime["py_obj_type_tag"],
-                    [arg],
-                    name="int.tag",
-                )
-                is_int = builder.icmp_signed(
-                    "==",
-                    tag,
-                    ir.Constant(_I64, PY_TYPE_INT),
-                    name="int.is_int",
-                )
-                int_bb = adapter.append_basic_block("int.from_int")
-                non_int_bb = adapter.append_basic_block("int.non_int")
-                builder.cbranch(is_int, int_bb, non_int_bb)
-
-                builder.position_at_end(int_bb)
-                builder.ret(arg)
-
-                builder.position_at_end(non_int_bb)
-                is_bool = builder.icmp_signed(
-                    "==",
-                    tag,
-                    ir.Constant(_I64, PY_TYPE_BOOL),
-                    name="int.is_bool",
-                )
-                bool_bb = adapter.append_basic_block("int.from_bool")
-                non_bool_bb = adapter.append_basic_block("int.non_bool")
-                builder.cbranch(is_bool, bool_bb, non_bool_bb)
-
-                builder.position_at_end(bool_bb)
-                truth = builder.call(
-                    self.runtime["py_obj_truthy"],
-                    [arg],
-                    name="int.bool.truth",
-                )
-                bool_int = builder.call(
-                    self.runtime["py_int_from_i64"],
-                    [truth],
-                    name="int.bool.result",
+                # ``int`` as a first-class callable: the one runtime owner
+                # converts (exact floats, __int__/__index__, CPython's
+                # TypeError).  This adapter had its own fptosi, which
+                # saturated int(1e20), and a message without the type name.
+                result = builder.call(
+                    self.runtime["py_obj_as_int_object"],
+                    [arg, ir.Constant(_I32, 10)],
+                    name="int.result",
                 )
                 builder.call(self.runtime["py_decref"], [arg])
-                builder.ret(bool_int)
-
-                builder.position_at_end(non_bool_bb)
-                is_float = builder.icmp_signed(
-                    "==",
-                    tag,
-                    ir.Constant(_I64, PY_TYPE_FLOAT),
-                    name="int.is_float",
-                )
-                float_bb = adapter.append_basic_block("int.from_float")
-                non_float_bb = adapter.append_basic_block("int.non_float")
-                builder.cbranch(is_float, float_bb, non_float_bb)
-
-                builder.position_at_end(float_bb)
-                f64 = builder.call(
-                    self.runtime["py_float_to_f64"],
-                    [arg],
-                    name="int.float.f64",
-                )
-                i64 = builder.fptosi(f64, _I64, name="int.float.i64")
-                float_int = builder.call(
-                    self.runtime["py_int_from_i64"],
-                    [i64],
-                    name="int.float.result",
-                )
-                builder.call(self.runtime["py_decref"], [arg])
-                builder.ret(float_int)
-
-                builder.position_at_end(non_float_bb)
-                is_str = builder.icmp_signed(
-                    "==",
-                    tag,
-                    ir.Constant(_I64, PY_TYPE_STR),
-                    name="int.is_str",
-                )
-                str_bb = adapter.append_basic_block("int.from_str")
-                type_error_bb = adapter.append_basic_block("int.type_error")
-                builder.cbranch(is_str, str_bb, type_error_bb)
-
-                builder.position_at_end(str_bb)
-                cstr = builder.call(
-                    self.runtime["py_str_utf8"],
-                    [arg],
-                    name="int.str.cstr",
-                )
-                parsed = builder.call(
-                    self.runtime["py_int_from_cstr_or_raise"],
-                    [cstr, ir.Constant(_I32, 10)],
-                    name="int.str.result",
-                )
-                builder.call(self.runtime["py_decref"], [arg])
-                builder.ret(parsed)
-
-                builder.position_at_end(type_error_bb)
-                builder.call(self.runtime["py_decref"], [arg])
-                self._emit_native_builtin_callable_type_error(
-                    builder,
-                    "int() argument must be a string, a bytes-like object, or a real number",
-                    name,
-                    "unsupported",
-                )
+                builder.ret(result)
 
         captures = self.builder.call(
             self.runtime["py_tuple_new"],
@@ -1196,6 +1107,20 @@ class NameLoweringMixin:
             # Python's LOAD_GLOBAL observes those writes before consulting
             # builtins / raising NameError, so make the dynamic namespace the
             # final lookup before the existing missing-name error.
+            if getattr(self, "_freestanding_module", False) or getattr(
+                self, "_runtime_port_module", False
+            ):
+                # Runtime modules have no module namespace, so this lookup
+                # could only ever raise NameError when the line runs.  That
+                # hid real bugs: a telemetry query calling an unimported
+                # helper allocated a NameError on every call and returned 0.
+                raise NameError(
+                    "runtime module "
+                    + (self.ast_module.name or "<module>")
+                    + ": name '"
+                    + expr.ident
+                    + "' is not defined (import it or declare it with extern())"
+                )
             module_name = self.ast_module.name or "__main__"
             module_name_ptr = self._ptr_to_cstr(
                 self._cstr_global(

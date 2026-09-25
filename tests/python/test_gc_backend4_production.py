@@ -15,8 +15,7 @@ from pcc.py_runtime.py.py_abi_constants import (
     PYCLASSOBJECT_METHODS_OFFSET,
 )
 from tests.runtime_build_cache import (
-    cached_c_runtime,
-    cached_threaded_c_runtime,
+    cached_pcc_python_runtime,
     cached_threaded_pcc_python_runtime,
 )
 
@@ -74,7 +73,7 @@ def _cc() -> str:
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess[str]:
@@ -89,7 +88,7 @@ def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),
@@ -1053,54 +1052,6 @@ def _relocation_type_specific_raw_payload_source() -> str:
 
 
 def test_backend4_deallocating_objects_are_quarantined_from_add_score_and_copy_source():
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
-    c_add = c_src.split("static int pcc_gc_relocation_set_add(", 1)[1].split(
-        "static void pcc_gc_relocation_set_remove", 1
-    )[0]
-    c_add_guard = c_add.split("int32_t flags =", 1)[1].split(
-        "if (pcc_gc_forwarding_find", 1
-    )[0]
-    assert "PY_FLAG_GC_RELOCATION_TARGET" in c_add_guard
-    assert "PY_FLAG_GC_DEALLOCATING" in c_add_guard
-    assert c_add_guard.index("PY_FLAG_GC_DEALLOCATING") < c_add_guard.index(
-        "return 0;"
-    )
-    assert c_add.index("PY_FLAG_GC_DEALLOCATING") < c_add.index("calloc(")
-    assert c_add.index("PY_FLAG_GC_DEALLOCATING") < c_add.index(
-        "py_header_flags_or(h, PY_FLAG_GC_RELOCATION_CANDIDATE)"
-    )
-    c_score = c_src.split(
-        "static int pcc_gc_backend4_zpage_candidate_snapshot(", 1
-    )[1].split("static int pcc_gc_backend4_select_one_page_object_unlocked", 1)[0]
-    assert (
-        "if ((flags & PY_FLAG_GC_DEALLOCATING) != 0) return 0;" in c_score
-    )
-    assert c_score.index("PY_FLAG_GC_DEALLOCATING") < c_score.index(
-        "int64_t owner_size = zp->size_bytes"
-    )
-    assert c_score.index("PY_FLAG_GC_DEALLOCATING") < c_score.index(
-        "candidate->mapping = zp"
-    )
-    c_copy = c_src.split(
-        "static int pcc_gc_relocate_copy_snapshot_unlocked(", 1
-    )[1].split(
-        "static PyObject *pcc_gc_relocate_copy_preallocated_unlocked(", 1
-    )[0]
-    c_copy_guard = c_copy.split("int32_t from_flags =", 1)[1].split(
-        "if (!pcc_gc_colored_relocate_copy_supported_tag", 1
-    )[0]
-    assert "PY_FLAG_GC_PINNED | PY_FLAG_GC_DEALLOCATING" in c_copy_guard
-    assert c_copy_guard.index("PY_FLAG_GC_DEALLOCATING") < c_copy_guard.index(
-        "return 0;"
-    )
-    c_public_copy = c_src.split("PyObject *pcc_gc_relocate_copy(", 1)[1].split(
-        "static int64_t pcc_gc_backend4_snapshot_relocation_batch_unlocked", 1
-    )[0]
-    assert c_public_copy.index("pcc_gc_graph_unlock();") < c_public_copy.index(
-        "PyObject *to = pcc_gc_alloc("
-    )
 
     strict_backend = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
@@ -1198,7 +1149,7 @@ def test_backend4_strict_relocation_copy_balances_owned_slot_retain(
 
 def _build_threaded_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_threaded_c_runtime()
+    return cached_threaded_pcc_python_runtime()
 
 
 def _compile_and_run_threaded(
@@ -1217,7 +1168,7 @@ def _compile_and_run_threaded(
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),
@@ -1230,7 +1181,7 @@ def _compile_and_run_threaded(
     return subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
 
 
-@pytest.mark.parametrize("runtime_kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("runtime_kind", ["pcc_python"])
 @pytest.mark.parametrize(
     ("raw_case", "raw_case_id"),
     [
@@ -1253,16 +1204,13 @@ def test_backend4_relocation_copies_type_specific_raw_payloads(
         f"#define PCC_TEST_RAW_CASE {raw_case_id}\n"
         + _relocation_type_specific_raw_payload_source()
     )
-    if runtime_kind == "c":
-        result = _compile_and_run_threaded(tmp_path, source)
-    else:
-        runtime = cached_threaded_pcc_python_runtime()
-        result = _compile_and_run_threaded_archive(
-            tmp_path,
-            source,
-            runtime / "libpy_runtime_pcc_py.a",
-            f"backend4_strict_type_specific_raw_payload_{raw_case}",
-        )
+    runtime = cached_threaded_pcc_python_runtime()
+    result = _compile_and_run_threaded_archive(
+        tmp_path,
+        source,
+        runtime / "libpy_runtime_pcc_py.a",
+        f"backend4_strict_type_specific_raw_payload_{raw_case}",
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -1327,9 +1275,6 @@ def test_backend4_skips_zpage_and_graph_for_leaf_objects(tmp_path: Path) -> None
         "1",
     ]
 
-    c_obj = (RUNTIME_DIR / "src" / "py_obj.c").read_text(encoding="utf-8")
-    assert "pcc_alloc_graph_leaf_tag(type_tag)" in c_obj
-    assert "PY_FLAG_GC_MALLOC_ALLOC" in c_obj
     py_obj = (RUNTIME_DIR / "py" / "py_obj.py").read_text(encoding="utf-8")
     assert "_gc_graph_leaf_tag(type_tag)" in py_obj
     assert "stored_flags = (stored_flags & ~65536) | 262144" in py_obj
@@ -1374,33 +1319,6 @@ def test_backend4_deallocating_index_node_is_not_active(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "backend4-zero-refcount-node-inactive-ok"
 
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    c_active = c_src.split("static int pcc_gc_object_node_is_active", 1)[1].split(
-        "static void pcc_gc_object_node_link_head", 1
-    )[0]
-    assert "PY_FLAG_GC_DEALLOCATING" in c_active
-
-    c_obj = (RUNTIME_DIR / "src" / "py_obj.c").read_text(encoding="utf-8")
-    c_prepare_start = c_obj.rindex("static void pcc_decref_prepare(")
-    c_finish_start = c_obj.rindex("static void pcc_decref_finish(")
-    c_prepare = c_obj[c_prepare_start:c_finish_start]
-    c_finish = c_obj[c_finish_start:c_obj.index("void py_decref(", c_finish_start)]
-    assert c_prepare.index("pcc_refcount_decref(") < c_prepare.index(
-        "prepared->new_refcount == 0"
-    ) < c_prepare.index("py_header_flags_or(h, PY_FLAG_GC_DEALLOCATING)")
-    assert "pcc_obj_runtime_log_event_code" not in c_prepare
-    assert "PY_FLAG_GC_DEALLOCATING" not in c_finish
-    assert c_finish.index("pcc_obj_runtime_log_event_code") < c_finish.index(
-        "py_weakref_invalidate(o)"
-    )
-
-    c_finalize = c_src.split("static void pcc_gc_finalize_unreachable", 1)[1].split(
-        "static void pcc_gc_recheck_reachability_after_finalizers", 1
-    )[0]
-    assert c_finalize.index("PY_FLAG_GC_DEALLOCATING") < c_finalize.index(
-        "pcc_gc_note_object_freeing(o)"
-    )
-
     root_src = STRICT_REFCOUNT_ROOTS.read_text(encoding="utf-8")
     py_active = root_src.split("def pcc_gc_object_node_is_active", 1)[1].split(
         "\n@c_abi_export", 1
@@ -1435,22 +1353,6 @@ def test_backend4_deallocating_index_node_is_not_active(tmp_path: Path) -> None:
 
 
 def test_backend4_forwarding_target_lookup_is_indexed() -> None:
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    c_target_exists = c_src.split("static int pcc_gc_forwarding_target_exists", 1)[
-        1
-    ].split("static int pcc_gc_forwarding_target_prepare", 1)[0]
-    assert "pcc_gc_forwarding_target_find(target) != NULL" in c_target_exists
-    assert "pcc_gc_forwardings" not in c_target_exists
-    assert "target_next" in c_src
-    assert "target_prev" in c_src
-    assert "pcc_gc_forwarding_target_index_clear()" in c_src
-
-    index_src = (RUNTIME_DIR / "src" / "py_gc_index_table.c").read_text(
-        encoding="utf-8"
-    )
-    assert "pcc_gc_forwarding_target_index_find" in index_src
-    assert "pcc_gc_forwarding_target_index_upsert" in index_src
-    assert "pcc_gc_forwarding_target_index_remove" in index_src
 
     # The forwarding-target identity surface moved to the freestanding
     # forwarding-identity module as the GC4 relocation policy migrated.
@@ -1501,34 +1403,6 @@ def test_backend4_zpage_owner_lookup_is_indexed(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout.strip() == "backend4-zpage-owner-index-ok"
 
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    c_link = c_src.split("static void pcc_gc_backend4_zpage_link_node_unlocked", 1)[
-        1
-    ].split("static void pcc_gc_backend4_zpage_unlink_node_unlocked", 1)[0]
-    c_unlink = c_src.split("static void pcc_gc_backend4_zpage_unlink_node_unlocked", 1)[
-        1
-    ].split("static PccGcZPageNode *pcc_gc_backend4_zpage_track_alloc_unlocked", 1)[0]
-    c_remove = c_src.split("static void pcc_gc_backend4_zpage_remove_unlocked", 1)[
-        1
-    ].split("static PccGcZPageNode *pcc_gc_backend4_zpage_find_unlocked", 1)[0]
-    c_freeing = c_src.split("void pcc_gc_note_object_freeing", 1)[1].split(
-        "if (!pcc_gc_tracks_objects())", 1
-    )[0]
-    c_free_memory = c_src.split("void pcc_gc_free_object_memory", 1)[1].split(
-        "void pcc_gc_note_load", 1
-    )[0]
-    assert "pcc_gc_zpage_owner_index_upsert(node->owner, node)" in c_link
-    assert "pcc_gc_zpage_owner_index_remove(node->owner)" in c_unlink
-    assert "pcc_gc_zpage_owner_index_find(owner)" in c_remove
-    assert "int64_t size = dead->size_bytes" in c_remove
-    assert "int32_t zpage_flags" in c_freeing
-    assert "zpage_owner_node" in c_freeing
-    assert "int32_t zpage_indexed" in c_freeing
-    assert "pcc_gc_backend4_zpage_owns_addr_unlocked(o)" not in c_freeing
-    assert "if (zpage_flags != 0 || zpage_indexed != 0)" in c_freeing
-    assert "pcc_gc_backend4_zpage_owns_addr_unlocked(o)" not in c_free_memory
-    assert "An unlabelled/foreign" in c_free_memory
-
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     zpage_mechanics = STRICT_ZPAGE_MECHANICS.read_text(encoding="utf-8")
     zpage_lifecycle = STRICT_ZPAGE_LIFECYCLE.read_text(encoding="utf-8")
@@ -1567,22 +1441,13 @@ def test_backend4_zpage_owner_lookup_is_indexed(tmp_path: Path) -> None:
 
 
 def test_relocation_reset_retires_detached_nodes_after_graph_unlock() -> None:
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
     )
-    c_reset = c_src.split("void pcc_gc_reset_relocation_set", 1)[1].split(
-        "int64_t pcc_gc_relocation_set_contains", 1
-    )[0]
     py_reset = py_src.split("def pcc_gc_reset_relocation_set", 1)[1].split(
         '@c_abi_export("pcc_gc_relocation_set_contains")', 1
     )[0]
-    for body, unlock, finish in (
-        (c_reset, "pcc_gc_graph_unlock();", "pcc_gc_relocation_reset_finish("),
-        (py_reset, "_object_graph_unlock()", "_relocation_reset_finish("),
-    ):
+    for body, unlock, finish in ((py_reset, "_object_graph_unlock()", "_relocation_reset_finish("),):
         unlock_at = body.index(unlock)
         finish_at = body.index(finish)
         assert unlock_at < finish_at
@@ -1591,59 +1456,34 @@ def test_relocation_reset_retires_detached_nodes_after_graph_unlock() -> None:
 
 
 def test_relocation_reseed_prepares_evacuation_nodes_before_locked_commit() -> None:
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
     )
-    c_reseed = c_src.split(
-        "static void pcc_gc_backend4_reseed_relocation_epoch_state", 1
-    )[1].split("int64_t pcc_gc_telemetry_reset", 1)[0]
     py_reseed = py_src.split(
         "def _backend4_reseed_relocation_epoch_state", 1
     )[1].split('@c_abi_export("pcc_gc_backend4_evacuation_page_find")', 1)[0]
 
-    for body, unlock, prepare, lock, page_scan in (
-        (
-            c_reseed,
-            "pcc_gc_graph_unlock();",
-            "pcc_gc_backend4_evacuation_page_nodes_prepare(",
-            "pcc_gc_graph_lock();",
-            "pcc_gc_backend4_reseed_plan_probe_wait(4)",
-        ),
-        (
+    for body, unlock, prepare, lock, page_scan in ((
             py_reseed,
             "_object_graph_unlock()",
             "_backend4_evacuation_page_nodes_prepare(",
             "_object_graph_lock()",
             "_backend4_reseed_plan_probe_wait(4)",
-        ),
-    ):
+        ),):
         unlock_at = body.index(unlock)
         prepare_at = body.index(prepare)
         relock_at = body.index(lock, prepare_at)
         page_scan_at = body.index(page_scan, relock_at)
         assert unlock_at < prepare_at < relock_at < page_scan_at
 
-    assert "pcc_gc_backend4_evacuation_page_add_unlocked(page)" not in c_reseed
     assert "_backend4_evacuation_page_add(page)" not in py_reseed
-    assert "pcc_gc_backend4_evacuation_page_detach_all_unlocked" not in c_reseed
     assert "_backend4_evacuation_page_detach_all()" not in py_reseed
-    for body, failed, finish, page_scan in (
-        (
-            c_reseed,
-            "if (prepared_count < required)",
-            "pcc_gc_backend4_evacuation_page_finish_detached(",
-            "pcc_gc_backend4_reseed_plan_probe_wait(4)",
-        ),
-        (
+    for body, failed, finish, page_scan in ((
             py_reseed,
             "if prepared_count < required:",
             "_backend4_evacuation_page_finish_detached(",
             "_backend4_reseed_plan_probe_wait(4)",
-        ),
-    ):
+        ),):
         failure_at = body.index(failed)
         finish_at = body.index(finish, failure_at)
         page_scan_at = body.index(page_scan)
@@ -1651,9 +1491,6 @@ def test_relocation_reseed_prepares_evacuation_nodes_before_locked_commit() -> N
 
 
 def test_relocation_reset_batches_raw_node_scans_with_owned_cursor() -> None:
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
     )
@@ -1667,22 +1504,9 @@ def test_relocation_reset_batches_raw_node_scans_with_owned_cursor() -> None:
     strict_forwarding = (
         RUNTIME_DIR / "py" / "freestanding_gc_forwarding_identity.py"
     ).read_text(encoding="utf-8")
-    c_reset = c_src.split("void pcc_gc_reset_relocation_set", 1)[1].split(
-        "int64_t pcc_gc_relocation_set_contains", 1
-    )[0]
     py_reset = py_src.split("def pcc_gc_reset_relocation_set", 1)[1].split(
         '@c_abi_export("pcc_gc_relocation_set_contains")', 1
     )[0]
-
-    assert "pcc_gc_backend4_relocation_reset_owner" in c_reset
-    assert "PCC_GC_SAFEPOINT_BATCH" in c_reset
-    assert c_reset.count("pcc_thread_safepoint();") >= 2
-    assert "pcc_gc_backend4_reset_object_cursor" in c_reset
-    assert c_src.index("pcc_gc_graph_unlock();", c_src.index(c_reset)) < (
-        c_src.index("pcc_thread_safepoint();", c_src.index(c_reset))
-    )
-    assert "pcc_gc_backend4_reset_object_cursor == n" in c_src
-    assert "pcc_gc_backend4_relocation_reset_owner != 0" in c_src
 
     assert '"pcc_gc_backend4_relocation_reset_owner"' in py_reset
     assert "examined < 16" in py_reset
@@ -1700,64 +1524,39 @@ def test_relocation_reset_batches_raw_node_scans_with_owned_cursor() -> None:
 
 
 def test_relocation_reseed_has_deterministic_plan_window_and_failure_control() -> None:
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
     )
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(
         encoding="utf-8"
     )
-    c_reseed = c_src.split(
-        "static void pcc_gc_backend4_reseed_relocation_epoch_state", 1
-    )[1].split("void pcc_gc_telemetry_reset", 1)[0]
     py_reseed = py_src.split(
         "def _backend4_reseed_relocation_epoch_state", 1
     )[1].split('@c_abi_export("pcc_gc_backend4_evacuation_page_find")', 1)[0]
 
-    for source in (c_src, py_src, header):
+    for source in (py_src, header):
         assert "pcc_gc_backend4_reseed_plan_probe_config" in source
         assert "pcc_gc_backend4_reseed_plan_probe_state" in source
-    for body, wait, prepare in (
-        (
-            c_reseed,
-            "pcc_gc_backend4_reseed_plan_probe_wait(1)",
-            "pcc_gc_backend4_evacuation_page_nodes_prepare(",
-        ),
-        (
+    for body, wait, prepare in ((
             py_reseed,
             "_backend4_reseed_plan_probe_wait(1)",
             "_backend4_evacuation_page_nodes_prepare(",
-        ),
-    ):
+        ),):
         assert body.index(wait) < body.index(prepare)
-    assert "pcc_gc_backend4_reseed_plan_probe_allocation_limit" in c_src
     assert '"pcc_gc_backend4_reseed_plan_probe_allocation_limit"' in py_src
 
 
 def test_relocation_reseed_required_page_count_is_bounded_and_restartable() -> None:
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
     )
     strict_state = (
         RUNTIME_DIR / "py" / "freestanding_gc_state.py"
     ).read_text(encoding="utf-8")
-    c_reseed = c_src.split(
-        "static void pcc_gc_backend4_reseed_relocation_epoch_state", 1
-    )[1].split("void pcc_gc_telemetry_reset", 1)[0]
     py_reseed = py_src.split(
         "def _backend4_reseed_relocation_epoch_state", 1
     )[1].split('@c_abi_export("pcc_gc_backend4_evacuation_page_find")', 1)[0]
 
-    assert "pcc_gc_backend4_reseed_page_count_unlocked" not in c_reseed
-    assert "pcc_gc_backend4_reseed_page_count_cursor" in c_reseed
-    assert "pcc_gc_backend4_reseed_page_revision" in c_reseed
-    assert "PCC_GC_SAFEPOINT_BATCH" in c_reseed
-    assert "pcc_thread_safepoint();" in c_reseed
     assert "_backend4_reseed_page_count()" not in py_reseed
     assert '"pcc_gc_backend4_reseed_page_count_cursor"' in py_reseed
     assert '"pcc_gc_backend4_reseed_page_revision"' in py_reseed
@@ -1772,26 +1571,16 @@ def test_relocation_reseed_required_page_count_is_bounded_and_restartable() -> N
 
 
 def test_relocation_reseed_aggregate_is_bounded_and_restartable() -> None:
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
     )
     strict_state = (
         RUNTIME_DIR / "py" / "freestanding_gc_state.py"
     ).read_text(encoding="utf-8")
-    c_reseed = c_src.split(
-        "static void pcc_gc_backend4_reseed_relocation_epoch_state", 1
-    )[1].split("void pcc_gc_telemetry_reset", 1)[0]
     py_reseed = py_src.split(
         "def _backend4_reseed_relocation_epoch_state", 1
     )[1].split('@c_abi_export("pcc_gc_backend4_evacuation_page_find")', 1)[0]
 
-    assert "pcc_gc_backend4_reseed_relocation_cursor" in c_reseed
-    assert "pcc_gc_backend4_reseed_relocation_revision" in c_reseed
-    assert c_reseed.count("PCC_GC_SAFEPOINT_BATCH") >= 2
-    assert "pcc_gc_backend4_reseed_plan_probe_wait(2)" in c_reseed
     assert '"pcc_gc_backend4_reseed_relocation_cursor"' in py_reseed
     assert '"pcc_gc_backend4_reseed_relocation_revision"' in py_reseed
     assert py_reseed.count("examined < 16") >= 2
@@ -1805,9 +1594,6 @@ def test_relocation_reseed_aggregate_is_bounded_and_restartable() -> None:
 
 
 def test_relocation_reseed_page_commit_is_bounded_without_raw_page_escape() -> None:
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(
-        encoding="utf-8"
-    )
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(
         encoding="utf-8"
     )
@@ -1823,18 +1609,10 @@ def test_relocation_reseed_page_commit_is_bounded_without_raw_page_escape() -> N
     strict_copy = (
         RUNTIME_DIR / "py" / "freestanding_gc_relocation_copy.py"
     ).read_text(encoding="utf-8")
-    c_reseed = c_src.split(
-        "static void pcc_gc_backend4_reseed_relocation_epoch_state", 1
-    )[1].split("void pcc_gc_telemetry_reset", 1)[0]
     py_reseed = py_src.split(
         "def _backend4_reseed_relocation_epoch_state", 1
     )[1].split('@c_abi_export("pcc_gc_backend4_evacuation_page_find")', 1)[0]
 
-    assert "pcc_gc_backend4_reseed_commit_owner" in c_reseed
-    assert "pcc_gc_backend4_reseed_plan_probe_wait(4)" in c_reseed
-    assert c_reseed.count("PCC_GC_SAFEPOINT_BATCH") >= 3
-    assert "pcc_gc_backend4_evacuation_page_detach_all_unlocked" not in c_reseed
-    assert "pcc_gc_backend4_evacuation_page_add_preallocated_unlocked" not in c_reseed
     assert '"pcc_gc_backend4_reseed_commit_owner"' in py_reseed
     assert "_backend4_reseed_plan_probe_wait(4)" in py_reseed
     assert py_reseed.count("examined < 16") >= 3
@@ -1843,18 +1621,6 @@ def test_relocation_reseed_page_commit_is_bounded_without_raw_page_escape() -> N
     assert 'define_global_i64("pcc_gc_backend4_reseed_commit_owner", 0)' in (
         strict_state
     )
-    c_candidate_add = c_src.split(
-        "static int pcc_gc_relocation_set_add", 1
-    )[1].split("static int pcc_gc_relocation_set_add_preallocated", 1)[0]
-    c_copy_snapshot = c_src.split(
-        "static int pcc_gc_relocate_copy_snapshot_unlocked", 1
-    )[1].split("typedef struct", 1)[0]
-    c_forwarding_prepare = c_src.rsplit(
-        "static PccGcForwardingInstallPlan *pcc_gc_forwarding_install_plan_prepare",
-        1,
-    )[1].split(
-        "static int64_t pcc_gc_install_forwarding_preallocated_unlocked", 1
-    )[0]
     strict_candidate_add = strict_selector.split(
         "def _backend4_add_candidate_node", 1
     )[1].split("@c_abi_export", 1)[0]
@@ -1864,14 +1630,7 @@ def test_relocation_reseed_page_commit_is_bounded_without_raw_page_escape() -> N
     strict_copy_entry = strict_copy.split(
         "def pcc_gc_relocate_copy", 1
     )[1]
-    for body in (
-        c_candidate_add,
-        c_copy_snapshot,
-        c_forwarding_prepare,
-        strict_candidate_add,
-        strict_forwarding_prepare,
-        strict_copy_entry,
-    ):
+    for body in (strict_candidate_add, strict_forwarding_prepare, strict_copy_entry):
         assert "pcc_gc_backend4_reseed_commit_owner" in body
 
 
@@ -1902,11 +1661,11 @@ def test_strict_reseed_retains_multiple_authoritative_evacuation_pages(
 def test_c_concurrent_reset_reseed_revalidates_prepared_plan(
     tmp_path: Path,
 ) -> None:
-    runtime = cached_threaded_c_runtime()
+    runtime = cached_threaded_pcc_python_runtime()
     result = _compile_and_run_threaded_archive(
         tmp_path,
         _concurrent_reset_reseed_plan_source(),
-        runtime / "libpy_runtime.a",
+        runtime / "libpy_runtime_pcc_py.a",
         "backend4_c_concurrent_reset_reseed",
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1930,11 +1689,11 @@ def test_strict_concurrent_reset_reseed_revalidates_prepared_plan(
 def test_c_reseed_forces_plan_growth_and_allocation_failure(
     tmp_path: Path,
 ) -> None:
-    runtime = cached_threaded_c_runtime()
+    runtime = cached_threaded_pcc_python_runtime()
     result = _compile_and_run_threaded_archive(
         tmp_path,
         _forced_reseed_plan_paths_source(),
-        runtime / "libpy_runtime.a",
+        runtime / "libpy_runtime_pcc_py.a",
         "backend4_c_forced_reseed_plan_paths",
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1978,11 +1737,11 @@ def test_strict_reseed_counts_more_than_one_page_batch(
 def test_c_reseed_count_cursor_survives_concurrent_full_reset(
     tmp_path: Path,
 ) -> None:
-    runtime = cached_threaded_c_runtime()
+    runtime = cached_threaded_pcc_python_runtime()
     result = _compile_and_run_threaded_archive(
         tmp_path,
         _forced_reseed_count_unlink_source(),
-        runtime / "libpy_runtime.a",
+        runtime / "libpy_runtime_pcc_py.a",
         "backend4_c_forced_reseed_count_unlink",
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -2006,11 +1765,11 @@ def test_strict_reseed_count_cursor_survives_concurrent_full_reset(
 def test_c_reseed_aggregate_cursor_survives_concurrent_full_reset(
     tmp_path: Path,
 ) -> None:
-    runtime = cached_threaded_c_runtime()
+    runtime = cached_threaded_pcc_python_runtime()
     result = _compile_and_run_threaded_archive(
         tmp_path,
         _forced_reseed_aggregate_unlink_source(),
-        runtime / "libpy_runtime.a",
+        runtime / "libpy_runtime_pcc_py.a",
         "backend4_c_forced_reseed_aggregate_unlink",
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -2034,11 +1793,11 @@ def test_strict_reseed_aggregate_cursor_survives_concurrent_full_reset(
 def test_c_reseed_page_cursor_survives_concurrent_full_reset(
     tmp_path: Path,
 ) -> None:
-    runtime = cached_threaded_c_runtime()
+    runtime = cached_threaded_pcc_python_runtime()
     result = _compile_and_run_threaded_archive(
         tmp_path,
         _forced_reseed_page_commit_unlink_source(),
-        runtime / "libpy_runtime.a",
+        runtime / "libpy_runtime_pcc_py.a",
         "backend4_c_forced_reseed_page_unlink",
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -2239,6 +1998,7 @@ def test_backend4_obj_dispatch_loads_forwarded_exception_slots(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -2367,6 +2127,7 @@ def test_backend4_obj_dispatch_loads_forwarded_instance_class_slot(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -4236,6 +3997,7 @@ def test_backend4_tls_exception_accessors_heal_forwarded_reference(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -4334,6 +4096,7 @@ def test_backend4_raise_context_chaining_resolves_forwarded_current_exception(tm
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -4434,6 +4197,7 @@ def test_backend4_relocation_retargets_class_attrs_side_table(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -4558,6 +4322,7 @@ def test_backend4_class_attrs_creation_uses_store_barrier(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         extern int64_t py_class_setattr(ProbeClassObject *cls, const char *name, PyObject *value);
@@ -4628,6 +4393,7 @@ def test_backend4_class_relocation_loads_forwarded_attrs_slot(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -4748,6 +4514,7 @@ def test_backend4_class_attrs_api_resolves_forwarded_class_argument(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         extern int64_t py_class_setattr(ProbeClassObject *cls, const char *name, PyObject *value);
@@ -4843,6 +4610,7 @@ def test_backend4_class_relocation_loads_forwarded_metadata_slots(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -4986,6 +4754,7 @@ def test_backend4_class_lookup_loads_forwarded_method_slot(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -5079,6 +4848,7 @@ def test_backend4_class_add_method_uses_metadata_store_barrier(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         extern void py_class_add_method(ProbeClassObject *cls, const char *name, PyObject *func);
@@ -5149,6 +4919,7 @@ def test_backend4_isinstance_resolves_forwarded_class_argument(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -5236,6 +5007,7 @@ def test_backend4_instance_get_field_loads_forwarded_slot(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -5338,6 +5110,7 @@ def test_backend4_instance_get_field_resolves_forwarded_class_slot(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -5432,6 +5205,7 @@ def test_backend4_instance_new_resolves_forwarded_class_argument(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -5519,6 +5293,7 @@ def test_backend4_class_add_method_resolves_forwarded_class_argument(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         extern void py_class_add_method(ProbeClassObject *cls, const char *name, PyObject *func);
@@ -5603,6 +5378,7 @@ def test_backend4_class_new_resolves_forwarded_base_argument(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         extern ProbeClassObject *py_class_new(
@@ -5673,6 +5449,7 @@ def test_backend4_class_new_resolves_forwarded_mro_entries(tmp_path):
             int32_t type_tag_alloc;
             PyObject *del_method;
             PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         extern ProbeClassObject *py_class_new(
@@ -5847,8 +5624,9 @@ def test_backend4_dunder_lookup_loads_forwarded_instance_class_slot(tmp_path):
             const char **field_names;
             int32_t instance_size;
             int32_t type_tag_alloc;
-            PyObject *attrs;
             PyObject *del_method;
+            PyObject *attrs;
+            struct ProbeClassObject *metaclass;
         } ProbeClassObject;
 
         typedef struct {
@@ -9787,8 +9565,6 @@ def test_backend4_class_method_growth_registers_payload_span(tmp_path):
 
 def test_backend4_class_creation_payload_span_registration_is_mirrored_source():
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(encoding="utf-8")
-    c_class = (RUNTIME_DIR / "src" / "py_class.c").read_text(encoding="utf-8")
-    c_gc = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_class = (RUNTIME_DIR / "py" / "py_class.py").read_text(encoding="utf-8")
     py_gc = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     abi = (REPO_ROOT / "pcc" / "py_frontend" / "codegen" / "runtime_abi.py").read_text(
@@ -9803,29 +9579,12 @@ def test_backend4_class_creation_payload_span_registration_is_mirrored_source():
     assert '@c_abi_export("pcc_gc_backend4_zpage_retarget_owner_payload_span")' in py_gc
     assert '"pcc_gc_backend4_zpage_unregister_owner_payload_span":' in abi
     assert '"pcc_gc_backend4_zpage_retarget_owner_payload_span":' in abi
-    assert "node->page->allocated_bytes = node->offset_bytes;" in c_gc
     # The zpage payload-span free moved to the freestanding zpage lifecycle
     # module as GC4 relocation policy migrated.
     zpage_lifecycle = (
         RUNTIME_DIR / "py" / "freestanding_gc_zpage_lifecycle.py"
     ).read_text(encoding="utf-8")
     assert "store_i64(page, 64, offset)" in zpage_lifecycle
-
-    c_new = c_class.split("PyClassObject *py_class_new(", 1)[1].split(
-        "void py_class_mark_slots_only", 1
-    )[0]
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in c_new
-    assert "n_bases * (int64_t)sizeof(PyClassObject *)" in c_new
-    assert "mro_len * (int64_t)sizeof(PyClassObject *)" in c_new
-
-    c_add_method = c_class.split("void py_class_add_method(", 1)[1].split(
-        "PyObject *py_class_lookup", 1
-    )[0]
-    assert "PyClassMethod *old_methods = cls->methods;" in c_add_method
-    assert "pcc_gc_backend4_zpage_retarget_owner_payload_span(" in c_add_method
-    assert "pcc_gc_backend4_zpage_unregister_owner_payload_span(" in c_add_method
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in c_add_method
-    assert "new_n * (int64_t)sizeof(PyClassMethod)" in c_add_method
 
     assert "pcc_gc_backend4_zpage_register_owner_payload_span = extern(" in py_class
     assert "pcc_gc_backend4_zpage_unregister_owner_payload_span = extern(" in py_class
@@ -9843,28 +9602,18 @@ def test_backend4_class_creation_payload_span_registration_is_mirrored_source():
     assert "pcc_gc_backend4_zpage_retarget_owner_payload_span(" in py_add_method
     assert "pcc_gc_backend4_zpage_unregister_owner_payload_span(" in py_add_method
     assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in py_add_method
-    assert "new_n * 16" in py_add_method
+    # A method record is {name, func, name_hash, name_length}: 24 bytes, the
+    # size py_internal.h pins with _Static_assert(sizeof(PyClassMethod) == 24).
+    assert PYCLASSMETHOD_SIZE == 24
+    assert "_Static_assert(sizeof(PyClassMethod) == 24" in (
+        RUNTIME_DIR / "src" / "py_internal.h"
+    ).read_text(encoding="utf-8")
+    assert "new_n * PYCLASSMETHOD_SIZE" in py_add_method
 
 
 def test_backend4_continuation_payload_span_registration_is_mirrored_source():
-    c_coroutine = (RUNTIME_DIR / "src" / "py_coroutine.c").read_text(encoding="utf-8")
-    c_gc = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_coroutine = (RUNTIME_DIR / "py" / "py_coroutine.py").read_text(encoding="utf-8")
     py_payload_source = STRICT_RELOCATION_PAYLOAD.read_text(encoding="utf-8")
-
-    c_new = c_coroutine.split("static PyObject *py_continuation_new_with_abi(", 1)[1]
-    c_new = c_new.split("PyObject *py_continuation_new(", 1)[0]
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in c_new
-    assert "n_slots * (int64_t)sizeof(PyObject *)" in c_new
-
-    c_payload = c_gc.split(
-        "static int pcc_gc_relocate_copy_payload_prepared_locked(", 1
-    )[1].split("static int pcc_gc_relocate_copy_payload(", 1)[0]
-    c_cont = c_payload.split("if (tag == PY_TYPE_CONTINUATION)", 1)[1].split(
-        "if (tag == PY_TYPE_EXC)", 1
-    )[0]
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span_unlocked(" in c_cont
-    assert "src_chunk->slot_count * (int64_t)sizeof(PyObject *)" in c_cont
 
     py_new = py_coroutine.split("def _py_continuation_new_with_abi(", 1)[1]
     py_new = py_new.split('@c_abi_export("py_continuation_new")', 1)[0]
@@ -9872,127 +9621,73 @@ def test_backend4_continuation_payload_span_registration_is_mirrored_source():
     assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in py_new
     assert "n_slots * 8" in py_new
 
-    py_payload = py_payload_source.split(
-        "def pcc_gc_relocate_copy_payload_prepared_locked", 1
-    )[1].split('@c_abi_export("pcc_gc_relocate_copy_payload")', 1)[0]
-    py_cont = py_payload.split(
+    # Relocation snapshots the slot array as a payload descriptor whose span
+    # covers every slot, and the raw publish registers the copied spans for the
+    # destination owner in one transaction.
+    py_snapshot = py_payload_source.split(
+        "def pcc_gc_relocation_payload_raw_snapshot_locked(", 1
+    )[1].split("\ndef ", 1)[0]
+    py_cont = py_snapshot.split(
         'if tag == abi_constant("object.type.continuation")', 1
     )[1].split(
         'if tag == abi_constant("object.type.exc")', 1
     )[0]
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in py_cont
-    assert "n_slots * 8" in py_cont
+    assert "_relocate_raw_add_descriptor(" in py_cont
+    assert py_cont.count("slot_count * 8") == 3
+    py_publish = py_payload_source.split(
+        "def _relocate_raw_publish_locked(to_obj, ctx) -> i64:", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked(" in (
+        py_publish
+    )
 
 
 def test_backend4_relocated_payload_span_registration_is_mirrored_source():
-    c_gc = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_gc = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     py_payload_source = STRICT_RELOCATION_PAYLOAD.read_text(encoding="utf-8")
 
-    assert (
-        "static int64_t " "pcc_gc_backend4_zpage_register_owner_payload_span_unlocked("
-    ) in c_gc
-    assert "pcc_gc_backend4_zpage_remove_payload_span_base_unlocked(" in c_gc
     assert "_backend4_zpage_remove_payload_span_base(" in py_gc
     assert "span_existing = load_ptr(node, 64)" in py_gc
     assert "store_i64(span_existing, 16, size_bytes)" in py_gc
     assert "allocated_existing < end_existing" in py_gc
-    unlocked_start = c_gc.index(
-        "static int64_t " "pcc_gc_backend4_zpage_register_owner_payload_span_unlocked("
-    )
-    unlocked_body = c_gc[
-        unlocked_start : c_gc.index(
-            "int64_t pcc_gc_backend4_zpage_register_owner_payload_span(",
-            unlocked_start,
-        )
-    ]
+
+    # Relocation snapshots every payload as a raw descriptor whose last byte
+    # count is the span registered for the destination owner (0 = copied but
+    # not a GC span); _relocate_raw_publish_locked registers them together.
+    py_snapshot = py_payload_source.split(
+        "def pcc_gc_relocation_payload_raw_snapshot_locked(", 1
+    )[1].split("\ndef ", 1)[0]
+
+    def branch(tag: str) -> str:
+        body = py_snapshot.split(
+            f'if tag == abi_constant("object.type.{tag}")', 1
+        )[1]
+        return body.split('if tag == abi_constant("object.type.', 1)[0]
+
+    for tag, span_arguments in (
+        ("dict", "ctx, entries, capacity * 24, capacity * 24, 40, capacity * 24, 0"),
+        ("set", "ctx, entries, capacity * 16, capacity * 16, 40, capacity * 16, 0"),
+        ("list", "ctx, items, capacity * 8, length * 8, 32, capacity * 8, 1"),
+    ):
+        assert span_arguments in branch(tag), tag
+    py_class = branch("class")
+    for span_expr in (
+        "n_bases * 8,\n                n_bases * 8,\n",
+        "n_mro * 8,\n                n_mro * 8,\n",
+        'method_bytes: i64 = n_methods * abi_constant("object.class_method.size")',
+    ):
+        assert span_expr in py_class, span_expr
+    # Field names are borrowed C strings: copied, never a GC slot span.
     assert (
-        "pcc_gc_backend4_zpage_remove_payload_spans_unlocked(node)" not in unlocked_body
+        'abi_constant("object.class.field_names_offset"),\n                0,\n'
+        in py_class
     )
-    assert "span->base != (uint8_t *)base" in unlocked_body
-    assert "span->size_bytes = size_bytes" in unlocked_body
-    assert "page->allocated_bytes < end" in unlocked_body
-    public_start = c_gc.index(
-        "int64_t pcc_gc_backend4_zpage_register_owner_payload_span("
+    py_publish = py_payload_source.split(
+        "def _relocate_raw_publish_locked(to_obj, ctx) -> i64:", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked(" in (
+        py_publish
     )
-    public_body = c_gc[
-        public_start : c_gc.index(
-            "int64_t pcc_gc_backend4_zpage_fragmentation_per_mille(",
-            public_start,
-        )
-    ]
-    assert "pcc_gc_graph_lock();" in public_body
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span_unlocked(" in public_body
-    assert "pcc_gc_backend4_zpage_remove_payload_span_base_unlocked(" in public_body
-    assert "pcc_gc_graph_unlock();" in public_body
-
-    c_payload = c_gc.split(
-        "static int pcc_gc_relocate_copy_payload_prepared_locked(", 1
-    )[1].split("static int pcc_gc_relocate_copy_payload(", 1)[0]
-    c_dict = c_payload.split("if (tag == PY_TYPE_DICT)", 1)[1].split(
-        "if (tag == PY_TYPE_SET)", 1
-    )[0]
-    c_set = c_payload.split("if (tag == PY_TYPE_SET)", 1)[1].split(
-        "if (tag == PY_TYPE_TUPLE)", 1
-    )[0]
-    c_list = c_payload.split("PyListObject *src = (PyListObject *)from;", 1)[1].split(
-        "return 0;\n}", 1
-    )[0]
-    for body, size_expr in (
-        (c_dict, "capacity * (int64_t)sizeof(DictEntry)"),
-        (c_set, "capacity * (int64_t)sizeof(SetEntry)"),
-        (c_list, "capacity * (int64_t)sizeof(PyObject *)"),
-    ):
-        assert "pcc_gc_backend4_zpage_register_owner_payload_span_unlocked(" in body
-        assert size_expr in body
-    c_class = c_payload.split("if (tag == PY_TYPE_CLASS)", 1)[1].split(
-        "if (tag == PY_TYPE_WEAKREF)", 1
-    )[0]
-    for size_expr in (
-        "n_bases * (int64_t)sizeof(PyClassObject *)",
-        "n_mro * (int64_t)sizeof(PyClassObject *)",
-        "n_methods * (int64_t)sizeof(PyClassMethod)",
-    ):
-        assert "pcc_gc_backend4_zpage_register_owner_payload_span_unlocked(" in c_class
-        assert size_expr in c_class
-
-    py_payload = py_payload_source.split(
-        "def pcc_gc_relocate_copy_payload_prepared_locked", 1
-    )[1].split('@c_abi_export("pcc_gc_relocate_copy_payload")', 1)[0]
-    py_dict = py_payload.split(
-        'if tag == abi_constant("object.type.dict")', 1
-    )[1].split(
-        'if tag == abi_constant("object.type.set")', 1
-    )[0]
-    py_set = py_payload.split(
-        'if tag == abi_constant("object.type.set")', 1
-    )[1].split(
-        'if tag == abi_constant("object.type.tuple")', 1
-    )[0]
-    py_list = py_payload.split(
-        'if tag == abi_constant("object.type.list")', 1
-    )[1].split(
-        "return 1\n\n    return 1", 1
-    )[0]
-    for body, size_expr in (
-        (py_dict, "capacity * 24"),
-        (py_set, "capacity * 16"),
-        (py_list, "capacity * 8"),
-    ):
-        assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in body
-        assert size_expr in body
-    py_class = py_payload.split(
-        'if tag == abi_constant("object.type.class")', 1
-    )[1].split(
-        'if tag == abi_constant("object.type.weakref")', 1
-    )[0]
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in py_class
-    for size_expr in (
-        'n_bases * abi_constant("object.pointer.size")',
-        'n_mro * abi_constant("object.pointer.size")',
-        'n_methods * abi_constant("object.class_method.size")',
-    ):
-        assert size_expr in py_class
 
 
 def test_backend4_genzgc_relocation_retargets_remembered_list_slots(tmp_path):
@@ -11464,7 +11159,6 @@ def test_backend4_str_join_leaves_leaf_string_list_items_unforwarded(tmp_path):
 
 def test_backend4_public_telemetry_symbols_are_wired():
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(encoding="utf-8")
-    c_src = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_src = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     relocation_payload = STRICT_RELOCATION_PAYLOAD.read_text(encoding="utf-8")
     relocation_selector = STRICT_RELOCATION_SELECTOR.read_text(encoding="utf-8")
@@ -11578,121 +11272,7 @@ def test_backend4_public_telemetry_symbols_are_wired():
     assert "PCC_GC_COUNTER_GENZGC_PAGE_PRESSURE_SCORE" in header
     assert "pcc_gc_note_slot_write_barrier" in header
     assert "pcc_gc_backend4_verify_no_old_addresses" in header
-    assert "pcc_gc_backend4_fragmentation_score" in c_src
-    assert "pcc_gc_backend4_generation_barrier_score" in c_src
-    assert "pcc_gc_backend4_store_buffer_entries" in c_src
-    assert "pcc_gc_backend4_generation_promotion_score" in c_src
-    assert "pcc_gc_backend4_evacuation_candidate_score" in c_src
-    assert "pcc_gc_backend4_evacuated_bytes" in c_src
-    assert "pcc_gc_backend4_page_policy_score" in c_src
-    assert "pcc_gc_backend4_large_object_defer_score" in c_src
-    assert "pcc_gc_backend4_large_object_deferred_bytes" in c_src
-    assert "pcc_gc_backend4_small_page_candidate_score" in c_src
-    assert "pcc_gc_backend4_medium_page_candidate_score" in c_src
-    assert "pcc_gc_backend4_evacuation_candidate_bytes" in c_src
-    assert "pcc_gc_backend4_small_page_candidate_bytes" in c_src
-    assert "pcc_gc_backend4_medium_page_candidate_bytes" in c_src
-    assert "pcc_gc_backend4_evacuation_candidate_zpage_bytes" in c_src
-    assert "pcc_gc_backend4_small_page_candidate_zpage_bytes" in c_src
-    assert "pcc_gc_backend4_medium_page_candidate_zpage_bytes" in c_src
-    assert "pcc_gc_backend4_evacuation_page_candidate_score" in c_src
-    assert "pcc_gc_backend4_evacuation_page_candidate_bytes" in c_src
-    assert "pcc_gc_backend4_evacuation_page_dirty_cards" in c_src
-    assert "pcc_gc_backend4_evacuation_drain" in c_src
-    assert "pcc_gc_backend4_evacuation_page_drain" in c_src
-    assert "pcc_gc_backend4_snapshot_selected_page_batch_unlocked" in c_src
-    assert "pcc_gc_backend4_store_buffer_drain_batches" in c_src
-    assert "pcc_gc_backend4_store_buffer_drained_entries" in c_src
-    assert "pcc_gc_backend4_store_buffer_duplicate_skips" in c_src
-    assert "pcc_gc_backend4_store_buffer_high_water" in c_src
-    assert "pcc_gc_backend4_store_buffer_owner_fanout_high_water" in c_src
-    assert "pcc_gc_backend4_store_buffer_owner_count_high_water" in c_src
-    assert "pcc_gc_backend4_store_buffer_incomplete_drains" in c_src
-    assert "pcc_gc_backend4_evacuation_incomplete_batches" in c_src
-    assert "pcc_gc_backend4_store_buffer_batch_capacity" in c_src
-    assert "pcc_gc_backend4_store_buffer_max_batch_size" in c_src
-    assert "pcc_gc_backend4_store_buffer_full_batches" in c_src
-    assert "pcc_gc_backend4_store_buffer_medium_capacity" in c_src
-    assert "pcc_gc_backend4_store_buffer_medium_pending" in c_src
-    assert "pcc_gc_backend4_store_buffer_medium_flushes" in c_src
-    assert "pcc_gc_backend4_store_buffer_medium_flushed_entries" in c_src
-    assert "pcc_gc_backend4_store_buffer_medium_full_flushes" in c_src
-    assert "pcc_gc_backend4_store_buffer_cross_thread_medium_flushes" in c_src
-    assert "pcc_gc_backend4_store_buffer_cross_thread_medium_flushed_entries" in c_src
-    assert "pcc_gc_backend4_evacuation_efficiency_per_mille" in c_src
-    assert "pcc_gc_backend4_fragmentation_backlog_bytes" in c_src
-    assert "pcc_gc_backend4_fragmentation_policy_score" in c_src
-    assert "pcc_gc_backend4_small_page_limit_bytes" in c_src
-    assert "pcc_gc_backend4_medium_page_limit_bytes" in c_src
-    assert "pcc_gc_backend4_large_defer_limit_bytes" in c_src
-    assert "pcc_gc_backend4_large_object_reconsiderations" in c_src
-    assert "pcc_gc_backend4_young_object_count" in c_src
-    assert "pcc_gc_backend4_old_object_count" in c_src
-    assert "pcc_gc_backend4_young_bytes" in c_src
-    assert "pcc_gc_backend4_old_bytes" in c_src
-    assert "pcc_gc_backend4_small_page_object_count" in c_src
-    assert "pcc_gc_backend4_medium_page_object_count" in c_src
-    assert "pcc_gc_backend4_large_page_object_count" in c_src
-    assert "pcc_gc_backend4_small_page_live_bytes" in c_src
-    assert "pcc_gc_backend4_medium_page_live_bytes" in c_src
-    assert "pcc_gc_backend4_large_page_live_bytes" in c_src
-    assert "pcc_gc_backend4_remembered_set_entries" in c_src
-    assert "pcc_gc_backend4_remembered_set_duplicate_skips" in c_src
-    assert "pcc_gc_backend4_remembered_set_high_water" in c_src
-    assert "pcc_gc_backend4_remembered_page_entries" in c_src
-    assert "pcc_gc_backend4_remembered_page_slot_entries" in c_src
-    assert "pcc_gc_backend4_remembered_page_high_water" in c_src
-    assert "pcc_gc_backend4_remembered_page_contains_slot" in c_src
-    assert "pcc_gc_backend4_remembered_page_clear_slot" in c_src
-    assert "pcc_gc_backend4_zpage_contains_remembered_card" in c_src
-    assert "pcc_gc_backend4_zpage_clear_remembered_card" in c_src
-    assert "pcc_gc_backend4_zpage_card_for_slot_unlocked" in c_src
-    assert "PccGcZPageNode" in c_src
-    assert "pcc_gc_backend4_zpage_track_alloc_unlocked" in c_src
-    assert "pcc_gc_backend4_zpage_find_reusable_page_unlocked" in c_src
-    assert "pcc_gc_backend4_evacuation_page_find_unlocked(page) != NULL" in c_src
-    assert "pcc_gc_backend4_zpage_note_owner_promoted_unlocked" in c_src
-    assert "pcc_gc_backend4_zpage_pop_free_page_unlocked" in c_src
-    assert "PCC_GC_BACKEND4_FREE_SMALL_PAGE_LIMIT 8" in c_src
-    assert "PCC_GC_BACKEND4_FREE_MEDIUM_PAGE_LIMIT 4" in c_src
-    assert "pcc_gc_backend4_zpage_remove_unlocked" in c_src
-    assert "typedef struct PccGcZPageEvacuationCandidate" in c_src
-    assert "pcc_gc_backend4_zpage_candidate_snapshot" in c_src
-    assert (
-        "pcc_gc_backend4_selector_scan_cursor = pcc_gc_backend4_zpages;"
-        in c_src
-    )
-    assert "pcc_gc_backend4_zpage_count" in c_src
-    assert "pcc_gc_backend4_zpage_capacity_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_fragmentation_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_large_pages" in c_src
-    assert "pcc_gc_backend4_zpage_used_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_allocated_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_reclaimable_gap_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_span_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_fragmentation_per_mille" in c_src
-    assert "pcc_gc_backend4_zpage_policy_score" in c_src
-    assert "typedef struct PccGcZPage" in c_src
-    assert "allocated_bytes" in c_src
-    assert "offset_bytes" in c_src
-    assert "size_bytes" in c_src
-    assert "span_base" in c_src
-    assert "span_capacity_bytes" in c_src
-    assert "PccGcZPage *page" in c_src
-    assert "pcc_gc_backend4_pages" in c_src
-    assert "pcc_gc_backend4_free_pages" in c_src
-    assert "pcc_gc_backend4_zpage_remembered_slots" in c_src
-    assert "pcc_gc_backend4_zpage_remembered_cards" in c_src
-    assert "pcc_gc_backend4_zpage_remembered_card_ratio_per_mille" in c_src
-    assert "pcc_gc_backend4_zpage_dirty_pages" in c_src
-    assert "pcc_gc_backend4_zpage_fragmented_pages" in c_src
-    assert "pcc_gc_backend4_zpage_young_pages" in c_src
-    assert "pcc_gc_backend4_zpage_old_pages" in c_src
-    assert "pcc_gc_backend4_zpage_free_pages" in c_src
-    assert "pcc_gc_backend4_zpage_free_capacity_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_free_span_bytes" in c_src
     assert "PCC_GC_BACKEND4_ZPAGE_SPAN_CARD_BYTES" in header
-    assert "PCC_GC_BACKEND4_ZPAGE_SPAN_CARD_BYTES" in c_src
     assert "pcc_gc_backend4_zpage_owner_offset_bytes" in header
     assert "pcc_gc_backend4_zpage_owner_size_bytes" in header
     assert "pcc_gc_backend4_zpage_owner_span_card" in header
@@ -11700,21 +11280,6 @@ def test_backend4_public_telemetry_symbols_are_wired():
     assert "pcc_gc_backend4_zpage_register_owner_payload_span" in header
     assert "pcc_gc_backend4_zpage_unregister_owner_payload_span" in header
     assert "pcc_gc_backend4_zpage_retarget_owner_payload_span" in header
-    assert "pcc_gc_backend4_zpage_owner_offset_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_owner_size_bytes" in c_src
-    assert "pcc_gc_backend4_zpage_owner_span_card" in c_src
-    assert "pcc_gc_backend4_zpage_owner_slot_span_card" in c_src
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span" in c_src
-    assert "pcc_gc_backend4_zpage_unregister_owner_payload_span" in c_src
-    assert "pcc_gc_backend4_zpage_retarget_owner_payload_span" in c_src
-    assert "PccGcZPagePayloadSpanNode" in c_src
-    assert "pcc_gc_backend4_zpage_card_for_node_slot_unlocked" in c_src
-    assert "pcc_gc_backend4_relocation_set_contains_page_unlocked" in c_src
-    assert "PccGcZPageEvacuationNode" in c_src
-    assert "pcc_gc_backend4_select_page_objects_batch_unlocked" in c_src
-    assert "pcc_gc_backend4_best_relocation_page_batch_unlocked" in c_src
-    assert "pcc_gc_backend4_evacuation_page_detach_unlocked" in c_src
-    assert "pcc_gc_backend4_page_pressure_score" in c_src
     assert '@c_abi_export("pcc_gc_backend4_fragmentation_score")' in py_src
     assert '@c_abi_export("pcc_gc_backend4_generation_barrier_score")' in py_src
     assert '@c_abi_export("pcc_gc_backend4_store_buffer_entries")' in py_src
@@ -11804,8 +11369,6 @@ def test_backend4_public_telemetry_symbols_are_wired():
     assert "pcc_gc_backend4_zpage_track_alloc" in zpage_allocation
     assert "pcc_gc_backend4_try_zpage_alloc" in zpage_allocation
     assert "pcc_gc_backend4_zpage_find_page_for_addr" in zpage_mechanics
-    assert "pcc_gc_backend4_try_zpage_alloc" in c_src
-    assert "PY_FLAG_GC_ZPAGE_ALLOC" in c_src
     assert "pcc_gc_backend4_zpage_find_reusable_page" in zpage_mechanics
     assert "load_i32(page, 108) == 0" in relocation_selector
     assert "_backend4_zpage_note_owner_promoted" in py_src
@@ -12034,9 +11597,7 @@ def test_backend4_public_telemetry_symbols_are_wired():
 
 
 def test_backend4_class_method_metadata_is_not_treated_as_gc_slots() -> None:
-    c_class = (RUNTIME_DIR / "src" / "py_class.c").read_text(encoding="utf-8")
     py_class = (RUNTIME_DIR / "py" / "py_class.py").read_text(encoding="utf-8")
-    c_gc = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
     py_gc = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
     strict_slots = STRICT_OBJECT_SLOTS.read_text(encoding="utf-8")
     strict_mark = STRICT_COMMON_MARK_CYCLE.read_text(encoding="utf-8")
@@ -12044,58 +11605,9 @@ def test_backend4_class_method_metadata_is_not_treated_as_gc_slots() -> None:
     strict_remap = STRICT_RELOCATION_REMAP.read_text(encoding="utf-8")
     relocation_payload = STRICT_RELOCATION_PAYLOAD.read_text(encoding="utf-8")
 
-    assert (
-        "PyObject *func = pcc_gc_note_relocation_read(m->methods[j].func);" in c_class
-    )
-    assert "m->methods[j].func = func;" in c_class
-    assert "&m->methods[j].func" not in c_class
     assert "func = pcc_gc_note_relocation_read(load_ptr(method_slot, 0))" in py_class
     assert "store_ptr(method_slot, 0, func)" in py_class
     assert "pcc_gc_load_ptr(m, ptr_add(methods, m_off + 8))" not in py_class
-
-    assert "pcc_gc_relocate_copy_slots(" in c_gc
-    assert "py_obj_update_slot(from_slot);" in c_gc
-    assert "from, to, from_slot, to_slot" in c_gc
-    helper_start = c_gc.index("static int pcc_gc_visit_class_slots(")
-    helper_end = c_gc.index(
-        "typedef struct {\n    PyObjSlotVisitor visit;",
-        helper_start,
-    )
-    helper_body = c_gc[helper_start:helper_end]
-    assert "visit_borrowed_update_only(&cls->methods[i].func" in helper_body
-    assert "visit_borrowed_update_only(&cls->del_method" in helper_body
-    visit_start = c_gc.index("int py_obj_visit_slots(", helper_end)
-    visit_end = c_gc.index(
-        "typedef struct {\n    void (*visit)(PyObject *child);",
-        visit_start,
-    )
-    visit_body = c_gc[visit_start:visit_end]
-    assert "pcc_gc_visit_class_slots(" in visit_body
-    assert "py_obj_visit_borrowed_update_only_slot" in visit_body
-    trace_adapter_start = c_gc.index("static void pcc_gc_trace_owner_slot(")
-    update_adapter_start = c_gc.index("static void pcc_gc_update_owner_slot(")
-    trace_adapter_body = c_gc[trace_adapter_start:update_adapter_start]
-    assert "role == PY_OBJ_SLOT_BORROWED_UPDATE_ONLY" in trace_adapter_body
-    promote_adapter_start = c_gc.index("static void pcc_gc_promote_owner_slot(")
-    promote_start = c_gc.index(
-        "static void pcc_gc_promote_owner_referents(",
-        promote_adapter_start,
-    )
-    promote_adapter_body = c_gc[promote_adapter_start:promote_start]
-    assert "role == PY_OBJ_SLOT_OWNED" in promote_adapter_body
-    assert "pcc_gc_promote_young_slot_with_mode" in promote_adapter_body
-    assert "pcc_gc_promote_young_borrowed_slot_with_mode" in promote_adapter_body
-    trace_start = c_gc.index("static void pcc_gc_trace_referents(", promote_start)
-    promote_body = c_gc[promote_start:trace_start]
-    trace_body = c_gc[
-        trace_start : c_gc.index("/* Slot-ADDRESS flavored sibling", trace_start)
-    ]
-    assert "py_obj_visit_slots(" in promote_body
-    assert "pcc_gc_promote_owner_slot" in promote_body
-    assert "py_obj_visit_slots(" in trace_body
-    assert "pcc_gc_trace_owner_slot" in trace_body
-    assert "visit(cls->methods[i].func)" not in c_gc
-    assert "visit(cls->del_method)" not in c_gc
 
     assert "def _relocate_copy_slots(from_obj, to_obj, ctx)" in relocation_payload
     assert "pcc_gc_backend4_remap_heal_slot(from_slot, 0)" in relocation_payload
@@ -12162,10 +11674,19 @@ def test_backend4_class_method_metadata_is_not_treated_as_gc_slots() -> None:
     assert (
         "pcc_gc_visit_object_slots(obj, pcc_gc_trace_slot, null())" in trace_py
     )
+    # Recursive promotion is a resumable worklist: the owner is enqueued and
+    # the drain walks its slots in budgeted slices with the promote visitor;
+    # the shallow mode visits once with the shallow visitor.
+    assert "_enqueue_promotion_owner(obj)" in promote_py
     assert (
-        "pcc_gc_visit_object_slots(obj, pcc_gc_generational_promote_slot, null())"
+        "pcc_gc_visit_object_slots(\n            obj, pcc_gc_generational_promote_shallow_slot, null()\n        )"
         in promote_py
     )
+    drain_py = strict_promotion.split(
+        "def pcc_gc_backend3_drain_promotion_worklist(budget: i64) -> i64:", 1
+    )[1].split("\n@c_abi_export", 1)[0]
+    assert "pcc_gc_visit_object_slots_slice(" in drain_py
+    assert "                pcc_gc_generational_promote_slot,\n" in drain_py
     assert (
         "pcc_gc_visit_object_slots(obj, pcc_gc_backend4_remap_slot, null())"
         in remap_py

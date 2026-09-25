@@ -25,6 +25,13 @@ def self_backend_target_identity(triple: str) -> str:
 def emit_self_asm(ir_text: str, triple: str | None = None) -> str:
     if triple is None:
         triple = parse_self_backend_target_triple(ir_text)
+        if triple.strip().lower() in ("", "unknown-unknown-unknown"):
+            # A module that declares no target is emitted for the host: the
+            # rule pcc.tools.ir_to_obj applies, and the one the AArch64
+            # emitter already assumes for an unpinned module.
+            from pcc.py_frontend.pipeline_targets import host_target_triple
+
+            triple = host_target_triple()
     target_id, emitter = resolve_self_asm_emitter(triple)
     asm_text = emitter(ir_text)
     return run_self_target_pass_pipeline(asm_text, target_id)

@@ -81,9 +81,8 @@ print(next(iterator))
     assert counts == [0, 0], "the unaccepted experiment must not change application codegen"
 
 
-@pytest.mark.parametrize("runtime_kind", ["c", "py"])
-def test_frame_restore_and_save_move_one_owner(tmp_path, request, runtime_kind):
-    archive = request.getfixturevalue("c_runtime_archive" if runtime_kind == "c" else "pcc_py_runtime_archive")
+def test_frame_restore_and_save_move_one_owner(tmp_path, pcc_py_runtime_archive):
+    archive = pcc_py_runtime_archive
     root = Path(__file__).resolve().parents[2]
     source = tmp_path / "frame_roundtrip.c"
     source.write_text('''#include "py_runtime.h"
@@ -131,12 +130,11 @@ int main(int argc, char **argv) {
     executable = tmp_path / "frame_roundtrip"
     command = ["clang", "-I" + str(root / "pcc/py_runtime/include"), str(source),
                str(archive), "-pthread", "-o", str(executable)]
-    if runtime_kind == "c":
-        control = subprocess.run([*command, "-Dpy_list_get_for_frame=py_list_get"],
-                                 capture_output=True, text=True, timeout=30)
-        assert control.returncode == 0, control.stderr
-        ran = subprocess.run([str(executable), "0"], capture_output=True, text=True, timeout=15)
-        assert ran.returncode == 2, "the ordinary retaining getter must leave the frame slot occupied"
+    control = subprocess.run([*command, "-Dpy_list_get_for_frame=py_list_get"],
+                             capture_output=True, text=True, timeout=30)
+    assert control.returncode == 0, control.stderr
+    ran = subprocess.run([str(executable), "0"], capture_output=True, text=True, timeout=15)
+    assert ran.returncode == 2, "the ordinary retaining getter must leave the frame slot occupied"
     built = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert built.returncode == 0, built.stdout + built.stderr
     for backend in range(5):
@@ -145,9 +143,8 @@ int main(int argc, char **argv) {
         assert ran.stdout.strip() == "frame-owner-roundtrip-ok"
 
 
-@pytest.mark.parametrize("runtime_kind", ["c", "py"])
-def test_frame_store_transfers_only_owned_sources(tmp_path, request, runtime_kind):
-    archive = request.getfixturevalue("c_runtime_archive" if runtime_kind == "c" else "pcc_py_runtime_archive")
+def test_frame_store_transfers_only_owned_sources(tmp_path, pcc_py_runtime_archive):
+    archive = pcc_py_runtime_archive
     root = Path(__file__).resolve().parents[2]
     source = tmp_path / "frame_owners.c"
     source.write_text('''#include "py_runtime.h"

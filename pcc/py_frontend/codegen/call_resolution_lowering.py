@@ -27,6 +27,22 @@ from ..py_ast import (
 from .errors import L1CodegenError
 
 
+def _call_kwargs_merge(span, operands):
+    """``__pcc_kwargs_merge__(m1, m2, ...)``: call keywords merged in order,
+    a repeated key raising CPython's TypeError (see ``_emit_kwargs_merge``)."""
+    return Call(
+        span=span,
+        ty=DictType(
+            name="dict",
+            key=StrType(name="str"),
+            value=DynType(name="dyn"),
+        ),
+        func=Name(span, DynType(name="dyn"), "__pcc_kwargs_merge__"),
+        args=operands,
+        kwargs=(),
+    )
+
+
 class CallResolutionLoweringMixin:
     def _call_resolution_span_or_none(self, node):
         try:
@@ -163,24 +179,11 @@ class CallResolutionLoweringMixin:
         if len(kwdict_srcs) == 1:
             kwdict_src = kwdict_srcs[0]
         elif len(kwdict_srcs) > 1:
+            # Call keywords, not a dict display: a key repeated across the
+            # ** operands is CPython's TypeError, so merge through the
+            # duplicate-checking helper instead of ``{**a, **b}``.
             span = self._call_resolution_span_or_none(kwdict_srcs[0])
-            pairs = []
-            for src in kwdict_srcs:
-                pairs.append(
-                    (
-                        Name(span, DynType(name="dyn"), "**"),
-                        src,
-                    )
-                )
-            kwdict_src = DictExpr(
-                span=span,
-                ty=DictType(
-                    name="dict",
-                    key=StrType(name="str"),
-                    value=DynType(name="dyn"),
-                ),
-                pairs=tuple(pairs),
-            )
+            kwdict_src = _call_kwargs_merge(span, tuple(kwdict_srcs))
 
         expanded_pos = list(plain_pos)
         if star_src is not None:
@@ -560,20 +563,6 @@ class CallResolutionLoweringMixin:
 
         if var_kw_idx >= 0:
             kw_pairs: list = []
-            raw_i = 0
-            while raw_i < len(raw_kwdict_srcs):
-                raw_src = raw_kwdict_srcs[raw_i]
-                kw_pairs.append(
-                    (
-                        Name(
-                            self._call_resolution_span_or_none(raw_src),
-                            DynType(name="dyn"),
-                            "**",
-                        ),
-                        raw_src,
-                    )
-                )
-                raw_i += 1
             kw_i = 0
             while kw_i < len(extra_kwargs):
                 kw_pair = extra_kwargs[kw_i]
@@ -590,7 +579,7 @@ class CallResolutionLoweringMixin:
                     )
                 )
                 kw_i += 1
-            resolved[var_kw_idx] = DictExpr(
+            explicit_kw_dict = DictExpr(
                 span=synth_span,
                 ty=DictType(
                     name="dict",
@@ -599,6 +588,22 @@ class CallResolutionLoweringMixin:
                 ),
                 pairs=tuple(kw_pairs),
             )
+            if raw_kwdict_srcs:
+                if len(raw_kwdict_srcs) > 1 and kw_pairs:
+                    raise NotImplementedError(
+                        "call cannot yet preserve source order for multiple "
+                        "**mapping operands interleaved with explicit keywords"
+                    )
+                # ``f(**a, **b)`` / ``f(**a, x=1)`` into ``**kw``: CPython
+                # raises TypeError for a key given twice across the operands
+                # and keywords; a dict display ``{**a, "x": 1}`` would
+                # overwrite.
+                resolved[var_kw_idx] = _call_kwargs_merge(
+                    synth_span,
+                    tuple(raw_kwdict_srcs) + (explicit_kw_dict,),
+                )
+            else:
+                resolved[var_kw_idx] = explicit_kw_dict
 
         i = 0
         while i < n_formal:

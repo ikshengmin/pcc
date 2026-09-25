@@ -10,7 +10,10 @@ from ..py_ast import BoolType, Call, DynType, Expr, FloatType, IntType, Name, Ty
 from . import marshal
 from .errors import L1CodegenError
 from .freestanding_abi_constants import PY_TYPE_FUNC
-from .generator_lowering import emit_generator_may_park_child
+from .generator_lowering import (
+    emit_generator_may_park_child,
+    funcdef_has_source_yield,
+)
 
 
 def _method_param_ir_type(host, method_fn, index: int, label: str) -> ir.Type:
@@ -505,6 +508,15 @@ class MethodCallLoweringMixin:
                     + "."
                     + method_name
                 )
+            if (
+                len(getattr(self, "_generator_ctx_stack", ())) == 0
+                and ast_fd is not None
+                and funcdef_has_source_yield(ast_fd)
+            ):
+                # A real generator method: outside a resumable caller the
+                # call's value is the generator itself, as in Python.
+                _method_release_arg_provenance(self, arg_provenance)
+                return result
             effect_name = info.name + "." + method_name
             if external_method_may_park and getattr(info, "owning_module", None):
                 effect_name = info.owning_module + "." + effect_name
@@ -653,6 +665,15 @@ class MethodCallLoweringMixin:
                     + "."
                     + method_name
                 )
+            if (
+                len(getattr(self, "_generator_ctx_stack", ())) == 0
+                and ast_fd is not None
+                and funcdef_has_source_yield(ast_fd)
+            ):
+                # A real generator method: outside a resumable caller the
+                # call's value is the generator itself, as in Python.
+                _method_release_arg_provenance(self, arg_provenance)
+                return result
             effect_name = info.name + "." + method_name
             if external_method_may_park and getattr(info, "owning_module", None):
                 effect_name = info.owning_module + "." + effect_name

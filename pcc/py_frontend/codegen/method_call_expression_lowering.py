@@ -26,6 +26,7 @@ from ..py_ast import (
     MemoryViewType,
     Name,
     NoneType,
+    SetType,
     StrLit,
     StrType,
     Subscript,
@@ -307,6 +308,18 @@ class MethodCallExpressionLoweringMixin:
         span,
     ) -> ir.Value:
         obj_val = self._emit_expr(obj_expr)
+        return self._emit_callable_attribute_call_on_value(
+            obj_val, attr_name, args, kwargs, span
+        )
+
+    def _emit_callable_attribute_call_on_value(
+        self,
+        obj_val: ir.Value,
+        attr_name: str,
+        args: tuple[Expr, ...],
+        kwargs: tuple[tuple[str, Expr], ...],
+        span,
+    ) -> ir.Value:
         name_ptr = self._attr_name_ptr(attr_name)
         if not kwargs and self._split_starstar_kwargs_unpack(args) is None:
             return self._emit_loaded_method_call(
@@ -1828,6 +1841,13 @@ class MethodCallExpressionLoweringMixin:
                 or self._native_builtin_module_for_name(attr.obj.ident) is not None
             )
             obj_ty_for_guard = attr.obj.ty
+            # A container receiver's method never belongs to a user class, even
+            # when exactly one class defines a method of that name: ``s.clear()``
+            # on a set called ``Bag.clear`` with the set as ``self``.  Scalar
+            # and None types stay out of this list: a global initialised to
+            # None and rebound later still infers as NoneType, and its method
+            # calls resolve through the unique class (the self-hosted backend's
+            # instruction-record buffer is one such receiver).
             if isinstance(
                 obj_ty_for_guard,
                 (
@@ -1838,6 +1858,7 @@ class MethodCallExpressionLoweringMixin:
                     BytesType,
                     ByteArrayType,
                     MemoryViewType,
+                    SetType,
                 ),
             ):
                 obj_ty_for_guard = None
@@ -1941,6 +1962,9 @@ class MethodCallExpressionLoweringMixin:
                     [self._emit_as_object(attr.obj)],
                     name=self._fresh("obj.clear"),
                 )
+                # Any receiver other than list/dict/set/bytearray takes the
+                # ordinary method call inside py_obj_clear and may raise.
+                self._emit_post_call_err_check(expr.span)
                 return self._emit_none_literal()
             native = self._maybe_emit_dict_method_via_dyn(expr)
             if native is not None:
@@ -2064,6 +2088,17 @@ class MethodCallExpressionLoweringMixin:
             self._emit_post_call_err_check(expr.span)
             self._note_owned_dynamic_call_value(result)
             return result
+        if (
+            isinstance(obj_ty, ByteArrayType)
+            and attr.name == "clear"
+            and not expr.args
+            and not expr.kwargs
+        ):
+            recv = self._emit_expr(attr.obj)
+            self.builder.call(self.runtime["py_bytearray_clear"], [recv])
+            self._gc_release_if_owned(recv, attr.obj)
+            self._emit_post_call_err_check(expr.span)
+            return self._emit_none_literal()
         if (
             isinstance(obj_ty, ByteArrayType)
             and attr.name == "pop"
@@ -2619,6 +2654,21 @@ class MethodCallExpressionLoweringMixin:
             # An unresolved imported annotation shell still uses the explicit
             # compatibility path; it supplies no native class/domain evidence.
             raw_val = self._emit_expr(attr.obj)
+            if raw_val not in getattr(self, "_cpy_values", ()) and (
+                getattr(self, "_strict_no_libpython", False)
+                or obj_ty.name == "type"
+            ):
+                # No CPython value can reach a strict build, and ``type(x)``
+                # of a native value is a native class (``type(cm).__aenter__
+                # (cm)`` in async-with).  The compatibility path would stub
+                # the whole function under --python-libpython=off.
+                return self._emit_callable_attribute_call_on_value(
+                    raw_val,
+                    attr.name,
+                    expr.args,
+                    expr.kwargs,
+                    expr.span,
+                )
             cpy_val, owned = self._marshal_to_cpython_consuming_source(
                 raw_val,
                 obj_ty,

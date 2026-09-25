@@ -58,6 +58,14 @@ py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_eq = extern("py_str_eq", (c_ptr, c_ptr), c_int64)
+py_str_concat = extern("py_str_concat", (c_ptr, c_ptr), c_ptr)
+py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
+py_int_to_str_obj = extern("py_int_to_str_obj", (c_ptr,), c_ptr)
+py_dict_keys = extern("py_dict_keys", (c_ptr,), c_ptr)
+py_list_len = extern("py_list_len", (c_ptr,), c_int64)
+py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
+py_list_new = extern("py_list_new", (c_int64,), c_ptr)
+py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
@@ -553,6 +561,278 @@ def _copy_varargs_known(args, start: int, nargs: int):
     return out
 
 
+def _sig_cat(acc, piece):
+    """Concatenate two owned strs, releasing both; NULL propagates."""
+    if ptr_is_null(acc) or ptr_is_null(piece):
+        if ptr_is_null(acc) == 0:
+            py_decref(acc)
+        if ptr_is_null(piece) == 0:
+            py_decref(piece)
+        return null()
+    out = py_str_concat(acc, piece)
+    py_decref(acc)
+    py_decref(piece)
+    return out
+
+
+def _sig_lit(text):
+    return py_str_new(text, strlen(text))
+
+
+def _sig_int(value: int):
+    boxed = py_int_from_i64(value)
+    if ptr_is_null(boxed):
+        return null()
+    out = py_int_to_str_obj(boxed)
+    py_decref(boxed)
+    return out
+
+
+def _sig_quoted(name):
+    """NEW ``'name'`` for a borrowed str."""
+    py_incref(name)
+    return _sig_cat(_sig_cat(_sig_lit(cstr("'")), name), _sig_lit(cstr("'")))
+
+
+def _sig_name_list(names_list):
+    """CPython's list: 'a' / 'a' and 'b' / 'a', 'b', and 'c'."""
+    n: int = py_list_len(names_list)
+    out = _sig_lit(cstr(""))
+    i: int = 0
+    while i < n:
+        if i > 0:
+            if n == 2:
+                out = _sig_cat(out, _sig_lit(cstr(" and ")))
+            elif i == n - 1:
+                out = _sig_cat(out, _sig_lit(cstr(", and ")))
+            else:
+                out = _sig_cat(out, _sig_lit(cstr(", ")))
+        item = py_list_get(names_list, i)
+        out = _sig_cat(out, _sig_quoted(item))
+        py_decref(item)
+        i = i + 1
+    return out
+
+
+@c_abi_export("py_func_display_name")
+def py_func_display_name(fn):
+    """NEW str: ``fn.__qualname__`` when set (nested defs, methods), else its
+    ``__name__`` -- what reprs and argument errors print."""
+    if ptr_is_null(fn) == 0 and load_i32(fn, 8) == PY_TYPE_FUNC:
+        attrs = pcc_gc_load_ptr(fn, ptr_add(fn, 88))
+        if ptr_is_null(attrs) == 0:
+            key = py_str_new(cstr("__qualname__"), 12)
+            if ptr_is_null(key) == 0:
+                value = py_dict_get(attrs, key)
+                py_decref(key)
+                if ptr_is_null(value) == 0:
+                    if is_tagged_int(value) == 0 and load_i32(value, 8) == PY_TYPE_STR:
+                        return value
+                    py_decref(value)
+        stored = load_ptr(fn, 72)
+        if ptr_is_null(stored) == 0:
+            return py_str_new(stored, strlen(stored))
+    return py_str_new(cstr("function"), 8)
+
+
+def _sig_raise(fn, tail):
+    """Raise ``TypeError(f"{qualname}() {tail}")``; ``tail`` is owned."""
+    text = _sig_cat(_sig_cat(py_func_display_name(fn), _sig_lit(cstr("() "))), tail)
+    if ptr_is_null(text):
+        return _func_type_error(cstr("function argument binding failed"))
+    exc = py_exc_new(3, py_str_utf8(text))
+    py_decref(text)
+    py_raise(exc)
+    if ptr_is_null(exc) == 0:
+        py_decref(exc)
+    return null()
+
+
+def _sig_kind(kinds, index: int) -> int:
+    kind_obj = py_tuple_get(kinds, index)
+    if ptr_is_null(kind_obj):
+        return -1
+    kind: int = py_int_value_i64(kind_obj)
+    py_decref(kind_obj)
+    return kind
+
+
+def _sig_has_default(has_defaults, index: int) -> int:
+    flag = py_tuple_get(has_defaults, index)
+    if ptr_is_null(flag):
+        return 0
+    out: int = py_obj_truthy(flag)
+    py_decref(flag)
+    return out
+
+
+def _signature_error(fn, sig, nargs: int, kwargs):
+    """Raise the TypeError CPython gives when ``nargs`` positional arguments
+    and ``kwargs`` do not bind to ``sig``, checked in CPython's order: keyword problems, too many
+    positional arguments, missing positional, missing keyword-only.
+    """
+    names = py_tuple_get(sig, 1)
+    kinds = py_tuple_get(sig, 2)
+    has_defaults = py_tuple_get(sig, 3)
+    if ptr_is_null(names) or ptr_is_null(kinds) or ptr_is_null(has_defaults):
+        _cleanup_signature_parts(names, kinds, has_defaults, null())
+        return _func_type_error(cstr("function argument binding failed"))
+    n: int = py_tuple_len(names)
+    has_varargs: int = 0
+    has_varkw: int = 0
+    npos: int = 0
+    nrequired_pos: int = 0
+    i: int = 0
+    while i < n:
+        kind: int = _sig_kind(kinds, i)
+        if kind == 3:
+            has_varargs = 1
+        elif kind == 4:
+            has_varkw = 1
+        elif kind == 0 or kind == 1:
+            npos = npos + 1
+            if _sig_has_default(has_defaults, i) == 0:
+                nrequired_pos = nrequired_pos + 1
+        i = i + 1
+    result = null()
+    kw_keys = null()
+    if _kwargs_empty(kwargs) == 0:
+        kw_keys = py_dict_keys(kwargs)
+    # 1. keyword problems, in keyword order.
+    if ptr_is_null(kw_keys) == 0:
+        posonly_as_kw = py_list_new(0)
+        k: int = 0
+        nkw: int = py_list_len(kw_keys)
+        while k < nkw and ptr_is_null(result):
+            key = py_list_get(kw_keys, k)
+            match: int = -1
+            match_kind: int = -1
+            j: int = 0
+            while j < n and match < 0:
+                formal = py_tuple_get(names, j)
+                if ptr_is_null(formal) == 0:
+                    if py_str_eq(formal, key) != 0:
+                        match = j
+                        match_kind = _sig_kind(kinds, j)
+                    py_decref(formal)
+                j = j + 1
+            if match < 0 or match_kind == 3 or match_kind == 4:
+                if has_varkw == 0:
+                    tail = _sig_lit(cstr("got an unexpected keyword argument "))
+                    result = _sig_raise(fn, _sig_cat(tail, _sig_quoted(key)))
+                    py_decref(key)
+                    py_decref(posonly_as_kw)
+                    py_decref(kw_keys)
+                    _cleanup_signature_parts(names, kinds, has_defaults, null())
+                    return result
+            elif match_kind == 1:
+                if has_varkw == 0:
+                    py_list_append(posonly_as_kw, key)
+            elif match_kind == 0 and match < nargs:
+                tail = _sig_lit(cstr("got multiple values for argument "))
+                result = _sig_raise(fn, _sig_cat(tail, _sig_quoted(key)))
+                py_decref(key)
+                py_decref(posonly_as_kw)
+                py_decref(kw_keys)
+                _cleanup_signature_parts(names, kinds, has_defaults, null())
+                return result
+            py_decref(key)
+            k = k + 1
+        if py_list_len(posonly_as_kw) > 0:
+            tail = _sig_lit(
+                cstr("got some positional-only arguments passed as keyword arguments: ")
+            )
+            quoted = py_list_new(0)
+            q: int = 0
+            while q < py_list_len(posonly_as_kw):
+                item = py_list_get(posonly_as_kw, q)
+                py_list_append(quoted, item)
+                py_decref(item)
+                q = q + 1
+            listing = _sig_lit(cstr(""))
+            q = 0
+            while q < py_list_len(quoted):
+                if q > 0:
+                    listing = _sig_cat(listing, _sig_lit(cstr(", ")))
+                item = py_list_get(quoted, q)
+                listing = _sig_cat(listing, _sig_quoted(item))
+                py_decref(item)
+                q = q + 1
+            py_decref(quoted)
+            py_decref(posonly_as_kw)
+            py_decref(kw_keys)
+            _cleanup_signature_parts(names, kinds, has_defaults, null())
+            return _sig_raise(fn, _sig_cat(tail, listing))
+        py_decref(posonly_as_kw)
+    # 2. too many positional arguments.
+    if has_varargs == 0 and nargs > npos:
+        tail = _sig_lit(cstr("takes "))
+        if nrequired_pos == npos:
+            tail = _sig_cat(tail, _sig_int(npos))
+        else:
+            tail = _sig_cat(tail, _sig_lit(cstr("from ")))
+            tail = _sig_cat(tail, _sig_int(nrequired_pos))
+            tail = _sig_cat(tail, _sig_lit(cstr(" to ")))
+            tail = _sig_cat(tail, _sig_int(npos))
+        if npos == 1 and nrequired_pos == npos:
+            tail = _sig_cat(tail, _sig_lit(cstr(" positional argument but ")))
+        else:
+            tail = _sig_cat(tail, _sig_lit(cstr(" positional arguments but ")))
+        tail = _sig_cat(tail, _sig_int(nargs))
+        if nargs == 1:
+            tail = _sig_cat(tail, _sig_lit(cstr(" was given")))
+        else:
+            tail = _sig_cat(tail, _sig_lit(cstr(" were given")))
+        if ptr_is_null(kw_keys) == 0:
+            py_decref(kw_keys)
+        _cleanup_signature_parts(names, kinds, has_defaults, null())
+        return _sig_raise(fn, tail)
+    # 3./4. missing positional, then missing keyword-only.
+    pass_kind: int = 0
+    while pass_kind < 2:
+        missing = py_list_new(0)
+        i = 0
+        while i < n:
+            kind = _sig_kind(kinds, i)
+            wanted: int = 0
+            if pass_kind == 0 and (kind == 0 or kind == 1) and i >= nargs:
+                wanted = 1
+            if pass_kind == 1 and kind == 2:
+                wanted = 1
+            if wanted != 0 and _sig_has_default(has_defaults, i) == 0:
+                formal = py_tuple_get(names, i)
+                supplied: int = 0
+                if ptr_is_null(kwargs) == 0 and ptr_is_null(kw_keys) == 0 and kind != 1:
+                    supplied = py_dict_contains(kwargs, formal)
+                if supplied == 0:
+                    py_list_append(missing, formal)
+                py_decref(formal)
+            i = i + 1
+        count: int = py_list_len(missing)
+        if count > 0:
+            tail = _sig_lit(cstr("missing "))
+            tail = _sig_cat(tail, _sig_int(count))
+            if pass_kind == 0:
+                tail = _sig_cat(tail, _sig_lit(cstr(" required positional argument")))
+            else:
+                tail = _sig_cat(tail, _sig_lit(cstr(" required keyword-only argument")))
+            if count > 1:
+                tail = _sig_cat(tail, _sig_lit(cstr("s")))
+            tail = _sig_cat(tail, _sig_lit(cstr(": ")))
+            tail = _sig_cat(tail, _sig_name_list(missing))
+            py_decref(missing)
+            if ptr_is_null(kw_keys) == 0:
+                py_decref(kw_keys)
+            _cleanup_signature_parts(names, kinds, has_defaults, null())
+            return _sig_raise(fn, tail)
+        py_decref(missing)
+        pass_kind = pass_kind + 1
+    if ptr_is_null(kw_keys) == 0:
+        py_decref(kw_keys)
+    _cleanup_signature_parts(names, kinds, has_defaults, null())
+    return _func_type_error(cstr("function arguments do not match its signature"))
+
+
 def _cleanup_signature_parts(names, kinds, has_defaults, defaults) -> None:
     if ptr_is_null(names) == 0:
         py_decref(names)
@@ -564,7 +844,7 @@ def _cleanup_signature_parts(names, kinds, has_defaults, defaults) -> None:
         py_decref(defaults)
 
 
-def _bind_signature(sig, args_tuple, kwargs):
+def _bind_signature(sig, args_tuple, kwargs, fn):
     names = py_tuple_get(sig, 1)
     kinds = py_tuple_get(sig, 2)
     has_defaults = py_tuple_get(sig, 3)
@@ -698,9 +978,7 @@ def _bind_signature(sig, args_tuple, kwargs):
                 if made_args != 0:
                     py_decref(args)
                 _cleanup_signature_parts(names, kinds, has_defaults, defaults)
-                return _func_type_error(
-                    cstr("native function got multiple values for argument")
-                )
+                return _signature_error(fn, sig, nargs, kwargs)
             item = py_tuple_get(args, pos_index)
             pos_index = pos_index + 1
             if ptr_is_null(item):
@@ -764,7 +1042,7 @@ def _bind_signature(sig, args_tuple, kwargs):
         if made_args != 0:
             py_decref(args)
         _cleanup_signature_parts(names, kinds, has_defaults, defaults)
-        return _func_type_error(cstr("missing required native function argument"))
+        return _signature_error(fn, sig, nargs, kwargs)
 
     if pos_index < nargs:
         py_decref(bound)
@@ -772,9 +1050,7 @@ def _bind_signature(sig, args_tuple, kwargs):
         if made_args != 0:
             py_decref(args)
         _cleanup_signature_parts(names, kinds, has_defaults, defaults)
-        return _func_type_error(
-            cstr("native function got too many positional arguments")
-        )
+        return _signature_error(fn, sig, nargs, kwargs)
 
     if saw_varkw == 0 and py_dict_len(remaining) != 0:
         py_decref(bound)
@@ -782,7 +1058,7 @@ def _bind_signature(sig, args_tuple, kwargs):
         if made_args != 0:
             py_decref(args)
         _cleanup_signature_parts(names, kinds, has_defaults, defaults)
-        return _func_type_error(cstr("unexpected native function keyword argument"))
+        return _signature_error(fn, sig, nargs, kwargs)
 
     py_decref(remaining)
     if made_args != 0:
@@ -791,7 +1067,7 @@ def _bind_signature(sig, args_tuple, kwargs):
     return bound
 
 
-def _bind_signature_no_kwargs(sig, args_tuple):
+def _bind_signature_no_kwargs(sig, args_tuple, fn):
     # Fast path for the dominant native-call shape: positional args only.
     # It mirrors _bind_signature but avoids constructing an empty kwargs dict
     # and reads validated tuple slots as borrowed values.
@@ -912,15 +1188,13 @@ def _bind_signature_no_kwargs(sig, args_tuple):
         py_decref(bound)
         if made_args != 0:
             py_decref(args)
-        return _func_type_error(cstr("missing required native function argument"))
+        return _signature_error(fn, sig, nargs, null())
 
     if pos_index < nargs:
         py_decref(bound)
         if made_args != 0:
             py_decref(args)
-        return _func_type_error(
-            cstr("native function got too many positional arguments")
-        )
+        return _signature_error(fn, sig, nargs, null())
 
     if made_args != 0:
         py_decref(args)
@@ -1033,9 +1307,9 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
     owns_call_args: int = 0
     if ptr_is_null(sig) == 0:
         if kwargs_are_empty != 0:
-            call_args = _bind_signature_no_kwargs(sig, args)
+            call_args = _bind_signature_no_kwargs(sig, args, fn)
         else:
-            call_args = _bind_signature(sig, args, kwargs)
+            call_args = _bind_signature(sig, args, kwargs, fn)
         if ptr_is_null(call_args):
             # Validate the binder's return before cleanup can run deallocators
             # and accidentally provide an unrelated pending exception.

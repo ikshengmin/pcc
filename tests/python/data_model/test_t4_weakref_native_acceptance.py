@@ -5,7 +5,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -13,7 +13,7 @@ RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 
 
 def test_t4_weakref_callable_and_dealloc_clear_native(tmp_path):
-    work_runtime = cached_c_runtime()
+    work_runtime = cached_pcc_python_runtime()
     src = tmp_path / "weakref_probe.c"
     exe = tmp_path / "weakref_probe.out"
     src.write_text(
@@ -51,7 +51,7 @@ def test_t4_weakref_callable_and_dealloc_clear_native(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-lm",
             "-o",
             str(exe),

@@ -426,6 +426,7 @@ class AttrLoadLoweringMixin:
         cache_name: str,
         result_name: str,
         method_name: str,
+        qualname: str = "",
     ) -> ir.Value:
         existing_cache = self.module.globals.get(cache_name)
         if isinstance(existing_cache, ir.GlobalVariable):
@@ -465,6 +466,11 @@ class AttrLoadLoweringMixin:
             [adapter, captures, self._attr_name_ptr(method_name)],
             name=self._fresh(result_name),
         )
+        if qualname:
+            self.builder.call(
+                self.runtime["py_obj_setattr"],
+                [created, self._attr_name_ptr("__qualname__"), self._emit_str_literal(qualname)],
+            )
         self._gc_release(captures)
         self._gc_pin(created)
         self.builder.store(created, cache_gv)
@@ -574,6 +580,7 @@ class AttrLoadLoweringMixin:
                 cache_name,
                 f"unbound.{method_name}.func",
                 method_name,
+                f"{owner_info.name}.{method_name}",
             )
 
         captures = self.builder.call(
@@ -585,6 +592,14 @@ class AttrLoadLoweringMixin:
             self.runtime["py_func_new_named"],
             [adapter, captures, self._attr_name_ptr(method_name)],
             name=self._fresh(f"unbound.{method_name}.func"),
+        )
+        self.builder.call(
+            self.runtime["py_obj_setattr"],
+            [
+                fn_obj,
+                self._attr_name_ptr("__qualname__"),
+                self._emit_str_literal(f"{owner_info.name}.{method_name}"),
+            ],
         )
         self._gc_release(captures)
         return fn_obj
@@ -1250,11 +1265,17 @@ class AttrLoadLoweringMixin:
                     "stdout",
                     "stderr",
                 ):
-                    # Value-position standard streams. Direct stream methods such as
-                    # sys.stdin.readline() still lower through native_system.py; the
-                    # marker here covers callbacks/containers that only need a
-                    # stable pcc object instead of a CPython stream.
-                    return self._emit_str_literal("<sys." + expr.name + ">")
+                    # Value-position standard streams (``destination = sys.stderr``,
+                    # ``print(..., file=out)``): a real file object over fd 0/1/2.
+                    # Direct stream methods such as sys.stdin.readline() still
+                    # lower through native_system.py.  This used to be the string
+                    # "<sys.stderr>", so every stored stream failed on .write.
+                    fd = {"stdin": 0, "stdout": 1, "stderr": 2}[expr.name]
+                    return self.builder.call(
+                        self.runtime["py_sys_stream_object"],
+                        [ir.Constant(_I64, fd)],
+                        name=self._fresh(f"sys.{expr.name}"),
+                    )
                 if builtin_module == "sys" and expr.name in ("prefix", "base_prefix"):
                     return self.builder.call(
                         self.runtime["py_sys_prefix_str"],

@@ -1,9 +1,9 @@
 """G-P3-LONGRUN fragmentation slice: malloc-heap statistics helper.
 
 Backends 0-3 are malloc-backed, so their fragmentation/overhead axis is
-defined at the allocator level: `pcc_os_heap_in_use_bytes` (bytes handed
-to the program) vs `pcc_os_heap_capacity_bytes` (bytes the allocator
-holds from the OS); proxy = capacity - in_use. Assertions stay loose
+defined at the allocator level: `pcc_os_heap_in_use_bytes` (bytes the
+production pcc allocator has handed out) vs `pcc_os_heap_capacity_bytes`
+(bytes it holds mapped from the OS); proxy = capacity - in_use. Assertions stay loose
 (the allocator owns the numbers): both calls succeed, capacity >=
 in_use, in_use grows across a retained allocation burst, and the
 freed burst does not push in_use below its pre-burst floor minus slack.
@@ -16,7 +16,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
@@ -28,7 +28,7 @@ def _cc() -> str:
 
 def _build_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_c_runtime()
+    return cached_pcc_python_runtime()
 
 
 _PROBE = """
@@ -41,7 +41,9 @@ _PROBE = """
 int main(void) {
     int64_t use0 = pcc_os_heap_in_use_bytes();
     int64_t cap0 = pcc_os_heap_capacity_bytes();
-    printf("%d\\n", use0 > 0);
+    /* The numbers are the production pcc allocator's own (requested vs
+     * mapped bytes); nothing may have been requested before this point. */
+    printf("%d\\n", use0 >= 0);
     printf("%d\\n", cap0 >= use0);
 
     /* retained burst: 8 MB in 1 KB blocks so in_use visibly grows */
@@ -78,7 +80,7 @@ def test_heap_stats_report_sane_values(tmp_path):
             "-std=c11",
             f"-I{work_runtime / 'include'}",
             str(src),
-            str(work_runtime / "libpy_runtime.a"),
+            str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o",
             str(exe),
         ],

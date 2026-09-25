@@ -6,33 +6,7 @@ that facade so pytest node ids stay stable.
 from _gc_substrate_common import *  # noqa: F401,F403
 
 
-
-
 def test_py_obj_next_roots_internal_iterator_state_across_call_and_equality():
-    c_source = (RUNTIME_DIR / "src" / "py_iter.c").read_text(encoding="utf-8")
-    c_body = c_source.split("PyObject *py_obj_next(PyObject *it_obj) {", 1)[1]
-    assert c_body.count("iter_prepare_moving_root(") == 6
-    compact_c_body = (
-        " ".join(c_body.split()).replace("( ", "(").replace(" )", ")")
-    )
-    call_at = compact_c_body.index("PyObject *result_storage = py_obj_call(")
-    eq_at = compact_c_body.index("int64_t is_stop = py_obj_eq(")
-    assert compact_c_body.index(
-        "iter_reload_moving_root(&result_storage", eq_at
-    ) > eq_at
-    assert compact_c_body.index(
-        "iter_reload_moving_root(&sentinel_storage", eq_at
-    ) > eq_at
-    done_at = compact_c_body.index("it->index = PY_ITER_CALLABLE_DONE", eq_at)
-    assert compact_c_body.rindex(
-        "iter_reload_moving_root(&it_storage, it_handle)", eq_at, done_at
-    ) < done_at
-    sequence_store = compact_c_body.index("it->index = iterator_index + 1")
-    assert compact_c_body.rindex(
-        "iter_reload_moving_root(&it_storage, it_handle)",
-        call_at,
-        sequence_store,
-    ) < sequence_store
 
     py_source = (RUNTIME_DIR / "py" / "py_iter.py").read_text(encoding="utf-8")
     py_body = py_source.split("def py_obj_next(it_obj):", 1)[1].split(
@@ -48,7 +22,7 @@ def test_py_obj_next_roots_internal_iterator_state_across_call_and_equality():
     ) < done_at
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_callable_iterator_reloads_state_after_cext_equality_relocation(
     tmp_path: Path,
     kind: str,
@@ -192,30 +166,6 @@ def test_backend4_callable_iterator_reloads_state_after_cext_equality_relocation
 
 
 def test_tuple_method_scans_share_rooted_callback_and_owned_element_cleanup():
-    c_source = (RUNTIME_DIR / "src" / "py_tuple_methods.c").read_text(
-        encoding="utf-8"
-    )
-    c_scan = c_source.split("static int64_t tuple_method_scan(", 1)[1].split(
-        "/* Number of elements", 1
-    )[0]
-    assert c_scan.count("tuple_method_prepare_root(") == 3
-    compact_c_scan = (
-        " ".join(c_scan.split()).replace("( ", "(").replace(" )", ")")
-    )
-    eq_at = compact_c_scan.index("int64_t equal = py_obj_eq(")
-    assert compact_c_scan.index(
-        "tuple_method_reload_root(&tuple_storage", eq_at
-    ) > eq_at
-    assert compact_c_scan.index(
-        "tuple_method_reload_root(&query_storage", eq_at
-    ) > eq_at
-    assert compact_c_scan.index(
-        "tuple_method_reload_root(&element_storage", eq_at
-    ) > eq_at
-    assert compact_c_scan.index("py_decref(element);", eq_at) > eq_at
-    for public in ("py_tuple_count", "py_tuple_index", "py_tuple_index_range"):
-        body = c_source.split(f"int64_t {public}(", 1)[1]
-        assert "tuple_method_scan(" in body.split("}", 1)[0]
 
     py_source = (RUNTIME_DIR / "py" / "py_tuple.py").read_text(encoding="utf-8")
     py_scan = py_source.split("def _tuple_method_scan(", 1)[1].split(
@@ -229,7 +179,7 @@ def test_tuple_method_scans_share_rooted_callback_and_owned_element_cleanup():
     assert py_scan.index("py_decref(element)", eq_at) > eq_at
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_tuple_method_equality_callback_reloads_relocated_tuple(
     tmp_path: Path,
     kind: str,
@@ -338,14 +288,10 @@ def test_backend4_tuple_method_equality_callback_reloads_relocated_tuple(
         ''',
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
         extra_sources=(
-            (RUNTIME_DIR / "src" / "py_tuple_methods.c",)
-            if kind == "c"
-            else ()
+            ()
         ),
         extra_compile_args=(
-            ("-Doffsetof(t,m)=__builtin_offsetof(t,m)",)
-            if kind == "c"
-            else ()
+            ()
         ),
     )
     run = subprocess.run(
@@ -358,33 +304,7 @@ def test_backend4_tuple_method_equality_callback_reloads_relocated_tuple(
 
 
 def test_dict_get_contains_use_rooted_restartable_hash_equality_lookup():
-    c_source = (RUNTIME_DIR / "src" / "py_dict.c").read_text(encoding="utf-8")
-    c_read = c_source.split("static PyObject *py_dict_rooted_op(", 1)[1].split(
-        "/* Rebuild indices[]", 1
-    )[0]
     # dict, key, value and the equality candidate are all rooted.
-    assert c_read.count("py_dict_prepare_moving_root(") == 4
-    compact_c_read = (
-        " ".join(c_read.split()).replace("( ", "(").replace(" )", ")")
-    )
-    hash_at = compact_c_read.index("int64_t hash = py_obj_hash(key)")
-    assert compact_c_read.index(
-        "py_dict_reload_moving_root(&dict_storage", hash_at
-    ) > hash_at
-    eq_at = compact_c_read.index("equal = py_obj_eq(candidate_storage, key)")
-    assert compact_c_read.index(
-        "py_dict_reload_moving_root(&dict_storage", eq_at
-    ) > eq_at
-    assert "if (!stable) goto restart;" in compact_c_read
-    c_get = c_source.split("PyObject *py_dict_get(", 1)[1].split(
-        "PyObject *py_dict_get_default", 1
-    )[0]
-    assert "return py_dict_rooted_op(dict, key, NULL, 0, NULL);" in c_get
-    c_contains = c_source.split("int64_t py_dict_contains(", 1)[1].split(
-        "int64_t py_dict_del", 1
-    )[0]
-    assert "PyObject *value = py_dict_get(dict, key);" in c_contains
-    assert "py_decref(value);" in c_contains
 
     py_source = (RUNTIME_DIR / "py" / "py_dict.py").read_text(encoding="utf-8")
     py_read = py_source.split("def _dict_rooted_op(", 1)[1].split(
@@ -398,7 +318,7 @@ def test_dict_get_contains_use_rooted_restartable_hash_equality_lookup():
     assert "if stable == 0:" in py_read
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_dict_read_hash_and_equality_callbacks_reload_relocated_owner(
     tmp_path: Path,
     kind: str,
@@ -568,21 +488,6 @@ def test_backend4_dict_read_hash_and_equality_callbacks_reload_relocated_owner(
 
 
 def test_set_contains_uses_rooted_restartable_hash_equality_lookup():
-    c_source = (RUNTIME_DIR / "src" / "py_set.c").read_text(encoding="utf-8")
-    c_read = c_source.split("static int64_t py_set_lookup_rooted(", 1)[1].split(
-        "/* Rebuild the entries", 1
-    )[0]
-    assert c_read.count("py_set_prepare_moving_root(") == 3
-    compact = " ".join(c_read.split()).replace("( ", "(").replace(" )", ")")
-    hash_at = compact.index("int64_t hash = py_obj_hash(item)")
-    assert compact.index("py_set_reload_moving_root(&set_storage", hash_at) > hash_at
-    eq_at = compact.index("int equal = py_obj_eq(candidate_storage, item)")
-    assert compact.index("py_set_reload_moving_root(&set_storage", eq_at) > eq_at
-    assert "if (!stable) goto restart;" in compact
-    c_public = c_source.split("int64_t py_set_contains(", 1)[1].split(
-        "int64_t py_set_remove", 1
-    )[0]
-    assert "return py_set_lookup_rooted(set, item, 0);" in c_public
 
     py_source = (RUNTIME_DIR / "py" / "py_set.py").read_text(encoding="utf-8")
     py_read = py_source.split("def _set_lookup_rooted(s, item, mode: int) -> int:", 1)[
@@ -596,7 +501,7 @@ def test_set_contains_uses_rooted_restartable_hash_equality_lookup():
     assert "if stable == 0:" in py_read
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_set_contains_hash_and_equality_callbacks_reload_relocated_owner(
     tmp_path: Path,
     kind: str,
@@ -752,21 +657,6 @@ def test_backend4_set_contains_hash_and_equality_callbacks_reload_relocated_owne
 
 
 def test_set_remove_commits_tombstone_and_size_before_decref_finish():
-    c_source = (RUNTIME_DIR / "src" / "py_set.c").read_text(encoding="utf-8")
-    c_remove = c_source.split("static int py_set_remove_rooted_slot(", 1)[1].split(
-        "static int64_t py_set_lookup_rooted", 1
-    )[0]
-    plan = c_remove.index("pcc_gc_store_ptr_plan_init")
-    lock = c_remove.index("pcc_gc_root_slot_lock()", plan)
-    commit = c_remove.index("pcc_gc_store_ptr_plan_commit_locked", lock)
-    size = c_remove.index("s->size--", commit)
-    unlock = c_remove.index("pcc_gc_root_slot_unlock()", size)
-    finish = c_remove.index("pcc_gc_store_ptr_plan_finish", unlock)
-    assert plan < lock < commit < size < unlock < finish
-    c_public = c_source.split("int64_t py_set_remove(", 1)[1].split(
-        "int64_t py_set_len", 1
-    )[0]
-    assert "py_set_lookup_rooted(set, item, 1)" in c_public
 
     py_source = (RUNTIME_DIR / "py" / "py_set.py").read_text(encoding="utf-8")
     py_remove = py_source.split("def _set_remove_rooted_slot(", 1)[1].split(
@@ -782,22 +672,6 @@ def test_set_remove_commits_tombstone_and_size_before_decref_finish():
 
 
 def test_set_add_commits_key_hash_and_counters_under_graph_lock():
-    c_source = (RUNTIME_DIR / "src" / "py_set.c").read_text(encoding="utf-8")
-    c_add = c_source.split("static int py_set_add_rooted_slot(", 1)[1].split(
-        "static int64_t py_set_lookup_rooted", 1
-    )[0]
-    plan = c_add.index("pcc_gc_store_ptr_plan_init")
-    lock = c_add.index("pcc_gc_root_slot_lock()", plan)
-    commit = c_add.index("pcc_gc_store_ptr_plan_commit_locked", lock)
-    entry_hash = c_add.index("entry->hash = hash", commit)
-    size = c_add.index("s->size++", entry_hash)
-    unlock = c_add.index("pcc_gc_root_slot_unlock()", size)
-    finish = c_add.index("pcc_gc_store_ptr_plan_finish", unlock)
-    assert plan < lock < commit < entry_hash < size < unlock < finish
-    c_public = c_source.split("void py_set_add(", 1)[1].split(
-        "void py_set_update", 1
-    )[0]
-    assert "py_set_lookup_rooted(set, item, 2)" in c_public
 
     py_source = (RUNTIME_DIR / "py" / "py_set.py").read_text(encoding="utf-8")
     py_add = py_source.split("def _set_add_rooted_slot(", 1)[1].split(
@@ -813,7 +687,7 @@ def test_set_add_commits_key_hash_and_counters_under_graph_lock():
     assert plan < lock < commit < entry_hash < size < unlock < finish
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_set_add_and_update_survive_callback_relocation_and_source_mutation(
     tmp_path: Path,
     kind: str,
@@ -1063,14 +937,10 @@ def test_strict_cext_managed_dealloc_flag_matches_public_bit62_abi():
     fake_python = (
         REPO_ROOT / "utils" / "fake_libc_include" / "Python.h"
     ).read_text(encoding="utf-8")
-    c_oracle = (RUNTIME_DIR / "src" / "py_capi_shim.c").read_text(
-        encoding="utf-8"
-    )
     assert "#define PCC_TPFLAGS_MANAGED_DEALLOC (1UL << 62)" in fake_python
-    assert "#define PCC_TPFLAGS_MANAGED_DEALLOC (1UL << 62)" in c_oracle
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence(
     tmp_path: Path,
     kind: str,
@@ -1082,7 +952,7 @@ def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence
         stem="backend4_set_remove_split_commit",
         source_text=(
             "#define PCC_PROBE_STRICT "
-            + ("1\n" if kind == "pcc_python" else "0\n")
+            + ("1\n")
             + r'''
             #include "Python.h"
             #include <stdint.h>
@@ -1223,7 +1093,7 @@ def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_list_growth_reaches_large_capacity_without_span_failure(
     tmp_path: Path,
     kind: str,
@@ -1271,7 +1141,7 @@ def test_backend4_list_growth_reaches_large_capacity_without_span_failure(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_capi_sequence_fast_items_pins_list_and_tuple_owners(
     tmp_path: Path,
     kind: str,

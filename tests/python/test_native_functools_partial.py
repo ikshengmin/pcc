@@ -30,7 +30,6 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     exe = tmp_path / "prog_bin"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
@@ -192,7 +191,6 @@ def test_functools_partial_compiled_sibling_function_no_libpython(tmp_path):
     repo_root = Path.cwd()
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv",
@@ -264,7 +262,6 @@ def test_package_method_default_async_function_partial_no_libpython(tmp_path):
     exe = tmp_path / "pkg_main"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
@@ -308,7 +305,6 @@ def test_package_main_method_default_async_function_partial_no_libpython(tmp_pat
     exe = tmp_path / "pkg_main"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",

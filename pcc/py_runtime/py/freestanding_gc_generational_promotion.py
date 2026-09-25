@@ -4,11 +4,12 @@ from pcc.py_runtime.py.py_abi_constants import (
     PY_TYPE_MEMORYVIEW,
 )
 
-from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i64,
     atomic_rmw_i32,
     atomic_store_i64,
+    cstr,
     global_addr,
     global_load_ptr,
     global_store_ptr,
@@ -37,6 +38,9 @@ pcc_gc_backend4_zpage_note_owner_promoted = extern(
     "pcc_gc_backend4_zpage_note_owner_promoted", (c_ptr,), c_void
 )
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
+pcc_py_gc_defer_tripwire = extern(
+    "pcc_py_gc_defer_tripwire", (c_ptr, c_ptr, c_int32), c_void
+)
 pcc_gc_forwarding_find = extern("pcc_gc_forwarding_find", (c_ptr,), c_ptr)
 pcc_gc_generational_oldify_copy = extern(
     "pcc_gc_generational_oldify_copy", (c_ptr,), c_ptr
@@ -93,6 +97,18 @@ def pcc_gc_generational_promote_young_if_known(obj) -> None:
         pcc_gc_trace_referents_for_promotion(obj)
         return
     promoted_flags: i64 = load_i32(obj, 12)
+    if (promoted_flags & 256) != 0:
+        # A YOUNG object can never already be OLD: promoting it again would
+        # corrupt the young list and (GC4) carry YOUNG into the next bit.
+        pcc_py_gc_defer_tripwire(
+            cstr(
+                "pcc_gc_promote_young_object: promoting a YOUNG object already"
+                " marked OLD (young->old generation invariant violated)"
+            ),
+            cstr("pcc/py_runtime/py/freestanding_gc_generational_promotion.py"),
+            99,
+        )
+        return
     pcc_gc_backend3_young_unlink(pcc_gc_object_index_find(obj))
     if backend == 4 and (promoted_flags & 256) == 0:
         # YOUNG and OLD are adjacent bits.  On the valid GC4 transition,

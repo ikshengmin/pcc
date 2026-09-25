@@ -24,6 +24,8 @@ def add(left: int, right: int) -> int:
 
 print(add(20, 22))
 """
+# What CPython prints for FUNCTION_SMOKE_SOURCE; the pcc1 binary must match it.
+FUNCTION_SMOKE_EXPECTED_STDOUT = "42\n"
 
 STAGE1_METRIC_SCOPES = {
     "wall_s": "end_to_end_elapsed",
@@ -210,6 +212,83 @@ def _set_stage1_build_modes(
         )
 
 
+def run_function_smoke(
+    compiler: Path,
+    *,
+    work_dir: Path,
+    output_dir: Path,
+    env: dict[str, str],
+    timeout: int,
+    ab,
+) -> None:
+    """Compile FUNCTION_SMOKE_SOURCE with ``compiler``, run it, check stdout.
+
+    Both steps keep their stdout/stderr under ``output_dir``; any failure,
+    including output that differs from CPython's, raises ``CompileABError``.
+    """
+    source = work_dir / "stage1_function_smoke.py"
+    program = work_dir / "stage1_function_smoke"
+    source.write_text(FUNCTION_SMOKE_SOURCE, encoding="utf-8")
+    compile_result = ab._run_process(
+        [
+            str(compiler),
+            "--backend",
+            "self",
+            "--python-libpython",
+            "off",
+            "--ir-scaffold",
+            "on",
+            str(source),
+            "-o",
+            str(program),
+        ],
+        timeout=timeout,
+        env=env,
+        cwd=work_dir,
+    )
+    (output_dir / "function-smoke-compile.stdout").write_text(
+        compile_result.stdout,
+        encoding="utf-8",
+    )
+    (output_dir / "function-smoke-compile.stderr").write_text(
+        compile_result.stderr,
+        encoding="utf-8",
+    )
+    if compile_result.returncode != 0 or not program.is_file():
+        raise ab.CompileABError(
+            "stage1 pcc1 function compile smoke failed rc="
+            + str(compile_result.returncode)
+            + ": "
+            + compile_result.stderr[-2000:]
+        )
+    run_result = ab._run_process(
+        [str(program)],
+        timeout=timeout,
+        env=env,
+        cwd=work_dir,
+    )
+    (output_dir / "function-smoke-run.stdout").write_text(
+        run_result.stdout,
+        encoding="utf-8",
+    )
+    (output_dir / "function-smoke-run.stderr").write_text(
+        run_result.stderr,
+        encoding="utf-8",
+    )
+    if (
+        run_result.returncode != 0
+        or run_result.stdout != FUNCTION_SMOKE_EXPECTED_STDOUT
+    ):
+        raise ab.CompileABError(
+            "stage1 pcc1 function run smoke failed rc="
+            + str(run_result.returncode)
+            + " stdout="
+            + repr(run_result.stdout)
+            + " stderr="
+            + run_result.stderr[-2000:]
+        )
+
+
 def _validate_source_root(path: str, ab) -> Path:
     root = Path(path).expanduser().resolve(strict=True)
     if not (root / "pcc" / "__main__.py").is_file():
@@ -335,64 +414,14 @@ def _run_build(args: argparse.Namespace, ab, *, run_token: str) -> dict[str, Any
     )
     if smoke.returncode != 0:
         raise ab.CompileABError("stage1 pcc1 --help smoke failed")
-    function_smoke_source = private_work / "stage1_function_smoke.py"
-    function_smoke_output = private_work / "stage1_function_smoke"
-    function_smoke_source.write_text(FUNCTION_SMOKE_SOURCE, encoding="utf-8")
-    function_compile = ab._run_process(
-        [
-            str(output),
-            "--backend",
-            "self",
-            "--python-libpython",
-            "off",
-            "--ir-scaffold",
-            "on",
-            str(function_smoke_source),
-            "-o",
-            str(function_smoke_output),
-        ],
-        timeout=args.smoke_timeout,
+    run_function_smoke(
+        output,
+        work_dir=private_work,
+        output_dir=output_dir,
         env=env,
-        cwd=private_work,
-    )
-    (output_dir / "function-smoke-compile.stdout").write_text(
-        function_compile.stdout,
-        encoding="utf-8",
-    )
-    (output_dir / "function-smoke-compile.stderr").write_text(
-        function_compile.stderr,
-        encoding="utf-8",
-    )
-    if function_compile.returncode != 0 or not function_smoke_output.is_file():
-        raise ab.CompileABError(
-            "stage1 pcc1 function compile smoke failed rc="
-            + str(function_compile.returncode)
-            + ": "
-            + function_compile.stderr[-2000:]
-        )
-    function_run = ab._run_process(
-        [str(function_smoke_output)],
         timeout=args.smoke_timeout,
-        env=env,
-        cwd=private_work,
+        ab=ab,
     )
-    (output_dir / "function-smoke-run.stdout").write_text(
-        function_run.stdout,
-        encoding="utf-8",
-    )
-    (output_dir / "function-smoke-run.stderr").write_text(
-        function_run.stderr,
-        encoding="utf-8",
-    )
-    if function_run.returncode != 0 or function_run.stdout != "42\n":
-        raise ab.CompileABError(
-            "stage1 pcc1 function run smoke failed rc="
-            + str(function_run.returncode)
-            + " stdout="
-            + repr(function_run.stdout)
-            + " stderr="
-            + function_run.stderr[-2000:]
-        )
     linkage = ab._linkage(
         output,
         timeout=args.smoke_timeout,

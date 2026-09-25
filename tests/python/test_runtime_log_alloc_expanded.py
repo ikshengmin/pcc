@@ -8,17 +8,9 @@ import textwrap
 from pathlib import Path
 
 
-def test_pcc_log_alloc_covers_scalar_class_func_weakref_exception_paths(tmp_path):
+def test_pcc_log_alloc_covers_scalar_class_func_weakref_exception_paths(tmp_path, pcc_py_runtime_archive):
     repo = Path(__file__).absolute().parents[2]
     runtime = repo / "pcc" / "py_runtime"
-
-    make = subprocess.run(
-        ["make", "-C", str(runtime), "libpy_runtime.a"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert make.returncode == 0, make.stdout + make.stderr
 
     src = tmp_path / "alloc_expanded_probe.c"
     exe = tmp_path / "alloc_expanded_probe"
@@ -67,7 +59,7 @@ def test_pcc_log_alloc_covers_scalar_class_func_weakref_exception_paths(tmp_path
         "-std=c11",
         f"-I{runtime / 'include'}",
         str(src),
-        str(runtime / "libpy_runtime.a"),
+        str(pcc_py_runtime_archive),
         "-lm",
         "-pthread",
         "-o",

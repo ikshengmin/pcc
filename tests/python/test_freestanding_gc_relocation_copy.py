@@ -23,8 +23,6 @@ FORWARDING_SOURCE = (
 )
 INDEX_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_index_table.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
-C_SOURCE = RUNTIME_DIR / "src" / "py_gc_backend.c"
-INDEX_C_SOURCE = RUNTIME_DIR / "src" / "py_gc_index_table.c"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
@@ -244,49 +242,12 @@ def test_relocation_copy_preserves_transaction_contract() -> None:
     assert allocation < commit_lock < commit_unlock < first_finish_free
     assert commit_unlock < failure_decref
 
-    c_src = C_SOURCE.read_text(encoding="utf-8")
-    assert "sizeof(PccGcRelocationCopyFinish) == 24" in c_src
-    assert "offsetof(PccGcRelocationCopyFinish, relocation_node) == 0" in c_src
-    assert "offsetof(PccGcRelocationCopyFinish, evacuation_node) == 8" in c_src
-    c_commit = c_src.split(
-        "static PyObject *pcc_gc_relocate_copy_preallocated_unlocked(", 1
-    )[1].split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[0]
-    assert "finish->relocation_node = detached_relocation;" in c_commit
-    assert "finish->evacuation_node = detached_page;" in c_commit
-    for forbidden in (
-        "pcc_gc_alloc(",
-        "pcc_thread_safepoint(",
-        "py_decref(",
-    ):
-        assert forbidden not in c_commit
-    c_public = c_src.split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[1].split(
-        "static int64_t pcc_gc_backend4_snapshot_relocation_batch_unlocked", 1
-    )[0]
-    assert "PccGcRelocationCopyFinish finish = { 0 };" in c_public
-    assert (
-        "from,size,to,&pairs,forwarding_plan,&finish"
-        in "".join(c_public.split())
-    )
-    first_unlock = c_public.index("pcc_gc_graph_unlock();")
-    allocation = c_public.index("PyObject *to = pcc_gc_alloc(")
-    commit_lock = c_public.index("pcc_gc_graph_lock();", allocation)
-    commit_unlock = c_public.index("pcc_gc_graph_unlock();", commit_lock)
-    finish = c_public.index("pcc_gc_relocate_copy_finish(&finish);")
-    failure_decref = c_public.index("py_decref(to)", finish)
-    assert first_unlock < allocation < commit_lock < commit_unlock < finish
-    assert finish < failure_decref
-
 
 def test_relocation_copy_defers_source_zpage_free_after_graph_unlock() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     zpage = (
         RUNTIME_DIR / "py" / "freestanding_gc_zpage_lifecycle.py"
     ).read_text(encoding="utf-8")
-    c_src = C_SOURCE.read_text(encoding="utf-8")
 
     assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
         "pcc_gc_backend4_zpage_detach_for_relocation"
@@ -328,52 +289,12 @@ def test_relocation_copy_defers_source_zpage_free_after_graph_unlock() -> None:
     )[1].split('@c_abi_export(', 1)[0]
     assert "free(node)" in strict_detach_finish
 
-    assert "sizeof(PccGcRelocationCopyFinish) == 24" in c_src
-    assert "offsetof(PccGcRelocationCopyFinish, source_zpage_node) == 16" in c_src
-    c_commit = c_src.split(
-        "static PyObject *pcc_gc_relocate_copy_preallocated_unlocked(", 1
-    )[1].split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[0]
-    assert "if (finish == NULL) return NULL;" in c_commit
-    assert "pcc_gc_backend4_zpage_detach_for_relocation_unlocked(from)" in c_commit
-    assert "pcc_gc_backend4_zpage_remove_unlocked(from)" not in c_commit
-    assert "free(" not in c_commit
-    c_detach = c_src.split(
-        "static PccGcZPageNode *pcc_gc_backend4_zpage_detach_for_relocation_unlocked(",
-        1,
-    )[1].split(
-        "static void pcc_gc_backend4_zpage_finish_relocation_detach(", 1
-    )[0]
-    assert "free(" not in c_detach
-    assert "pcc_gc_backend4_zpage_node_release_unlocked(" not in c_detach
-    c_finish = c_src.split(
-        "static void pcc_gc_relocate_copy_finish(", 1
-    )[1].split(
-        "static PyObject *pcc_gc_relocate_copy_preallocated_unlocked(", 1
-    )[0]
-    assert "pcc_gc_backend4_zpage_finish_relocation_detach(" in c_finish
-
-    c_public = c_src.split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[1].split(
-        "static int64_t pcc_gc_backend4_snapshot_relocation_batch_unlocked", 1
-    )[0]
-    c_unlock = c_public.index(
-        "pcc_gc_graph_unlock();",
-        c_public.index("PyObject *committed"),
-    )
-    c_finish_call = c_public.index("pcc_gc_relocate_copy_finish(&finish);", c_unlock)
-    assert c_unlock < c_finish_call
-
 
 def test_relocation_copy_preallocates_forwarding_indexes_outside_graph_lock(
 ) -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     forwarding = FORWARDING_SOURCE.read_text(encoding="utf-8")
     index_source = INDEX_SOURCE.read_text(encoding="utf-8")
-    c_src = C_SOURCE.read_text(encoding="utf-8")
-    c_index = INDEX_C_SOURCE.read_text(encoding="utf-8")
 
     expected_signatures = {
         "pcc_gc_forwarding_install_plan_prepare": (
@@ -448,59 +369,6 @@ def test_relocation_copy_preallocates_forwarding_indexes_outside_graph_lock(
     for forbidden in ("malloc(", "calloc(", "free("):
         assert forbidden not in strict_index_commit
 
-    c_commit = c_src.split(
-        "static PyObject *pcc_gc_relocate_copy_preallocated_unlocked(", 1
-    )[1].split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[0]
-    assert "pcc_gc_install_forwarding_preallocated_unlocked(" in c_commit
-    assert "pcc_gc_install_forwarding_unlocked(from, to)" not in c_commit
-
-    c_public = c_src.split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[1].split(
-        "static int64_t pcc_gc_backend4_snapshot_relocation_batch_unlocked", 1
-    )[0]
-    c_plan_prepare = c_public.index(
-        "pcc_gc_forwarding_install_plan_prepare(from, to)"
-    )
-    c_commit_lock = c_public.index("pcc_gc_graph_lock();", c_plan_prepare)
-    c_commit_unlock = c_public.index(
-        "pcc_gc_graph_unlock();", c_commit_lock
-    )
-    c_plan_finish = c_public.index(
-        "pcc_gc_forwarding_install_plan_finish(forwarding_plan);",
-        c_commit_unlock,
-    )
-    assert c_plan_prepare < c_commit_lock < c_commit_unlock < c_plan_finish
-
-    c_install = c_src.rsplit(
-        "static int64_t pcc_gc_install_forwarding_preallocated_unlocked(", 1
-    )[1].split("static int64_t pcc_gc_install_forwarding_unlocked(", 1)[0]
-    for forbidden in ("malloc(", "calloc(", "free(", "py_decref("):
-        assert forbidden not in c_install
-    assert "pcc_gc_forwarding_plan_index_commit(" in c_install
-    assert "pcc_gc_forwarding_plan_index_insert(" in c_install
-    assert "pcc_gc_forwarding_index_remove(from)" in c_install
-
-    c_prepare = c_src.rsplit(
-        "static PccGcForwardingInstallPlan "
-        "*pcc_gc_forwarding_install_plan_prepare(",
-        1,
-    )[1].split(
-        "static int64_t pcc_gc_install_forwarding_preallocated_unlocked(", 1
-    )[0]
-    c_prepare_unlock = c_prepare.index("pcc_gc_graph_unlock();")
-    assert c_prepare_unlock < c_prepare.index("calloc(")
-    assert "calloc(" not in c_prepare[:c_prepare_unlock]
-    assert "sizeof(PccGcForwardingInstallPlan) == 72" in c_src
-
-    c_index_commit = c_index.split(
-        "int64_t pcc_gc_forwarding_plan_index_commit(", 1
-    )[1].split("int64_t pcc_gc_forwarding_plan_index_insert(", 1)[0]
-    for forbidden in ("malloc(", "calloc(", "free("):
-        assert forbidden not in c_index_commit
-
 
 def test_relocation_copy_prepares_slot_retains_outside_graph_lock() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
@@ -508,8 +376,6 @@ def test_relocation_copy_prepares_slot_retains_outside_graph_lock() -> None:
         RUNTIME_DIR / "py" / "freestanding_gc_relocation_payload.py"
     ).read_text(encoding="utf-8")
     strict_obj = (RUNTIME_DIR / "py" / "py_obj.py").read_text(encoding="utf-8")
-    c_src = C_SOURCE.read_text(encoding="utf-8")
-    c_obj = (RUNTIME_DIR / "src" / "py_obj.c").read_text(encoding="utf-8")
     internal = (RUNTIME_DIR / "src" / "py_internal.h").read_text(
         encoding="utf-8"
     )
@@ -537,14 +403,11 @@ def test_relocation_copy_prepares_slot_retains_outside_graph_lock() -> None:
         "pcc_gc_retain_plan_finish",
     ):
         assert symbol in internal
-        assert symbol in c_obj
         assert f'@c_abi_export("{symbol}")' in strict_obj
         assert symbol in FREESTANDING_GC_CROSS_OBJECT_SIGNATURES
         assert symbol not in RUNTIME_SIGNATURES
         assert symbol not in public_header
 
-    assert "sizeof(PccGcRetainPlan) == sizeof(PccRefcountPrepared)" in c_obj
-    assert "_Alignof(PccGcRetainPlan) >= _Alignof(PccRefcountPrepared)" in c_obj
     assert "uint64_t opaque[7]" in internal
     assert (
         "pcc_gc_backend4_relocate_copy_preallocated_unlocked"
@@ -559,11 +422,6 @@ def test_relocation_copy_prepares_slot_retains_outside_graph_lock() -> None:
         not in public_header
     )
 
-    c_slots = c_src.split("static int pcc_gc_relocate_copy_slots(", 1)[1].split(
-        "typedef struct {\n    PyObject **slot;", 1
-    )[0]
-    assert "pcc_gc_retain_plan_prepare_locked(" in c_slots
-    assert "py_incref(" not in c_slots
     strict_slots = payload.split("def _relocate_copy_slots(", 1)[1].split(
         '@c_abi_export("pcc_gc_relocation_payload_retire_count_slot")', 1
     )[0]
@@ -578,53 +436,16 @@ def test_relocation_copy_prepares_slot_retains_outside_graph_lock() -> None:
         )
     )
 
-    c_finish_body = c_src.split(
-        "static void pcc_gc_relocate_slot_pairs_finish(", 1
-    )[1].split("static int pcc_gc_relocate_slot_pairs_prepare(", 1)[0]
-    assert c_finish_body.count("pcc_gc_retain_plan_finish(") == 1
-    assert "i < pairs->count" in c_finish_body
     strict_finish_body = payload.split(
         "def _relocate_slot_pairs_dispose(ctx)", 1
     )[1].split('@c_abi_export("pcc_gc_relocation_payload_count_slot")', 1)[0]
     assert strict_finish_body.count("pcc_gc_retain_plan_finish(") == 1
     assert "while index < count" in strict_finish_body
 
-    c_commit = c_src.split(
-        "static PyObject *pcc_gc_relocate_copy_preallocated_unlocked(", 1
-    )[1].split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[0]
-    assert "pcc_gc_relocate_slot_pairs_finish(" not in c_commit
     strict_commit = strict.split(
         "def pcc_gc_backend4_relocate_copy_preallocated_unlocked", 1
     )[1].split('@c_abi_export("pcc_gc_relocate_copy")', 1)[0]
     assert "pcc_gc_relocation_payload_plan_finish(" not in strict_commit
-
-    c_public = c_src.split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[1].split(
-        "static int64_t pcc_gc_backend4_snapshot_relocation_batch_unlocked", 1
-    )[0]
-    c_first_unlock = c_public.index("pcc_gc_graph_unlock();")
-    c_plan_prepare = c_public.index("pcc_gc_relocate_slot_pairs_prepare(")
-    c_allocation = c_public.index("PyObject *to = pcc_gc_alloc(")
-    c_commit_lock = c_public.index("pcc_gc_graph_lock();", c_allocation)
-    c_validate = c_public.index("pcc_gc_relocate_slot_pairs_validate_locked(")
-    c_commit_unlock = c_public.index("pcc_gc_graph_unlock();", c_commit_lock)
-    c_plan_finish = c_public.index(
-        "pcc_gc_relocate_slot_pairs_finish(", c_commit_unlock
-    )
-    assert c_public.count("pcc_gc_relocate_slot_pairs_prepare(") == 1
-    assert c_public.count("pcc_gc_relocate_slot_pairs_validate_locked(") == 1
-    assert c_public.count("pcc_gc_relocate_slot_pairs_finish(") == 4
-    assert (
-        c_first_unlock
-        < c_plan_prepare
-        < c_commit_lock
-        < c_validate
-        < c_commit_unlock
-        < c_plan_finish
-    )
 
     strict_public = strict.split(
         '@c_abi_export("pcc_gc_relocate_copy")', 1
@@ -662,7 +483,6 @@ def test_relocation_copy_preallocates_type_specific_payload_outside_graph_lock()
     payload = (
         RUNTIME_DIR / "py" / "freestanding_gc_relocation_payload.py"
     ).read_text(encoding="utf-8")
-    c_src = C_SOURCE.read_text(encoding="utf-8")
 
     strict_symbols = (
         "pcc_gc_relocation_payload_raw_snapshot_locked",
@@ -673,22 +493,6 @@ def test_relocation_copy_preallocates_type_specific_payload_outside_graph_lock()
         assert f'@c_abi_export("{symbol}")' in payload
         assert symbol in FREESTANDING_GC_CROSS_OBJECT_SIGNATURES
         assert symbol not in RUNTIME_SIGNATURES
-
-    c_raw_snapshot = c_src.split(
-        "static int pcc_gc_relocate_raw_snapshot_fill_locked(", 1
-    )[1].split("static int pcc_gc_relocate_raw_snapshot_locked(", 1)[0]
-    c_dict_snapshot = c_raw_snapshot.split(
-        "if (snapshot->tag == PY_TYPE_DICT)", 1
-    )[1].split("if (snapshot->tag == PY_TYPE_SET)", 1)[0]
-    c_set_snapshot = c_raw_snapshot.split(
-        "if (snapshot->tag == PY_TYPE_SET)", 1
-    )[1].split("if (snapshot->tag == PY_TYPE_LIST)", 1)[0]
-    assert c_dict_snapshot.index(
-        "size < (int64_t)sizeof(PyDictObject)"
-    ) < c_dict_snapshot.index("src->capacity")
-    assert c_set_snapshot.index(
-        "size < (int64_t)sizeof(PySetObject)"
-    ) < c_set_snapshot.index("src->capacity")
 
     strict_raw_snapshot = payload.split(
         "def pcc_gc_relocation_payload_raw_snapshot_locked", 1
@@ -710,32 +514,15 @@ def test_relocation_copy_preallocates_type_specific_payload_outside_graph_lock()
         strict_set_snapshot.index("load_i64(from_obj, 16)")
     )
 
-    c_prepared = c_src.split(
-        "static int pcc_gc_relocate_copy_payload_prepared_locked(", 1
-    )[1].split("static int pcc_gc_relocate_copy_payload(", 1)[0]
     strict_prepared = payload.split(
         "def pcc_gc_relocate_copy_payload_prepared_locked", 1
     )[1].split('@c_abi_export("pcc_gc_relocate_copy_payload")', 1)[0]
     for forbidden in ("malloc(", "calloc(", "free("):
-        assert forbidden not in c_prepared
         assert forbidden not in strict_prepared
-    assert "pcc_gc_backend4_zpage_register_owner_payload_span_unlocked(" not in (
-        c_prepared
-    )
     assert "pcc_gc_backend4_zpage_register_owner_payload_span(" not in (
         strict_prepared
     )
 
-    c_raw_publish = c_src.split(
-        "static int pcc_gc_relocate_raw_publish_locked(", 1
-    )[1].split("static void pcc_gc_relocate_slot_pairs_finish(", 1)[0]
-    c_span_publish = c_src.split(
-        "pcc_gc_backend4_zpage_publish_relocation_payload_spans_unlocked(",
-        1,
-    )[1].split(
-        "static int64_t pcc_gc_backend4_zpage_retarget_owner_payload_span_unlocked(",
-        1,
-    )[0]
     strict_raw_publish = payload.split(
         "def _relocate_raw_publish_locked", 1
     )[1].split('@c_abi_export("pcc_gc_relocation_payload_fail")', 1)[0]
@@ -746,24 +533,9 @@ def test_relocation_copy_preallocates_type_specific_payload_outside_graph_lock()
         '@c_abi_export("pcc_gc_backend4_zpage_register_owner_payload_span")',
         1,
     )[0]
-    for locked_publish in (
-        c_raw_publish,
-        c_span_publish,
-        strict_raw_publish,
-        strict_span_publish,
-    ):
+    for locked_publish in (strict_raw_publish, strict_span_publish):
         for forbidden in ("malloc(", "calloc(", "free("):
             assert forbidden not in locked_publish
-    assert c_raw_publish.index("memcpy(buffer, descriptor->source") < (
-        c_raw_publish.index(
-            "pcc_gc_backend4_zpage_publish_relocation_payload_spans_unlocked("
-        )
-    )
-    assert c_raw_publish.index(
-        "pcc_gc_backend4_zpage_publish_relocation_payload_spans_unlocked("
-    ) < c_raw_publish.index(
-        "if (snapshot->tag == PY_TYPE_CONTINUATION && snapshot->count > 0)"
-    )
     assert strict_raw_publish.index("memmove(buffer, load_ptr(descriptor, 0)") < (
         strict_raw_publish.index(
             "pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked("
@@ -773,35 +545,6 @@ def test_relocation_copy_preallocates_type_specific_payload_outside_graph_lock()
         "pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked("
     ) < strict_raw_publish.index(
         'if tag == abi_constant("object.type.continuation") and count > 0:'
-    )
-
-    c_public = c_src.split(
-        "PyObject *pcc_gc_relocate_copy(PyObject *from, int64_t size)", 1
-    )[1].split(
-        "static int64_t pcc_gc_backend4_snapshot_relocation_batch_unlocked", 1
-    )[0]
-    c_plan = c_public.index("pcc_gc_relocate_slot_pairs_prepare(")
-    c_snapshot_lock = c_public.index("pcc_gc_graph_lock();", c_plan)
-    c_snapshot = c_public.index("pcc_gc_relocate_raw_snapshot_locked(")
-    c_snapshot_unlock = c_public.index("pcc_gc_graph_unlock();", c_snapshot_lock)
-    c_raw_prepare = c_public.index("pcc_gc_relocate_raw_prepare(")
-    c_allocation = c_public.index("PyObject *to = pcc_gc_alloc(")
-    c_commit_lock = c_public.index("pcc_gc_graph_lock();", c_allocation)
-    c_raw_validate = c_public.index("pcc_gc_relocate_raw_validate_locked(")
-    c_commit_unlock = c_public.index("pcc_gc_graph_unlock();", c_commit_lock)
-    c_finish = c_public.index("pcc_gc_relocate_slot_pairs_finish(", c_commit_unlock)
-    assert c_public.count("pcc_gc_relocate_slot_pairs_finish(&pairs);") == 4
-    assert (
-        c_plan
-        < c_snapshot_lock
-        < c_snapshot
-        < c_snapshot_unlock
-        < c_raw_prepare
-        < c_allocation
-        < c_commit_lock
-        < c_raw_validate
-        < c_commit_unlock
-        < c_finish
     )
 
     strict_public = strict.split(
@@ -845,7 +588,6 @@ def test_relocation_copy_preallocates_type_specific_payload_outside_graph_lock()
 
 
 def test_relocation_copy_batch_publishes_bounded_fresh_target_spans() -> None:
-    c_src = C_SOURCE.read_text(encoding="utf-8")
     strict_backend = (
         RUNTIME_DIR / "py" / "py_gc_backend.py"
     ).read_text(encoding="utf-8")
@@ -856,25 +598,6 @@ def test_relocation_copy_batch_publishes_bounded_fresh_target_spans() -> None:
     symbol = "pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked"
     assert symbol in FREESTANDING_GC_CROSS_OBJECT_SIGNATURES
     assert symbol not in RUNTIME_SIGNATURES
-
-    c_preflight = c_src.split(
-        "static int pcc_gc_backend4_zpage_payload_span_preflight_unlocked(", 1
-    )[1].split(
-        "static int pcc_gc_backend4_zpage_publish_relocation_payload_spans_unlocked(",
-        1,
-    )[0]
-    assert "node->payload_spans != NULL" in c_preflight
-    c_batch = c_src.split(
-        "static int pcc_gc_backend4_zpage_publish_relocation_payload_spans_unlocked(",
-        1,
-    )[1].split(
-        "static int64_t pcc_gc_backend4_zpage_retarget_owner_payload_span_unlocked(",
-        1,
-    )[0]
-    assert "span_count > PCC_GC_RELOCATION_PAYLOAD_SPAN_MAX" in c_batch
-    assert "node->payload_spans != NULL" in c_batch
-    assert "node->payload_spans = span_head;" in c_batch
-    assert "for (PccGcZPagePayloadSpanNode *existing" not in c_batch
 
     strict_preflight = strict_backend.split(
         "def pcc_gc_backend4_zpage_payload_span_preflight_locked", 1
@@ -891,27 +614,15 @@ def test_relocation_copy_batch_publishes_bounded_fresh_target_spans() -> None:
     assert "store_ptr(node, 64, span_head)" in strict_batch
     assert "while ptr_is_null(existing)" not in strict_batch
 
-    c_raw_publish = c_src.split(
-        "static int pcc_gc_relocate_raw_publish_locked(", 1
-    )[1].split("static void pcc_gc_relocate_slot_pairs_finish(", 1)[0]
     strict_raw_publish = payload.split(
         "def _relocate_raw_publish_locked", 1
     )[1].split('@c_abi_export("pcc_gc_relocation_payload_fail")', 1)[0]
-    assert c_raw_publish.count(
-        "pcc_gc_backend4_zpage_publish_relocation_payload_spans_unlocked("
-    ) == 1
-    assert "PccGcZPagePayloadSpanNode *span_tail = NULL;" in c_raw_publish
-    assert "span_tail->next = span;" in c_raw_publish
-    assert c_raw_publish.index("span_tail->next = span;") < c_raw_publish.index(
-        "span_tail = span;"
-    )
     assert strict_raw_publish.count(symbol + "(") == 1
     assert "span_tail = null()" in strict_raw_publish
     assert "store_ptr(span_tail, 40, span)" in strict_raw_publish
     assert strict_raw_publish.index("store_ptr(span_tail, 40, span)") < (
         strict_raw_publish.index("span_tail = span")
     )
-    assert "register_owner_payload_span_preallocated" not in c_raw_publish
     assert "register_owner_payload_span_preallocated" not in strict_raw_publish
 
 

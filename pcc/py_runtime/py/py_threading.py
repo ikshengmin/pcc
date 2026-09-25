@@ -8,26 +8,31 @@ ABI symbols rather than embedding pthread details in layer1.
 __pcc_runtime_port__ = True
 
 from pcc.py_runtime.py.py_abi_constants import (
+    PY_TYPE_THREAD,
     PY_TYPE_THREAD_CONDITION,
     PY_TYPE_THREAD_EVENT,
     PY_TYPE_THREAD_LOCK,
     PY_TYPE_THREAD_RLOCK,
     PY_TYPE_THREAD_SEMAPHORE,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
 )
 
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_cas_i64,
     atomic_load_i64,
+    atomic_store_i64,
     cstr,
     define_global_i64,
     define_global_ptr_null,
     free,
+    function_addr,
     global_addr,
     global_load_ptr,
     global_store_ptr,
     int_to_ptr,
     is_tagged_int,
+    load_i32,
     load_i64,
     load_ptr,
     malloc,
@@ -54,6 +59,9 @@ _VTHREAD_WAITER_POOL_LIMIT = 4096
 
 pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
+pcc_thread_start = extern("pcc_thread_start", (c_ptr, c_ptr, c_ptr), c_int64)
+pcc_thread_join = extern("pcc_thread_join", (c_ptr, c_ptr), c_int64)
+pcc_thread_detach = extern("pcc_thread_detach", (c_ptr,), c_void)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
 pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
 pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
@@ -61,6 +69,10 @@ pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 pcc_cond_new = extern("pcc_cond_new", (), c_ptr)
 pcc_cond_free = extern("pcc_cond_free", (c_ptr,), c_void)
 pcc_cond_wait = extern("pcc_cond_wait", (c_ptr, c_ptr), c_int64)
+pcc_cond_timedwait_ms = extern(
+    "pcc_cond_timedwait_ms", (c_ptr, c_ptr, c_int64), c_int64
+)
+pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_cond_signal = extern("pcc_cond_signal", (c_ptr,), c_int64)
 pcc_cond_broadcast = extern("pcc_cond_broadcast", (c_ptr,), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
@@ -265,6 +277,48 @@ def _current_vthread():
     return vthread
 
 
+def _pin_current_vthread(reason):
+    """Pin a virtual thread to its carrier across a blocking OS-level wait.
+
+    Returns the owned vthread to hand to _unpin_current_vthread, or null when
+    the caller is not a virtual thread (or the pin was refused)."""
+    vthread = _current_vthread()
+    if ptr_is_null(vthread):
+        return vthread
+    if py_virtual_thread_pin_enter(vthread, reason) < 0:
+        py_decref_extern(vthread)
+        return null()
+    return vthread
+
+
+def _unpin_current_vthread(vthread) -> None:
+    if ptr_is_null(vthread):
+        return
+    py_virtual_thread_pin_leave(vthread)
+    py_decref_extern(vthread)
+
+
+def _wait_parkable(cond, mutex) -> int:
+    """One bounded wait on ``cond`` that lets stop-the-world GC proceed.
+
+    Called with ``mutex`` held; returns with it held again (0), or -1 with it
+    released.  An unbounded pthread_cond_wait never reaches a safepoint, so a
+    thread blocked on a contended primitive would deadlock a concurrent
+    gc.collect() whose stop-the-world waits for it -- while the owner that
+    could release the primitive is itself parked at a safepoint.  The mutex
+    is dropped before the safepoint: parking while holding it would block the
+    releaser's own lock acquisition, which is not a safepoint either.
+    """
+    if pcc_cond_timedwait_ms(cond, mutex, 5) < 0:
+        pcc_mutex_unlock(mutex)
+        return -1
+    pcc_mutex_unlock(mutex)
+    pcc_thread_safepoint()
+    if pcc_mutex_lock(mutex) != 0:
+        return -1
+    return 0
+
+
 def _alloc_obj(type_tag: int, size: int):
     return pcc_gc_alloc(size, type_tag, 0)
 
@@ -302,21 +356,23 @@ def py_threading_lock_new():
 
 @c_abi_export("py_threading_lock_acquire")
 def py_threading_lock_acquire(lock) -> int:
-    if ptr_is_null(lock):
+    if ptr_is_null(lock) or is_tagged_int(lock):
         return -1
     m = load_ptr(lock, 16)
     c = load_ptr(lock, 24)
+    vthread = _pin_current_vthread(cstr("threading.Lock.acquire"))
     if pcc_mutex_lock(m) != 0:
+        _unpin_current_vthread(vthread)
         return -1
-    result = 0
     while load_i64(lock, 32) != 0:
-        if pcc_cond_wait(c, m) != 0:
-            result = -1
-            break
-    if result == 0:
-        store_i64(lock, 32, 1)
-    if pcc_mutex_unlock(m) != 0 and result == 0:
+        if _wait_parkable(c, m) != 0:
+            _unpin_current_vthread(vthread)
+            return -1
+    store_i64(lock, 32, 1)
+    result: int = 0
+    if pcc_mutex_unlock(m) != 0:
         result = -1
+    _unpin_current_vthread(vthread)
     return result
 
 
@@ -498,16 +554,21 @@ def py_threading_event_is_set(event) -> int:
 
 @c_abi_export("py_threading_event_wait")
 def py_threading_event_wait(event) -> int:
-    if ptr_is_null(event):
+    if ptr_is_null(event) or is_tagged_int(event):
         return -1
     m = load_ptr(event, 16)
     c = load_ptr(event, 24)
+    vthread = _pin_current_vthread(cstr("threading.Event.wait"))
     if pcc_mutex_lock(m) != 0:
+        _unpin_current_vthread(vthread)
         return -1
     while load_i64(event, 32) == 0:
-        if pcc_cond_wait(c, m) != 0:
-            break
-    return pcc_mutex_unlock(m)
+        if _wait_parkable(c, m) != 0:
+            _unpin_current_vthread(vthread)
+            return -1
+    result: int = pcc_mutex_unlock(m)
+    _unpin_current_vthread(vthread)
+    return result
 
 
 @c_abi_export("py_threading_event_wait_vthread")
@@ -569,9 +630,12 @@ def py_threading_condition_new(lock):
 
 @c_abi_export("py_threading_condition_acquire")
 def py_threading_condition_acquire(cond) -> int:
-    if ptr_is_null(cond):
+    if ptr_is_null(cond) or is_tagged_int(cond):
         return -1
-    return pcc_mutex_lock(load_ptr(cond, 16))
+    vthread = _pin_current_vthread(cstr("threading.Condition.acquire"))
+    result: int = pcc_mutex_lock(load_ptr(cond, 16))
+    _unpin_current_vthread(vthread)
+    return result
 
 
 @c_abi_export("py_threading_condition_release")
@@ -583,9 +647,12 @@ def py_threading_condition_release(cond) -> int:
 
 @c_abi_export("py_threading_condition_wait")
 def py_threading_condition_wait(cond) -> int:
-    if ptr_is_null(cond):
+    if ptr_is_null(cond) or is_tagged_int(cond):
         return -1
-    return pcc_cond_wait(load_ptr(cond, 24), load_ptr(cond, 16))
+    vthread = _pin_current_vthread(cstr("threading.Condition.wait"))
+    result: int = pcc_cond_wait(load_ptr(cond, 24), load_ptr(cond, 16))
+    _unpin_current_vthread(vthread)
+    return result
 
 
 @c_abi_export("py_threading_condition_wait_vthread")
@@ -649,19 +716,22 @@ def py_threading_semaphore_new(initial: int):
 
 @c_abi_export("py_threading_semaphore_acquire")
 def py_threading_semaphore_acquire(sem) -> int:
-    if ptr_is_null(sem):
+    if ptr_is_null(sem) or is_tagged_int(sem):
         return -1
     m = load_ptr(sem, 16)
     c = load_ptr(sem, 24)
+    vthread = _pin_current_vthread(cstr("threading.Semaphore.acquire"))
     if pcc_mutex_lock(m) != 0:
+        _unpin_current_vthread(vthread)
         return -1
     while load_i64(sem, 32) <= 0:
-        if pcc_cond_wait(c, m) != 0:
-            break
-    v: int = load_i64(sem, 32)
-    if v > 0:
-        store_i64(sem, 32, v - 1)
-    return pcc_mutex_unlock(m)
+        if _wait_parkable(c, m) != 0:
+            _unpin_current_vthread(vthread)
+            return -1
+    store_i64(sem, 32, load_i64(sem, 32) - 1)
+    result: int = pcc_mutex_unlock(m)
+    _unpin_current_vthread(vthread)
+    return result
 
 
 @c_abi_export("py_threading_semaphore_acquire_vthread")
@@ -719,59 +789,136 @@ def py_dealloc_thread_semaphore(sem) -> None:
     pcc_gc_free_object_memory(sem)
 
 
+# PyThreadObject: header@0, handle@16, callable@24, args@32, result@40,
+# started@48, joined@56, finished@64 (72 bytes).  ``finished`` is written by
+# the thread that runs the target and read by is_alive() on any thread.
+
+
+def _is_thread(thread) -> int:
+    if ptr_is_null(thread) or is_tagged_int(thread):
+        return 0
+    if load_i32(thread, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_THREAD:
+        return 0
+    return 1
+
+
 @c_abi_export("py_threading_thread_new")
 def py_threading_thread_new(callable, args):
-    # Layout mirrors the C PyThreadObject enough for the no-C archive:
-    # header, handle, callable, args, result, started, joined, finished.
-    o = _alloc_obj(27, 72)
+    o = _alloc_obj(PY_TYPE_THREAD, 72)
     if ptr_is_null(o):
         return o
+    none = global_load_ptr("py_None")
+    callable_value = callable
+    if ptr_is_null(callable_value):
+        callable_value = none
+    args_value = args
+    if ptr_is_null(args_value):
+        args_value = none
     store_ptr(o, 16, null())
     store_ptr(o, 24, null())
     store_ptr(o, 32, null())
     store_ptr(o, 40, null())
-    pcc_gc_store_ptr(o, ptr_add(o, 24), callable)
-    pcc_gc_store_ptr(o, ptr_add(o, 32), args)
     store_i64(o, 48, 0)
     store_i64(o, 56, 0)
     store_i64(o, 64, 0)
+    pcc_gc_store_ptr(o, ptr_add(o, 24), callable_value)
+    pcc_gc_store_ptr(o, ptr_add(o, 32), args_value)
     return o
+
+
+def _thread_invoke(thread) -> None:
+    if atomic_load_i64(thread, 64, "acquire") != 0:
+        return
+    none = global_load_ptr("py_None")
+    callable_obj = pcc_gc_load_ptr(thread, ptr_add(thread, 24))
+    args_obj = pcc_gc_load_ptr(thread, ptr_add(thread, 32))
+    if ptr_is_null(callable_obj) == 0 and ptr_eq(callable_obj, none) == 0:
+        result = py_obj_call(callable_obj, args_obj, null())
+        pcc_gc_store_ptr(thread, ptr_add(thread, 40), result)
+        py_decref_extern(result)
+    else:
+        pcc_gc_store_ptr(thread, ptr_add(thread, 40), none)
+    atomic_store_i64(thread, 64, 1, "release")
+
+
+@c_abi_export("py_threading_thread_main_py")
+def py_threading_thread_main(thread):
+    if ptr_is_null(thread):
+        return null()
+    _thread_invoke(thread)
+    # Release the start-handoff reference taken before pcc_thread_start.
+    # Read the result first: this decref may free the Thread wrapper when
+    # the program dropped its last reference right after start().
+    result = pcc_gc_load_ptr(thread, ptr_add(thread, 40))
+    py_decref_extern(thread)
+    return result
 
 
 @c_abi_export("py_threading_thread_start")
 def py_threading_thread_start(thread) -> int:
-    if ptr_is_null(thread):
+    if _is_thread(thread) == 0:
         return -1
-    # No real pthread dispatch in the pcc-Python archive; run the target
-    # synchronously so simple Thread programs work in libpy_runtime_pcc_py.a.
+    if load_i64(thread, 48) != 0:
+        return -1
+    if pcc_threads_enabled() == 0:
+        # Deterministic single-thread fallback for the threads-off kernel:
+        # there is no second thread to run the target on.
+        _thread_invoke(thread)
+        store_i64(thread, 48, 1)
+        store_i64(thread, 56, 1)
+        return 0
+    # The new thread receives a borrowed pointer, so take an owned handoff
+    # reference before it starts: ``t = Thread(...); t.start(); t = None``
+    # must not free the wrapper before the thread body runs.
+    py_incref_extern(thread)
+    if pcc_thread_start(
+        ptr_add(thread, 16),
+        function_addr("py_threading_thread_main_py"),
+        thread,
+    ) != 0:
+        py_decref_extern(thread)
+        return -1
     store_i64(thread, 48, 1)
-    callable_obj = pcc_gc_load_ptr(thread, ptr_add(thread, 24))
-    args_obj = pcc_gc_load_ptr(thread, ptr_add(thread, 32))
-    if ptr_is_null(callable_obj) == 0:
-        result = py_obj_call(callable_obj, args_obj, null())
-        pcc_gc_store_ptr(thread, ptr_add(thread, 40), result)
-        py_decref_extern(result)
-    store_i64(thread, 56, 1)
-    store_i64(thread, 64, 1)
     return 0
 
 
 @c_abi_export("py_threading_thread_join")
 def py_threading_thread_join(thread) -> int:
-    return 0 if ptr_is_null(thread) == 0 else -1
+    if _is_thread(thread) == 0:
+        return -1
+    if load_i64(thread, 48) == 0:
+        return -1
+    if load_i64(thread, 56) != 0:
+        return 0
+    handle = load_ptr(thread, 16)
+    if ptr_is_null(handle) == 0:
+        vthread = _pin_current_vthread(cstr("threading.Thread.join"))
+        status: int = pcc_thread_join(handle, null())
+        _unpin_current_vthread(vthread)
+        if status != 0:
+            return -1
+        store_ptr(thread, 16, null())
+    store_i64(thread, 56, 1)
+    return 0
 
 
 @c_abi_export("py_threading_thread_is_alive")
 def py_threading_thread_is_alive(thread) -> int:
-    if ptr_is_null(thread):
+    if _is_thread(thread) == 0:
         return 0
-    return 1 if load_i64(thread, 48) != 0 and load_i64(thread, 56) == 0 and load_i64(thread, 64) == 0 else 0
+    if load_i64(thread, 48) == 0 or load_i64(thread, 56) != 0:
+        return 0
+    return 1 if atomic_load_i64(thread, 64, "acquire") == 0 else 0
 
 
 @c_abi_export("py_dealloc_thread_thread")
 def py_dealloc_thread_thread(thread) -> None:
     if ptr_is_null(thread):
         return
+    handle = load_ptr(thread, 16)
+    if ptr_is_null(handle) == 0 and load_i64(thread, 56) == 0:
+        pcc_thread_detach(handle)
+        store_ptr(thread, 16, null())
     py_decref_extern(pcc_gc_load_ptr(thread, ptr_add(thread, 24)))  # callable
     py_decref_extern(pcc_gc_load_ptr(thread, ptr_add(thread, 32)))  # args
     py_decref_extern(pcc_gc_load_ptr(thread, ptr_add(thread, 40)))  # result

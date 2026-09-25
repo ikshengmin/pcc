@@ -126,6 +126,14 @@ def pcc_py_gc_pending_minor_block_set(block: c_ptr) -> None:
     global_store_ptr("g_tls_pcc_py_gc_pending_minor_block", block)
 
 
+@c_abi_export("pcc_py_gc_minor_graph_lock_depth")
+def pcc_py_gc_minor_graph_lock_depth() -> i64:
+    """This thread's graph-lock nesting depth (0 when the lock is elided)."""
+    if pcc_threads_enabled() == 0:
+        return 0
+    return load_i32(global_addr("g_tls_pcc_py_gc_minor_graph_lock_depth"), 0)
+
+
 @c_abi_export("pcc_py_gc_minor_graph_lock")
 def pcc_py_gc_minor_graph_lock() -> None:
     # Mirror parity with the C oracle's compile-time elision

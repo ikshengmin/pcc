@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 
-def test_user_dunder_str_hash_iter_next_native(tmp_path, c_runtime_archive):
+def test_user_dunder_str_hash_iter_next_native(tmp_path, pcc_py_runtime_archive):
     src = tmp_path / "dunder_probe.c"
     exe = tmp_path / "dunder_probe"
     src.write_text(
@@ -83,11 +83,11 @@ def test_user_dunder_str_hash_iter_next_native(tmp_path, c_runtime_archive):
         [
             os.environ.get("CC", "cc"),
             "-I",
-            str(c_runtime_archive.parent / "include"),
+            str(pcc_py_runtime_archive.parent / "include"),
             "-I",
-            str(c_runtime_archive.parent / "src"),
+            str(pcc_py_runtime_archive.parent / "src"),
             str(src),
-            str(c_runtime_archive),
+            str(pcc_py_runtime_archive),
             "-lm",
             "-o",
             str(exe),
@@ -99,25 +99,15 @@ def test_user_dunder_str_hash_iter_next_native(tmp_path, c_runtime_archive):
 
 
 def test_user_dunder_sources_are_wired():
-    dunder_c = Path("pcc/py_runtime/src/py_dunder.c").read_text(encoding="utf-8")
-    compare_c = Path("pcc/py_runtime/src/py_obj_ops_compare.c").read_text(encoding="utf-8")
-    iter_c = Path("pcc/py_runtime/src/py_iter.c").read_text(encoding="utf-8")
     dunder_py = Path("pcc/py_runtime/py/py_dunder.py").read_text(encoding="utf-8")
     iter_py = Path("pcc/py_runtime/py/py_iter.py").read_text(encoding="utf-8")
 
-    assert "py_user_hash_dispatch" in dunder_c
-    assert "py_user_iter_dispatch" in dunder_c
-    assert "py_user_next_dispatch" in dunder_c
-    assert "py_user_hash_dispatch(o, &handled)" in compare_c
-    assert "py_user_iter_dispatch(o)" in iter_c
-    assert "py_user_next_dispatch(it_obj)" in iter_c
     assert '@c_abi_export("py_user_hash_dispatch")' in dunder_py
     assert "py_user_iter_dispatch" in iter_py
     assert "py_user_next_dispatch" in iter_py
 
 
 def test_iterator_runtime_guards_silent_null_before_state_cleanup():
-    iter_c = Path("pcc/py_runtime/src/py_iter.c").read_text(encoding="utf-8")
     iter_py = Path("pcc/py_runtime/py/py_iter.py").read_text(encoding="utf-8")
 
     messages = (
@@ -136,41 +126,26 @@ def test_iterator_runtime_guards_silent_null_before_state_cleanup():
         "enumerate could not allocate an output pair",
         "enumerate could not allocate an index object",
     )
-    enumerate_c = Path("pcc/py_runtime/src/py_enumerate.c").read_text(
-        encoding="utf-8"
-    )
-    for source in (iter_c, iter_py):
+    for source in (iter_py,):
         assert "py_runtime_error_if_unset" in source
         for message in messages[:-3]:
             assert message in source
-    for source in (enumerate_c, iter_py):
+    for source in (iter_py,):
         assert "py_runtime_error_if_unset" in source
         for message in messages[-3:]:
             assert message in source
 
-    for source, call, guard, cleanup in (
-        (
-            iter_c,
-            "PyObject *result = py_obj_call(callable, args, py_None);",
-            "callable iterator returned NULL without setting an exception",
-            "py_decref(args);",
-        ),
-        (
+    for source, call, guard, cleanup in ((
             iter_py,
             "result = py_obj_call(callable, args, none_obj)",
             "callable iterator returned NULL without setting an exception",
             "py_decref(args)",
-        ),
-    ):
+        ),):
         call_pos = source.index(call)
         guard_pos = source.index(guard, call_pos)
         cleanup_pos = source.index(cleanup, call_pos)
         assert call_pos < guard_pos < cleanup_pos
 
-    c_item_guard = iter_c.index(
-        "iterator element lookup returned NULL without setting an exception"
-    )
-    assert c_item_guard < iter_c.index("it->index++;", c_item_guard)
     py_item_guard = iter_py.index(
         "iterator element lookup returned NULL without setting an exception"
     )
@@ -178,20 +153,12 @@ def test_iterator_runtime_guards_silent_null_before_state_cleanup():
         "store_i64(it_obj, 24, index + 1)", py_item_guard
     )
 
-    for source, allocation, guard, cleanup in (
-        (
-            enumerate_c,
-            "PyObject *idx_obj = py_int_from_i64(index);",
-            "enumerate could not allocate an index object",
-            "py_decref(item);",
-        ),
-        (
+    for source, allocation, guard, cleanup in ((
             iter_py,
             "index_obj = py_int_from_i64(index)",
             "enumerate could not allocate an index object",
             "py_decref(item)",
-        ),
-    ):
+        ),):
         allocation_pos = source.index(allocation)
         guard_pos = source.index(guard, allocation_pos)
         cleanup_pos = source.index(cleanup, guard_pos)

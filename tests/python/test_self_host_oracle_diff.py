@@ -4933,7 +4933,6 @@ def test_pcc1_runtime_rebuild_uses_repo_python_and_surfaces_make_error(
     run_env["PCC_REPO_ROOT"] = str(REPO_ROOT)
     run_env["PCC_RUNTIME_DIR"] = str(runtime_dir)
     run_env["PCC_RUNTIME_CC"] = "pcc"
-    run_env["PCC_RUNTIME_HIGH"] = "py"
     result = subprocess.run(
         [
             str(pcc1_self_host_binary),

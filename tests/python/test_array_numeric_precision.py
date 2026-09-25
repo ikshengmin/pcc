@@ -174,6 +174,8 @@ def test_native_source_numeric_family_matches_host(options):
     assert actual["dtype"] == expected["dtype"]
     assert actual["shape"] == expected["shape"]
     assert_same_values(actual["data"], expected["data"])
+    # pcc1 once reported uint64 as [0, -1]: 2**64 read through its raw i64 lane.
+    assert actual.get("dtype_range") == expected.get("dtype_range")
     assert actual["diagnostics"] == expected["diagnostics"] == []
 
 
@@ -249,4 +251,6 @@ def test_current_pcc1_array_numeric_cli(options, pcc1_self_host_binary):
     assert actual["dtype"] == expected["dtype"]
     assert actual["shape"] == expected["shape"]
     assert_same_values(actual["data"], expected["data"])
+    # pcc1 once reported uint64 as [0, -1]: 2**64 read through its raw i64 lane.
+    assert actual.get("dtype_range") == expected.get("dtype_range")
     assert actual["diagnostics"] == expected["diagnostics"] == []

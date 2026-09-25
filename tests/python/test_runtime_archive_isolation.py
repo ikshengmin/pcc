@@ -23,7 +23,7 @@ def test_runtime_archive_provenance_stamp_target_cli(tmp_path):
         "darwin:arm64:arm64-apple-darwin\n"
     )
 
-def _write_completed_c_runtime_bundle(archive: Path) -> Path:
+def _write_completed_capi_bundle(archive: Path) -> Path:
     source = archive.with_suffix(".c")
     object_path = archive.with_suffix(".o")
     source.write_text(
@@ -122,8 +122,8 @@ def test_runtime_archive_environment_override_is_fail_closed(
 ):
     from pcc.py_frontend import pipeline
 
-    archive = tmp_path / "libpy_runtime.a"
-    _write_completed_c_runtime_bundle(archive)
+    archive = tmp_path / "libpy_runtime_pcc_py_libpython.a"
+    _write_completed_capi_bundle(archive)
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(archive))
     assert pipeline._ensure_runtime(False) == str(archive)
 
@@ -133,13 +133,13 @@ def test_runtime_archive_environment_override_is_fail_closed(
         pipeline._ensure_runtime(False)
 
 
-def test_explicit_c_runtime_archive_rejects_empty_member_inventory(
+def test_explicit_libpython_runtime_archive_rejects_empty_member_inventory(
     tmp_path: Path,
     monkeypatch,
 ):
     from pcc.py_frontend import pipeline
 
-    archive = tmp_path / "libpy_runtime.a"
+    archive = tmp_path / "libpy_runtime_pcc_py_libpython.a"
     # This is the observed corrupt publication shape: a regular archive whose
     # only real content was the ar symbol table, accompanied by an empty C-API
     # completion inventory.
@@ -154,13 +154,15 @@ def test_explicit_c_runtime_archive_rejects_empty_member_inventory(
         pipeline._ensure_runtime(False)
 
 
-def test_explicit_c_runtime_archive_rejects_inventory_from_another_archive(
+def test_explicit_libpython_runtime_archive_rejects_inventory_from_another_archive(
     tmp_path: Path,
     monkeypatch,
 ):
     from pcc.py_frontend import pipeline
 
-    archive = _write_completed_c_runtime_bundle(tmp_path / "libpy_runtime.a")
+    archive = _write_completed_capi_bundle(
+        tmp_path / "libpy_runtime_pcc_py_libpython.a"
+    )
     Path(str(archive) + ".capi_syms").write_text(
         "PyDifferentRuntimeSymbol\n",
         encoding="ascii",
@@ -227,14 +229,13 @@ def test_runtime_build_failure_is_reported_before_link(
     runtime_root = tmp_path / "py_runtime"
     runtime_root.mkdir()
     (runtime_root / "Makefile").write_text("all:\n", encoding="utf-8")
-    archive = runtime_root / "libpy_runtime.a"
+    archive = runtime_root / "libpy_runtime_pcc_py.a"
 
     def fail_build(_make_cmd, *, verbose):
-        raise subprocess.CalledProcessError(2, ["make", "libpy_runtime.a"])
+        raise subprocess.CalledProcessError(2, ["make", "libpy_runtime_pcc_py.a"])
 
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_DIR", str(runtime_root))
-    monkeypatch.setattr(pipeline, "_PY_RUNTIME_ARCHIVE", str(archive))
+    monkeypatch.setattr(pipeline, "_PY_RUNTIME_ARCHIVE_PCC_PY", str(archive))
     monkeypatch.setattr(pipeline, "_run_runtime_make", fail_build)
 
     with pytest.raises(pipeline.PyPipelineError, match="failed to build required"):
@@ -250,38 +251,35 @@ def test_runtime_build_rejects_empty_archive_publication(
     runtime_root = tmp_path / "py_runtime"
     runtime_root.mkdir()
     (runtime_root / "Makefile").write_text("all:\n", encoding="utf-8")
-    archive = runtime_root / "libpy_runtime.a"
+    archive = runtime_root / "libpy_runtime_pcc_py_libpython.a"
 
     def publish_empty(_make_cmd, *, verbose):
         archive.write_bytes(b"!<arch>\n")
         Path(str(archive) + ".capi_syms").write_text("", encoding="ascii")
 
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_DIR", str(runtime_root))
-    monkeypatch.setattr(pipeline, "_PY_RUNTIME_ARCHIVE", str(archive))
+    monkeypatch.setattr(pipeline, "_PY_RUNTIME_ARCHIVE_PCC_PY_LIBPYTHON", str(archive))
     monkeypatch.setattr(pipeline, "_run_runtime_make", publish_empty)
 
     with pytest.raises(
         pipeline.PyPipelineError,
         match="invalid archive/inventory bundle",
     ):
-        pipeline._ensure_runtime(False, needs_libpython=False)
+        pipeline._ensure_runtime(False, needs_libpython=True)
 
 
-def test_c_runtime_make_publication_requires_nonempty_inventory() -> None:
+def test_libpython_runtime_make_publication_requires_nonempty_inventory() -> None:
     makefile = (
         Path(__file__).resolve().parents[2] / "pcc" / "py_runtime" / "Makefile"
     ).read_text(encoding="utf-8")
 
-    host_rule = makefile[makefile.index("$(LIB): $(OBJS)") :]
-    host_rule = host_rule[: host_rule.index("$(OBJDIR)/%.o:")]
-    pcc_rule = makefile[makefile.index("$(LIB_PCC):") :]
-    pcc_rule = pcc_rule[: pcc_rule.index("$(OBJDIR_PCC)/%.o:")]
-    for rule in (host_rule, pcc_rule):
-        assert 'test -s "$@.capi_syms.tmp"' in rule
-        assert rule.index('mv -f "$@.tmp" "$@"') < rule.index(
-            'mv -f "$@.capi_syms.tmp" "$@.capi_syms"'
-        )
+    rule = makefile[makefile.index("$(LIB_PCC_PY_LIBPYTHON): $(LIB_PCC_PY)") :]
+    rule = rule[: rule.index("$(OBJDIR_LIBPY)/py_libpython.o:")]
+    assert 'test -s "$@.capi_syms.nm.tmp"' in rule
+    assert 'test -s "$@.capi_syms.tmp"' in rule
+    assert rule.index('mv -f "$@.tmp" "$@"') < rule.index(
+        'mv -f "$@.capi_syms.tmp" "$@.capi_syms"'
+    )
 
 
 def test_production_runtime_archive_environment_override_rejects_invalid_provenance(
@@ -343,7 +341,6 @@ def test_invalid_production_runtime_shortcut_rebuilds_before_acceptance(
         _write_valid_production_runtime_archive(runtime_root)
 
     monkeypatch.setenv("PCC_RUNTIME_CC", "pcc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "py")
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_DIR", str(runtime_root))
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_ARCHIVE_PCC_PY", str(archive))
     monkeypatch.setattr(
@@ -377,7 +374,6 @@ def test_production_runtime_is_verified_after_make_before_acceptance(
         )
 
     monkeypatch.setenv("PCC_RUNTIME_CC", "pcc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "py")
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_DIR", str(runtime_root))
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_ARCHIVE_PCC_PY", str(archive))
     monkeypatch.setattr(pipeline, "_run_runtime_make", build_invalid_archive)
@@ -406,7 +402,6 @@ def test_invalid_production_runtime_without_makefile_fails_closed(
         encoding="utf-8",
     )
     monkeypatch.setenv("PCC_RUNTIME_CC", "pcc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "py")
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_DIR", str(runtime_root))
     monkeypatch.setattr(pipeline, "_PY_RUNTIME_ARCHIVE_PCC_PY", str(archive))
 

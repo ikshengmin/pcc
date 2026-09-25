@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 
-def test_module_attr_side_table_runtime(tmp_path, c_runtime_archive):
+def test_module_attr_side_table_runtime(tmp_path, pcc_py_runtime_archive):
     src = tmp_path / "module_attrs_probe.c"
     exe = tmp_path / "module_attrs_probe"
     src.write_text(
@@ -34,9 +34,9 @@ def test_module_attr_side_table_runtime(tmp_path, c_runtime_archive):
         [
             os.environ.get("CC", "cc"),
             "-I",
-            str(c_runtime_archive.parent / "include"),
+            str(pcc_py_runtime_archive.parent / "include"),
             str(src),
-            str(c_runtime_archive),
+            str(pcc_py_runtime_archive),
             "-lm",
             "-o",
             str(exe),
@@ -52,8 +52,8 @@ def test_call_splat_and_module_attrs_are_built_and_exposed():
     header = Path("pcc/py_runtime/include/py_runtime.h").read_text(encoding="utf-8")
     abi = Path("pcc/py_frontend/codegen/runtime_abi.py").read_text(encoding="utf-8")
 
-    assert "py_call_splat.c" in makefile
-    assert "py_module_attrs.c" in makefile
+    assert "py_call_splat_runtime" in makefile
+    assert "py_module_attrs_runtime" in makefile
     assert "PyObject *py_call_merge_posargs" in header
     assert "int64_t   py_module_attr_set" in header
     assert '"py_call_merge_posargs": (_PYOBJ, [_PYOBJ, _PYOBJ], False)' in abi

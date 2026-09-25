@@ -73,9 +73,13 @@ class NativeMathLoweringMixin:
                 ir.Constant(_I64, ((0x7FFFFFFF << 32) | 0xFFFFFFFF)),
                 name=self._fresh("math.copysign.magnitude"),
             )
+            # The sign mask 0x8000000000000000 spelled as the i64 it is:
+            # as an unsigned literal it is 2**63, which pcc's own raw-int lane
+            # cannot hold -- pcc1 unboxed it to 0 and every copysign result
+            # lost its sign (the lane now raises OverflowError instead).
             selected_sign = self.builder.and_(
                 sign_bits,
-                ir.Constant(_I64, ((0x80000000 << 32) | 0x0)),
+                ir.Constant(_I64, -0x7FFFFFFFFFFFFFFF - 1),
                 name=self._fresh("math.copysign.sign"),
             )
             result_bits = self.builder.or_(

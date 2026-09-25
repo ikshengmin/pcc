@@ -453,6 +453,128 @@ class Preprocessor:
             "__ORDER_LITTLE_ENDIAN__": "1234", "__ORDER_BIG_ENDIAN__": "4321",
             "__BYTE_ORDER__": "1234", "__SIZEOF_POINTER__": "8",
         }
+        # GCC/Clang target-description macros for the LP64 model pcc's own
+        # headers use (int64_t is long; long double is double).  Sources
+        # such as ``typedef __SIZE_TYPE__ size_t;`` or ``#if __INT_MAX__``
+        # rely on them; ``__GNUC__`` stays undefined so headers keep their
+        # portable branches.
+        predefines.update({
+            "__CHAR_BIT__": "8",
+            "__SCHAR_MAX__": "127",
+            "__SHRT_MAX__": "32767",
+            "__INT_MAX__": "2147483647",
+            "__LONG_MAX__": "9223372036854775807L",
+            "__LONG_LONG_MAX__": "9223372036854775807LL",
+            "__WCHAR_MAX__": "2147483647",
+            "__WINT_MAX__": "2147483647",
+            "__INTMAX_MAX__": "9223372036854775807L",
+            "__UINTMAX_MAX__": "18446744073709551615UL",
+            "__SIZE_MAX__": "18446744073709551615UL",
+            "__PTRDIFF_MAX__": "9223372036854775807L",
+            "__INTPTR_MAX__": "9223372036854775807L",
+            "__UINTPTR_MAX__": "18446744073709551615UL",
+            "__SIG_ATOMIC_MAX__": "2147483647",
+            "__INT8_MAX__": "127",
+            "__INT16_MAX__": "32767",
+            "__INT32_MAX__": "2147483647",
+            "__INT64_MAX__": "9223372036854775807L",
+            "__UINT8_MAX__": "255",
+            "__UINT16_MAX__": "65535",
+            "__UINT32_MAX__": "4294967295U",
+            "__UINT64_MAX__": "18446744073709551615UL",
+            "__SIZEOF_SHORT__": "2",
+            "__SIZEOF_INT__": "4",
+            "__SIZEOF_LONG__": "8",
+            "__SIZEOF_LONG_LONG__": "8",
+            "__SIZEOF_FLOAT__": "4",
+            "__SIZEOF_DOUBLE__": "8",
+            "__SIZEOF_LONG_DOUBLE__": "8",
+            "__SIZEOF_SIZE_T__": "8",
+            "__SIZEOF_WCHAR_T__": "4",
+            "__SIZEOF_WINT_T__": "4",
+            "__SIZEOF_PTRDIFF_T__": "8",
+            "__SIZE_TYPE__": "unsigned long",
+            "__PTRDIFF_TYPE__": "long",
+            "__WCHAR_TYPE__": "int",
+            "__WINT_TYPE__": "int",
+            "__INTMAX_TYPE__": "long",
+            "__UINTMAX_TYPE__": "unsigned long",
+            "__INTPTR_TYPE__": "long",
+            "__UINTPTR_TYPE__": "unsigned long",
+            "__CHAR16_TYPE__": "unsigned short",
+            "__CHAR32_TYPE__": "unsigned int",
+            "__INT8_TYPE__": "signed char",
+            "__INT16_TYPE__": "short",
+            "__INT32_TYPE__": "int",
+            "__INT64_TYPE__": "long",
+            "__UINT8_TYPE__": "unsigned char",
+            "__UINT16_TYPE__": "unsigned short",
+            "__UINT32_TYPE__": "unsigned int",
+            "__UINT64_TYPE__": "unsigned long",
+            "__INT_LEAST8_TYPE__": "signed char",
+            "__INT_LEAST16_TYPE__": "short",
+            "__INT_LEAST32_TYPE__": "int",
+            "__INT_LEAST64_TYPE__": "long",
+            "__UINT_LEAST8_TYPE__": "unsigned char",
+            "__UINT_LEAST16_TYPE__": "unsigned short",
+            "__UINT_LEAST32_TYPE__": "unsigned int",
+            "__UINT_LEAST64_TYPE__": "unsigned long",
+            "__INT_FAST8_TYPE__": "signed char",
+            "__INT_FAST16_TYPE__": "short",
+            "__INT_FAST32_TYPE__": "int",
+            "__INT_FAST64_TYPE__": "long",
+            "__UINT_FAST8_TYPE__": "unsigned char",
+            "__UINT_FAST16_TYPE__": "unsigned short",
+            "__UINT_FAST32_TYPE__": "unsigned int",
+            "__UINT_FAST64_TYPE__": "unsigned long",
+            # IEEE float/double; long double is double in pcc's model.
+            "__FLT_DECIMAL_DIG__": "9",
+            "__FLT_DENORM_MIN__": "1.40129846e-45F",
+            "__FLT_DIG__": "6",
+            "__FLT_EPSILON__": "1.19209290e-7F",
+            "__FLT_MANT_DIG__": "24",
+            "__FLT_MAX__": "3.40282347e+38F",
+            "__FLT_MAX_10_EXP__": "38",
+            "__FLT_MAX_EXP__": "128",
+            "__FLT_MIN__": "1.17549435e-38F",
+            "__FLT_MIN_10_EXP__": "(-37)",
+            "__FLT_MIN_EXP__": "(-125)",
+            "__FLT_NORM_MAX__": "3.40282347e+38F",
+            "__FLT_HAS_DENORM__": "1",
+            "__FLT_HAS_INFINITY__": "1",
+            "__FLT_HAS_QUIET_NAN__": "1",
+            "__DBL_DECIMAL_DIG__": "17",
+            "__DBL_DENORM_MIN__": "4.9406564584124654e-324",
+            "__DBL_DIG__": "15",
+            "__DBL_EPSILON__": "2.2204460492503131e-16",
+            "__DBL_MANT_DIG__": "53",
+            "__DBL_MAX__": "1.7976931348623157e+308",
+            "__DBL_MAX_10_EXP__": "308",
+            "__DBL_MAX_EXP__": "1024",
+            "__DBL_MIN__": "2.2250738585072014e-308",
+            "__DBL_MIN_10_EXP__": "(-307)",
+            "__DBL_MIN_EXP__": "(-1021)",
+            "__DBL_NORM_MAX__": "1.7976931348623157e+308",
+            "__DBL_HAS_DENORM__": "1",
+            "__DBL_HAS_INFINITY__": "1",
+            "__DBL_HAS_QUIET_NAN__": "1",
+            "__LDBL_DECIMAL_DIG__": "17",
+            "__LDBL_DENORM_MIN__": "4.9406564584124654e-324L",
+            "__LDBL_DIG__": "15",
+            "__LDBL_EPSILON__": "2.2204460492503131e-16L",
+            "__LDBL_MANT_DIG__": "53",
+            "__LDBL_MAX__": "1.7976931348623157e+308L",
+            "__LDBL_MAX_10_EXP__": "308",
+            "__LDBL_MAX_EXP__": "1024",
+            "__LDBL_MIN__": "2.2250738585072014e-308L",
+            "__LDBL_MIN_10_EXP__": "(-307)",
+            "__LDBL_MIN_EXP__": "(-1021)",
+            "__LDBL_NORM_MAX__": "1.7976931348623157e+308L",
+            "__LDBL_HAS_DENORM__": "1",
+            "__LDBL_HAS_INFINITY__": "1",
+            "__LDBL_HAS_QUIET_NAN__": "1",
+            "__FLT_RADIX__": "2",
+        })
         machine = platform.machine().lower()
         if machine in ("aarch64", "arm64"):
             predefines["__aarch64__"] = "1"
@@ -471,6 +593,33 @@ class Preprocessor:
                 self.macros[name] = Macro(name, str(value))
         self._apply_cpp_args(list(cpp_args or []))
 
+    def _apply_language_standard(self, standard):
+        # The only preprocessor-visible effect of -std is __STDC_VERSION__,
+        # which C89/C90 leaves undefined.  GNU dialects predefine the same
+        # value as their ISO base.  An unknown standard still fails closed.
+        versions = {
+            "c89": None, "c90": None, "gnu89": None, "gnu90": None,
+            "iso9899:1990": None,
+            "iso9899:199409": "199409L",
+            "c99": "199901L", "c9x": "199901L", "gnu99": "199901L",
+            "gnu9x": "199901L", "iso9899:1999": "199901L",
+            "c11": "201112L", "c1x": "201112L", "gnu11": "201112L",
+            "gnu1x": "201112L", "iso9899:2011": "201112L",
+            "c17": "201710L", "c18": "201710L", "gnu17": "201710L",
+            "gnu18": "201710L", "iso9899:2017": "201710L",
+            "iso9899:2018": "201710L",
+            "c2x": "202311L", "c23": "202311L", "gnu2x": "202311L",
+            "gnu23": "202311L",
+        }
+        if standard not in versions:
+            raise ValueError("unsupported owned preprocessor option: -std=" + standard)
+        version = versions[standard]
+        if version is None:
+            self.macros.pop("__STDC_VERSION__", None)
+        else:
+            self.macros["__STDC_VERSION__"] = Macro("__STDC_VERSION__", version)
+        self._invalidate_expand_cache()
+
     def _apply_cpp_args(self, args):
         i = 0
         while i < len(args):
@@ -485,6 +634,9 @@ class Preprocessor:
                 option, value = arg[:2], arg[2:]
             elif arg == "-nostdinc":
                 self.system_include_dirs.clear()
+                continue
+            elif arg.startswith("-std=") or arg == "-ansi":
+                self._apply_language_standard("c89" if arg == "-ansi" else arg[5:])
                 continue
             else:
                 raise ValueError("unsupported owned preprocessor option: " + arg)
@@ -590,6 +742,10 @@ class Preprocessor:
         return "\n".join(output)
 
     def _handle_directive(self, directive, output, skip_stack, skipping, base_dir):
+        # ``#if(X)`` needs no space after the directive name.
+        m = re.match(r"(if|elif|ifdef|ifndef)(?=[^\w\s])", directive)
+        if m:
+            directive = m.group(1) + " " + directive[m.end():]
         # --- Conditional directives (always processed for nesting) ---
         if directive.startswith("ifdef "):
             name = directive[6:].strip()
@@ -688,6 +844,11 @@ class Preprocessor:
         if m:
             self.macros.pop(m.group(1), None)
             self._invalidate_expand_cache()
+            return
+
+        # ``#line N "file"`` and the GNU ``# N "file"`` linemarker only
+        # relabel diagnostics; the owned output carries no line map.
+        if re.match(r"line\b", directive) or re.match(r"\d+(\s|$)", directive):
             return
 
         if directive == "pragma once":

@@ -3,12 +3,9 @@
 from pathlib import Path
 import subprocess
 
-import pytest
 
-
-@pytest.mark.parametrize("runtime_kind", ["c", "py"])
-def test_completed_continuation_value_survives_every_collector(tmp_path, request, runtime_kind):
-    archive = request.getfixturevalue("c_runtime_archive" if runtime_kind == "c" else "pcc_py_runtime_archive")
+def test_completed_continuation_value_survives_every_collector(tmp_path, pcc_py_runtime_archive):
+    archive = pcc_py_runtime_archive
     root = Path(__file__).resolve().parents[2]
     source = tmp_path / "completed.c"
     source.write_text('''#include "py_runtime.h"

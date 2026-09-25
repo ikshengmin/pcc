@@ -25,8 +25,12 @@ AAPCS64 makes callee-saved and which no emitter touches.  A value in that pool
 survives calls, so intervals that cross a call, end at a call operand, or
 belong to a scalar function argument may be allocated there; the prologue saves
 exactly the pool registers the function uses and every epilogue restores them.
-Intervals are function-wide (see ``_function_level_facts``) and PHI values and
-PHI inputs still stay spilled.
+Intervals are function-wide (see ``_function_level_facts``).  In this mode
+scalar PHI values and PHI inputs are candidates too: an incoming value is used
+at its predecessor's last position, a PHI's interval starts just before its
+block (``_append_phi_intervals``), and the edge copy moves between registers
+and slots in parallel.  Values a stack-map reload rewrites after a safepoint
+stay in their slots (``note_aarch64_reload_destinations``).
 """
 
 import os
@@ -46,8 +50,10 @@ from .self_backend_aarch64_darwin_mem import (
 )
 from .self_backend_kernel import (
     IndexedFunctionKernel,
+    TYPE_KIND_ARRAY,
     TYPE_KIND_INT,
     TYPE_KIND_PTR,
+    TYPE_KIND_STRUCT,
     get_indexed_function_kernel,
 )
 from .self_backend_ir import (
@@ -65,6 +71,7 @@ from .self_backend_ir import (
     PARSED_INSTRUCTION_KIND_RET,
     PARSED_INSTRUCTION_KIND_RET_VOID,
     PARSED_INSTRUCTION_KIND_SELECT,
+    PARSED_INSTRUCTION_KIND_STORE,
     PARSED_INSTRUCTION_KIND_SWITCH,
     PARSED_INSTRUCTION_KIND_SYSCALL6,
     PARSED_INSTRUCTION_KIND_UNREACHABLE,
@@ -81,7 +88,7 @@ from .self_backend_target_passes import (
     AArch64MaddFusion,
     aarch64_madd_fusion_for_product,
 )
-from .self_backend_value_arena import CompilerInt4
+from .self_backend_value_arena import CompilerInt3, CompilerInt4
 
 
 _REGISTER_POOL = (1, 2, 3, 4, 5, 6, 7, 8)
@@ -89,7 +96,8 @@ _REGISTER_POOL = (1, 2, 3, 4, 5, 6, 7, 8)
 # the frame record), so a value here survives every call.  No emitter uses
 # these as scratch; the prologue saves the ones a function is assigned.
 _CALLEE_SAVED_POOL = (19, 20, 21, 22, 23, 24, 25, 26, 27, 28)
-_ASSIGNABLE_REGISTERS = _REGISTER_POOL + _CALLEE_SAVED_POOL
+# x0 is assignable only to argument 0 (see _append_argument_intervals).
+_ASSIGNABLE_REGISTERS = (0,) + _REGISTER_POOL + _CALLEE_SAVED_POOL
 
 # Every instruction in an allocated block must be known not to clobber x1-x8.
 # Non-candidate floating/vector/aggregate and atomic values still use their
@@ -543,6 +551,29 @@ def _function_level_facts(
         position += 1
         block_id += 1
 
+    # A phi is defined on entry to its block, and each incoming value is read
+    # by the edge copy emitted with its predecessor's terminator, so that
+    # value is used at the predecessor's last position.
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        phi_fact = kernel.block_phi_fact(block_id)
+        phi_index = 0
+        while phi_index < phi_fact.second:
+            phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
+            if phi.first >= 0:
+                def_block[phi.first] = block_id
+            incoming_index = 0
+            while incoming_index < phi.fourth:
+                incoming = kernel.phi_incoming(phi.third + incoming_index)
+                if incoming.first >= 0 and 0 <= incoming.second < len(block_end):
+                    end = block_end[incoming.second]
+                    if last_use.get(incoming.first, -1) < end:
+                        last_use[incoming.first] = end
+                    _note_use_block(use_blocks, incoming.first, incoming.second)
+                incoming_index += 1
+            phi_index += 1
+        block_id += 1
+
     # Successors from the indexed terminators: br/br_cond targets and the
     # switch default plus its cases.
     successors: list[list[int]] = []
@@ -677,7 +708,9 @@ def _linear_scan_assign(kernel, intervals: list[tuple[int, int, int]]) -> None:
 
 
 def _linear_scan_assign_pools(
-    kernel, intervals: list[tuple[int, int, int, bool]]
+    kernel,
+    intervals: list[tuple[int, int, int, bool]],
+    fixed_registers: dict[int, int],
 ) -> list[int]:
     """Two-pool linear scan; return the callee-saved registers it assigned.
 
@@ -700,6 +733,9 @@ def _linear_scan_assign_pools(
             # committed, so an interval ending at this instruction can
             # safely donate its register to the new result.
             if active_end <= start:
+                if register_index == 0:
+                    # x0 belongs to argument 0 only; it is never pooled.
+                    continue
                 if register_index >= _CALLEE_SAVED_POOL[0]:
                     free_callee.append(register_index)
                 else:
@@ -711,7 +747,13 @@ def _linear_scan_assign_pools(
         free_callee.sort()
 
         register_index = -1
-        if not needs_callee_saved and free_caller:
+        fixed = fixed_registers.get(value_id, -1)
+        if fixed == 0 and not needs_callee_saved:
+            register_index = 0
+        elif fixed > 0 and not needs_callee_saved and fixed in free_caller:
+            free_caller.remove(fixed)
+            register_index = fixed
+        elif not needs_callee_saved and free_caller:
             register_index = free_caller.pop(0)
         elif free_callee:
             register_index = free_callee.pop(0)
@@ -720,8 +762,11 @@ def _linear_scan_assign_pools(
             index = 0
             while index < len(active):
                 if (
-                    not needs_callee_saved
-                    or active[index][2] >= _CALLEE_SAVED_POOL[0]
+                    active[index][2] != 0
+                    and (
+                        not needs_callee_saved
+                        or active[index][2] >= _CALLEE_SAVED_POOL[0]
+                    )
                 ) and (
                     spill_index < 0 or active[index][0] > active[spill_index][0]
                 ):
@@ -858,14 +903,20 @@ def _append_argument_intervals(
     phi_input_ids: set[int],
     global_last_use: dict[int, int],
     hard_barriers: list[int],
+    call_barriers: list[int],
+    reload_offsets: list[int],
     intervals: list[tuple[int, int, int, bool]],
+    fixed_registers: dict[int, int],
 ) -> None:
-    """Add register-passed scalar arguments as callee-saved candidates.
+    """Add register-passed scalar arguments as candidates.
 
     An argument is defined on entry (position -1) and is committed by the
-    prologue.  It is restricted to x19-x28 so that the commit can never
-    overwrite another incoming argument register that the prologue has yet
-    to read.
+    prologue.  One whose interval crosses a call is restricted to x19-x28,
+    so that its commit can never overwrite another incoming argument
+    register that the prologue has yet to read.  Any other argument stays in
+    the register it arrived in (``fixed_registers``): its commit is no move
+    at all, and x0, which only calls and returns write, is used for nothing
+    else.
     """
 
     arg_types = [arg.type for arg in func.args]
@@ -893,14 +944,296 @@ def _append_argument_intervals(
             and header.second in (1, 8, 16, 32, 64)
         ):
             continue
-        if kernel.value_slot_offset(value_id) < 0:
+        slot_offset = kernel.value_slot_offset(value_id)
+        if slot_offset < 0 or slot_offset in reload_offsets:
             continue
         last_use = global_last_use.get(value_id)
         if last_use is None or last_use < 0:
             continue
         if _interval_touches_call(0, last_use, hard_barriers):
             continue
-        intervals.append((-1, last_use, value_id, True))
+        crosses_call = _interval_touches_call(0, last_use, call_barriers)
+        if not crosses_call:
+            fixed_registers[value_id] = int(regs[0][1:])
+        intervals.append((-1, last_use, value_id, crosses_call))
+
+
+def _append_phi_intervals(
+    kernel,
+    block_id: int,
+    block_base: list[int],
+    global_last_use: dict[int, int],
+    first_live: dict[int, int],
+    hard_barriers: list[int],
+    call_barriers: list[int],
+    reload_offsets: list[int],
+    intervals: list[tuple[int, int, int, bool]],
+) -> None:
+    """Add a block's scalar phi results as candidates.
+
+    A phi is written by the edge copies at the end of each predecessor, so
+    its interval starts one position before its block.  Every value live
+    into the block is defined earlier and so overlaps it; a value whose last
+    use is a predecessor's final position may donate its register, which
+    makes that edge copy a no-op.  Clobbers are scanned from the block on:
+    the copies run after the predecessor's last call.
+    """
+
+    phi_fact = kernel.block_phi_fact(block_id)
+    phi_index = 0
+    while phi_index < phi_fact.second:
+        phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
+        header: CompilerInt4 = kernel.type_header(phi.second)
+        if header.first == TYPE_KIND_ARRAY or header.first == TYPE_KIND_STRUCT:
+            # An aggregate phi sends the whole edge down the slot-only path.
+            return
+        phi_index += 1
+    base = block_base[block_id]
+    start = base - 1
+    phi_index = 0
+    while phi_index < phi_fact.second:
+        phi = kernel.phi_record(phi_fact.first + phi_index)
+        phi_index += 1
+        value_id = phi.first
+        if value_id < 0:
+            continue
+        header = kernel.type_header(phi.second)
+        if header.first != TYPE_KIND_PTR and not (
+            header.first == TYPE_KIND_INT and header.second in (1, 8, 16, 32, 64)
+        ):
+            continue
+        recorded_type_id = kernel.value_type_id(value_id)
+        if recorded_type_id < 0 or not _register_type_ids_match(
+            kernel, recorded_type_id, phi.second
+        ):
+            continue
+        slot_offset = kernel.value_slot_offset(value_id)
+        if slot_offset < 0 or slot_offset in reload_offsets:
+            continue
+        last_use = global_last_use.get(value_id)
+        if last_use is None or last_use < base:
+            continue
+        if first_live.get(value_id, start) < start:
+            continue
+        if _interval_touches_call(base, last_use, hard_barriers):
+            continue
+        intervals.append(
+            (
+                start,
+                last_use,
+                value_id,
+                _interval_touches_call(base, last_use, call_barriers),
+            )
+        )
+
+
+def _fusable_branch_conditions(kernel) -> dict[int, int]:
+    """Compares a block's ``br_cond`` can take from the flags.
+
+    An integer or pointer icmp that is its block's last instruction, and
+    whose only use in the function is that block's ``br_cond``, needs no i1:
+    the compare sets NZCV and the terminator branches on it.  Nothing is
+    emitted between the two but a safepoint label and its ``nop``; the edge
+    copies after the branch move values without touching the flags.
+    Returns ``{icmp value id: block id}``.
+    """
+
+    candidates: dict[int, int] = {}
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        header: CompilerInt4 = kernel.terminator_header(block_id)
+        block_fact: CompilerInt4 = kernel.block_fact(block_id)
+        if (
+            header.first == PARSED_INSTRUCTION_KIND_BR_COND
+            and header.third >= 0
+            and block_fact.second > 0
+        ):
+            last_id = block_fact.first + block_fact.second - 1
+            metadata: CompilerInt4 = kernel.instruction_metadata_by_id(last_id)
+            fact: CompilerInt4 = kernel.instruction_fact_by_id(last_id)
+            if (
+                metadata.first == PARSED_INSTRUCTION_KIND_ICMP
+                and fact.first == header.third
+            ):
+                icmp: CompilerInt4 = kernel.instruction_record(metadata.second)
+                type_header: CompilerInt4 = kernel.type_header(icmp.second)
+                if type_header.first == TYPE_KIND_PTR or (
+                    type_header.first == TYPE_KIND_INT
+                    and type_header.second in (1, 8, 16, 32, 64)
+                ):
+                    candidates[fact.first] = block_id
+        block_id += 1
+    if not candidates:
+        return candidates
+
+    # Every use other than the terminator that owns the compare disqualifies
+    # it: instruction operands, other terminators, phi inputs and the
+    # conditions of inline error edges all read the materialised i1.
+    rejected: dict[int, bool] = {}
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        block_fact = kernel.block_fact(block_id)
+        instruction_index = 0
+        while instruction_index < block_fact.second:
+            use_count = kernel.instruction_use_count(block_id, instruction_index)
+            use_index = 0
+            while use_index < use_count:
+                used = kernel.instruction_use_id(block_id, instruction_index, use_index)
+                if used in candidates:
+                    rejected[used] = True
+                use_index += 1
+            instruction_index += 1
+        if kernel.terminator_use_count(block_id) == 1:
+            used = kernel.terminator_use_id(block_id, 0)
+            if used in candidates and candidates[used] != block_id:
+                rejected[used] = True
+        phi_fact = kernel.block_phi_fact(block_id)
+        phi_index = 0
+        while phi_index < phi_fact.second:
+            phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
+            incoming_index = 0
+            while incoming_index < phi.fourth:
+                incoming = kernel.phi_incoming(phi.third + incoming_index)
+                if incoming.first in candidates:
+                    rejected[incoming.first] = True
+                incoming_index += 1
+            phi_index += 1
+        error_span = kernel.inline_error_edge_span(block_id)
+        error_index = 0
+        while error_index < error_span.second:
+            condition = kernel.inline_error_edge_condition(
+                error_span.first + error_index
+            )
+            if condition in candidates:
+                rejected[condition] = True
+            error_index += 1
+        block_id += 1
+    fused: dict[int, int] = {}
+    for value_id in candidates:
+        if value_id not in rejected:
+            fused[value_id] = candidates[value_id]
+    return fused
+
+
+_FRAMELESS_INSTRUCTION_KIND_IDS = (
+    PARSED_INSTRUCTION_KIND_BINOP,
+    PARSED_INSTRUCTION_KIND_CAST,
+    PARSED_INSTRUCTION_KIND_FREEZE,
+    PARSED_INSTRUCTION_KIND_GEP,
+    PARSED_INSTRUCTION_KIND_ICMP,
+    PARSED_INSTRUCTION_KIND_LOAD,
+    PARSED_INSTRUCTION_KIND_SELECT,
+    PARSED_INSTRUCTION_KIND_STORE,
+)
+_FRAMELESS_TERMINATOR_KIND_IDS = (
+    PARSED_INSTRUCTION_KIND_BR,
+    PARSED_INSTRUCTION_KIND_BR_COND,
+    PARSED_INSTRUCTION_KIND_RET,
+    PARSED_INSTRUCTION_KIND_RET_VOID,
+    PARSED_INSTRUCTION_KIND_SWITCH,
+    PARSED_INSTRUCTION_KIND_UNREACHABLE,
+)
+
+
+def _value_needs_slot(func: ParsedFunction, kernel, value_id: int) -> bool:
+    """True when emitting ``value_id`` touches its stack slot."""
+
+    if value_id < 0 or kernel.value_slot_id(value_id) < 0:
+        return False
+    if allocated_scalar_register_indexed(
+        kernel, value_id, kernel.value_type_id(value_id)
+    ) >= 0:
+        return False
+    if value_id in func.aarch64_fused_branch_values:
+        return False
+    return aarch64_madd_fusion_for_product(func, kernel.value_name(value_id)) is None
+
+
+def _is_frameless_leaf(func: ParsedFunction, kernel) -> bool:
+    """Whether the function can run without a frame record or stack.
+
+    Only integer/pointer loads, stores and arithmetic with branches and
+    returns, and every argument, phi and result in a register: then nothing
+    addresses a slot through x29, no call needs LR saved, and no callee-saved
+    register was assigned.  Anything else keeps the frame.
+    """
+
+    if func.aarch64_callee_saved or func.is_vararg:
+        return False
+    if kernel.hidden_sret_slot_id >= 0:
+        return False
+    arg_types = [arg.type for arg in func.args]
+    arg_regs = assign_abi_arg_regs(arg_types)
+    arg_index = 0
+    while arg_index < len(func.args):
+        arg = func.args[arg_index]
+        regs = arg_regs[arg_index]
+        arg_index += 1
+        value_id = kernel.value_id(arg.name)
+        if value_id < 0 or kernel.value_slot_id(value_id) < 0:
+            continue
+        if len(regs) != 1 or aggregate_passed_indirect(arg.type):
+            return False
+        if _value_needs_slot(func, kernel, value_id):
+            return False
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        header: CompilerInt4 = kernel.terminator_header(block_id)
+        if header.first not in _FRAMELESS_TERMINATOR_KIND_IDS:
+            return False
+        if kernel.inline_error_edge_span(block_id).second:
+            return False
+        phi_fact = kernel.block_phi_fact(block_id)
+        phi_index = 0
+        while phi_index < phi_fact.second:
+            phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
+            if _value_needs_slot(func, kernel, phi.first):
+                return False
+            phi_index += 1
+        block_fact: CompilerInt4 = kernel.block_fact(block_id)
+        instruction_index = 0
+        while instruction_index < block_fact.second:
+            instruction_id = block_fact.first + instruction_index
+            metadata: CompilerInt4 = kernel.instruction_metadata_by_id(instruction_id)
+            if metadata.first not in _FRAMELESS_INSTRUCTION_KIND_IDS:
+                return False
+            fact: CompilerInt4 = kernel.instruction_fact_by_id(instruction_id)
+            if _value_needs_slot(func, kernel, fact.first):
+                return False
+            instruction_index += 1
+        block_id += 1
+    return True
+
+
+def note_aarch64_reload_destinations(func: ParsedFunction, plan) -> None:
+    """Record the spill slots the stack map rewrites after a safepoint.
+
+    A managed value live across a safepoint is reloaded from its root into
+    its spill slot once the call returns (a relocating collector may have
+    moved the object).  The reload writes only the slot, so such a value
+    must be read from the slot: in x19-x28 it would keep the pre-move
+    address.
+    """
+
+    offsets: list[int] = []
+    records = getattr(plan, "packed_records", None)
+    if records is not None:
+        index = 0
+        count = len(records.reload_scalars) // 3
+        while index < count:
+            # One name per type: pcc types a local once per function.
+            packed: CompilerInt3 = records.reload_scalars.get3_unchecked(index)
+            offset = -packed.second
+            if offset not in offsets:
+                offsets.append(offset)
+            index += 1
+    else:
+        for record in getattr(plan, "records", ()):
+            for planned in record.reloads:
+                offset = -planned.destination_offset
+                if offset not in offsets:
+                    offsets.append(offset)
+    func.aarch64_reload_slot_offsets = offsets
 
 
 def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
@@ -909,6 +1242,8 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     kernel = get_indexed_function_kernel(func)
     kernel.clear_value_registers()
     func.aarch64_callee_saved = []
+    func.aarch64_fused_branch_values = {}
+    func.aarch64_frameless = False
     if func.is_vararg:
         return
     function_level = function_live_intervals_enabled()
@@ -923,14 +1258,21 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     if callee_saved:
         function_level = True
         call_results = True
+        func.aarch64_fused_branch_values = _fusable_branch_conditions(kernel)
     pool_intervals: list[tuple[int, int, int, bool]] = []
     alias_pairs: list[tuple[int, int]] = []
     call_barriers: list[int] = []
     hard_barriers: list[int] = []
     first_live: dict[int, int] = {}
+    # The callee-saved mode allocates phis and their inputs (the edge copies
+    # move between registers and slots); the block-local modes keep both in
+    # their slots.
     phi_input_ids: set[int] = set()
+    reload_offsets: list[int] = (
+        func.aarch64_reload_slot_offsets if callee_saved else []
+    )
     block_id = 0
-    while block_id < len(kernel.block_names):
+    while not callee_saved and block_id < len(kernel.block_names):
         phi_fact = kernel.block_phi_fact(block_id)
         phi_index = 0
         while phi_index < phi_fact.second:
@@ -959,6 +1301,21 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
             hard_barriers,
             first_live,
         ) = _function_level_facts(kernel)
+        # A fused multiply reads its inputs at the consumer, not at the mul.
+        # The per-block overrides below cover instruction results; arguments
+        # and phis take their intervals straight from these last uses.
+        for fusion in func.aarch64_madd_fusions:
+            fusion_block_id = kernel.block_id(fusion.block_name)
+            if fusion_block_id < 0:
+                continue
+            consumer_position = block_base[fusion_block_id] + fusion.consumer_index
+            for operand in (fusion.mul_lhs, fusion.mul_rhs):
+                operand_id = kernel.value_id(operand)
+                if operand_id < 0:
+                    continue
+                known = global_last_use.get(operand_id)
+                if known is None or known < consumer_position:
+                    global_last_use[operand_id] = consumer_position
 
     for block_id in range(len(kernel.block_names)):
         block_name = kernel.block_names[block_id]
@@ -979,6 +1336,18 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
             instruction_index += 1
         if not block_is_safe:
             continue
+        if callee_saved:
+            _append_phi_intervals(
+                kernel,
+                block_id,
+                block_base,
+                global_last_use,
+                first_live,
+                hard_barriers,
+                call_barriers,
+                reload_offsets,
+                pool_intervals,
+            )
 
         call_positions: list[int] = []
         instruction_index = 0
@@ -1103,6 +1472,11 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 # preassigned slot needed by pressure/type fallback paths.
                 position += 1
                 continue
+            if kernel.value_slot_offset(dest_id) in reload_offsets:
+                # A safepoint reload rewrites this slot; see
+                # ``note_aarch64_reload_destinations``.
+                position += 1
+                continue
             # Preserve the established compare/cset/byte-slot/branch peephole
             # for a boolean consumed directly by br_cond.  Other integer SSA
             # values, including booleans used by scalar instructions, remain
@@ -1191,14 +1565,23 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
             _linear_scan_assign(kernel, intervals)
 
     if callee_saved:
+        fixed_registers: dict[int, int] = {}
         _append_argument_intervals(
             func, kernel, phi_input_ids, global_last_use, hard_barriers,
-            pool_intervals,
+            call_barriers, reload_offsets, pool_intervals, fixed_registers,
         )
         group_intervals, group_members = _merge_alias_groups(
             pool_intervals, alias_pairs
         )
-        _linear_scan_assign_pools(kernel, group_intervals)
+        # A group that must survive a call keeps x19-x28 for all members.
+        fixed_roots: dict[int, int] = {}
+        for _start, _end, root, needs in group_intervals:
+            if needs:
+                continue
+            for member in group_members[root]:
+                if member in fixed_registers:
+                    fixed_roots[root] = fixed_registers[member]
+        _linear_scan_assign_pools(kernel, group_intervals, fixed_roots)
         func.aarch64_callee_saved = _publish_group_registers(
             kernel, group_intervals, group_members
         )
@@ -1213,6 +1596,9 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         for fusion in func.aarch64_madd_fusions
         if _aarch64_madd_fusion_storage_is_safe(func, fusion)
     ]
+    if callee_saved:
+        # Decided last: a dropped madd plan above materialises its product.
+        func.aarch64_frameless = _is_frameless_leaf(func, kernel)
 
 
 def callee_saved_area_size(func: ParsedFunction) -> int:

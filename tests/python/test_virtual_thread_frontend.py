@@ -400,8 +400,6 @@ def _write_sequential_io_case(path: Path) -> None:
 
 
 def test_virtual_thread_spawn_lowers_to_typed_resume_ir(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_frontend.py"
@@ -427,8 +425,6 @@ def test_virtual_thread_generator_spawn_lowers_to_state_machine_resume_ir(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_generator.py"
@@ -450,8 +446,6 @@ def test_virtual_thread_generator_spawn_lowers_to_state_machine_resume_ir(
 
 
 def test_virtual_thread_spawn_runs_direct_user_function(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_frontend.py"
@@ -476,8 +470,6 @@ def test_virtual_thread_spawn_runs_direct_user_function(tmp_path, monkeypatch):
 
 
 def test_virtual_thread_import_from_aliases_run(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_from_import.py"
@@ -505,8 +497,6 @@ def test_virtual_thread_generator_spawn_preserves_frame_and_parks_lock(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_generator.py"
@@ -534,8 +524,6 @@ def test_virtual_thread_generator_parks_threading_wait_primitives(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_blocking.py"
@@ -562,8 +550,6 @@ def test_virtual_thread_generator_parks_threading_wait_primitives(
 
 
 def test_virtual_thread_uncaught_exception_is_task_local(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_task_failure.py"
@@ -597,8 +583,6 @@ def test_virtual_thread_uncaught_exception_is_task_local(tmp_path, monkeypatch):
 
 
 def test_virtual_thread_join_parks_and_propagates_outcomes(tmp_path, monkeypatch):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_join.py"
@@ -635,8 +619,6 @@ def test_virtual_thread_cancel_is_cooperative_and_runs_sync_cleanup(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     monkeypatch.setenv("PCC_GC_BACKEND", "4")
     from pcc.py_frontend.pipeline import compile_python
 
@@ -696,8 +678,6 @@ def test_virtual_thread_sequential_readable_writable_use_platform_reactor(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "vthread_sequential_io.py"

@@ -39,13 +39,10 @@ def test_tooling_manifest_cli_is_native_and_machine_readable(capsys):
 
 
 def test_traceback_runtime_mirrors_keep_source_line_and_function_frames():
-    c_source = (ROOT / "pcc/py_runtime/src/py_exc_traceback.c").read_text(
-        encoding="utf-8"
-    )
     py_source = (ROOT / "pcc/py_runtime/py/py_exc_traceback.py").read_text(
         encoding="utf-8"
     )
-    for source in (c_source, py_source):
+    for source in (py_source,):
         assert "source_line" in source
         assert "func_name" in source
         assert "line" in source

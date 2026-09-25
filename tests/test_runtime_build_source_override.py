@@ -45,7 +45,9 @@ def runtime_sources(tmp_path, monkeypatch):
 
 
 def test_default_runtime_key_preserves_v4_serialization(runtime_sources):
-    assert cache._pcc_runtime_source_key(Path("/frozen/pcc")) == "7d209b20edafce1a5b49226b"
+    # Re-pinned when the retired C-runtime selectors PCC_RUNTIME_CC and
+    # PCC_RUNTIME_HIGH left the key's environment inputs (2026-09-25).
+    assert cache._pcc_runtime_source_key(Path("/frozen/pcc")) == "008d6ddf1d7fff18b0be5cfe"
 
 
 def test_identical_external_runtime_uses_same_logical_source_key(runtime_sources):

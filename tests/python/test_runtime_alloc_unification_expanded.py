@@ -10,41 +10,6 @@ def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_c_scalar_and_object_constructors_route_through_pcc_gc_alloc():
-    checks = {
-        "pcc/py_runtime/src/py_str.c": [
-            "pcc_gc_alloc(\n        (int64_t)total, PY_TYPE_STR, 0)",
-        ],
-        "pcc/py_runtime/src/py_bytes.c": [
-            "PY_TYPE_BYTES, 0",
-            "PY_TYPE_BYTEARRAY, 0",
-            "PY_TYPE_MEMORYVIEW, 0",
-        ],
-        "pcc/py_runtime/src/py_obj_stubs.c": [
-            "PY_TYPE_FLOAT, 0",
-            "PY_TYPE_COMPLEX, 0",
-        ],
-        "pcc/py_runtime/src/py_func.c": [
-            "PY_TYPE_FUNC, 0",
-        ],
-        "pcc/py_runtime/src/py_class.c": [
-            "PY_TYPE_CLASS, 0",
-            "cls->type_tag_alloc, 0",
-        ],
-        "pcc/py_runtime/src/py_weakref.c": [
-            "PY_TYPE_WEAKREF, 0",
-        ],
-        "pcc/py_runtime/src/py_exc_objects.c": [
-            "PY_TYPE_EXC, 0",
-        ],
-    }
-    for path, needles in checks.items():
-        text = _text(path)
-        assert "pcc_gc_alloc" in text, path
-        for needle in needles:
-            assert needle in text, f"{needle!r} missing from {path}"
-
-
 def test_pcc_py_scalar_and_object_constructors_route_through_pcc_gc_alloc():
     checks = {
         "pcc/py_runtime/py/py_str.py": ["pcc_gc_alloc(40 + byte_len + 1, 4, 0)"],
@@ -75,12 +40,3 @@ def test_pcc_py_scalar_and_object_constructors_route_through_pcc_gc_alloc():
             assert needle in text, f"{needle!r} missing from {path}"
 
 
-def test_known_bignum_raw_allocation_is_documented_until_collapse_path_is_fixed():
-    text = _text("pcc/py_runtime/src/py_int_core.c")
-    assert "PyIntObject *py_bigint_alloc" in text
-    assert "malloc(bytes)" in text
-    assert "free(b);" in text, (
-        "py_bigint_to_pyobject still frees freshly collapsed bignums directly; "
-        "do not route py_bigint_alloc through pcc_gc_alloc until that path "
-        "emits object-freeing/forget events symmetrically."
-    )

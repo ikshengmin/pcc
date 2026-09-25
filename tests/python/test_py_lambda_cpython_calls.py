@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+
+
+# The IR printer spells out the callee type (``call ptr (ptr, ptr) @f``);
+# drop it so the assertions below read the call shape only.
+_EXPLICIT_CALL_TYPE = re.compile(r"\bcall (\S+) \((?:[^()]|\([^()]*\))*\) @")
+
+
+def _normalize_call_types(ir_text: str) -> str:
+    return _EXPLICIT_CALL_TYPE.sub(r"call \1 @", ir_text)
 
 
 class PyLambdaCpythonCallTests(unittest.TestCase):
@@ -160,7 +170,7 @@ class PyLambdaCpythonCallTests(unittest.TestCase):
         ll = os.path.join(self.td, "cpy_tuple_slice_key.ll")
         compile_python(src, ll, emit_llvm_only=True, libpython_mode="auto")
         with open(ll, "r", encoding="utf-8") as fh:
-            ir_text = fh.read()
+            ir_text = _normalize_call_types(fh.read())
         self.assertRegex(
             ir_text,
             r"slice\.expr[^=\n]* = call ptr @py_slice_new",

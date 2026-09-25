@@ -244,8 +244,6 @@ PyObject *pcc_capi_builtin_object_getattr(PyObject *o, const char *name);
 void pcc_gc_note_load(void);
 PyObject *pcc_gc_note_relocation_read(PyObject *o);
 void pcc_gc_note_store(void);
-void pcc_gc_root_slot_lock(void);
-void pcc_gc_root_slot_unlock(void);
 void pcc_gc_note_safepoint(void);
 void pcc_gc_note_pin(int32_t delta);
 void pcc_gc_note_write_barrier(PyObject *owner, PyObject *value);
@@ -325,9 +323,7 @@ int64_t pcc_gc_sweep_owed(void);
 int64_t pcc_gc_collect_tracing(void);
 void pcc_gc_begin_explicit_tracing_collect(void);
 void pcc_gc_end_explicit_tracing_collect(void);
-int32_t pcc_gc_explicit_collect_is_active(void);
 typedef void (*PccGcRootVisitor)(PyObject *root, void *ctx);
-void pcc_gc_visit_runtime_roots(PccGcRootVisitor visit, void *ctx);
 void pcc_gc_note_frame_enter(const void *frame_map, PyObject **slots);
 void pcc_gc_note_frame_leave(PyObject **slots);
 void pcc_gc_note_frame_enter_lifo(const void *frame_map, PyObject **slots);
@@ -482,7 +478,6 @@ typedef void (*PccPyObjSlotVisitorI64)(
     int64_t role,
     void *ctx
 );
-int py_obj_visit_slots(PyObject *o, PyObjSlotVisitor visit, void *ctx);
 int64_t pcc_gc_visit_object_slots_slice(
     PyObject *o,
     int64_t cursor,
@@ -491,7 +486,6 @@ int64_t pcc_gc_visit_object_slots_slice(
     void *ctx,
     int64_t *state_out
 );
-void py_obj_update_slot(PyObject **slot);
 int pcc_capi_visit_cext_object_slots(
     PyObject *o,
     PyObjSlotVisitor visit,
@@ -502,10 +496,6 @@ int pcc_capi_visit_cext_object_slots_i64(
     PccPyObjSlotVisitorI64 visit,
     void *ctx
 );
-/* Slot-address referent walker for the backend-4 remap phase
- * (docs/plans/gc4-relocation-remap-plan.md). Coverage mirrors
- * pcc_gc_trace_referents. */
-void pcc_gc_update_referents(PyObject *o, void (*update)(PyObject **slot));
 void *pcc_gc_forwarding_index_find(PyObject *obj);
 int64_t pcc_gc_forwarding_index_insert(PyObject *obj, void *node);
 void *pcc_gc_forwarding_index_remove(PyObject *obj);
@@ -577,10 +567,7 @@ void *pcc_gc_zpage_page_index_remove(void *page);
 void pcc_gc_zpage_page_index_clear(void);
 int64_t pcc_gc_object_is_known(PyObject *obj);
 int64_t pcc_gc_object_is_known_no_lock(PyObject *obj);
-int64_t pcc_gc_pointer_is_managed_no_lock(PyObject *obj);
 int64_t pcc_gc_backend4_slot_needs_resolve(PyObject *value);
-int64_t pcc_gc_forwarding_population_load(void);
-int64_t pcc_gc_relocation_set_active_load(void);
 int64_t pcc_gc_slot_is_runtime_root(PyObject **slot);
 
 /* ---- Tagged-int helpers ------------------------------------------------ */
@@ -686,8 +673,6 @@ const char *py_str_utf8(PyObject *s);
 PyObject *py_obj_repr(PyObject *o);
 PyObject *py_obj_ascii(PyObject *o);
 PyObject *py_obj_str(PyObject *o);
-PyObject *py_format_obj_to_str(PyObject *o, int use_repr);
-PyObject *py_float_to_str_obj(PyObject *o);
 
 typedef struct {
     PyObjectHeader h;
@@ -1163,17 +1148,6 @@ PyObject *py_super_lookup(PyClassObject *start_cls,
                           PyClassObject *from_cls,
                           const char *name);
 
-/* Compute the C3 linearization of `bases`. The first element of the
- * returned MRO is always a freshly introduced "self" placeholder supplied
- * by py_class_new (it handles prepending); this function only linearizes
- * the bases' MROs plus the `bases` list itself. Writes an owned array to
- * *out_mro (malloc'd) and the length to *out_n. Returns 0 on success,
- * -1 on MRO inconsistency (raises nothing in Phase 3; marks out_n = -1).
- *
- * Callers retain ownership of the returned array and must free() it. */
-int c3_linearize(PyClassObject **bases, int32_t n_bases,
-                 PyClassObject ***out_mro, int32_t *out_n);
-
 /* Destructor helper used by py_decref when a class's refcount drops. */
 void py_class_dealloc(PyObject *o);
 void py_instance_dealloc(PyObject *o);
@@ -1216,15 +1190,6 @@ PyObject *py_classmethod_new(PyObject *func);
 PyObject *py_staticmethod_new(PyObject *func);
 PyObject *py_instance_bind_method(PyObject *method, PyObject *self, const char *name);
 
-/* In-place setter/deleter replacement — used by the @name.setter /
- * @name.deleter decorator form where a second `def` with the same
- * attribute name updates the already-installed property's fset/fdel
- * slot instead of creating a new property object.
- *
- * Returns 0 on success, -1 if ``prop`` is not a property. Acquires
- * a new reference to ``func`` (NULL is accepted to clear the slot). */
-int py_property_set_fset(PyObject *prop, PyObject *func);
-int py_property_set_fdel(PyObject *prop, PyObject *func);
 
 /* ---- Iteration + extended generic ops (Phase 3) ----------------------- */
 PyObject *py_obj_iter(PyObject *o);
@@ -1247,7 +1212,6 @@ PyObject *py_obj_floordiv(PyObject *a, PyObject *b);
 PyObject *py_obj_inplace_op(PyObject *a, PyObject *b, int64_t op_code);
 void pcc_gc_record_explicit_pause(int64_t start_us, int64_t end_us);
 PyObject *py_obj_mod(PyObject *a, PyObject *b);
-PyObject *py_obj_pow(PyObject *a, PyObject *b);
 PyObject *py_obj_abs(PyObject *o);
 PyObject *py_obj_neg(PyObject *a);
 PyObject *py_obj_pos(PyObject *a);
@@ -1406,6 +1370,11 @@ PyObject *py_user_iter_dispatch(PyObject *o);
 PyObject *py_user_next_dispatch(PyObject *o);
 PyObject *py_user_matmul_dispatch(PyObject *a, PyObject *b);
 PyObject *py_user_binop_dispatch(PyObject *a, PyObject *b, const char *name, const char *rname, const char *type_err_msg);
+PyObject *py_int_from_f64_exact(double value);
+int64_t py_float_to_i64_checked(double value);
+PyObject *py_obj_neg(PyObject *value);
+PyObject *py_obj_pos(PyObject *value);
+PyObject *py_obj_invert(PyObject *value);
 PyObject *py_obj_floordiv(PyObject *a, PyObject *b);
 PyObject *py_obj_inplace_op(PyObject *a, PyObject *b, int64_t op_code);
 void pcc_gc_record_explicit_pause(int64_t start_us, int64_t end_us);

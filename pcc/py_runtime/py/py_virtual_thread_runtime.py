@@ -193,6 +193,8 @@ pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
 pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
 pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
 pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_cond_new = extern("pcc_cond_new", (), c_ptr)
 pcc_cond_free = extern("pcc_cond_free", (c_ptr,), c_void)
 pcc_cond_signal = extern("pcc_cond_signal", (c_ptr,), c_int64)
@@ -346,11 +348,19 @@ def _scheduler_cond():
 def _scheduler_lock() -> int:
     if _scheduler_init() != 0:
         return -1
-    return pcc_mutex_lock(_scheduler_mutex())
+    status = pcc_mutex_lock(_scheduler_mutex())
+    if status == 0:
+        # The holder must not park at a safepoint: a carrier that needs this
+        # lock to reach its own safepoint would block, and a stop-the-world
+        # would wait for it forever.  Loops in locked regions carry
+        # compiler-inserted polls; exit parks once the lock is released.
+        pcc_thread_no_park_enter()
+    return status
 
 
 def _scheduler_unlock() -> None:
     pcc_mutex_unlock(_scheduler_mutex())
+    pcc_thread_no_park_exit()
 
 
 def _scheduler_signal() -> None:

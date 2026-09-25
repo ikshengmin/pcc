@@ -1376,19 +1376,6 @@ def execute_cli(
         )
         with _temporary_env(pass_env):
             effective_link_args = _copy_seq(link_args)
-            if freestanding_libc:
-                runtime_cc = str(os.environ.get("PCC_RUNTIME_CC", "") or "")
-                runtime_high = str(
-                    os.environ.get("PCC_RUNTIME_HIGH", "") or ""
-                )
-                if runtime_cc.strip().lower() in ("cc", "c", "host"):
-                    raise RuntimeError(
-                        "--freestanding-libc requires PCC_RUNTIME_CC=pcc"
-                    )
-                if runtime_high.strip().lower() in ("cc", "c"):
-                    raise RuntimeError(
-                        "--freestanding-libc requires PCC_RUNTIME_HIGH=py"
-                    )
 
             if emit_mode or output_path:
                 if use_multi_input:

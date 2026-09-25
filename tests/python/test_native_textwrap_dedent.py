@@ -17,8 +17,6 @@ def test_runtime_textwrap_dedent_stays_native_for_dynamic_string(tmp_path):
     exe = tmp_path / "dynamic_dedent"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     compile_result = subprocess.run(
         [
             "uv",

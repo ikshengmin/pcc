@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Build and run the production C-runtime virtual-thread scale gate.
+"""Build and run the production-runtime virtual-thread scale gate.
+
+The C harness links the pcc-Python runtime archive: ``PCC_RUNTIME_ARCHIVE``
+when set, otherwise a private copy of ``pcc/py_runtime`` built with ``make``.
 
 The default one-million run is manual-only and requires ``PCC_VTHREAD_1M=1``.
 Smaller ``--n`` values are intended only for focused regression coverage.
@@ -36,8 +39,12 @@ class VThreadRuntimeGateError(RuntimeError):
 
 def _source_files() -> tuple[Path, ...]:
     files = [BENCHMARK_SOURCE, Path(__file__).absolute(), RUNTIME_DIR / "Makefile"]
-    for directory in (RUNTIME_DIR / "include", RUNTIME_DIR / "src"):
-        files.extend(path for path in directory.rglob("*") if path.is_file())
+    for directory in (RUNTIME_DIR / "include", RUNTIME_DIR / "py"):
+        files.extend(
+            path
+            for path in directory.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        )
     return tuple(sorted(files))
 
 
@@ -87,37 +94,55 @@ def _run_checked(
     return result
 
 
-def build_benchmark(*, timeout: int = 240) -> tuple[Path, Path, str]:
+def build_benchmark(*, timeout: int = 1800) -> tuple[Path, Path, str]:
+    explicit = os.environ.get("PCC_RUNTIME_ARCHIVE", "").strip()
     digest = source_digest()
+    if explicit:
+        archive = Path(explicit).expanduser().resolve(strict=True)
+        digest = hashlib.sha256(
+            (digest + "\0" + _archive_digest(archive)).encode("ascii")
+        ).hexdigest()
     build_root = _cache_root() / digest[:20]
     runtime_copy = build_root / "py_runtime"
     executable = build_root / "vthread_real_runtime"
-    archive = runtime_copy / "libpy_runtime.a"
+    if not explicit:
+        archive = runtime_copy / "libpy_runtime_pcc_py.a"
     if executable.exists() and archive.exists():
         return executable, archive, digest
 
     if build_root.exists():
         shutil.rmtree(build_root)
     build_root.mkdir(parents=True)
-    shutil.copytree(
-        RUNTIME_DIR,
-        runtime_copy,
-        ignore=shutil.ignore_patterns(
-            "build", "build_pcc", "build_py", "build_libpython", "*.a"
-        ),
-    )
-    _run_checked(
-        ["make", "-B", "-C", str(runtime_copy), "libpy_runtime.a"],
-        timeout=timeout,
-    )
+    if not explicit:
+        shutil.copytree(
+            RUNTIME_DIR,
+            runtime_copy,
+            ignore=shutil.ignore_patterns(
+                "build", "build_pcc", "build_py", "build_libpython", "*.a",
+                "*.a.*", "_native", "__pycache__",
+            ),
+        )
+        pcc_bin = REPO_ROOT / ".venv" / "bin" / "pcc"
+        _run_checked(
+            [
+                "make",
+                "-j" + str(min(8, os.cpu_count() or 1)),
+                "-C",
+                str(runtime_copy),
+                f"PCC={pcc_bin if pcc_bin.is_file() else 'pcc'}",
+                f"PYTHON={sys.executable}",
+                f"PCC_REPO_ROOT={REPO_ROOT}",
+                "libpy_runtime_pcc_py.a",
+            ],
+            timeout=timeout,
+        )
     cc = os.environ.get("CC", "cc")
     _run_checked(
         [
             cc,
             "-O2",
             "-std=c11",
-            f"-I{runtime_copy / 'include'}",
-            f"-I{runtime_copy / 'src'}",
+            f"-I{RUNTIME_DIR / 'include'}",
             str(BENCHMARK_SOURCE),
             str(archive),
             "-lm",
@@ -265,7 +290,7 @@ def run_gate(
         "backends": list(backends),
         "results": results,
         "claim_boundary": (
-            "Current-machine no-libpython C runtime measurement of simultaneous "
+            "Current-machine no-libpython pcc runtime measurement of simultaneous "
             "pcc virtual-thread scheduler objects. Mean operation latencies are "
             "amortized phase measurements, not percentile distributions; the IO "
             "sample shares one real pipe and does not claim one million fds."
@@ -286,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backends", type=_parse_backends, default=(0, 1, 2, 3, 4))
     parser.add_argument("--timer-n", type=int)
     parser.add_argument("--io-n", type=int)
-    parser.add_argument("--build-timeout", type=int, default=240)
+    parser.add_argument("--build-timeout", type=int, default=1800)
     parser.add_argument("--backend-timeout", type=int, default=600)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)

@@ -16,7 +16,7 @@ except ImportError:
     # pcc publishes this provider as the top-level stdlib module ``bz2``.
     from _compression_stream import CompressionWriter, DecompressReader
 
-from pcc.extern import c_int64, c_ptr, extern, c_obj
+from pcc.extern import c_int64, c_ptr, c_rawptr, extern, c_obj
 from pcc.unsafe import (
     call_i32_ptr1,
     call_i32_ptr_i32,
@@ -41,7 +41,8 @@ from pcc.unsafe import (
 )
 
 
-_py_bytes_new: "extern" = extern("py_bytes_new", (c_ptr, c_int64), c_obj)
+# The data operand is a raw native buffer address, never an object.
+_py_bytes_new: "extern" = extern("py_bytes_new", (c_rawptr, c_int64), c_obj)
 
 _BZ_STREAM_SIZE = 80
 _MAX_NATIVE_INPUT = 0xFFFFFFFF
@@ -68,7 +69,7 @@ def _signed_i32(value):
     return narrowed
 
 
-def _open_libbz2():
+def _open_libbz2() -> int:
     handle = dynamic_library_open(
         cstr("/usr/lib/libbz2.1.0.dylib"), "darwin"
     )
@@ -83,7 +84,7 @@ def _open_libbz2():
     return handle
 
 
-def _decompress_symbols(handle):
+def _decompress_symbols(handle: int) -> tuple[int, int, int]:
     init_fn = dynamic_library_symbol(handle, cstr("BZ2_bzDecompressInit"))
     code_fn = dynamic_library_symbol(handle, cstr("BZ2_bzDecompress"))
     end_fn = dynamic_library_symbol(handle, cstr("BZ2_bzDecompressEnd"))
@@ -92,7 +93,7 @@ def _decompress_symbols(handle):
     return init_fn, code_fn, end_fn
 
 
-def _compress_symbols(handle):
+def _compress_symbols(handle: int) -> tuple[int, int, int]:
     init_fn = dynamic_library_symbol(handle, cstr("BZ2_bzCompressInit"))
     code_fn = dynamic_library_symbol(handle, cstr("BZ2_bzCompress"))
     end_fn = dynamic_library_symbol(handle, cstr("BZ2_bzCompressEnd"))
@@ -101,11 +102,11 @@ def _compress_symbols(handle):
     return init_fn, code_fn, end_fn
 
 
-def _bytes_data(data):
+def _bytes_data(data) -> int:
     return ptr_add(data, 24)
 
 
-def _total_out(stream):
+def _total_out(stream: int) -> int:
     low = load_i32(stream, 36) & 0xFFFFFFFF
     high = load_i32(stream, 40) & 0xFFFFFFFF
     return low + (high << 32)

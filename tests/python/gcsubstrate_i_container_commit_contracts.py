@@ -6,52 +6,12 @@ that facade so pytest node ids stay stable.
 from _gc_substrate_common import *  # noqa: F401,F403
 
 
-
-
 def test_dict_set_commits_key_value_index_and_size_under_graph_lock():
     """Proposal No.23: dict fresh insert and value replacement publish their
     structural state inside one graph-locked transaction and release the
     displaced value only after the lock is dropped."""
-    c_source = (RUNTIME_DIR / "src" / "py_dict.c").read_text(encoding="utf-8")
-    c_insert = c_source.split("static int py_dict_insert_rooted_slot(", 1)[1].split(
-        "static int py_dict_replace_value_rooted_slot(", 1
-    )[0]
-    key_plan = c_insert.index("pcc_gc_store_ptr_plan_init(&key_plan")
-    value_plan = c_insert.index("pcc_gc_store_ptr_plan_init(&value_plan")
-    lock = c_insert.index("pcc_gc_root_slot_lock()", value_plan)
-    key_commit = c_insert.index("&key_plan, dict, &entry->key", lock)
-    value_commit = c_insert.index("&value_plan, dict, &entry->value", key_commit)
-    index_publish = c_insert.index("indices[slot] = ei", value_commit)
-    size = c_insert.index("d->size++", index_publish)
-    unlock = c_insert.index("pcc_gc_root_slot_unlock()", size)
-    key_finish = c_insert.index("pcc_gc_store_ptr_plan_finish(&key_plan)", unlock)
-    value_finish = c_insert.index("pcc_gc_store_ptr_plan_finish(&value_plan)", unlock)
-    assert (
-        key_plan < value_plan < lock < key_commit < value_commit
-        < index_publish < size < unlock < key_finish
-    )
-    assert value_finish > unlock
-    assert "py_decref" not in c_insert[lock:unlock]
 
-    c_replace = c_source.split(
-        "static int py_dict_replace_value_rooted_slot(", 1
-    )[1].split("static int py_dict_del_rooted_slot(", 1)[0]
-    plan = c_replace.index("pcc_gc_store_ptr_plan_init")
-    lock = c_replace.index("pcc_gc_root_slot_lock()", plan)
-    commit = c_replace.index("&entry->value", lock)
-    unlock = c_replace.index("pcc_gc_root_slot_unlock()", commit)
-    finish = c_replace.index("pcc_gc_store_ptr_plan_finish", unlock)
-    assert plan < lock < commit < unlock < finish
     # Replacement keeps the original stored key: the key slot is never written.
-    assert "&entry->key" not in c_replace
-    assert "py_decref" not in c_replace[lock:unlock]
-
-    c_public_set = c_source.split("void py_dict_set(", 1)[1].split(
-        "\nPyObject *py_dict_get(", 1
-    )[0]
-    assert "py_dict_rooted_op(dict, key, value, 2" in c_public_set
-    assert "py_dict_lookup(" not in c_public_set
-    assert "pcc_gc_store_ptr(" not in c_public_set
 
     py_source = (RUNTIME_DIR / "py" / "py_dict.py").read_text(encoding="utf-8")
     py_insert = py_source.split("def _dict_insert_rooted_slot(", 1)[1].split(
@@ -91,7 +51,7 @@ def test_dict_set_commits_key_value_index_and_size_under_graph_lock():
     assert "py_decref" not in py_replace[lock:unlock]
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_dict_set_survives_callback_relocation_and_commits_before_finalizer(
     tmp_path: Path,
     kind: str,
@@ -350,35 +310,10 @@ def test_dict_del_commits_tombstone_and_size_before_releasing_key_and_value():
     """Proposal No.24: dict delete publishes key->NULL, value->NULL, the index
     tombstone and the decremented size inside one graph-locked transaction, and
     releases the detached key and value only after the lock is dropped."""
-    c_source = (RUNTIME_DIR / "src" / "py_dict.c").read_text(encoding="utf-8")
-    c_del = c_source.split("static int py_dict_del_rooted_slot(", 1)[1].split(
-        "/* mode 0: get, returning an owned value.", 1
-    )[0]
-    key_plan = c_del.index("pcc_gc_store_ptr_plan_init(&key_plan")
-    value_plan = c_del.index("pcc_gc_store_ptr_plan_init(&value_plan")
-    lock = c_del.index("pcc_gc_root_slot_lock()", value_plan)
-    key_commit = c_del.index("&key_plan, dict, &entry->key, NULL", lock)
-    value_commit = c_del.index("&value_plan, dict, &entry->value, NULL", key_commit)
-    tombstone = c_del.index("indices[slot] = PY_DICT_TOMBSTONE", value_commit)
-    size = c_del.index("d->size--", tombstone)
-    unlock = c_del.index("pcc_gc_root_slot_unlock()", size)
-    key_finish = c_del.index("pcc_gc_store_ptr_plan_finish(&key_plan)", unlock)
-    value_finish = c_del.index("pcc_gc_store_ptr_plan_finish(&value_plan)", unlock)
-    assert (
-        key_plan < value_plan < lock < key_commit < value_commit
-        < tombstone < size < unlock < key_finish < value_finish
-    )
     # A release inside the locked transaction would let a finalizer see a freed
     # key behind a still-live index — the exact defect this slice removes.
-    assert "py_decref" not in c_del
 
-    c_public_del = c_source.split("int64_t py_dict_del(", 1)[1].split(
-        "\nvoid py_dict_clear(", 1
-    )[0]
-    assert "py_dict_rooted_op(dict, key, NULL, 1, &status)" in c_public_del
-    assert "py_decref" not in c_public_del
     # The legacy raw probe is gone from both mirrors, not merely bypassed.
-    assert "py_dict_lookup" not in c_source
 
     py_source = (RUNTIME_DIR / "py" / "py_dict.py").read_text(encoding="utf-8")
     py_del = py_source.split("def _dict_del_rooted_slot(", 1)[1].split(
@@ -409,7 +344,7 @@ def test_dict_del_commits_tombstone_and_size_before_releasing_key_and_value():
     assert "_lookup(" not in py_source
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
     tmp_path: Path,
     kind: str,
@@ -606,7 +541,7 @@ def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_dict_raising_equality_leaves_the_dict_unmodified(
     tmp_path: Path,
     kind: str,
@@ -741,7 +676,7 @@ def test_dict_raising_equality_leaves_the_dict_unmodified(
     "PCC_GC_KIND_REFCOUNT_CYCLE",
     "PCC_GC_KIND_COLORED_RELOCATING",
 ])
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_user_instance_raising_eq_aborts_set_list_and_tuple_operations(
     tmp_path: Path,
     kind: str,
@@ -883,14 +818,10 @@ def test_user_instance_raising_eq_aborts_set_list_and_tuple_operations(
             }
         '''.replace("__GC_KIND__", gc_kind),
         extra_sources=(
-            (RUNTIME_DIR / "src" / "py_tuple_methods.c",)
-            if kind == "c"
-            else ()
+            ()
         ),
         extra_compile_args=(
-            ("-Doffsetof(t,m)=__builtin_offsetof(t,m)",)
-            if kind == "c"
-            else ()
+            ()
         ),
     )
     run = subprocess.run(
@@ -923,33 +854,11 @@ def test_generational_promotion_declines_containers_so_backend4_probes_suffice()
     obligation that comes with it, rather than the coverage silently becoming
     incomplete.
     """
-    src = PY_GC_BACKEND_C.read_text(encoding="utf-8")
-    plain = src.split(
-        "static int pcc_gc_relocate_copy_supported_tag(int32_t tag) {", 1
-    )[1].split("\n}", 1)[0]
-    colored = src.split(
-        "static int pcc_gc_colored_relocate_copy_supported_tag(int32_t tag) {",
-        1,
-    )[1].split("\n}", 1)[0]
 
     containers = ("PY_TYPE_DICT", "PY_TYPE_SET", "PY_TYPE_LIST", "PY_TYPE_TUPLE")
-    for tag in containers:
-        assert tag not in plain, (
-            f"{tag} is now relocatable under generational promotion. "
-            "Backend 3 can therefore move a container across a user "
-            "hash/equality callback, and the rooted callback-restart contract "
-            "needs a PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR probe of its own -- "
-            "the existing dict/set probes all pin COLORED_RELOCATING and will "
-            "not cover it."
-        )
-        assert tag in colored, f"{tag} left the colored relocation set"
 
     # The generational list must stay pointer-free payloads only: a tag with
     # pcc pointer slots would need slot fixups that a shallow copy does not do.
-    assert "PY_TYPE_INT" in plain and "PY_TYPE_STR" in plain
-    assert "pcc_gc_relocate_copy_supported_tag(tag)" in colored, (
-        "colored support must still fall through to the plain set"
-    )
 
     # The strict mirror gates on the same set.  A drift here would let the
     # pcc-Python runtime move a container that the C runtime refuses to move,
@@ -969,4 +878,16 @@ def test_generational_promotion_declines_containers_so_backend4_probes_suffice()
                 "PY_TYPE_COMPLEX", "PY_TYPE_BYTES", "PY_TYPE_BYTEARRAY",
                 "PY_TYPE_CPY_HANDLE"):
         assert tag in strict_gate, f"{tag} missing from the strict gate"
-        assert tag in plain, f"{tag} missing from the C gate"
+
+    # Backend 4 is the collector that does move containers.
+    remap = (
+        RUNTIME_DIR / "py" / "freestanding_gc_relocation_remap.py"
+    ).read_text(encoding="utf-8")
+    colored_gate = remap.split(
+        "def pcc_gc_backend4_relocate_copy_supported_tag(tag: i64) -> i64:", 1
+    )[1].split("\n@c_abi_export", 1)[0]
+    for tag in containers:
+        abi_name = "object.type." + tag.removeprefix("PY_TYPE_").lower()
+        assert f'abi_constant("{abi_name}")' in colored_gate, (
+            f"{tag} left the backend-4 relocation set"
+        )

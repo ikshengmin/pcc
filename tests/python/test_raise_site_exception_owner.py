@@ -24,7 +24,7 @@ import pytest
 from test_gc_threading_substrate import REPO_ROOT, _compile_runtime_probe
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_generator_type_errors_leave_a_single_pending_reference(
     tmp_path: Path, kind: str
 ) -> None:

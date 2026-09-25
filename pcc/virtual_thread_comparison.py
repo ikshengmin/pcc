@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
@@ -216,7 +217,7 @@ def run_runtime_probe(
     *,
     iterations: int,
     repo_root: str | Path | None = None,
-    timeout: int = 180,
+    timeout: int = 1800,
     keep_tmp: bool = False,
 ) -> dict[str, Any]:
     root = Path(repo_root) if repo_root is not None else _repo_root()
@@ -234,17 +235,24 @@ def run_runtime_probe(
             runtime_dir,
             work_runtime,
             ignore=shutil.ignore_patterns(
-                "build", "build_pcc", "build_py", "build_libpython", "*.a"
+                "build", "build_pcc", "build_py", "build_libpython", "*.a",
+                "*.a.*", "_native", "__pycache__",
             ),
         )
+        # The threaded pcc-Python runtime: every module goes through pcc, so
+        # this takes minutes where the retired C archive took seconds.
+        pcc_bin = root / ".venv" / "bin" / "pcc"
         build_runtime = subprocess.run(
             [
                 "make",
                 "-B",
                 "-C",
                 str(work_runtime),
+                f"PCC={pcc_bin if pcc_bin.is_file() else 'pcc'}",
+                f"PYTHON={sys.executable}",
+                f"PCC_REPO_ROOT={root}",
                 "PCC_WITH_THREADS=1",
-                "libpy_runtime.a",
+                "libpy_runtime_pcc_py.a",
             ],
             capture_output=True,
             text=True,
@@ -264,7 +272,7 @@ def run_runtime_probe(
                 f"-I{work_runtime / 'include'}",
                 f"-I{work_runtime / 'src'}",
                 str(src),
-                str(work_runtime / "libpy_runtime.a"),
+                str(work_runtime / "libpy_runtime_pcc_py.a"),
                 "-lm",
                 "-o",
                 str(exe),

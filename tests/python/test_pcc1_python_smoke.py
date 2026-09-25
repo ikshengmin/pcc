@@ -43,6 +43,10 @@ _PCC1_CANDIDATES = [
 
 
 def _find_pcc1() -> Path | None:
+    if os.environ.get("PCC_CURRENT_PCC1"):
+        # The selection every other pcc1 consumer honors, equally strict: a
+        # missing path fails the module instead of testing another binary.
+        return find_current_pcc1(REPO)
     env_path = os.environ.get("PCC1_BINARY")
     if env_path:
         p = Path(env_path)
@@ -274,7 +278,9 @@ def test_pcc1_help_lists_bootstrap_cli_options():
         "--pytest",
     ):
         assert option in result.stdout
-    assert "C/project inputs are" in result.stdout
+    # C/project inputs no longer delegate to a host pcc: pcc1 runs the full C
+    # frontend in-process (the old "C/project inputs are delegated" wording).
+    assert "C/project requests enter the full C frontend" in result.stdout
 
 
 def test_pcc1_native_subprocess_preserves_child_returncode(tmp_path):

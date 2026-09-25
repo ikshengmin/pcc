@@ -6,11 +6,9 @@ that facade so pytest node ids stay stable.
 from _gc_substrate_common import *  # noqa: F401,F403
 
 
-
-
 @pytest.mark.parametrize("phase", ["contains", "remove"])
 @pytest.mark.parametrize("gc_kind", ALL_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_collect_during_list_op_keeps_list_and_collector_live(
     tmp_path: Path,
     kind: str,
@@ -348,7 +346,7 @@ def test_collect_during_list_op_keeps_list_and_collector_live(
 
 
 @pytest.mark.parametrize("gc_kind", ALL_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_collect_during_set_add_update_discard_keeps_set_consistent(
     tmp_path: Path,
     kind: str,
@@ -645,7 +643,7 @@ def test_collect_during_set_add_update_discard_keeps_set_consistent(
 
 
 @pytest.mark.parametrize("gc_kind", ALL_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_collect_during_update_and_delete_keeps_container_consistent(
     tmp_path: Path,
     kind: str,
@@ -1000,7 +998,7 @@ def test_collect_during_update_and_delete_keeps_container_consistent(
 
 
 @pytest.mark.parametrize("gc_kind", ALL_GC_KINDS)
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_collect_during_insert_keeps_fresh_entry_alive_on_every_backend(
     tmp_path: Path,
     kind: str,
@@ -1292,7 +1290,7 @@ def test_collect_during_insert_keeps_fresh_entry_alive_on_every_backend(
     )
 
 
-@pytest.mark.parametrize("kind", ["c", "pcc_python"])
+@pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
     tmp_path: Path,
     kind: str,

@@ -5,7 +5,7 @@ import textwrap
 
 
 def test_list_indexed_method_dispatch_parity(
-    tmp_path, monkeypatch, threaded_c_runtime_archive
+    tmp_path, monkeypatch, threaded_pcc_py_runtime_archive
 ):
     """One parity gate for ``list[index].method(...)`` dispatch.
 
@@ -18,10 +18,8 @@ def test_list_indexed_method_dispatch_parity(
     """
     from pcc.py_frontend.pipeline import compile_python
 
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
-    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(threaded_c_runtime_archive))
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(threaded_pcc_py_runtime_archive))
 
     src = tmp_path / "list_indexed_method_dispatch_parity.py"
     exe = tmp_path / "list_indexed_method_dispatch_parity.out"

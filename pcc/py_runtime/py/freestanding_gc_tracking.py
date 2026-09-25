@@ -143,10 +143,12 @@ def py_gc_track(obj) -> None:
     owner_token: i64 = atomic_load_i64(
         global_addr("pcc_gc_table_lock_owner_token"), 0, "acquire"
     )
-    current_token: i64 = ptr_diff(pcc_current_native_thread_token(), null())
     collector_owns_lock: i64 = 0
-    if owner_token != 0 and owner_token == current_token:
-        collector_owns_lock: i64 = 1
+    # Only a held lock has an owner to compare; the thread identity is a
+    # thread-local lookup, so the unowned common case skips it.
+    if owner_token != 0:
+        if owner_token == ptr_diff(pcc_current_native_thread_token(), null()):
+            collector_owns_lock: i64 = 1
     if collector_owns_lock == 0:
         pcc_gc_default_table_lock()
     flags: i64 = load_i32(obj, 12)
@@ -207,10 +209,12 @@ def py_gc_untrack(obj) -> None:
     owner_token: i64 = atomic_load_i64(
         global_addr("pcc_gc_table_lock_owner_token"), 0, "acquire"
     )
-    current_token: i64 = ptr_diff(pcc_current_native_thread_token(), null())
     collector_owns_lock: i64 = 0
-    if owner_token != 0 and owner_token == current_token:
-        collector_owns_lock: i64 = 1
+    # Only a held lock has an owner to compare; the thread identity is a
+    # thread-local lookup, so the unowned common case skips it.
+    if owner_token != 0:
+        if owner_token == ptr_diff(pcc_current_native_thread_token(), null()):
+            collector_owns_lock: i64 = 1
     if collector_owns_lock == 0:
         pcc_gc_default_table_lock()
     flags: i64 = load_i32(obj, 12)

@@ -266,10 +266,8 @@ main()
 """
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_binary_dunder_dispatch_and_err_check(tmp_path, monkeypatch, runtime_cc):
-    if runtime_cc:
-        monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     src = tmp_path / "binop_probe.py"
     exe = tmp_path / "binop_probe"
     src.write_text(dedent(_SOURCE), encoding="utf-8")
@@ -350,14 +348,12 @@ main()
 '''
 
 
-@pytest.mark.parametrize("runtime_cc", [False, True], ids=["port", "cc"])
+@pytest.mark.parametrize("runtime_cc", [False], ids=["port"])
 def test_classtype_augassign_dispatches_inplace_dunder(tmp_path, monkeypatch, runtime_cc):
     """``c += x`` / ``c *= x`` on a statically-typed (ClassType) target now
     dispatches ``__iadd__`` / ``__imul__`` (falling back to ``__add__``),
     instead of raising "Layer 1 cannot coerce ClassType to int". The DynType
     target path already worked; this extends it to ClassType targets."""
-    if runtime_cc:
-        monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     src = tmp_path / "aug_probe.py"
     exe = tmp_path / "aug_probe"
     src.write_text(dedent(_AUGASSIGN_SOURCE), encoding="utf-8")

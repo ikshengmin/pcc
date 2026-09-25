@@ -332,10 +332,10 @@ class SetLoweringMixin:
             "add", "remove", "discard", "update", "issubset", "issuperset",
             "isdisjoint", "union", "intersection", "difference",
             "symmetric_difference", "intersection_update", "difference_update",
-            "symmetric_difference_update", "copy", "pop",
+            "symmetric_difference_update", "copy", "pop", "clear",
         ):
             return None
-        if name in ("copy", "pop"):
+        if name in ("copy", "pop", "clear"):
             if expr.args:
                 return None
         elif len(expr.args) != 1:
@@ -427,6 +427,12 @@ class SetLoweringMixin:
                 )
                 self._emit_post_call_err_check(expr.span)
             return new_set
+        if name == "clear":
+            self.builder.call(self.runtime["py_set_clear"], [recv])
+            if not recv_borrowed:
+                self._gc_release_if_owned(recv, attr.obj)
+            self._emit_post_call_err_check(expr.span)
+            return self._emit_none_literal()
         if name == "pop":
             result = self.builder.call(
                 self.runtime["py_set_pop"],

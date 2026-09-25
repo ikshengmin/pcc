@@ -29,7 +29,6 @@ import textwrap
 
 import pytest
 
-from tests.runtime_build_cache import cached_c_runtime
 
 from pathlib import Path
 
@@ -195,15 +194,11 @@ int main(int argc, char **argv) {
 """ % {"workers": _WORKERS, "rounds": _ROUNDS}
 
 
-@pytest.fixture(scope="module", params=["c", "py"])
+@pytest.fixture(scope="module", params=["py"])
 def _vthread_waiter_pool_exe(tmp_path_factory, request):
     tmp = tmp_path_factory.mktemp("gc_vthread_waiter_pool")
-    if request.param == "c":
-        work_runtime = cached_c_runtime()
-        archive = work_runtime / "libpy_runtime.a"
-    else:
-        archive = request.getfixturevalue("pcc_py_runtime_archive")
-        work_runtime = archive.parent
+    archive = request.getfixturevalue("pcc_py_runtime_archive")
+    work_runtime = archive.parent
 
     src = tmp / "vthread_waiter_node_pool.c"
     src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")

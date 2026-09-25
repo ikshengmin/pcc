@@ -411,6 +411,12 @@ class ReturnLoweringMixin:
                     value,
                     stmt.value.ty,
                 )
+        if value in getattr(self, "_cpy_values", ()):
+            # A NULL from the libpython bridge must take the error edge while
+            # the GC frames are still entered: the cleanup below leaves them,
+            # and err.exit leaves them again (the precise stack map rejected
+            # the join, and the frames were left twice).
+            self._guard_cpy_value_not_null(value)
         value = self._retain_borrowed_return_value(value, stmt)
         self._return_log("value finally")
         self._emit_pending_finally_blocks()
@@ -432,7 +438,6 @@ class ReturnLoweringMixin:
         self._emit_owned_local_cleanup(skip_name=skip_name)
         value = self._leave_return_cleanup_root(value, ret_root_slot, ret_root_ptr)
         if value in getattr(self, "_cpy_values", ()):
-            self._guard_cpy_value_not_null(value)
             if self._cpy_value_is_owned(value):
                 # Transfer the expression's existing new reference to the
                 # caller; no extra retain is needed.

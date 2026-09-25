@@ -130,6 +130,11 @@ pcc_runtime_tripwire_fail = extern(
     (c_ptr, c_ptr, c_int32),
     c_void,
 )
+pcc_gc_tripwire_defer_or_fail = extern(
+    "pcc_gc_tripwire_defer_or_fail",
+    (c_ptr, c_ptr, c_int32),
+    c_int32,
+)
 
 define_global_i32("pcc_dealloc_depth", 0)
 define_global_ptr_null("pcc_dealloc_trash_head")
@@ -306,6 +311,19 @@ def _cpy_handle_tripwire(message, line: int) -> None:
     )
 
 
+def _cpy_handle_owner_tripwire(message, line: int) -> None:
+    # PCC_GC_OWNER_TRIPWIRE: the move runs inside GC3 oldification while the
+    # caller owns the graph lock, where the fatal log sink must not run.  A
+    # lock owner records the violation for the outer unlock to report; an
+    # unlocked caller still aborts here.  Either way the caller bails before
+    # the move, which would otherwise drop an owned foreign reference.
+    pcc_gc_tripwire_defer_or_fail(
+        message,
+        cstr("pcc/py_runtime/py/py_obj_dealloc.py"),
+        line,
+    )
+
+
 @c_abi_export("py_cpy_handle_set_release_fn")
 def py_cpy_handle_set_release_fn(fn) -> None:
     global_store_ptr("py_cpy_handle_release_fn", fn)
@@ -352,14 +370,14 @@ def pcc_cpy_handle_move_owned_ref(from_obj, to_obj) -> None:
             == PY_TYPE_CPY_HANDLE
         )
     if not valid:
-        _cpy_handle_tripwire(
+        _cpy_handle_owner_tripwire(
             cstr("pcc_cpy_handle_move_owned_ref: invalid native-handle move"),
             258,
         )
         return
     owned = load_ptr(from_obj, 16)
     if ptr_is_null(owned):
-        _cpy_handle_tripwire(
+        _cpy_handle_owner_tripwire(
             cstr(
                 "pcc_cpy_handle_move_owned_ref: source has no owned foreign reference"
             ),
@@ -368,7 +386,7 @@ def pcc_cpy_handle_move_owned_ref(from_obj, to_obj) -> None:
         return
     destination = load_ptr(to_obj, 16)
     if not ptr_is_null(destination) and not ptr_eq(destination, owned):
-        _cpy_handle_tripwire(
+        _cpy_handle_owner_tripwire(
             cstr(
                 "pcc_cpy_handle_move_owned_ref: destination owns a different foreign reference"
             ),
@@ -452,19 +470,15 @@ def pcc_dealloc_cascade_active() -> int:
 def pcc_dealloc_with_trash(o, tag: int) -> None:
     depth_slot = global_addr("pcc_dealloc_depth")
     depth: int = load_i32(depth_slot, 0)
-    defer_depth: int = 0
-    if pcc_gc_backend() == 4:
-        # Shallow-recursion allowance (CPython trashcan precedent, level
-        # 50): backend 4 historically dealloc'd zpage objects inline (the
-        # exclusion removed by this fix), so its cost baseline never paid
-        # the 24-byte queue-node malloc per nested death. Compiler-scale
-        # workloads under GC4 regressed stage2 past its 2400s watchdog
-        # when every nested death enqueued; keeping cascades <= 48 deep
-        # inline restores the hot path while the queue still bounds the
-        # pathological chains. The recycle-UAF protection is independent:
-        # page recycles defer on pcc_dealloc_cascade_active() (depth > 0),
-        # not on the queue threshold.
-        defer_depth = 48
+    # Shallow-recursion allowance, every backend (CPython trashcan precedent,
+    # level 50): cascades up to this depth dealloc inline, depth-first, which
+    # is also CPython's __del__ order; only deeper chains go through the
+    # queue, which keeps the C stack bounded.  Queueing every nested death
+    # paid a 24-byte node malloc/free per contained object (GC4 already
+    # regressed Stage2 past its watchdog that way).  The backend-4 recycle-UAF
+    # protection is independent: page recycles defer on
+    # pcc_dealloc_cascade_active() (depth > 0), not on this threshold.
+    defer_depth: int = 48
     if depth > defer_depth:
         if _dealloc_should_defer(tag):
             # zpage-resident objects (header flag 0x10000) defer like

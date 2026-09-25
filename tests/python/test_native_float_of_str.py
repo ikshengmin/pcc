@@ -14,7 +14,6 @@ import subprocess
 import sys
 import textwrap
 
-import pytest
 
 PROGRAM = textwrap.dedent("""
     def ident(s):
@@ -40,10 +39,7 @@ PROGRAM = textwrap.dedent("""
     """).lstrip()
 
 
-@pytest.mark.parametrize("runtime_cc", [None, "cc"], ids=["port", "cc"])
-def test_float_of_str_matches_cpython(tmp_path, monkeypatch, runtime_cc):
-    if runtime_cc is not None:
-        monkeypatch.setenv("PCC_RUNTIME_CC", runtime_cc)
+def test_float_of_str_matches_cpython(tmp_path):
     from pcc.py_frontend.pipeline import compile_python
 
     src = tmp_path / "fs.py"

@@ -289,16 +289,6 @@ def test_relocation_read_barrier_is_gated_on_a_moving_backend() -> None:
         "pcc_gc_object_is_known_no_lock(obj)"
     )
 
-    c_source = (RUNTIME_DIR / "src" / "py_gc_backend.c").read_text(encoding="utf-8")
-    c_read = c_source.split("PyObject *pcc_gc_note_relocation_read(PyObject *o) {", 1)[
-        1
-    ].split("\n}", 1)[0]
-    assert "PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR" in c_read
-    assert "PCC_GC_KIND_COLORED_RELOCATING" in c_read
-    assert c_read.index("PCC_GC_KIND_COLORED_RELOCATING") < c_read.index(
-        "pcc_gc_is_known_object(o)"
-    )
-
 
 def test_production_archive_has_one_forwarding_identity_owner(
     pcc_py_runtime_archive: Path,

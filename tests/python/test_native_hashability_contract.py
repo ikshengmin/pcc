@@ -20,26 +20,17 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def test_hash_runtime_mirrors_reject_mutable_builtins_and_guard_callers():
-    compare_c = (
-        REPO / "pcc" / "py_runtime" / "src" / "py_obj_ops_compare.c"
-    ).read_text(encoding="utf-8")
     compare_py = (
         REPO / "pcc" / "py_runtime" / "py" / "py_obj_ops_compare.py"
     ).read_text(encoding="utf-8")
-    dict_c = (REPO / "pcc" / "py_runtime" / "src" / "py_dict.c").read_text(
-        encoding="utf-8"
-    )
     dict_py = (REPO / "pcc" / "py_runtime" / "py" / "py_dict.py").read_text(
-        encoding="utf-8"
-    )
-    set_c = (REPO / "pcc" / "py_runtime" / "src" / "py_set.c").read_text(
         encoding="utf-8"
     )
     set_py = (REPO / "pcc" / "py_runtime" / "py" / "py_set.py").read_text(
         encoding="utf-8"
     )
 
-    for source in (compare_c, compare_py):
+    for source in (compare_py,):
         for type_name in ("list", "dict", "set", "bytearray"):
             assert f"unhashable type: '{type_name}'" in source
         assert "PY_TYPE_LIST" in source
@@ -48,26 +39,13 @@ def test_hash_runtime_mirrors_reject_mutable_builtins_and_guard_callers():
         assert "PY_TYPE_BYTEARRAY" in source
         assert "py_err_occurred()" in source
 
-    assert dict_c.count(
-        "int64_t hash = py_obj_hash(key);\n    if (py_err_occurred())"
-    ) == 4
     assert dict_py.count(
         "h: int = py_obj_hash(key)\n    if py_err_occurred() != 0:"
     ) == 4
-    assert set_c.count(
-        "int64_t hash = py_obj_hash(item);\n    if (py_err_occurred())"
-    ) == 3
     assert set_py.count(
         "h: int = py_obj_hash(item)\n    if py_err_occurred() != 0:"
     ) == 3
 
-    assert dict_c.count(
-        "if (v == NULL) {\n        if (py_err_occurred()) return NULL;"
-    ) == 2
-    assert (
-        "if (v != NULL) return v;\n    if (py_err_occurred()) return NULL;"
-        in dict_c
-    )
     assert dict_py.count(
         "if ptr_is_null(v) == 0:\n        return v\n"
         "    if py_err_occurred() != 0:\n        return null()"

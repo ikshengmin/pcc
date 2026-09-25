@@ -3,16 +3,11 @@
 from pathlib import Path
 import subprocess
 
-import pytest
 
-
-@pytest.mark.parametrize("runtime_kind", ["c", "py"])
-def test_bytes_and_bytearray_membership(tmp_path: Path, request, monkeypatch, runtime_kind):
+def test_bytes_and_bytearray_membership(tmp_path: Path, pcc_py_runtime_archive, monkeypatch):
     from pcc.py_frontend.pipeline import compile_python
 
-    archive = request.getfixturevalue(
-        "c_runtime_archive" if runtime_kind == "c" else "pcc_py_runtime_archive"
-    )
+    archive = pcc_py_runtime_archive
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(archive))
     source = tmp_path / "membership.py"
     executable = tmp_path / "membership"

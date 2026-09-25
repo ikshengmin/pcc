@@ -20,8 +20,6 @@ from pcc.unsafe import (
     free,
     f64_bits,
     f64_signbit,
-    float_to_i64,
-    i64_to_float,
     initial_environ,
     load_i32,
     load_i64,
@@ -873,6 +871,149 @@ def _format_raw_unsigned(
     return position
 
 
+@c_abi_export("pcc_stdio_float_raw_capacity")
+def _float_raw_capacity(precision: i64) -> i64:
+    # Bytes ``pcc_stdio_format_float_raw`` may write for ``precision``: a sign,
+    # up to 309 integer digits, '.', the fraction digits, an exponent of at
+    # most five bytes ("e+308") and the NUL, with slack.  Callers size their
+    # output buffer with this; precision is no longer clamped.
+    if precision < 6:
+        precision: i64 = 6
+    return precision + 336
+
+
+@c_abi_export("pcc_stdio_limbs_mul_small")
+def _limbs_mul_small(limbs, count: i64, factor: i64) -> i64:
+    # ``limbs`` is a little-endian base-1e9 natural number of ``count`` limbs.
+    # Multiply it in place by ``factor`` (< 2**31) and return the new count;
+    # limb * factor + carry < 1e9 * 2**31 + 2**31 fits in an i64.
+    carry: i64 = 0
+    index: i64 = 0
+    while index < count:
+        product = load_i64(limbs, index * 8) * factor + carry
+        store_i64(limbs, index * 8, unsigned_rem_i64(product, 1000000000))
+        carry = unsigned_div_i64(product, 1000000000)
+        index = index + 1
+    while carry != 0:
+        store_i64(limbs, count * 8, unsigned_rem_i64(carry, 1000000000))
+        carry = unsigned_div_i64(carry, 1000000000)
+        count = count + 1
+    return count
+
+
+@c_abi_export("pcc_stdio_limb_digits")
+def _limb_digits(digits, count: i64, limb: i64, width: i64) -> i64:
+    # Append the decimal digit values of ``limb`` to ``digits`` at ``count``:
+    # exactly ``width`` digits with leading zeros, or as many as the limb
+    # needs when ``width`` is 0.
+    scratch = stack_alloc(9)
+    used: i64 = 0
+    while limb != 0 or used < width:
+        store_i8(scratch, used, unsigned_rem_i64(limb, 10))
+        limb = unsigned_div_i64(limb, 10)
+        used = used + 1
+    while used > 0:
+        used = used - 1
+        store_i8(digits, count, load_i8(scratch, used))
+        count = count + 1
+    return count
+
+
+@c_abi_export("pcc_stdio_float_exact_digits")
+def _float_exact_digits(bits: i64, digits, point_out) -> i64:
+    # Exact decimal expansion of the finite, positive double whose bit
+    # pattern is ``bits``.  Writes digit values 0..9 to ``digits`` (at most
+    # 770 of them) with no leading or trailing zeros, stores the decimal point
+    # position -- the number of integer digits, possibly <= 0 -- at
+    # ``point_out``, and returns the digit count.  A double is m * 2**e
+    # exactly: for e >= 0 that is the integer m << e, and for e < 0 it is
+    # (m * 5**-e) / 10**-e.  Both are big-integer digit strings, so rounding
+    # them needs no floating-point arithmetic.  The old generator repeatedly
+    # multiplied by 0.1 and 10.0 and printed 2.0**60 as 1152921504606848169.
+    exponent_bits = logical_shift_right_i64(bits, 52) & 2047
+    mantissa = bits & 4503599627370495
+    binary_exponent: i64 = -1074
+    if exponent_bits != 0:
+        mantissa = mantissa | 4503599627370496
+        binary_exponent = exponent_bits - 1075
+    # m * 5**1074 has 767 decimal digits: 86 limbs, and m << 971 needs 35.
+    limbs = stack_alloc(800)
+    store_i64(limbs, 0, unsigned_rem_i64(mantissa, 1000000000))
+    store_i64(limbs, 8, unsigned_div_i64(mantissa, 1000000000))
+    count: i64 = 2
+    if load_i64(limbs, 8) == 0:
+        count: i64 = 1
+    shift: i64 = 0
+    if binary_exponent >= 0:
+        remaining = binary_exponent
+        while remaining >= 28:
+            count = _limbs_mul_small(limbs, count, 268435456)
+            remaining = remaining - 28
+        if remaining > 0:
+            count = _limbs_mul_small(limbs, count, 1 << remaining)
+    else:
+        remaining = 0 - binary_exponent
+        shift = remaining
+        while remaining >= 13:
+            count = _limbs_mul_small(limbs, count, 1220703125)
+            remaining = remaining - 13
+        factor: i64 = 1
+        while remaining > 0:
+            factor = factor * 5
+            remaining = remaining - 1
+        if factor > 1:
+            count = _limbs_mul_small(limbs, count, factor)
+    total: i64 = _limb_digits(digits, 0, load_i64(limbs, (count - 1) * 8), 0)
+    index = count - 2
+    while index >= 0:
+        total = _limb_digits(digits, total, load_i64(limbs, index * 8), 9)
+        index = index - 1
+    store_i64(point_out, 0, total - shift)
+    while total > 0 and load_i8(digits, total - 1) == 0:
+        total = total - 1
+    return total
+
+
+@c_abi_export("pcc_stdio_float_round_digits")
+def _float_round_digits(digits, total: i64, point_box, requested: i64) -> i64:
+    # Round the exact expansion ``digits[0:total]`` (no trailing zeros, as
+    # produced by pcc_stdio_float_exact_digits) to ``requested`` significant
+    # digits, half to even on the exact binary value -- C printf and
+    # CPython's dtoa agree.  Returns the retained digit count, at most
+    # ``total``; positions past it are zeros.  A carry out of the leading
+    # digit leaves a single 1 and bumps the point stored at ``point_box``.
+    if requested >= total:
+        return total
+    if requested < 0:
+        return 0
+    round_up: i64 = 0
+    guard = load_i8(digits, requested)
+    if guard > 5:
+        round_up: i64 = 1
+    elif guard == 5:
+        # With no trailing zeros, any digit after the guard puts the
+        # discarded tail above one half; an exact tie advances only an odd
+        # retained digit (nothing retained counts as 0, even).
+        if requested + 1 < total:
+            round_up: i64 = 1
+        elif requested > 0 and (load_i8(digits, requested - 1) & 1) != 0:
+            round_up: i64 = 1
+    if round_up == 0:
+        return requested
+    carry_index = requested - 1
+    while carry_index >= 0:
+        rounded = load_i8(digits, carry_index) + 1
+        if rounded < 10:
+            store_i8(digits, carry_index, rounded)
+            return requested
+        store_i8(digits, carry_index, 0)
+        carry_index = carry_index - 1
+    # Every retained digit was 9, or none was retained.
+    store_i8(digits, 0, 1)
+    store_i64(point_box, 0, load_i64(point_box, 0) + 1)
+    return 1
+
+
 @c_abi_export("pcc_stdio_format_float_raw")
 def _format_float_raw(
     output,
@@ -919,84 +1060,29 @@ def _format_float_raw(
 
     if precision < 0:
         precision: i64 = 6
-    if precision > 64:
-        precision: i64 = 64
     if (conversion == 103 or conversion == 71) and precision == 0:
         precision: i64 = 1
 
-    exponent: i64 = 0
-    normalized = value
-    if normalized != 0.0:
-        while normalized >= 10.0:
-            normalized = normalized * 0.1
-            exponent = exponent + 1
-        while normalized < 1.0:
-            normalized = normalized * 10.0
-            exponent = exponent - 1
+    # Exact digits of |value|; ``point`` is the number of integer digits.
+    # Zero has no digits and formats with exponent 0.
+    digits = stack_alloc(800)
+    point_box = stack_alloc(8)
+    total: i64 = 0
+    point: i64 = 1
+    if exponent_bits != 0 or mantissa_bits != 0:
+        total = _float_exact_digits(bits, digits, point_box)
+        point = load_i64(point_box, 0)
 
     requested_digits = precision + 1
     if conversion == 102 or conversion == 70:
-        requested_digits = exponent + precision + 1
+        requested_digits = point + precision
     elif conversion == 103 or conversion == 71:
         requested_digits = precision
 
-    digits = stack_alloc(384)
-    digit_count = requested_digits
-    if digit_count < 0:
-        digit_count: i64 = 0
-    generated: i64 = 0
-    remainder = normalized
-    while generated < digit_count:
-        digit = float_to_i64(remainder)
-        if digit < 0:
-            digit: i64 = 0
-        if digit > 9:
-            digit: i64 = 9
-        store_i8(digits, generated, digit)
-        remainder = (remainder - i64_to_float(digit)) * 10.0
-        generated = generated + 1
-
-    guard: i64 = 0
-    if digit_count > 0:
-        guard = float_to_i64(remainder)
-    elif exponent == 0 - precision - 1:
-        guard = float_to_i64(normalized)
-    round_up: i64 = 0
-    if guard > 5:
-        round_up: i64 = 1
-    elif guard == 5:
-        # Round halfway cases to even. ``remainder`` still contains the guard
-        # digit plus its fractional tail: a value above 5 is not an exact tie;
-        # at an exact tie only an odd retained digit advances. This is shared
-        # by printf-style formatting and round(x, ndigits).
-        if remainder > 5.0:
-            round_up: i64 = 1
-        elif remainder == 5.0 and digit_count > 0:
-            if (load_i8(digits, digit_count - 1) & 1) != 0:
-                round_up: i64 = 1
-    if round_up != 0:
-        if digit_count == 0:
-            store_i8(digits, 0, 1)
-            digit_count: i64 = 1
-            exponent = 0 - precision
-        else:
-            carry_index = digit_count - 1
-            carry: i64 = 1
-            while carry_index >= 0 and carry != 0:
-                rounded = load_i8(digits, carry_index) + 1
-                if rounded >= 10:
-                    store_i8(digits, carry_index, 0)
-                else:
-                    store_i8(digits, carry_index, rounded)
-                    carry: i64 = 0
-                carry_index = carry_index - 1
-            if carry != 0:
-                store_i8(digits, 0, 1)
-                fill_index: i64 = 1
-                while fill_index < digit_count:
-                    store_i8(digits, fill_index, 0)
-                    fill_index = fill_index + 1
-                exponent = exponent + 1
+    store_i64(point_box, 0, point)
+    digit_count = _float_round_digits(digits, total, point_box, requested_digits)
+    point = load_i64(point_box, 0)
+    exponent = point - 1
 
     scientific: i64 = 0
     fractional_digits = precision
@@ -1005,7 +1091,11 @@ def _format_float_raw(
     elif conversion == 103 or conversion == 71:
         if exponent < -4 or exponent >= precision:
             scientific: i64 = 1
+        # '#' keeps all ``precision`` significant digits; positions past
+        # ``digit_count`` read as zeros below.
         effective_digits = digit_count
+        if alternate != 0:
+            effective_digits = requested_digits
         if alternate == 0:
             while effective_digits > 1 and load_i8(
                 digits, effective_digits - 1
@@ -1309,6 +1399,12 @@ def _format_core(output, capacity: i64, stream, format, cursor) -> i64:
             or conversion == 71
         ):
             raw_float = stack_alloc(512)
+            raw_heap = null()
+            if _float_raw_capacity(precision) > 512:
+                raw_heap = malloc(_float_raw_capacity(precision))
+                if ptr_is_null(raw_heap):
+                    return -1
+                raw_float = raw_heap
             raw_length = _format_float_raw(
                 raw_float,
                 va_arg_f64(cursor),
@@ -1350,6 +1446,8 @@ def _format_core(output, capacity: i64, stream, format, cursor) -> i64:
                 index = _format_emit_repeat(
                     output, capacity, stream, index, 32, padding
                 )
+            if not ptr_is_null(raw_heap):
+                free(raw_heap)
         else:
             index = _format_emit_char(output, capacity, stream, index, 37)
             if index >= 0:

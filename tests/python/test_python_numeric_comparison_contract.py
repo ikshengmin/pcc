@@ -10,12 +10,12 @@ import sys
 import pytest
 
 from pcc.py_frontend.pipeline import compile_python
-from tests.runtime_build_cache import cached_c_runtime
+from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 @pytest.fixture(scope="module")
 def numeric_c_runtime():
-    return cached_c_runtime() / "libpy_runtime.a"
+    return cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
 
 
 def native_matches_python(tmp_path, monkeypatch, numeric_c_runtime, source, reference_source=None):
@@ -31,8 +31,6 @@ def native_matches_python(tmp_path, monkeypatch, numeric_c_runtime, source, refe
     )
     assert reference.returncode == 0, reference.stderr
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(numeric_c_runtime))
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
     compile_python(
         str(path), str(output), backend="self", libpython_mode="off",
         ir_scaffold_mode="on",

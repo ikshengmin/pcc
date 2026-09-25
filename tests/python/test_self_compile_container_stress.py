@@ -4,8 +4,8 @@ The pcc1 binary (built via ``--backend self --python-libpython=off``) crashes
 with nano-allocator heap corruption while compiling pcc/__main__.py. The
 crash bt was inside Lifter._s_Return -> py_instance_new + 60 -> nanov2 guard.
 
-The corresponding C-level container helpers (libpy_runtime.a) have all
-been validated by tests/test_gc_store_ptr_balance.py. So the regression
+The container helpers are exercised directly from C harnesses by
+tests/test_gc_store_ptr_balance.py. So the regression
 must be in the pcc-Python-compiled versions of those helpers — i.e.,
 pcc's codegen for py_set.py / py_obj.py / py_class.py / etc. These tests
 compile a small pcc-Python program through the SAME self backend that

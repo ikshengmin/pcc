@@ -28,8 +28,10 @@ from ..py_ast import (
     Name,
     NoneLit,
     NoneType,
+    Slice,
     StrLit,
     StrType,
+    Subscript,
     TupleExpr,
     TupleType,
     Type,
@@ -72,6 +74,16 @@ _BUILTIN_TYPE_TAGS = {
     "bytearray": PY_TYPE_BYTEARRAY,
 }
 
+# ``a <op> b`` is ``b <mirrored op> a``.
+_MIRRORED_COMPARE_OP = {
+    "==": "==",
+    "!=": "!=",
+    "<": ">",
+    "<=": ">=",
+    ">": "<",
+    ">=": "<=",
+}
+
 
 class CompareMembershipLoweringMixin:
     def _emit_runtime_object_compare(
@@ -80,13 +92,15 @@ class CompareMembershipLoweringMixin:
         lhs_obj: ir.Value,
         rhs_obj: ir.Value,
         name_prefix: str,
+        pinned_release_on_error=(),
     ) -> ir.Value:
         """Emit one runtime object-comparison contract.
 
         Object-vs-object comparisons and DynType ordering used to duplicate
         runtime-symbol selection, the raising-call edge, and bool
         normalization.  Operands are projected by the caller so evaluation
-        order and valueclass/CPython boundary policy stay outside this owner.
+        order and valueclass/CPython boundary policy stay outside this owner;
+        a caller holding pinned operands passes their error-edge cleanup.
         """
         runtime_name = {
             "==": "py_obj_eq_value",
@@ -105,7 +119,10 @@ class CompareMembershipLoweringMixin:
             [lhs_obj, rhs_obj],
             name=self._fresh(name_prefix + ".cmp"),
         )
-        self._emit_post_call_err_check(self._expr_span_or_none(expr))
+        self._emit_post_call_err_check(
+            self._expr_span_or_none(expr),
+            pinned_release_on_error=pinned_release_on_error,
+        )
         result = self.builder.icmp_signed(
             "!=",
             compared,
@@ -119,10 +136,87 @@ class CompareMembershipLoweringMixin:
             )
         return result
 
+    def _str_char_subscript_operand(self, operand: Expr) -> Optional[Subscript]:
+        """``operand`` when it is ``s[i]`` on a ``str`` with an ``int`` index."""
+        if isinstance(operand, Subscript):
+            if (
+                isinstance(operand.obj.ty, StrType)
+                and not isinstance(operand.idx, Slice)
+                and isinstance(operand.idx.ty, IntType)
+            ):
+                return operand
+        return None
+
+    def _emit_str_char_projection_compare(self, expr: Compare) -> Optional[ir.Value]:
+        """``s[i] == "c"`` / ``!=`` / ``in "abc"`` / ``not in`` as a code point test.
+
+        ``s[i]`` of a str is exactly one character, so these tests need only its
+        code point: the one-character string is never built (the value-model
+        projection of a character).  Evaluation order and the IndexError are
+        those of ``s[i]``; the literal side has no effects.
+        """
+        subscript = None
+        literal = None
+        if expr.op in ("==", "!="):
+            subscript = self._str_char_subscript_operand(expr.lhs)
+            literal = expr.rhs
+            if subscript is None:
+                subscript = self._str_char_subscript_operand(expr.rhs)
+                literal = expr.lhs
+            if (
+                subscript is None
+                or not isinstance(literal, StrLit)
+                or len(literal.value) != 1
+            ):
+                return None
+        elif expr.op in ("in", "not in"):
+            subscript = self._str_char_subscript_operand(expr.lhs)
+            literal = expr.rhs
+            if subscript is None or not isinstance(literal.ty, StrType):
+                return None
+        else:
+            return None
+        obj = self._emit_expr(subscript.obj)
+        index = self._emit_expr_as_i64(subscript.idx)
+        code = self.builder.call(
+            self.runtime["py_str_codepoint_at"],
+            [obj, index],
+            name=self._fresh("str.char.code"),
+        )
+        self._emit_post_call_err_check(getattr(subscript, "span", None))
+        self._gc_release_if_owned(obj, subscript.obj)
+        hit: ir.Value = ir.Constant(_I1, 0)
+        if isinstance(literal, StrLit):
+            for value in sorted({ord(ch) for ch in literal.value}):
+                is_code = self.builder.icmp_signed(
+                    "==", code, ir.Constant(_I64, value), name=self._fresh("str.char.is")
+                )
+                hit = self.builder.or_(hit, is_code, name=self._fresh("str.char.hit"))
+        else:
+            # ``s[i] in t`` for any str ``t`` (a module-level character set,
+            # a parameter): its current value, scanned for the code point.
+            haystack = self._emit_expr(literal)
+            found = self.builder.call(
+                self.runtime["py_str_contains_codepoint"],
+                [haystack, code],
+                name=self._fresh("str.char.found"),
+            )
+            self._gc_release_if_owned(haystack, literal)
+            hit = self.builder.icmp_signed(
+                "!=", found, ir.Constant(_I64, 0), name=self._fresh("str.char.hit")
+            )
+        if expr.op in ("!=", "not in"):
+            hit = self.builder.xor(hit, ir.Constant(_I1, 1), name=self._fresh("str.char.miss"))
+        return hit
+
     def _emit_compare(self, expr: Compare) -> ir.Value:
         builtin_type_cmp = self._emit_builtin_type_name_compare(expr)
         if builtin_type_cmp is not None:
             return builtin_type_cmp
+
+        char_cmp = self._emit_str_char_projection_compare(expr)
+        if char_cmp is not None:
+            return char_cmp
 
         # Identity against None: pointer compare against @py_None.
         if expr.op in ("is", "is not"):
@@ -507,17 +601,8 @@ class CompareMembershipLoweringMixin:
                         )
                     return eq_i1
                 if isinstance(lhs_ty, FloatType) or isinstance(rhs_ty, FloatType):
-                    lf = self._to_double(lhs, lhs_ty)
-                    rf = self._to_double(rhs, rhs_ty)
-                    if expr.op == "!=":
-                        return self.builder.fcmp_unordered(
-                            "!=", lf, rf, name=self._fresh("dyn.scalar.fcmp")
-                        )
-                    return self.builder.fcmp_ordered(
-                        expr.op,
-                        lf,
-                        rf,
-                        name=self._fresh("dyn.scalar.fcmp"),
+                    return self._emit_float_scalar_compare(
+                        expr.op, lhs, lhs_ty, rhs, rhs_ty, "dyn.scalar.fcmp"
                     )
                 lv = self._to_int64(lhs, lhs_ty)
                 rv = self._to_int64(rhs, rhs_ty)
@@ -589,11 +674,9 @@ class CompareMembershipLoweringMixin:
         lhs = self._emit_expr(expr.lhs)
         rhs = self._emit_expr(expr.rhs)
         if isinstance(lhs_ty, FloatType) or isinstance(rhs_ty, FloatType):
-            lf = self._to_double(lhs, lhs_ty)
-            rf = self._to_double(rhs, rhs_ty)
-            if expr.op == "!=":
-                return self.builder.fcmp_unordered("!=", lf, rf, name=self._fresh("fcmp"))
-            return self.builder.fcmp_ordered(expr.op, lf, rf, name=self._fresh("fcmp"))
+            return self._emit_float_scalar_compare(
+                expr.op, lhs, lhs_ty, rhs, rhs_ty, "fcmp"
+            )
         if (isinstance(lhs_ty, DynType) or isinstance(rhs_ty, DynType)) and expr.op in (
             "<",
             "<=",
@@ -628,6 +711,145 @@ class CompareMembershipLoweringMixin:
             )
         return self.builder.icmp_signed(expr.op, lv, rv, name=self._fresh("icmp"))
 
+    def _emit_float_scalar_compare(
+        self,
+        op: str,
+        lhs: ir.Value,
+        lhs_ty: Type,
+        rhs: ir.Value,
+        rhs_ty: Type,
+        name: str,
+    ) -> ir.Value:
+        """Compare two numeric scalars, at least one of them a float.
+
+        CPython orders an int against a float by exact value
+        (``float_richcompare``).  Converting the int to a double first
+        rounded ``2**53 + 1`` onto ``2**53.0`` and ``10**30`` onto ``1e30``,
+        so both compared equal.  An int operand a double cannot carry -- a
+        raw i64 or a boxed object -- takes the exact compare; a float pair, a
+        bool or a narrower machine int keeps the plain fcmp.
+        """
+        if isinstance(rhs_ty, FloatType) and self._fcmp_operand_is_wide_int(
+            lhs, lhs_ty
+        ):
+            return self._emit_int_float_compare(
+                op, lhs, self._to_double(rhs, rhs_ty), name
+            )
+        if isinstance(lhs_ty, FloatType) and self._fcmp_operand_is_wide_int(
+            rhs, rhs_ty
+        ):
+            return self._emit_int_float_compare(
+                _MIRRORED_COMPARE_OP[op], rhs, self._to_double(lhs, lhs_ty), name
+            )
+        lf = self._to_double(lhs, lhs_ty)
+        rf = self._to_double(rhs, rhs_ty)
+        if op == "!=":
+            return self.builder.fcmp_unordered("!=", lf, rf, name=self._fresh(name))
+        return self.builder.fcmp_ordered(op, lf, rf, name=self._fresh(name))
+
+    def _fcmp_operand_is_wide_int(self, value: ir.Value, ty: Type) -> bool:
+        if not isinstance(ty, (IntType, DynType)):
+            return False
+        if isinstance(value.type, ir.PointerType):
+            # A CPython-backed value keeps its ``_to_double`` unbox.
+            return value not in getattr(self, "_cpy_values", ())
+        # pcc.u64 keeps its uitofp: type inference rejects a raw int meeting
+        # a float, so only the signed lane arrives here.
+        return (
+            self._ir_type_matches(value.type, _I64)
+            and getattr(ty, "name", "") != "pcc.u64"
+        )
+
+    def _emit_int_float_compare(
+        self,
+        op: str,
+        value: ir.Value,
+        f: ir.Value,
+        name: str,
+    ) -> ir.Value:
+        """``value <op> f`` by exact value, for an int ``value``, double ``f``."""
+        if isinstance(value.type, ir.PointerType):
+            # A boxed int (or dyn object): the runtime three-way compare in
+            # place of the py_float_to_f64 unbox.  -1 / 0 / 1, or 2
+            # (PY_OBJ_CMP_UNORDERED) when f is NaN.
+            order = self.builder.call(
+                self.runtime["py_int_f64_cmp"],
+                [value, f],
+                name=self._fresh(name + ".order"),
+            )
+            if op == ">=":
+                # 0 or 1: unsigned, both -1 and 2 are above 1.
+                return self.builder.icmp_unsigned(
+                    "<=",
+                    order,
+                    ir.Constant(order.type, 1),
+                    name=self._fresh(name),
+                )
+            # ==, != and <= test the order against 0 directly.
+            pred = op
+            want = 0
+            if op == "<":
+                pred = "=="
+                want = -1
+            elif op == ">":
+                pred = "=="
+                want = 1
+            return self.builder.icmp_signed(
+                pred,
+                order,
+                ir.Constant(order.type, want),
+                name=self._fresh(name),
+            )
+        # A raw i64, branch-free.  sitofp is monotone and f is a double, so
+        # d < f proves value < f and d > f proves value > f; only a tie
+        # (d == f, so f is an integer) compares value with f's exact integer
+        # t.  2**63 is above every i64 and never reaches fptosi, where it is
+        # poison.
+        d = self.builder.sitofp(value, _DOUBLE, name=self._fresh(name + ".d"))
+        lt = self.builder.fcmp_ordered("<", d, f, name=self._fresh(name + ".lt"))
+        gt = self.builder.fcmp_ordered(">", d, f, name=self._fresh(name + ".gt"))
+        eq = self.builder.fcmp_ordered("==", d, f, name=self._fresh(name + ".eq"))
+        big = self.builder.fcmp_ordered(
+            "==",
+            f,
+            ir.Constant(_DOUBLE, 9223372036854775808.0),
+            name=self._fresh(name + ".big"),
+        )
+        exact = self.builder.and_(
+            eq,
+            self.builder.not_(big, name=self._fresh(name + ".small")),
+            name=self._fresh(name + ".exact"),
+        )
+        in_range = self.builder.select(
+            exact,
+            f,
+            ir.Constant(_DOUBLE, 0.0),
+            name=self._fresh(name + ".f"),
+        )
+        t = self.builder.fptosi(in_range, _I64, name=self._fresh(name + ".t"))
+        tie_op = "==" if op in ("==", "!=") else op
+        tie = self.builder.icmp_signed(
+            tie_op, value, t, name=self._fresh(name + ".tie")
+        )
+        if op in ("==", "!="):
+            same = self.builder.and_(exact, tie, name=self._fresh(name + ".same"))
+            if op == "!=":
+                return self.builder.not_(same, name=self._fresh(name))
+            return same
+        if op in ("<", "<="):
+            # At 2**63 every i64 is below f.
+            below = self.builder.or_(big, tie, name=self._fresh(name + ".below"))
+            return self.builder.or_(
+                lt,
+                self.builder.and_(eq, below, name=self._fresh(name + ".at")),
+                name=self._fresh(name),
+            )
+        return self.builder.or_(
+            gt,
+            self.builder.and_(exact, tie, name=self._fresh(name + ".at")),
+            name=self._fresh(name),
+        )
+
     def _emit_owned_string_predicate(self, expr: Compare, contains: bool, object_compare: bool = False) -> ir.Value:
         """Consume transient strings and preserve the LHS through RHS effects."""
         lhs = self._emit_expr_as_pcc_object(expr.lhs) if object_compare else self._emit_expr(expr.lhs)
@@ -645,21 +867,27 @@ class CompareMembershipLoweringMixin:
             rhs_owned = True
         if rhs_owned:
             self._gc_pin(rhs)
+        cleanup = ((lhs, True),)
+        if rhs_owned:
+            cleanup = ((lhs, True), (rhs, True))
+        if object_compare:
+            # One owner for runtime object comparison (symbol, raising edge,
+            # bool normalization and ``!=``); this path only adds ownership.
+            result = self._emit_runtime_object_compare(
+                expr, lhs, rhs, "str.predicate", pinned_release_on_error=cleanup,
+            )
+            self._gc_unpin(lhs)
+            self._gc_release(lhs)
+            if rhs_owned:
+                self._gc_unpin(rhs)
+                self._gc_release(rhs)
+            return result
         operands = [rhs, lhs] if contains else [lhs, rhs]
         symbol = "py_str_contains" if contains else "py_str_eq"
-        if object_compare:
-            symbol = {
-                "==": "py_obj_eq_value", "!=": "py_obj_eq_value",
-                "<": "py_obj_lt", "<=": "py_obj_le",
-                ">": "py_obj_gt", ">=": "py_obj_ge",
-            }[expr.op]
         status = self.builder.call(
             self.runtime[symbol], operands, name=self._fresh("str.predicate"),
         )
-        if contains or object_compare:
-            cleanup = ((lhs, True),)
-            if rhs_owned:
-                cleanup = ((lhs, True), (rhs, True))
+        if contains:
             self._emit_post_call_err_check(
                 getattr(expr, "span", None), pinned_release_on_error=cleanup,
             )

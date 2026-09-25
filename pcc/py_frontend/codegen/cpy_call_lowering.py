@@ -733,6 +733,7 @@ class CpyCallLoweringMixin:
     ) -> ir.Value:
         """Dispatch ``callable(*pos, k=v, **mapping)`` through a helper
         that merges explicit kwargs into the mapping before the call."""
+        self._reject_kwargs_merge_with_explicit_keywords(kwargs_expr, kwargs)
         self._require_supported_cpy_kw_mapping(kwargs_expr)
         if self._has_starred_unpack(pos_exprs):
             raise NotImplementedError(

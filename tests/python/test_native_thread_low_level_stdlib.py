@@ -15,8 +15,6 @@ def test_low_level_thread_get_ident_is_native_without_libpython(tmp_path):
     executable = tmp_path / "thread-get-ident"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_CC"] = "cc"
-    env["PCC_RUNTIME_HIGH"] = "c"
     compile_result = subprocess.run(
         [
             "uv",

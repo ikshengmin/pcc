@@ -229,7 +229,7 @@ def _compile_and_run(tmp_path: Path, archive: Path) -> subprocess.CompletedProce
 
 @pytest.mark.parametrize(
     "archive_fixture",
-    ["c_runtime_archive", "pcc_py_runtime_archive"],
+    ["pcc_py_runtime_archive", "pcc_py_runtime_archive"],
 )
 def test_py_func_null_result_sets_or_preserves_exception(
     archive_fixture,
@@ -243,7 +243,6 @@ def test_py_func_null_result_sets_or_preserves_exception(
 
 
 def test_py_func_call_kwargs_fail_closed_contract_is_mirrored():
-    c_source = (RUNTIME / "src" / "py_func.c").read_text(encoding="utf-8")
     py_source = (RUNTIME / "py" / "py_func.py").read_text(encoding="utf-8")
 
     for message in (
@@ -255,35 +254,15 @@ def test_py_func_call_kwargs_fail_closed_contract_is_mirrored():
         "native function argument binding returned NULL without exception",
         "compiled native function returned NULL without exception",
     ):
-        assert message in c_source
         assert message in py_source
-    assert "if (result == NULL)" in c_source
     assert "if ptr_is_null(result):" in py_source
-    assert "if (py_err_occurred()) return NULL;" in c_source
     assert "if py_err_occurred() != 0:" in py_source
-
-    c_binding_guard = c_source.index(
-        '"native function argument binding returned NULL without exception"'
-    )
-    c_binding_cleanup = c_source.index("py_decref(sig);", c_binding_guard)
-    assert c_binding_guard < c_binding_cleanup
 
     py_binding_guard = py_source.index(
         '"native function argument binding returned NULL without exception"'
     )
     py_binding_cleanup = py_source.index("py_decref(sig)", py_binding_guard)
     assert py_binding_guard < py_binding_cleanup
-
-    c_entry_call = c_source.index("PyObject *result = f->entry(")
-    c_entry_guard = c_source.index(
-        '"compiled native function returned NULL without exception"',
-        c_entry_call,
-    )
-    c_entry_cleanup = c_source.index(
-        "if (bound_args) py_decref(call_args);",
-        c_entry_call,
-    )
-    assert c_entry_call < c_entry_guard < c_entry_cleanup
 
     py_entry_call = py_source.index("result = call_ptr2(")
     py_entry_guard = py_source.index(

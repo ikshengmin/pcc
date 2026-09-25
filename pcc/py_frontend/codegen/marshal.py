@@ -522,8 +522,8 @@ def marshal_from_object(
 ) -> ir.Value:
     """Unpack a ``PyObject*`` into the native representation of ``target_ty``.
 
-    * ``int``   → ``py_int_to_i64`` (overflow flag discarded at L1/L2 for
-      now; Phase 3 propagates it to an exception).
+    * ``int``   → ``py_int_to_i64_lane``: an int beyond i64 raises
+      OverflowError instead of becoming 0.
     * ``float`` → ``py_float_to_f64``
     * ``bool``  → ``py_obj_truthy`` truncated to i1.
     * ``str`` / ``list`` / ``dict`` / ``tuple`` / ``None`` → pass through
@@ -547,14 +547,16 @@ def marshal_from_object(
             # calls per constant use were the bulk of the int box/unbox
             # traffic in a self-hosted pcc1 compile.
             return folded
-        # The overflow slot is written but not branched on.  Record the source
-        # object so an immediate re-box can hand it back instead of a truncated
-        # i64: above 2**63-1 `py_int_to_i64` yields 0.
+        # An int beyond i64 raises OverflowError in ``py_int_to_i64_lane``: the
+        # lane was chosen because the value was believed bounded, and the 0
+        # ``py_int_to_i64`` returns for it made a wrong program instead of a
+        # visible error (pcc1 folded ``10 ** 30`` to 0).  The overflow slot
+        # still receives the flag.
         ov_slot = _stash_overflow_slot(builder)
         fn = builder._block.function
         if fn is None:
             return builder.call(
-                runtime["py_int_to_i64"], [pyobj, ov_slot], name="m.int_unbox"
+                runtime["py_int_to_i64_lane"], [pyobj, ov_slot], name="m.int_unbox"
             )
         # A tagged small int is its own payload: shift the bits inline and
         # call the runtime only for a boxed (bignum) object.  Every indexed
@@ -580,7 +582,7 @@ def marshal_from_object(
         builder.branch(join_bb)
         builder.position_at_end(slow_bb)
         slow = builder.call(
-            runtime["py_int_to_i64"], [pyobj, ov_slot], name="m.int_unbox.slow"
+            runtime["py_int_to_i64_lane"], [pyobj, ov_slot], name="m.int_unbox.slow"
         )
         builder.branch(join_bb)
         builder.position_at_end(join_bb)

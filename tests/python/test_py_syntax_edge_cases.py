@@ -5,8 +5,6 @@ import textwrap
 import pytest
 
 def _compile_and_run(tmp_path, monkeypatch, source: str) -> str:
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     from pcc.py_frontend.pipeline import compile_python
     src = tmp_path / "case.py"
     exe = tmp_path / "case.out"

@@ -39,6 +39,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_eq,
     ptr_is_null,
+    stack_alloc,
     store_i8,
     store_i32,
     untag_int,
@@ -186,6 +187,28 @@ def py_int_to_i64(o, overflow) -> int:
         min_i64: int = -9223372036854775807
         return min_i64 - 1
     return 0 - (high * 4294967296 + low)
+
+
+@c_abi_export("py_int_to_i64_lane")
+def py_int_to_i64_lane(o, overflow) -> int:
+    """``py_int_to_i64`` for a value entering a compiled i64 lane.
+
+    The compiler keeps an ``int`` in the raw i64 lane when it believes the
+    value is bounded.  An int that does not fit means that belief was wrong,
+    and the silent 0 ``py_int_to_i64`` returns turned it into a wrong program
+    (pcc1 folded ``10 ** 30`` to 0).  Such an int raises OverflowError here;
+    anything else converts exactly as ``py_int_to_i64`` does.
+    """
+    flag = overflow
+    if ptr_is_null(flag):
+        flag = stack_alloc(8)
+    value: int = py_int_to_i64(o, flag)
+    if load_i32(flag, 0) != 0 and not ptr_is_null(o) and not is_tagged_int(o):
+        if load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_INT:
+            py_raise_owned(
+                py_exc_new(15, cstr("Python int too large to convert to C int64"))
+            )
+    return value
 
 
 @c_abi_export("py_int_to_bytes")

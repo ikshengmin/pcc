@@ -22,7 +22,6 @@ from __future__ import annotations
 import os
 import subprocess
 
-import pytest
 
 _CASES = [
     ("dict-hit", "lookup(d, 'a')"),
@@ -98,16 +97,12 @@ EXPECTED = [
 ]
 
 
-def _build(tmp_path, *, runtime_cc: bool):
+def _build(tmp_path):
     src = tmp_path / "prog.py"
     src.write_text(PROGRAM, encoding="utf-8")
-    exe = tmp_path / ("prog_cc" if runtime_cc else "prog_port")
+    exe = tmp_path / "prog"
     env = os.environ.copy()
     env.pop("LC_ALL", None)
-    if runtime_cc:
-        # Link the C runtime sources instead of the pcc-Python port so both
-        # mirrors of the raising subscript are exercised.
-        env["PCC_RUNTIME_CC"] = "cc"
     build = subprocess.run(
         [
             "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
@@ -131,10 +126,5 @@ def _run_all_backends(exe):
         assert run.stdout.splitlines() == EXPECTED, (backend, run.stdout)
 
 
-def test_dyn_subscript_raises_like_cpython_port_runtime(tmp_path):
-    _run_all_backends(_build(tmp_path, runtime_cc=False))
-
-
-@pytest.mark.integration
-def test_dyn_subscript_raises_like_cpython_c_runtime(tmp_path):
-    _run_all_backends(_build(tmp_path, runtime_cc=True))
+def test_dyn_subscript_raises_like_cpython(tmp_path):
+    _run_all_backends(_build(tmp_path))

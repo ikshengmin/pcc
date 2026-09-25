@@ -118,6 +118,19 @@ class Argument:
         return f"{self.ty} %{self.name}"
 
 
+def _ssa_name_end(text: str, start: int) -> int:
+    r"""End of the ``[\w.$-]+`` run of an SSA name starting at ``start``."""
+    end = start
+    n = len(text)
+    while end < n:
+        ch = text[end]
+        if ch.isalnum() or ch == "_" or ch == "." or ch == "$" or ch == "-":
+            end += 1
+        else:
+            break
+    return end
+
+
 @dataclass
 class Instruction:
     """A single LLVM IR instruction."""
@@ -128,25 +141,30 @@ class Instruction:
 
     @classmethod
     def from_text(cls, text: str) -> "Instruction":
+        # Hand-scanned _ASSIGN_RE / _OPCODE_RE (``\w`` is isalnum() or "_",
+        # ``\s`` is isspace()).  This runs for every instruction line of every
+        # text pass; a regex match per line (match object, spans, bound
+        # methods) was a top allocation site of a self-hosted compile.
+        n = len(text)
+        start = 0
+        while start < n and text[start].isspace():
+            start += 1
         result = None
-        m = _ASSIGN_RE.match(text)
-        if m:
-            result = m.group(1)
-        op_m = _OPCODE_RE.match(text.lstrip())
-        opcode = ""
-        if op_m:
-            opcode = op_m.group(1)
-            # If the text starts with `%name = opcode ...`, opcode is
-            # the SECOND word, not the first. _OPCODE_RE handles that
-            # case via the leading optional assign prefix; when the
-            # assign is present, we need to skip it.
-            if text.lstrip().startswith("%") and " = " in text:
-                # Re-extract.
-                after_eq = text.split("=", 1)[1].lstrip()
-                m2 = re.match(r"(\w+)", after_eq)
-                if m2:
-                    opcode = m2.group(1)
-        return cls(text=text, result_name=result, opcode=opcode)
+        word = start
+        if start < n and text[start] == "%":
+            name_end = _ssa_name_end(text, start + 1)
+            eq = name_end
+            while eq < n and text[eq].isspace():
+                eq += 1
+            if name_end > start + 1 and eq < n and text[eq] == "=":
+                result = text[start + 1 : name_end]
+                word = eq + 1
+                while word < n and text[word].isspace():
+                    word += 1
+        word_end = word
+        while word_end < n and (text[word_end].isalnum() or text[word_end] == "_"):
+            word_end += 1
+        return cls(text=text, result_name=result, opcode=text[word:word_end])
 
     def is_terminator(self) -> bool:
         return self.opcode in _TERMINATORS

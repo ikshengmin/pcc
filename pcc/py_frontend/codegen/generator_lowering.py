@@ -138,6 +138,81 @@ def emit_generator_may_park_call(
     )
 
 
+def _release_may_park_arg_provenance(host, pinned_arg_provenance) -> None:
+    for value, managed, raw, owned in pinned_arg_provenance:
+        if managed:
+            host.builder.call(
+                host.runtime["pcc_gc_unpin"],
+                [host._value_available_at_insertion_point(value)],
+            )
+            if owned:
+                host._gc_release(
+                    value,
+                    host._release_context_label("method_call_arg"),
+                )
+        elif raw and owned:
+            raise L1CodegenError(
+                "raw method argument cannot carry pcc ownership"
+            )
+
+
+def emit_generator_may_park_sync(
+    host,
+    expr: Call,
+    callee_name: str,
+    child: ir.Value,
+    pinned_arg_provenance=(),
+) -> ir.Value:
+    """Run a ``may_park`` child to completion for a synchronous caller.
+
+    A resumable caller forwards the child's suspensions
+    (``emit_generator_may_park_child``).  The module body, or any function
+    that is not itself resumable, has no parent to forward them to; such a
+    call used to hand the raw child generator to user code as its value, so
+    the callee's body never ran.  ``py_gen_run_may_park_sync`` finishes the
+    child (outside a virtual thread every parking primitive blocks) and
+    returns an owned ``StopIteration.value``.
+    """
+    host._gc_pin(child)
+    result = host.builder.call(
+        host.runtime["py_gen_run_may_park_sync"],
+        [child],
+        name=host._fresh("vthread.sync.result"),
+    )
+    host._gc_unpin(child)
+    host._gc_release(child)
+    _release_may_park_arg_provenance(host, pinned_arg_provenance)
+    host._emit_post_call_err_check(host._expr_span_or_none(expr))
+
+    result_ty = getattr(expr, "ty", None)
+    if result_ty is None or isinstance(result_ty, NoneType):
+        host._gc_release(result)
+        return host._emit_none_literal()
+    if host._is_valueclass_payload_type(result_ty):
+        payload = host._emit_object_to_valueclass_payload(result, result_ty)
+        if payload is None:
+            raise L1CodegenError(
+                "may_park call cannot restore value payload from "
+                + repr(callee_name)
+            )
+        host._emit_post_call_err_check(host._expr_span_or_none(expr))
+        host._gc_release(result)
+        return payload
+    if host._is_object(result_ty):
+        host._note_owned_object_value(result)
+        return result
+    native_result = marshal.marshal_from_object(
+        host.builder,
+        host.module,
+        host.runtime,
+        result,
+        result_ty,
+    )
+    host._emit_post_call_err_check(host._expr_span_or_none(expr))
+    host._gc_release(result)
+    return native_result
+
+
 def emit_generator_may_park_child(
     host,
     expr: Call,
@@ -148,9 +223,17 @@ def emit_generator_may_park_child(
 ) -> ir.Value:
     """Drive an already-created child continuation through its parent."""
     if len(getattr(host, "_generator_ctx_stack", ())) == 0:
-        raise L1CodegenError(
-            "may_park child delegation requires a generator parent: "
-            + callee_name
+        if child_already_rooted:
+            raise L1CodegenError(
+                "may_park child delegation requires a generator parent: "
+                + callee_name
+            )
+        return emit_generator_may_park_sync(
+            host,
+            expr,
+            callee_name,
+            child,
+            pinned_arg_provenance,
         )
     child_slot, initial_child_root_ptr = generator_may_park_child_slot(
         host, expr, callee_name
@@ -173,21 +256,7 @@ def emit_generator_may_park_child(
     # Keep those pins until the returned child has entered its traced frame
     # slot; releasing them earlier would put the only child reference in SSA
     # across collector-visible cleanup calls.
-    for value, managed, raw, owned in pinned_arg_provenance:
-        if managed:
-            host.builder.call(
-                host.runtime["pcc_gc_unpin"],
-                [host._value_available_at_insertion_point(value)],
-            )
-            if owned:
-                host._gc_release(
-                    value,
-                    host._release_context_label("method_call_arg"),
-                )
-        elif raw and owned:
-            raise L1CodegenError(
-                "raw method argument cannot carry pcc ownership"
-            )
+    _release_may_park_arg_provenance(host, pinned_arg_provenance)
 
     parent_fn = host.current_function
     next_bb = parent_fn.append_basic_block(
@@ -453,6 +522,41 @@ def generator_may_park_child_slot(host, expr: Call, callee_name: str):
     )
     host.builder.position_at_end(saved_block)
     return child_slot, root_ptr
+
+
+def funcdef_has_source_yield(fd: FuncDef) -> bool:
+    """True when ``fd`` contains a source ``yield`` / ``yield from``.
+
+    Effect analysis gives ``may_park`` callables the generator ABI too, but in
+    Python only a real generator function returns its generator; a parking
+    function without a source yield is an ordinary call.
+    """
+    stack = []
+    for stmt in fd.body:
+        stack.append(stmt)
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        if isinstance(node, FuncDef) or isinstance(node, ClassDef):
+            continue
+        if (
+            isinstance(node, Call)
+            and isinstance(node.func, Name)
+            and node.func.ident
+            in ("_yield", "_yield_from", "__yield__", "__yield_from__")
+        ):
+            return True
+        for slot in _dataclass_field_names(node):
+            if slot == "span":
+                continue
+            value = _dataclass_field_value(node, slot, None)
+            if isinstance(value, tuple):
+                for item in value:
+                    stack.append(item)
+            else:
+                stack.append(value)
+    return False
 
 
 def _dataclass_field_value(obj, field_name: str, default=None):
@@ -1142,10 +1246,22 @@ class GeneratorLoweringMixin:
             ast_arg.name: (ir_arg, ast_arg)
             for ir_arg, ast_arg in zip(fn.args, runtime_args)
         }
+        # A parameter a returned closure captures is a list cell for the whole
+        # body (hoisting rewrote its reads to ``name[0]``).  Ordinary functions
+        # box it in their prologue; a generator's body starts in the resume
+        # function, so the factory stores the cell in the frame instead.
+        closure_boxed_params = getattr(self, "_closure_boxed_params", {})
+        boxed_param_names = closure_boxed_params.get(fd.name, ())
+        if owner_class_name is not None:
+            boxed_param_names = closure_boxed_params.get(
+                f"{owner_class_name}.{fd.name}",
+                boxed_param_names,
+            )
         none_gv = declare_runtime_global(self.module, "py_None")
         none_obj = self.builder.load(none_gv, name=self._fresh("gen.none"))
         for frame_index, name in enumerate(frame_names):
             arg_entry = arg_by_name.get(name)
+            cell = None
             if arg_entry is None:
                 if bulk_frame_init:
                     continue
@@ -1159,6 +1275,14 @@ class GeneratorLoweringMixin:
                     ir_arg,
                     ast_arg.annotation or DynType(name="dyn"),
                 )
+                if name in boxed_param_names:
+                    cell = self.builder.call(
+                        self.runtime["py_list_new"],
+                        [ir.Constant(_I64, 0)],
+                        name=self._fresh(f"{name}.cell"),
+                    )
+                    self.builder.call(self.runtime["py_list_append"], [cell, obj])
+                    obj = cell
             if bulk_frame_init:
                 self.builder.call(
                     self._generator_frame_helper("set"),
@@ -1166,6 +1290,8 @@ class GeneratorLoweringMixin:
                 )
             else:
                 self.builder.call(self.runtime["py_list_append"], [frame, obj])
+            if cell is not None:
+                self._gc_release(cell)
 
         resume_ptr = self.builder.bitcast(
             resume_fn,

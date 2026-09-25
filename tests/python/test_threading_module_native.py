@@ -5,7 +5,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_threaded_c_runtime
+from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
@@ -14,7 +14,7 @@ RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 
 def _build_threaded_runtime(tmp_path: Path) -> Path:
     del tmp_path
-    return cached_threaded_c_runtime()
+    return cached_threaded_pcc_python_runtime()
 
 
 def test_threading_stdlib_native_lock_event_smoke(tmp_path):
@@ -225,7 +225,7 @@ def test_pthread_thread_object_survives_dropped_user_reference(tmp_path):
         [
             cc, "-std=c11", "-pthread",
             f"-I{work_runtime / 'include'}",
-            str(src), str(work_runtime / "libpy_runtime.a"),
+            str(src), str(work_runtime / "libpy_runtime_pcc_py.a"),
             "-o", str(exe),
         ],
         capture_output=True,
@@ -241,8 +241,6 @@ def test_pthread_thread_object_survives_dropped_user_reference(tmp_path):
 def test_pthread_lock_serializes_shared_list_updates(tmp_path, monkeypatch):
     from pcc.py_frontend.pipeline import compile_python
 
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
     work_runtime = _build_threaded_runtime(tmp_path)
 
@@ -286,7 +284,7 @@ def test_pthread_lock_serializes_shared_list_updates(tmp_path, monkeypatch):
         str(exe),
         ir_scaffold_mode="on",
         libpython_mode="off",
-        runtime_archive=str(work_runtime / "libpy_runtime.a"),
+        runtime_archive=str(work_runtime / "libpy_runtime_pcc_py.a"),
     )
     outputs: list[str] = []
     for _ in range(3):

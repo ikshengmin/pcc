@@ -318,6 +318,7 @@ class Layer1InitMixin:
         self._hoisted_enclosing_class = {}
         self._hoisted_enclosing_method_kind = {}
         self._closure_boxed_params = {}
+        self._hoisted_qualnames = {}
         self._hoist_wrap_caps = {}
 
 

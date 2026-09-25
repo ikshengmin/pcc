@@ -797,11 +797,17 @@ class CInitializerLoweringMixin:
                     return addr.bitcast(ir_type)
         try:
             val = self._eval_const_expr(init_node)
-            if val == 0:
-                return ir.Constant(ir_type, None)
         except Exception:
             return None
-        return None
+        if isinstance(val, bool) or not isinstance(val, int):
+            return None
+        if val == 0:
+            return ir.Constant(ir_type, None)
+        # An integer constant converted to a pointer, e.g. ``(void *)(long)5``
+        # through a cast chain: GCC and Clang accept it as a static
+        # initializer and so does the LLVM lowering, as an ``inttoptr``
+        # constant.  Only the null pointer constant used to be handled.
+        return ir.Constant(int64_t, val).inttoptr(ir_type)
 
     def _const_int_to_bytes(self, value, byte_width):
         if byte_width <= 0:

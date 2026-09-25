@@ -48,11 +48,9 @@ MIN_RING_SPEEDUP = 1.5
 
 
 @pytest.fixture
-def threaded_runtime(monkeypatch, threaded_c_runtime_archive):
-    monkeypatch.setenv("PCC_RUNTIME_CC", "cc")
-    monkeypatch.setenv("PCC_RUNTIME_HIGH", "c")
+def threaded_runtime(monkeypatch, threaded_pcc_py_runtime_archive):
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
-    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(threaded_c_runtime_archive))
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(threaded_pcc_py_runtime_archive))
 
 
 def _compile(src: Path, exe: Path) -> None:
