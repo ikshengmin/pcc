@@ -1,17 +1,22 @@
 """pcc-Python port of py_func.c.
 
-Function object layout:
-    offset  0   PyObjectHeader
-    offset 16   PyNativeFuncEntry
-    offset 24   captures tuple
-    offset 32   borrowed const char* name, nullable
-    offset 40   bound self object, nullable
-    total size: 48 bytes
+Function object layout (unchanged):
+    offset  0   PyObjectHeader (compiler entry roles use header flag bits)
+    offset 16   C-API-compatible function prefix, through offset 48
+    offset 56   PyNativeFuncEntry
+    offset 64   captures tuple
+    offset 72   borrowed const char* name, nullable
+    offset 80   bound self object, nullable
+    offset 88   attributes, nullable
+    total size: 96 bytes
 """
 
 __pcc_runtime_port__ = True
 
 from pcc.py_runtime.py.py_abi_constants import (
+    PY_FLAG_FUNC_AUTO_PARK,
+    PY_FLAG_FUNC_CONTINUATION_FACTORY,
+    PY_FLAG_FUNC_TRANSPARENT_CALL,
     PY_TYPE_DICT,
     PY_TYPE_FUNC,
     PY_TYPE_NONE,
@@ -21,7 +26,15 @@ from pcc.py_runtime.py.py_abi_constants import (
 
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.unsafe import (
+    atomic_rmw_i32,
     call_ptr2,
+    define_global_i32,
+    define_thread_local_i32,
+    global_addr,
+    memset,
+    stack_alloc,
+    store_i32,
+    store_i64,
     cstr,
     global_load_ptr,
     global_store_ptr,
@@ -83,6 +96,22 @@ pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+py_gen_run_may_park_sync = extern("py_gen_run_may_park_sync", (c_ptr,), c_ptr)
+py_current_exception = extern("py_current_exception", (), c_ptr)
+
+# A deferred request is consumed by the actual semantic callee. Ordinary
+# function bodies run with synchronous dynamic-call semantics. Transparent
+# bind/partial entries forward only their target call through the second lane.
+define_thread_local_i32("pcc_native_callable_sync_context", 1)
+define_thread_local_i32("pcc_native_callable_forward_context", 1)
+define_global_i32("pcc_native_callable_result_frame_map", 11)
+
 py_class_new = extern(
     "py_class_new",
     (c_ptr, c_ptr, c_int32, c_ptr, c_int32),
@@ -1243,34 +1272,216 @@ def py_func_new(entry, captures_tuple):
     return py_func_new_named(entry, captures_tuple, null())
 
 
+def _func_keep_call_error(slots, pins, offset: int) -> None:
+    if ptr_is_null(load_ptr(slots, offset)) == 0:
+        return
+    error = py_current_exception()
+    if ptr_is_null(error):
+        return
+    prior_pin: int = load_i32(error, 12) & 64
+    pcc_gc_pin(error)
+    py_incref(error)
+    store_ptr(slots, offset, error)
+    store_i64(pins, offset, prior_pin)
+    pcc_gc_note_write_barrier(null(), error)
+
+
+def _func_clear_call_root(slots, pins, offset: int) -> None:
+    value = load_ptr(slots, offset)
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        pcc_gc_unpin(value)
+        if load_i64(pins, offset) != 0:
+            atomic_rmw_i32("or", value, 12, 64, "relaxed")
+    pcc_gc_store_root(ptr_add(slots, offset), null())
+
+
 @c_abi_export("py_func_call_kwargs")
 def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
+    # The existing C ABI borrows inputs for this call. Keep each input stable
+    # across binder/entry polls, including nested transparent adapters.
+    argument_pins = stack_alloc(24)
+    memset(argument_pins, 0, 24)
+    # Unrolled: a loop latch would park with later borrowed copies unpinned.
+    if ptr_is_null(callable_obj) == 0 and is_tagged_int(callable_obj) == 0:
+        store_i64(argument_pins, 0, load_i32(callable_obj, 12) & 64)
+        pcc_gc_pin(callable_obj)
+    if ptr_is_null(args_tuple) == 0 and is_tagged_int(args_tuple) == 0:
+        store_i64(argument_pins, 8, load_i32(args_tuple, 12) & 64)
+        pcc_gc_pin(args_tuple)
+    if ptr_is_null(kwargs) == 0 and is_tagged_int(kwargs) == 0:
+        store_i64(argument_pins, 16, load_i32(kwargs, 12) & 64)
+        pcc_gc_pin(kwargs)
+    roles: int = 0
+    if ptr_is_null(callable_obj) == 0 and is_tagged_int(callable_obj) == 0:
+        if load_i32(callable_obj, 8) == PY_TYPE_FUNC:
+            roles = load_i32(callable_obj, 12)
+    context: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    previous_forward: int = load_i32(global_addr("pcc_native_callable_forward_context"), 0)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, 1)
+    forward: int = (context & 1) if (roles & PY_FLAG_FUNC_TRANSPARENT_CALL) != 0 else 1
+    store_i32(global_addr("pcc_native_callable_forward_context"), 0, forward)
+    drive: int = 1 if (context & 1) != 0 and (roles & (PY_FLAG_FUNC_AUTO_PARK | PY_FLAG_FUNC_CONTINUATION_FACTORY)) != 0 and (roles & PY_FLAG_FUNC_TRANSPARENT_CALL) == 0 else 0
+    slots = stack_alloc(88)
+    pins = stack_alloc(88)
+    memset(slots, 0, 88)
+    memset(pins, 0, 88)
+    pcc_gc_frame_enter(global_addr("pcc_native_callable_result_frame_map"), slots)
+    store_i64(pins, 64, load_i64(argument_pins, 0))
+    pcc_gc_store_root(ptr_add(slots, 64), callable_obj)
+    store_i64(pins, 72, load_i64(argument_pins, 8))
+    pcc_gc_store_root(ptr_add(slots, 72), args_tuple)
+    store_i64(pins, 80, load_i64(argument_pins, 16))
+    pcc_gc_store_root(ptr_add(slots, 80), kwargs)
+    # slot0 = compiler-created child; slot1 = returned user value; slot2 =
+    # pending exception protected across all owner cleanup. Slots3..7 own
+    # captures, signature, inner captures, synthesized args and bound args.
+    output_offset: int = 0 if drive else 8
+    _func_call_kwargs_body(slots, pins, output_offset, context & 2)
+    if drive and ptr_is_null(load_ptr(slots, 0)) == 0:
+        result = py_gen_run_may_park_sync(load_ptr(slots, 0))
+        store_ptr(slots, 8, result)
+        if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+            store_i64(pins, 8, load_i32(result, 12) & 64)
+            pcc_gc_pin(result)
+            pcc_gc_note_write_barrier(null(), result)
+    if ptr_is_null(load_ptr(slots, 8)):
+        _func_keep_call_error(slots, pins, 16)
+    index: int = 0
+    result = load_ptr(slots, 8)
+    prior_result_pin: int = load_i64(pins, 8)
+    if ptr_is_null(result) == 0:
+        if ptr_eq(result, load_ptr(slots, 0)):
+            prior_result_pin = load_i64(pins, 0)
+        # A native continuation factory can return its captures container.
+        # The body keeps this lease through synchronous driving; the other
+        # binder temporaries have already been cleared before the drive.
+        if ptr_eq(result, load_ptr(slots, 24)):
+            prior_result_pin = load_i64(pins, 24)
+        # An aliased result restores the external pin state, not a pin this
+        # invocation itself acquired for the earliest matching argument.
+        index = 3
+        while index > 0:
+            index = index - 1
+            if ptr_eq(result, load_ptr(slots, 64 + index * 8)):
+                prior_result_pin = load_i64(pins, 64 + index * 8)
+    _func_clear_call_root(slots, pins, 0)
+    _func_clear_call_root(slots, pins, 56)
+    _func_clear_call_root(slots, pins, 48)
+    _func_clear_call_root(slots, pins, 40)
+    _func_clear_call_root(slots, pins, 32)
+    _func_clear_call_root(slots, pins, 24)
+    _func_clear_call_root(slots, pins, 80)
+    _func_clear_call_root(slots, pins, 72)
+    _func_clear_call_root(slots, pins, 64)
+    error = load_ptr(slots, 16)
+    if ptr_is_null(error) == 0:
+        py_raise(error)
+        _func_clear_call_root(slots, pins, 16)
+    # Argument/child unpins may have cleared the same bit on an aliased
+    # result. The result lease still exists; reload the healed root and
+    # restore that bit without acquiring an extra metric-counted pin.
+    result = load_ptr(slots, 8)
+    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+    pcc_gc_frame_leave(slots)
+    store_i32(global_addr("pcc_native_callable_forward_context"), 0, previous_forward)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, context)
+    return pcc_gc_take_pinned_slot(ptr_add(slots, 8), prior_result_pin)
+
+
+@c_abi_export("py_obj_call_sync")
+def py_obj_call_sync(callable_obj, args, kwargs):
+    previous: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, 1)
+    result = py_obj_call(callable_obj, args, kwargs)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, previous)
+    return result
+
+
+@c_abi_export("py_obj_call_context_is_deferred")
+def py_obj_call_context_is_deferred() -> int:
+    # The actual non-PyFunc semantic callee consumes this request too. Keep
+    # TLS storage in its defining object; other objects use this owned query.
+    return 1 if (load_i32(global_addr("pcc_native_callable_sync_context"), 0) & 1) == 0 else 0
+
+
+@c_abi_export("py_obj_call_deferred")
+def py_obj_call_deferred(callable_obj, args, kwargs):
+    previous: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, 0)
+    result = py_obj_call(callable_obj, args, kwargs)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, previous)
+    return result
+
+
+@c_abi_export("py_obj_call_forward")
+def py_obj_call_forward(callable_obj, args, kwargs):
+    previous: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    forwarded: int = load_i32(global_addr("pcc_native_callable_forward_context"), 0)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, forwarded)
+    result = py_obj_call(callable_obj, args, kwargs)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, previous)
+    return result
+
+
+@c_abi_export("py_func_call_bound_forward")
+def py_func_call_bound_forward(callable_obj, args):
+    previous: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    forwarded: int = load_i32(global_addr("pcc_native_callable_forward_context"), 0) & 1
+    # bit1 is a one-callee binder token, never forwarded to ordinary body calls.
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, forwarded | 2)
+    result = py_func_call_kwargs(callable_obj, args, null())
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, previous)
+    return result
+
+
+def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) -> None:
+    callable_obj = load_ptr(slots, 64)
+    args_tuple = load_ptr(slots, 72)
+    kwargs = load_ptr(slots, 80)
     fn = _checked_func(callable_obj)
     if ptr_is_null(fn):
         if ptr_is_null(callable_obj):
-            return _func_type_error(
+            _func_type_error(
                 cstr("native function call received NULL callable")
             )
-        return _func_type_error(
+            return
+        _func_type_error(
             cstr("native function call requires a function object")
         )
+        return
     entry = load_ptr(fn, 56)
     if ptr_is_null(entry):
-        return _func_runtime_error_if_unset(
+        _func_runtime_error_if_unset(
             cstr("py_func_call_kwargs"),
             cstr("native function object has no entry point")
         )
+        return
     args = args_tuple
     made_args: int = 0
     if _is_none_or_null(args) != 0:
         args = py_tuple_new(0)
+        store_ptr(slots, 48, args)
+        if ptr_is_null(args) == 0 and is_tagged_int(args) == 0:
+            store_i64(pins, 48, load_i32(args, 12) & 64)
+            pcc_gc_pin(args)
+            pcc_gc_note_write_barrier(null(), args)
         made_args = 1
         if ptr_is_null(args):
-            return _func_runtime_error_if_unset(
+            _func_runtime_error_if_unset(
                 cstr("py_tuple_new"),
                 cstr("native function could not create its argument tuple")
             )
+            return
     captures = pcc_gc_load_ptr(fn, ptr_add(fn, 64))
+    # This field load borrows from a pinned function. Pin before retaining;
+    # thereafter the owned slot protects it independently of function mutation.
+    if ptr_is_null(captures) == 0 and is_tagged_int(captures) == 0:
+        store_i64(pins, 24, load_i32(captures, 12) & 64)
+        pcc_gc_pin(captures)
+    py_incref(captures)
+    store_ptr(slots, 24, captures)
+    pcc_gc_note_write_barrier(null(), captures)
     actual_captures = captures
     sig = null()
     owns_actual_captures: int = 0
@@ -1280,36 +1491,53 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
         captures_len = py_tuple_len(captures)
     if captures_len == 2:
         candidate = py_tuple_get(captures, 1)
+        store_ptr(slots, 32, candidate)
+        if ptr_is_null(candidate) == 0 and is_tagged_int(candidate) == 0:
+            store_i64(pins, 32, load_i32(candidate, 12) & 64)
+            pcc_gc_pin(candidate)
+            pcc_gc_note_write_barrier(null(), candidate)
         if _signature_valid(candidate) != 0:
             inner = py_tuple_get(captures, 0)
+            store_ptr(slots, 40, inner)
+            if ptr_is_null(inner) == 0 and is_tagged_int(inner) == 0:
+                store_i64(pins, 40, load_i32(inner, 12) & 64)
+                pcc_gc_pin(inner)
+                pcc_gc_note_write_barrier(null(), inner)
             if ptr_is_null(inner):
-                py_decref(candidate)
+                _func_clear_call_root(slots, pins, 32)
                 if made_args != 0:
-                    py_decref(args)
-                return _func_runtime_error_if_unset(
+                    _func_clear_call_root(slots, pins, 48)
+                _func_runtime_error_if_unset(
                     cstr("py_func_signature_from_captures"),
                     cstr("native function signature has no captures tuple")
                 )
+                return
             sig = candidate
             actual_captures = inner
             owns_actual_captures = 1
         else:
             if ptr_is_null(candidate) == 0:
-                py_decref(candidate)
+                _func_clear_call_root(slots, pins, 32)
 
     kwargs_are_empty: int = _kwargs_empty(kwargs)
     if ptr_is_null(sig) and kwargs_are_empty == 0:
         if made_args != 0:
-            py_decref(args)
-        return _func_type_error(cstr("native function does not accept keywords"))
+            _func_clear_call_root(slots, pins, 48)
+        _func_type_error(cstr("native function does not accept keywords"))
+        return
 
     call_args = args
     owns_call_args: int = 0
-    if ptr_is_null(sig) == 0:
+    if ptr_is_null(sig) == 0 and already_bound == 0:
         if kwargs_are_empty != 0:
             call_args = _bind_signature_no_kwargs(sig, args, fn)
         else:
             call_args = _bind_signature(sig, args, kwargs, fn)
+        store_ptr(slots, 56, call_args)
+        if ptr_is_null(call_args) == 0 and is_tagged_int(call_args) == 0:
+            store_i64(pins, 56, load_i32(call_args, 12) & 64)
+            pcc_gc_pin(call_args)
+            pcc_gc_note_write_barrier(null(), call_args)
         if ptr_is_null(call_args):
             # Validate the binder's return before cleanup can run deallocators
             # and accidentally provide an unrelated pending exception.
@@ -1319,34 +1547,62 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
                     "native function argument binding returned NULL without exception"
                 )
             )
-            py_decref(sig)
+            _func_clear_call_root(slots, pins, 32)
             if owns_actual_captures != 0:
-                py_decref(actual_captures)
+                _func_clear_call_root(slots, pins, 40)
             if made_args != 0:
-                py_decref(args)
-            return null()
+                _func_clear_call_root(slots, pins, 48)
+            return
         owns_call_args = 1
 
+    # Nested calls can clear the single pin bit. Caller and binder roots are
+    # authoritative after arbitrary callbacks; reload every pointer we reuse.
+    actual_captures = load_ptr(slots, 40) if owns_actual_captures else load_ptr(slots, 24)
+    if owns_call_args:
+        call_args = load_ptr(slots, 56)
+    elif made_args:
+        call_args = load_ptr(slots, 48)
+    else:
+        call_args = load_ptr(slots, 72)
     result = call_ptr2(entry, actual_captures, call_args)
+    store_ptr(slots, output_offset, result)
+    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+        store_i64(pins, output_offset, load_i32(result, 12) & 64)
+        pcc_gc_pin(result)
+        pcc_gc_note_write_barrier(null(), result)
+    # The result may alias a binder temporary. Restore the pin state from
+    # before the earliest matching temporary lease, not that lease's own bit.
+    if ptr_is_null(result) == 0:
+        if ptr_eq(result, load_ptr(slots, 56)):
+            store_i64(pins, output_offset, load_i64(pins, 56))
+        if ptr_eq(result, load_ptr(slots, 40)):
+            store_i64(pins, output_offset, load_i64(pins, 40))
+        if ptr_eq(result, load_ptr(slots, 32)):
+            store_i64(pins, output_offset, load_i64(pins, 32))
+        if ptr_eq(result, load_ptr(slots, 24)):
+            store_i64(pins, output_offset, load_i64(pins, 24))
+        if ptr_eq(result, load_ptr(slots, 48)):
+            store_i64(pins, output_offset, load_i64(pins, 48))
     # The compiled entry owns its exception contract.  Check it before
     # releasing call temporaries so cleanup cannot mask a silent NULL return.
     if ptr_is_null(result):
-        entry_name = load_ptr(fn, 72)
+        entry_name = load_ptr(load_ptr(slots, 64), 72)
         if ptr_is_null(entry_name):
             entry_name = cstr("<compiled native function>")
         _func_runtime_error_if_unset(
             entry_name,
             cstr("compiled native function returned NULL without exception")
         )
+        _func_keep_call_error(slots, pins, 16)
     if owns_call_args != 0:
-        py_decref(call_args)
+        _func_clear_call_root(slots, pins, 56)
     if ptr_is_null(sig) == 0:
-        py_decref(sig)
+        _func_clear_call_root(slots, pins, 32)
     if owns_actual_captures != 0:
-        py_decref(actual_captures)
+        _func_clear_call_root(slots, pins, 40)
     if made_args != 0:
-        py_decref(args)
-    return result
+        _func_clear_call_root(slots, pins, 48)
+    return
 
 
 @c_abi_export("py_func_call")
@@ -1354,72 +1610,116 @@ def py_func_call(callable_obj, args_tuple):
     return py_func_call_kwargs(callable_obj, args_tuple, null())
 
 
-def _partial_full_args(bound, args):
-    nb: int = py_tuple_len(bound)
-    na: int = py_tuple_len(args)
+def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
+    # slots: output0, captures8, call args16, function24, bound32,
+    # kwargs40, full args48, current item56, preserved error64.
+    fn = py_tuple_get(load_ptr(slots, 8), 0)
+    store_ptr(slots, 24, fn)
+    if ptr_is_null(fn) == 0 and is_tagged_int(fn) == 0:
+        store_i64(pins, 24, load_i32(fn, 12) & 64)
+        pcc_gc_pin(fn)
+        pcc_gc_note_write_barrier(null(), fn)
+    if ptr_is_null(fn):
+        return
+    bound = py_tuple_get(load_ptr(slots, 8), 1)
+    store_ptr(slots, 32, bound)
+    if ptr_is_null(bound) == 0 and is_tagged_int(bound) == 0:
+        store_i64(pins, 32, load_i32(bound, 12) & 64)
+        pcc_gc_pin(bound)
+        pcc_gc_note_write_barrier(null(), bound)
+    if ptr_is_null(bound):
+        return
+    if has_kwargs:
+        kwargs = py_tuple_get(load_ptr(slots, 8), 2)
+        store_ptr(slots, 40, kwargs)
+        if ptr_is_null(kwargs) == 0 and is_tagged_int(kwargs) == 0:
+            store_i64(pins, 40, load_i32(kwargs, 12) & 64)
+            pcc_gc_pin(kwargs)
+            pcc_gc_note_write_barrier(null(), kwargs)
+        if ptr_is_null(kwargs):
+            return
+    nb: int = py_tuple_len(load_ptr(slots, 32))
+    na: int = py_tuple_len(load_ptr(slots, 16))
     full = py_tuple_new(nb + na)
+    store_ptr(slots, 48, full)
+    if ptr_is_null(full) == 0 and is_tagged_int(full) == 0:
+        store_i64(pins, 48, load_i32(full, 12) & 64)
+        pcc_gc_pin(full)
+        pcc_gc_note_write_barrier(null(), full)
     if ptr_is_null(full):
-        return null()
+        return
     i: int = 0
-    while i < nb:
-        item = py_tuple_get(bound, i)
-        py_tuple_set_item(full, i, item)
-        py_decref(item)
-        i += 1
-    j: int = 0
-    while j < na:
-        item = py_tuple_get(args, j)
-        py_tuple_set_item(full, nb + j, item)
-        py_decref(item)
-        j += 1
-    return full
+    while i < nb + na:
+        if i < nb:
+            item = py_tuple_get(load_ptr(slots, 32), i)
+        else:
+            item = py_tuple_get(load_ptr(slots, 16), i - nb)
+        store_ptr(slots, 56, item)
+        if ptr_is_null(item) == 0 and is_tagged_int(item) == 0:
+            store_i64(pins, 56, load_i32(item, 12) & 64)
+            pcc_gc_pin(item)
+            pcc_gc_note_write_barrier(null(), item)
+        if ptr_is_null(item):
+            return
+        py_tuple_set_item(load_ptr(slots, 48), i, load_ptr(slots, 56))
+        _func_clear_call_root(slots, pins, 56)
+        i = i + 1
+    result = py_obj_call_forward(load_ptr(slots, 24), load_ptr(slots, 48), load_ptr(slots, 40))
+    store_ptr(slots, 0, result)
+    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+        store_i64(pins, 0, load_i32(result, 12) & 64)
+        pcc_gc_pin(result)
+        pcc_gc_note_write_barrier(null(), result)
+
+
+def _partial_entry(captures, args, has_kwargs: int):
+    slots = stack_alloc(88)
+    pins = stack_alloc(88)
+    memset(slots, 0, 88)
+    memset(pins, 0, 88)
+    pcc_gc_frame_enter(global_addr("pcc_native_callable_result_frame_map"), slots)
+    if ptr_is_null(captures) == 0 and is_tagged_int(captures) == 0:
+        store_i64(pins, 8, load_i32(captures, 12) & 64)
+        pcc_gc_pin(captures)
+    pcc_gc_store_root(ptr_add(slots, 8), captures)
+    if ptr_is_null(args) == 0 and is_tagged_int(args) == 0:
+        store_i64(pins, 16, load_i32(args, 12) & 64)
+        pcc_gc_pin(args)
+    pcc_gc_store_root(ptr_add(slots, 16), args)
+    _partial_entry_build(slots, pins, has_kwargs)
+    if ptr_is_null(load_ptr(slots, 0)):
+        _func_keep_call_error(slots, pins, 64)
+    prior_result_pin: int = load_i64(pins, 0)
+    # Reverse acquisition order preserves an alias's external pin state.
+    index: int = 7
+    while index > 0:
+        if ptr_eq(load_ptr(slots, 0), load_ptr(slots, index * 8)):
+            prior_result_pin = load_i64(pins, index * 8)
+        index = index - 1
+    _func_clear_call_root(slots, pins, 56)
+    _func_clear_call_root(slots, pins, 48)
+    _func_clear_call_root(slots, pins, 40)
+    _func_clear_call_root(slots, pins, 32)
+    _func_clear_call_root(slots, pins, 24)
+    _func_clear_call_root(slots, pins, 16)
+    _func_clear_call_root(slots, pins, 8)
+    error = load_ptr(slots, 64)
+    if ptr_is_null(error) == 0:
+        py_raise(error)
+        _func_clear_call_root(slots, pins, 64)
+    result = load_ptr(slots, 0)
+    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
 
 
 def _pcc_partial_entry(captures, args):
-    fn = py_tuple_get(captures, 0)
-    bound = py_tuple_get(captures, 1)
-    if ptr_is_null(fn) or ptr_is_null(bound):
-        if ptr_is_null(fn) == 0:
-            py_decref(fn)
-        if ptr_is_null(bound) == 0:
-            py_decref(bound)
-        return null()
-    full = _partial_full_args(bound, args)
-    if ptr_is_null(full):
-        py_decref(fn)
-        py_decref(bound)
-        return null()
-    out = py_obj_call(fn, full, null())
-    py_decref(full)
-    py_decref(fn)
-    py_decref(bound)
-    return out
+    return _partial_entry(captures, args, 0)
 
 
 def _pcc_partial_kw_entry(captures, args):
-    fn = py_tuple_get(captures, 0)
-    bound = py_tuple_get(captures, 1)
-    kwargs = py_tuple_get(captures, 2)
-    if ptr_is_null(fn) or ptr_is_null(bound) or ptr_is_null(kwargs):
-        if ptr_is_null(fn) == 0:
-            py_decref(fn)
-        if ptr_is_null(bound) == 0:
-            py_decref(bound)
-        if ptr_is_null(kwargs) == 0:
-            py_decref(kwargs)
-        return null()
-    full = _partial_full_args(bound, args)
-    if ptr_is_null(full):
-        py_decref(fn)
-        py_decref(bound)
-        py_decref(kwargs)
-        return null()
-    out = py_obj_call(fn, full, kwargs)
-    py_decref(full)
-    py_decref(fn)
-    py_decref(bound)
-    py_decref(kwargs)
-    return out
+    return _partial_entry(captures, args, 1)
 
 
 @c_abi_export("py_functools_partial")
@@ -1441,6 +1741,8 @@ def py_functools_partial(fn, bound_args):
     py_tuple_set_item(captures, 0, fn)
     py_tuple_set_item(captures, 1, bound)
     p = py_func_new_bound_raw(_pcc_partial_entry, captures, cstr("partial"), null())
+    if ptr_is_null(p) == 0:
+        atomic_rmw_i32("or", p, 12, PY_FLAG_FUNC_TRANSPARENT_CALL, "relaxed")
     py_decref(captures)
     if made_bound != 0:
         py_decref(bound)
@@ -1483,6 +1785,8 @@ def py_functools_partial_kw(fn, bound_args, bound_kwargs):
         cstr("partial"),
         null(),
     )
+    if ptr_is_null(p) == 0:
+        atomic_rmw_i32("or", p, 12, PY_FLAG_FUNC_TRANSPARENT_CALL, "relaxed")
     py_decref(captures)
     if made_bound != 0:
         py_decref(bound)

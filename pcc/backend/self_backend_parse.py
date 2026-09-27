@@ -164,6 +164,12 @@ _SYSCALL6_ASM_RE = re.compile(
     r'~\{rcx\},~\{r11\},~\{memory\}"\s*'
     r"\((?P<args>[^)]*)\)(?:\s+#\d+)?(?:,\s*!.*)?$"
 )
+_AARCH64_SYSCALL6_ASM_RE = re.compile(
+    r"^(?P<dest>%.*)\s*=\s*call\s+i64\s+asm\s+sideeffect\s+"
+    r'"svc #0",\s*"=\{x0\},\{x8\},\{x0\},\{x1\},\{x2\},\{x3\},\{x4\},\{x5\},'
+    r'~\{memory\},~\{cc\}"\s*'
+    r"\((?P<args>[^)]*)\)(?:\s+#\d+)?(?:,\s*!.*)?$"
+)
 _BINOP_RE = re.compile(
     r"^(?P<dest>%.*)\s*=\s*"
     r"(?P<op>add|sub|mul|sdiv|udiv|srem|urem|and|or|xor|shl|lshr|ashr)(?:\s+[A-Za-z_][A-Za-z0-9_()]*)*\s+"
@@ -2029,29 +2035,34 @@ def _parse_globals(ir_text: str) -> list[GlobalDef]:
                 f"self backend found duplicate thread_local storage classes: {line!r}"
             )
         tls_model = tls_models[0] if tls_models else ""
-        if "external" in prefix.split():
-            if tls_model:
-                raise BackendUnavailable(
-                    "self backend target TLS lowering does not support external "
-                    f"thread-local declarations yet: {line!r}"
-                )
+        declaration = "external" in prefix.split()
+        if declaration and not tls_model:
             continue
         name = decode_global_name(match.group("name"))
         if name in seen:
             continue
         check_simple_symbol_name(name)
         body_text = match.group("body")
+        declaration_attributes: tuple[str, ...] = ()
+        if declaration:
+            body_text, declaration_attributes = _split_global_trailing_attrs(body_text)
         try:
             type_text, initializer = _extract_leading_type_token(body_text)
         except BackendUnavailable as exc:
             raise BackendUnavailable(
                 f"self backend could not split global type from initializer: {body_text!r}"
             ) from exc
-        if not type_text or not initializer:
+        if not type_text or (not initializer and not declaration):
             raise BackendUnavailable(
                 f"self backend could not split global type from initializer: {body_text!r}"
             )
         initializer, trailing_attributes = _split_global_trailing_attrs(initializer)
+        if declaration:
+            trailing_attributes = declaration_attributes
+        if declaration and initializer:
+            raise BackendUnavailable(
+                f"self backend external global declaration has an initializer: {line!r}"
+            )
         alignment = 0
         for attribute in trailing_attributes:
             align_match = re.fullmatch(r"align\s+(\d+)", attribute)
@@ -4395,7 +4406,7 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             f"self backend fence shape not supported in {function_name!r}/{block_name!r}: {line}"
         )
     if " asm " in line and "= call " in line:
-        if match := _SYSCALL6_ASM_RE.match(line):
+        if match := (_SYSCALL6_ASM_RE.match(line) or _AARCH64_SYSCALL6_ASM_RE.match(line)):
             arg_values = []
             for piece in split_top_level(match.group("args")):
                 arg_type_text, arg_value_text = _extract_leading_type_token(

@@ -91,6 +91,7 @@ def _runtime_signatures_part_0():
     "pcc_gc_collect": (_I64, [_I32], False),
     "pcc_gc_pin": (_VOID, [_PYOBJ], False),
     "pcc_gc_unpin": (_VOID, [_PYOBJ], False),
+    "pcc_gc_take_pinned_slot": (_PYOBJ, [_PTR, _I64], False),
     "pcc_gc_immortalize": (_VOID, [_PYOBJ], False),
     "pcc_gc_object_id": (_I64, [_PYOBJ], False),
     "py_obj_id": (_I64, [_PYOBJ], False),
@@ -697,6 +698,11 @@ def _runtime_signatures_part_10():
     "py_set_len": (_I64, [_PYOBJ], False),
     # ---- Generic object ops ---------------------------------------
     "py_obj_call": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_obj_call_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_obj_call_context_is_deferred": (_I64, [], False),
+    "py_obj_call_deferred": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_obj_call_forward": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_func_call_bound_forward": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_call_method1": (_PYOBJ, [_PYOBJ, _CSTR, _PYOBJ], False),
     # a <op> b on user-class operands: a.__op__(b), then b.__rop__(a) on
     # absence or NotImplemented, else TypeError(message).
@@ -829,6 +835,7 @@ def _runtime_signatures_part_12():
     "py_gen_run_may_park_sync": (_PYOBJ, [_PYOBJ], False),
     "py_gen_set_may_park": (_VOID, [_PYOBJ], False),
     "py_gen_is_may_park": (_I64, [_PYOBJ], False),
+    "py_gen_is_continuation": (_I64, [_PYOBJ], False),
     "py_gen_next": (_PYOBJ, [_PYOBJ], False),
     "py_gen_send": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_gen_throw": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -1033,6 +1040,9 @@ def _runtime_signatures_part_15():
     "py_sys_executable_str": (_PYOBJ, [], False),
     "py_sys_prefix_str": (_PYOBJ, [_I64], False),
     "py_os_getpid": (_PYOBJ, [], False),
+    "py_fcntl_flock": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_msvcrt_locking": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_os_kill": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_subprocess_check_output": (_PYOBJ, [_PYOBJ], False),
     "py_subprocess_run": (_I64, [_PYOBJ, _I32], False),
     "py_subprocess_run_timeout": (_I64, [_PYOBJ, _I32, _I64], False),
@@ -1040,6 +1050,7 @@ def _runtime_signatures_part_15():
     "py_os_listdir": (_PYOBJ, [_PYOBJ], False),
     "py_shlex_split": (_PYOBJ, [_PYOBJ], False),
     "py_shutil_which": (_PYOBJ, [_PYOBJ], False),
+    "py_shutil_rmtree": (_PYOBJ, [_PYOBJ, _I32], False),
     }
 
 
@@ -1095,6 +1106,8 @@ def _runtime_signatures_part_16():
     "py_os_path_isabs": (_I32, [_PYOBJ], False),
     "py_os_path_isfile": (_I32, [_PYOBJ], False),
     "py_os_path_isdir": (_I32, [_PYOBJ], False),
+    "py_os_path_islink": (_I32, [_PYOBJ], False),
+    "py_os_path_getsize": (_PYOBJ, [_PYOBJ], False),
     "py_os_path_getmtime": (_PYOBJ, [_PYOBJ], False),
     "py_os_path_abspath": (_PYOBJ, [_PYOBJ], False),
     "py_os_path_expanduser": (_PYOBJ, [_PYOBJ], False),
@@ -1448,14 +1461,11 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_cms_worker_traces',
         'pcc_gc_config_initialized',
         'pcc_gc_cycle_requested',
-        'pcc_gc_debt_bytes',
-        'pcc_gc_debt_threshold_override',
         'pcc_gc_explicit_collect_active',
         'pcc_gc_forwarding_population',
         'pcc_gc_gray_count',
         'pcc_gc_in_auto_step',
         'pcc_gc_last_alloc_bytes',
-        'pcc_gc_live_bytes',
         'pcc_gc_mark_active',
         'pcc_gc_metric_alloc',
         'pcc_gc_metric_load',
@@ -1503,6 +1513,9 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        'pcc_gc_debt_bytes',
+        'pcc_gc_live_bytes',
+        'pcc_gc_debt_threshold_override',
         'pcc_gc_backend3_remembered_owner_allocation_limit',
         'pcc_gc_backend3_frame_root_scan_slot',
         'pcc_gc_backend3_promotion_revision',

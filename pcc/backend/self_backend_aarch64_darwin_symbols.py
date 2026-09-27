@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from .self_backend_target_match import is_aarch64_linux_triple
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_parse import check_simple_symbol_name
 
@@ -16,9 +17,10 @@ def asm_symbol_prevalidated(
 ) -> str:
     """Mangle a symbol already validated at the parse boundary."""
 
+    prefix = "" if is_aarch64_linux_triple(module_symbols.target_triple) else "_"
     if name in module_symbols.internal_symbols:
-        return f"_{module_symbols.internal_prefix}{name}"
-    return f"_{name}"
+        return f"{prefix}{module_symbols.internal_prefix}{name}"
+    return f"{prefix}{name}"
 
 
 def sanitize_label(value: str) -> str:

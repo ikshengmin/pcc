@@ -52,6 +52,9 @@ _SECTION_FLAGS = {
         MOD_INIT_SECTION_FLAGS,
     ("__DATA", "__pcc_stackmaps", "regular"):
         PCC_STACKMAP_SECTION_FLAGS,
+    # ELF-only symbol metadata carried through the owned section transport.
+    # The ELF adapter consumes it; no TLS storage is allocated by this section.
+    ("__PCC", "__tls_refs", ""): DATA_SECTION_FLAGS,
     ("__LD", "__compact_unwind", "regular,debug"):
         COMPACT_UNWIND_SECTION_FLAGS,
     ("__TEXT", "__eh_frame",
@@ -270,6 +273,8 @@ class AArch64ModuleBuilder:
             key = (seg, sect)
             if key not in self.buffers:
                 flags = _SECTION_FLAGS.get((seg, sect, attrs))
+                if seg == "__PCC" and not attrs and sect.startswith(("__init", "__fini")) and sect[6:].isdigit():
+                    flags = DATA_SECTION_FLAGS
                 if flags is None:
                     raise EncodeError(
                         f"section {seg},{sect} with attrs {attrs!r} not proven"

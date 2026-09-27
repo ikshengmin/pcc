@@ -13,6 +13,7 @@ class PreparedModuleSymbols:
     defined_symbols: frozenset[str]
     internal_symbols: frozenset[str]
     thread_local_symbols: frozenset[str]
+    target_triple: str = ""
 
 
 def _stable_symbol_digest(text: str) -> str:
@@ -40,16 +41,17 @@ def prepare_module_symbols(
     ir_text: str,
     globals_: list[GlobalDef],
     functions: list[ParsedFunction],
+    target_triple: str = "",
 ) -> PreparedModuleSymbols:
     defined_symbols = frozenset(
-        {global_.name for global_ in globals_} | {func.name for func in functions}
+        {global_.name for global_ in globals_ if global_.initializer} | {func.name for func in functions}
     )
     internal_symbols = frozenset(
         {global_.name for global_ in globals_ if global_.is_internal}
         | {func.name for func in functions if not func.is_global}
     )
     public_symbols = sorted(
-        {global_.name for global_ in globals_ if not global_.is_internal}
+        {global_.name for global_ in globals_ if global_.initializer and not global_.is_internal}
         | {func.name for func in functions if func.is_global}
     )
     if public_symbols:
@@ -58,6 +60,7 @@ def prepare_module_symbols(
         prefix_seed = "\n".join(sorted(defined_symbols))
     internal_prefix = "__pccmod_" + _stable_symbol_digest(prefix_seed) + "_"
     return PreparedModuleSymbols(
+        target_triple=target_triple,
         internal_prefix=internal_prefix,
         defined_symbols=defined_symbols,
         internal_symbols=internal_symbols,

@@ -2,7 +2,7 @@
 
 from pcc.llvm_capi.compat import ir_c as ir
 
-from .c_declaration_state import CodegenError
+from .c_declaration_state import CodegenError, is_thread_local_storage
 from .c_layout import is_struct_ir_type as _is_struct_ir_type
 from .c_types import get_ir_type, int8_t, int32_t, int64_t
 from ..ast import c_ast as c_ast
@@ -25,6 +25,14 @@ class CDeclarationLoweringMixin:
 
         if node.name is not None:
             self._record_decl_ast_type(node.name, node.type)
+
+        thread_local = is_thread_local_storage(node.storage)
+        if thread_local and (
+            isinstance(node.type, c_ast.FuncDecl)
+            or (node.storage and any(word in node.storage for word in ("auto", "register", "typedef")))
+            or (not self.in_global and not any(word in node.storage for word in ("static", "extern")))
+        ):
+            raise CodegenError("invalid thread-local storage declaration for " + str(node.name))
 
         # Standalone tag definitions such as:
         #   struct S { ... };
@@ -56,7 +64,7 @@ class CDeclarationLoweringMixin:
         )
         if is_extern_local:
             ir_type = self._extern_decl_ir_type(node.name, node.type)
-            self._bind_local_extern_object(node.name, ir_type)
+            self._bind_local_extern_object(node.name, ir_type, storage=node.storage)
             return None, None
 
         # Static local objects: stored as internal globals with function-scoped names
@@ -65,7 +73,7 @@ class CDeclarationLoweringMixin:
             ir_type = self._static_local_ir_type(node.type, init_node=node.init)
             # Create unique global name
             global_name = self._static_local_symbol_name(node.name)
-            gv = self._create_bound_global(node.name, ir_type, symbol_name=global_name)
+            gv = self._create_bound_global(node.name, ir_type, symbol_name=global_name, storage=node.storage)
             gv.linkage = "internal"
             if node.init:
                 gv.initializer = self._build_const_init(node.init, ir_type)
@@ -659,7 +667,7 @@ class CDeclarationLoweringMixin:
                 var_ir_type = ir_type
             else:
                 if self.in_global:
-                    pointee_ir_type = get_ir_type(type_str)
+                    pointee_ir_type = self._get_ir_type(type_str)
                     if isinstance(pointee_ir_type, ir.VoidType):
                         pointee_ir_type = int8_t
                     for _ in range(point_level):
@@ -710,4 +718,3 @@ class CDeclarationLoweringMixin:
             return None, None
 
         return None, var_addr
-

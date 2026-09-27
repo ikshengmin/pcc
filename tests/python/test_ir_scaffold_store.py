@@ -45,7 +45,10 @@ def _compile_to_ll(source: str, name: str, *, mode: str) -> str:
 
 _USE_STORE_PROGRAM = textwrap.dedent(
     """
-    def use_store(builder, val, ptr) -> None:
+    from pcc.llvm_capi.compat import ir
+
+    def use_store(val, ptr) -> None:
+        builder = ir.IRBuilder()
         builder.store(val, ptr)
     """
 )
@@ -123,7 +126,10 @@ def test_extern_declared_once_for_multiple_call_sites():
     must not duplicate it."""
     program = textwrap.dedent(
         """
-        def two_stores(builder, v1, p1, v2, p2) -> None:
+        from pcc.llvm_capi.compat import ir
+
+        def two_stores(v1, p1, v2, p2) -> None:
+            builder = ir.IRBuilder()
             builder.store(v1, p1)
             builder.store(v2, p2)
         """

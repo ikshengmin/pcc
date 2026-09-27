@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+def is_thread_local_storage(storage):
+    return bool(storage and any(
+        item in ("_Thread_local", "thread_local", "__thread") for item in storage
+    ))
+
+
 @dataclass
 class FileScopeObjectState:
     type_key: str
@@ -12,6 +18,7 @@ class FileScopeObjectState:
     definition_kind: str
     symbol_name: str
     ir_type: object
+    thread_local: bool = False
 
 
 @dataclass
@@ -33,6 +40,7 @@ class CodegenError(Exception):
 
 
 class ExternGlobalRef:
-    def __init__(self, symbol_name, ir_type) -> None:
+    def __init__(self, symbol_name, ir_type, thread_local=False) -> None:
         self.symbol_name = symbol_name
         self.ir_type = ir_type
+        self.thread_local = thread_local

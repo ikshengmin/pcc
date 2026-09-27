@@ -13,14 +13,19 @@ from tests.python.test_pcc_bootstrap_full import (
 pytestmark = pytest.mark.integration
 
 
-def test_full_three_stage_bootstrap_self_gc4(
-    shared_stage1_pcc1,
-    pcc_py_runtime_archive,
-    bootstrap_gc_parallel_slots,
-) -> None:
+def test_full_three_stage_bootstrap_self_gc4(request) -> None:
+    from tests.python.test_bootstrap_gate_baseline import _is_macos_arm64
+    if not _is_macos_arm64():
+        from pathlib import Path
+        from scripts.bootstrap_platform import run_chain
+        root = Path(__file__).resolve().parents[3]
+        receipt = run_chain("4", root / "build" / "platform-bootstrap" / "gc4")
+        assert receipt["qualified"] and receipt["fixed_point"]
+        assert [stage["stage"] for stage in receipt["stages"]] == [1, 2, 3]
+        return
     run_full_three_stage_bootstrap_self_gc(
         "4",
-        shared_stage1_pcc1,
-        pcc_py_runtime_archive,
-        parallel_slots=bootstrap_gc_parallel_slots,
+        request.getfixturevalue("shared_stage1_pcc1"),
+        request.getfixturevalue("pcc_py_runtime_archive"),
+        parallel_slots=request.getfixturevalue("bootstrap_gc_parallel_slots"),
     )

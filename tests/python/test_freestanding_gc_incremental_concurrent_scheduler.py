@@ -260,9 +260,9 @@ def test_incremental_concurrent_scheduler_preserves_bounded_policy_order() -> No
         "pcc_gc_tracing_discharge_debt(processed)"
     )
     assert step.index("pcc_gc_tracing_discharge_debt(processed)") < step.index(
-        'store_i32(global_addr("pcc_gc_debt_bytes"), 0, 0)'
+        'store_i64(global_addr("pcc_gc_debt_bytes"), 0, 0)'
     )
-    assert step.index('store_i32(global_addr("pcc_gc_debt_bytes"), 0, 0)') < (
+    assert step.index('store_i64(global_addr("pcc_gc_debt_bytes"), 0, 0)') < (
         step.index("pcc_gc_tracing_record_pause(")
     )
 

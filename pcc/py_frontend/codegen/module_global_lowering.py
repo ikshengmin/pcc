@@ -9,6 +9,7 @@ from ..py_ast import (
     Attr,
     AugAssign,
     BoolLit,
+    DynType,
     Expr,
     For,
     FuncDef,
@@ -623,6 +624,17 @@ class ModuleGlobalLoweringMixin:
                             continue
                         bound = as_name or imported_name
                         if bound in global_names:
+                            native_table = self._native_module_exports
+                            resolved = self._resolve_relative_import(s)
+                            if native_table is not None and resolved in native_table:
+                                # The executing import binds a pcc object into
+                                # this global through the ordinary assignment
+                                # owner. A CPython alias here would misclassify
+                                # later loads even before this function runs.
+                                self._ensure_module_global_name(
+                                    bound, DynType(name="dyn")
+                                )
+                                continue
                             gv = self._cpy_module_global(bound)
                             self._cpy_modules()[bound] = gv
                     continue

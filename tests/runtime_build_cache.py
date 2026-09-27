@@ -346,7 +346,13 @@ def _cached_pcc_python_runtime(
     pcc_bin = _REPO_ROOT / ".venv" / "bin" / "pcc"
     variant = "threaded-pcc-py" if threaded else "pcc-py"
     key = _pcc_runtime_cache_key(pcc_bin, variant=variant, runtime_source=runtime_source)
-    cache_root = Path.home() / ".cache" / "pcc" / "test-artifacts" / "runtime-builds"
+    selected_cache = os.environ.get("PCC_TEST_RUNTIME_CACHE_ROOT", "")
+    cache_root = (
+        Path(selected_cache) if selected_cache
+        else Path.home() / ".cache" / "pcc" / "test-artifacts" / "runtime-builds"
+    )
+    if selected_cache and not cache_root.is_absolute():
+        raise ValueError("PCC_TEST_RUNTIME_CACHE_ROOT must be absolute")
     cache_root.mkdir(parents=True, exist_ok=True)
     runtime = cache_root / key
     marker = runtime / (".pcc-" + variant + "-complete")

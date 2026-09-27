@@ -33,6 +33,8 @@ from ..py_ast import (
     While,
     With,
 )
+from .generator_lowering import emit_generator_terminal_frame_clear
+
 from .builtin_exceptions import (
     BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG,
     builtin_exc_tag_or_missing as _builtin_exc_tag_or_missing,
@@ -1614,58 +1616,13 @@ class ExceptionLoweringMixin:
             # An escaping exception ends this activation just like return;
             # leaving those owners behind retains the suspended task tree.
             self.builder.call(self.runtime["py_gen_set_done"], [fn.args[0]])
-        # Function-level exact-int representation planning registers every
-        # such local and its owned flag before body emission.  Release the
-        # currently-owned object on the shared error epilogue before the root
-        # frame is left; otherwise an exception in a later exact operation
-        # leaks the initializer/previous branch value.  Keep this finite and
-        # representation-specific rather than changing the historical cleanup
-        # policy for unrelated locals in this slice.
-        exact_flags = getattr(self, "_exact_int_env_flags", {})
-        for_target_names = getattr(self, "_for_target_owned_names", set())
-        for local_name in sorted(getattr(self, "_owned_local_names", set())):
-            if (
-                not generator_exit
-                and not exact_flags.get(local_name, False)
-                and local_name not in for_target_names
-            ):
-                continue
-            slot = self.env.get(local_name)
-            if slot is None:
-                continue
-            local_alloca, local_ir_ty, _local_decl_ty = slot
-            if not isinstance(local_ir_ty, ir.PointerType):
-                continue
-            owned_flag = self._ensure_owned_local_flag(
-                local_name,
-                local_alloca,
-            )
-            is_owned = self.builder.load(
-                owned_flag,
-                name=self._fresh(local_name + ".err.owned"),
-            )
-            current = self.builder.call(
-                self.runtime["pcc_gc_load_ptr"],
-                [
-                    ir.Constant(_CSTR, None),
-                    self._as_gc_ptr(
-                        local_alloca,
-                        name=self._fresh(local_name + ".err.gc.slot"),
-                    ),
-                ],
-                name=self._fresh(local_name + ".err.current"),
-            )
-            release_value = self.builder.select(
-                is_owned,
-                current,
-                ir.Constant(_CSTR, None),
-                name=self._fresh(local_name + ".err.release.value"),
-            )
-            self._gc_release(
-                release_value,
-                self._release_context_label("local:" + local_name),
-            )
-            self.builder.store(ir.Constant(_I1, 0), owned_flag)
+            emit_generator_terminal_frame_clear(self)
+        # Keep terminal releases before every frame_leave, including slots
+        # discovered after an earlier error edge. Generator completion still
+        # precedes callbacks from destroying its locals.
+        finish_bb = fn.append_basic_block(name="err.finish")
+        self.builder.branch(finish_bb)
+        self.builder.position_at_end(finish_bb)
         ret_ty = fn.function_type.return_type
         if isinstance(ret_ty, ir.VoidType):
             self.builder.ret_void()
@@ -1702,6 +1659,11 @@ class ExceptionLoweringMixin:
             # current emitted types).
             self.builder.unreachable()
         self._fn_err_exit_blocks[fn_name] = err_bb
+        self._fn_err_exit_finish_blocks[fn_name] = finish_bb
+        # Owned flags are registered by physical (slot, flag) identity, so
+        # lexical name restoration cannot lose a previously created owner.
+        for owned_entry in self._fn_err_exit_owned_slots.get(fn_name, ()):
+            self._patch_fn_err_exit_gc_root_leave(owned_entry[0], owned_entry[1])
         # Back-patch every slot this function already frame-registered.
         # Drive this from the per-slot registry, NOT from name->env lookups:
         # a slot whose env entry was popped or re-bound (e.g. comprehension

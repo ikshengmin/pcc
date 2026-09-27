@@ -29,6 +29,7 @@ from ..py_ast import (
 )
 from . import marshal
 from .errors import L1CodegenError
+from .generator_lowering import emit_function_auto_park_role
 from .runtime_abi import declare_runtime_global
 
 _I1 = ir.IntType(1)
@@ -301,6 +302,8 @@ class AttrLoadLoweringMixin:
             [adapter, wrapped_captures, self._attr_name_ptr(method_name), self_val],
             name=self._fresh(f"bound.{method_name}.func"),
         )
+        if ast_fd is not None:
+            emit_function_auto_park_role(self, ast_fd, fn_obj)
         self._gc_release(captures)
         self._gc_release(signature)
         self._gc_release(wrapped_captures)
@@ -415,6 +418,8 @@ class AttrLoadLoweringMixin:
             ],
             name=self._fresh(f"bound.{method_name}.classmethod.func"),
         )
+        if ast_fd is not None:
+            emit_function_auto_park_role(self, ast_fd, fn_obj)
         self._gc_release(captures)
         self._gc_release(signature)
         self._gc_release(wrapped_captures)
@@ -427,6 +432,7 @@ class AttrLoadLoweringMixin:
         result_name: str,
         method_name: str,
         qualname: str = "",
+        ast_fd=None,
     ) -> ir.Value:
         existing_cache = self.module.globals.get(cache_name)
         if isinstance(existing_cache, ir.GlobalVariable):
@@ -466,6 +472,8 @@ class AttrLoadLoweringMixin:
             [adapter, captures, self._attr_name_ptr(method_name)],
             name=self._fresh(result_name),
         )
+        if ast_fd is not None:
+            emit_function_auto_park_role(self, ast_fd, created)
         if qualname:
             self.builder.call(
                 self.runtime["py_obj_setattr"],
@@ -581,6 +589,7 @@ class AttrLoadLoweringMixin:
                 f"unbound.{method_name}.func",
                 method_name,
                 f"{owner_info.name}.{method_name}",
+                ast_fd,
             )
 
         captures = self.builder.call(
@@ -593,6 +602,8 @@ class AttrLoadLoweringMixin:
             [adapter, captures, self._attr_name_ptr(method_name)],
             name=self._fresh(f"unbound.{method_name}.func"),
         )
+        if ast_fd is not None:
+            emit_function_auto_park_role(self, ast_fd, fn_obj)
         self.builder.call(
             self.runtime["py_obj_setattr"],
             [
@@ -1002,28 +1013,28 @@ class AttrLoadLoweringMixin:
         if re_compile_method_attr is not None:
             return re_compile_method_attr
         if self._native_builtin_value_kind_for_expr(expr.obj) == "os.path":
-            # POSIX posixpath module constants (pcc targets POSIX). These are
+            # Target OS path constants. These are
             # plain literals — emitting them natively keeps ``os.path.<const>``
             # off the libpython fallback (generic B-P0-PKG fallback shrink).
             if expr.name == "sep":
-                return self._emit_str_literal("/")
+                return self._emit_str_literal("\\" if self._target_sys_platform_text() == "win32" else "/")
             if expr.name == "extsep":
                 return self._emit_str_literal(".")
             if expr.name == "pathsep":
-                return self._emit_str_literal(":")
+                return self._emit_str_literal(";" if self._target_sys_platform_text() == "win32" else ":")
             # NOTE: ``os.path.defpath`` is intentionally NOT lowered — its value
             # is platform/build-variable (observed ``/bin:/usr/bin`` here vs the
             # CPython posixpath source literal ``:/bin:/usr/bin``), so a
             # hardcoded constant would silently diverge from the host. Leave it
             # to fall back rather than emit a possibly-wrong value.
             if expr.name == "devnull":
-                return self._emit_str_literal("/dev/null")
+                return self._emit_str_literal("nul" if self._target_sys_platform_text() == "win32" else "/dev/null")
             if expr.name == "curdir":
                 return self._emit_str_literal(".")
             if expr.name == "pardir":
                 return self._emit_str_literal("..")
             if expr.name == "altsep":
-                return self._emit_none_literal()
+                return self._emit_str_literal("/") if self._target_sys_platform_text() == "win32" else self._emit_none_literal()
         if (
             expr.name == "__name__"
             and isinstance(expr.obj, Call)
@@ -1336,12 +1347,11 @@ class AttrLoadLoweringMixin:
                             [ir.Constant(_I64, _OS_ACCESS_CONSTS[expr.name])],
                             name=self._fresh(f"os.{expr.name}"),
                         )
-                    # `os.sep` — POSIX-only platforms keep this as "/"
-                    # (Windows isn't a target). Emit the string literal
-                    # directly so pipeline.py / cli code can self-host
-                    # without dragging libpython for one constant.
+                    if expr.name == "name":
+                        return self._emit_str_literal("nt" if self._target_sys_platform_text() == "win32" else "posix")
+                    # Constants follow the compilation target, including cross builds.
                     if expr.name == "sep":
-                        return self._emit_str_literal("/")
+                        return self._emit_str_literal("\\" if self._target_sys_platform_text() == "win32" else "/")
                     if expr.name == "curdir":
                         return self._emit_str_literal(".")
                     if expr.name == "pardir":
@@ -1349,13 +1359,13 @@ class AttrLoadLoweringMixin:
                     if expr.name == "extsep":
                         return self._emit_str_literal(".")
                     if expr.name == "devnull":
-                        return self._emit_str_literal("/dev/null")
+                        return self._emit_str_literal("nul" if self._target_sys_platform_text() == "win32" else "/dev/null")
                     if expr.name == "linesep":
-                        return self._emit_str_literal("\n")
+                        return self._emit_str_literal("\r\n" if self._target_sys_platform_text() == "win32" else "\n")
                     if expr.name == "altsep":
-                        return self._emit_none_literal()
+                        return self._emit_str_literal("/") if self._target_sys_platform_text() == "win32" else self._emit_none_literal()
                     if expr.name == "pathsep":
-                        return self._emit_str_literal(":")
+                        return self._emit_str_literal(";" if self._target_sys_platform_text() == "win32" else ":")
                 compiled_export = self._native_builtin_compiled_export_info(
                     expr.obj.ident,
                     expr.name,

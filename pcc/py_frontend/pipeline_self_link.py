@@ -28,6 +28,11 @@ def _join_arguments(arguments: tuple[str, ...]) -> str:
 
 def default_self_link_mode(platform: str, machine: Optional[str]) -> str:
     """Select pcc only for the accepted native Darwin AArch64 boundary."""
+    normalized = str(machine or "").strip().lower()
+    if str(platform or "").startswith("linux") and normalized in ("x86_64", "amd64", "arm64", "aarch64"):
+        return "pcc"
+    if str(platform or "") == "win32" and normalized in ("x86_64", "amd64", "x64"):
+        return "pcc"
     if str(platform or "") != "darwin":
         return "cc"
     normalized_machine = str(machine or "").strip().lower()

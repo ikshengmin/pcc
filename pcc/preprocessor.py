@@ -429,7 +429,7 @@ class Macro:
 
 
 class Preprocessor:
-    def __init__(self, base_dir=None, defines=None, include_dirs=None, cpp_args=None):
+    def __init__(self, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None):
         self.base_dir = base_dir or "."
         self.include_dirs = list(include_dirs or [])
         self.system_include_dirs = [os.path.join(
@@ -575,17 +575,37 @@ class Preprocessor:
             "__LDBL_HAS_QUIET_NAN__": "1",
             "__FLT_RADIX__": "2",
         })
-        machine = platform.machine().lower()
+        if target_triple is None:
+            from pcc.py_frontend.pipeline_targets import host_target_triple
+            target_triple = host_target_triple()
+        from pcc.backend.self_backend_target_match import target_os_name
+        target_os = target_os_name(target_triple)
+        machine = target_triple.split("-", 1)[0].lower()
         if machine in ("aarch64", "arm64"):
             predefines["__aarch64__"] = "1"
         elif machine in ("x86_64", "amd64"):
             predefines["__x86_64__"] = "1"
-        if platform.system() == "Darwin":
+        if target_os == "darwin":
             predefines["__APPLE__"] = "1"
             predefines["__MACH__"] = "1"
             predefines["__PCC_HOST_DARWIN__"] = "1"
-        elif platform.system() == "Linux":
+        elif target_os == "linux":
             predefines["__linux__"] = "1"
+            if machine in ("aarch64", "arm64"):
+                predefines["__CHAR_UNSIGNED__"] = "1"
+        elif target_os == "win32":
+            predefines.pop("__LP64__", None)
+            predefines.pop("_LP64", None)
+            predefines.update({"_WIN32": "1", "_WIN64": "1", "_M_X64": "100",
+                               "__SIZEOF_LONG__": "4", "__LONG_MAX__": "2147483647L",
+                               "__SIZEOF_WCHAR_T__": "2", "__WCHAR_TYPE__": "unsigned short",
+                               "__WCHAR_MAX__": "65535"})
+            for key, value in list(predefines.items()):
+                if key.endswith("_TYPE__") and value in ("long", "unsigned long"):
+                    predefines[key] = value + " long"
+                elif key.endswith("_MAX__") and value.endswith("L") and key != "__LONG_MAX__":
+                    if not value.endswith("LL"):
+                        predefines[key] = value + "L"
         for name, value in predefines.items():
             self.macros[name] = Macro(name, value)
         if defines:
@@ -1065,7 +1085,7 @@ class Preprocessor:
         return body
 
 
-def preprocess(source, base_dir=None, defines=None, include_dirs=None, cpp_args=None):
+def preprocess(source, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None):
     """Preprocess C source code."""
-    pp = Preprocessor(base_dir=base_dir, defines=defines, include_dirs=include_dirs, cpp_args=cpp_args)
+    pp = Preprocessor(base_dir=base_dir, defines=defines, include_dirs=include_dirs, cpp_args=cpp_args, target_triple=target_triple)
     return pp.preprocess(source)

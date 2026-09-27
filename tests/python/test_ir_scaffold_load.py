@@ -50,7 +50,10 @@ def _function_body(ir_text: str, fn_name_suffix: str) -> str | None:
 
 _USE_LOAD_PROGRAM = textwrap.dedent(
     """
-    def use_load(builder, ptr):
+    from pcc.llvm_capi.compat import ir
+
+    def use_load(ptr):
+        builder = ir.IRBuilder()
         return builder.load(ptr)
     """
 )
@@ -131,7 +134,10 @@ def test_load_arity_check():
     out = _BUILD / "load_bad_arity.ll"
     src.write_text(textwrap.dedent(
         """
-        def f(builder, a, b):
+        from pcc.llvm_capi.compat import ir
+
+        def f(a, b):
+            builder = ir.IRBuilder()
             return builder.load(a, b, b, b)
         """
     ), encoding="utf-8")

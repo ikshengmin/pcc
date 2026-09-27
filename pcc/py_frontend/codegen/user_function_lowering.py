@@ -43,6 +43,7 @@ from ..py_ast import (
 )
 from . import marshal
 from .errors import L1CodegenError
+from .generator_lowering import emit_function_auto_park_role
 from .exact_int_lowering import (
     allocate_forced_exact_int_locals,
     bind_forced_exact_int_parameter,
@@ -2400,6 +2401,7 @@ class UserFunctionLoweringMixin:
             [adapter, wrapped_captures, display_name_ptr],
             name=self._fresh(f"{orig_name}.func"),
         )
+        emit_function_auto_park_role(self, fd, fn_obj)
         if qualname and qualname != display_name:
             self.builder.call(
                 self.runtime["py_obj_setattr"],

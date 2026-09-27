@@ -31,6 +31,8 @@ def host_target_triple() -> str:
         return machine + "-apple-darwin"
     if sys.platform.startswith("linux"):
         return machine + "-unknown-linux-gnu"
+    if sys.platform == "win32":
+        return machine + "-pc-windows-msvc"
     return "unknown-unknown-unknown"
 
 

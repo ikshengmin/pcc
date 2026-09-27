@@ -117,7 +117,7 @@ NATIVE_IMPORT_FROMS = {
         }
     ),
     "sys": frozenset({"exit", "stdin", "stdout", "stderr"}),
-    "os": frozenset({"path", "sep", "linesep", "altsep"}),
+    "os": frozenset({"path", "name", "sep", "linesep", "altsep", "pathsep"}),
     "time": frozenset(
         {
             "monotonic",

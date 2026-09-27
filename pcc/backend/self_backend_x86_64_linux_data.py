@@ -78,7 +78,7 @@ _RESERVED_ASM_SYMBOLS = frozenset(
 _X86_TLS_DIAGNOSTIC_PREFIX = "self-x86_64-linux ELF TLS lowering"
 _SUPPORTED_TLS_MODELS = frozenset({"default", "initialexec"})
 _SUPPORTED_TLS_PREFIX_WORDS = frozenset(
-    {"dso_local", "internal", "private", "local_unnamed_addr", "unnamed_addr"}
+    {"external", "dso_local", "internal", "private", "local_unnamed_addr", "unnamed_addr"}
 )
 _THREAD_LOCAL_PREFIX_RE = re.compile(r"\bthread_local(?:\([^()]*\))?")
 
@@ -86,7 +86,7 @@ _THREAD_LOCAL_PREFIX_RE = re.compile(r"\bthread_local(?:\([^()]*\))?")
 def asm_symbol(name: str, module_symbols: PreparedModuleSymbols) -> str:
     if name in module_symbols.internal_symbols:
         return f"{module_symbols.internal_prefix}{name}"
-    if name in module_symbols.defined_symbols and name.lower() in _RESERVED_ASM_SYMBOLS:
+    if (name in module_symbols.defined_symbols or name in module_symbols.thread_local_symbols) and name.lower() in _RESERVED_ASM_SYMBOLS:
         return f"__pcc_sym_{name}"
     return name
 
@@ -320,6 +320,8 @@ def validate_x86_tls_global(global_: GlobalDef) -> None:
             f"{_X86_TLS_DIAGNOSTIC_PREFIX} does not support thread-local "
             f"constants for {global_.name!r}"
         )
+    if not global_.initializer:
+        return
     if global_.type.is_int:
         if global_.type.width <= 0 or global_.type.width > 64:
             raise BackendUnavailable(
@@ -354,6 +356,18 @@ def emit_globals(
 ) -> list[str]:
     lines: list[str] = []
     for global_ in globals_:
+        if not global_.initializer:
+            validate_x86_tls_global(global_)
+            symbol = asm_symbol(global_.name, module_symbols)
+            lines.extend([f".globl {symbol}", f".type {symbol}, @tls_object"])
+            continue
+        if global_.name in ("llvm.global_ctors", "llvm.global_dtors"):
+            from .self_backend_aarch64_darwin_data import global_ctor_entries
+            family = "fini" if global_.name == "llvm.global_dtors" else "init"
+            for priority, ordinal, target in global_ctor_entries(global_):
+                lines.extend([f".section .{family}_array.{priority:010d}", ".p2align 3",
+                              "  .quad " + asm_symbol(target, module_symbols)])
+            continue
         if not (
             global_.type.is_int
             or global_.type.is_ptr

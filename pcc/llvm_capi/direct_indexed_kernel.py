@@ -566,6 +566,51 @@ class DirectIndexedFunctionBuilder:
             rhs_operand,
         )
 
+    def publish_atomicrmw(
+        self,
+        op: str,
+        dest_ref: _ir.Value,
+        ptr_type,
+        ptr_ref: _ir.Value,
+        value_type,
+        value_ref: _ir.Value,
+        ordering: str,
+    ) -> int:
+        """Record ``atomicrmw`` with the text parser's cold payload.
+
+        The tuple is exactly ``ParsedInstr("atomicrmw", ...)``'s data --
+        dest, op, pointer type, pointer, value type, value, ordering -- so
+        the target emitters see the same record from either producer.
+        """
+        dest_id = self._dest_value_id(dest_ref)
+        dest_name = self.seed.value_names[dest_id]
+        value_desc = self._type_desc(value_type)
+        ptr_operand = self._operand_value_ref(ptr_ref)
+        value_operand = self._operand_value_ref(value_ref)
+        payload_id = self.seed.append_cold_instruction_data(
+            (
+                dest_name,
+                op,
+                self._type_desc(ptr_type),
+                decode_value_token(self._value_ref_text(ptr_ref)),
+                value_desc,
+                decode_value_token(self._value_ref_text(value_ref)),
+                ordering,
+            )
+        )
+        self.seed.publish_value_type_id(
+            dest_id,
+            self._intern_type_desc(value_desc),
+        )
+        return self._append_metadata(
+            "atomicrmw",
+            payload_id,
+            dest_id,
+            0,
+            ptr_operand,
+            value_operand,
+        )
+
     def publish_fcmp(
         self,
         predicate: str,

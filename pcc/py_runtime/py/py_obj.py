@@ -1133,32 +1133,8 @@ def pcc_gc_collect(reason: int) -> int:
     return collected
 
 
-@c_abi_export("pcc_gc_pin")
-def pcc_gc_pin(o) -> None:
-    if ptr_is_null(o) != 0:
-        return
-    if is_tagged_int(o) != 0:
-        return
-    flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags | PY_FLAG_GC_PINNED)
-    # pcc_gc_note_pin(1), inline: codegen pins around most calls.
-    pin_metric = global_addr("pcc_gc_metric_pin")
-    store_i32(pin_metric, 0, load_i32(pin_metric, 0) + 1)
-    return
-
-
-@c_abi_export("pcc_gc_unpin")
-def pcc_gc_unpin(o) -> None:
-    if ptr_is_null(o) != 0:
-        return
-    if is_tagged_int(o) != 0:
-        return
-    flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~PY_FLAG_GC_PINNED)
-    # pcc_gc_note_pin(-1), inline.
-    pin_metric = global_addr("pcc_gc_metric_pin")
-    store_i32(pin_metric, 0, load_i32(pin_metric, 0) - 1)
-    return
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 
 
 @c_abi_export("pcc_gc_immortalize")

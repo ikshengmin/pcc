@@ -1,16 +1,8 @@
-"""Explicit Windows-CRT boundary for recursive build-tool closure.
-
-Meson's platform package contains a Windows-only module which imports
-``msvcrt``.  The recursive source walker sees that import even on Darwin and
-Linux, so a pcc-owned provider is required to keep the closed-world compile
-free of libpython fallbacks.  Importing the provider on a non-Windows target
-matches CPython by raising ``ImportError``.  On Windows, the CRT descriptor and
-locking operations remain unowned and fail closed instead of pretending to
-provide process-global locking semantics.
-"""
+"""Owned Windows file-region locking; other CRT surfaces fail explicitly."""
 from __future__ import annotations
 
 import sys
+from pcc.extern import c_obj, extern
 
 
 if sys.platform != "win32":
@@ -26,12 +18,18 @@ LK_NBRLCK = 4
 
 def _unowned():
     raise NotImplementedError(
-        "msvcrt descriptor, console and locking operations are not runtime-owned"
+        "msvcrt descriptor and console operations are not runtime-owned"
     )
 
 
+_native_locking = extern("py_msvcrt_locking", (c_obj, c_obj, c_obj), c_obj)
+
+
 def locking(fd, mode, nbytes):
-    _unowned()
+    error = _native_locking(fd, mode, nbytes)
+    if error is not None:
+        raise error
+    return None
 
 
 def setmode(fd, flags):

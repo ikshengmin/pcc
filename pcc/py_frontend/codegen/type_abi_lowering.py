@@ -565,6 +565,9 @@ class TypeAbiLoweringMixin:
                 [idx],
                 name=self._fresh(f"value.{ty.name}.box.field{idx}"),
             )
+            # A scalar or nested payload field is boxed here into a new
+            # reference (or an immortal); a pointer field is the payload's.
+            boxed_here = not isinstance(field_value.type, ir.PointerType)
             field_obj = self._emit_valueclass_payload_to_object(
                 field_value,
                 field_ty,
@@ -582,7 +585,13 @@ class TypeAbiLoweringMixin:
                 self.runtime["py_valuebox_set_field"],
                 [inst, ir.Constant(_I32, idx), field_obj],
             )
-            if consume_fields and isinstance(field_obj.type, ir.PointerType):
+            # The box took its own reference (set_field stores through the
+            # write barrier).  Drop ours when it was created here -- a nested
+            # valuebox or a boxed int/float leaked one reference per field --
+            # or when the caller transfers the payload's pointer fields.
+            if (boxed_here or consume_fields) and isinstance(
+                field_obj.type, ir.PointerType
+            ):
                 if field_obj not in getattr(self, "_cpy_values", ()):
                     self._gc_release(
                         field_obj,

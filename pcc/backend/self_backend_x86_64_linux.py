@@ -59,6 +59,10 @@ from .self_backend_x86_64_linux_data import (
     validate_x86_tls_globals,
 )
 
+_WINDOWS_ABI = False
+_WINDOWS_SCRATCH_BASE = 0
+_X86_EMISSION_ACTIVE = False
+
 _MODULE_SYMBOLS = PreparedModuleSymbols(
     internal_prefix="",
     defined_symbols=frozenset(),
@@ -206,7 +210,13 @@ def _is_memory_aggregate_arg(type_desc: TypeDesc) -> bool:
 
 
 def _aggregate_returned_indirect(ty: TypeDesc) -> bool:
-    return (ty.is_array or ty.is_struct) and ty.slot_size > 16
+    if _WINDOWS_ABI:
+        from .self_backend_win64_abi import indirect
+        return indirect(ty)
+    if ty.is_array or ty.is_struct:
+        from .self_backend_sysv_aggregates import classes
+        return not bool(classes(ty))
+    return False
 
 
 def _aggregate_reg_chunks(type_desc: TypeDesc) -> tuple[int, ...]:
@@ -272,6 +282,8 @@ def _aggregate_sse_members(type_desc: TypeDesc) -> tuple[tuple[TypeDesc, int], .
     deliberately structural (arrays/nested structs recurse) and fail-closed
     for packed or mixed-class shapes that need the full SysV merge algorithm.
     """
+    if _WINDOWS_ABI:
+        return ()
     if not (type_desc.is_array or type_desc.is_struct):
         return ()
     if type_desc.slot_size <= 0 or type_desc.slot_size > 16:
@@ -330,43 +342,16 @@ def _iter_arg_locations(
     locations: list[tuple[str, object]] = []
     stack_offset = 0
     for arg_type in arg_types:
-        if _is_memory_aggregate_arg(arg_type):
-            locations.append(("stack_byval", stack_offset))
-            stack_offset += _stack_arg_storage_size(arg_type)
-            continue
         if arg_type.is_array or arg_type.is_struct:
-            sse_members = _aggregate_sse_members(arg_type)
-            if sse_members:
-                if fp_index + len(sse_members) <= len(_FP_ARG_REGS):
-                    regs = tuple(
-                        _FP_ARG_REGS[fp_index + index]
-                        for index in range(len(sse_members))
-                    )
-                    locations.append(
-                        (
-                            "aggregate_sse_regs",
-                            tuple(
-                                (reg, member_type, member_offset)
-                                for reg, (member_type, member_offset) in zip(
-                                    regs, sse_members, strict=False
-                                )
-                            ),
-                        )
-                    )
-                    fp_index += len(sse_members)
-                    continue
-                fp_index = len(_FP_ARG_REGS)
+            from .self_backend_sysv_aggregates import assign
+            assigned, next_gp, next_fp = assign(arg_type, _ARG_REGS, _FP_ARG_REGS, gp_index, fp_index)
+            if assigned:
+                locations.append(("aggregate_abi_regs", assigned))
+                gp_index, fp_index = next_gp, next_fp
+            else:
+                stack_offset = _align_to(stack_offset, max(8, min(16, arg_type.align)))
                 locations.append(("stack_byval", stack_offset))
                 stack_offset += _stack_arg_storage_size(arg_type)
-                continue
-            chunks = _aggregate_reg_chunks(arg_type)
-            if gp_index + len(chunks) <= len(_ARG_REGS):
-                regs = tuple(_ARG_REGS[gp_index + index] for index in range(len(chunks)))
-                locations.append(("aggregate_regs", tuple(zip(regs, chunks, strict=False))))
-                gp_index += len(chunks)
-                continue
-            locations.append(("stack_byval", stack_offset))
-            stack_offset += _stack_arg_storage_size(arg_type)
             continue
         if arg_type.is_fp:
             if fp_index < len(_FP_ARG_REGS):
@@ -413,6 +398,9 @@ def _tls_global(name: str) -> GlobalDef | None:
 
 
 def _materialize_global_symbol_address(name: str, reg: str) -> list[str]:
+    if _WINDOWS_ABI and _tls_global(name) is not None:
+        from .self_backend_win64_abi import tls_address
+        return tls_address(_asm_symbol(name), reg, _WINDOWS_SCRATCH_BASE)
     global_ = _tls_global(name)
     if global_ is None:
         return [f"  lea {reg}, {_global_symbol_addr(name)}"]
@@ -950,13 +938,12 @@ def _materialize_vector_value_to_address(
 
 def _emit_vararg_start(func: ParsedFunction, ap_ptr: str) -> list[str]:
     if not func.is_vararg:
-        raise BackendUnavailable(f"x86_64 self backend saw llvm.va_start in non-variadic function {func.name!r}")
-    _locations, fixed_stack_bytes, _fp_count = _iter_arg_locations([arg.type for arg in func.args])
-    first_vararg_offset = 16 + fixed_stack_bytes
-    lines = _materialize_pointer_storage_address(func, ap_ptr, "r11")
-    lines.append(f"  lea r10, {_stack_arg_addr(first_vararg_offset)}")
-    lines.append("  mov QWORD PTR [r11], r10")
-    return lines
+        raise BackendUnavailable(f"x86_64 va_start in non-variadic function {func.name!r}")
+    if _WINDOWS_ABI:
+        from .self_backend_win64_abi import vararg_start
+        return vararg_start(func, ap_ptr)
+    from .self_backend_sysv_varargs import start
+    return start(func, ap_ptr)
 
 
 def _emit_va_arg(
@@ -966,6 +953,9 @@ def _emit_va_arg(
     ap: str,
     value_type: TypeDesc,
 ) -> list[str]:
+    if not _WINDOWS_ABI:
+        from .self_backend_sysv_varargs import argument
+        return argument(func, dest, ap, value_type)
     if not ap_type.is_ptr:
         raise BackendUnavailable(
             f"x86_64 self backend va_arg expects pointer va_list storage, got {ap_type.describe()}"
@@ -974,8 +964,12 @@ def _emit_va_arg(
     lines.append("  mov r10, QWORD PTR [r11]")
     if dest in func.value_slots:
         if value_type.is_array or value_type.is_struct:
-            lines.append(f"  lea rax, {_slot_addr(func.value_slots[dest].offset)}")
-            lines.extend(_copy_address_to_address("r10", "rax", value_type.slot_size))
+            lines.append(f"  lea r8, {_slot_addr(func.value_slots[dest].offset)}")
+            if _WINDOWS_ABI and _aggregate_returned_indirect(value_type):
+                lines.append("  mov rdx, QWORD PTR [r10]")
+                lines.extend(_copy_address_to_address("rdx", "r8", value_type.slot_size))
+            else:
+                lines.extend(_copy_address_to_address("r10", "r8", value_type.slot_size))
         elif value_type.is_int or value_type.is_ptr or value_type.is_fp:
             value_reg = _reg_name(value_type, 0)
             lines.extend(_load_from_address("r10", value_reg, value_type))
@@ -984,7 +978,7 @@ def _emit_va_arg(
             raise BackendUnavailable(
                 f"x86_64 self backend va_arg type not translated yet in {func.name!r}: {value_type.describe()}"
             )
-    lines.extend(_emit_add_immediate_to_reg("r10", _vararg_stack_storage_size(value_type)))
+    lines.extend(_emit_add_immediate_to_reg("r10", 8 if _WINDOWS_ABI else _vararg_stack_storage_size(value_type)))
     lines.append("  mov QWORD PTR [r11], r10")
     return lines
 
@@ -1441,6 +1435,9 @@ def _emit_gep_instruction(
 
 
 def _emit_prologue(func: ParsedFunction) -> list[str]:
+    if _WINDOWS_ABI:
+        from .self_backend_win64_abi import prologue
+        return prologue(func)
     is_process_entry = _is_linux_process_entry(func)
     symbol = _asm_symbol(func.name)
     lines = ["", ".text", ".p2align 4, 0x90"]
@@ -1458,8 +1455,16 @@ def _emit_prologue(func: ParsedFunction) -> list[str]:
         lines.append("  sub rsp, 8")
     lines.append("  push rbp")
     lines.append("  mov rbp, rsp")
-    if func.frame_size:
-        lines.append(f"  sub rsp, {func.frame_size}")
+    total_frame = func.frame_size + func.platform_frame_extra
+    if total_frame:
+        lines.append(f"  sub rsp, {total_frame}")
+    saved_rbx = 176 if func.is_vararg else 0
+    lines.append(f"  mov QWORD PTR [rsp + {saved_rbx}], rbx")
+    if func.is_vararg:
+        for index, register in enumerate(_ARG_REGS):
+            lines.append(f"  mov QWORD PTR [rsp + {index * 8}], {register}")
+        for index in range(8):
+            lines.append(f"  movdqu XMMWORD PTR [rsp + {48 + index * 16}], xmm{index}")
     gp_start = 0
     if func.hidden_sret_slot is not None:
         lines.extend(_store_reg_to_slot("rdi", func.hidden_sret_slot.offset, func.hidden_sret_slot.type))
@@ -1480,6 +1485,10 @@ def _emit_prologue(func: ParsedFunction) -> list[str]:
             continue
         if kind == "reg":
             lines.extend(_store_reg_to_slot(str(payload), func.value_slots[arg.name].offset, arg.type))
+            continue
+        if kind == "aggregate_abi_regs":
+            from .self_backend_sysv_aggregates import store
+            lines.extend(store(func.value_slots[arg.name].offset, payload))
             continue
         if kind == "aggregate_regs":
             lines.extend(
@@ -1775,6 +1784,8 @@ def _emit_memory_instruction(func: ParsedFunction, kind: str, data: tuple) -> li
         return []
 
     if kind == "syscall6":
+        if _WINDOWS_ABI:
+            raise BackendUnavailable("Windows uses named system DLL ABIs, not raw Linux syscalls")
         # musl arch/x86_64/syscall_arch.h ABI: rax=nr, args in
         # rdi/rsi/rdx/r10/r8/r9; the kernel clobbers rcx/r11 and rax
         # carries the raw return. Every value lives in a stack slot, so
@@ -2342,11 +2353,11 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
                 f"x86_64 self backend insertelement lane type mismatch in {func.name!r}: "
                 f"{elem_type.describe()} -> {expected_elem.describe()}"
             )
-        lines = [f"  lea rax, {_slot_addr(func.value_slots[dest].offset)}"]
-        lines.extend(_materialize_vector_value_to_address(func, vector_value, vector_type, "rax"))
+        lines = [f"  lea r8, {_slot_addr(func.value_slots[dest].offset)}"]
+        lines.extend(_materialize_vector_value_to_address(func, vector_value, vector_type, "r8"))
         elem_reg = _reg_name(elem_type, 10)
         lines.extend(_materialize_value(func, elem_value, elem_type, elem_reg))
-        lines.extend(_store_reg_to_address_offset("rax", lane * elem_type.slot_size, elem_reg, elem_type))
+        lines.extend(_store_reg_to_address_offset("r8", lane * elem_type.slot_size, elem_reg, elem_type))
         return lines
 
     if kind == "shufflevector":
@@ -2354,12 +2365,12 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
         if dest not in func.value_slots:
             return []
         elem_type = _vector_elem_type(vector_type)
-        lines = [f"  lea rax, {_slot_addr(func.value_slots[dest].offset)}"]
+        lines = [f"  lea r8, {_slot_addr(func.value_slots[dest].offset)}"]
         if mask_value == "zeroinitializer":
             for lane in range(vector_type.count):
                 reg = _reg_name(elem_type, 10)
                 lines.extend(_materialize_vector_lane_to_reg(func, lhs, vector_type, 0, reg))
-                lines.extend(_store_reg_to_address_offset("rax", lane * elem_type.slot_size, reg, elem_type))
+                lines.extend(_store_reg_to_address_offset("r8", lane * elem_type.slot_size, reg, elem_type))
             return lines
         if not is_aggregate_literal_value(mask_value):
             raise BackendUnavailable(
@@ -2375,7 +2386,7 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             )
             if source_lane < 0:
                 lines.append("  xor r10d, r10d")
-                lines.extend(_store_reg_to_address_offset("rax", lane * elem_type.slot_size, "r10d", elem_type))
+                lines.extend(_store_reg_to_address_offset("r8", lane * elem_type.slot_size, "r10d", elem_type))
                 continue
             source_value = lhs
             if source_lane >= vector_type.count:
@@ -2383,7 +2394,7 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
                 source_lane -= vector_type.count
             reg = _reg_name(elem_type, 10)
             lines.extend(_materialize_vector_lane_to_reg(func, source_value, vector_type, source_lane, reg))
-            lines.extend(_store_reg_to_address_offset("rax", lane * elem_type.slot_size, reg, elem_type))
+            lines.extend(_store_reg_to_address_offset("r8", lane * elem_type.slot_size, reg, elem_type))
         return lines
 
     if kind == "va_arg":
@@ -2409,6 +2420,11 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             raise BackendUnavailable(
                 f"x86_64 self backend unresolved direct callee not translated yet in {func.name!r}"
             )
+        if not is_indirect and callee.startswith("llvm."):
+            from .self_backend_x86_intrinsics import emit as emit_extra_intrinsic
+            intrinsic_lines = emit_extra_intrinsic(func, dest, ret_type, callee, args, windows=_WINDOWS_ABI)
+            if intrinsic_lines is not None:
+                return intrinsic_lines
         if not is_indirect and callee.startswith("llvm.memcpy."):
             return _emit_memcpy_intrinsic_call(func, args)
         if not is_indirect and callee.startswith("llvm.memset."):
@@ -2434,15 +2450,6 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             return _emit_vararg_start(func, ap_ptr)
         if not is_indirect and callee.startswith(("llvm.va_end", "llvm.lifetime.start", "llvm.lifetime.end")):
             return []
-        if _is_vararg_call and not is_indirect and callee in _VARARG_FUNCTIONS:
-            return _emit_internal_vararg_call(
-                func,
-                dest,
-                ret_type,
-                callee,
-                args,
-                _fixed_arg_count,
-            )
         if not is_indirect and callee == "llvm.vector.reduce.mul.v4i32":
             if dest is None or dest not in func.value_slots:
                 return []
@@ -2509,6 +2516,9 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
                 f"x86_64 self backend has no native lowering for "
                 f"intrinsic {callee!r} in {func.name!r}"
             )
+        if _WINDOWS_ABI:
+            from .self_backend_win64_abi import call
+            return call(func, dest, ret_type, callee, is_indirect, args, _is_vararg_call)
         lines: list[str] = []
         hidden_sret = _aggregate_returned_indirect(ret_type)
         if hidden_sret and (dest is None or dest not in func.value_slots):
@@ -2527,6 +2537,10 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
         for (arg_type, value), (kind, payload) in zip(args, arg_locations, strict=False):
             if kind == "reg":
                 lines.extend(_materialize_value(func, value, arg_type, str(payload)))
+                continue
+            if kind == "aggregate_abi_regs":
+                from .self_backend_sysv_aggregates import load
+                lines.extend(load(func, value, arg_type, payload))
                 continue
             if kind == "aggregate_regs":
                 lines.extend(_materialize_aggregate_to_gp_regs(func, value, arg_type, payload))
@@ -2577,25 +2591,8 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
         if ret_type.is_array or ret_type.is_struct:
             if hidden_sret:
                 return lines
-            sse_members = _aggregate_sse_members(ret_type)
-            if sse_members:
-                lines.extend(
-                    _store_aggregate_sse_regs_to_slot(
-                        func.value_slots[dest].offset,
-                        tuple(
-                            (f"xmm{index}", member_type, member_offset)
-                            for index, (member_type, member_offset) in enumerate(sse_members)
-                        ),
-                    )
-                )
-                return lines
-            lines.extend(
-                _store_aggregate_regs_to_slot(
-                    ret_type,
-                    func.value_slots[dest].offset,
-                    tuple(zip(("rax", "rdx"), _aggregate_reg_chunks(ret_type), strict=False)),
-                )
-            )
+            from .self_backend_sysv_aggregates import store, returned
+            lines.extend(store(func.value_slots[dest].offset, returned(ret_type)))
             return lines
         if not (ret_type.is_int or ret_type.is_ptr or ret_type.is_fp):
             raise BackendUnavailable(
@@ -2625,6 +2622,12 @@ def _emit_return_terminator(func: ParsedFunction, ret_type: TypeDesc, value: str
             else:
                 lines.extend(_materialize_aggregate_value_address(func, value, ret_type, "r10"))
                 lines.extend(_copy_address_to_address("r10", "r11", ret_type.slot_size))
+            lines.extend(_load_slot_to_reg(func.hidden_sret_slot.offset, "rax", func.hidden_sret_slot.type))
+            lines.extend(_emit_epilogue(func))
+            return lines
+        if not _WINDOWS_ABI:
+            from .self_backend_sysv_aggregates import load, returned
+            lines = load(func, value, ret_type, returned(ret_type))
             lines.extend(_emit_epilogue(func))
             return lines
         sse_members = _aggregate_sse_members(ret_type)
@@ -2658,14 +2661,20 @@ def _emit_return_terminator(func: ParsedFunction, ret_type: TypeDesc, value: str
 
 
 def _emit_epilogue(func: ParsedFunction) -> list[str]:
+    if _WINDOWS_ABI:
+        from .self_backend_win64_abi import epilogue
+        return epilogue(func)
     if _is_linux_process_entry(func):
         # There is no caller and therefore no return address.  A correctly
         # authored process entry terminates through pcc.unsafe.process_exit;
         # trap if that machine-boundary syscall unexpectedly returns.
         return ["  ud2"]
     lines: list[str] = []
-    if func.frame_size:
-        lines.append(f"  add rsp, {func.frame_size}")
+    saved_rbx = 176 if func.is_vararg else 0
+    lines.append(f"  mov rbx, QWORD PTR [rsp + {saved_rbx}]")
+    total_frame = func.frame_size + func.platform_frame_extra
+    if total_frame:
+        lines.append(f"  add rsp, {total_frame}")
     lines.append("  pop rbp")
     lines.append("  ret")
     return lines
@@ -2702,7 +2711,7 @@ def _emit_phi_assignments(func: ParsedFunction, *, source_block: str, target_blo
 
     total_temp = _align_to(temp_offset, 16)
     lines: list[str] = []
-    if total_temp:
+    if total_temp and not _WINDOWS_ABI:
         lines.append(f"  sub rsp, {total_temp}")
 
     for phi, match, offset in assignments:
@@ -2732,7 +2741,7 @@ def _emit_phi_assignments(func: ParsedFunction, *, source_block: str, target_blo
         lines.extend(_load_temp_to_reg(offset, reg, phi.type))
         lines.extend(_store_reg_to_slot(reg, func.value_slots[phi.dest].offset, phi.type))
 
-    if total_temp:
+    if total_temp and not _WINDOWS_ABI:
         lines.append(f"  add rsp, {total_temp}")
     return lines
 
@@ -2832,6 +2841,10 @@ def _emit_function(
     func: ParsedFunction,
     stack_map_plan: FunctionStackMapPlan,
 ) -> list[str]:
+    global _WINDOWS_SCRATCH_BASE
+    if _WINDOWS_ABI:
+        from .self_backend_win64_abi import outgoing_size
+        _WINDOWS_SCRATCH_BASE = outgoing_size(func)
     symbol = _asm_symbol(func.name)
     lines = _emit_prologue(func)
     kernel = get_indexed_function_kernel(func)
@@ -2860,40 +2873,41 @@ def _emit_function(
     )
     lines.append(stack_map_plan.end_label + ":")
     lines.append(f".size {symbol}, .-{symbol}")
+    if _WINDOWS_ABI:
+        lines.append(".seh_endproc")
     return lines
 
 
-def _reject_external_tls_declarations(ir_text: str) -> None:
-    for line in ir_text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("@") or "thread_local" not in stripped:
-            continue
-        if "=" not in stripped or "global" not in stripped:
-            continue
-        prefix = stripped.split("=", 1)[1].split("global", 1)[0]
-        if "external" in prefix.split():
-            raise BackendUnavailable(
-                "self-x86_64-linux ELF TLS lowering does not support external "
-                f"thread-local declarations yet: {stripped!r}"
-            )
+def _emit_x86_64_module(ir_text: str, *, windows: bool = False, module=None) -> str:
+    global _WINDOWS_ABI, _X86_EMISSION_ACTIVE
+    if _X86_EMISSION_ACTIVE:
+        raise BackendUnavailable("x86 emission is already active")
+    _X86_EMISSION_ACTIVE = True
+    _WINDOWS_ABI = windows
+    try:
+        if module is None:
+            prepared = prepare_module_for_target(ir_text, aggregate_returned_indirect=_aggregate_returned_indirect)
+        else:
+            from .self_backend_prepare import prepare_parsed_module_for_target
+            prepared = prepare_parsed_module_for_target(module, aggregate_returned_indirect=_aggregate_returned_indirect)
+        from .self_backend_target_match import is_x86_64_windows_triple
+        valid = is_x86_64_windows_triple(prepared.triple) if windows else is_x86_64_linux_triple(prepared.triple)
+        if not valid:
+            raise BackendUnavailable("x86 emitter target mismatch: " + prepared.triple)
+        prepared = run_self_target_memory_pass_pipeline(prepared, "self-x86_64-linux-v0")
+        return _emit_prepared_x86_64_module(prepared, ir_text)
+    finally:
+        _WINDOWS_ABI = False
+        _X86_EMISSION_ACTIVE = False
 
 
 def emit_x86_64_linux_asm(ir_text: str) -> str:
+    return _emit_x86_64_module(ir_text)
+
+
+def _emit_prepared_x86_64_module(prepared, ir_text: str) -> str:
     global _MODULE_SYMBOLS, _VARARG_FUNCTIONS, _TLS_GLOBALS
-    _reject_external_tls_declarations(ir_text)
-    prepared = prepare_module_for_target(
-        ir_text,
-        aggregate_returned_indirect=_aggregate_returned_indirect,
-    )
     triple = prepared.triple
-    if not is_x86_64_linux_triple(triple):
-        raise BackendUnavailable(
-            f"self backend asm Linux slice only supports x86_64 Linux, got {triple!r}"
-        )
-    prepared = run_self_target_memory_pass_pipeline(
-        prepared,
-        "self-x86_64-linux-v0",
-    )
     validate_x86_tls_globals(prepared.globals_)
     _MODULE_SYMBOLS = prepared.module_symbols
     functions, _profile_decision = apply_function_order_profile(
@@ -2901,6 +2915,13 @@ def emit_x86_64_linux_asm(ir_text: str) -> str:
         ir_text=ir_text,
         target=triple,
     )
+    if _WINDOWS_ABI:
+        from .self_backend_win64_abi import prepare_frame
+        for func in functions:
+            prepare_frame(func)
+    else:
+        for func in functions:
+            func.platform_frame_extra = 192 if func.is_vararg else 16
     _VARARG_FUNCTIONS = frozenset(func.name for func in functions if func.is_vararg)
     tls_globals: dict[str, GlobalDef] = {}
     for global_ in prepared.globals_:

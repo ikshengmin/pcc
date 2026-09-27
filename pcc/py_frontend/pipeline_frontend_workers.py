@@ -1,9 +1,16 @@
-"""Pure worker-budget and chunking policy for multi-module frontend codegen."""
+"""Worker admission, resident-memory observations, and frontend chunking policy."""
 
 from __future__ import annotations
 
 import os
 import subprocess
+import sys
+
+from pcc.extern import c_int64, extern
+
+
+_native_current_rss_bytes = extern("pcc_os_current_rss_bytes", (), c_int64)
+_native_gc_backend = extern("pcc_gc_backend", (), c_int64)
 
 
 _TRUE_VALUES = ("1", "true", "yes", "on")
@@ -46,6 +53,10 @@ WORKER_TREE_BUDGET_ENV = "PCC_WORKER_TREE_BUDGET_BYTES"
 HOST_SOURCE_WORKER_PEAK_BYTES = 2147483648
 COMPILED_SAFE_WORKER_PEAK_BYTES = 3221225472
 WORKER_COORDINATOR_RESERVE_BYTES = 1073741824
+# Reuse the existing frontend calibration's 128 MiB fixed launch/allocator
+# allowance. A live parent is quiescent while the fixed-width pool runs; this
+# covers pool command/env vectors and allocator rounding, not child memory.
+WORKER_COORDINATOR_RSS_HEADROOM_BYTES = 134217728
 HOST_SOURCE_WORKER_AUTO_CAP = 10
 
 # Export workers parse/lift one module and summary workers decode one AST and
@@ -64,6 +75,12 @@ COMPILED_EXPORT_AUTO_CAP = 10
 COMPILED_SUMMARY_WORKER_PEAK_BYTES = 536870912
 COMPILED_SUMMARY_COORDINATOR_RESERVE_BYTES = 3221225472
 COMPILED_SUMMARY_AUTO_CAP = 10
+# Preload deltas decode the complete export graph in every worker. GC1 reached
+# 3.3 GiB in the coordinator and 6.78 GiB with two children, while six children
+# crossed the 8 GiB guard. Keep this lane separate from 512 MiB export workers.
+COMPILED_PRELOAD_WORKER_PEAK_BYTES = 1879048192
+COMPILED_PRELOAD_COORDINATOR_RESERVE_BYTES = 3758096384
+COMPILED_PRELOAD_AUTO_CAP = 6
 
 
 class FrontendWorkerContractError(ValueError):
@@ -83,26 +100,91 @@ def worker_tree_budget_bytes(raw: str) -> int:
     return budget
 
 
+def _host_coordinator_rss_bytes() -> int:
+    """CPython-only conservative projection; never called by native pcc.
+
+    ru_maxrss is a high-water mark, so it can over-reserve but cannot understate
+    the host's resident high water. No subprocess or third-party sampler is used.
+    """
+    try:
+        import resource
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except (ImportError, OSError, ValueError, AttributeError):
+        return -1
+    return value if sys.platform == "darwin" else value * 1024
+
+
+def _coordinator_rss_bytes() -> int:
+    if sys.implementation.name == "pcc":
+        # This is the existing owned Darwin/Linux boundary, not a host oracle.
+        return _native_current_rss_bytes()
+    return _host_coordinator_rss_bytes()
+
+
+def _worker_collector() -> int:
+    if sys.implementation.name == "pcc":
+        return _native_gc_backend()
+    # Host projection for a command which will start a native worker. Native
+    # callers above read the actual runtime selector, not its initial env hint.
+    value = str(os.environ.get("PCC_GC_BACKEND", "0"))
+    if value not in ("0", "1", "2", "3", "4"):
+        raise FrontendWorkerContractError("invalid worker collector identity")
+    return int(value)
+
+
+def _resident_coordinator_reserve(configured_floor: int, observed_rss: int) -> int:
+    if observed_rss <= 0:
+        raise FrontendWorkerContractError(
+            "budgeted worker admission requires coordinator RSS; "
+            "RSS observation is unavailable on this platform"
+        )
+    return max(int(configured_floor), int(observed_rss) + WORKER_COORDINATOR_RSS_HEADROOM_BYTES)
+
+
+
+def compiled_native_worker_budget(tree_budget_bytes: int, coordinator_floor_bytes: int) -> int:
+    """Available bytes observed by the process which will actually spawn."""
+    if tree_budget_bytes <= 0:
+        return 0
+    reserve = _resident_coordinator_reserve(coordinator_floor_bytes, _coordinator_rss_bytes())
+    available = int(tree_budget_bytes) - reserve
+    if available <= 0:
+        raise FrontendWorkerContractError(
+            "worker tree budget leaves no child memory: budget=" + str(tree_budget_bytes)
+            + " coordinator=" + str(reserve)
+        )
+    return available
+
+
+def _phase_budget_jobs(cpu_budget: int, memory_budget_bytes: int,
+                       worker_peak_bytes: int, coordinator_reserve_bytes: int,
+                       hard_cap: int) -> int:
+    if worker_peak_bytes <= 0 or coordinator_reserve_bytes < 0:
+        raise FrontendWorkerContractError("worker memory reservations must be positive")
+    jobs = max(1, min(int(cpu_budget), int(hard_cap)))
+    if memory_budget_bytes > 0:
+        remaining = int(memory_budget_bytes) - int(coordinator_reserve_bytes)
+        by_memory = remaining // int(worker_peak_bytes)
+        if by_memory < 1:
+            raise FrontendWorkerContractError(
+                "worker memory budget cannot admit one task: budget="
+                + str(memory_budget_bytes) + " coordinator="
+                + str(coordinator_reserve_bytes) + " worker=" + str(worker_peak_bytes)
+            )
+        jobs = min(jobs, by_memory)
+    return jobs
+
+
 def budget_jobs(
     cpu_budget: int,
     memory_budget_bytes: int,
     per_worker_peak_bytes: int,
     hard_cap: int,
 ) -> int:
-    jobs = int(cpu_budget)
-    cap = int(hard_cap)
-    if jobs > cap:
-        jobs = cap
-    budget = int(memory_budget_bytes)
-    if budget > 0:
-        by_memory = (budget - WORKER_COORDINATOR_RESERVE_BYTES) // int(
-            per_worker_peak_bytes
-        )
-        if by_memory < jobs:
-            jobs = by_memory
-    if jobs < 1:
-        return 1
-    return jobs
+    return _phase_budget_jobs(
+        cpu_budget, memory_budget_bytes, per_worker_peak_bytes,
+        WORKER_COORDINATOR_RESERVE_BYTES, hard_cap,
+    )
 
 
 def frontend_jobs(job_count_hint: int, raw: str, cpu_budget: int) -> int:
@@ -132,14 +214,13 @@ def frontend_jobs(job_count_hint: int, raw: str, cpu_budget: int) -> int:
 
 def compiled_native_auto_jobs(jobs: int) -> int:
     """Bound an automatic compiled-worker lane by its memory contract."""
-    selected = int(jobs)
-    if selected < 1:
-        return 1
-    return budget_jobs(
-        selected,
-        worker_tree_budget_bytes(os.environ.get(WORKER_TREE_BUDGET_ENV, "")),
-        COMPILED_SAFE_WORKER_PEAK_BYTES,
-        SOURCE_WORKER_AUTO_SAFE_JOBS,
+    budget = worker_tree_budget_bytes(os.environ.get(WORKER_TREE_BUDGET_ENV, ""))
+    reserve = WORKER_COORDINATOR_RESERVE_BYTES
+    if budget > 0:
+        reserve = _resident_coordinator_reserve(reserve, _coordinator_rss_bytes())
+    return _phase_budget_jobs(
+        jobs, budget, COMPILED_SAFE_WORKER_PEAK_BYTES,
+        reserve, SOURCE_WORKER_AUTO_SAFE_JOBS,
     )
 
 
@@ -149,26 +230,16 @@ def _compiled_native_light_jobs(
     coordinator_reserve_bytes: int,
     hard_cap: int,
 ) -> int:
-    selected = int(jobs)
-    if selected < 1:
-        return 1
-    if selected > int(hard_cap):
-        selected = int(hard_cap)
-    budget = worker_tree_budget_bytes(
-        os.environ.get(WORKER_TREE_BUDGET_ENV, "")
-    )
+    selected = max(1, min(int(jobs), int(hard_cap)))
+    budget = worker_tree_budget_bytes(os.environ.get(WORKER_TREE_BUDGET_ENV, ""))
     if budget <= 0:
-        if selected > SOURCE_WORKER_AUTO_SAFE_JOBS:
-            return SOURCE_WORKER_AUTO_SAFE_JOBS
-        return selected
-    by_memory = (budget - int(coordinator_reserve_bytes)) // int(
-        worker_peak_bytes
+        return min(selected, SOURCE_WORKER_AUTO_SAFE_JOBS)
+    reserve = _resident_coordinator_reserve(
+        coordinator_reserve_bytes, _coordinator_rss_bytes(),
     )
-    if by_memory < selected:
-        selected = by_memory
-    if selected < 1:
-        return 1
-    return selected
+    # Fixed-width admission uses estimates, not enforceable RSS leases. The
+    # enclosing process-tree guard remains required if a worker exceeds them.
+    return _phase_budget_jobs(selected, budget, worker_peak_bytes, reserve, hard_cap)
 
 
 def compiled_native_export_jobs(jobs: int) -> int:
@@ -183,7 +254,7 @@ def compiled_native_export_jobs(jobs: int) -> int:
 
 
 def compiled_native_summary_jobs(jobs: int) -> int:
-    """Derive the compiled summary width from its measured memory class."""
+    """Baseline summary cap; the input-aware path uses summary_plan below."""
 
     return _compiled_native_light_jobs(
         jobs,
@@ -191,6 +262,106 @@ def compiled_native_summary_jobs(jobs: int) -> int:
         COMPILED_SUMMARY_COORDINATOR_RESERVE_BYTES,
         COMPILED_SUMMARY_AUTO_CAP,
     )
+
+
+def compiled_native_preload_jobs(jobs: int) -> int:
+    """Bound whole-export-graph preload workers by the compiler tree budget."""
+    return _compiled_native_light_jobs(
+        jobs,
+        COMPILED_PRELOAD_WORKER_PEAK_BYTES,
+        COMPILED_PRELOAD_COORDINATOR_RESERVE_BYTES,
+        COMPILED_PRELOAD_AUTO_CAP,
+    )
+
+
+
+def summary_worker_peak_bytes(ast_bytes: int, export_bytes: int, collector: int) -> int:
+    """Sample-calibrated reservation, not an enforced resident-memory limit.
+
+    The same largest eight-module batch was replayed under GC0..4. Coefficients
+    20/40/40/26/44 bytes per input byte cover all observed peaks before the
+    existing 25% + 128 MiB margin. Include both AST and shared effect wire;
+    exports-size extrapolation remains an estimate. See the retained fixture.
+    """
+    if ast_bytes < 0 or export_bytes < 0:
+        raise FrontendWorkerContractError("negative summary input size")
+    if collector == 0:
+        expansion = 20
+    elif collector == 1 or collector == 2:
+        expansion = 40
+    elif collector == 3:
+        expansion = 26
+    elif collector == 4:
+        expansion = 44
+    else:
+        raise FrontendWorkerContractError("invalid summary collector identity")
+    working = 134217728 + (int(ast_bytes) + int(export_bytes)) * expansion
+    reservation = (working * 5 + 3) // 4 + 134217728
+    return max(COMPILED_SUMMARY_WORKER_PEAK_BYTES, reservation)
+
+
+def _summary_memory_chunks(ast_sizes, export_bytes: int, collector: int,
+                           available_bytes: int):
+    chunks = []
+    chunk = []
+    ast_bytes = 0
+    for index in range(len(ast_sizes)):
+        size = int(ast_sizes[index])
+        if size < 0:
+            raise FrontendWorkerContractError("negative summary AST size")
+        peak = summary_worker_peak_bytes(ast_bytes + size, export_bytes, collector)
+        if chunk and (len(chunk) >= 8 or (available_bytes >= 0 and peak > available_bytes)):
+            chunks.append(chunk)
+            chunk = []
+            ast_bytes = 0
+            peak = summary_worker_peak_bytes(size, export_bytes, collector)
+        if available_bytes >= 0 and peak > available_bytes:
+            raise FrontendWorkerContractError(
+                "summary budget cannot admit one module: index=" + str(index)
+                + " ast_bytes=" + str(size) + " worker=" + str(peak)
+                + " available=" + str(available_bytes)
+            )
+        chunk.append(index)
+        ast_bytes += size
+    if chunk:
+        chunks.append(chunk)
+    return chunks
+
+
+def compiled_native_summary_plan(jobs: int, ast_sizes, export_bytes: int):
+    """Plan semantic-preserving batches and one conservative fixed pool width."""
+    budget = worker_tree_budget_bytes(os.environ.get(WORKER_TREE_BUDGET_ENV, ""))
+    collector = _worker_collector()
+    reserve = COMPILED_SUMMARY_COORDINATOR_RESERVE_BYTES
+    observed_rss = -1
+    available = -1
+    if budget > 0:
+        observed_rss = _coordinator_rss_bytes()
+        reserve = _resident_coordinator_reserve(reserve, observed_rss)
+        available = max(0, budget - reserve)
+    chunks = _summary_memory_chunks(ast_sizes, export_bytes, collector, available)
+    largest = 0
+    for chunk in chunks:
+        size = 0
+        for index in chunk:
+            size += int(ast_sizes[index])
+        largest = max(largest, summary_worker_peak_bytes(size, export_bytes, collector))
+    selected = min(max(1, int(jobs)), COMPILED_SUMMARY_AUTO_CAP)
+    if budget > 0 and chunks:
+        selected = _phase_budget_jobs(selected, budget, largest, reserve, COMPILED_SUMMARY_AUTO_CAP)
+    elif budget <= 0:
+        selected = min(selected, SOURCE_WORKER_AUTO_SAFE_JOBS)
+    details = {
+        "schema": "pcc.summary-worker-admission.v1", "collector": collector,
+        # The same snapshot must select both cost model and child runtime.
+        "worker_env": "PCC_GC_BACKEND=" + str(collector),
+        "tree_budget_bytes": budget, "coordinator_rss_bytes": observed_rss,
+        "coordinator_reserve_bytes": reserve, "worker_peak_reservation_bytes": largest,
+        "effect_wire_bytes": int(export_bytes), "chunks": len(chunks), "jobs": selected,
+        "rss_enforcement": "outer-process-tree-guard", "pool": "fixed-width",
+        "rss_source": "owned-current" if sys.implementation.name == "pcc" else "host-high-water",
+    }
+    return chunks, selected, details
 
 
 def numeric_jobs_override(raw: str) -> bool:

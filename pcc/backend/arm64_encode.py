@@ -401,6 +401,7 @@ _EMITTED_REG_X = 0
 _EMITTED_REG_W = 1
 _EMITTED_REG_D = 2
 _EMITTED_REG_S = 3
+_EMITTED_REG_Q = 4
 
 
 def _emitted_register_code(token: str) -> int:
@@ -414,7 +415,7 @@ def _emitted_register_code(token: str) -> int:
         return 29 | (_EMITTED_REG_X << 6)
     if token == "lr":
         return 30 | (_EMITTED_REG_X << 6)
-    if len(token) < 2 or token[0] not in "xwds":
+    if len(token) < 2 or token[0] not in "xwdsq":
         return -1
     digits = token[1:]
     if not digits.isdigit():
@@ -429,8 +430,10 @@ def _emitted_register_code(token: str) -> int:
         kind = _EMITTED_REG_W
     elif first == "d":
         kind = _EMITTED_REG_D
-    else:
+    elif first == "s":
         kind = _EMITTED_REG_S
+    else:
+        kind = _EMITTED_REG_Q
     return number | (kind << 6)
 
 
@@ -915,6 +918,15 @@ def encode_emitted_load_store_parts(
         raise EncodeError("bad emitted load/store base " + base)
 
     register_kind = register_code >> 6
+    if register_kind == _EMITTED_REG_Q:
+        if mnemonic not in ("ldr", "str", "ldur", "stur"):
+            raise EncodeError("q register requires a full-width load/store")
+        load = mnemonic.startswith("ld")
+        if unscaled:
+            return _enc_ldst_unscaled(0, 3 if load else 2, register_code & 63, base_code & 63, immediate) | (1 << 26)
+        if immediate < 0 or immediate % 16 or immediate // 16 > 4095:
+            raise EncodeError("q load/store offset must be a nonnegative 16-byte multiple below 65536")
+        return (0x3DC00000 if load else 0x3D800000) | ((immediate // 16) << 10) | ((base_code & 63) << 5) | (register_code & 63)
     byte_access = mnemonic.endswith("b")
     half_access = mnemonic.endswith("h")
     if byte_access or half_access:
@@ -2857,6 +2869,12 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         relocations.append(Relocation(at, symbol, reloc_type, pcrel=True))
         return 0x90000000 | rd
 
+    if mn in ("ldr", "str", "ldur", "stur") and ops[0].strip().startswith("q"):
+        base, imm, mode = _mem(ops[1])
+        if mode:
+            raise EncodeError("q load/store writeback is unsupported")
+        return encode_emitted_load_store_parts(mn, ops[0].strip(), "sp" if base == 31 else "x" + str(base), imm)
+
     if (
         mn in ("ldur", "stur")
         and _reg_kind(ops[0]) in ("d", "s")
@@ -3131,15 +3149,22 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         register = ops[0] if mn == "mrs" else ops[1]
         system = ops[1] if mn == "mrs" else ops[0]
         rn, n64 = _reg(register)
-        if system.lower() != "nzcv" or not n64 or register.lower() == "sp":
-            raise EncodeError("only 64-bit NZCV transfers are supported")
-        return (0xD53B4200 if mn == "mrs" else 0xD51B4200) | rn
+        if system.lower() not in ("nzcv", "tpidr_el0") or not n64 or register.lower() == "sp":
+            raise EncodeError("unsupported 64-bit system-register transfer")
+        base = 0xD53B4200 if system.lower() == "nzcv" else 0xD53BD040
+        return (base if mn == "mrs" else base - 0x200000) | rn
 
     if mn == "blr":
         rn, n64 = _reg(ops[0])
         if not n64:
             raise EncodeError("blr needs a 64-bit register")
         return 0xD63F0000 | (rn << 5)
+
+    if mn == "svc":
+        imm = _imm(ops[0])
+        if not 0 <= imm <= 0xFFFF:
+            raise EncodeError("svc immediate out of range")
+        return 0xD4000001 | (imm << 5)
 
     if mn == "brk":
         imm = _imm(ops[0])

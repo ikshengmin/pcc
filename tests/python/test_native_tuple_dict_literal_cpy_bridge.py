@@ -72,12 +72,14 @@ def test_tuple_literal_with_cpy_value_bridges(mode):
 
 
 def test_tuple_splat_cpy_iterable_still_falls_back():
+    # ``os.environ`` is native now, so its keys are a pcc list; a decimal's
+    # DecimalTuple is still a CPython iterable.
     program = textwrap.dedent(
         """
-        import os
+        import decimal
 
         def f() -> tuple:
-            cpy_iter = os.environ.keys()
+            cpy_iter = decimal.Decimal("1.5").as_tuple()
             return (*cpy_iter,)
         """
     )

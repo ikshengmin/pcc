@@ -44,10 +44,12 @@ def _compile_to_ll(source: str, name: str, *, mode: str) -> str:
 # Should produce many py_cpy_* calls in OFF mode and far fewer in ON.
 _LAYER1_SHAPED = textwrap.dedent(
     """
+    from pcc.llvm_capi.compat import ir
+
     class FakeCodegen:
         def __init__(self):
             self.runtime = {}
-            self.builder = None
+            self.builder = ir.IRBuilder()
 
         def emit_arith(self, a, b, ptr) -> None:
             sum_v = self.builder.add(a, b)
@@ -91,9 +93,8 @@ def test_layer1_shaped_on_reduces_fallbacks():
     )
 
 
-def test_layer1_shaped_on_emits_scaffold_externs():
-    """Concrete proof of dispatch: each idiom we introduced must
-    surface as a ``user_pcc_llvm_capi_ir_IRBuilder_*`` extern declaration."""
+def test_user_class_builder_field_does_not_emit_scaffold_externs():
+    """A user class can replace its field after construction at runtime."""
     ir_on = _compile_to_ll(
         _LAYER1_SHAPED, "shape_externs", mode="on",
     )
@@ -106,8 +107,8 @@ def test_layer1_shaped_on_emits_scaffold_externs():
         "@user_pcc_llvm_capi_ir_IRBuilder_call1",
     )
     for sym in expected_externs:
-        assert sym in ir_on, (
-            f"expected scaffold extern {sym} not emitted in ON mode"
+        assert sym not in ir_on, (
+            f"ordinary user field was redirected to scaffold extern {sym}"
         )
     # Runtime dict lookup desugar: the looked-up function must be
     # declared and referenced directly.

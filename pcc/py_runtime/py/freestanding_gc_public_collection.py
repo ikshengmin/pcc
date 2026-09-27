@@ -2,7 +2,9 @@
 
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
-from pcc.unsafe import cstr, global_addr, load_i8, load_i32, ptr_is_null, store_i32
+from pcc.unsafe import (
+    cstr, global_addr, load_i8, load_i32, ptr_is_null, store_i32, store_i64,
+)
 from pcc.unsafe import (
     atomic_cas_i32,
     atomic_load_i32,
@@ -221,7 +223,7 @@ def pcc_gc_config_ensure() -> i64:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 0)
     store_i32(global_addr("pcc_gc_pause"), 0, pause)
     store_i32(global_addr("pcc_gc_stepmul"), 0, stepmul)
-    store_i32(global_addr("pcc_gc_debt_threshold_override"), 0, threshold)
+    store_i64(global_addr("pcc_gc_debt_threshold_override"), 0, threshold)
     store_i32(global_addr("pcc_gc_minor_heap_size"), 0, minor_heap_size)
     store_i32(global_addr("pcc_gc_minor_alloc_max"), 0, minor_alloc_max)
     store_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0, refcount_probe)

@@ -20,10 +20,14 @@ from pcc.py_runtime.py.py_abi_constants import (
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_cas_i64,
+    atomic_rmw_i32,
     atomic_load_i64,
     atomic_store_i64,
     cstr,
     define_global_i64,
+    define_global_i32,
+    stack_alloc,
+    memset,
     define_global_ptr_null,
     free,
     function_addr,
@@ -55,6 +59,11 @@ define_global_ptr_null("pcc_threading_vthread_waiter_free_py")
 define_global_i64("pcc_threading_vthread_waiter_free_count_py", 0)
 define_global_i64("pcc_threading_vthread_waiter_mutex_bits_py", 0)
 
+define_global_i32("pcc_threading_invoke_frame_map", 4)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
+
 _VTHREAD_WAITER_POOL_LIMIT = 4096
 
 pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
@@ -77,9 +86,12 @@ pcc_cond_signal = extern("pcc_cond_signal", (c_ptr,), c_int64)
 pcc_cond_broadcast = extern("pcc_cond_broadcast", (c_ptr,), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_sync = extern("py_obj_call_sync", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_incref_extern = extern("py_incref", (c_ptr,), c_void)
 py_decref_extern = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_scheduler_root_register_handle = extern(
@@ -826,19 +838,59 @@ def py_threading_thread_new(callable, args):
     return o
 
 
+def _thread_invoke_clear(slots, pins, offset: int) -> None:
+    value = load_ptr(slots, offset)
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        pcc_gc_unpin(value)
+        if load_i64(pins, offset) != 0:
+            atomic_rmw_i32("or", value, 12, 64, "relaxed")
+    pcc_gc_store_root(ptr_add(slots, offset), null())
+
+
 def _thread_invoke(thread) -> None:
     if atomic_load_i64(thread, 64, "acquire") != 0:
         return
-    none = global_load_ptr("py_None")
-    callable_obj = pcc_gc_load_ptr(thread, ptr_add(thread, 24))
-    args_obj = pcc_gc_load_ptr(thread, ptr_add(thread, 32))
-    if ptr_is_null(callable_obj) == 0 and ptr_eq(callable_obj, none) == 0:
-        result = py_obj_call(callable_obj, args_obj, null())
-        pcc_gc_store_ptr(thread, ptr_add(thread, 40), result)
-        py_decref_extern(result)
+    # Nested calls can clear the single physical pin bit. Every operand that
+    # survives the target body also has a healable root and is reloaded.
+    slots = stack_alloc(32)
+    pins = stack_alloc(32)
+    memset(slots, 0, 32)
+    memset(pins, 0, 32)
+    store_i64(pins, 0, load_i32(thread, 12) & 64)
+    pcc_gc_pin(thread)
+    pcc_gc_frame_enter(global_addr("pcc_threading_invoke_frame_map"), slots)
+    pcc_gc_store_root(slots, thread)
+    callable_obj = pcc_gc_load_ptr(load_ptr(slots, 0), ptr_add(load_ptr(slots, 0), 24))
+    if ptr_is_null(callable_obj) == 0 and is_tagged_int(callable_obj) == 0:
+        store_i64(pins, 8, load_i32(callable_obj, 12) & 64)
+        pcc_gc_pin(callable_obj)
+    pcc_gc_store_root(ptr_add(slots, 8), callable_obj)
+    args_obj = pcc_gc_load_ptr(load_ptr(slots, 0), ptr_add(load_ptr(slots, 0), 32))
+    if ptr_is_null(args_obj) == 0 and is_tagged_int(args_obj) == 0:
+        store_i64(pins, 16, load_i32(args_obj, 12) & 64)
+        pcc_gc_pin(args_obj)
+    pcc_gc_store_root(ptr_add(slots, 16), args_obj)
+    callable_obj = load_ptr(slots, 8)
+    if ptr_is_null(callable_obj) == 0 and ptr_eq(callable_obj, global_load_ptr("py_None")) == 0:
+        result = py_obj_call_sync(callable_obj, load_ptr(slots, 16), null())
+        store_ptr(slots, 24, result)
+        if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+            store_i64(pins, 24, load_i32(result, 12) & 64)
+            pcc_gc_pin(result)
+            pcc_gc_note_write_barrier(null(), result)
+        thread = load_ptr(slots, 0)
+        atomic_rmw_i32("or", thread, 12, 64, "relaxed")
+        pcc_gc_store_ptr(thread, ptr_add(thread, 40), load_ptr(slots, 24))
     else:
-        pcc_gc_store_ptr(thread, ptr_add(thread, 40), none)
-    atomic_store_i64(thread, 64, 1, "release")
+        pcc_gc_store_ptr(load_ptr(slots, 0), ptr_add(load_ptr(slots, 0), 40), global_load_ptr("py_None"))
+    # Result is now owned by Thread, before its returned reference is released.
+    # Reverse lease order preserves original pin state when values alias.
+    _thread_invoke_clear(slots, pins, 24)
+    _thread_invoke_clear(slots, pins, 16)
+    _thread_invoke_clear(slots, pins, 8)
+    atomic_store_i64(load_ptr(slots, 0), 64, 1, "release")
+    _thread_invoke_clear(slots, pins, 0)
+    pcc_gc_frame_leave(slots)
 
 
 @c_abi_export("py_threading_thread_main_py")

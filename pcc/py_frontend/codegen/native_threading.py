@@ -302,18 +302,47 @@ class NativeThreadingLoweringMixin:
                     raise NotImplementedError(
                         "native threading.Thread target kwargs are not supported yet"
                     )
-            target_obj = self._emit_threading_callable_object(values.get("target"))
+            target_expr = values.get("target")
+            target_obj = self._emit_threading_callable_object(target_expr)
+            target_root = self._enter_container_temp_root(target_obj, self._fresh("thread.target"))
+            target_owned = self._value_is_owned_object(target_obj)
+            if target_expr is not None:
+                target_owned = target_owned or self._owned_release_needed(target_obj, target_expr)
+            roots = ((target_root, target_owned),)
             args_expr = values.get("args")
-            args_obj = (
-                self._emit_empty_tuple("thread.args")
-                if args_expr is None
-                else self._emit_as_object(args_expr)
-            )
-            return self.builder.call(
-                self.runtime["py_threading_thread_new"],
-                [target_obj, args_obj],
+            if args_expr is None:
+                args_obj = self._emit_empty_tuple("thread.args")
+                args_owned = True
+            else:
+                args_obj = self._emit_expr_with_cpy_operand_cleanup(
+                    args_expr, (), as_object=True, rooted_pcc_lifetimes=roots,
+                )
+                args_owned = self._owned_release_needed(args_obj, args_expr)
+            args_root = self._enter_container_temp_root(args_obj, self._fresh("thread.args"))
+            roots = roots + ((args_root, args_owned),)
+            operands = []
+            for slot, _owned in roots:
+                operands.append(self.builder.call(
+                    self.runtime["pcc_gc_load_ptr"],
+                    [ir.Constant(_CSTR, None), self._as_gc_ptr(slot)],
+                    name=self._fresh("thread.argument.current"),
+                ))
+            result = self.builder.call(
+                self.runtime["py_threading_thread_new"], operands,
                 name=self._fresh("threading.Thread"),
             )
+            result_root = self._enter_container_temp_root(result, self._fresh("thread.result"))
+            self._release_rooted_pcc_lifetimes(roots)
+            result = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(result_root)],
+                name=self._fresh("thread.result.current"),
+            )
+            self._gc_pin(result)
+            self._leave_container_temp_root(result_root)
+            self._gc_unpin(result)
+            self._note_owned_object_value(result)
+            return result
         return None
 
     def _emit_native_threading_call(self, expr: Call) -> Optional[ir.Value]:

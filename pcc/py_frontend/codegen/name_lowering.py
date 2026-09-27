@@ -813,14 +813,16 @@ class NameLoweringMixin:
                 if native_callable is not None:
                     return native_callable
             builtin_value = self._native_builtin_value_for_name(expr.ident)
+            if builtin_value == "os.name":
+                return self._emit_str_literal("nt" if self._target_sys_platform_text() == "win32" else "posix")
             if builtin_value == "os.sep":
-                return self._emit_str_literal("/")
+                return self._emit_str_literal("\\" if self._target_sys_platform_text() == "win32" else "/")
             if builtin_value == "os.linesep":
-                return self._emit_str_literal("\n")
+                return self._emit_str_literal("\r\n" if self._target_sys_platform_text() == "win32" else "\n")
             if builtin_value == "os.altsep":
-                return self._emit_none_literal()
+                return self._emit_str_literal("/") if self._target_sys_platform_text() == "win32" else self._emit_none_literal()
             if builtin_value == "os.pathsep":
-                return self._emit_str_literal(":")
+                return self._emit_str_literal(";" if self._target_sys_platform_text() == "win32" else ":")
             if builtin_value in ("sys.prefix", "sys.base_prefix"):
                 return self.builder.call(
                     self.runtime["py_sys_prefix_str"],

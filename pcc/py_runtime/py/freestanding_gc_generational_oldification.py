@@ -16,6 +16,7 @@ from pcc.unsafe import (
     global_addr,
     is_tagged_int,
     load_i32,
+    load_i64,
     load_ptr,
     malloc,
     memmove,
@@ -195,8 +196,8 @@ def pcc_gc_generational_oldify_copy(from_obj: c_ptr) -> c_ptr:
         pcc_gc_object_node_release(node)
         free(to_obj)
         return null()
-    live: i64 = load_i32(global_addr("pcc_gc_live_bytes"), 0)
-    store_i32(global_addr("pcc_gc_live_bytes"), 0, live + size)
+    live: i64 = load_i64(global_addr("pcc_gc_live_bytes"), 0)
+    store_i64(global_addr("pcc_gc_live_bytes"), 0, live + size)
 
     moved_cpy_ref: i64 = 0
     if tag == PY_TYPE_CPY_HANDLE:

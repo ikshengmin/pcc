@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pcc.llvm_capi.compat import ir
 
+from ..export_meta import decode_type
 from ..py_ast import Attr, DynType, Expr, IntType, Name, Type
 from . import marshal
 
@@ -151,6 +152,51 @@ class AttrStoreLoweringMixin:
                 {},
             ).get(target.obj.ident)
             if native_module is not None:
+                info = (self._native_module_exports or {}).get(native_module, {}).get(target.name)
+                kind = info.get("kind") if info is not None else None
+                if kind not in ("module_global", "constant"):
+                    raise NotImplementedError(
+                        "compiled module attribute assignment requires a value export: "
+                        + native_module + "." + target.name
+                    )
+                if kind == "constant" and not info.get("has_module_storage"):
+                    raise NotImplementedError(
+                        "compiled module constant has no provider storage metadata: "
+                        + native_module + "." + target.name
+                    )
+                declared_ty = decode_type(info.get("value_ty", ("dyn",))) or DynType(name="dyn")
+                if isinstance(declared_ty, IntType):
+                    if "box_int_abi" not in info:
+                        raise NotImplementedError("compiled module integer storage ABI is unknown")
+                    storage_ty = self._abi_ir_type(declared_ty, box_int_abi=bool(info["box_int_abi"]))
+                elif self._is_object(declared_ty):
+                    storage_ty = ir.IntType(8).as_pointer()
+                else:
+                    storage_ty = self._storage_ir_type(declared_ty)
+                if not isinstance(storage_ty, ir.PointerType):
+                    raise NotImplementedError(
+                        "compiled module attribute assignment to raw typed storage is not supported: "
+                        + native_module + "." + target.name
+                    )
+                if info.get("storage_owner") != "managed":
+                    raise NotImplementedError(
+                        "compiled module attribute mutation requires proven managed provider storage: "
+                        + native_module + "." + target.name
+                    )
+                owning_module = info.get("owning_module", native_module)
+                export_name = info.get("export_name", target.name)
+                if owning_module != native_module or export_name != target.name:
+                    raise NotImplementedError(
+                        "compiled reexport attribute mutation needs binding-local storage metadata: "
+                        + native_module + "." + target.name
+                    )
+                symbol = self._module_global_symbol_name(owning_module, export_name)
+                gv = self.module.globals.get(symbol)
+                if gv is None:
+                    gv = ir.GlobalVariable(self.module, storage_ty, name=symbol)
+                    gv.linkage = "external"
+                elif not self._ir_type_matches(gv.value_type, storage_ty):
+                    raise NotImplementedError("compiled module attribute storage ABI mismatch: " + symbol)
                 value_obj = marshal.marshal_to_object(
                     self.builder,
                     self.module,
@@ -158,23 +204,56 @@ class AttrStoreLoweringMixin:
                     value,
                     value_ty,
                 )
-                gv = self._native_module_attr_global(native_module, target.name)
-                old_value = self.builder.load(
-                    gv,
-                    name=self._fresh(f"modattr.{target.name}.old"),
-                )
-                self._gc_unpin(old_value)
+                # Both RHS and displaced value need an owned, pinned keeper:
+                # namespace publication allocates, and dropping the last old
+                # reference may run a finalizer which reads both representations.
+                new_root = self._enter_container_temp_root(value_obj, "module.attr.new")
+                old_value = self.builder.load(gv, name=self._fresh("module.attr.old"))
+                old_root = self._enter_container_temp_root(old_value, "module.attr.old")
+                value_obj = self.builder.load(new_root, name=self._fresh("module.attr.new.live"))
+                old_value = self.builder.load(old_root, name=self._fresh("module.attr.old.live"))
+                same = self.builder.icmp_unsigned("==", old_value, value_obj)
+                preserve = self.builder.select(same, ir.Constant(ir.IntType(64), 64), ir.Constant(ir.IntType(64), 0))
+                # This is the new canonical-global pin; the keeper has a
+                # separate metric acquisition. Do not clear the old pin yet.
                 self._gc_pin(value_obj)
                 self.builder.call(
                     self.runtime["pcc_gc_store_root"],
-                    [
-                        self._as_gc_ptr(
-                            gv,
-                            name=self._fresh(f"modattr.{target.name}.slot"),
-                        ),
-                        value_obj,
-                    ],
+                    [self._as_gc_ptr(gv, name=self._fresh("module.attr.slot")), value_obj],
                 )
+                self.builder.call(
+                    self.runtime["py_module_attr_set"],
+                    [self._pooled_cstr_ptr(native_module, ".pcc.attr.binding.module"),
+                     self._attr_name_ptr(target.name), value_obj],
+                    name=self._fresh("module.attr.publish"),
+                )
+                # Unregister in LIFO order while both objects remain pinned.
+                # In threaded functions these entry slots stay registered
+                # until the ordinary function epilogue; take clears the slot.
+                persistent = self.current_func_def is not None and getattr(self, "_runtime_threads_enabled", False)
+                if not persistent:
+                    self._emit_gc_frame_leave_lifo_for_slot(old_root)
+                    self._emit_gc_frame_leave_lifo_for_slot(new_root)
+                new_owned = self.builder.call(
+                    self.runtime["pcc_gc_take_pinned_slot"],
+                    [self._as_gc_ptr(new_root), ir.Constant(ir.IntType(64), 64)],
+                    name=self._fresh("module.attr.new.take"),
+                )
+                self._gc_release(new_owned)
+                if not isinstance(value.type, ir.PointerType):
+                    self._gc_release(new_owned)
+                # Publish has finished before either old owner is released.
+                # For self-assignment keep the replacement global's PIN bit
+                # while balancing both displaced-global and keeper metrics.
+                old_live = self.builder.load(old_root, name=self._fresh("module.attr.old.live"))
+                self._gc_unpin(old_live)
+                old_owned = self.builder.call(
+                    self.runtime["pcc_gc_take_pinned_slot"],
+                    [self._as_gc_ptr(old_root), preserve],
+                    name=self._fresh("module.attr.old.take"),
+                )
+                self._gc_release(old_owned)
+                self._emit_post_call_err_check(target.span)
                 return
         # Property setter fast path.
         if isinstance(target.obj, Name):
@@ -357,6 +436,14 @@ class AttrStoreLoweringMixin:
             self._class_attr_runtime_state[(info.name, runtime_attr_name)] = state
 
     def _emit_attr_store(self, target: Attr, value_expr: Expr) -> None:
+        if (
+            isinstance(target.obj, Name)
+            and target.obj.ident in getattr(self, "_native_module_aliases", {})
+            and self._expr_returns_unsafe_raw_pointer(value_expr)
+        ):
+            raise NotImplementedError(
+                "compiled module attribute assignment cannot store an unsafe raw pointer as a Python object"
+            )
         prefer_native_callable = (
             isinstance(value_expr, Name) and value_expr.ident in self.functions
         )

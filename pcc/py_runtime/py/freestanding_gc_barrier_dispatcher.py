@@ -65,6 +65,9 @@ pcc_py_gc_minor_graph_unlock = extern(
 pcc_gc_object_is_known_no_lock = extern(
     "pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64
 )
+pcc_gc_gray_count_increment_acq_rel = extern(
+    "pcc_gc_gray_count_increment_acq_rel", (), c_void
+)
 pcc_gc_pointer_is_managed = extern(
     "pcc_gc_pointer_is_managed", (c_ptr,), c_int64
 )
@@ -223,6 +226,10 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
             if backend == 2 and (value_flags & 16) == 0:
                 should_gray: i64 = 1
             if should_gray != 0:
+                # GC1/2 count each non-GRAY -> GRAY transition once. GC4
+                # moving-color transfer is a separate ownership contract.
+                if (backend == 1 or backend == 2) and (value_flags & 16) == 0:
+                    pcc_gc_gray_count_increment_acq_rel()
                 store_i32(value, 12, (value_flags & ~56) | 16)
                 store_i32(global_addr("pcc_gc_mark_active"), 0, 1)
                 if backend == 2:
@@ -271,6 +278,8 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
             if backend == 2 and (value_flags & 16) == 0:
                 should_gray_value: i64 = 1
             if should_shade != 0 and should_gray_value != 0:
+                if (value_flags & 16) == 0:
+                    pcc_gc_gray_count_increment_acq_rel()
                 store_i32(value, 12, (value_flags & ~56) | 16)
                 store_i32(global_addr("pcc_gc_mark_active"), 0, 1)
                 if backend == 2:

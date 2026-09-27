@@ -231,8 +231,9 @@ def test_unimplemented_method_raises_via_dispatch(monkeypatch):
         layer1._IR_SCAFFOLD_METHOD_IMPL - {method},
     )
 
-    cg = _build_codegen("x = 1\n", mode="on")
-    self_builder = _attr(_attr(_name("self"), "builder"), method)
+    cg = _build_codegen("from pcc.llvm_capi.compat import ir\nx = 1\n", mode="on")
+    cg._ir_builder_env_flags = {"builder": "IRBuilder"}
+    self_builder = _attr(_name("builder"), method)
     from pcc.py_frontend.py_ast import Call
 
     fake_call = Call(
@@ -262,7 +263,7 @@ def test_unimplemented_symbol_raises_via_dispatch(monkeypatch):
         layer1._IR_SCAFFOLD_SYMBOL_IMPL - {symbol},
     )
 
-    cg = _build_codegen("x = 1\n", mode="on")
+    cg = _build_codegen("from pcc.llvm_capi.compat import ir\nx = 1\n", mode="on")
     ir_attr = _attr(_name("ir"), symbol)
     from pcc.py_frontend.py_ast import Call, IntLit
 

@@ -55,16 +55,36 @@ def _function_body(ir_text: str, fn_name_suffix: str) -> str | None:
 
 
 def _gen_program(method: str, arg_count: int) -> str:
-    """Build a minimal user-source program that calls ``builder.<method>``
-    with ``arg_count`` positional args (all DynType local variables)."""
+    """Build a real owned-builder call with dynamic operand parameters."""
     args = ", ".join([f"a{i}" for i in range(arg_count)])
-    params = "builder" + ("" if arg_count == 0 else ", " + args)
+    params = args
+    if method == "add_incoming":
+        return textwrap.dedent(
+            f"""
+            from pcc.llvm_capi.compat import ir
+
+            def use_method({params}):
+                builder = ir.IRBuilder()
+                phi = builder.phi(ir.IntType(64))
+                return phi.add_incoming({args})
+            """
+        )
     return textwrap.dedent(
         f"""
+        from pcc.llvm_capi.compat import ir
+
         def use_method({params}):
+            builder = ir.IRBuilder()
             return builder.{method}({args})
         """
     )
+
+
+def _gen_dynamic_program(method: str, arg_count: int) -> str:
+    """An unknown parameter is the ordinary non-scaffold dispatch case."""
+    args = ", ".join(f"a{i}" for i in range(arg_count))
+    params = "builder" + (", " + args if args else "")
+    return f"def use_method({params}):\n    return builder.{method}({args})\n"
 
 
 # Subset of _IR_SCAFFOLD_SIMPLE_METHODS used for the parametrised
@@ -81,7 +101,6 @@ _PARAM_METHODS = [
     ("position_before", 1, "void"),
     ("ret", 1, "void"),
     ("cbranch", 3, "void"),
-    ("resume", 1, "void"),
     ("fence", 1, "void"),
     ("add_incoming", 2, "void"),
     # ptr-returning — loads/casts/arithmetic
@@ -120,7 +139,6 @@ _PARAM_METHODS = [
     ("fneg", 1, "ptr"),
     ("select", 3, "ptr"),
     ("extract_value", 2, "ptr"),
-    ("insert_value", 3, "ptr"),
     ("icmp_signed", 3, "ptr"),
     ("icmp_unsigned", 3, "ptr"),
     ("fcmp_ordered", 3, "ptr"),
@@ -185,7 +203,7 @@ def test_simple_method_off_routes_dyn_dispatch(method, arg_count, _ret):
     shape is acceptable as long as the scaffold extern is absent —
     that's the actual OFF/ON distinction this test guards.
     """
-    program = _gen_program(method, arg_count)
+    program = _gen_dynamic_program(method, arg_count)
     ir_text = _compile_to_ll(program, f"sm_{method}_off", mode="off")
     assert f"@user_pcc_llvm_capi_ir_IRBuilder_{method}" not in ir_text, (
         f"OFF mode must NOT emit scaffold extern for {method}"
@@ -210,7 +228,9 @@ def test_simple_method_off_routes_dyn_dispatch(method, arg_count, _ret):
 
 def test_extract_value_boxes_native_integer_index_for_python_callee():
     ir_text = _compile_to_ll(
-        "def extract_lane(builder, aggregate):\n"
+        "from pcc.llvm_capi.compat import ir\n"
+        "def extract_lane(aggregate):\n"
+        "    builder = ir.IRBuilder()\n"
         "    return builder.extract_value(aggregate, 0)\n",
         "sm_extract_value_native_index",
         mode="on",
@@ -224,3 +244,17 @@ def test_extract_value_boxes_native_integer_index_for_python_callee():
         rf"{_PTR} [^,]+, {_PTR} [^,]+, {_PTR} [^,]+, {_PTR} [^)]+\)",
         body,
     ), body
+
+
+@pytest.mark.parametrize("method,args", [("resume", "a"), ("insert_value", "a, b, c")])
+def test_missing_provider_methods_fail_before_emitting_an_undefined_symbol(method, args):
+    from pcc.py_frontend.codegen.ir_scaffold_lowering import ScaffoldUnsupportedError
+
+    source = (
+        "from pcc.llvm_capi.compat import ir\n"
+        "def f(a, b, c):\n"
+        "    builder = ir.IRBuilder()\n"
+        f"    return builder.{method}({args})\n"
+    )
+    with pytest.raises(ScaffoldUnsupportedError, match="no scaffold lowering"):
+        _compile_to_ll(source, "sm_missing_" + method, mode="on")

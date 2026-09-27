@@ -52,6 +52,7 @@ normalize_wait_status = extern(
 )
 
 
+@c_abi_export("pcc_process_free_exec_argv")
 def _free_exec_argv(items, count: int) -> None:
     if ptr_is_null(items):
         return
@@ -62,6 +63,7 @@ def _free_exec_argv(items, count: int) -> None:
     free(items)
 
 
+@c_abi_export("pcc_process_build_exec_argv")
 def _build_exec_argv(argv):
     count = py_obj_len(argv)
     if count <= 0 or count > 1048576:
@@ -150,18 +152,22 @@ def py_subprocess_run_timeout(
     if ptr_is_null(child_env):
         _free_exec_argv(items, count)
         return 127
+    # Allocate before spawning so allocation failure cannot orphan a child.
+    status = malloc(4)
+    if ptr_is_null(status):
+        platform_env_snapshot_free(child_env)
+        _free_exec_argv(items, count)
+        return 127
+    store_i32(status, 0, 0)
     pid = platform_spawnp(items, child_env, capture_output)
     platform_env_snapshot_free(child_env)
     _free_exec_argv(items, count)
     if pid <= 0:
+        free(status)
         return 127
 
     # waitpid writes one C ``int``.  Keep the raw slot at the platform ABI
     # width instead of over-allocating it as though it were an int64 result.
-    status = malloc(4)
-    if ptr_is_null(status):
-        return 127
-    store_i32(status, 0, 0)
     start_ms = _monotonic_millis()
     if start_ms < 0:
         _terminate_process_group(pid, status)

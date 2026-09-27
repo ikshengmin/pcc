@@ -514,6 +514,24 @@ def ensure_runtime(
     write_archive_target_stamp,
     logger,
 ) -> str:
+    if sys.platform.startswith("linux") or sys.platform == "win32":
+        if needs_libpython:
+            raise RuntimeArchiveError("owned platform runtime does not include libpython")
+        from .owned_runtime_build import ensure_target_runtime
+        from .pipeline_targets import host_target_triple
+        # Configuration must be checked before either the explicit-archive
+        # return or the mtime/wheel fast path. A single-thread archive can be
+        # completely fresh while still being invalid for a threaded program.
+        try:
+            archive = ensure_target_runtime(
+                runtime_dir_default, host_target_triple(),
+                packaged_archive=archive_pcc_py, wheel_matches=wheel_matches,
+            )
+        except (ValueError, OSError) as exc:
+            raise RuntimeArchiveError(str(exc)) from exc
+        logger(verbose, "runtime archive: " + archive)
+        return archive
+
     explicit_archive = str(os.environ.get("PCC_RUNTIME_ARCHIVE", "") or "").strip()
     if explicit_archive:
         explicit_archive = os.path.abspath(explicit_archive)

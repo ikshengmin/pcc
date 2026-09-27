@@ -36,7 +36,7 @@ def emit_epilogue(func: ParsedFunction) -> list[str]:
     if func.aarch64_frameless:
         return [emitted_fixed_instruction_line("ret")]
     lines = emit_callee_saved_loads(func)
-    total_frame = func.frame_size + callee_saved_area_size(func)
+    total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
     if total_frame:
         lines.extend(emit_stack_adjust(total_frame))
     lines.append(emitted_frame_pair_line(True))
@@ -56,7 +56,7 @@ def emit_tail_epilogue(func: ParsedFunction, target: str) -> list[str]:
     if func.aarch64_frameless:
         return [emitted_branch_line("b", target)]
     lines = emit_callee_saved_loads(func)
-    total_frame = func.frame_size + callee_saved_area_size(func)
+    total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
     if total_frame:
         lines.extend(emit_stack_adjust(total_frame))
     lines.append(emitted_frame_pair_line(True))

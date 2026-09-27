@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Link x86_64 ELF relocatable inputs with pcc's static-only linker.
+"""Link x86-64 or AArch64 ELF inputs with pcc's owned static linker.
 
 This driver is the host-process seam matching ``pcc_link_macho.py``.  It never
 falls back to ``as`` or ``ld``.  Internal self-backend assembly is encoded by
@@ -72,6 +72,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--entry", default="_start")
     parser.add_argument(
+        "--target", default="x86_64-unknown-linux-gnu",
+        help="Linux target triple (defaults to the historical x86-64 target)",
+    )
+    parser.add_argument(
         "--previous-output",
         help=(
             "accepted for command parity; the ELF slice always rebuilds an "
@@ -93,28 +97,30 @@ def main(argv: list[str] | None = None) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     sys.path.insert(0, str(repo_root()))
-    from pcc.backend.elf_x86_64 import (
-        ElfError,
-        link_static_executable,
-        parse_relocatable,
-        parse_static_executable,
+    from pcc.backend.elf_x86_64 import ElfError, parse_static_executable
+    from pcc.backend.owned_elf_link import link_inputs
+    from pcc.backend.self_backend_target_match import (
+        is_aarch64_linux_triple, is_x86_64_linux_triple,
     )
-    from pcc.backend.x86_64_asm_driver import assemble_file
+    from pcc.backend.arm64_encode import EncodeError
     from pcc.backend.x86_64_encode import X86EncodeError
 
+    if not (is_aarch64_linux_triple(args.target) or is_x86_64_linux_triple(args.target)):
+        parser.error("unsupported owned ELF target: " + args.target)
     try:
-        objects = [assemble_file(Path(path).read_text(encoding="utf-8"))
-                   for path in args.assembly]
-        objects.extend(
-            parse_relocatable(Path(path).read_bytes())
-            for path in args.objects
-        )
-        archives = [Path(path).read_bytes() for path in args.archive]
-        image = link_static_executable(objects, archives=archives, entry=args.entry)
-        parse_static_executable(image)
-    except (ElfError, X86EncodeError, OSError, UnicodeError) as exc:
+        # The shared linker supplies the platform startup/thread intrinsics.
+        # Retain this host wrapper's fsync/readback/atomic publication contract
+        # and its stronger alias checks, including symlinks and hard links.
+        with tempfile.TemporaryDirectory(prefix=".pcc-elf-", dir=out_path.parent) as work:
+            linked = Path(work) / "image"
+            link_inputs(target=args.target, output=str(linked),
+                        assembly=args.assembly, objects=args.objects,
+                        archives=args.archive, entry=args.entry)
+            image = linked.read_bytes()
+            parse_static_executable(image)
+            _publish(out_path, image)
+    except (ElfError, X86EncodeError, EncodeError, OSError, UnicodeError) as exc:
         parser.error(str(exc))
-    _publish(out_path, image)
     return 0
 
 

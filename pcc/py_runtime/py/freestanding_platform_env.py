@@ -14,7 +14,7 @@ from pcc.unsafe import (
     global_addr,
     global_load_ptr,
     global_store_ptr,
-    initial_environ,
+    initial_environ, target_sys_platform,
     load_i8,
     load_ptr,
     malloc,
@@ -78,9 +78,15 @@ def _env_valid_name_len(name) -> i64:
 def _env_entry_matches(entry, name, name_len: i64) -> i64:
     if ptr_is_null(entry):
         return 0
+    windows: i64 = 1 if load_i8(target_sys_platform(), 0) == 119 else 0
     offset: i64 = 0
     while offset < name_len:
-        if load_i8(entry, offset) != load_i8(name, offset):
+        left: i64 = load_i8(entry, offset)
+        right: i64 = load_i8(name, offset)
+        if windows:
+            if 97 <= left <= 122: left = left - 32
+            if 97 <= right <= 122: right = right - 32
+        if left != right:
             return 0
         offset = offset + 1
     if load_i8(entry, name_len) == 61:

@@ -83,7 +83,7 @@ class CSSALoweringMixin:
             resolved_names = resolved_text.split()
         else:
             resolved_names = resolved
-        return get_ir_type_from_names(resolved_names)
+        return get_ir_type_from_names(resolved_names, str(self.module.triple))
 
     def _ssa_resolve_int_typedef(self, type_name):
         """Walk typedef chain for integer typedef names so `size_t` /

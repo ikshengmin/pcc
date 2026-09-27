@@ -93,6 +93,7 @@ def build_closed_world_context(
     from .py_ast import ClassDef as _ClassDef
     from .py_ast import ClassType as _ClassType
     from .py_ast import Compare as _Compare
+    from .py_ast import DictExpr as _DictExpr
     from .py_ast import DynType as _DynType
     from .py_ast import ExprStmt as _ExprStmt
     from .py_ast import FuncDef as _FuncDef
@@ -531,6 +532,34 @@ def build_closed_world_context(
                             "value_ty": encode_type(value_ty),
                             "box_int_abi": module_box_int_abi,
                         }
+                constant_export = exports.get(target_name)
+                if constant_export is not None and constant_export.get("kind") == "constant":
+                    # Literal exports are still mutable Python module bindings.
+                    # Record their provider storage, rather than guessing the
+                    # provider's integer ABI from a consuming module's policy.
+                    storage_ty = annotation if annotation is not None else static_value_ty
+                    if storage_ty is not None:
+                        constant_export["value_ty"] = encode_type(storage_ty)
+                        boxes_int = module_box_int_abi
+                        if _closed_world_is_node(storage_ty, _IntType):
+                            literal_int = _export_signed_int_literal_or_none(value)
+                            if literal_int is not None and (
+                                literal_int < -(1 << 63) or literal_int > (1 << 63) - 1
+                            ):
+                                boxes_int = True
+                        constant_export["box_int_abi"] = boxes_int
+                        constant_export["has_module_storage"] = True
+                binding_export = exports.get(target_name)
+                if binding_export is not None and binding_export.get("kind") in ("constant", "module_global"):
+                    # A pointer-shaped ABI is not proof of a PyObject owner:
+                    # unsafe malloc/extern results may also be Dyn/ptr. Admit
+                    # only source productions whose managed ownership is known.
+                    managed_storage = _closed_world_is_node(
+                        value, (_StrLit, _NoneLit, _ListExpr, _TupleExpr, _DictExpr)
+                    )
+                    if binding_export.get("value_kind") == "int":
+                        managed_storage = bool(binding_export.get("box_int_abi", False))
+                    binding_export["storage_owner"] = "managed" if managed_storage else "unknown"
                 if target_name == "__all__" and target_name in exports:
                     all_names = _export_static_all_names(value)
                     if all_names is not None:

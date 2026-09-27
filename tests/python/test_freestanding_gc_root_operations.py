@@ -17,9 +17,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
 ROOT_OPS_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_root_operations.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
+PIN_CALLER_SOURCE = RUNTIME_DIR / "py" / "py_obj.py"
+TRANSFER_CALLER_SOURCE = RUNTIME_DIR / "py" / "py_os_path.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
-OWNED_SYMBOLS = {
+PIN_SYMBOLS = {"pcc_gc_pin", "pcc_gc_unpin"}
+TRANSFER_SYMBOLS = {"pcc_gc_take_pinned_slot"}
+OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | {
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_gray_count_increment_acq_rel",
     "pcc_gc_gray_count_load_acquire",
@@ -33,7 +37,7 @@ RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_object_index_find",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {"py_decref", "py_incref"}
-RAW_GLOBAL_IMPORTS = {"pcc_gc_backend_selected", "pcc_gc_gray_count"}
+RAW_GLOBAL_IMPORTS = {"pcc_gc_backend_selected", "pcc_gc_gray_count", "pcc_gc_metric_pin"}
 
 
 def _exported_symbols(source: str) -> set[str]:
@@ -70,6 +74,8 @@ def _compile_object(tmp_path: Path, emitter: str) -> Path:
 def test_root_operations_have_one_strict_source_owner():
     strict = ROOT_OPS_SOURCE.read_text(encoding="utf-8")
     managed = MANAGED_SOURCE.read_text(encoding="utf-8")
+    pin_caller = PIN_CALLER_SOURCE.read_text(encoding="utf-8")
+    transfer_caller = TRANSFER_CALLER_SOURCE.read_text(encoding="utf-8")
     makefile = MAKEFILE.read_text(encoding="utf-8")
 
     assert "__pcc_freestanding__ = True" in strict
@@ -77,8 +83,10 @@ def test_root_operations_have_one_strict_source_owner():
     assert _exported_symbols(managed).isdisjoint(OWNED_SYMBOLS)
     assert RAW_ONLY_CROSS_OBJECT_SYMBOLS.isdisjoint(RUNTIME_SIGNATURES)
     assert "freestanding_gc_root_operations" in makefile
+    assert _exported_symbols(pin_caller).isdisjoint(PIN_SYMBOLS)
     for symbol in OWNED_SYMBOLS:
-        assert f'"{symbol}"' in managed
+        caller = pin_caller if symbol in PIN_SYMBOLS else transfer_caller if symbol in TRANSFER_SYMBOLS else managed
+        assert f'"{symbol}"' in caller
 
 
 def test_strict_gc3_known_object_gate_rejects_deallocating_header_state():
@@ -154,6 +162,8 @@ int main(void) {
     obj->length = 0;
     obj->capacity = 0;
     obj->items = NULL;
+    /* Publish like a real constructor: GC4 never relocates FRESH_ALLOC objects. */
+    pcc_gc_publish_initialized((PyObject *)obj);
 
     pcc_gc_gray_count_store_release(0);
     pcc_gc_mark_root_gray_if_known((PyObject *)obj);

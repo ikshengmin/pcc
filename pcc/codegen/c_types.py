@@ -32,14 +32,26 @@ def names_to_key(names):
     return names[0] if len(names) == 1 else " ".join(sorted(names))
 
 
-def get_ir_type(type_str):
+def long_double_type(target_triple):
+    """The long-double format belongs to the target ABI, never the host."""
+    from pcc.backend.self_backend_target_match import target_os_name
+    if target_os_name(target_triple) == "linux":
+        machine = target_triple.split("-", 1)[0].lower()
+        if machine in ("x86_64", "amd64"):
+            return ir.X86FP80Type()
+        if machine in ("aarch64", "arm64"):
+            return ir.FP128Type()
+    return double_t
+
+
+def get_ir_type(type_str, target_triple=""):
     """Get an IR type from a single C type name or name sequence."""
 
     names = [type_str] if isinstance(type_str, str) else type_str
-    return get_ir_type_from_names(names)
+    return get_ir_type_from_names(names, target_triple)
 
 
-def get_ir_type_from_names(names):
+def get_ir_type_from_names(names, target_triple=""):
     """Project a list of C type specifiers to its physical IR type."""
 
     names = [
@@ -97,9 +109,16 @@ def get_ir_type_from_names(names):
         "uint64_t": int64_t,
         "wchar_t": int32_t,
     }
+    from pcc.backend.self_backend_target_match import target_os_name
+    if target_os_name(target_triple) == "win32":
+        for spelling in ("long", "int long", "int long unsigned", "long unsigned"):
+            type_map[spelling] = int32_t
+        type_map["wchar_t"] = int16_t
     if canonical in type_map:
         return type_map[canonical]
     if "double" in names:
+        if "long" in names:
+            return long_double_type(target_triple)
         return double_t
     if "_Float16" in names:
         return half_t

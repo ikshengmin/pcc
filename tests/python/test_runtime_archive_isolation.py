@@ -4,13 +4,26 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 
+@pytest.fixture
+def darwin_archive_policy(monkeypatch):
+    """Exercise the retained Make/libpython policy on every test host.
+
+    Linux/Windows configuration-aware selection is covered separately by
+    test_owned_runtime_selection; these cases specify the Darwin route.
+    """
+    from pcc.py_frontend import pipeline_runtime_archive
+
+    monkeypatch.setattr(pipeline_runtime_archive, "sys", SimpleNamespace(platform="darwin"))
+
 
 def test_runtime_archive_provenance_stamp_target_cli(tmp_path):
     from pcc.tools.runtime_archive_provenance import main
+    from pcc.py_frontend.pipeline_runtime_archive import target_id
 
     archive = tmp_path / "libpy_runtime_pcc_py.a"
     archive.write_bytes(b"archive")
@@ -20,57 +33,29 @@ def test_runtime_archive_provenance_stamp_target_cli(tmp_path):
         "--host-target-triple", "arm64-apple-darwin",
     ]) == 0
     assert Path(str(archive) + ".target").read_text(encoding="ascii") == (
-        "darwin:arm64:arm64-apple-darwin\n"
+        target_id("arm64-apple-darwin") + "\n"
     )
 
 def _write_completed_capi_bundle(archive: Path) -> Path:
-    source = archive.with_suffix(".c")
-    object_path = archive.with_suffix(".o")
-    source.write_text(
-        "int PyRuntime_IsolationAnchor(void) { return 1; }\n",
-        encoding="utf-8",
-    )
-    compile_result = subprocess.run(
-        ["cc", "-c", str(source), "-o", str(object_path)],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
-    archive_result = subprocess.run(
-        ["ar", "rcs", str(archive), str(object_path)],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    assert archive_result.returncode == 0, archive_result.stdout + archive_result.stderr
-    nm_result = subprocess.run(
-        ["nm", "-g", str(archive)],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    assert nm_result.returncode == 0, nm_result.stdout + nm_result.stderr
-    symbols: set[str] = set()
-    for line in nm_result.stdout.splitlines():
-        parts = line.split()
-        if len(parts) != 3 or parts[1] == "U" or not parts[1].isupper():
-            continue
-        symbol = parts[2]
-        bare = symbol[1:] if symbol.startswith("_") else symbol
-        if bare.startswith("Py") or bare.startswith("_Py"):
-            symbols.add(symbol)
-    assert symbols
+    from pcc.backend.arm64_asm_driver import assemble_file
+    from pcc.backend.macho_obj import emit_object
+    from pcc.backend.ar_writer import write_archive
+
+    sections, undefined = assemble_file(
+        ".section __TEXT,__text,regular,pure_instructions\n"
+        ".globl _PyRuntime_IsolationAnchor\n_PyRuntime_IsolationAnchor:\n ret\n")
+    archive.write_bytes(write_archive([
+        ("anchor.o", emit_object(sections, undefined=undefined)),
+    ]))
     Path(str(archive) + ".capi_syms").write_text(
-        "\n".join(sorted(symbols)) + "\n", encoding="ascii"
+        "_PyRuntime_IsolationAnchor\n", encoding="ascii"
     )
     return archive
 
 
 def _write_valid_production_runtime_archive(runtime_root: Path) -> Path:
-    from llvmlite import binding as llvm
-
-    from pcc.tools.ir_to_obj import emit_object
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.backend.ar_writer import write_archive
     from pcc.tools.runtime_archive_provenance import (
         assemble_runtime_archive_manifest,
         capi_inventory_path_for_archive,
@@ -83,12 +68,13 @@ def _write_valid_production_runtime_archive(runtime_root: Path) -> Path:
     source.parent.mkdir(parents=True, exist_ok=True)
     object_path.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("def member() -> int:\n    return 1\n", encoding="utf-8")
-    target_triple = llvm.get_default_triple()
+    target_triple = "arm64-apple-darwin"
     ir_text = (
-        f'target triple = "{target_triple}"\n' "define i32 @member() { ret i32 1 }\n"
+        f'target triple = "{target_triple}"\n'
+        "define i32 @member() {\nentry:\n  ret i32 1\n}\n"
     )
     ir_path.write_text(ir_text, encoding="utf-8")
-    object_path.write_bytes(emit_object(ir_text))
+    object_path.write_bytes(emit_owned_object(ir_text, target_triple))
     write_pcc_python_receipt(
         object_path=object_path,
         ir_path=ir_path,
@@ -97,13 +83,7 @@ def _write_valid_production_runtime_archive(runtime_root: Path) -> Path:
         target_triple=target_triple,
     )
     archive = runtime_root / "libpy_runtime_pcc_py.a"
-    process = subprocess.run(
-        ["ar", "rcs", str(archive), str(object_path)],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert process.returncode == 0, process.stdout + process.stderr
+    archive.write_bytes(write_archive([(object_path.name, object_path.read_bytes())]))
     capi_inventory_path_for_archive(archive).write_text(
         "PyRuntime_IsolationAnchor\n",
         encoding="ascii",
@@ -119,6 +99,7 @@ def _write_valid_production_runtime_archive(runtime_root: Path) -> Path:
 def test_runtime_archive_environment_override_is_fail_closed(
     tmp_path: Path,
     monkeypatch,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 
@@ -136,6 +117,7 @@ def test_runtime_archive_environment_override_is_fail_closed(
 def test_explicit_libpython_runtime_archive_rejects_empty_member_inventory(
     tmp_path: Path,
     monkeypatch,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 
@@ -157,6 +139,7 @@ def test_explicit_libpython_runtime_archive_rejects_empty_member_inventory(
 def test_explicit_libpython_runtime_archive_rejects_inventory_from_another_archive(
     tmp_path: Path,
     monkeypatch,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 
@@ -223,6 +206,7 @@ def test_runtime_make_does_not_require_PATH_tools(tmp_path, monkeypatch, capfd):
 def test_runtime_build_failure_is_reported_before_link(
     tmp_path: Path,
     monkeypatch,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 
@@ -245,6 +229,7 @@ def test_runtime_build_failure_is_reported_before_link(
 def test_runtime_build_rejects_empty_archive_publication(
     tmp_path: Path,
     monkeypatch,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 
@@ -285,6 +270,7 @@ def test_libpython_runtime_make_publication_requires_nonempty_inventory() -> Non
 def test_production_runtime_archive_environment_override_rejects_invalid_provenance(
     tmp_path: Path,
     monkeypatch,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 
@@ -305,6 +291,7 @@ def test_invalid_production_runtime_shortcut_rebuilds_before_acceptance(
     tmp_path: Path,
     monkeypatch,
     shortcut: str,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 
@@ -358,6 +345,7 @@ def test_invalid_production_runtime_shortcut_rebuilds_before_acceptance(
 def test_production_runtime_is_verified_after_make_before_acceptance(
     tmp_path: Path,
     monkeypatch,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 
@@ -386,6 +374,7 @@ def test_production_runtime_is_verified_after_make_before_acceptance(
 def test_invalid_production_runtime_without_makefile_fails_closed(
     tmp_path: Path,
     monkeypatch,
+    darwin_archive_policy,
 ):
     from pcc.py_frontend import pipeline
 

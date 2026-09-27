@@ -18,6 +18,7 @@ __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.py_runtime.py.py_abi_constants import (
+    PY_FLAG_FUNC_TRANSPARENT_CALL,
     C_POINTER_SIZE,
     DICTENTRY_KEY_OFFSET,
     DICTENTRY_SIZE,
@@ -75,8 +76,8 @@ from pcc.py_runtime.py.py_abi_constants import (
     PY_TYPE_VALUEBOX,
 )
 from pcc.unsafe import (
-    atomic_load_i32,
     atomic_rmw_i32,
+    atomic_load_i32,
     cstr,
     define_global_i32,
     define_thread_local_i32,
@@ -132,6 +133,7 @@ py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
 py_func_call_kwargs = extern("py_func_call_kwargs", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_dict_subclass_getattr = extern("py_dict_subclass_getattr", (c_ptr, c_ptr), c_ptr)
+py_func_call_bound_forward = extern("py_func_call_bound_forward", (c_ptr, c_ptr), c_ptr)
 py_func_new_bound = extern(
     "py_func_new_bound", (c_ptr, c_ptr, c_ptr, c_ptr), c_ptr
 )
@@ -834,150 +836,148 @@ def _wrap_bound_captures(method, captures):
 
 
 def _call_pyfunc_bound_args(func, bound_args):
-    if not _ptr_can_have_header(func):
-        return _class_require_result(
-            null(),
-            cstr("class callback"),
-            cstr("class callback received an invalid function object"),
-        )
-    if load_i32(func, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
-        return _class_require_result(
-            null(),
-            cstr("class callback"),
-            cstr("class callback received an invalid function object"),
-        )
-    entry = load_ptr(func, 56)
-    if ptr_is_null(entry) != 0:
-        return _class_require_result(
-            null(),
-            cstr("class callback"),
-            cstr("class callback function has no entry point"),
-        )
-    captures = pcc_gc_load_ptr(func, ptr_add(func, 64))
-    actual_captures = captures
-    owns_actual: int = 0
-    if _ptr_can_have_header(captures):
-        if load_i32(captures, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE and py_tuple_len(captures) == 2:
-            candidate = py_tuple_get(captures, 1)
-            if _func_signature_valid(candidate):
-                inner = py_tuple_get(captures, 0)
-                if ptr_is_null(inner) == 0:
-                    actual_captures = inner
-                    owns_actual = 1
-            if ptr_is_null(candidate) == 0:
-                py_decref(candidate)
-    out = call_ptr2(entry, actual_captures, bound_args)
-    _class_require_result(
-        out,
-        cstr("class callback"),
-        cstr("class callback returned NULL without setting an exception"),
-    )
-    if owns_actual != 0:
-        py_decref(actual_captures)
-    return out
+    # The outer bound PyFunc already normalized varargs/keyword-only/defaults.
+    # Forward its context while consuming those slots without rebinding them.
+    return py_func_call_bound_forward(func, bound_args)
+
+
+def _bound_clear_root(slots, pins, offset: int) -> None:
+    value = load_ptr(slots, offset)
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        # Only the function slot can contain an unmanaged native entry. Its
+        # ownership remains in the tuple; it carries no pin lease (pin=-1).
+        prior: int = load_i64(pins, offset)
+        if prior >= 0:
+            pcc_gc_unpin(value)
+            if prior != 0:
+                atomic_rmw_i32("or", value, 12, 64, "relaxed")
+    pcc_gc_store_root(ptr_add(slots, offset), null())
+
+
+def _bound_entry_build(slots, pins) -> None:
+    # output0, captures8, args16, function24, self32, full48,
+    # current arg56, arg1 64, arg2 72, saved error80.
+    func = py_tuple_get(load_ptr(slots, 8), 0)
+    store_ptr(slots, 24, func)
+    store_i64(pins, 24, -1)
+    if ptr_is_null(func):
+        return
+    # The slot is already registered. Query can park, so reload after it.
+    managed: int = _ptr_can_have_header(func)
+    func = load_ptr(slots, 24)
+    if managed and is_tagged_int(func) == 0:
+        store_i64(pins, 24, load_i32(func, 12) & 64)
+        pcc_gc_pin(func)
+        pcc_gc_note_write_barrier(null(), func)
+    self_obj = py_tuple_get(load_ptr(slots, 8), 1)
+    store_ptr(slots, 32, self_obj)
+    if ptr_is_null(self_obj) == 0 and is_tagged_int(self_obj) == 0:
+        store_i64(pins, 32, load_i32(self_obj, 12) & 64)
+        pcc_gc_pin(self_obj)
+        pcc_gc_note_write_barrier(null(), self_obj)
+    if ptr_is_null(self_obj):
+        return
+    n_args: int = py_tuple_len(load_ptr(slots, 16))
+    func = load_ptr(slots, 24)
+    if managed and load_i32(func, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
+        full = py_tuple_new(n_args + 1)
+        store_ptr(slots, 48, full)
+        if ptr_is_null(full) == 0 and is_tagged_int(full) == 0:
+            store_i64(pins, 48, load_i32(full, 12) & 64)
+            pcc_gc_pin(full)
+            pcc_gc_note_write_barrier(null(), full)
+        if ptr_is_null(full):
+            return
+        py_tuple_set_item(load_ptr(slots, 48), 0, load_ptr(slots, 32))
+        i: int = 0
+        while i < n_args:
+            arg = py_tuple_get(load_ptr(slots, 16), i)
+            store_ptr(slots, 56, arg)
+            if ptr_is_null(arg) == 0 and is_tagged_int(arg) == 0:
+                store_i64(pins, 56, load_i32(arg, 12) & 64)
+                pcc_gc_pin(arg)
+                pcc_gc_note_write_barrier(null(), arg)
+            if ptr_is_null(arg):
+                return
+            py_tuple_set_item(load_ptr(slots, 48), i + 1, load_ptr(slots, 56))
+            _bound_clear_root(slots, pins, 56)
+            i = i + 1
+        result = _call_pyfunc_bound_args(load_ptr(slots, 24), load_ptr(slots, 48))
+        store_ptr(slots, 0, result)
+        if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+            store_i64(pins, 0, load_i32(result, 12) & 64)
+            pcc_gc_pin(result)
+            pcc_gc_note_write_barrier(null(), result)
+    elif n_args >= 0 and n_args <= 3:
+        i: int = 0
+        while i < n_args:
+            arg = py_tuple_get(load_ptr(slots, 16), i)
+            store_ptr(slots, 56 + i * 8, arg)
+            if ptr_is_null(arg) == 0 and is_tagged_int(arg) == 0:
+                store_i64(pins, 56 + i * 8, load_i32(arg, 12) & 64)
+                pcc_gc_pin(arg)
+                pcc_gc_note_write_barrier(null(), arg)
+            if ptr_is_null(arg):
+                return
+            i = i + 1
+        if n_args == 0:
+            result = call_ptr1(load_ptr(slots, 24), load_ptr(slots, 32))
+        elif n_args == 1:
+            result = call_ptr2(load_ptr(slots, 24), load_ptr(slots, 32), load_ptr(slots, 56))
+        elif n_args == 2:
+            result = call_ptr3(load_ptr(slots, 24), load_ptr(slots, 32), load_ptr(slots, 56), load_ptr(slots, 64))
+        else:
+            result = call_ptr4(load_ptr(slots, 24), load_ptr(slots, 32), load_ptr(slots, 56), load_ptr(slots, 64), load_ptr(slots, 72))
+        store_ptr(slots, 0, result)
+        if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+            store_i64(pins, 0, load_i32(result, 12) & 64)
+            pcc_gc_pin(result)
+            pcc_gc_note_write_barrier(null(), result)
 
 
 def _instance_bound_method_entry(captures, args):
-    func = py_tuple_get(captures, 0)
-    self_obj = py_tuple_get(captures, 1)
-    if ptr_is_null(func) != 0 or ptr_is_null(self_obj) != 0:
-        if ptr_is_null(func) == 0:
-            py_decref(func)
-        if ptr_is_null(self_obj) == 0:
-            py_decref(self_obj)
-        return null()
-    n_args: int = py_tuple_len(args)
-    out = null()
-    if _ptr_can_have_header(func) and load_i32(func, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
-        full_args = py_tuple_new(n_args + 1)
-        if ptr_is_null(full_args) == 0:
-            py_tuple_set_item(full_args, 0, self_obj)
-            i: int = 0
-            valid: int = 1
-            while i < n_args:
-                arg = py_tuple_get(args, i)
-                if ptr_is_null(arg) != 0:
-                    valid = 0
-                    i = n_args
-                else:
-                    py_tuple_set_item(full_args, i + 1, arg)
-                    py_decref(arg)
-                i = i + 1
-            if valid != 0:
-                out = _call_pyfunc_bound_args(func, full_args)
-                _class_require_result(
-                    out,
-                    cstr("class callback"),
-                    cstr("class callback returned NULL without setting an exception"),
-                )
-            py_decref(full_args)
-        else:
-            _class_require_result(
-                null(),
-                cstr("py_tuple_new"),
-                cstr("class callback argument tuple allocation failed"),
-            )
-    elif n_args == 0:
-        out = call_ptr1(func, self_obj)
-        _class_require_result(
-            out,
-            cstr("class callback"),
-            cstr("class callback returned NULL without setting an exception"),
-        )
-    elif n_args == 1:
-        arg0 = py_tuple_get(args, 0)
-        if ptr_is_null(arg0) == 0:
-            out = call_ptr2(func, self_obj, arg0)
-            _class_require_result(
-                out,
-                cstr("class callback"),
-                cstr("class callback returned NULL without setting an exception"),
-            )
-            py_decref(arg0)
-    elif n_args == 2:
-        arg0 = py_tuple_get(args, 0)
-        arg1 = py_tuple_get(args, 1)
-        if ptr_is_null(arg0) == 0 and ptr_is_null(arg1) == 0:
-            out = call_ptr3(func, self_obj, arg0, arg1)
-            _class_require_result(
-                out,
-                cstr("class callback"),
-                cstr("class callback returned NULL without setting an exception"),
-            )
-        if ptr_is_null(arg0) == 0:
-            py_decref(arg0)
-        if ptr_is_null(arg1) == 0:
-            py_decref(arg1)
-    elif n_args == 3:
-        arg0 = py_tuple_get(args, 0)
-        arg1 = py_tuple_get(args, 1)
-        arg2 = py_tuple_get(args, 2)
-        if (
-            ptr_is_null(arg0) == 0
-            and ptr_is_null(arg1) == 0
-            and ptr_is_null(arg2) == 0
-        ):
-            out = call_ptr4(func, self_obj, arg0, arg1, arg2)
-            _class_require_result(
-                out,
-                cstr("class callback"),
-                cstr("class callback returned NULL without setting an exception"),
-            )
-        if ptr_is_null(arg0) == 0:
-            py_decref(arg0)
-        if ptr_is_null(arg1) == 0:
-            py_decref(arg1)
-        if ptr_is_null(arg2) == 0:
-            py_decref(arg2)
-    if ptr_is_null(out) != 0:
-        _class_require_result(
-            out,
-            cstr("class callback"),
-            cstr("class callback returned NULL without setting an exception"),
-        )
-    py_decref(func)
-    py_decref(self_obj)
-    return out
+    slots = stack_alloc(88)
+    pins = stack_alloc(88)
+    memset(slots, 0, 88)
+    memset(pins, 0, 88)
+    pcc_gc_frame_enter(global_addr("pcc_bound_callback_frame_map"), slots)
+    if ptr_is_null(captures) == 0 and is_tagged_int(captures) == 0:
+        store_i64(pins, 8, load_i32(captures, 12) & 64)
+        pcc_gc_pin(captures)
+    pcc_gc_store_root(ptr_add(slots, 8), captures)
+    if ptr_is_null(args) == 0 and is_tagged_int(args) == 0:
+        store_i64(pins, 16, load_i32(args, 12) & 64)
+        pcc_gc_pin(args)
+    pcc_gc_store_root(ptr_add(slots, 16), args)
+    _bound_entry_build(slots, pins)
+    if ptr_is_null(load_ptr(slots, 0)):
+        _class_require_result(null(), cstr("class callback"), cstr("class callback returned NULL without setting an exception"))
+        error = py_current_exception()
+        if ptr_is_null(error) == 0:
+            store_i64(pins, 80, load_i32(error, 12) & 64)
+            pcc_gc_pin(error)
+            py_incref(error)
+            store_ptr(slots, 80, error)
+            pcc_gc_note_write_barrier(null(), error)
+    prior_result_pin: int = load_i64(pins, 0)
+    index: int = 9
+    while index > 0:
+        if ptr_eq(load_ptr(slots, 0), load_ptr(slots, index * 8)):
+            prior_result_pin = load_i64(pins, index * 8)
+        index = index - 1
+    index = 9
+    while index > 0:
+        _bound_clear_root(slots, pins, index * 8)
+        index = index - 1
+    error = load_ptr(slots, 80)
+    if ptr_is_null(error) == 0:
+        py_raise(error)
+        _bound_clear_root(slots, pins, 80)
+    result = load_ptr(slots, 0)
+    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
 
 
 @c_abi_export("py_instance_bind_method")
@@ -1001,6 +1001,8 @@ def py_instance_bind_method(method, self_obj, name):
         bound_name,
         self_obj,
     )
+    if ptr_is_null(bound) == 0:
+        atomic_rmw_i32("or", bound, 12, PY_FLAG_FUNC_TRANSPARENT_CALL, "relaxed")
     if ptr_eq(bound_captures, captures) == 0:
         py_decref(bound_captures)
     py_decref(captures)
@@ -3034,3 +3036,17 @@ def _instance_method_call_fallback(inst, name, full_args):
     py_decref(method)
     py_decref(tail)
     return out
+
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+
+pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+
+define_global_i32("pcc_bound_callback_frame_map", 11)
+
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)

@@ -201,7 +201,9 @@ def _owned_macho_link_in_process(
         phases["decode_pco"] += (before_link - before_extras) * 1000.0
         # These inputs are private to this link invocation. Transfer them so
         # the merge can retire decoded graphs before constructing its result.
-        pending = [prepare_executable_object(objects, archives=archives, _consume_inputs=True)]
+        pending = [prepare_executable_object(
+            objects, archives=archives, _consume_inputs=True, _source_view=True,
+        )]
         objects.clear()
         archives.clear()
         sign_times = [0.0, 0.0]
@@ -283,6 +285,7 @@ def run_link_command(
     pcc_internal_input_manifest: Optional[str] = None,
     semantic_layout_policy: Optional[str] = None,
     link_profile_path: Optional[str] = None,
+    target_triple: Optional[str] = None,
     resolve_self_link_mode,
     validate_pcc_self_link_surface,
     repo_root_for_link,
@@ -292,13 +295,16 @@ def run_link_command(
     join_strings,
 ) -> None:
     """Run exactly the selected linker; never fall back after selection."""
+    from .pipeline_targets import host_target_triple
+    from pcc.backend.self_backend_target_match import target_os_name
+    selected_target = target_triple or host_target_triple()
     selected_mode = resolve_self_link_mode(
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_args=extra_link_args,
     )
     if semantic_layout_policy and (
-        selected_mode != "pcc" or sys.platform != "darwin"
+        selected_mode != "pcc" or target_os_name(selected_target) != "darwin"
     ):
         raise SelfBackendLinkError(
             "Mach-O semantic layout requires the pcc-owned Darwin linker"
@@ -312,7 +318,39 @@ def run_link_command(
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
     )
-    linux_elf = sys.platform.startswith("linux")
+    from .pipeline_targets import host_target_triple
+    selected_target = target_triple or host_target_triple()
+    from pcc.backend.self_backend_target_match import is_aarch64_linux_triple, is_x86_64_linux_triple, is_x86_64_windows_triple
+    linux_elf = is_aarch64_linux_triple(selected_target) or is_x86_64_linux_triple(selected_target)
+    windows_pe = is_x86_64_windows_triple(selected_target)
+    if linux_elf or windows_pe:
+        from pcc.backend.owned_elf_link import link_inputs as link_elf_inputs
+        from pcc.backend.owned_pe_link import link_inputs as link_pe_inputs
+        from .pipeline_targets import host_target_triple
+        assembly = ([str(asm_path)] if asm_path else []) + [str(path) for path in pcc_asm_inputs]
+        object_paths = [str(path) for path in pcc_native_object_inputs]
+        archive_paths = [str(runtime_archive)] if runtime_archive else []
+        for path in extra_link_inputs or ():
+            if str(path).endswith((".a", ".lib")):
+                archive_paths.append(str(path))
+            else:
+                object_paths.append(str(path))
+        if pcc_internal_input_manifest and object_paths:
+            # Extra external objects remain explicit; the manifest owns only
+            # the internal input order. Merge them without a host helper.
+            from pcc.backend.macho_internal_inputs import read_internal_input_manifest
+            for kind, path in read_internal_input_manifest(pcc_internal_input_manifest):
+                (assembly if kind == "ASM" else object_paths).append(path)
+            pcc_internal_input_manifest = None
+        if linux_elf:
+            link_elf_inputs(target=selected_target, output=str(tmp_out_path),
+                            assembly=assembly, objects=object_paths, archives=archive_paths,
+                            manifest=pcc_internal_input_manifest or "")
+        else:
+            link_pe_inputs(output=str(tmp_out_path), assembly=assembly,
+                           objects=object_paths, archives=archive_paths,
+                           manifest=pcc_internal_input_manifest or "")
+        return
     if not linux_elf and _owned_macho_link_covers_surface(
         asm_path=asm_path,
         pcc_asm_inputs=pcc_asm_inputs,
@@ -446,6 +484,16 @@ def link_ir_texts_run(
     semantic_layout_enabled,
     write_semantic_layout_policy,
 ) -> None:
+    from pcc.backend.self_backend_parse import parse_self_backend_target_triple
+    from .pipeline_targets import host_target_triple
+    selected_target = ""
+    for module_text in ir_texts:
+        target = parse_self_backend_target_triple(str(module_text))
+        if target == "unknown-unknown-unknown":
+            target = host_target_triple()
+        if selected_target and selected_target != target:
+            raise SelfBackendLinkError("cannot link modules with different targets")
+        selected_target = target
     signature_owned_by_pcc = resolve_self_link_mode(
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
@@ -454,7 +502,8 @@ def link_ir_texts_run(
     # Owned Darwin and Linux links consume internal assembly.  Their drivers
     # encode directly into Mach-O/ELF objects; external object inputs remain an
     # explicit, separately labelled boundary.
-    pcc_elf_link = signature_owned_by_pcc and sys.platform.startswith("linux")
+    from pcc.backend.self_backend_target_match import target_os_name
+    pcc_elf_link = signature_owned_by_pcc and target_os_name(selected_target) == "linux"
     link_profile = "link_self_pcc" if signature_owned_by_pcc else "link_self_cc"
     validate_pcc_self_link_surface(
         extra_link_args=extra_link_args,
@@ -481,7 +530,7 @@ def link_ir_texts_run(
                 break
     profile_end(profile, "link_self_split_scan", started)
     semantic_layout_policy = None
-    if semantic_layout_enabled():
+    if semantic_layout_enabled() and target_os_name(selected_target) == "darwin":
         if has_large_module and split_large_modules:
             raise SelfBackendLinkError(
                 "Mach-O semantic layout does not yet own split-module symbol "
@@ -570,6 +619,7 @@ def link_ir_texts_run(
                     else ()
                 ),
                 semantic_layout_policy=semantic_layout_policy,
+                target_triple=selected_target,
             )
             profile_end(profile, link_profile + "_driver", started)
             finish_self_backend_executable(
@@ -632,6 +682,7 @@ def link_ir_texts_run(
             needs_libpython=needs_libpython,
             needs_native_extension_exports=export_pcc_capi,
             semantic_layout_policy=semantic_layout_policy,
+            target_triple=selected_target,
         )
         profile_end(profile, link_profile + "_driver", started)
         finish_self_backend_executable(

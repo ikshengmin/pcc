@@ -147,6 +147,8 @@ class ExternScaffoldMixin:
         # boxed into a pcc ``PyFunc`` object (which the callee will
         # treat as an opaque pointer and dereference as a fn-ptr).
         ir_args: list[ir.Value] = []
+        object_roots: list[tuple[ir.Value, bool]] = []
+        object_arg_indices: list[int] = []
         for i, a in enumerate(args):
             ctype = argtype_names[i] if i < len(argtype_names) else None
             v: ir.Value
@@ -160,17 +162,59 @@ class ExternScaffoldMixin:
                     )
                     ir_args.append(v)
                     continue
-            v = self._emit_expr(a)
-            if i < len(argtype_names):
+            v = self._emit_expr_with_cpy_operand_cleanup(
+                a,
+                (),
+                as_object=ctype == "c_obj",
+                rooted_pcc_lifetimes=tuple(object_roots),
+            )
+            if ctype == "c_obj":
+                # c_obj is a managed object, never an integer address. Pin it
+                # before evaluating another operand or entering foreign code.
+                owned = self._owned_release_needed(v, a)
+                root = self._enter_container_temp_root(
+                    v, self._fresh("extern.object.argument")
+                )
+                object_roots.append((root, owned))
+                object_arg_indices.append(i)
+            elif i < len(argtype_names):
                 want = self._EXTERN_CTYPE_IR[argtype_names[i]]
                 v = self._coerce_to_extern(v, a.ty, want, argtype_names[i])
             ir_args.append(v)
+        for root_index, argument_index in enumerate(object_arg_indices):
+            root_slot, _owned = object_roots[root_index]
+            ir_args[argument_index] = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(root_slot)],
+                name=self._fresh("extern.object.argument.current"),
+            )
         call_name = (
             ""
             if isinstance(ret_ty, ir.VoidType)
             else self._fresh(f"extern.{symbol}.ret")
         )
         result = self.builder.call(fn, ir_args, name=call_name)
+        if object_roots:
+            if restype_name == "c_obj":
+                # An owned result may alias an argument. An argument's unpin
+                # then clears that same object's pin bit, so a pin alone does
+                # not protect the result across the remaining argument cleanup.
+                result_root = self._enter_container_temp_root(
+                    result, self._fresh("extern.object.result")
+                )
+                self._release_rooted_pcc_lifetimes(tuple(object_roots))
+                result = self.builder.call(
+                    self.runtime["pcc_gc_load_ptr"],
+                    [ir.Constant(_CSTR, None), self._as_gc_ptr(result_root)],
+                    name=self._fresh("extern.object.result.current"),
+                )
+                # Reestablish the pin after possible alias unpins. The extra
+                # pair balances metrics and covers root deregistration itself.
+                self._gc_pin(result)
+                self._leave_container_temp_root(result_root)
+                self._gc_unpin(result)
+            else:
+                self._release_rooted_pcc_lifetimes(tuple(object_roots))
         if restype_name == "c_rawptr" and self._raw_addresses_are_ints():
             # Raw address results are ``int`` outside runtime-port mode.
             result = self.builder.ptrtoint(
@@ -276,7 +320,11 @@ class ExternScaffoldMixin:
         sext, pcc str → i8*, bool zext."""
         if isinstance(want, ir.VoidType):
             return v
-        if ctype_name in {"c_str", "c_ptr", "c_obj", "c_rawptr"}:
+        if ctype_name == "c_obj":
+            return self._emit_value_as_pcc_object_or_bridge(
+                v, ty, "extern.object.boxed"
+            )
+        if ctype_name in {"c_str", "c_ptr", "c_rawptr"}:
             # A pointer-shaped parameter accepts either an object pointer or a
             # raw address.  Raw addresses are ``int`` in normal mode, so an
             # integer-typed value is converted with ``inttoptr``; a dynamic
@@ -293,7 +341,7 @@ class ExternScaffoldMixin:
                 # Declared raw: an untyped value carrying a tagged address is
                 # untagged at run time.
                 return self._pointer_or_address_operand(v, ty)
-            # c_ptr / c_obj / c_str parameters receive PyObject* values.  A
+            # c_ptr / c_str preserve the legacy pointer projection. A
             # tagged small int IS a legitimate object argument here (an int fd,
             # a boxed count), so no run-time untagging; only a statically
             # int-typed raw address is converted.

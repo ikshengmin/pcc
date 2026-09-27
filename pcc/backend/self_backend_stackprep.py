@@ -147,8 +147,9 @@ def assign_stack_slots(
 
     def alloc(size: int, align: int) -> int:
         nonlocal offset
-        offset = _align_to(offset, align)
-        offset += size
+        # Offsets name object starts at FP-offset, so align the resulting
+        # descending address, not the previous allocation's upper boundary.
+        offset = _align_to(offset + size, align)
         return offset
 
     def alloc_value_slot(
@@ -316,7 +317,10 @@ def assign_stack_slots(
                             dest,
                             alloc(
                                 allocated_layout.third,
-                                allocated_layout.fourth,
+                                # Raw byte buffers can hold machine pointer
+                                # slots. Keep their nominal span unchanged,
+                                # but provide at least word-aligned storage.
+                                max(allocated_layout.fourth, 8),
                             ),
                             allocated_type_id,
                         )

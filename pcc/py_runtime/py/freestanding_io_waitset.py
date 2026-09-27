@@ -85,6 +85,8 @@ def _is_linux_x86_64() -> i64:
     if _is_linux() == 0:
         return 0
     machine = target_platform_machine()
+    if load_i8(machine, 0) == 97:
+        return 1  # compiler target registry admits arm64/aarch64 here
     expected = cstr("x86_64")
     index: i64 = 0
     while True:

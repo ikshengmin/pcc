@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .self_backend_target_match import is_aarch64_linux_triple
 from .self_backend_aarch64_darwin_abi import (
     aggregate_passed_indirect,
     assign_abi_arg_regs,
@@ -58,6 +59,14 @@ def emit_function_prologue(
     if func.is_global:
         lines.append(f".globl {symbol}")
     lines.append(f"{symbol}:")
+    linux = is_aarch64_linux_triple(module_symbols.target_triple)
+    func.platform_frame_extra = 192 if linux and func.is_vararg else 0
+    if linux and func.name == "_start":
+        if len(func.args) != 1 or not func.args[0].type.is_ptr or not func.ret_type.is_void:
+            raise ValueError("Linux _start requires void (ptr initial_stack)")
+        lines.append("  mov x0, sp")
+    if func.platform_frame_extra:
+        func.aarch64_frameless = False
     # AArch64 branch protection (pac-ret + BTI). ``paciasp`` signs LR (x30) with
     # SP as the modifier *before* the frame save stores it, and doubles as a BTI
     # ``c`` landing pad for ``bl``/``blr`` callers. The matching ``autiasp`` is
@@ -79,11 +88,16 @@ def emit_function_prologue(
                 emitted_move_register_line("x29", "sp"),
             ]
         )
-        total_frame = func.frame_size + callee_saved_area_size(func)
+        total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
         if total_frame:
             lines.extend(emit_stack_adjust(-total_frame))
         # Save before any argument is committed into a callee-saved register.
         lines.extend(emit_callee_saved_stores(func))
+    if func.platform_frame_extra:
+        # Preserve incoming variadic registers before normal argument lowering.
+        for index in range(8):
+            lines.append(f"  str x{index}, [sp, #{index * 8}]")
+            lines.append(f"  str q{index}, [sp, #{64 + index * 16}]")
     kernel = get_indexed_function_kernel(func)
     if func.indexed_slot_projection and kernel.hidden_sret_slot_id >= 0:
         hidden_slot_id = kernel.hidden_sret_slot_id
@@ -98,8 +112,8 @@ def emit_function_prologue(
         lines.extend(store_reg_to_slot("x8", func.hidden_sret_slot))
 
     arg_types = [arg.type for arg in func.args]
-    arg_regs = assign_abi_arg_regs(arg_types)
-    stack_offsets = stack_arg_offsets(arg_types, arg_regs)
+    arg_regs = assign_abi_arg_regs(arg_types, linux=linux)
+    stack_offsets = stack_arg_offsets(arg_types, arg_regs, linux=linux)
     for arg, regs, stack_offset in zip(func.args, arg_regs, stack_offsets):
         if not parsed_function_has_value_slot(func, arg.name):
             continue

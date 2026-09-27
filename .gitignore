@@ -209,3 +209,4 @@ pcc/py_runtime/libpy_runtime_pcc.a.target
 .playwright-cli/
 projects/python-proxy/pproxy/diagnostic_log.py
 pcc-cpu-flamegraph.svg
+/pcc/py_runtime/build_owned/

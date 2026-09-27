@@ -20,6 +20,7 @@ from ..py_ast import (
     DynType,
     Expr,
     FloatType,
+    IfExpr,
     IntType,
     Lambda,
     ListExpr,
@@ -678,6 +679,13 @@ class OwnershipLoweringMixin:
         return len(matches) == 1
 
     def _expr_returns_unsafe_raw_pointer(self, expr: Expr) -> bool:
+        if isinstance(expr, IfExpr):
+            # The result is a raw pointer only if both possible values are.
+            # In particular, `cstr(a) if flag else cstr(b)` must not cross
+            # the managed ternary retain path in a freestanding function.
+            return self._expr_returns_unsafe_raw_pointer(
+                expr.then_e
+            ) and self._expr_returns_unsafe_raw_pointer(expr.else_e)
         if not isinstance(expr, Call):
             return False
         if not isinstance(expr.func, Name):
@@ -1226,17 +1234,57 @@ class OwnershipLoweringMixin:
         err_bb = self._fn_err_exit_blocks.get(fn.name)
         if err_bb is None:
             return
-        # Dedup by SLOT IDENTITY, not by local name (a re-bound name's
-        # second alloca needs its own err-exit leave) and not by value-name
-        # string (name uniquification timing differs between host and
-        # self-hosted stages and would drift the emitted leave count).
+        # An owned local can be discovered after err.exit already exists.
+        # Patch its release into the entry block, whose branch precedes the
+        # finish block containing every root leave. A false flag selects an
+        # always-empty scratch slot: borrowed/unbound values are untouched.
+        owned = self._fn_err_exit_owned_slots.get(fn.name, [])
+        index = 0
+        while index < len(owned):
+            entry = owned[index]
+            if entry[1] is alloca and not entry[3]:
+                flag = entry[2]
+                empty = self._alloca_in_entry(
+                    _CSTR, name=self._fresh("err.empty.owner"), init_null=True,
+                )
+                saved_block = self.builder._block
+                self.builder.position_before(err_bb._instrs[-1])
+                is_owned = self.builder.load(flag, name=self._fresh(name + ".err.owned"))
+                slot_ptr = self._as_gc_ptr(alloca, name=self._fresh(name + ".err.slot"))
+                empty_ptr = self._as_gc_ptr(empty, name=self._fresh(name + ".err.empty"))
+                active_slot = self.builder.select(
+                    is_owned, slot_ptr, empty_ptr,
+                    name=self._fresh(name + ".err.active.slot"),
+                )
+                self.builder.store(ir.Constant(_I1, 0), flag)
+                # store_root consumes exactly the slot's owned reference. It
+                # clears the traced slot before any terminal callback, and
+                # no copied managed pointer crosses a collection here.
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [active_slot, ir.Constant(_CSTR, None)],
+                )
+                owned[index] = (entry[0], entry[1], flag, True)
+                self.builder.position_at_end(saved_block)
+            index += 1
+
+        registered = False
+        for entry in self._fn_gc_root_slot_registry.get(fn.name, ()):
+            if entry[1] is alloca:
+                registered = True
+                break
+        if not registered:
+            return
+        # Root leaves retain their separate physical-slot ledger. An owned
+        # flag registered after the leave must still get its release above.
         if not hasattr(self, "_fn_err_exit_gc_root_slots"):
             self._fn_err_exit_gc_root_slots = {}
         patched = self._fn_err_exit_gc_root_slots.setdefault(fn.name, [])
         for done in patched:
             if done is alloca:
                 return
-        if not self._insert_gc_frame_leave_before_terminator(err_bb, alloca):
+        finish_bb = self._fn_err_exit_finish_blocks[fn.name]
+        if not self._insert_gc_frame_leave_before_terminator(finish_bb, alloca):
             return
         patched.append(alloca)
 
@@ -1272,6 +1320,12 @@ class OwnershipLoweringMixin:
             self._owned_local_flag_allocas[name] = alloca
         else:
             self._owned_local_flag_allocas.pop(name, None)
+        if alloca is not None and self.current_func_def is not None:
+            fn = self.current_function
+            if fn is not None and name not in self._current_global_names:
+                entries = self._fn_err_exit_owned_slots.setdefault(fn.name, [])
+                entries.append((name, alloca, flag, False))
+                self._patch_fn_err_exit_gc_root_leave(name, alloca)
         return flag
 
     def _owned_local_flag_for(
@@ -1302,19 +1356,15 @@ class OwnershipLoweringMixin:
         cont_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.cont"))
         self.builder.cbranch(is_owned, release_bb, cont_bb)
         self.builder.position_at_end(release_bb)
-        old_value = self.builder.call(
-            self.runtime["pcc_gc_load_ptr"],
-            [
-                ir.Constant(_CSTR, None),
-                self._as_gc_ptr(
-                    alloca,
-                    name=self._fresh(f"{name}.release.gc.slot"),
-                ),
-            ],
-            name=self._fresh(f"{name}.release.current"),
-        )
-        self._gc_release(old_value, self._release_context_label(f"local:{name}"), True)
+        # Each owned local slot contains exactly one reference. Clear the
+        # flag and slot before a terminal release can call back or collect;
+        # the root-store primitive performs the one matching decref.
         self.builder.store(ir.Constant(_I1, 0), flag)
+        self.builder.call(
+            self.runtime["pcc_gc_store_root"],
+            [self._as_gc_ptr(alloca, name=self._fresh(name + ".release.gc.slot")),
+             ir.Constant(_CSTR, None)],
+        )
         self.builder.branch(cont_bb)
         self.builder.position_at_end(cont_bb)
 

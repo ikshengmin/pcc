@@ -171,11 +171,12 @@ def _section_from_directive(line: str) -> str:
     if not parts or not parts[0]:
         raise X86EncodeError(f"bad section directive {line!r}")
     name = parts[0]
-    if name not in _SECTION_SPECS or len(parts) not in (1, 3):
+    initializer = name.startswith((".init_array.", ".fini_array.")) and name.rsplit(".", 1)[1].isdigit()
+    if (name not in _SECTION_SPECS and not initializer) or len(parts) not in (1, 3):
         raise X86EncodeError(f"section shape not proven: {line!r}")
     if len(parts) == 1:
         return name
-    section_type, flags, _alignment = _SECTION_SPECS[name]
+    section_type, flags, _alignment = (SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, 8) if initializer else _SECTION_SPECS[name]
     expected_flags = ""
     for letter, bit in (("a", SHF_ALLOC), ("w", SHF_WRITE), ("x", SHF_EXECINSTR), ("T", SHF_TLS)):
         if flags & bit:
@@ -201,6 +202,8 @@ def _parse_file(asm_text: str):
     def switch(name: str) -> None:
         nonlocal current
         spec = _SECTION_SPECS.get(name)
+        if name.startswith((".init_array.", ".fini_array.")) and name.rsplit(".", 1)[1].isdigit():
+            spec = (SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, 8)
         if spec is None:
             raise X86EncodeError(f"section {name!r} is outside the ELF contract")
         if name not in plans:
@@ -241,9 +244,9 @@ def _parse_file(asm_text: str):
         if line.startswith(".type "):
             body = line[len(".type "):]
             pieces = [part.strip() for part in body.split(",")]
-            if len(pieces) != 2 or pieces[1] not in ("@function", "@object"):
+            if len(pieces) != 2 or pieces[1] not in ("@function", "@object", "@tls_object"):
                 raise X86EncodeError(f"bad .type directive {line!r}")
-            symbol_type = STT_FUNC if pieces[1] == "@function" else STT_OBJECT
+            symbol_type = STT_FUNC if pieces[1] == "@function" else STT_TLS if pieces[1] == "@tls_object" else STT_OBJECT
             meta = symbols.setdefault(pieces[0], _SymbolMeta())
             if meta.type not in (STT_NOTYPE, symbol_type):
                 raise X86EncodeError(
@@ -528,8 +531,9 @@ def assemble_file(asm_text: str) -> ElfObject:
         )
         (global_symbols if meta.global_ else local_symbols).append(record)
     for name in sorted(referenced - set(labels)):
+        meta = symbol_meta.get(name, _SymbolMeta())
         global_symbols.append(ElfSymbol(
-            name, 0, 0, 0, STB_GLOBAL, STT_NOTYPE,
+            name, 0, 0, 0, STB_GLOBAL, meta.type,
         ))
     all_symbols = [ElfSymbol.null(), *local_symbols, *global_symbols]
     symbol_indices = {

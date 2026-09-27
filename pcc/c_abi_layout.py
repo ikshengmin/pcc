@@ -24,6 +24,8 @@ def integer_scalar_layout(bit_width: int) -> CAbiScalarLayout:
 
 
 def floating_scalar_layout(bit_width: int) -> CAbiScalarLayout:
+    if bit_width == 80:
+        return CAbiScalarLayout(size=16, alignment=16)
     if bit_width not in (16, 32, 64, 128):
         raise ValueError(f"unsupported floating width: {bit_width}")
     size = bit_width // 8

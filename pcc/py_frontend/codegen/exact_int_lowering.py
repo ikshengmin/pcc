@@ -26,6 +26,7 @@ from ..py_ast import (
     FuncDef,
     If,
     IfExpr,
+    ImportFrom,
     IntLit,
     IntType,
     ListType,
@@ -110,6 +111,13 @@ def _collect_local_binding_types(stmts, out) -> None:
                 stmt.target.ty,
                 out,
             )
+        elif isinstance(stmt, ImportFrom):
+            # A native from-import binds a Python object in the executing
+            # function, even when another write to this name is a raw scalar.
+            # Plan one compatible slot before either branch is emitted.
+            for imported, alias in stmt.names:
+                if imported != "*":
+                    out.append((alias or imported, DynType(name="dyn")))
         elif isinstance(stmt, For):
             is_enumerate_tuple = (
                 isinstance(stmt.iter, Call)

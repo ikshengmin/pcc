@@ -139,6 +139,7 @@ from .hoist_boxing import (
     box_outer_body,
     collect_scope_bindings,
     function_boxed_names,
+    function_local_bindings,
     late_bound_lambda_captures,
     scope_declared_names,
 )
@@ -148,6 +149,24 @@ from .hoist_predicates import (
     body_needs_nested_rewrite,
     hoist_stmt_kind,
 )
+
+
+def _hoist_lexical_scope_names(fd, body, inherited):
+    """Names available as lexical captures below this function scope.
+
+    A global declaration is a barrier for descendants as well as this body.
+    Nonlocals retain the enclosing cell; their writes do not create locals.
+    Inspect the rewritten body too, so generated cell/import temporaries stay
+    available without reinstating source-level global bindings.
+    """
+    globals_here = scope_declared_names(fd.body, True, False)
+    external = scope_declared_names(fd.body, True, True)
+    names = [name for name in inherited if not name_in(globals_here, name)]
+    extend_names_once(names, function_local_bindings(fd))
+    for name in collect_scope_bindings(body):
+        if not name_in(external, name):
+            append_name_once(names, name)
+    return names
 
 
 def _hoist_decorator_name(dec):
@@ -427,49 +446,61 @@ class _HoistLoweringPass:
                                 )
             return tuple(boxed)
 
-        def collect_first_class_closure_captures(body):
+        def collect_first_class_closure_captures(body, outer_scope_names):
             boxed = []
 
-            def walk_block(stmts):
+            def walk_block(stmts, lexical_names):
                 for stmt in stmts:
                     if isinstance(stmt, _FuncDef):
                         if body_uses_name_as_value(stmts, stmt.name):
-                            extend_names_once(boxed, analyze_names(stmt, ()))
-                        walk_block(stmt.body)
+                            # The cell planner must see the same enclosing
+                            # locals as later closure conversion. Otherwise a
+                            # same-named module global hides an imported/local
+                            # binding here, and the later pass captures its
+                            # current value instead of its shared lexical cell.
+                            extend_names_once(
+                                boxed,
+                                analyze_names(stmt, (), outer_scope_names=lexical_names),
+                            )
+                        child_names = _hoist_lexical_scope_names(
+                            stmt, stmt.body, lexical_names,
+                        )
+                        walk_block(stmt.body, tuple(child_names))
                         continue
                     if isinstance(stmt, _If):
-                        walk_block(stmt.body)
-                        walk_block(stmt.else_body)
+                        walk_block(stmt.body, lexical_names)
+                        walk_block(stmt.else_body, lexical_names)
                         continue
                     if isinstance(stmt, _While):
-                        walk_block(stmt.body)
-                        walk_block(stmt.else_body)
+                        walk_block(stmt.body, lexical_names)
+                        walk_block(stmt.else_body, lexical_names)
                         continue
                     if isinstance(stmt, _For):
-                        walk_block(stmt.body)
-                        walk_block(stmt.else_body)
+                        walk_block(stmt.body, lexical_names)
+                        walk_block(stmt.else_body, lexical_names)
                         continue
                     if isinstance(stmt, _Try):
-                        walk_block(stmt.body)
+                        walk_block(stmt.body, lexical_names)
                         for handler in stmt.handlers:
                             walk_block(
-                                _dataclass_field_value(handler, "body", ())
+                                _dataclass_field_value(handler, "body", ()),
+                                lexical_names,
                             )
-                        walk_block(stmt.else_body)
-                        walk_block(stmt.finally_body)
+                        walk_block(stmt.else_body, lexical_names)
+                        walk_block(stmt.finally_body, lexical_names)
                         continue
                     if isinstance(stmt, _With):
-                        walk_block(stmt.body)
+                        walk_block(stmt.body, lexical_names)
 
-            walk_block(body)
+            walk_block(body, outer_scope_names)
             return tuple(boxed)
 
-        def boxed_capture_names(body):
+        def boxed_capture_names(body, outer_scope_names):
             boxed = []
             extend_names_once(boxed, collect_all_mutable_captures(body))
             extend_names_once(
                 boxed,
-                collect_first_class_closure_captures(body),
+                collect_first_class_closure_captures(body, outer_scope_names),
             )
             extend_names_once(boxed, late_bound_lambda_captures(body))
             return tuple(boxed)
@@ -544,12 +575,7 @@ class _HoistLoweringPass:
                 cached_entry = locally_bound_names_cache.get(cache_key)
                 if cached_entry is not None and cached_entry[1] is fd:
                     return cached_entry[0]
-                bound = []
-                for a in fd.args:
-                    if a.name != "":
-                        append_name_once(bound, a.name)
-                extend_names_once(bound, collect_scope_bindings(fd.body))
-                result = tuple(bound)
+                result = function_local_bindings(fd)
                 locally_bound_names_cache[cache_key] = (result, fd)
                 return result
 
@@ -888,6 +914,9 @@ class _HoistLoweringPass:
                 if cached_entry is not None and cached_entry[1] is fd:
                     return cached_entry[0]
                 out = []
+                child_scope = _hoist_lexical_scope_names(
+                    fd, fd.body, outer_scope_names,
+                )
                 for inner_fd in fd.body:
                     if not isinstance(inner_fd, _FuncDef):
                         continue
@@ -895,12 +924,12 @@ class _HoistLoweringPass:
                     inner_free = analyze_names(
                         inner_fd,
                         excluded_names,
-                        outer_scope_names=outer_scope_names,
+                        outer_scope_names=child_scope,
                     )
                     inner_forwarded = forwarded_value_capture_names(
                         inner_fd,
                         excluded_names,
-                        outer_scope_names,
+                        child_scope,
                         inner_local_bound,
                     )
                     inner_needed = []
@@ -1322,7 +1351,9 @@ class _HoistLoweringPass:
                         st.body,
                         final_name,
                         tuple(a.name for a in st.args if a.name != ""),
-                        function_boxed_names(st, boxed_capture_names(st.body)),
+                        function_boxed_names(
+                            st, boxed_capture_names(st.body, function_local_bindings(st))
+                        ),
                         closure_boxed_params,
                         boxed_function_defs,
                     )
@@ -1375,13 +1406,8 @@ class _HoistLoweringPass:
                         update_name_map(inner_map, rename_map)
                         if not binds_cell:
                             inner_map[st.name] = (final_name, free_names)
-                        inner_scope = copy_names(scope_names)
-                        for a in st.args:
-                            if a.name != "":
-                                append_name_once(inner_scope, a.name)
-                        extend_names_once(
-                            inner_scope,
-                            collect_scope_bindings(inner_source_body),
+                        inner_scope = _hoist_lexical_scope_names(
+                            st, inner_source_body, scope_names,
                         )
                         inner_body = rewrite_body(
                             inner_source_body,
@@ -1865,11 +1891,13 @@ class _HoistLoweringPass:
                         stmt.body,
                         stmt.name,
                         tuple(scope_names),
-                        function_boxed_names(stmt, boxed_capture_names(stmt.body)),
+                        function_boxed_names(
+                            stmt, boxed_capture_names(stmt.body, function_local_bindings(stmt))
+                        ),
                         closure_boxed_params,
                         boxed_function_defs,
                     )
-                    extend_names_once(scope_names, collect_scope_bindings(boxed_body))
+                    scope_names = _hoist_lexical_scope_names(stmt, boxed_body, ())
                     new_body = rewrite_body(
                         boxed_body,
                         {},
@@ -1912,14 +1940,13 @@ class _HoistLoweringPass:
                                 m.body,
                                 method_owner_name,
                                 tuple(scope_names),
-                                function_boxed_names(m, boxed_capture_names(m.body)),
+                                function_boxed_names(
+                                    m, boxed_capture_names(m.body, function_local_bindings(m))
+                                ),
                                 closure_boxed_params,
                                 boxed_function_defs,
                             )
-                            extend_names_once(
-                                scope_names,
-                                collect_scope_bindings(boxed_body),
-                            )
+                            scope_names = _hoist_lexical_scope_names(m, boxed_body, ())
                             enclosing_self_type[0] = _hoist_method_self_type(m)
                             new_body = rewrite_body(
                                 boxed_body,

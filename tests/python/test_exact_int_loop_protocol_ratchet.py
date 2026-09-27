@@ -99,10 +99,45 @@ def test_exact_int_loop_protocol_ratchet(tmp_path):
     # After:  load_ptr 9 (3 on the hot path, one per statement; the rest in
     # cold error/exit release blocks), pin 5 (all inside the two slow bignum
     # blocks), unpin 11 (slow blocks and their error-cleanup twins), no plain
-    # store_root (4 ownership-transferring pcc_gc_store_root_take), lifo 0.
+    # store_root on any loop cycle (cold cleanup may clear roots), four
+    # ownership-transferring pcc_gc_store_root_take sites, and lifo 0.
     assert counts["pcc_gc_frame_enter_lifo"] == 0, counts
     assert counts["pcc_gc_load_ptr"] <= 9, counts
-    assert counts["pcc_gc_store_root"] == 0, counts
+    # The tagged loop cannot acquire an ordinary root-store protocol. Cold
+    # owner cleanup now clears its slot before any terminal release callback.
+    blocks = {}
+    for block in _blocks(body):
+        label = re.match(r"([A-Za-z_.][A-Za-z0-9_.]*):\n", block)
+        if label:
+            blocks[label.group(1)] = block
+    edges = {name: re.findall(r"label %([A-Za-z0-9_.]+)", block)
+             for name, block in blocks.items()}
+    cyclic = set()
+    for name in blocks:
+        pending = list(edges.get(name, ()))
+        seen = set()
+        while pending:
+            next_name = pending.pop()
+            if next_name == name:
+                cyclic.add(name)
+                break
+            if next_name not in seen:
+                seen.add(next_name)
+                pending.extend(edges.get(next_name, ()))
+    assert cyclic, "the tagged-loop CFG must contain its actual backedge"
+    for name, block in blocks.items():
+        for line in block.splitlines():
+            if "@pcc_gc_store_root(" not in line:
+                continue
+            assert name not in cyclic, block
+            assert re.search(r"@pcc_gc_store_root\([^\n]*, ptr null\)", line), line
+            leave = block.find("@pcc_gc_frame_leave")
+            assert leave < 0 or block.index(line) < leave, block
+    error = blocks.get("err.exit", "")
+    finish = blocks.get("err.finish", "")
+    assert "@pcc_gc_store_root(" in error and "br label %err.finish" in error
+    assert "@pcc_gc_frame_leave" not in error
+    assert "@pcc_gc_frame_leave" in finish
     assert counts["pcc_gc_store_root_take"] <= 4, counts
     assert counts["pcc_gc_pin"] <= 5, counts
     assert counts["pcc_gc_unpin"] <= 11, counts

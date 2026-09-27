@@ -40,6 +40,10 @@ def _defined_symbols(payload: bytes) -> tuple[str, list[str]]:
         return "elf", [symbol.name for symbol in obj.symbols
                        if symbol.name and symbol.binding in (STB_GLOBAL, STB_WEAK)
                        and symbol.section_index != SHN_UNDEF]
+    if payload[:2] == b"\x64\x86":
+        from .coff_x86_64 import parse_object
+        obj = parse_object(payload)
+        return "coff", [symbol.name for symbol in obj.symbols if symbol.external and symbol.section]
     raise ArchiveFormatError("archive input is not an owned relocatable object")
 
 

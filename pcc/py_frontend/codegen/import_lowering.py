@@ -75,6 +75,7 @@ from .layer1_support import (
 )
 
 _Name = Name
+_CSTR = ir.IntType(8).as_pointer()
 
 
 def _dataclass_field_value(obj, field_name: str, default=None):
@@ -724,6 +725,69 @@ class ImportLoweringMixin:
                 f"pcc.compiled.from.import.{module_name.replace('.', '_')}"
             ),
         )
+        if self.current_func_def is not None:
+            # Import/getattr return owned objects. Keep the module alive until
+            # all requested bindings finish, including error unwinds, and pin
+            # each incoming value across release of a replaced local owner.
+            module_root = self._enter_container_temp_root(
+                module, self._fresh("compiled.import.module")
+            )
+            module_lifetime = (module_root, True)
+            old_error = self._current_try_err_block()
+            error_target = old_error if old_error is not None else self._ensure_fn_err_exit()
+            module_cleanup = self._make_cpy_operand_cleanup_block(
+                (), (), error_target, "compiled.import.module.error",
+                rooted_pcc_lifetimes=(module_lifetime,),
+            )
+            self._try_err_block = module_cleanup
+            try:
+                self._emit_post_call_err_check()
+                for attr_name, as_name in names:
+                    if attr_name == "*":
+                        raise NotImplementedError(
+                            "star import from compiled sibling module is not supported"
+                        )
+                    current_module = self.builder.call(
+                        self.runtime["pcc_gc_load_ptr"],
+                        [ir.Constant(_CSTR, None), self._as_gc_ptr(module_root)],
+                        name=self._fresh("compiled.import.module.current"),
+                    )
+                    value = self.builder.call(
+                        self.runtime["py_obj_getattr"],
+                        [current_module, self._attr_name_ptr(attr_name)],
+                        name=self._fresh("pcc.compiled.from." + attr_name),
+                    )
+                    value_root = self._enter_container_temp_root(
+                        value, self._fresh("compiled.import.value")
+                    )
+                    self._try_err_block = self._make_cpy_operand_cleanup_block(
+                        (), (), error_target, "compiled.import.value.error",
+                        rooted_pcc_lifetimes=(module_lifetime, (value_root, True)),
+                    )
+                    self._emit_post_call_err_check()
+                    value = self.builder.call(
+                        self.runtime["pcc_gc_load_ptr"],
+                        [ir.Constant(_CSTR, None), self._as_gc_ptr(value_root)],
+                        name=self._fresh("compiled.import.value.current"),
+                    )
+                    self._store_unpack_target(
+                        Name(
+                            span=self.current_func_def.span,
+                            ty=DynType(name="dyn"),
+                            ident=as_name or attr_name,
+                        ),
+                        value,
+                        DynType(name="dyn"),
+                        value_is_owned=True,
+                    )
+                    # The local/global assignment consumed the incoming owner.
+                    # Retire only the additional traced temporary reference.
+                    self._leave_container_temp_root(value_root)
+                    self._try_err_block = module_cleanup
+            finally:
+                self._try_err_block = old_error
+            self._release_rooted_pcc_lifetimes((module_lifetime,))
+            return
         self._emit_post_call_err_check()
         for attr_name, as_name in names:
             if attr_name == "*":

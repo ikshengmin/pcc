@@ -44,7 +44,11 @@ def _host_pool(specs, width):
     def signal_group(process, number):
         process.poll()
         try:
-            os.killpg(process.pid, number)
+            if sys.platform == "win32":
+                if process.returncode is None:
+                    process.kill() if number == 9 else process.terminate()
+            else:
+                os.killpg(process.pid, number)
         except ProcessLookupError:
             pass
         except PermissionError:
@@ -69,7 +73,9 @@ def _host_pool(specs, width):
                 argv, env_vector = specs[next_index]
                 env = dict(item.split("=", 1) for item in env_vector)
                 try:
-                    process = subprocess.Popen(argv, env=env, process_group=0)
+                    process = (subprocess.Popen(argv, env=env, creationflags=512)
+                               if sys.platform == "win32"
+                               else subprocess.Popen(argv, env=env, process_group=0))
                 except OSError:
                     return ((next_index + 1) << 32) | 127
                 active.append((next_index, process))
@@ -109,7 +115,11 @@ def _host_weighted_pool(specs, reservations, width, budget):
     def signal_group(process, number):
         process.poll()
         try:
-            os.killpg(process.pid, number)
+            if sys.platform == "win32":
+                if process.returncode is None:
+                    process.kill() if number == 9 else process.terminate()
+            else:
+                os.killpg(process.pid, number)
         except ProcessLookupError:
             pass
         except PermissionError:
@@ -141,7 +151,9 @@ def _host_weighted_pool(specs, reservations, width, budget):
                 argv, env_vector = specs[selected]
                 env = dict(item.split("=", 1) for item in env_vector)
                 try:
-                    process = subprocess.Popen(argv, env=env, process_group=0)
+                    process = (subprocess.Popen(argv, env=env, creationflags=512)
+                               if sys.platform == "win32"
+                               else subprocess.Popen(argv, env=env, process_group=0))
                 except OSError:
                     return ((selected + 1) << 32) | 127
                 active.append((selected, process))
@@ -196,7 +208,11 @@ def _host_chained_pool(specs, reservations, followups, followup_paths, floor,
     def signal_group(process, number):
         process.poll()
         try:
-            os.killpg(process.pid, number)
+            if sys.platform == "win32":
+                if process.returncode is None:
+                    process.kill() if number == 9 else process.terminate()
+            else:
+                os.killpg(process.pid, number)
         except ProcessLookupError:
             pass
         except PermissionError:
@@ -249,7 +265,9 @@ def _host_chained_pool(specs, reservations, followups, followup_paths, floor,
                 argv, env_vector = spec
                 env = dict(item.split("=", 1) for item in env_vector)
                 try:
-                    process = subprocess.Popen(argv, env=env, process_group=0)
+                    process = (subprocess.Popen(argv, env=env, creationflags=512)
+                               if sys.platform == "win32"
+                               else subprocess.Popen(argv, env=env, process_group=0))
                 except OSError:
                     return ((selected + 1) << 32) | 127
                 active.append((selected, process))

@@ -229,6 +229,7 @@ class ControlFlowLoweringMixin:
         class_attr_state_before = dict(
             getattr(self, "_class_attr_runtime_state", {})
         )
+        scaffold_facts_before = dict(getattr(self, "_ir_builder_env_flags", {}))
 
         fn = self.current_function
         then_bb = fn.append_basic_block(name=self._fresh("if.then"))
@@ -247,17 +248,22 @@ class ControlFlowLoweringMixin:
         class_attr_state_then = dict(
             getattr(self, "_class_attr_runtime_state", {})
         )
-        if not self._builder_block_is_terminated():
+        scaffold_facts_then = dict(self._ir_builder_env_flags)
+        then_reaches_merge = not self._builder_block_is_terminated()
+        if then_reaches_merge:
             self.builder.branch(merge_bb)
 
         self.builder.position_at_end(else_bb)
         self._class_attr_runtime_state = dict(class_attr_state_before)
+        self._ir_builder_env_flags = dict(scaffold_facts_before)
         if stmt.else_body:
             self._emit_stmts(stmt.else_body)
         class_attr_state_else = dict(
             getattr(self, "_class_attr_runtime_state", {})
         )
-        if not self._builder_block_is_terminated():
+        scaffold_facts_else = dict(self._ir_builder_env_flags)
+        else_reaches_merge = not self._builder_block_is_terminated()
+        if else_reaches_merge:
             self.builder.branch(merge_bb)
 
         self.builder.position_at_end(merge_bb)
@@ -277,6 +283,18 @@ class ControlFlowLoweringMixin:
             else:
                 merged_class_attr_state[key] = "unknown"
         self._class_attr_runtime_state = merged_class_attr_state
+        if then_reaches_merge and else_reaches_merge:
+            self._ir_builder_env_flags = {
+                name: kind
+                for name, kind in scaffold_facts_then.items()
+                if scaffold_facts_else.get(name) == kind
+            }
+        elif then_reaches_merge:
+            self._ir_builder_env_flags = scaffold_facts_then
+        elif else_reaches_merge:
+            self._ir_builder_env_flags = scaffold_facts_else
+        else:
+            self._ir_builder_env_flags = scaffold_facts_before
 
     def _emit_if_expr(self, expr: IfExpr) -> ir.Value:
         """Lower ``then_e if cond else else_e`` into a diamond CFG plus phi."""

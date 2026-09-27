@@ -28,6 +28,16 @@
 #define UCHAR_MAX 255
 #endif
 
+#ifndef CHAR_MAX
+#if defined(__CHAR_UNSIGNED__)
+#define CHAR_MAX UCHAR_MAX
+#define CHAR_MIN 0
+#else
+#define CHAR_MAX SCHAR_MAX
+#define CHAR_MIN SCHAR_MIN
+#endif
+#endif
+
 #ifndef SHRT_MAX
 #define SHRT_MAX 32767
 #endif
@@ -53,7 +63,7 @@
 #endif
 
 #ifndef LONG_MAX
-#define LONG_MAX 9223372036854775807L
+#define LONG_MAX __LONG_MAX__
 #endif
 
 #ifndef LONG_MIN
@@ -61,7 +71,7 @@
 #endif
 
 #ifndef ULONG_MAX
-#define ULONG_MAX 18446744073709551615UL
+#define ULONG_MAX (2UL * __LONG_MAX__ + 1UL)
 #endif
 
 #ifndef LLONG_MAX

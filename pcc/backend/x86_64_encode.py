@@ -113,6 +113,8 @@ _XMM_NAMES = {
 }
 
 _SIZE_PREFIXES = {
+    "TBYTE PTR ": 80,
+    "XMMWORD PTR": 128,
     "BYTE PTR ": 8,
     "WORD PTR ": 16,
     "DWORD PTR ": 32,
@@ -182,8 +184,9 @@ def _parse_mem(text: str) -> _Mem | None:
             width = candidate
             raw = raw[len(prefix):].strip()
             break
-    if raw.lower() == "fs:0":
-        return _Mem(width, disp=0, segment="fs")
+    if raw.lower().startswith(("fs:", "gs:")):
+        segment, displacement = raw.lower().split(":", 1)
+        return _Mem(width, disp=int(displacement, 0), segment=segment)
     if raw.endswith("[rip]"):
         symbol = raw[:-5].strip()
         relocation = R_X86_64_PC32
@@ -318,7 +321,7 @@ def _encode_rm(reg_field: int, operand) -> _RMEncoding:
             relocation_type=operand.relocation,
         )
     if operand.segment is not None:
-        if operand.segment != "fs" or operand.base is not None or operand.index is not None:
+        if operand.segment not in ("fs", "gs") or operand.base is not None or operand.index is not None:
             raise X86EncodeError("only absolute fs:0 memory is proven")
         return _RMEncoding(
             bytes((((reg_field & 7) << 3) | 4, 0x25)) + _int_bytes(operand.disp, 4),
@@ -371,7 +374,7 @@ def _modrm_instruction(
     segment_prefix = (
         b"\x64"
         if isinstance(rm, _Mem) and rm.segment == "fs"
-        else b""
+        else (b"\x65" if isinstance(rm, _Mem) and rm.segment == "gs" else b"")
     )
     rex = _rex(
         w=width == 64,
@@ -661,7 +664,7 @@ def _encode_group_unary(mnemonic: str, operands: list, pc: int) -> EncodedInstru
     width = _operand_width(operand)
     if width not in (8, 16, 32, 64):
         raise X86EncodeError(f"{mnemonic} has no width")
-    group = {"neg": 3, "div": 6, "idiv": 7}[mnemonic]
+    group = {"neg": 3, "mul": 4, "div": 6, "idiv": 7}[mnemonic]
     pseudo = _Reg("group", group, width)
     return _modrm_instruction(
         pc=pc, legacy=_legacy_width(width),
@@ -783,6 +786,7 @@ def _encode_sse(mnemonic: str, operands: list, pc: int) -> EncodedInstruction:
         raise X86EncodeError(f"{mnemonic} expects two operands")
     dst, src = operands
     scalar_ops = {
+        "movdqu": (b"\xf3", 0x6F, 0x7F, 128),
         "movss": (b"\xf3", 0x10, 0x11, 32),
         "movsd": (b"\xf2", 0x10, 0x11, 64),
         "addss": (b"\xf3", 0x58, None, 32),
@@ -931,6 +935,29 @@ def encode_instruction(
         return EncodedInstruction(b"")
     mnemonic, _, rest = stripped.partition(" ")
     mnemonic = mnemonic.lower()
+    # x87 register-stack operations have implicit operands.  Keep the owned
+    # dialect finite: these exact spellings are emitted by the fp80 lowering.
+    x87_fixed = {
+        "faddp": b"\xde\xc1", "fsubp": b"\xde\xe9",
+        "fmulp": b"\xde\xc9", "fdivp": b"\xde\xf9",
+        "fchs": b"\xd9\xe0", "fabs": b"\xd9\xe1",
+        "fsqrt": b"\xd9\xfa", "fprem": b"\xd9\xf8",
+        "frndint": b"\xd9\xfc", "fldz": b"\xd9\xee",
+    }
+    if mnemonic in x87_fixed:
+        if rest.strip():
+            raise X86EncodeError(f"{mnemonic} takes no operands in the owned dialect")
+        return EncodedInstruction(x87_fixed[mnemonic])
+    x87_stack = {
+        ("fxch", "st(1)"): b"\xd9\xc9",
+        ("fld", "st(0)"): b"\xd9\xc0",
+        ("fstp", "st(0)"): b"\xdd\xd8",
+        ("fstp", "st(1)"): b"\xdd\xd9",
+        ("fucomip", "st(0), st(1)"): b"\xdf\xe9",
+        ("fnstsw", "ax"): b"\xdf\xe0",
+    }
+    if (mnemonic, rest.strip()) in x87_stack:
+        return EncodedInstruction(x87_stack[(mnemonic, rest.strip())])
     if mnemonic == "lock":
         nested_mnemonic = rest.strip().partition(" ")[0].lower()
         if nested_mnemonic not in ("xadd", "cmpxchg"):
@@ -948,6 +975,28 @@ def encode_instruction(
             nested.relocations,
         )
     operands = [_parse_operand(item) for item in _split_operands(rest)]
+    if mnemonic in ("fld", "fstp", "fild", "fistp", "fnstcw", "fldcw"):
+        if len(operands) != 1 or not isinstance(operands[0], _Mem):
+            raise X86EncodeError(f"{mnemonic} requires one sized memory operand")
+        forms = {
+            ("fld", 32): (0xD9, 0), ("fld", 64): (0xDD, 0),
+            ("fld", 80): (0xDB, 5), ("fstp", 32): (0xD9, 3),
+            ("fstp", 64): (0xDD, 3), ("fstp", 80): (0xDB, 7),
+            ("fild", 64): (0xDF, 5), ("fistp", 64): (0xDF, 7),
+            ("fnstcw", 16): (0xD9, 7), ("fldcw", 16): (0xD9, 5),
+        }
+        form = forms.get((mnemonic, operands[0].width))
+        if form is None:
+            raise X86EncodeError(f"unsupported {mnemonic} memory width")
+        opcode, group = form
+        # Operand width belongs to the opcode, not a 66 prefix or REX.W.
+        return _modrm_instruction(pc=pc, legacy=b"", opcode=bytes((opcode,)),
+                                  width=32, reg=_Reg("group", group, 32), rm=operands[0])
+    if mnemonic in ("stmxcsr", "ldmxcsr"):
+        if len(operands) != 1 or not isinstance(operands[0], _Mem) or operands[0].width != 32:
+            raise X86EncodeError("MXCSR transfer requires one DWORD memory operand")
+        return _modrm_instruction(pc=pc, legacy=b"", opcode=b"\x0f\xae", width=32,
+                                  reg=_Reg("group", 3 if mnemonic == "stmxcsr" else 2, 32), rm=operands[0])
     if mnemonic == "mov":
         return _encode_mov(operands, pc)
     if mnemonic in _BINARY_REG_RM:
@@ -958,7 +1007,7 @@ def encode_instruction(
         return _encode_lea(operands, pc)
     if mnemonic == "imul":
         return _encode_imul(operands, pc)
-    if mnemonic in ("neg", "div", "idiv"):
+    if mnemonic in ("neg", "mul", "div", "idiv"):
         return _encode_group_unary(mnemonic, operands, pc)
     if mnemonic in ("shl", "shr", "sar"):
         return _encode_shift(mnemonic, operands, pc)
@@ -971,7 +1020,7 @@ def encode_instruction(
     if mnemonic in ("xchg", "xadd", "cmpxchg"):
         return _encode_xchg_like(mnemonic, operands, pc)
     if mnemonic in {
-        "movss", "movsd", "movd", "movq", "xorps", "xorpd",
+        "movdqu", "movss", "movsd", "movd", "movq", "xorps", "xorpd",
         "addss", "addsd", "subss", "subsd", "mulss", "mulsd",
         "divss", "divsd", "sqrtss", "sqrtsd", "ucomiss", "ucomisd",
         "cvtsi2ss", "cvtsi2sd", "cvttss2si", "cvttsd2si",

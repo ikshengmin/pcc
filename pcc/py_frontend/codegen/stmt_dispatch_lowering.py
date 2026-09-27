@@ -90,6 +90,68 @@ def _stmt_is_return(stmt) -> bool:
     )
 
 
+def _scaffold_loop_exit_facts(before: dict, after: dict) -> dict:
+    """A loop can execute zero times, so retain only facts true both ways."""
+    return {name: kind for name, kind in before.items() if after.get(name) == kind}
+
+
+def _scaffold_forget_bound_target(facts: dict, target) -> None:
+    if isinstance(target, Name):
+        facts.pop(target.ident, None)
+        return
+    for element in getattr(target, "elems", ()):
+        _scaffold_forget_bound_target(facts, element)
+
+
+def _scaffold_forget_import_bindings(facts: dict, stmt, from_import: bool) -> None:
+    for imported, alias in stmt.names:
+        bound = alias or (imported if from_import else imported.split(".")[0])
+        facts.pop(bound, None)
+
+
+def _scaffold_try_touched_names(stmt) -> set[str]:
+    names: set[str] = set()
+
+    def collect_target(target) -> None:
+        if isinstance(target, Name):
+            names.add(target.ident)
+            return
+        for element in getattr(target, "elems", ()):
+            collect_target(element)
+
+    def visit(node) -> None:
+        if isinstance(node, (FuncDef, ClassDef)):
+            names.add(node.name)
+            return
+        if _stmt_is_assign(node):
+            for target in node.targets:
+                collect_target(target)
+        elif isinstance(node, AugAssign):
+            collect_target(node.target)
+        elif isinstance(node, Delete):
+            for target in node.targets:
+                collect_target(target)
+        elif isinstance(node, For):
+            collect_target(node.target)
+        elif isinstance(node, With):
+            for _manager, target in node.items:
+                if target is not None:
+                    collect_target(target)
+        elif isinstance(node, (Import, ImportFrom)):
+            for imported, alias in node.names:
+                names.add(alias or (imported if isinstance(node, ImportFrom) else imported.split(".")[0]))
+        elif _stmt_kind_name(node) == "ExceptHandler":
+            bound = getattr(node, "name", None)
+            if bound:
+                names.add(bound)
+        for field in ("body", "else_body", "finally_body", "handlers"):
+            for child in getattr(node, field, ()):
+                visit(child)
+
+    visit(stmt)
+    return names
+
+
 class StmtDispatchLoweringMixin:
     def _loop_finally_base(self) -> int:
         """Depth of the finally stack at loop entry. ``break``/``continue`` run
@@ -193,7 +255,11 @@ class StmtDispatchLoweringMixin:
             self._emit_augassign(stmt)
             return
         if _stmt_is_for(stmt):
+            scaffold_before = dict(self._ir_builder_env_flags)
             self._emit_for(stmt)
+            self._ir_builder_env_flags = _scaffold_loop_exit_facts(
+                scaffold_before, self._ir_builder_env_flags
+            )
             return
         if _stmt_is_return(stmt):
             self._emit_return(stmt)
@@ -205,28 +271,46 @@ class StmtDispatchLoweringMixin:
             self._emit_raise(stmt)
             return
         if isinstance(stmt, Try):
+            scaffold_before = dict(self._ir_builder_env_flags)
             self._emit_try(stmt)
+            # Preserve identities of locals the try/handlers/finally never
+            # bind. For touched names the emitted last arm is not a join.
+            touched = _scaffold_try_touched_names(stmt)
+            self._ir_builder_env_flags = {
+                name: kind for name, kind in scaffold_before.items() if name not in touched
+            }
             return
         if isinstance(stmt, With):
+            for _manager, target in stmt.items:
+                if target is not None:
+                    _scaffold_forget_bound_target(self._ir_builder_env_flags, target)
             self._emit_with(stmt)
             return
         if _is_import_stmt(stmt):
             if _is_import_from_stmt(stmt):
+                _scaffold_forget_import_bindings(self._ir_builder_env_flags, stmt, True)
                 self._emit_import_from(stmt)
             else:
+                _scaffold_forget_import_bindings(self._ir_builder_env_flags, stmt, False)
                 self._emit_import(stmt)
             return
         if isinstance(stmt, Import):
+            _scaffold_forget_import_bindings(self._ir_builder_env_flags, stmt, False)
             self._emit_import(stmt)
             return
         if isinstance(stmt, ImportFrom):
+            _scaffold_forget_import_bindings(self._ir_builder_env_flags, stmt, True)
             self._emit_import_from(stmt)
             return
         if isinstance(stmt, If):
             self._emit_if(stmt)
             return
         if isinstance(stmt, While):
+            scaffold_before = dict(self._ir_builder_env_flags)
             self._emit_while(stmt)
+            self._ir_builder_env_flags = _scaffold_loop_exit_facts(
+                scaffold_before, self._ir_builder_env_flags
+            )
             return
         if isinstance(stmt, (Nonlocal, Global)):
             # pcc has no lexical-scope closure story — ``nonlocal`` /

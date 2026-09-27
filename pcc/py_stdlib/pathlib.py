@@ -117,9 +117,33 @@ class PurePath:
         """
         base = str(other)
         mine = self._raw
+        if os.sep == "\\":
+            base = base.replace("/", "\\")
+            mine = mine.replace("/", "\\")
+            base_drive, base_tail = _op.splitdrive(base)
+            mine_drive, mine_tail = _op.splitdrive(mine)
+            if _op.normcase(base_drive) != _op.normcase(mine_drive) or base_tail.startswith("\\") != mine_tail.startswith("\\"):
+                raise ValueError(repr(mine) + " is not in the subpath of " + repr(base))
+            base_parts: list = []
+            mine_parts: list = []
+            for part in base_tail.split("\\"):
+                if part and part != ".":
+                    base_parts.append(part)
+            for part in mine_tail.split("\\"):
+                if part and part != ".":
+                    mine_parts.append(part)
+            if len(base_parts) > len(mine_parts):
+                raise ValueError(repr(mine) + " is not in the subpath of " + repr(base))
+            index = 0
+            while index < len(base_parts):
+                if base_parts[index].lower() != mine_parts[index].lower():
+                    raise ValueError(repr(mine) + " is not in the subpath of " + repr(base))
+                index = index + 1
+            relative = "\\".join(mine_parts[len(base_parts):])
+            return self.__class__(relative if relative else ".")
         if base == mine:
             return self.__class__(".")
-        prefix = base if base.endswith("/") else base + "/"
+        prefix = base if base.endswith(os.sep) else base + os.sep
         if not mine.startswith(prefix):
             raise ValueError(
                 repr(mine) + " is not in the subpath of " + repr(base)
@@ -142,6 +166,8 @@ class Path(PurePath):
         return out
 
     def absolute(self) -> "Path":
+        if os.sep == "\\":
+            return Path(_op.abspath(self._raw))
         if _op.isabs(self._raw):
             return Path(self._raw)
         return Path(_op.join(os.getcwd(), self._raw))
@@ -155,6 +181,10 @@ class Path(PurePath):
         in this tree need -- ``Path(__file__).resolve().parents[2]`` wants an
         absolute repo root, not link identity.
         """
+        if os.sep == "\\":
+            if strict and not _op.exists(self._raw):
+                raise FileNotFoundError(self._raw)
+            return Path(_op.realpath(self._raw))
         return Path(_op.normpath(self.absolute()._raw))
 
     @staticmethod

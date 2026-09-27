@@ -8,7 +8,10 @@ means what it says and no longer depends on a process-wide monkeypatch.
 
 from __future__ import annotations
 
-import fcntl as _gate_fcntl
+try:
+    import fcntl as _gate_fcntl
+except ImportError:
+    _gate_fcntl = None
 import importlib.util
 import shutil
 import subprocess
@@ -85,6 +88,11 @@ def pcc_py_runtime_archive(tmp_path_factory):
         )
         return archive
 
+    if _gate_sys.platform.startswith("linux") or _gate_sys.platform == "win32":
+        from pcc.py_frontend.owned_runtime_build import ensure_target_runtime
+        from pcc.py_frontend.pipeline_targets import host_target_triple
+        runtime_dir = str(Path(__file__).resolve().parents[1] / "pcc" / "py_runtime")
+        return Path(ensure_target_runtime(runtime_dir, host_target_triple()))
     del tmp_path_factory
     return cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
 
@@ -211,6 +219,8 @@ def _provision_pcc1() -> None:
     if _PCC1_PROVISIONED or os.environ.get("PCC_NO_AUTO_PCC1", "").strip():
         return
     _PCC1_PROVISIONED = True
+    if _gate_sys.platform != "darwin":
+        raise RuntimeError("provision platform pcc1 with scripts/bootstrap_platform.py and set PCC_NO_AUTO_PCC1=1")
     repo = Path(__file__).resolve().parent.parent
     lock_path = os.path.join(tempfile.gettempdir(), "pcc-pytest-pcc1-provision.lock")
     with open(lock_path, "a+") as lockfile:

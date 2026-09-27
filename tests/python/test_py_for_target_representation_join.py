@@ -45,6 +45,25 @@ def _function_body(ir_text: str, suffix: str) -> str:
     return match.group(1)
 
 
+def _assert_owned_error_slot_clear(body: str, name: str) -> None:
+    # Both constant ownership and a live flag/phi may guard the real slot.
+    # A false-only clear of the dummy slot is not evidence of local cleanup.
+    error = re.search(r"^err.exit:\n(.*?)(?=^[A-Za-z0-9_.]+:|\Z)", body, re.M | re.S)
+    finish = re.search(r"^err.finish:\n(.*?)(?=^[A-Za-z0-9_.]+:|\Z)", body, re.M | re.S)
+    assert error is not None and finish is not None, body
+    cleanup = error.group(1)
+    root_clear = re.search(r"@pcc_gc_store_root\(ptr (%" + re.escape(name) + r"[\w.]*), ptr null\)", cleanup)
+    assert root_clear is not None, cleanup
+    selected = root_clear.group(1)
+    if ".err.active.slot" in selected:
+        assert re.search(re.escape(selected) + r" = select i1 (?:true|%" + re.escape(name) + r"[\w.]*), ptr %" + re.escape(name) + r"\.err\.slot[\w.]*, ptr %" + re.escape(name) + r"\.err\.empty[\w.]*", cleanup), cleanup
+    else:
+        assert ".addr" in selected or ".err.slot" in selected, cleanup
+    assert "@pcc_gc_frame_leave" not in cleanup
+    assert "br label %err.finish" in cleanup
+    assert "@pcc_gc_frame_leave" in finish.group(1)
+
+
 def test_live_cpython_native_target_join_remains_fail_closed():
     """Do not replace an arbitrary foreign object with a lossy pcc projection."""
     host = SimpleNamespace(
@@ -246,23 +265,7 @@ def test_zero_iteration_preserves_prior_target_and_owned_root(tmp_path):
     assert re.search(r"@py_int_from_i64\(|%int\.lit\.tagged", body), body
     assert "@pcc_gc_frame_enter" in body, body
     assert re.search(r"@pcc_gc_store_root(?:_take)?\(", body), body
-    # The slot is always owned in this shape, so the optimizer may fold the
-    # dynamic ownership flag to a literal true.  Either representation must
-    # retain the error-exit release; requiring the pre-folded SSA name made
-    # this test reject stronger constant ownership evidence.
-    # The for-target error cleanup is named ``<ident>.for.err.*`` (see
-    # ``_for_target_error_cleanup``); the bare ``<ident>.err.*`` release in the
-    # same body belongs to the ordinary local unwind and is a literal-false
-    # select here, so anchoring on it tested nothing.  The slot is always
-    # owned in this shape, so the optimizer may fold the dynamic ownership
-    # flag to a literal true; either representation must retain the release.
-    # mem2reg can also leave the loop's ownership flag as a phi
-    # (``%item.owned.N.phi``) guarding the same release.
-    assert "item.for.err.owned" in body or re.search(
-        r"%item\.for\.err\.release\.value[^=]*=\s*select\s+i1\s+"
-        r"(?:true|%item\.owned[\w.]*),",
-        body,
-    ), body
+    _assert_owned_error_slot_clear(body, "item")
     assert not re.search(
         r"store\s+ptr\s+(?!null\b)[^,]+,\s+ptr\s+%item\.addr",
         body,
@@ -524,7 +527,7 @@ def test_for_target_join_covers_zero_nonzero_break_continue_and_error_edges(tmp_
     body = _function_body(ir_text, "choose")
     assert re.search(r"%value\.addr(?:\.\d+)? = alloca ptr", body), body
     assert "value.for.obj.addr" not in body, body
-    assert re.search(r"%value(?:\.for)?\.err\.release\.value", body), body
+    _assert_owned_error_slot_clear(body, "value")
     assert "@pcc_gc_frame_leave" in body, body
     assert "@pcc_gc_release" in body, body
 

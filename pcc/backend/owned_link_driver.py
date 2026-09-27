@@ -1,4 +1,4 @@
-"""Native Mach-O linker entry over pcc's existing parser/assembler/linker.
+"""Native target-selected linker entry over pcc's owned implementations.
 
 Accepts --out PATH and repeated --native-object, --object, --asm or --archive
 inputs. Unsupported CLI surfaces fail explicitly. This entry is qualified
@@ -17,6 +17,25 @@ from pcc.backend.macho_internal_inputs import read_internal_input_manifest
 def main(argv=None, *, _direct_source_view: bool = True) -> None:
     if argv is None:
         argv = sys.argv
+    from pcc.py_frontend.pipeline_targets import host_target_triple
+    target = host_target_triple()
+    filtered = [argv[0]]
+    scan = 1
+    while scan < len(argv):
+        if argv[scan] == "--target":
+            if scan + 1 >= len(argv):
+                raise ValueError("missing linker target")
+            target = argv[scan + 1]
+            scan += 2
+        else:
+            filtered.append(argv[scan])
+            scan += 1
+    argv = filtered
+    from pcc.backend.self_backend_target_match import is_aarch64_darwin_triple, is_aarch64_linux_triple, is_x86_64_linux_triple, is_x86_64_windows_triple
+    if is_aarch64_linux_triple(target) or is_x86_64_linux_triple(target) or is_x86_64_windows_triple(target):
+        return _platform_main(argv, target)
+    if not is_aarch64_darwin_triple(target):
+        raise ValueError("unsupported owned linker target: " + target)
     output = ""
     entry = "_main"
     objects = []
@@ -75,6 +94,40 @@ def main(argv=None, *, _direct_source_view: bool = True) -> None:
         stream.write(image)
     os.chmod(temporary, 0o755)
     os.replace(temporary, output)
+
+
+def _platform_main(argv, target):
+    output = ""
+    from .self_backend_target_match import is_x86_64_windows_triple
+    entry = "pcc_windows_start" if is_x86_64_windows_triple(target) else "_start"
+    assembly = []
+    objects = []
+    archives = []
+    manifest = ""
+    index = 1
+    while index < len(argv):
+        option = argv[index]
+        if index + 1 >= len(argv):
+            raise ValueError("missing value for " + option)
+        value = argv[index + 1]
+        index += 2
+        if option == "--out": output = value
+        elif option == "--entry": entry = value
+        elif option == "--asm": assembly.append(value)
+        elif option in ("--object", "--native-object"): objects.append(value)
+        elif option == "--archive": archives.append(value)
+        elif option == "--internal-input-manifest":
+            if manifest: raise ValueError("duplicate internal input manifest")
+            manifest = value
+        else: raise ValueError("unsupported native linker option: " + option)
+    if not output:
+        raise ValueError("native linker requires --out")
+    if is_x86_64_windows_triple(target):
+        from pcc.backend.owned_pe_link import link_inputs
+        link_inputs(output=output, assembly=assembly, objects=objects, archives=archives, manifest=manifest, entry=entry)
+    else:
+        from pcc.backend.owned_elf_link import link_inputs
+        link_inputs(target=target, output=output, assembly=assembly, objects=objects, archives=archives, manifest=manifest, entry=entry)
 
 
 if __name__ == "__main__":

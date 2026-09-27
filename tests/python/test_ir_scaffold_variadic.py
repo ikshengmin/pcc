@@ -29,6 +29,17 @@ _PTR = r"(?:ptr|i8\s*\*)"
 def _compile_to_ll(source: str, name: str, *, mode: str) -> str:
     from pcc.py_frontend.pipeline import compile_python
 
+    # These cases exercise methods on an owned builder. A parameter merely
+    # named "builder" is an unknown user receiver and must not be scaffolded.
+    if re.search(r"(?m)^def f\(builder(?:,|\))", source):
+        source = "from pcc.llvm_capi.compat import ir\n" + source
+        source = re.sub(r"(?m)^def f\(builder(?:, )?", "def f(", source)
+        source = re.sub(
+            r"(?m)^(def f\([^\n]*\):\n)",
+            r"\1    builder = ir.IRBuilder()\n",
+            source,
+            count=1,
+        )
     src = _BUILD / f"{name}.py"
     out = _BUILD / f"{name}.ll"
     src.write_text(source, encoding="utf-8")
@@ -297,7 +308,11 @@ def test_switch_lowers_to_irbuilder_scaffold():
 def test_switch_add_case_lowers_to_switchinstr_scaffold():
     program = textwrap.dedent(
         """
-        def f(switch_inst, value, target):
+        from pcc.llvm_capi.compat import ir
+
+        def f(value, target):
+            builder = ir.IRBuilder()
+            switch_inst = builder.switch(value, target)
             switch_inst.add_case(value, target)
         """
     )
@@ -315,7 +330,9 @@ def test_switch_add_case_constant_i64_uses_i64_scaffold():
 
         _I64 = ir.IntType(64)
 
-        def f(switch_inst, value: int, target):
+        def f(value: int, target):
+            builder = ir.IRBuilder()
+            switch_inst = builder.switch(ir.Constant(_I64, value), target)
             switch_inst.add_case(ir.Constant(_I64, value), target)
         """
     )
@@ -365,7 +382,10 @@ def test_append_basic_block_on_function_receiver():
     builder. The unambiguous-method match catches this."""
     program = textwrap.dedent(
         """
-        def f(some_function):
+        from pcc.llvm_capi.compat import ir
+
+        def f(module, fn_type):
+            some_function = ir.Function(module, fn_type)
             return some_function.append_basic_block()
         """
     )
@@ -382,7 +402,11 @@ def test_append_basic_block_on_function_receiver():
 def test_add_incoming_on_phi_receiver():
     program = textwrap.dedent(
         """
-        def f(phi, val, blk):
+        from pcc.llvm_capi.compat import ir
+
+        def f(ty, val, blk):
+            builder = ir.IRBuilder()
+            phi = builder.phi(ty)
             phi.add_incoming(val, blk)
         """
     )
@@ -396,7 +420,10 @@ def test_add_incoming_on_phi_receiver():
 def test_as_pointer_on_type_receiver():
     program = textwrap.dedent(
         """
-        def f(ty):
+        from pcc.llvm_capi.compat import ir
+
+        def f():
+            ty = ir.IntType(64)
             return ty.as_pointer()
         """
     )

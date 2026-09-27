@@ -21,6 +21,7 @@ from .c_declaration_state import (
     ExternGlobalRef,
     FileScopeFunctionState,
     FileScopeObjectState,
+    is_thread_local_storage,
 )
 from .c_layout import (
     BitFieldRef,
@@ -560,6 +561,8 @@ class LLVMCodeGenerator(
         gv = self.module.globals.get(actual_name)
         if gv is None:
             gv = ir.GlobalVariable(self.module, ir_type, actual_name)
+        if is_thread_local_storage(storage):
+            gv.storage_class = "thread_local"
         if self._is_file_scope_static(storage):
             gv.linkage = "internal"
         elif not external and getattr(gv, "initializer", None) is None:
@@ -664,6 +667,7 @@ class LLVMCodeGenerator(
         definition_kind = self._file_scope_object_definition_kind(
             storage, has_initializer
         )
+        thread_local = is_thread_local_storage(storage)
         state = self._file_scope_object_states.get(name)
         linkage = self._decl_linkage(storage, existing_state=state)
         symbol_name = self._effective_file_scope_symbol_name(
@@ -677,6 +681,7 @@ class LLVMCodeGenerator(
                 definition_kind=definition_kind,
                 symbol_name=symbol_name,
                 ir_type=ir_type,
+                thread_local=thread_local,
             )
             self._file_scope_object_states[name] = state
             if definition_kind == "extern":
@@ -687,6 +692,8 @@ class LLVMCodeGenerator(
             )
             return gv, True
 
+        if state.thread_local != thread_local:
+            raise SemanticError(f"conflicting thread-local storage for global '{name}'")
         if not self._are_compatible_object_ir_types(state.ir_type, ir_type):
             raise SemanticError(f"conflicting types for global '{name}'")
         merged_ir_type = self._merge_object_ir_types(state.ir_type, ir_type)
@@ -944,7 +951,8 @@ class LLVMCodeGenerator(
             (
                 ir_type,
                 ExternGlobalRef(
-                    self._file_scope_symbol_name(name, storage), ir_type
+                    self._file_scope_symbol_name(name, storage), ir_type,
+                    is_thread_local_storage(storage),
                 ),
             ),
         )
@@ -1375,7 +1383,7 @@ class LLVMCodeGenerator(
                 gv.initializer = ir.Constant(ir_type, None)
             return gv
 
-    def _bind_local_extern_object(self, name, ir_type):
+    def _bind_local_extern_object(self, name, ir_type, storage=None):
         """Bind a block-scope extern object name without mutating file-scope storage.
 
         A local `extern int x;` inside a function should resolve to the visible
@@ -1383,7 +1391,10 @@ class LLVMCodeGenerator(
         undefined external declaration (gcc_torture scope-1.c).
         """
         state = self._file_scope_object_states.get(name)
+        thread_local = is_thread_local_storage(storage)
         if state is not None:
+            if state.thread_local != thread_local:
+                raise SemanticError(f"conflicting thread-local storage for global '{name}'")
             bind_type = self._merge_object_ir_types(state.ir_type, ir_type)
             state.ir_type = bind_type
             state.type_key = str(bind_type)
@@ -1395,12 +1406,18 @@ class LLVMCodeGenerator(
                     symbol_name,
                     external=(state.definition_kind == "extern"),
                 )
+                if thread_local:
+                    existing.storage_class = "thread_local"
             self.define(name, (bind_type, existing))
             return
 
         existing = self.module.globals.get(name)
         if existing is None:
             existing = self._safe_global_var(ir_type, name, external=True)
+            if thread_local:
+                existing.storage_class = "thread_local"
+        elif (getattr(existing, "storage_class", "") == "thread_local") != thread_local:
+            raise SemanticError(f"conflicting thread-local storage for global '{name}'")
         self.define(name, (ir_type, existing))
 
     # External C globals lazily declared on first use.
@@ -1438,6 +1455,8 @@ class LLVMCodeGenerator(
             gv = self._safe_global_var(
                 binding.ir_type, binding.symbol_name, external=True
             )
+            if binding.thread_local:
+                gv.storage_class = "thread_local"
             self.define(name, (binding.ir_type, gv))
             return self.env[name]
         return valtype, binding
@@ -1690,7 +1709,7 @@ class LLVMCodeGenerator(
         symbol_name=None,
     ):
 
-        ir_type = get_ir_type(type_str)
+        ir_type = self._get_ir_type(type_str)
 
         if array_list is not None:
             reversed_list = reversed(array_list)
@@ -2468,10 +2487,14 @@ class LLVMCodeGenerator(
         resolved = self._resolve_type_str(type_str)
         if isinstance(resolved, ir.Type):
             return resolved
-        return get_ir_type(resolved)
+        return get_ir_type(resolved, str(self.module.triple))
 
     def _is_unsigned_type_names(self, type_str):
         """Check if a type name list resolves to an unsigned type."""
+        triple = str(self.module.triple)
+        if "linux" in triple and triple.startswith(("aarch64-", "arm64-")):
+            if type_str == "char" or type_str == ["char"]:
+                return True
         if isinstance(type_str, list):
             if _is_unsigned_names(type_str):
                 return True
@@ -5066,6 +5089,20 @@ class LLVMCodeGenerator(
     def _builtin_va_list_storage(self, expr):
         value, addr = self.codegen(expr)
         storage = addr if addr is not None else value
+        from pcc.backend.self_backend_target_match import is_x86_64_linux_triple
+        if is_x86_64_linux_triple(str(self.module.triple)) and isinstance(
+            getattr(value, "type", None), ir.PointerType
+        ) and _is_struct_ir_type(value.type.pointee):
+            members = self._aggregate_member_ir_types(value.type.pointee)
+            if (len(members) == 4
+                    and isinstance(members[0], ir.IntType) and members[0].width == 32
+                    and isinstance(members[1], ir.IntType) and members[1].width == 32
+                    and isinstance(members[2], ir.PointerType)
+                    and isinstance(members[3], ir.PointerType)):
+                # SysV va_list is an array of one record. A local array and
+                # an adjusted function parameter both produce record* here;
+                # the latter's local variable address would be record**.
+                storage = value
         if not isinstance(getattr(storage, "type", None), ir.PointerType):
             return None
         return storage
@@ -5130,6 +5167,12 @@ class LLVMCodeGenerator(
 
         value_size = self._ir_type_size(aggregate_type)
         slot_size = self._align_up(value_size, 8)
+        cursor = src_ptr
+        if "windows" in str(self.module.triple):
+            slot_size = 8
+            if value_size not in (1, 2, 4, 8):
+                pointer_slot = self.builder.bitcast(src_ptr, voidptr_t.as_pointer())
+                src_ptr = self.builder.load(pointer_slot)
         aggregate_align = max(1, self._ir_type_align(aggregate_type))
 
         temp = self._alloca_in_entry(
@@ -5158,7 +5201,7 @@ class LLVMCodeGenerator(
         )
 
         next_ptr = self.builder.gep(
-            src_ptr,
+            cursor,
             [ir.Constant(int64_t, slot_size)],
             inbounds=True,
             name=f"vaargnext.{self._vaarg_counter}",
@@ -5204,6 +5247,14 @@ class LLVMCodeGenerator(
 
     def _coerce_variadic_aggregate_arg(self, arg):
         if not self._is_aggregate_ir_type(arg.type):
+            return arg
+
+        # The owned ELF and Win64 backends classify the original aggregate.
+        # Packing it into integer chunks here loses SysV's SSE/INTEGER classes
+        # (and can change the size of Win64's small direct aggregates). Darwin
+        # retains its existing stack-varargs representation.
+        from pcc.backend.self_backend_target_match import target_os_name
+        if target_os_name(str(self.module.triple)) in ("linux", "win32"):
             return arg
 
         source_type = arg.type

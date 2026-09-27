@@ -635,8 +635,14 @@ class AssignmentStatementLoweringMixin:
 
         if not hasattr(self, "_ir_builder_env_flags"):
             self._ir_builder_env_flags = {}
-        if self._expr_is_ir_builder_ctor(stmt.value):
-            self._ir_builder_env_flags[target.ident] = True
+        if isinstance(stmt.value, Name):
+            kind = self._scaffold_local_kind(stmt.value.ident)
+        elif isinstance(stmt.value, Attr):
+            kind = self._scaffold_field_receiver_kind(stmt.value)
+        else:
+            kind = self._scaffold_result_class_for_call(stmt.value)
+        if kind:
+            self._ir_builder_env_flags[target.ident] = kind
         else:
             self._ir_builder_env_flags.pop(target.ident, None)
 

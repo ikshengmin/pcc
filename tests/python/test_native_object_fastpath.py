@@ -405,6 +405,15 @@ def test_owned_source_view_unordered_indices_keep_iterator_contract():
     iterator.close()
 
 
+def test_private_final_link_order_accepts_23_bit_indices_without_widening_public_objects():
+    assert native_object_module._MAX_COUNT == 8_000_000
+    for count in (0, 8_000_000, 8_120_563, 8_388_608):
+        native_object_module._validate_final_link_relocation_count(count)
+    for count in (-1, 8_388_609):
+        with pytest.raises(NativeObjectError, match="23 bits"):
+            native_object_module._validate_final_link_relocation_count(count)
+
+
 def test_owned_merged_source_view_rebases_section_target_and_runs(tmp_path):
     source = NativeObject.from_sections([
         Section(

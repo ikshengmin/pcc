@@ -801,8 +801,14 @@ def _ensure_runtime(
     verbose: bool,
     *,
     needs_libpython: bool = False,
+    target_triple: Optional[str] = None,
 ) -> str:
     try:
+        if target_triple and target_triple != _pipeline_targets.host_target_triple():
+            if needs_libpython:
+                raise PyPipelineError("cross-target runtime cannot use host libpython")
+            from .owned_runtime_build import ensure_target_runtime
+            return ensure_target_runtime(_PY_RUNTIME_DIR, target_triple)
         return _pipeline_runtime_archive.ensure_runtime(
             verbose,
             needs_libpython=needs_libpython,
@@ -824,11 +830,35 @@ def _ensure_runtime(
             write_archive_target_stamp=_write_runtime_archive_target_stamp,
             logger=_log,
         )
-    except _pipeline_runtime_archive.RuntimeArchiveError as exc:
+    except (_pipeline_runtime_archive.RuntimeArchiveError, ValueError, OSError) as exc:
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
 
 
-def _ensure_runtime_without_direct_indexed_env(verbose: bool) -> str:
+def _explicit_runtime_archive(runtime_archive: str, *, needs_libpython: bool = False,
+                              target_triple: Optional[str] = None) -> str:
+    """Apply the same owned target/configuration checks to the public argument."""
+    from pcc.backend.self_backend_target_match import target_os_name
+
+    host_target = _pipeline_targets.host_target_triple()
+    target = target_triple or host_target
+    if target_os_name(target) in ("linux", "win32"):
+        if needs_libpython:
+            raise PyPipelineError("owned platform runtime does not include libpython")
+        from .owned_runtime_build import ensure_target_runtime
+        try:
+            return ensure_target_runtime(
+                _PY_RUNTIME_DIR, target, explicit_archive=str(runtime_archive),
+                wheel_matches=(_runtime_archive_wheel_stamp_matches if target == host_target else None),
+            )
+        except (ValueError, OSError) as exc:
+            raise PyPipelineError(str(exc) or type(exc).__name__) from exc
+    archive = os.path.abspath(str(runtime_archive))
+    if not os.path.isfile(archive):
+        raise PyPipelineError("explicit runtime archive not found: " + archive)
+    return archive
+
+
+def _ensure_runtime_without_direct_indexed_env(verbose: bool, *, target_triple: Optional[str] = None) -> str:
     """Build/load the runtime without leaking frontend-worker direct mode."""
     direct_names = (
         "PCC_DIRECT_INDEXED_KERNEL_CAPTURE",
@@ -844,7 +874,7 @@ def _ensure_runtime_without_direct_indexed_env(verbose: bool) -> str:
         if name in os.environ:
             saved[name] = os.environ.pop(name)
     try:
-        return _ensure_runtime(verbose, needs_libpython=False)
+        return _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
     finally:
         for name, value in saved.items():
             os.environ[name] = value
@@ -1631,6 +1661,7 @@ def _run_self_link_command(
     pcc_internal_input_manifest: Optional[str] = None,
     semantic_layout_policy: Optional[str] = None,
     link_profile_path: Optional[str] = None,
+    target_triple: Optional[str] = None,
 ) -> None:
     try:
         _pipeline_self_backend_link.run_link_command(
@@ -1648,6 +1679,7 @@ def _run_self_link_command(
             pcc_internal_input_manifest=pcc_internal_input_manifest,
             semantic_layout_policy=semantic_layout_policy,
             link_profile_path=link_profile_path,
+            target_triple=target_triple,
             resolve_self_link_mode=_resolve_self_link_mode,
             validate_pcc_self_link_surface=_validate_pcc_self_link_surface,
             repo_root_for_link=_repo_root_for_link,
@@ -1721,14 +1753,17 @@ def _record_macho_link_profile(profile, path: str) -> None:
 
 def _prepare_direct_native_object_dir(out_path: str) -> str:
     path = os.path.abspath(str(out_path)) + ".pcc-pco." + str(os.getpid())
-    subprocess.run(["/bin/rm", "-rf", path], check=True)
-    subprocess.run(["mkdir", "-p", path], check=True)
+    import shutil
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
     return path
 
 
 def _remove_direct_native_object_dir(path: str) -> None:
     if path:
-        subprocess.run(["/bin/rm", "-rf", path], check=True)
+        import shutil
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _link_with_self_backend_assembly_texts(
@@ -1781,7 +1816,7 @@ def _link_with_self_backend_assembly_texts(
         tmp_out_path = str(out_path) + ".tmp"
         link_profile_path = (
             os.path.join(tmp, "pcc-link-profile.json")
-            if signature_owned_by_pcc and profile is not None
+            if signature_owned_by_pcc and profile is not None and sys.platform == "darwin"
             else None
         )
         cmd = [cc] + asm_paths + list(extra_link_inputs)
@@ -1897,9 +1932,9 @@ def _link_with_self_backend_direct_artifacts(
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
     )
-    if _resolve_self_link_mode() != "pcc" or sys.platform != "darwin":
+    if _resolve_self_link_mode() != "pcc":
         raise PyPipelineError(
-            "direct indexed artifacts require the pcc-owned Darwin linker"
+            "direct indexed artifacts require the pcc-owned linker"
         )
     ordered: list[tuple[str, str]] = []
     for _module_name, raw_kind, raw_path in artifacts:
@@ -1943,7 +1978,7 @@ def _link_with_self_backend_direct_artifacts(
         _write_direct_input_manifest(input_manifest, ordered)
         link_profile_path = (
             os.path.join(tmp, "pcc-link-profile.json")
-            if profile is not None
+            if profile is not None and sys.platform == "darwin"
             else None
         )
         cc = str(os.environ.get("CC", "") or "").strip() or "cc"
@@ -2455,6 +2490,8 @@ def compile_python(
     codegen._prefer_native_callable_values = libpython_mode == "off"
     codegen._module_source_path = os.path.abspath(src_path)
     codegen._target_triple = target_triple or ""
+    if target_triple:
+        codegen.module.triple = target_triple
     codegen._freestanding_module = freestanding_module
     codegen._runtime_port_module = runtime_port_module
     if runtime_port_abi_exports is not None:
@@ -2549,13 +2586,13 @@ def compile_python(
 
     t = _profile_begin(profile)
     if runtime_archive is not None:
-        runtime = os.path.abspath(str(runtime_archive))
-        if not os.path.isfile(runtime):
-            raise PyPipelineError("explicit runtime archive not found: " + runtime)
+        runtime = _explicit_runtime_archive(runtime_archive, needs_libpython=needs_libpython,
+                                            target_triple=target_triple)
     else:
         runtime = _ensure_runtime(
             verbose,
             needs_libpython=needs_libpython,
+            target_triple=target_triple,
         )
     _profile_end(profile, "ensure_runtime", t)
     extra_link_inputs: tuple[str, ...] = ()
@@ -2907,17 +2944,42 @@ def _build_unique_external_class_preload_index(native_exports, work_dir=""):
     prefix = _python_frontend_worker_command_prefix()
     raw_jobs = str(os.environ.get("PCC_PRELOAD_DELTA_JOBS", "") or "").strip()
     jobs = int(raw_jobs) if raw_jobs.isdigit() else min(_parallel_cpu_budget(), 6)
+    if (
+        jobs > 1
+        and len(prefix) == 1
+        and _is_native_worker_executable(prefix[0])
+    ):
+        frontend_width = str(os.environ.get(_PY_FRONTEND_JOBS_ENV, "") or "")
+        if _pipeline_frontend_workers.numeric_jobs_override(frontend_width):
+            try:
+                jobs = min(jobs, max(1, int(frontend_width)))
+            except ValueError:
+                jobs = 1
     if not prefix or not work_dir or jobs <= 1:
         return build_unique_external_class_preload_index(native_exports)
 
     def root_deltas(roots, global_by_key):
-        if len(roots) < _PRELOAD_DELTA_MIN_ROOTS:
+        # Only reserve child memory when this callback will actually spawn.
+        # Tiny/empty root sets use the already-resident coordinator directly.
+        selected_jobs = jobs
+        if (
+            len(roots) >= _PRELOAD_DELTA_MIN_ROOTS
+            and len(prefix) == 1
+            and _is_native_worker_executable(prefix[0])
+        ):
+            try:
+                selected_jobs = _pipeline_frontend_workers.compiled_native_preload_jobs(jobs)
+            except _pipeline_frontend_workers.FrontendWorkerContractError:
+                # This algorithm already has an equivalent in-parent path.
+                # Failure to reserve a child does not forbid serial work.
+                selected_jobs = 1
+        if len(roots) < _PRELOAD_DELTA_MIN_ROOTS or selected_jobs <= 1:
             deltas = {}
             for root in roots:
                 deltas[root] = preload_root_delta(native_exports, root, global_by_key)
             return deltas
         return _preload_deltas_in_workers(
-            native_exports, roots, prefix, jobs, work_dir,
+            native_exports, roots, prefix, selected_jobs, work_dir,
         )
 
     return build_unique_external_class_preload_index(
@@ -3238,11 +3300,7 @@ def _compile_python_multi_codegen_parallel_uncached(
     )
     worker_prefix = _python_frontend_worker_command_prefix()
     module_dependency_map = None
-    if (
-        auto_source_lanes
-        and len(worker_prefix) == 1
-        and _is_native_worker_executable(worker_prefix[0])
-    ):
+    if len(worker_prefix) == 1 and _is_native_worker_executable(worker_prefix[0]):
         # The export workers already own one complete lifted AST each. They
         # populate this shared map from those ASTs inside build_shared_exports;
         # avoid a second textual import scan in the pcc1 coordinator.
@@ -3497,7 +3555,7 @@ def compile_python_multi(
             else 0
         ),
     )
-    if native_backend == "self" or emit_only_self_backend:
+    if (native_backend == "self" or emit_only_self_backend) and target_triple is None:
         direct_emit = str(
             os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", "") or ""
         ).strip().lower() in ("1", "true", "yes", "on")
@@ -3639,6 +3697,9 @@ def compile_python_multi(
                 codegen._strict_no_libpython = libpython_mode == "off"
                 codegen._prefer_native_callable_values = libpython_mode == "off"
                 codegen._module_source_path = os.path.abspath(src)
+                codegen._target_triple = target_triple or ""
+                if target_triple:
+                    codegen.module.triple = target_triple
             except Exception as exc:
                 raise PyPipelineError(
                     "codegen_init["
@@ -3735,15 +3796,11 @@ def compile_python_multi(
             needs_native_extension_exports=any_needs_native_extension_exports,
         )
         if runtime_archive is not None:
-            runtime = os.path.abspath(str(runtime_archive))
-            if not os.path.isfile(runtime):
-                raise PyPipelineError(
-                    "explicit runtime archive not found: " + runtime
-                )
+            runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
         elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
-            runtime = _ensure_runtime(verbose, needs_libpython=False)
+            runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
         else:
-            runtime = _ensure_runtime_without_direct_indexed_env(verbose)
+            runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
         assembly_count = 0
         native_count = 0
         assembly_bytes = 0
@@ -3806,15 +3863,11 @@ def compile_python_multi(
             needs_native_extension_exports=any_needs_native_extension_exports,
         )
         if runtime_archive is not None:
-            runtime = os.path.abspath(str(runtime_archive))
-            if not os.path.isfile(runtime):
-                raise PyPipelineError(
-                    "explicit runtime archive not found: " + runtime
-                )
+            runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
         elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
-            runtime = _ensure_runtime(verbose, needs_libpython=False)
+            runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
         else:
-            runtime = _ensure_runtime_without_direct_indexed_env(verbose)
+            runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
         _profile_counter(
             profile,
             "multi_direct_native_object_modules",
@@ -3874,11 +3927,7 @@ def compile_python_multi(
             ),
         )
         if runtime_archive is not None:
-            runtime = os.path.abspath(str(runtime_archive))
-            if not os.path.isfile(runtime):
-                raise PyPipelineError(
-                    "explicit runtime archive not found: " + runtime
-                )
+            runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
         elif str(
             os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or ""
         ).strip():
@@ -3886,9 +3935,9 @@ def compile_python_multi(
             # PCC_RUNTIME_ARCHIVE.  Preserve the ordinary bundle/provenance
             # checks without entering the auto-build path whose nested compiler
             # must have direct-worker flags stripped.
-            runtime = _ensure_runtime(verbose, needs_libpython=False)
+            runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
         else:
-            runtime = _ensure_runtime_without_direct_indexed_env(verbose)
+            runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
         _profile_counter(
             profile,
             "multi_direct_assembly_modules",
@@ -4002,13 +4051,13 @@ def compile_python_multi(
 
     t = _profile_begin(profile)
     if runtime_archive is not None:
-        runtime = os.path.abspath(str(runtime_archive))
-        if not os.path.isfile(runtime):
-            raise PyPipelineError("explicit runtime archive not found: " + runtime)
+        runtime = _explicit_runtime_archive(runtime_archive, needs_libpython=any_needs_libpython,
+                                            target_triple=target_triple)
     else:
         runtime = _ensure_runtime(
             verbose,
             needs_libpython=any_needs_libpython,
+            target_triple=target_triple,
         )
     _profile_end(profile, "ensure_runtime", t)
     if native_backend == "self" and _self_backend_skip_ll_temp():

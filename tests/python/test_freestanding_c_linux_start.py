@@ -57,8 +57,9 @@ def test_c_linux_start_establishes_static_tls_before_runtime_calls(
     ir_text = _compile_linux_ir(tmp_path, monkeypatch)
     source = SOURCE.read_text(encoding="utf-8")
 
-    assert "@pcc_linux_initial_tls_reserve" in ir_text
-    assert "@pcc_linux_initial_tls_reserve = global [512 x ptr] [ptr null" in ir_text
+    assert "@pcc_linux_tls_image" in ir_text
+    assert "@pcc_linux_allocate_tls" in ir_text
+    assert "page_alloc(allocation_size)" in source
     assert '@c_abi_export("pcc_linux_initial_tls_setup")' in source
     assert "load_i64(auxv, aux_index * 16)" in source
     assert "load_i32(program_header, 0) == 7" in source  # PT_TLS

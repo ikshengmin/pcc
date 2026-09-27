@@ -283,7 +283,7 @@ def test_object_nodes_preserve_pool_list_and_young_invariants() -> None:
 
     live = _export_body(strict, "pcc_gc_live_bytes_subtract")
     assert "if size >= live:" in live
-    assert 'store_i32(global_addr("pcc_gc_live_bytes"), 0, 0)' in live
+    assert 'store_i64(global_addr("pcc_gc_live_bytes"), 0, 0)' in live
 
 
 def test_production_archive_has_one_object_node_owner(

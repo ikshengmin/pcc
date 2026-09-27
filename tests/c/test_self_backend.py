@@ -679,7 +679,7 @@ entry:
         emit_x86_64_linux_asm(ir_text)
 
 
-def test_self_backend_x86_64_linux_rejects_external_tls_before_asm_publication():
+def test_self_backend_x86_64_linux_emits_external_tls_reference_without_storage():
     ir_text = r'''
 target triple = "x86_64-unknown-linux-gnu"
 @tls_external = external thread_local global i32
@@ -691,11 +691,11 @@ entry:
 }
 '''.strip()
 
-    with pytest.raises(
-        BackendUnavailable,
-        match="self-x86_64-linux ELF TLS lowering does not support external",
-    ):
-        emit_x86_64_linux_asm(ir_text)
+    assembly = emit_x86_64_linux_asm(ir_text)
+    assert ".type tls_external, @tls_object" in assembly
+    assert "tls_external@gottpoff[rip]" in assembly
+    assert "tls_external:" not in assembly
+    assert ".tdata" not in assembly and ".tbss" not in assembly
 
 
 def test_self_backend_x86_64_linux_rejects_unsupported_tls_storage_shapes():
@@ -1785,10 +1785,12 @@ entry:
 
 
 def test_self_backend_target_registry_lists_current_target_identities():
-    assert known_self_backend_target_identities() == (
+    assert set(known_self_backend_target_identities()) == {
         "self-aarch64-darwin-v0",
         "self-x86_64-linux-v0",
-    )
+        "self-aarch64-linux-v0",
+        "self-x86_64-windows-v0",
+    }
 
 
 def test_self_backend_target_matchers_cover_current_aliases():

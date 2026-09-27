@@ -61,6 +61,8 @@ def prepare_parsed_module_for_target(
     functions = list(module.functions)
     prepare_parsed_functions(functions)
     for func in functions:
+        func.platform_frame_extra = 0
+        func.platform_intrinsic_labels = 0
         assign_stack_slots(
             func,
             aggregate_returned_indirect=aggregate_returned_indirect,
@@ -69,7 +71,7 @@ def prepare_parsed_module_for_target(
             ),
             materialize_legacy_slots=materialize_legacy_slots,
         )
-    module_symbols = prepare_module_symbols("", globals_, functions)
+    module_symbols = prepare_module_symbols("", globals_, functions, module.triple)
     return PreparedSelfBackendModule(
         triple=module.triple,
         globals_=globals_,

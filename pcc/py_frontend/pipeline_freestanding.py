@@ -125,6 +125,7 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "socket_setsockopt": ("setsockopt", "__error"),
         "socket_getsockopt": ("getsockopt", "__error"),
         "fd_control": ("fcntl", "__error"),
+        "file_flock": ("flock", "__error"),
         "socket_send": ("send", "__error"),
         "socket_recv": ("recv", "__error"),
         "socket_accept": ("accept", "__error"),
@@ -141,6 +142,8 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "access": ("access",),
         "stat_kind": ("stat",),
         "stat_mtime": ("stat",),
+        "stat_size": ("stat", "__error"),
+        "is_symlink": ("lstat", "__error"),
         "uname": ("uname",),
         "cpu_query": ("sysctlbyname",),
         "clock_gettime": ("clock_gettime",),
@@ -182,6 +185,7 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "gc_backend_current": ("pcc_gc_backend",),
         "call_ptr1": ("__pcc_verified_indirect_call__",),
         "call_ptr0": ("__pcc_verified_indirect_call__",),
+        "call_void_i32": ("__pcc_verified_indirect_call__",),
         "call_void_ptr0": ("__pcc_verified_indirect_call__",),
         "call_void_ptr1": ("__pcc_verified_indirect_call__",),
         "call_void_ptr_i64_ptr": ("__pcc_verified_indirect_call__",),
@@ -212,6 +216,22 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
             "__pcc_verified_indirect_call__",
         ),
     }
+    from .codegen.windows_platform import _SIGNATURES as windows_intrinsics
+    for intrinsic in windows_intrinsics:
+        symbol = ("pcc_platform_" if intrinsic in ("getenv", "setenv", "unsetenv") else "pcc_win_") + intrinsic
+        if intrinsic == "dynamic_library_open_global":
+            symbol = "pcc_win_dynamic_library_open"
+        boundary_by_intrinsic[intrinsic] = boundary_by_intrinsic.get(intrinsic, ()) + (symbol,)
+    boundary_by_intrinsic.update({
+        "linux_set_thread_pointer": ("pcc_linux_set_thread_pointer",),
+        "epoll_wait": ("pcc_linux_aarch64_epoll_wait",),
+        "directory_open": ("opendir", "pcc_linux_directory_open", "pcc_win_directory_open"),
+        "directory_next": ("readdir", "__error", "pcc_linux_directory_next", "pcc_win_directory_next"),
+        "directory_error": ("__error", "pcc_linux_directory_error", "pcc_win_directory_error"),
+        "directory_close": ("closedir", "pcc_linux_directory_close", "pcc_win_directory_close"),
+        "windows_full_path": ("pcc_win_full_path",),
+        "windows_real_path": ("pcc_win_realpath",),
+    })
     imported = []
     collecting = False
     for raw_line in source.splitlines():
@@ -262,6 +282,8 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "sigaction": ("(c_int,c_ptr,c_ptr)", "c_int"),
         "sigemptyset": ("(c_ptr,)", "c_int"),
     }
+    from .codegen.platform_machine_abis import PLATFORM_MACHINE_ABIS
+    freestanding_machine_abis.update(PLATFORM_MACHINE_ABIS)
     for symbol, compact_params, return_name in (
         freestanding_module_scope_extern_bindings(source)
     ):

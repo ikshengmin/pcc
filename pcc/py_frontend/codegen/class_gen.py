@@ -49,6 +49,8 @@ and module.
 
 from __future__ import annotations
 
+from .generator_lowering import emit_function_auto_park_role
+
 import os
 import sys
 from typing import Optional, cast
@@ -5079,6 +5081,7 @@ class ClassLowering:
             [adapter, wrapped_captures, method_name_ptr],
             name=self._fresh(f"{suffix}.{method_name}.func"),
         )
+        emit_function_auto_park_role(self.parent, method_def, func_obj)
         # CPython's __qualname__ for a method is ``Class.method``; reprs and
         # argument errors print it.
         self.parent.builder.call(
@@ -5133,6 +5136,7 @@ class ClassLowering:
             [adapter, captures, self.parent._attr_name_ptr(prop_name)],
             name=self._fresh(f"property.{info.name}.{prop_name}.{accessor_kind}"),
         )
+        emit_function_auto_park_role(self.parent, accessor_def, func_obj)
         self.parent._gc_release(captures)
         return func_obj
 
@@ -5590,6 +5594,7 @@ class ClassLowering:
             [adapter, wrapped_captures, self.parent._attr_name_ptr(fd.name)],
             name=self._fresh(f"namespace.method.{fd.name}"),
         )
+        emit_function_auto_park_role(self.parent, fd, fn_obj)
         self.parent._gc_release(captures)
         self.parent._gc_release(signature)
         self.parent._gc_release(wrapped_captures)

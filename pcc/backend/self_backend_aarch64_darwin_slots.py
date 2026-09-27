@@ -4,6 +4,7 @@ from .arm64_encode import encode_emitted_load_store_parts
 from .self_backend_aarch64_fragments import AArch64EmissionFragments
 from .self_backend_aarch64_darwin_abi import (
     abi_value_reg_names,
+    fp_register_prefix,
     aggregate_hfa_members,
     aggregate_reg_chunks,
     reg_name,
@@ -487,7 +488,7 @@ def _hfa_value_memory_lines(
     index = 0
     while index < len(hfa):
         member_type, member_offset = hfa[index]
-        prefix = "s" if member_type.width <= 32 else "d"
+        prefix = fp_register_prefix(member_type.width)
         reg = f"{prefix}{start_index + index}"
         op = mem_store_op(member_type) if store else mem_load_op(member_type)
         lines.append(

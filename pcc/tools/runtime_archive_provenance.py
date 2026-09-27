@@ -70,6 +70,9 @@ _RECEIPT_OPTIONAL_FIELDS = frozenset(
         # introduced; automatic local archive selection separately treats a
         # missing or unprovable identity as stale.
         "codegen_checksum",
+        # Owned non-Darwin builders bind semantic build options per member;
+        # the wheel's manifest digest covers these automatically.
+        "runtime_build_config",
     }
 )
 _RECEIPT_FIELDS = _RECEIPT_REQUIRED_FIELDS | _RECEIPT_OPTIONAL_FIELDS
@@ -283,6 +286,7 @@ def write_pcc_python_receipt(
     object_bytes: bytes | None = None,
     output_path: Path | None = None,
     member: str | None = None,
+    runtime_build_config: dict | None = None,
 ) -> dict[str, object]:
     """Write the receipt for one object emitted from a pcc-Python module."""
 
@@ -317,6 +321,9 @@ def write_pcc_python_receipt(
         "target_triple": target_triple,
         "codegen_checksum": codegen_checksum(),
     }
+    if runtime_build_config is not None:
+        _validate_runtime_build_config(runtime_build_config)
+        receipt["runtime_build_config"] = dict(runtime_build_config)
     _write_json_atomic(output_path or receipt_path_for_object(object_path), receipt)
     return receipt
 
@@ -338,6 +345,9 @@ def _runtime_emitter_source_identity() -> str:
 
     digest = hashlib.sha256()
     digest.update(Path(__file__).with_name("ir_to_obj.py").read_bytes())
+    digest.update(
+        (Path(__file__).resolve().parents[1] / "backend" / "owned_object_emit.py").read_bytes()
+    )
     digest.update(macho_linker_source_identity().encode("ascii"))
     return digest.hexdigest()
 
@@ -470,6 +480,17 @@ def _load_json_object(path: Path) -> dict[str, object]:
     return value
 
 
+def _validate_runtime_build_config(config: object) -> None:
+    if not isinstance(config, dict) or set(config) != {"threads", "refcount"}:
+        raise ProvenanceError("invalid runtime build configuration fields")
+    if type(config["threads"]) is not bool:
+        raise ProvenanceError("runtime build threads setting must be boolean")
+    refcount = config["refcount"]
+    if (not isinstance(refcount, str) or not refcount
+            or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in refcount)):
+        raise ProvenanceError("invalid runtime refcount setting")
+
+
 def _validate_member_record(
     record: dict[str, object],
     *,
@@ -488,6 +509,8 @@ def _validate_member_record(
         )
     if record.get("schema") != RECEIPT_SCHEMA:
         raise ProvenanceError(f"{member}: invalid object receipt schema")
+    if "runtime_build_config" in record:
+        _validate_runtime_build_config(record["runtime_build_config"])
     if record.get("member") != member:
         raise ProvenanceError(f"{member}: receipt names {record.get('member')!r}")
     if record.get("source_kind") != _PCC_PYTHON_SOURCE_KIND:

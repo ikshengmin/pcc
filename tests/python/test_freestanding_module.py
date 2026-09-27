@@ -699,11 +699,11 @@ def test_freestanding_allows_only_registered_literal_gc_global_imports(tmp_path)
     ir_text = _compile_freestanding(
         tmp_path,
         "from pcc.extern import c_abi_export\n"
-        "from pcc.unsafe import global_addr, load_i32\n"
+        "from pcc.unsafe import global_addr, load_i64\n"
         "__pcc_freestanding__ = True\n"
         "@c_abi_export('read_gc_debt')\n"
         "def read_gc_debt() -> i64:\n"
-        "    return load_i32(global_addr('pcc_gc_debt_bytes'), 0)\n",
+        "    return load_i64(global_addr('pcc_gc_debt_bytes'), 0)\n",
     )
     body = ir_text.split("define i64 @read_gc_debt", 1)[1].split("}\n", 1)[0]
     assert "@pcc_gc_debt_bytes" in body

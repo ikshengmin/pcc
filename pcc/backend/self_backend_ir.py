@@ -1259,6 +1259,9 @@ class AllocaInfo:
 class GlobalDef:
     name: str
     type: TypeDesc
+    # An empty initializer denotes an external TLS declaration. Keep these
+    # records in indexed modules so address lowering retains the TLS ABI even
+    # though this module contributes no storage for the symbol.
     initializer: str
     is_constant: bool
     is_internal: bool
@@ -1325,6 +1328,8 @@ class ParsedFunction:
     )
     hidden_sret_slot: SlotInfo | None = None
     frame_size: int = 0
+    platform_frame_extra: int = 0
+    platform_intrinsic_labels: int = 0
     # Built lazily by the first indexed analysis consumer.  Kept at the end to
     # preserve the established positional construction interface, and typed as
     # object to avoid a module cycle: self_backend_kernel imports this IR

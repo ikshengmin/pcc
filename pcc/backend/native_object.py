@@ -71,6 +71,7 @@ class NativeObjectError(Exception):
 MAGIC = b"PCCNOBJ\x01"
 _NONE_INDEX = 0xFFFFFFFF
 _MAX_COUNT = 8_000_000  # merged pcc compiler closure exceeds 1M relocations
+_FINAL_LINK_ORDER_LIMIT = 8_388_608  # 23-bit index in private sorted rows
 _MAX_NAME_BYTES = 1_048_576
 
 _HEADER = struct.Struct("<8sII")
@@ -87,6 +88,16 @@ _SYMBOL_PRIVATE_EXTERNAL = 2
 _UINT64_MAX = (1 << 64) - 1
 _RELOCATION_SCALAR_COUNT = 9
 _FINAL_LINK_RELOCATION_SCALAR_COUNT = 6
+
+
+def _validate_final_link_relocation_count(count: int) -> None:
+    """The private final-link order packs each index into 23 bits.
+
+    Individual public objects retain the stricter _MAX_COUNT contract.
+    """
+    if count < 0 or count > _FINAL_LINK_ORDER_LIMIT:
+        raise NativeObjectError("relocation ordering index exceeds 23 bits")
+
 
 _py_bytes_new: "extern" = extern("py_bytes_new", (c_ptr, c_int64), c_obj)
 
@@ -1472,9 +1483,7 @@ class OwnedMergedSourceView:
 
     def _iter_section_relocation_indices(self, rows: bytes, ordered: bool):
         count = len(rows) // _FINAL_LINK_RELOCATION.size
-        _validate_count(count, "relocation", allow_zero=True)
-        if count > 8388608:
-            raise NativeObjectError("relocation ordering index exceeds 23 bits")
+        _validate_final_link_relocation_count(count)
         order_capacity = 0
         if ordered:
             order_capacity = count
@@ -1493,7 +1502,7 @@ class OwnedMergedSourceView:
                         raise NativeObjectError(
                             "relocation offset exceeds signed r_address range"
                         )
-                    order.append((0x7FFFFFFF - offset) * 8388608 + index)
+                    order.append((0x7FFFFFFF - offset) * _FINAL_LINK_ORDER_LIMIT + index)
                 order.sort_nonnegative_radix()
             for index in range(count):
                 yield order.get_unchecked(index) & 0x7FFFFF if ordered else index

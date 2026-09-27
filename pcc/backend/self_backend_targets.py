@@ -14,8 +14,12 @@ from . import BackendUnavailable
 from .self_backend_aarch64_darwin import emit_aarch64_darwin_asm
 from .self_backend_target_match import (
     is_aarch64_darwin_triple,
+    is_aarch64_linux_triple,
+    is_x86_64_windows_triple,
     is_x86_64_linux_triple,
 )
+from .self_backend_x86_64_windows import emit_x86_64_windows_asm
+from .self_backend_aarch64_linux import emit_aarch64_linux_asm
 from .self_backend_x86_64_linux import emit_x86_64_linux_asm
 
 SelfAsmEmitter = Callable[[str], str]
@@ -64,6 +68,8 @@ class SelfBackendTargetSpec:
 
 
 SELF_BACKEND_TARGETS: tuple[SelfBackendTargetSpec, ...] = (
+    SelfBackendTargetSpec("self-x86_64-windows-v0", is_x86_64_windows_triple, emit_x86_64_windows_asm),
+    SelfBackendTargetSpec("self-aarch64-linux-v0", is_aarch64_linux_triple, emit_aarch64_linux_asm),
     SelfBackendTargetSpec(
         identity="self-aarch64-darwin-v0",
         matches_triple=is_aarch64_darwin_triple,

@@ -14,7 +14,8 @@ from .self_backend_aarch64_darwin import (
     emit_aarch64_darwin_indexed_transport,
 )
 from .self_backend_indexed_codec import decode_indexed_module_file
-from .self_backend_target_match import is_aarch64_darwin_triple
+from .self_backend_target_match import (is_aarch64_darwin_triple, is_aarch64_linux_triple,
+    is_x86_64_linux_triple, is_x86_64_windows_triple)
 
 
 _pcc_os_heap_in_use_bytes: "extern" = extern(
@@ -64,6 +65,30 @@ def emit_indexed_module_file(
     _debug_phase("decode-start")
     module = decode_indexed_module_file(sidecar_path)
     _debug_phase("decode-complete")
+    if is_aarch64_linux_triple(module.triple) or is_x86_64_linux_triple(module.triple) or is_x86_64_windows_triple(module.triple):
+        if is_aarch64_linux_triple(module.triple):
+            assembly = emit_aarch64_darwin_indexed_module(module, optimize=optimize)
+        else:
+            from .self_backend_x86_64_linux import _emit_x86_64_module
+            assembly = _emit_x86_64_module("", module=module, windows=is_x86_64_windows_triple(module.triple))
+        if artifact_kind == "ASM":
+            payload = assembly.encode("utf-8")
+        elif is_x86_64_windows_triple(module.triple):
+            from .coff_x86_64 import assemble_object
+            payload = assemble_object(assembly)
+        else:
+            from .owned_elf_link import assemble
+            from .elf_x86_64 import emit_relocatable
+            payload = emit_relocatable(assemble(assembly, module.triple))
+        temporary = output_path + ".tmp"
+        try:
+            with open(temporary, "wb") as stream:
+                stream.write(payload)
+            os.replace(temporary, output_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return
     if (
         module.triple != "unknown-unknown-unknown"
         and not is_aarch64_darwin_triple(module.triple)

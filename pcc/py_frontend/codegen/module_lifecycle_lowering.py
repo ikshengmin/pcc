@@ -7,6 +7,7 @@ import os
 from pcc.llvm_capi.compat import ir
 
 from ..py_ast import Call, ExprStmt, Name, Stmt
+from .generator_lowering import funcdef_has_source_yield
 from .runtime_abi import declare_runtime_global
 
 _I8 = ir.IntType(8)
@@ -280,13 +281,23 @@ class ModuleLifecycleLoweringMixin:
         if not isinstance(fn, ir.Function) or len(fn.args) != 0:
             self._emit_stmts((stmt,))
             return ir.Constant(_I32, 0)
-        ret_ty = fn.function_type.return_type
-        if isinstance(ret_ty, ir.VoidType):
-            self.builder.call(fn, [])
-            self._emit_post_call_err_check(stmt.span)
+        ast_func_def = self._find_user_funcdef("main")
+        if ast_func_def.is_async or funcdef_has_source_yield(ast_func_def):
+            # A source generator/coroutine call constructs its object. The
+            # trailing-main exit convention must neither drive that object
+            # nor treat it as an integer return value.
+            self._emit_stmts((stmt,))
             return ir.Constant(_I32, 0)
-        ret_val = self.builder.call(fn, [], name=self._fresh("user.main.ret"))
-        self._emit_post_call_err_check(stmt.span)
+        # Use the ordinary call boundary. Effect analysis can give a regular
+        # Python main() the resumable ABI when it reaches Event.wait() etc.
+        # Expression lowering drives that child for a synchronous caller and
+        # preserves call-result roots/errors. A raw builder.call would return
+        # the generator without executing main's body. Its declared IR return
+        # type is then also the wrong type for the eventual exit value.
+        ret_val = self._emit_expr(stmt.expr)
+        ret_ty = ret_val.type
+        if isinstance(ret_ty, ir.VoidType):
+            return ir.Constant(_I32, 0)
         if isinstance(ret_ty, ir.IntType):
             if ret_ty.width == 32:
                 return ret_val

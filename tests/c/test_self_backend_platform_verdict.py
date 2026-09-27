@@ -67,13 +67,10 @@ def test_vector_parity_family_uses_registry_platform_verdict_source_guard():
 @pytest.mark.parametrize(
     "triple",
     [
-        "x86_64-pc-windows-gnu",
-        "amd64-pc-windows-gnu",
-        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
         "x86_64-w64-mingw32",
         "x86_64-pc-freebsd-gnu",
         "x86_64-unknown-gnu",
-        "x86_64-linuxvendor-windows-gnu",
         "x86_64-pc-notlinux-gnu",
         "x86_64-pc-windows-linux",
         "x86_64--linux-gnu",
@@ -88,7 +85,6 @@ def test_vector_parity_family_uses_registry_platform_verdict_source_guard():
         "arm64-apple--darwin",
         "arm64-apple",
         "arm64-apple-ios17.0",
-        "aarch64-unknown-linux-gnu",
         "",
         "garbage",
     ],
@@ -106,6 +102,11 @@ def test_target_classifier_rejects_other_operating_systems_and_malformed_compone
 @pytest.mark.parametrize(
     "triple, identity",
     [
+        ("aarch64-unknown-linux-gnu", "self-aarch64-linux-v0"),
+        ("x86_64-pc-windows-msvc", "self-x86_64-windows-v0"),
+        ("x86_64-pc-windows-gnu", "self-x86_64-windows-v0"),
+        ("amd64-pc-windows-gnu", "self-x86_64-windows-v0"),
+        ("x86_64-linuxvendor-windows-gnu", "self-x86_64-windows-v0"),
         ("arm64-apple-darwin", "self-aarch64-darwin-v0"),
         ("aarch64-apple-darwin23.6.0", "self-aarch64-darwin-v0"),
         ("ARM64-APPLE-MACOSX14.0.0", "self-aarch64-darwin-v0"),
@@ -125,7 +126,7 @@ def test_explicit_target_components_preserve_linux_and_darwin_aliases(triple, id
     assert verdict.target_identity == identity
 
 
-def test_windows_gnu_is_rejected_before_object_emission_or_publication(
+def test_unsupported_windows_arch_is_rejected_before_object_emission_or_publication(
     tmp_path, monkeypatch
 ):
     from pcc.evaluater.c_evaluator import CEvaluator
@@ -138,7 +139,7 @@ def test_windows_gnu_is_rejected_before_object_emission_or_publication(
         pytest.fail("unsupported OS reached assembly emission")
 
     monkeypatch.setattr(evaluator, "_self_backend_asm_text", unexpected_emitter)
-    units = [("windows", 'target triple = "x86_64-pc-windows-gnu"\n', None, ())]
+    units = [("windows", 'target triple = "aarch64-pc-windows-msvc"\n', None, ())]
     with pytest.raises(BackendUnavailable, match="no emitter for target triple"):
         evaluator._emit_compiled_units_self_backend(
             units, emit_obj=str(output), optimize=0

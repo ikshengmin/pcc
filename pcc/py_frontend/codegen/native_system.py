@@ -383,10 +383,37 @@ class NativeSystemLoweringMixin:
         if (
             not isinstance(attr.obj, Name)
             or self._native_builtin_module_for_name(attr.obj.ident) != "shutil"
-            or attr.name != "which"
-            or len(expr.args) != 1
-            or expr.kwargs
         ):
+            return None
+        if attr.name == "rmtree" and 1 <= len(expr.args) <= 2:
+            ignore_errors = ir.Constant(_I32, 0)
+            if len(expr.args) == 2:
+                if expr.kwargs:
+                    return None
+                raw = self._emit_expr(expr.args[1])
+                ignore_errors = self.builder.zext(
+                    self._truthy(raw, expr.args[1].ty),
+                    _I32,
+                    name=self._fresh("shutil.rmtree.ignore_errors"),
+                )
+            elif expr.kwargs:
+                if len(expr.kwargs) != 1 or expr.kwargs[0][0] != "ignore_errors":
+                    return None
+                value_expr = expr.kwargs[0][1]
+                raw = self._emit_expr(value_expr)
+                ignore_errors = self.builder.zext(
+                    self._truthy(raw, value_expr.ty),
+                    _I32,
+                    name=self._fresh("shutil.rmtree.ignore_errors"),
+                )
+            result = self.builder.call(
+                self.runtime["py_shutil_rmtree"],
+                [self._emit_as_object(expr.args[0]), ignore_errors],
+                name=self._fresh("shutil.rmtree"),
+            )
+            self._emit_post_call_err_check(getattr(expr, "span", None))
+            return result
+        if attr.name != "which" or len(expr.args) != 1 or expr.kwargs:
             return None
         name_obj = self._emit_as_object(expr.args[0])
         return self.builder.call(

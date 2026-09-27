@@ -331,10 +331,16 @@ def emit_isinstance_call_impl(
             return e.ident, None
         if isinstance(e, Attr):
             if isinstance(e.obj, Name):
-                host._ensure_native_module_alias_class_export(
+                class_info = host._ensure_native_module_alias_class_export(
                     e.obj.ident,
                     e.name,
                 )
+                if class_info is not None:
+                    # The registry qualifies collisions between modules that
+                    # export the same leaf class name. Keep that resolved
+                    # owner for scalar and tuple classinfo instead of looking
+                    # up another module's pre-existing short-name binding.
+                    return class_info.name, ir_symbol
             return e.name, ir_symbol
         if (
             isinstance(e, Call)

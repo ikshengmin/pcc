@@ -1060,7 +1060,7 @@ class ComprehensionLoweringMixin:
         self._store_entry_initializer(iter_slot, ir.Constant(_CSTR, None))
         self.env[owned_iter_name] = (iter_slot, _CSTR, DynType(name="dyn"))
         self._ensure_owned_local_gc_root(owned_iter_name, iter_slot, _CSTR)
-        self.builder.call(self.runtime["pcc_gc_store_root"], [iter_slot, iterator])
+        self.builder.call(self.runtime["pcc_gc_store_root_take"], [iter_slot, iterator])
         self._owned_local_names.add(owned_iter_name)
         self._owned_local_has_value.add(owned_iter_name)
         iter_flag = self._ensure_owned_local_flag(owned_iter_name, iter_slot)
@@ -1158,8 +1158,6 @@ class ComprehensionLoweringMixin:
             target_flag = self._ensure_owned_local_flag(target_ident, alloca)
             self.builder.store(ir.Constant(_I1, 0), target_flag)
             self._emit_release_owned_local_if_flagged(owned_iter_name, iter_slot)
-            self.builder.call(self.runtime["pcc_gc_store_root"],
-                [iter_slot, ir.Constant(_CSTR, None)])
             if block is cleanup_bb:
                 self.builder.branch(outer_error if outer_error is not None else self._ensure_fn_err_exit())
 

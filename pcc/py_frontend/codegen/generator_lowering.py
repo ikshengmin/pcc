@@ -56,6 +56,48 @@ _CSTR = _I8.as_pointer()
 _STOP_ITERATION_TAG = 8
 
 
+def emit_generator_terminal_frame_clear(host) -> None:
+    """Retire only the heap cells of this compiler-owned generator frame.
+
+    The generator and its frame container may outlive completion. The current
+    activation still owns its restored locals; release saved heap-cell owners
+    before those locals, with an updateable frame root and a temporary pin.
+    """
+    ctx = host._generator_ctx_stack[-1]
+    frame = host.builder.call(
+        host.runtime["pcc_gc_load_ptr"],
+        [ir.Constant(_CSTR, None), host._as_gc_ptr(ctx["frame_root"])],
+        name=host._fresh("gen.terminal.frame"),
+    )
+    # The private factory always supplies a managed list frame. Preserve an
+    # existing pin lease while balancing this helper's own temporary pin.
+    flags_addr = host.builder.gep(frame, [ir.Constant(_I64, 12)])
+    flags_ptr = host.builder.bitcast(flags_addr, _I32.as_pointer())
+    flags = host.builder.load(flags_ptr, name=host._fresh("gen.frame.pin.flags"))
+    prior = host.builder.and_(flags, ir.Constant(_I32, 64))
+    prior = host.builder.zext(prior, _I64)
+    keeper = host._enter_container_temp_root(frame, host._fresh("gen.terminal.frame.keeper"))
+    none = host._emit_none_literal()
+    for _name, entry in ctx["frame_slots"].items():
+        current = host.builder.call(
+            host.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), host._as_gc_ptr(keeper)],
+            name=host._fresh("gen.terminal.frame.current"),
+        )
+        host.builder.call(
+            host._generator_frame_helper("set"),
+            [current, ir.Constant(_I64, entry[0]), none],
+        )
+    if not (host.current_func_def is not None and getattr(host, "_runtime_threads_enabled", False)):
+        host._emit_gc_frame_leave_lifo_for_slot(keeper)
+    owned_frame = host.builder.call(
+        host.runtime["pcc_gc_take_pinned_slot"],
+        [host._as_gc_ptr(keeper), prior],
+        name=host._fresh("gen.terminal.frame.take"),
+    )
+    host._gc_release(owned_frame)
+
+
 def emit_generator_may_park_call(
     host,
     expr: Call,
@@ -522,6 +564,42 @@ def generator_may_park_child_slot(host, expr: Call, callee_name: str):
     )
     host.builder.position_at_end(saved_block)
     return child_slot, root_ptr
+
+
+def emit_function_auto_park_role(host, fd: FuncDef, function_object: ir.Value) -> None:
+    """Mark only compiler-lifted ordinary callable entries, before any call.
+
+    A returned continuation may be ordinary user data. Roles belong to the
+    actual callable: auto-lifted functions and explicit continuation factories
+    drive synchronously; source generators and async functions return data.
+    """
+    if (id(fd) not in getattr(host, "_vthread_may_park_func_ids", set())
+            and id(fd) not in getattr(host, "_vthread_may_park_method_ids", set())):
+        return
+    role = 8388608
+    if host._funcdef_is_continuation_factory(fd):
+        # The decorator's public contract is blocking-looking, including
+        # first-class bound calls. Only explicit deferred contexts expose its
+        # continuation to their resumable caller.
+        role = 67108864
+    elif fd.is_async or funcdef_has_source_yield(fd):
+        return
+    # A failed constructor returns NULL. The role write is guarded without a
+    # helper call, so neither success nor failure inserts a new safepoint.
+    mark = host.current_function.append_basic_block(host._fresh("func.role.mark"))
+    done = host.current_function.append_basic_block(host._fresh("func.role.done"))
+    present = host.builder.icmp_unsigned("!=", function_object,
+                                         ir.Constant(function_object.type, None),
+                                         name=host._fresh("func.role.present"))
+    host.builder.cbranch(present, mark, done)
+    host.builder.position_at_end(mark)
+    flags_byte = host.builder.gep(function_object, [ir.Constant(_I64, 12)],
+                                  name=host._fresh("func.role.flags.byte"))
+    flags_ptr = host.builder.bitcast(flags_byte, _I32.as_pointer(),
+                                    name=host._fresh("func.role.flags.ptr"))
+    host.builder.atomic_rmw("or", flags_ptr, ir.Constant(_I32, role), "monotonic")
+    host.builder.branch(done)
+    host.builder.position_at_end(done)
 
 
 def funcdef_has_source_yield(fd: FuncDef) -> bool:
@@ -1303,14 +1381,25 @@ class GeneratorLoweringMixin:
             [resume_ptr, frame],
             name=self._fresh(f"{fd.name}.gen"),
         )
-        if (
-            id(fd) in getattr(self, "_vthread_may_park_func_ids", set())
-            or id(fd) in getattr(self, "_vthread_may_park_method_ids", set())
-        ):
-            self.builder.call(
-                self.runtime["py_gen_set_may_park"],
-                [gen],
+        # Source generators preserve their parking effect marker, but a
+        # virtual-thread call must return them as data instead of delegating.
+        # Explicit continuation factories keep their established protocol.
+        if funcdef_has_source_yield(fd) and not self._funcdef_is_continuation_factory(fd):
+            source_gen_bb = self.current_function.append_basic_block(name=self._fresh("gen.source.role"))
+            source_done_bb = self.current_function.append_basic_block(name=self._fresh("gen.source.done"))
+            self.builder.cbranch(
+                self.builder.icmp_unsigned("!=", gen, ir.Constant(_CSTR, None)),
+                source_gen_bb, source_done_bb,
             )
+            self.builder.position_at_end(source_gen_bb)
+            flags_addr = self.builder.gep(gen, [ir.Constant(_I64, 12)])
+            flags_ptr = self.builder.bitcast(flags_addr, _I32.as_pointer())
+            self.builder.atomic_rmw("or", flags_ptr, ir.Constant(_I32, 33554432), "monotonic")
+            self.builder.branch(source_done_bb)
+            self.builder.position_at_end(source_done_bb)
+        if (id(fd) in getattr(self, "_vthread_may_park_func_ids", set())
+                or id(fd) in getattr(self, "_vthread_may_park_method_ids", set())):
+            self.builder.call(self.runtime["py_gen_set_may_park"], [gen])
         self._gc_release(frame)
         self.builder.ret(gen)
 
@@ -1399,6 +1488,14 @@ class GeneratorLoweringMixin:
         self.current_class = class_info
         self.current_method_kind = method_kind
 
+        # Keep the borrowed frame address healable for terminal cleanup after
+        # arbitrary body calls. Entry root registration precedes the first
+        # poll; the generator owns the frame, so this adds no frame reference.
+        frame_root_name = self._fresh("gen.frame.borrowed")
+        frame_root = self._alloca_in_entry(_CSTR, name=self._fresh("gen.frame.borrowed.slot"))
+        self.builder.store(fn.args[1], frame_root)
+        self.env[frame_root_name] = (frame_root, _CSTR, DynType(name="dyn"))
+        self._ensure_borrowed_local_gc_root(frame_root_name, frame_root, _CSTR)
         self._emit_thread_safepoint()
 
         first_entry_init = str(
@@ -1474,6 +1571,7 @@ class GeneratorLoweringMixin:
             {
                 "gen": fn.args[0],
                 "frame": fn.args[1],
+                "frame_root": frame_root,
                 "frame_slots": frame_slots,
                 "dispatch_bb": dispatch_bb,
                 "switch": switch_inst,
@@ -1606,6 +1704,9 @@ class GeneratorLoweringMixin:
             [ctx["gen"], value],
             name=self._fresh("gen.finish"),
         )
+        # StopIteration now owns the return value, including an alias of a
+        # saved cell. Keep that result while retiring frame/activation refs.
+        emit_generator_terminal_frame_clear(self)
         self._emit_owned_local_cleanup()
         self.builder.ret(result)
 

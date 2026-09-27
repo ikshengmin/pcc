@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 from .precise_stackmap import (
     ARCH_X86_64,
+    ARCH_AARCH64,
     PreciseStackMapError,
     decode_stack_map,
     function_address_offsets,
@@ -45,6 +46,7 @@ ELFOSABI_SYSV = 0
 ET_REL = 1
 ET_EXEC = 2
 EM_X86_64 = 62
+EM_AARCH64 = 183
 
 PT_LOAD = 1
 PT_TLS = 7
@@ -190,12 +192,15 @@ class ElfSymbol:
 class ElfObject:
     sections: tuple[ElfSection, ...]
     symbols: tuple[ElfSymbol, ...]
+    machine: int = EM_X86_64
 
     def __post_init__(self) -> None:
         _validate_object(self)
 
 
 def _validate_object(obj: ElfObject) -> None:
+    if obj.machine not in (EM_X86_64, EM_AARCH64):
+        raise ElfError("unsupported ELF machine: " + str(obj.machine))
     if not obj.symbols or obj.symbols[0] != ElfSymbol.null():
         raise ElfError("ELF object symbol zero must be the canonical null symbol")
     if len(obj.sections) > _MAX_SECTIONS or len(obj.symbols) > _MAX_SYMBOLS:
@@ -222,7 +227,7 @@ def _validate_object(obj: ElfObject) -> None:
                 raise ElfError(
                     f"section {section.name!r} relocation has invalid symbol index"
                 )
-            width = _relocation_width(relocation.type)
+            width = _relocation_width(relocation.type, obj.machine)
             if relocation.offset < 0 or relocation.offset + width > len(section.data):
                 raise ElfError(
                     f"section {section.name!r} relocation is outside its payload"
@@ -271,7 +276,7 @@ def _validate_object(obj: ElfObject) -> None:
             address_offsets = function_address_offsets(section.data)
             decoded_stackmap = decode_stack_map(
                 section.data,
-                expected_arch=ARCH_X86_64,
+                expected_arch=ARCH_AARCH64 if obj.machine == EM_AARCH64 else ARCH_X86_64,
                 final_image=False,
             )
         except PreciseStackMapError as exc:
@@ -287,7 +292,7 @@ def _validate_object(obj: ElfObject) -> None:
             )
         for address_offset in address_offsets:
             relocation = relocation_by_offset[address_offset]
-            if relocation.type != R_X86_64_64 or relocation.addend != 0:
+            if relocation.type != (257 if obj.machine == EM_AARCH64 else R_X86_64_64) or relocation.addend != 0:
                 raise ElfError(
                     "stack-map function address needs a plain R_X86_64_64 relocation"
                 )
@@ -308,7 +313,13 @@ def _validate_object(obj: ElfObject) -> None:
                 )
 
 
-def _relocation_width(reloc_type: int) -> int:
+def _relocation_width(reloc_type: int, machine: int = EM_X86_64) -> int:
+    if machine == EM_AARCH64:
+        from .elf_aarch64_relocations import relocation_width
+        try:
+            return relocation_width(reloc_type)
+        except ValueError as exc:
+            raise ElfError(str(exc)) from exc
     if reloc_type in (R_X86_64_NONE,):
         return 0
     if reloc_type in (R_X86_64_64,):
@@ -445,7 +456,7 @@ def emit_relocatable(obj: ElfObject) -> bytes:
     image[:_ELF_HEADER.size] = _ELF_HEADER.pack(
         ident,
         ET_REL,
-        EM_X86_64,
+        obj.machine,
         EV_CURRENT,
         0,
         0,
@@ -472,8 +483,8 @@ def _unpack_elf_header(data: bytes) -> tuple:
         raise ElfError("only little-endian ELF64 is supported")
     if ident[6] != EV_CURRENT or values[3] != EV_CURRENT:
         raise ElfError("unsupported ELF version")
-    if values[2] != EM_X86_64:
-        raise ElfError(f"ELF machine {values[2]} is not x86_64")
+    if values[2] not in (EM_X86_64, EM_AARCH64):
+        raise ElfError(f"unsupported ELF machine {values[2]}")
     return values
 
 
@@ -628,7 +639,7 @@ def parse_relocatable(data: bytes) -> ElfObject:
             old.name, old.type, old.flags, old.align, old.data, old.mem_size,
             tuple(relocations),
         )
-    return ElfObject(tuple(mutable_sections), tuple(symbols))
+    return ElfObject(tuple(mutable_sections), tuple(symbols), header[2])
 
 
 @dataclass(frozen=True)
@@ -653,8 +664,8 @@ def _object_symbol_sets(obj: ElfObject) -> tuple[frozenset[str], frozenset[str]]
     return frozenset(defined), frozenset(undefined)
 
 
-def read_archive(data: bytes) -> tuple[ElfArchiveMember, ...]:
-    """Read GNU or BSD ``ar`` members and validate every ELF object."""
+def read_archive_payloads(data: bytes) -> list[tuple[str, bytes]]:
+    """Read GNU/BSD/COFF ar containers without assuming an object format."""
     if not data.startswith(_AR_MAGIC):
         raise ElfError("not an ar archive")
     offset = len(_AR_MAGIC)
@@ -699,14 +710,20 @@ def read_archive(data: bytes) -> tuple[ElfArchiveMember, ...]:
                 raise ElfError("GNU ar member name offset is out of range")
             name_end = gnu_names.find(b"/\n", name_offset)
             if name_end < 0:
-                raise ElfError("GNU ar long member name is unterminated")
+                name_end = gnu_names.find(b"\0", name_offset)
+            if name_end < 0:
+                raise ElfError("ar long member name is unterminated")
             name = gnu_names[name_offset:name_end].decode("utf-8", "surrogateescape")
         else:
             name = raw_name.rstrip(b"/").decode("utf-8", "surrogateescape")
         pending.append((name, payload))
 
+    return pending
+
+
+def read_archive(data: bytes) -> tuple[ElfArchiveMember, ...]:
     members: list[ElfArchiveMember] = []
-    for name, payload in pending:
+    for name, payload in read_archive_payloads(data):
         try:
             obj = parse_relocatable(payload)
         except ElfError as exc:
@@ -809,8 +826,16 @@ def link_static_executable(
     if base_address < 0x10000 or base_address % _PAGE:
         raise ElfError("static ELF base address must be page-aligned and >= 0x10000")
     objects = list(objects)
+    machine = objects[0].machine
+    boundary_names = ("__init_array_start", "__init_array_end", "__fini_array_start", "__fini_array_end")
+    boundary_symbols = [ElfSymbol.null()]
+    for name in boundary_names:
+        boundary_symbols.append(ElfSymbol(name, SHN_ABS, 0, 0, STB_GLOBAL, STT_NOTYPE))
+    objects.append(ElfObject((), tuple(boundary_symbols), machine))
     definitions, undefined = _global_state(objects)
     for archive_data in archives:
+        if entry not in definitions:
+            undefined.add(entry)
         selected, _remaining = select_archive_members(
             read_archive(archive_data),
             undefined,
@@ -818,6 +843,8 @@ def link_static_executable(
         )
         objects.extend(selected)
         definitions, undefined = _global_state(objects)
+    if any(obj.machine != machine for obj in objects):
+        raise ElfError("cannot mix ELF machines in a link")
     if undefined:
         raise ElfError("undefined static ELF symbols: " + ", ".join(sorted(undefined)))
     if entry not in definitions:
@@ -848,6 +875,8 @@ def link_static_executable(
         R_X86_64_GOTPCRELX,
         R_X86_64_REX_GOTPCRELX,
     }
+    if machine == EM_AARCH64:
+        got_reloc_types = {311, 312, 541, 542}
     for object_index, section_index, section in alloc_sections:
         for relocation in section.relocations:
             if relocation.type not in got_reloc_types:
@@ -855,19 +884,25 @@ def link_static_executable(
             identity = _symbol_identity(
                 objects, definitions, object_index, relocation.symbol_index
             )
-            kind = "tpoff" if relocation.type == R_X86_64_GOTTPOFF else "address"
+            kind = "tpoff" if relocation.type in ((541, 542) if machine == EM_AARCH64 else (R_X86_64_GOTTPOFF,)) else "address"
             key = (identity, kind)
             if key not in got_seen:
                 got_seen.add(key)
                 got_identities.append(key)
 
     rx_sections = [item for item in alloc_sections if not item[2].flags & SHF_WRITE]
+    if machine == EM_AARCH64:
+        rx_sections.sort(key=lambda item: not bool(item[2].flags & SHF_EXECINSTR))
     rw_file_sections = [
         item for item in alloc_sections
         if item[2].flags & SHF_WRITE
         and not item[2].flags & SHF_TLS
         and item[2].type != SHT_NOBITS
     ]
+    rw_file_sections.sort(key=lambda item: (
+        1 if item[2].name.startswith(".init_array") else 2 if item[2].name.startswith(".fini_array") else 0,
+        item[2].name if item[2].name.startswith((".init_array", ".fini_array")) else "",
+    ))
     tdata_sections = [
         item for item in alloc_sections
         if item[2].flags & SHF_TLS and item[2].type != SHT_NOBITS
@@ -908,7 +943,8 @@ def link_static_executable(
 
     tls_align = max((item[2].align for item in tdata_sections + tbss_sections), default=1)
     tls_file_start = _align(cursor, tls_align) if has_tls else 0
-    cursor = tls_file_start
+    if has_tls:
+        cursor = tls_file_start
     for object_index, section_index, section in tdata_sections:
         cursor = _align(cursor, section.align)
         placements[(object_index, section_index)] = _Placement(cursor, base_address + cursor)
@@ -939,6 +975,14 @@ def link_static_executable(
         placement = placements[(object_index, section_index)]
         image[placement.file_offset:placement.file_offset + len(section.data)] = section.data
 
+    boundaries = {}
+    for family in ("init", "fini"):
+        selected = [item for item in alloc_sections if item[2].name.startswith("." + family + "_array")]
+        begin = min((placements[(oi, si)].address for oi, si, sec in selected), default=0)
+        end = max((placements[(oi, si)].address + sec.size for oi, si, sec in selected), default=0)
+        boundaries["__" + family + "_array_start"] = begin
+        boundaries["__" + family + "_array_end"] = end
+
     def resolve_symbol(object_index: int, symbol_index: int) -> tuple[int, ElfSymbol]:
         identity = _symbol_identity(objects, definitions, object_index, symbol_index)
         if identity[0] == "weak-zero":
@@ -948,7 +992,7 @@ def link_static_executable(
         )
         symbol = objects[target_object].symbols[target_symbol]
         if symbol.section_index == SHN_ABS:
-            return symbol.value, symbol
+            return boundaries.get(symbol.name, symbol.value), symbol
         if symbol.section_index == SHN_UNDEF:
             return 0, symbol
         placement = placements.get((target_object, symbol.section_index))
@@ -956,7 +1000,7 @@ def link_static_executable(
             raise ElfError(f"symbol {symbol.name!r} is defined in a non-alloc section")
         return placement.address + symbol.value, symbol
 
-    tls_tp = _align(base_address + tls_memory_end, max(tls_align, 16)) if has_tls else 0
+    tls_tp = base_address + tls_file_start + _align(tls_memory_end - tls_file_start, tls_align) if has_tls else 0
 
     def tls_offset(object_index: int, symbol_index: int) -> int:
         address, symbol = resolve_symbol(object_index, symbol_index)
@@ -964,6 +1008,8 @@ def link_static_executable(
             raise ElfError(f"TLS relocation targets non-TLS symbol {symbol.name!r}")
         if not has_tls:
             raise ElfError("TLS relocation exists without a PT_TLS image")
+        if machine == EM_AARCH64:
+            return address - (base_address + tls_file_start) + _align(16, tls_align)
         return address - tls_tp
 
     got_offsets = {identity: index * 8 for index, identity in enumerate(got_identities)}
@@ -999,7 +1045,21 @@ def link_static_executable(
             symbol_address, _symbol = resolve_symbol(
                 object_index, relocation.symbol_index
             )
-            if relocation.type == R_X86_64_64:
+            if machine == EM_AARCH64:
+                from .elf_aarch64_relocations import apply_relocation
+                target = symbol_address
+                if relocation.type in (311, 312, 541, 542):
+                    identity = _symbol_identity(objects, definitions, object_index, relocation.symbol_index)
+                    kind = "tpoff" if relocation.type in (541, 542) else "address"
+                    target = got_address + got_offsets[(identity, kind)]
+                elif relocation.type in (549, 551):
+                    target = tls_offset(object_index, relocation.symbol_index)
+                try:
+                    apply_relocation(image, patch, relocation.type,
+                                     target + relocation.addend, place)
+                except ValueError as exc:
+                    raise ElfError(str(exc)) from exc
+            elif relocation.type == R_X86_64_64:
                 _write_int(image, patch, symbol_address + relocation.addend, 64, False)
             elif relocation.type in (R_X86_64_PC32, R_X86_64_PLT32):
                 _write_int(image, patch, symbol_address + relocation.addend - place, 32, True)
@@ -1048,7 +1108,7 @@ def link_static_executable(
         try:
             decode_stack_map(
                 payload,
-                expected_arch=ARCH_X86_64,
+                expected_arch=ARCH_AARCH64 if machine == EM_AARCH64 else ARCH_X86_64,
                 final_image=True,
             )
         except PreciseStackMapError as exc:
@@ -1085,7 +1145,7 @@ def link_static_executable(
     ident = ELF_MAGIC + bytes((ELFCLASS64, ELFDATA2LSB, EV_CURRENT, ELFOSABI_SYSV))
     ident += b"\0" * (16 - len(ident))
     image[:_ELF_HEADER.size] = _ELF_HEADER.pack(
-        ident, ET_EXEC, EM_X86_64, EV_CURRENT, entry_address,
+        ident, ET_EXEC, machine, EV_CURRENT, entry_address,
         _ELF_HEADER.size, 0, 0, _ELF_HEADER.size,
         _PROGRAM_HEADER.size, len(program_headers), 0, 0, 0,
     )

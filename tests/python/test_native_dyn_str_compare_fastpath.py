@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import textwrap
 
@@ -57,6 +58,9 @@ def test_dyn_str_compare_fastpath_uses_type_guarded_str_eq(tmp_path):
         emit_llvm_only=True,
     )
     ir_text = ll.read_text(encoding="utf-8")
-    assert "dyn.str.tag" in ir_text
-    assert "dyn.str.eq.call" in ir_text
+    # An exact str tag compares natively; anything else keeps the generic
+    # (``__eq__``-aware) comparison behind the guard.
+    assert "str.predicate.tag" in ir_text
+    assert "@py_obj_type_tag" in ir_text
+    assert re.search(r"str\.predicate\.eq[.\w]* = call [^\n]*@py_str_eq\(", ir_text)
     assert "obj.str.eq" not in ir_text

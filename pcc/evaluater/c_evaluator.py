@@ -125,6 +125,8 @@ _SELF_OBJECT_EMITTER_SYSTEM_AS = "system-as"
 _SELF_OBJECT_EMITTER_DIRECT_TARGETS = frozenset(
     {
         "self-aarch64-darwin-v0",
+        "self-aarch64-linux-v0",
+        "self-x86_64-windows-v0",
         "self-x86_64-linux-v0",
     }
 )
@@ -1409,7 +1411,7 @@ _C_EXTENSION_COMPAT_DEFINES = (
 
 
 def _preprocess_translation_unit_source(
-    source, base_dir, use_system_cpp, include_dirs=None, cpp_args=None
+    source, base_dir, use_system_cpp, include_dirs=None, cpp_args=None, target_triple=None
 ):
     codestr = _rewrite_embed_directives(
         _rewrite_missing_clang_test_headers(_strip_ignored_clang_pragmas(source))
@@ -1434,6 +1436,7 @@ def _preprocess_translation_unit_source(
             base_dir=base_dir,
             include_dirs=include_dirs,
             cpp_args=list(_C_EXTENSION_COMPAT_DEFINES) + list(cpp_args or []),
+            target_triple=target_triple,
         )
     return _normalize_preprocessed_source(codestr)
 
@@ -1538,6 +1541,7 @@ def _compile_translation_unit_artifact_job(
         use_system_cpp,
         include_dirs=include_dirs,
         cpp_args=cpp_args,
+        target_triple=target_triple,
     )
 
     # SEC-P1-UBSAN: when opt-in trapping is active the emitted IR differs from
@@ -2522,8 +2526,29 @@ class CEvaluator(object):
         if link_args:
             raise BackendUnavailable("owned C executable linking does not yet support extra link arguments")
         prepared = self._prepare_self_backend_units(compiled_units, optimize=optimize) if self._normalize_opt_level(optimize) > 0 else compiled_units
-        if self._self_link_target_identity(prepared) != "self-aarch64-darwin-v0":
-            raise BackendUnavailable("owned C executable publication is currently implemented for AArch64 Darwin")
+        target_id = self._self_link_target_identity(prepared)
+        if target_id in ("self-aarch64-linux-v0", "self-x86_64-linux-v0", "self-x86_64-windows-v0"):
+            from pcc.py_frontend.pipeline import _ensure_runtime
+            from pcc.py_frontend.owned_runtime_build import ensure_target_runtime
+            from pcc.backend.owned_elf_link import link_inputs as elf_link
+            from pcc.backend.owned_pe_link import link_inputs as pe_link
+            with tempfile.TemporaryDirectory(prefix="pcc_c_owned_") as temporary:
+                paths = []
+                for index, unit in enumerate(prepared):
+                    path = os.path.join(temporary, "unit_" + str(index) + ".s")
+                    with open(path, "w", encoding="utf-8") as stream:
+                        stream.write(self._self_backend_asm_text([unit]))
+                    paths.append(path)
+                if self.target_triple == host_target_triple():
+                    runtime = _ensure_runtime(False, needs_libpython=False)
+                else:
+                    runtime_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "py_runtime")
+                    runtime = ensure_target_runtime(runtime_root, self.target_triple)
+                if "windows" in self.target_triple:
+                    pe_link(output=output, assembly=paths, archives=[runtime])
+                else:
+                    elf_link(output=output, target=self.target_triple, assembly=paths, archives=[runtime])
+            return
         from pcc.backend.arm64_asm_driver import assemble_file
         from pcc.backend.native_object import NativeObject
         from pcc.backend.macho_exec import link_executable
@@ -2579,7 +2604,9 @@ class CEvaluator(object):
                 os.environ.get(_SELF_OBJECT_EMITTER_ENV),
                 target_identity,
             )
-        asm_text = self._self_backend_asm_text(prepared_units)
+        asm_text = ""
+        if emit_asm or (emit_obj and object_emitter != _SELF_OBJECT_EMITTER_PCC):
+            asm_text = self._self_backend_asm_text(prepared_units)
 
         if emit_llvm:
             with open(emit_llvm, "w") as f:
@@ -2628,11 +2655,20 @@ class CEvaluator(object):
                         else link_relocatable_native(native_objects)
                     )
                     object_bytes = native_object.to_macho()
-                elif target_identity == "self-x86_64-linux-v0":
+                elif target_identity in ("self-x86_64-linux-v0", "self-aarch64-linux-v0"):
                     from ..backend.elf_x86_64 import emit_relocatable
-                    from ..backend.x86_64_asm_driver import assemble_file
+                    from ..backend.owned_elf_link import assemble
+                    from ..backend.relocatable_merge import merge_elf_objects
 
-                    object_bytes = emit_relocatable(assemble_file(asm_text))
+                    objects = [assemble(emit_self_asm(unit[1]), parse_self_backend_target_triple(unit[1]))
+                               for unit in prepared_units]
+                    object_bytes = emit_relocatable(merge_elf_objects(objects))
+                elif target_identity == "self-x86_64-windows-v0":
+                    from ..backend.coff_x86_64 import assemble, emit_object
+                    from ..backend.relocatable_merge import merge_coff_objects
+
+                    objects = [assemble(emit_self_asm(unit[1])) for unit in prepared_units]
+                    object_bytes = emit_object(merge_coff_objects(objects))
                 else:
                     raise BackendUnavailable(
                         "pcc self object emitter lost target validation for "
@@ -2942,6 +2978,14 @@ class CEvaluator(object):
         asm_text = self._self_backend_asm_text(prepared_units)
         tmpdir = tempfile.mkdtemp(prefix="pcc_self_run_")
         try:
+            if not link_with_system_cc and self._self_link_target_identity(prepared_units) in (
+                "self-x86_64-linux-v0", "self-aarch64-linux-v0", "self-x86_64-windows-v0"
+            ):
+                owned_bin = os.path.join(tmpdir, "program.exe" if "windows" in self.target_triple else "program")
+                self.emit_executable(prepared_units, owned_bin, optimize=False, link_args=link_args)
+                return subprocess.run([owned_bin] + [str(arg) for arg in (prog_args or [])],
+                                      capture_output=capture_output, text=text,
+                                      timeout=timeout, cwd=base_dir or os.getcwd())
             # Freestanding startup objects and caller-supplied link arguments
             # are host-toolchain inputs; pcc owns the plain case, which is the
             # one that made *running* C require a C compiler.

@@ -727,6 +727,35 @@ def test_cli_bootstrap_package_schema_static_imports_stay_native():
     assert _count_py_cpy_calls(ir_text) == 0
 
 
+def test_cli_worker_static_exports_match_owned_provider_signatures():
+    from pcc.py_frontend.codegen.layer1_support import (
+        _PCC_FRONTEND_STATIC_NATIVE_EXPORTS,
+    )
+
+    for module_name in (
+        "pcc.py_frontend.native_deferred",
+        "pcc.py_frontend.preload_delta_worker",
+    ):
+        source = _REPO_ROOT.joinpath(*module_name.split(".")).with_suffix(".py")
+        definition = next(
+            node
+            for node in ast.parse(source.read_text(encoding="utf-8")).body
+            if isinstance(node, ast.FunctionDef) and node.name == "run"
+        )
+        declared = _PCC_FRONTEND_STATIC_NATIVE_EXPORTS[module_name]["run"]
+        assert tuple(arg["name"] for arg in declared["call_sig"]) == tuple(
+            argument.arg for argument in definition.args.args
+        )
+        types = {None: ("dyn",), "str": ("str",), "int": ("int", 64, True)}
+        assert declared["param_types"] == tuple(
+            types[ast.unparse(argument.annotation) if argument.annotation else None]
+            for argument in definition.args.args
+        )
+        assert declared["return_ty"] == types[
+            ast.unparse(definition.returns) if definition.returns else None
+        ]
+
+
 def test_layer1_constants_cross_module_static_imports_stay_native():
     """Focused regression for ``layer1.py`` static table imports.
 

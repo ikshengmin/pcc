@@ -263,6 +263,20 @@ class DoubleType(_SingletonType):
         return "double"
 
 
+class X86FP80Type(_SingletonType):
+    _name = "x86_fp80"
+
+    def __str__(self) -> str:
+        return "x86_fp80"
+
+
+class FP128Type(_SingletonType):
+    _name = "fp128"
+
+    def __str__(self) -> str:
+        return "fp128"
+
+
 class PointerType(Type):
     """Pointer to a pointee type. LLVM 15+ uses opaque pointers (``ptr``)
     — we emit the opaque form by default to match llvmlite's current
@@ -756,6 +770,14 @@ class Constant(Value):
                 # i64-range value.
                 return Constant._format_int(_i64_spelling(value))
             return Constant._format_int(value)
+        if isinstance(ty, (X86FP80Type, FP128Type)):
+            from pcc.backend.wide_float import encode_float_bits
+            width = 80 if isinstance(ty, X86FP80Type) else 128
+            raw = encode_float_bits(str(value), width)
+            if width == 80:
+                return "0xK" + format(raw, "020X")
+            # LLVM's L spelling writes the low 64-bit word first.
+            return "0xL" + format(raw & ((1 << 64) - 1), "016X") + format(raw >> 64, "016X")
         if isinstance(ty, (FloatType, DoubleType, HalfType)):
             # Do not coerce with ``value * 1.0``: during self-host this path can
             # receive a boxed pcc float in a DynType slot, and dynamic ``*``
@@ -1995,6 +2017,7 @@ class IRBuilder:
             self._direct_indexed_capture
             and _env_flag_enabled("PCC_DIRECT_INDEXED_KERNEL_EMIT")
             and not _env_flag_enabled("PCC_DIRECT_INDEXED_KERNEL_VALIDATE")
+            and not _env_flag_enabled("PCC_TEXT_INDEXED_KERNEL_EMIT")
         )
 
     @property
@@ -3196,21 +3219,36 @@ class IRBuilder:
         name: str = "",
     ) -> Value:
         v = self._next(name, val.type)
-        self._emit(
-            str(v)
-            + " = atomicrmw "
-            + str(op)
-            + " "
-            + str(ptr.type)
-            + " "
-            + str(ptr)
-            + ", "
-            + str(val.type)
-            + " "
-            + str(val)
-            + " "
-            + str(ordering)
-        )
+        direct_builder = self._direct_builder_plane()
+        if self._direct_indexed_no_text and direct_builder is not None:
+            rec = self._emit_direct("atomicrmw")
+        else:
+            rec = self._emit(
+                str(v)
+                + " = atomicrmw "
+                + str(op)
+                + " "
+                + str(ptr.type)
+                + " "
+                + str(ptr)
+                + ", "
+                + str(val.type)
+                + " "
+                + str(val)
+                + " "
+                + str(ordering)
+            )
+        if direct_builder is not None:
+            rec._direct_record_id = DirectIndexedFunctionBuilder.publish_atomicrmw(
+                direct_builder,
+                op,
+                v,
+                ptr.type,
+                ptr,
+                val.type,
+                val,
+                ordering,
+            )
         return v
 
     def cmpxchg(
@@ -3256,21 +3294,31 @@ class IRBuilder:
         a6: Value,
         name: str = "",
     ) -> Value:
-        """Raw Linux x86_64 syscall as an inline-asm call (musl ABI).
+        """Raw Linux syscall, selected from the owning module's target.
 
-        One fixed shape so the self backend can recognize it exactly:
-        rax=nr, args in rdi/rsi/rdx/r10/r8/r9, rcx/r11/memory clobbered.
+        Keep this method's positional/keyword contract identical in host and
+        native scaffold code. Call sites must not choose the machine ABI.
+        An unset target retains the historical x86-64 IR-builder dialect.
         """
+        triple = self._fn.module.triple if self._fn is not None else ""
+        arch = triple.split("-", 1)[0] if triple else "x86_64"
+        if arch in ("unknown", "amd64"):
+            arch = "x86_64"
         v = self._next(name, IntType(64))
         args = [nr, a1, a2, a3, a4, a5, a6]
         arg_parts = []
         for arg in args:
             arg_parts.append("i64 " + _value_ref(arg))
+        opcode = "syscall"
+        constraints = "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"
+        if arch in ("aarch64", "arm64"):
+            opcode = "svc #0"
+            constraints = "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory},~{cc}"
+        elif arch != "x86_64":
+            raise NotImplementedError("unsupported raw syscall ABI: " + arch)
         self._emit(
             str(v)
-            + ' = call i64 asm sideeffect "syscall", '
-            + '"={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},'
-            + '~{rcx},~{r11},~{memory}"('
+            + ' = call i64 asm sideeffect "' + opcode + '", "' + constraints + '"('
             + _join_text(arg_parts, ", ")
             + ")"
         )
@@ -3855,6 +3903,14 @@ def DoubleType___init__():
     return DoubleType()
 
 
+def X86FP80Type___init__():
+    return X86FP80Type()
+
+
+def FP128Type___init__():
+    return FP128Type()
+
+
 def FunctionType___init__0(return_type):
     return FunctionType(return_type, ())
 
@@ -4298,6 +4354,8 @@ __all__ = [
     "HalfType",
     "FloatType",
     "DoubleType",
+    "X86FP80Type",
+    "FP128Type",
     "PointerType",
     "ArrayType",
     "BaseStructType",

@@ -53,6 +53,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_select_relocation_pages",
     "pcc_gc_config_ensure",
     "pcc_gc_generational_step",
+    "pcc_gc_gray_count_increment_acq_rel",
     "pcc_gc_incremental_concurrent_step",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_pointer_is_managed",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+from .self_backend_target_match import is_aarch64_linux_triple
 from . import BackendUnavailable
 from .self_backend_analysis import is_local_value_ref
 from .self_backend_aarch64_darwin_abi import (
@@ -13,6 +14,8 @@ from .self_backend_aarch64_darwin_abi import (
     aggregate_passed_indirect_indexed,
     assign_abi_arg_regs,
     reg_name,
+    stack_arg_alignment,
+    stack_arg_alignment_indexed,
     stack_arg_offsets,
     stack_arg_storage_size,
     stack_arg_storage_size_indexed,
@@ -179,6 +182,9 @@ def emit_vararg_start(
         raise BackendUnavailable(
             f"self backend saw llvm.va_start in non-variadic function {func.name!r}"
         )
+    if is_aarch64_linux_triple(module_symbols.target_triple):
+        from .self_backend_aarch64_linux import emit_linux_vararg_start
+        return emit_linux_vararg_start(func, ap_ptr, module_symbols)
     arg_types = [arg.type for arg in func.args]
     assignments = assign_abi_arg_regs(arg_types)
     stack_offsets = stack_arg_offsets(arg_types, assignments)
@@ -209,6 +215,9 @@ def emit_va_arg(
         raise BackendUnavailable(
             f"self backend va_arg expects pointer va_list storage, got {ap_type.describe()}"
         )
+    if is_aarch64_linux_triple(module_symbols.target_triple):
+        from .self_backend_aarch64_linux import emit_linux_va_arg
+        return emit_linux_va_arg(func, dest, ap, value_type, module_symbols)
     if value_type.is_void or value_type.is_array or value_type.is_struct:
         raise BackendUnavailable(
             f"self backend va_arg only supports scalar results for now, got {value_type.describe()}"
@@ -2004,7 +2013,7 @@ def emit_call_instruction_indexed(
             f"self backend saw malformed variadic call in {func.name!r}: fixed args exceed actual args"
         )
 
-    fixed_count = fixed_arg_count if is_vararg_call else arg_count
+    fixed_count = fixed_arg_count if is_vararg_call and not is_aarch64_linux_triple(module_symbols.target_triple) else arg_count
     stack_arg_entries: list[tuple[int, int]] = []
     indirect_stack_ptr_entries: list[tuple[int, int]] = []
     pending_indirect_stack_literals: list[tuple[int, int]] = []
@@ -2051,12 +2060,18 @@ def emit_call_instruction_indexed(
                 first_register_index = fpr_index
                 fpr_index += register_count
         elif register_class == 1:
+            if is_aarch64_linux_triple(module_symbols.target_triple) and not arg_is_indirect and kernel.type_span(arg_type_id).fourth >= 16:
+                gpr_index = _align_to(gpr_index, 2)
             if gpr_index + register_count > 8:
                 register_count = 0
+                if is_aarch64_linux_triple(module_symbols.target_triple):
+                    gpr_index = 8
             else:
                 first_register_index = gpr_index
                 gpr_index += register_count
         if register_count == 0:
+            if is_aarch64_linux_triple(module_symbols.target_triple):
+                stack_offset = _align_to(stack_offset, stack_arg_alignment_indexed(kernel, arg_type_id))
             if arg_is_indirect:
                 ptr_offset = stack_offset
                 stack_offset += 8
@@ -2072,8 +2087,6 @@ def emit_call_instruction_indexed(
                 stack_arg_entries.append((stack_offset, arg_index))
                 stack_offset += (
                     stack_arg_storage_size_indexed(kernel, arg_type_id)
-                    if arg_is_aggregate
-                    else 8
                 )
             arg_index += 1
             continue
@@ -2127,9 +2140,6 @@ def emit_call_instruction_indexed(
         variadic_kind_id = kernel.type_kind_id(raw.first)
         stack_offset += (
             variadic_stack_arg_storage_size_indexed(kernel, raw.first)
-            if variadic_kind_id == TYPE_KIND_ARRAY
-            or variadic_kind_id == TYPE_KIND_STRUCT
-            else 8
         )
         arg_index += 1
 
@@ -2521,10 +2531,11 @@ def emit_call_instruction(
             )
         indirect_callee_value_id = indexed_use0
         indexed_use_index = 1
-    fixed_args = args[:fixed_arg_count] if is_vararg_call else args
-    vararg_args = args[fixed_arg_count:] if is_vararg_call else ()
+    darwin_varargs = is_vararg_call and not is_aarch64_linux_triple(module_symbols.target_triple)
+    fixed_args = args[:fixed_arg_count] if darwin_varargs else args
+    vararg_args = args[fixed_arg_count:] if darwin_varargs else ()
     fixed_types = [arg_type for arg_type, _value in fixed_args]
-    arg_regs = assign_abi_arg_regs(fixed_types)
+    arg_regs = assign_abi_arg_regs(fixed_types, linux=is_aarch64_linux_triple(module_symbols.target_triple))
     stack_arg_entries: list[tuple[int, TypeDesc, str, int]] = []
     indirect_stack_ptr_entries: list[tuple[int, TypeDesc, str, int]] = []
     pending_indirect_stack_literals: list[tuple[int, TypeDesc, str]] = []
@@ -2550,6 +2561,8 @@ def emit_call_instruction(
                 )
             indexed_use_index += 1
         if not regs:
+            if is_aarch64_linux_triple(module_symbols.target_triple):
+                stack_offset = _align_to(stack_offset, stack_arg_alignment(arg_type))
             if aggregate_passed_indirect(arg_type):
                 ptr_offset = stack_offset
                 stack_offset += stack_arg_storage_size(arg_type)

@@ -344,8 +344,8 @@ def pcc_gc_object_known_size(obj: c_ptr) -> i64:
 def pcc_gc_live_bytes_subtract(size: i64) -> None:
     if size <= 0:
         return
-    live: i64 = load_i32(global_addr("pcc_gc_live_bytes"), 0)
+    live: i64 = load_i64(global_addr("pcc_gc_live_bytes"), 0)
     if size >= live:
-        store_i32(global_addr("pcc_gc_live_bytes"), 0, 0)
+        store_i64(global_addr("pcc_gc_live_bytes"), 0, 0)
     else:
-        store_i32(global_addr("pcc_gc_live_bytes"), 0, live - size)
+        store_i64(global_addr("pcc_gc_live_bytes"), 0, live - size)

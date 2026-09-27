@@ -1622,7 +1622,7 @@ def emit_callee_saved_stores(func: ParsedFunction) -> list[str]:
                 "str",
                 "x" + str(func.aarch64_callee_saved[index]),
                 "sp",
-                index * 8,
+                func.platform_frame_extra + index * 8,
             )
         )
         index += 1
@@ -1638,7 +1638,7 @@ def emit_callee_saved_loads(func: ParsedFunction) -> list[str]:
                 "ldr",
                 "x" + str(func.aarch64_callee_saved[index]),
                 "sp",
-                index * 8,
+                func.platform_frame_extra + index * 8,
             )
         )
         index += 1

@@ -1320,6 +1320,7 @@ def merge_stack_map_payloads(
     """
     if not payloads:
         raise PreciseStackMapError("cannot merge an empty stack-map collection")
+    arch = 0
     functions: list[tuple[int, bytes]] = []
     seen_ids: set[int] = set()
     table: list[bytes] = []
@@ -1330,6 +1331,10 @@ def merge_stack_map_payloads(
     function_size = _FUNCTION.size
     for payload in payloads:
         _count, scanned, table_start, table_count = _scan_stack_map_payload(payload)
+        source_arch = payload[10]
+        if arch and source_arch != arch:
+            raise PreciseStackMapError("cannot merge stack maps for different targets")
+        arch = source_arch
         source_table = payload[
             table_start:table_start + table_count * location_size
         ]
@@ -1401,7 +1406,7 @@ def merge_stack_map_payloads(
     header = _HEADER.pack(
         MAGIC,
         VERSION,
-        ARCH_AARCH64,
+        arch,
         POINTER_SIZE,
         len(functions),
         total_locations,

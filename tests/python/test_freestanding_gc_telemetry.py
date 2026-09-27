@@ -126,6 +126,7 @@ def _differential_source() -> str:
     globals_ = sorted(py_globals | oracle_globals)
     function_values = {name: 10000 + index for index, name in enumerate(functions)}
     global_values = {name: 1000 + index for index, name in enumerate(globals_)}
+    global_values["pcc_gc_debt_bytes"] = 8589934765
 
     aliases = {
         "pcc_gc_max_pause_us": "pcc_gc_metric_max_pause_us",

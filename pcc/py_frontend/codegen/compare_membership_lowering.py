@@ -1358,6 +1358,7 @@ class CompareMembershipLoweringMixin:
                 expr.lhs,
                 expr.rhs,
                 negate=(expr.op == "not in"),
+                span=getattr(expr, "span", None),
             )
         if self._is_os_environ_attr(expr.rhs):
             key = self._emit_membership_needle_object(
@@ -1584,38 +1585,137 @@ class CompareMembershipLoweringMixin:
             name_hint,
         )
 
-    def _emit_membership_tuple_literal(
-        self, lhs_expr: Expr, rhs: TupleExpr, negate: bool
-    ) -> ir.Value:
-        """Unroll ``x in (a, b, c)`` as ``x==a or x==b or x==c``."""
-        lhs_obj = self._emit_membership_needle_object(
-            lhs_expr,
-            "cpy.tup.lit.in.key",
-        )
-        acc: Optional[ir.Value] = None
-        for el in rhs.elems:
-            v_obj = self._emit_membership_needle_object(
-                el,
-                "cpy.tup.lit.in.el",
-            )
-            eq_i32 = self.builder.call(
-                self.runtime["py_obj_eq"],
-                [lhs_obj, v_obj],
-                name=self._fresh("tup.eq"),
-            )
-            eq_i1 = self.builder.icmp_signed(
-                "!=",
-                eq_i32,
-                ir.Constant(_I32, 0),
-                name=self._fresh("tup.eq.i1"),
-            )
-            if acc is None:
-                acc = eq_i1
+    # Needle types whose ``==`` against a builtin literal runs no user code
+    # and cannot raise, so the comparisons are unobservable.
+    _MEMBERSHIP_BUILTIN_NEEDLE_TYPES = (
+        IntType, BoolType, FloatType, StrType, BytesType, NoneType,
+    )
+
+    def _emit_native_int_tuple_membership(
+        self, lhs_expr: Expr, value: ir.Value, rhs: TupleExpr
+    ) -> Optional[ir.Value]:
+        """``n in (0, 1)`` for a native int/bool ``n`` as integer compares.
+
+        None unless the needle is already a native integer and every element
+        is an int/bool literal that fits in i64.  ``True == 1`` in Python, so
+        bool and int compare by value.
+        """
+        if not isinstance(lhs_expr.ty, (IntType, BoolType)):
+            return None
+        if value in getattr(self, "_cpy_values", ()):
+            return None
+        if not isinstance(value.type, ir.IntType) or value.type.width > 64:
+            return None
+        constants: list[int] = []
+        for element in rhs.elems:
+            if isinstance(element, BoolLit):
+                constants.append(1 if bool(element.value) else 0)
+            elif isinstance(element, IntLit):
+                literal = int(element.value)
+                # Bounds stay inside i64: pcc1 lowers its own source, and a
+                # 2**63 literal (``-9223372036854775808``) overflows there.
+                if literal < -9223372036854775807 or literal > 9223372036854775807:
+                    return None
+                constants.append(literal)
             else:
-                acc = self.builder.or_(acc, eq_i1, name=self._fresh("tup.or"))
-        if acc is None:
-            # Empty tuple: ``x in ()`` is always False.
+                return None
+        needle = value
+        if value.type.width == 1:
+            needle = self.builder.zext(value, _I64, name=self._fresh("tup.in.b2i"))
+        elif value.type.width < 64:
+            needle = self.builder.sext(value, _I64, name=self._fresh("tup.in.sext"))
+        acc: ir.Value = ir.Constant(_I1, 0)
+        for constant in constants:
+            hit = self.builder.icmp_signed(
+                "==", needle, ir.Constant(_I64, constant),
+                name=self._fresh("tup.in.is"),
+            )
+            acc = self.builder.or_(acc, hit, name=self._fresh("tup.in.or"))
+        return acc
+
+    def _emit_membership_tuple_literal(
+        self, lhs_expr: Expr, rhs: TupleExpr, negate: bool, span=None
+    ) -> ir.Value:
+        """``x in (a, b, c)`` against literals, without building the tuple.
+
+        Python compares left to right and stops at the first match.  A
+        builtin needle cannot observe that, so its tests are a flat chain
+        (or native integer compares); any other needle may run ``__eq__``,
+        so it branches out on the first match and checks for a raised error
+        after each comparison.  A needle object created here is released.
+        """
+        needle = self._emit_valueclass_constructor_needle(lhs_expr)
+        if needle is not None:
+            lhs_obj = needle
+            owned = True
+        else:
+            value = self._emit_expr(lhs_expr)
+            native = self._emit_native_int_tuple_membership(lhs_expr, value, rhs)
+            if native is not None:
+                if negate:
+                    return self.builder.not_(native, name=self._fresh("tup.not_in"))
+                return native
+            lhs_obj = self._emit_value_as_pcc_object_or_bridge(
+                value, lhs_expr.ty, "cpy.tup.lit.in.key",
+            )
+            owned = lhs_obj is not value or self._owned_release_needed(
+                value, lhs_expr
+            )
+        observable = needle is not None or not isinstance(
+            lhs_expr.ty, self._MEMBERSHIP_BUILTIN_NEEDLE_TYPES
+        )
+        if len(rhs.elems) == 0:
+            # ``x in ()`` is always False; the needle was still evaluated.
+            acc: ir.Value = ir.Constant(_I1, 0)
+        elif not observable:
             acc = ir.Constant(_I1, 0)
+            for el in rhs.elems:
+                v_obj = self._emit_membership_needle_object(el, "cpy.tup.lit.in.el")
+                eq_i32 = self.builder.call(
+                    self.runtime["py_obj_eq"],
+                    [lhs_obj, v_obj],
+                    name=self._fresh("tup.eq"),
+                )
+                eq_i1 = self.builder.icmp_signed(
+                    "!=", eq_i32, ir.Constant(_I32, 0),
+                    name=self._fresh("tup.eq.i1"),
+                )
+                acc = self.builder.or_(acc, eq_i1, name=self._fresh("tup.or"))
+        else:
+            cleanup = ((lhs_obj, True),) if owned else ()
+            if owned:
+                self._gc_pin(lhs_obj)
+            fn = self.current_function
+            found_bb = fn.append_basic_block(name=self._fresh("tup.in.found"))
+            done_bb = fn.append_basic_block(name=self._fresh("tup.in.done"))
+            for el in rhs.elems:
+                v_obj = self._emit_membership_needle_object(el, "cpy.tup.lit.in.el")
+                eq_i32 = self.builder.call(
+                    self.runtime["py_obj_eq"],
+                    [lhs_obj, v_obj],
+                    name=self._fresh("tup.eq"),
+                )
+                self._emit_post_call_err_check(span, pinned_release_on_error=cleanup)
+                eq_i1 = self.builder.icmp_signed(
+                    "!=", eq_i32, ir.Constant(_I32, 0),
+                    name=self._fresh("tup.eq.i1"),
+                )
+                next_bb = fn.append_basic_block(name=self._fresh("tup.in.next"))
+                self.builder.cbranch(eq_i1, found_bb, next_bb)
+                self.builder.position_at_end(next_bb)
+            self.builder.branch(done_bb)
+            miss_end = self.builder.block
+            self.builder.position_at_end(found_bb)
+            self.builder.branch(done_bb)
+            self.builder.position_at_end(done_bb)
+            result = self.builder.phi(_I1, name=self._fresh("tup.in.result"))
+            result.add_incoming(ir.Constant(_I1, 1), found_bb)
+            result.add_incoming(ir.Constant(_I1, 0), miss_end)
+            acc = result
+            if owned:
+                self._gc_unpin(lhs_obj)
+        if owned and lhs_obj not in getattr(self, "_cpy_values", ()):
+            self._gc_release(lhs_obj)
         if negate:
             return self.builder.not_(acc, name=self._fresh("tup.not_in"))
         return acc

@@ -12,6 +12,8 @@ def test_emitter_identity_tracks_only_self_backend_implementation(tmp_path):
     identity_helper.write_text("HELPER = 1\n", encoding="utf-8")
     unrelated = backend_dir / "package_backend.py"
     unrelated.write_text("PACKAGE = 1\n", encoding="utf-8")
+    object_emitter = backend_dir / "owned_object_emit.py"
+    object_emitter.write_text("OBJECT = 1\n", encoding="utf-8")
 
     first = self_backend_emitter_source_identity(tmp_path)
     unrelated.write_text("PACKAGE = 2\n", encoding="utf-8")
@@ -19,6 +21,9 @@ def test_emitter_identity_tracks_only_self_backend_implementation(tmp_path):
     unrelated_change = self_backend_emitter_source_identity(tmp_path)
     emitter.write_text("EMITTER = 2\n", encoding="utf-8")
     emitter_change = self_backend_emitter_source_identity(tmp_path)
+    object_emitter.write_text("OBJECT = 2\n", encoding="utf-8")
+    object_change = self_backend_emitter_source_identity(tmp_path)
 
     assert unrelated_change == first
     assert emitter_change != first
+    assert object_change != emitter_change

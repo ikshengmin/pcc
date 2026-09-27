@@ -160,7 +160,7 @@ class NativeVirtualThreadLoweringMixin:
             name=self._fresh("vthread.call.none"),
         )
         result = self.builder.call(
-            self.runtime["py_obj_call"],
+            self.runtime["py_obj_call_deferred"],
             [
                 self._load_virtual_thread_operand_root(callable_root),
                 self._load_virtual_thread_operand_root(args_root),
@@ -242,7 +242,7 @@ class NativeVirtualThreadLoweringMixin:
             name=self._fresh("vthread.call.inspect.rooted"),
         )
         effect_marker = self.builder.call(
-            self.runtime["py_gen_is_may_park"],
+            self.runtime["py_gen_is_continuation"],
             [inspect_rooted_result],
             name=self._fresh("vthread.call.result.effect_marker"),
         )

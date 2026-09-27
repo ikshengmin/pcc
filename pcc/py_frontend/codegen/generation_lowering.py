@@ -163,11 +163,18 @@ class GenerationLoweringMixin:
         saved_sibling_module_inits = self._sibling_module_inits
         saved_native_module_exports = self._native_module_exports
         saved_direct_retain_text = getattr(self.module, "_direct_indexed_retain_text", False)
+        saved_target_triple = self.module.triple
+        saved_data_layout = self.module.data_layout
         if module is not None:
             setattr(self, "ast_module", module)
             setattr(self, "_ast_body", module.body)
             setattr(self, "_try_err_block", None)
             setattr(self, "module", ir.Module(name=module.name or "pcc_py_module"))
+            # Target-sensitive builders inspect their owning module while
+            # lowering. Replacing it must preserve the selected ABI, not just
+            # restore a target directive after instructions have been emitted.
+            self.module.triple = saved_target_triple
+            self.module.data_layout = saved_data_layout
             self.module._direct_indexed_retain_text = saved_direct_retain_text
             # The constructor already built a compile unit, but for the module
             # it was handed; this is a different ``ir.Module``, and debug nodes
@@ -186,6 +193,8 @@ class GenerationLoweringMixin:
             setattr(self, "_fn_err_exit_gc_root_names", {})
             setattr(self, "_fn_gc_root_slot_registry", {})
             setattr(self, "_fn_err_exit_gc_root_slots", {})
+            setattr(self, "_fn_err_exit_owned_slots", {})
+            setattr(self, "_fn_err_exit_finish_blocks", {})
             setattr(self, "_fn_gc_root_exit_sites", {})
             setattr(self, "_post_call_frame_blocks", {})
             setattr(self, "_source_file_lines_cache", {})
@@ -912,6 +921,8 @@ class GenerationLoweringMixin:
             .strip()
             .lower()
             in ("1", "true", "yes", "on")
+            and str(os.environ.get("PCC_TEXT_INDEXED_KERNEL_EMIT", "") or "")
+            .strip().lower() not in ("1", "true", "yes", "on")
             and not (
                 str(
                     os.environ.get("PCC_DIRECT_INDEXED_KERNEL_VALIDATE", "")

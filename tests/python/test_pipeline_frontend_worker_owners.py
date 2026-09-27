@@ -15,6 +15,29 @@ from pcc.py_frontend import pipeline_frontend_worker_execution as worker_executi
 from pcc.py_frontend import module_action_dag
 
 
+def test_direct_indexed_placeholder_uses_host_target_without_rewriting_explicit_target():
+    from pcc.backend.self_backend_ir import ParsedModule
+
+    globals_ = ()
+    functions = ()
+    placeholder = ParsedModule("unknown-unknown-unknown", globals_, functions)
+    selected = worker_execution._concrete_direct_indexed_target(
+        placeholder, "arm64-apple-darwin",
+    )
+    assert selected.triple == "arm64-apple-darwin"
+    assert selected.globals_ is globals_
+    assert selected.functions is functions
+
+    explicit = ParsedModule("x86_64-unknown-linux-gnu", globals_, functions)
+    assert worker_execution._concrete_direct_indexed_target(
+        explicit, "arm64-apple-darwin",
+    ) is explicit
+    with pytest.raises(Exception, match="no supported host target"):
+        worker_execution._concrete_direct_indexed_target(
+            placeholder, "unknown-unknown-unknown",
+        )
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -701,9 +724,14 @@ def test_native_in_process_codegen_reuses_coordinator_and_forces_asm(
     assert [kind for _name, kind, _path in result[7]] == ["ASM", "ASM"]
 
 
+@pytest.mark.parametrize(
+    ("auto_source_lanes", "jobs"), ((True, 10), (False, 2))
+)
 def test_native_codegen_checkpoint_persists_sidecars_and_singleton_manifests(
     tmp_path,
     monkeypatch,
+    auto_source_lanes,
+    jobs,
 ):
     plan = tmp_path / "codegen.plan"
     output = tmp_path / "pcc2"
@@ -714,6 +742,7 @@ def test_native_codegen_checkpoint_persists_sidecars_and_singleton_manifests(
     monkeypatch.setenv("PCC_DEFER_FRONTEND_CODEGEN_PLAN", str(plan))
     monkeypatch.setenv("PCC_DEFER_FRONTEND_OUTPUT", str(output))
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(runtime))
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(8 * 1024**3))
     sources = []
     for index, size in enumerate((220_000, 20)):
         source = tmp_path / ("checkpoint" + str(index) + ".py")
@@ -731,10 +760,11 @@ def test_native_codegen_checkpoint_persists_sidecars_and_singleton_manifests(
         exports.write_text("{}", encoding="utf-8")
         return str(exports)
 
+    counters = {}
     result = parallel.compile_parallel_uncached(
         sources,
         ["large", "small"],
-        jobs=10,
+        jobs=jobs,
         entry_module="large",
         sibling_inits=("small",),
         libpython_mode="off",
@@ -759,8 +789,11 @@ def test_native_codegen_checkpoint_persists_sidecars_and_singleton_manifests(
         read_worker_ir=lambda *_args: "",
         profile_begin=lambda _profile: 0,
         profile_end=lambda *_args: None,
-        profile_counter=lambda *_args: None,
+        profile_counter=lambda _profile, name, value: counters.__setitem__(
+            name, value
+        ),
         pipeline_error=RuntimeError,
+        auto_source_lanes=auto_source_lanes,
     )
 
     assert result == ("PCC_DEFERRED_FRONTEND_CODEGEN",)
@@ -768,11 +801,37 @@ def test_native_codegen_checkpoint_persists_sidecars_and_singleton_manifests(
     assert lines[0] == "pcc.frontend-codegen-plan.v2"
     assert lines[7:11] == ["2", "1", "2", "2"]
     assert lines[11] == "pidx-pco-v1"
+    assert counters["multi_frontend_export_safe_jobs"] == (10 if auto_source_lanes else 2)
     persisted = [Path(path) for path in lines[12:]]
     assert all(path.is_file() for path in persisted)
     manifest = worker_policy.read_worker_manifest(str(persisted[0]))
     assert Path(manifest["ast_dir"]).is_dir()
     assert Path(manifest["exports_path"]).is_file()
+
+
+def test_native_preload_respects_explicit_frontend_width(monkeypatch, tmp_path):
+    from pcc.py_frontend import type_infer
+
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "2")
+    monkeypatch.setenv("PCC_PRELOAD_DELTA_JOBS", "6")
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(8 * 1024**3))
+    monkeypatch.setattr(
+        pipeline, "_python_frontend_worker_command_prefix", lambda: ["pcc1"]
+    )
+    monkeypatch.setattr(pipeline, "_is_native_worker_executable", lambda _: True)
+    monkeypatch.setattr(
+        type_infer,
+        "build_unique_external_class_preload_index",
+        lambda exports, root_deltas: root_deltas(
+            tuple(str(index) for index in range(20)), {}
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_preload_deltas_in_workers",
+        lambda exports, roots, prefix, jobs, work_dir: jobs,
+    )
+    assert pipeline._build_unique_external_class_preload_index({}, str(tmp_path)) == 2
 
 
 def test_parallel_frontend_reads_worker_ir_into_ordered_text_results(tmp_path):
@@ -1113,6 +1172,7 @@ def test_source_worker_lane_failure_stops_safe_work_and_override_is_authoritativ
     # Compiled native workers keep the oversized/safe split: the failing
     # oversized lane stops the run before any safe worker launches.
     assert run_case(True, worker_prefix=("pcc1",)) == [(1, 1)]
+    assert run_case(False, worker_prefix=("pcc1",)) == [(1, 1)]
     # Host CPython workers are not split in auto mode, and a numeric override
     # stays authoritative for every executor.
     assert run_case(True) == [(2, 2)]

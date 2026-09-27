@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from .self_backend_target_match import is_aarch64_linux_triple
 from . import BackendUnavailable
 from .self_backend_aarch64_darwin_regs import align_pow2
 from .self_backend_aarch64_darwin_symbols import asm_symbol
@@ -25,10 +26,9 @@ from .self_backend_parse import (
 _GLOBAL_CTORS_NAME = "llvm.global_ctors"
 
 
-def _emit_global_ctors(
+def global_ctor_entries(
     global_: GlobalDef,
-    module_symbols: PreparedModuleSymbols,
-) -> list[str]:
+) -> list[tuple[int, int, str]]:
     """Lower LLVM's appending ctor array to Mach-O initializer pointers."""
     ty = global_.type
     if (
@@ -99,6 +99,18 @@ def _emit_global_ctors(
     entries.sort(key=lambda entry: (entry[0], entry[1]))
     if not entries:
         return []
+    return entries
+
+
+def _emit_global_ctors(global_, module_symbols):
+    entries = global_ctor_entries(global_)
+    if is_aarch64_linux_triple(module_symbols.target_triple):
+        lines = []
+        family = "fini" if global_.name == "llvm.global_dtors" else "init"
+        for priority, ordinal, target in entries:
+            lines.extend([f".section __PCC,__{family}{priority:010d}", ".p2align 3",
+                          f"  .quad {asm_symbol(target, module_symbols)}"])
+        return lines
     lines = [
         ".section __DATA,__mod_init_func,mod_init_funcs",
         ".p2align 3",
@@ -115,10 +127,18 @@ def emit_globals(
 ) -> list[str]:
     lines: list[str] = []
     for global_ in globals_:
+        if not global_.initializer:
+            if is_aarch64_linux_triple(module_symbols.target_triple):
+                symbol = asm_symbol(global_.name, module_symbols)
+                lines.append(".section __PCC,__tls_refs")
+                lines.extend(emit_byte_data(symbol.encode("utf-8") + b"\0"))
+            # Darwin resolves the other module's TLV descriptor. The shared
+            # module-symbol table already retains the declaration's TLS kind.
+            continue
         if global_.tls_model:
             lines.extend(_emit_thread_local_global(global_, module_symbols))
             continue
-        if global_.name == _GLOBAL_CTORS_NAME:
+        if global_.name == _GLOBAL_CTORS_NAME or (global_.name == "llvm.global_dtors" and is_aarch64_linux_triple(module_symbols.target_triple)):
             lines.extend(_emit_global_ctors(global_, module_symbols))
             continue
         section = (
@@ -138,6 +158,14 @@ def emit_globals(
 
 def _emit_thread_local_global(global_: GlobalDef, module_symbols: PreparedModuleSymbols) -> list[str]:
     """Emit the template and descriptor consumed by Darwin's TLV resolver."""
+    if is_aarch64_linux_triple(module_symbols.target_triple):
+        symbol = asm_symbol(global_.name, module_symbols)
+        lines = [".section __DATA,__thread_data,thread_local_regular",
+                 f".p2align {align_pow2(max(global_.alignment, global_.type.align))}"]
+        if not global_.is_internal:
+            lines.append(".globl " + symbol)
+        lines.extend([symbol + ":", emit_global_initializer(global_, module_symbols)])
+        return lines
     if global_.tls_model != "default":
         raise BackendUnavailable(
             "self-aarch64-darwin TLS does not support model " + repr(global_.tls_model)

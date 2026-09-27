@@ -737,6 +737,8 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "socket_setsockopt": TYPE_INT,
     "socket_getsockopt": TYPE_INT,
     "fd_control": TYPE_INT,
+    "file_flock": TYPE_INT,
+    "file_lock_region": TYPE_INT,
     "eventfd_create": TYPE_INT,
     "socket_send": TYPE_INT,
     "socket_recv": TYPE_INT,
@@ -770,11 +772,14 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "access": TYPE_INT,
     "stat_kind": TYPE_INT,
     "stat_mtime": TYPE_FLOAT,
+    "stat_size": TYPE_INT,
+    "is_symlink": TYPE_INT,
     "target_sys_platform": TYPE_DYN,
     "target_platform_machine": TYPE_DYN,
     "darwin_errno_location": TYPE_DYN,
     "call_ptr1": TYPE_DYN,
     "call_ptr0": TYPE_DYN,
+    "call_void_i32": TYPE_NONE,
     "call_void_ptr0": TYPE_NONE,
     "call_void_ptr1": TYPE_NONE,
     "call_void_ptr_i64_ptr": TYPE_NONE,
@@ -826,7 +831,14 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "atomic_fence": TYPE_NONE,
     "atomic_test_and_set": TYPE_INT,
     "atomic_clear": TYPE_NONE,
+    "windows_full_path": TYPE_DYN,
+    "windows_real_path": TYPE_DYN,
+    "directory_open": TYPE_DYN,
+    "directory_next": TYPE_DYN,
+    "directory_error": TYPE_INT,
+    "directory_close": TYPE_INT,
     "syscall6": TYPE_INT,
+    "linux_set_thread_pointer": TYPE_INT,
     "page_alloc": TYPE_DYN,
     "page_free": TYPE_INT,
     "va_start": TYPE_DYN,
@@ -6377,6 +6389,26 @@ def _merge_method_arg_overrides(
     return merged, changed
 
 
+def _method_override_preserves_object_abi(ty: Type) -> bool:
+    """Keep local method observations from narrowing an unannotated ABI.
+
+    Closed-world exports describe a missing annotation as Dyn. Calls observed
+    through ``self`` are useful object-shape hints, but do not cover callers
+    outside this class. They cannot turn that pointer parameter into a scalar
+    or value payload: a consumer still passes the original Python object.
+    """
+    if isinstance(ty, ClassType) and bool(getattr(ty, "valueclass", False)):
+        return False
+    return isinstance(
+        ty,
+        (
+            DynType, StrType, BytesType, ByteArrayType, MemoryViewType,
+            ListType, SetType, DictType, TupleType, ClassType, ComplexType,
+            NoneType, FuncType,
+        ),
+    )
+
+
 def _infer_funcdef(
     ctx: _InferCtx,
     scope: _Scope,
@@ -6424,7 +6456,9 @@ def _infer_funcdef(
             and -1 not in arg_overrides
             and not isinstance(arg_overrides[index], DynType)
         ):
-            ty = ctx.resolve_type_refs(arg_overrides[index])
+            inferred_arg = ctx.resolve_type_refs(arg_overrides[index])
+            if _method_override_preserves_object_abi(inferred_arg):
+                ty = inferred_arg
         default = (
             _infer_expr(ctx, param_scope, a.default)
             if a.default is not None

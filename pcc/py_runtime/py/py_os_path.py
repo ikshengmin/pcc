@@ -16,8 +16,15 @@ from pcc.extern import (
     extern, c_abi_export, c_double, c_ptr, c_int32, c_int64, c_void,
 )
 from pcc.unsafe import (
+    target_sys_platform, windows_full_path,
     chmod_file,
     cstr,
+    define_global_i32,
+    global_addr,
+    memset,
+    stack_alloc,
+    store_i32,
+    store_ptr,
     free,
     global_load_ptr,
     is_tagged_int,
@@ -36,6 +43,8 @@ from pcc.unsafe import (
     rename_file,
     sync_file,
     unlinkat,
+    stat_size,
+    is_symlink,
 )
 
 
@@ -58,13 +67,187 @@ py_path_getcwd     = extern("py_path_getcwd",     (),               c_ptr)
 py_path_realpath   = extern("py_path_realpath",   (c_ptr,),         c_ptr)
 py_tuple_new       = extern("py_tuple_new",       (c_int64,),       c_ptr)
 py_tuple_set_item  = extern("py_tuple_set_item",  (c_ptr, c_int64, c_ptr), c_void)
+py_str_lower       = extern("py_str_lower", (c_ptr,), c_ptr)
 py_str_utf8        = extern("py_str_utf8",        (c_ptr,),         c_ptr)
 py_exc_new         = extern("py_exc_new",         (c_int64, c_ptr), c_ptr)
 py_raise_owned     = extern("py_raise_owned",     (c_ptr,),         c_void)
 mkdir_sys          = extern("mkdir",              (c_ptr, c_int32), c_int32)
 access             = extern("pcc_platform_access", (c_ptr, c_int64), c_int64)
 getenv             = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
+memcmp_c           = extern("memcmp", (c_ptr, c_ptr, c_int64), c_int64)
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 
+define_global_i32("pcc_os_path_abspath_frame_map", 3)
+define_global_i32("pcc_os_path_normpath_frame_map", 2)
+define_global_i32("pcc_os_path_relpath_frame_map", 4)
+define_global_i32("pcc_os_path_compare_frame_map", 4)
+
+
+def _path_clear_root_prefix(slots, pins, count: int) -> None:
+    # Reverse acquisition order preserves pre-existing pins even when two
+    # owned slots alias. Clear through the canonical root-store RC owner.
+    index: int = count
+    while index > 0:
+        index = index - 1
+        offset: int = index * 8
+        value = load_ptr(slots, offset)
+        if not ptr_is_null(value):
+            prior_pin: int = load_i64(pins, offset)
+            pcc_gc_unpin(value)
+            if prior_pin:
+                store_i32(value, 12, load_i32(value, 12) | 64)
+        pcc_gc_store_root(ptr_add(slots, offset), null())
+
+
+
+
+def _path_windows() -> int:
+    return 1 if load_i8(target_sys_platform(), 0) == 119 else 0
+
+
+def _path_sep(byte: int) -> int:
+    return 1 if byte == 47 or (_path_windows() and byte == 92) else 0
+
+
+def _path_drive_length(data, n: int) -> int:
+    if not _path_windows():
+        return 0
+    if n >= 2 and load_i8(data, 1) == 58:
+        return 2
+    if n >= 6 and _path_sep(load_i8(data, 0)) and _path_sep(load_i8(data, 1)) and (load_i8(data, 2) == 63 or load_i8(data, 2) == 46) and _path_sep(load_i8(data, 3)) and load_i8(data, 5) == 58:
+        return 6
+    if n < 2 or not _path_sep(load_i8(data, 0)) or not _path_sep(load_i8(data, 1)):
+        return 0
+    start: int = 2
+    if n >= 8 and load_i8(data, 2) == 63 and _path_sep(load_i8(data, 3)):
+        if (load_i8(data, 4) | 32) == 117 and (load_i8(data, 5) | 32) == 110 and (load_i8(data, 6) | 32) == 99 and _path_sep(load_i8(data, 7)):
+            start = 8
+    first: int = start
+    while first < n and not _path_sep(load_i8(data, first)):
+        first = first + 1
+    if first == n:
+        return n
+    second: int = first + 1
+    while second < n and not _path_sep(load_i8(data, second)):
+        second = second + 1
+    return second
+
+
+def _path_windows_equal_build(left, left_len: int, right, right_len: int, slots, pins) -> int:
+    left_text = py_str_new(left, left_len)
+    store_ptr(slots, 0, left_text)
+    if not ptr_is_null(left_text):
+        store_i64(pins, 0, load_i32(left_text, 12) & 64)
+        pcc_gc_pin(left_text)
+        pcc_gc_note_write_barrier(null(), left_text)
+    if ptr_is_null(left_text):
+        return 0
+    right_text = py_str_new(right, right_len)
+    store_ptr(slots, 8, right_text)
+    if not ptr_is_null(right_text):
+        store_i64(pins, 8, load_i32(right_text, 12) & 64)
+        pcc_gc_pin(right_text)
+        pcc_gc_note_write_barrier(null(), right_text)
+    if ptr_is_null(right_text):
+        return 0
+    left_key = py_os_path_normcase(load_ptr(slots, 0))
+    store_ptr(slots, 16, left_key)
+    if not ptr_is_null(left_key):
+        store_i64(pins, 16, load_i32(left_key, 12) & 64)
+        pcc_gc_pin(left_key)
+        pcc_gc_note_write_barrier(null(), left_key)
+    if ptr_is_null(left_key):
+        return 0
+    right_key = py_os_path_normcase(load_ptr(slots, 8))
+    store_ptr(slots, 24, right_key)
+    if not ptr_is_null(right_key):
+        store_i64(pins, 24, load_i32(right_key, 12) & 64)
+        pcc_gc_pin(right_key)
+        pcc_gc_note_write_barrier(null(), right_key)
+    if ptr_is_null(right_key):
+        return 0
+    left_key = load_ptr(slots, 16)
+    right_key = load_ptr(slots, 24)
+    size: int = load_i64(left_key, 16)
+    if size != load_i64(right_key, 16):
+        return 0
+    return 1 if memcmp_c(ptr_add(left_key, 40), ptr_add(right_key, 40), size) == 0 else 0
+
+
+def _path_windows_equal(left, left_len: int, right, right_len: int) -> int:
+    # The caller owns stable raw spans; this frame owns all allocated keys.
+    slots = stack_alloc(32)
+    pins = stack_alloc(32)
+    memset(slots, 0, 32)
+    memset(pins, 0, 32)
+    pcc_gc_frame_enter(global_addr("pcc_os_path_compare_frame_map"), slots)
+    result: int = _path_windows_equal_build(left, left_len, right, right_len, slots, pins)
+    _path_clear_root_prefix(slots, pins, 4)
+    pcc_gc_frame_leave(slots)
+    return result
+
+
+def _windows_join(parts):
+    count: int = _path_seq_len(parts)
+    capacity: int = count + 2
+    index: int = 0
+    while index < count:
+        item, owned = _coerce_path_str(_path_seq_borrow(parts, index))
+        if ptr_is_null(item):
+            return null()
+        capacity = capacity + load_i64(item, 16)
+        if not ptr_is_null(owned):
+            py_decref(owned)
+        index = index + 1
+    work = malloc(capacity)
+    if ptr_is_null(work):
+        return null()
+    size: int = 0
+    drive: int = 0
+    index = 0
+    while index < count:
+        item, owned = _coerce_path_str(_path_seq_borrow(parts, index))
+        if ptr_is_null(item):
+            free(work)
+            return null()
+        data = ptr_add(item, 40)
+        n: int = load_i64(item, 16)
+        new_drive: int = _path_drive_length(data, n)
+        same_drive: int = _path_windows_equal(work, drive, data, new_drive)
+        if new_drive and not same_drive:
+            memmove(work, data, n)
+            size = n
+            drive = new_drive
+        elif n > new_drive and _path_sep(load_i8(data, new_drive)):
+            if new_drive:
+                memmove(work, data, new_drive)
+                drive = new_drive
+            memmove(ptr_add(work, drive), ptr_add(data, new_drive), n - new_drive)
+            size = drive + n - new_drive
+        else:
+            if new_drive:
+                if new_drive != drive:
+                    memmove(ptr_add(work, new_drive), ptr_add(work, drive), size - drive)
+                    size = size - drive + new_drive
+                memmove(work, data, new_drive)
+                drive = new_drive
+            if size > 0 and not _path_sep(load_i8(work, size - 1)) and load_i8(work, size - 1) != 58:
+                store_i8(work, size, 92)
+                size = size + 1
+            memmove(ptr_add(work, size), ptr_add(data, new_drive), n - new_drive)
+            size = size + n - new_drive
+        if not ptr_is_null(owned):
+            py_decref(owned)
+        index = index + 1
+    result = py_str_new(work, size)
+    free(work)
+    return result
 
 def _type_of(obj) -> int:
     if is_tagged_int(obj):
@@ -134,14 +317,22 @@ def py_os_makedirs(path, mode: int, exist_ok: int):
     memmove(buf, raw, raw_len)
     store_i8(buf, raw_len, 0)
 
+    drive: int = _path_drive_length(buf, raw_len)
+    root_end: int = drive
+    if root_end < raw_len and _path_sep(load_i8(buf, root_end)):
+        root_end = root_end + 1
+    if root_end < 1:
+        root_end = 1
     end: int = raw_len
-    while end > 1 and load_i8(buf, end - 1) == 47:
+    while end > root_end and _path_sep(load_i8(buf, end - 1)):
         end = end - 1
     store_i8(buf, end, 0)
 
-    i: int = 1
+    i: int = max(1, drive + 1)
+    if i > end:
+        i = end
     while i <= end:
-        if i == end or load_i8(buf, i) == 47:
+        if i == end or _path_sep(load_i8(buf, i)):
             saved: int = load_i8(buf, i)
             store_i8(buf, i, 0)
             component_mode: int = mode if i == end else 511
@@ -240,6 +431,8 @@ def py_os_fsync(fd: int):
 
 @c_abi_export("py_os_path_join")
 def py_os_path_join(parts):
+    if _path_windows():
+        return _windows_join(parts)
     n: int = _path_seq_len(parts)
     if n < 0:
         return null()
@@ -319,10 +512,11 @@ def py_os_path_dirname(path):
     data = ptr_add(item, 40)
     n: int = load_i64(item, 16)
 
-    last: int = -1
-    i: int = 0
+    drive: int = _path_drive_length(data, n)
+    last: int = drive - 1
+    i: int = drive
     while i < n:
-        if load_i8(data, i) == 47:
+        if _path_sep(load_i8(data, i)):
             last = i
         i = i + 1
 
@@ -333,15 +527,15 @@ def py_os_path_dirname(path):
         return py_str_new(null(), 0)
 
     all_slash: int = 1
-    j: int = 0
+    j: int = drive
     while j < head_len:
-        if load_i8(data, j) != 47:
+        if not _path_sep(load_i8(data, j)):
             all_slash = 0
         j = j + 1
 
     out_len: int = head_len
     if all_slash == 0:
-        while out_len > 0 and load_i8(data, out_len - 1) == 47:
+        while out_len > drive and _path_sep(load_i8(data, out_len - 1)):
             out_len = out_len - 1
 
     out = py_str_new(data, out_len)
@@ -363,7 +557,8 @@ def py_os_path_basename(path):
     data = ptr_add(item, 40)
     end: int = load_i64(item, 16)
     start: int = end
-    while start > 0 and load_i8(data, start - 1) != 47:
+    drive: int = _path_drive_length(data, end)
+    while start > drive and not _path_sep(load_i8(data, start - 1)):
         start = start - 1
     out = py_str_new(ptr_add(data, start), end - start)
     if ptr_is_null(owned) == 0:
@@ -382,23 +577,24 @@ def py_os_path_split(path):
     data = ptr_add(item, 40)
     n: int = load_i64(item, 16)
 
-    split_at: int = 0
-    i: int = 0
+    drive: int = _path_drive_length(data, n)
+    split_at: int = drive
+    i: int = drive
     while i < n:
-        if load_i8(data, i) == 47:
+        if _path_sep(load_i8(data, i)):
             split_at = i + 1
         i = i + 1
 
     head_len: int = split_at
     if head_len > 0:
         all_slash: int = 1
-        j: int = 0
+        j: int = drive
         while j < head_len:
-            if load_i8(data, j) != 47:
+            if not _path_sep(load_i8(data, j)):
                 all_slash = 0
             j = j + 1
         if all_slash == 0:
-            while head_len > 0 and load_i8(data, head_len - 1) == 47:
+            while head_len > drive and _path_sep(load_i8(data, head_len - 1)):
                 head_len = head_len - 1
 
     head = py_str_new(data, head_len)
@@ -432,6 +628,25 @@ def py_os_path_isfile(path) -> int:
     return 0
 
 
+@c_abi_export("py_os_path_islink")
+def py_os_path_islink(path) -> int:
+    item, owned = _coerce_path_str(path)
+    if ptr_is_null(item) != 0:
+        py_decref(owned)
+        return 0
+    raw = py_str_utf8(item)
+    length: int = py_str_byte_len(item)
+    index: int = 0
+    while index < length:
+        if load_i8(raw, index) == 0:
+            py_decref(owned)
+            return 0
+        index = index + 1
+    result: int = is_symlink(raw)
+    py_decref(owned)
+    return result
+
+
 @c_abi_export("py_os_path_isabs")
 def py_os_path_isabs(path) -> int:
     item, owned = _coerce_path_str(path)
@@ -442,7 +657,13 @@ def py_os_path_isabs(path) -> int:
     data = ptr_add(item, 40)
     n: int = load_i64(item, 16)
     ok: int = 0
-    if n > 0 and load_i8(data, 0) == 47:
+    if _path_windows():
+        drive: int = _path_drive_length(data, n)
+        if drive > 0 and n > drive and _path_sep(load_i8(data, drive)):
+            ok = 1
+        elif drive > 1 and _path_sep(load_i8(data, 0)) and _path_sep(load_i8(data, 1)):
+            ok = 1
+    elif n > 0 and load_i8(data, 0) == 47:
         ok = 1
     if ptr_is_null(owned) == 0:
         py_decref(owned)
@@ -465,51 +686,165 @@ def py_os_path_isdir(path) -> int:
     return 0
 
 
-@c_abi_export("py_os_path_abspath")
-def py_os_path_abspath(path):
-    item, owned = _coerce_path_str(path)
-    if ptr_is_null(item) != 0:
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return null()
+def _path_abspath_build(path, slots, pins) -> None:
+    # Inputs are borrowed and pinned by the managed call boundary. New owned
+    # strings go into an already registered slot before any following call.
+    if ptr_is_null(path):
+        return
+    item = path
+    if _type_of(path) != PY_TYPE_STR:
+        converted = py_obj_str(path)
+        store_ptr(slots, 0, converted)
+        if not ptr_is_null(converted):
+            store_i64(pins, 0, load_i32(converted, 12) & 64)
+            pcc_gc_pin(converted)
+            pcc_gc_note_write_barrier(null(), converted)
+        if ptr_is_null(converted):
+            return
+        item = load_ptr(slots, 0)
     data = ptr_add(item, 40)
     in_len: int = load_i64(item, 16)
-
-    # Already absolute → copy unchanged.
-    if in_len > 0:
-        if load_i8(data, 0) == 47:
-            out = py_str_new(data, in_len)
-            if ptr_is_null(owned) == 0:
-                py_decref(owned)
-            return out
-
+    if _path_windows():
+        buffer = malloc(131072)
+        result = windows_full_path(py_str_utf8(item), buffer, 131072) if not ptr_is_null(buffer) else null()
+        if not ptr_is_null(result):
+            length: int = 0
+            while load_i8(result, length) != 0:
+                length = length + 1
+            out = py_str_new(result, length)
+            store_ptr(slots, 8, out)
+            if not ptr_is_null(out):
+                store_i64(pins, 8, load_i32(out, 12) & 64)
+                pcc_gc_pin(out)
+                pcc_gc_note_write_barrier(null(), out)
+        free(buffer)
+        return
+    if in_len > 0 and load_i8(data, 0) == 47:
+        out = py_str_new(data, in_len)
+        store_ptr(slots, 8, out)
+        if not ptr_is_null(out):
+            store_i64(pins, 8, load_i32(out, 12) & 64)
+            pcc_gc_pin(out)
+            pcc_gc_note_write_barrier(null(), out)
+        return
     cwd_ptr = py_path_getcwd()
-    if ptr_is_null(cwd_ptr) != 0:
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return null()
+    if ptr_is_null(cwd_ptr):
+        return
     cwd_len: int = 0
     while load_i8(cwd_ptr, cwd_len) != 0:
         cwd_len = cwd_len + 1
-
     if in_len == 0:
         out = py_str_new(cwd_ptr, cwd_len)
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return out
-
-    total: int = cwd_len + 1 + in_len
+        store_ptr(slots, 8, out)
+        if not ptr_is_null(out):
+            store_i64(pins, 8, load_i32(out, 12) & 64)
+            pcc_gc_pin(out)
+            pcc_gc_note_write_barrier(null(), out)
+        return
+    # getcwd("/") already supplies the separator. Inventing a second slash
+    # would create a distinct POSIX // prefix that normpath must preserve.
+    separator_len: int = 0 if cwd_len > 0 and load_i8(cwd_ptr, cwd_len - 1) == 47 else 1
+    total: int = cwd_len + separator_len + in_len
     out = py_str_new(null(), total)
-    if ptr_is_null(out) != 0:
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return null()
+    store_ptr(slots, 8, out)
+    if not ptr_is_null(out):
+        store_i64(pins, 8, load_i32(out, 12) & 64)
+        pcc_gc_pin(out)
+        pcc_gc_note_write_barrier(null(), out)
+    if ptr_is_null(out):
+        return
+    out = load_ptr(slots, 8)
     dst = ptr_add(out, 40)
     memmove(dst, cwd_ptr, cwd_len)
-    store_i8(dst, cwd_len, 47)
-    memmove(ptr_add(dst, cwd_len + 1), data, in_len)
-    if ptr_is_null(owned) == 0:
-        py_decref(owned)
+    if separator_len:
+        store_i8(dst, cwd_len, 47)
+    memmove(ptr_add(dst, cwd_len + separator_len), data, in_len)
+
+
+@c_abi_export("py_os_path_abspath")
+def py_os_path_abspath(path):
+    slots = stack_alloc(24)
+    pins = stack_alloc(24)
+    memset(slots, 0, 24)
+    memset(pins, 0, 24)
+    pcc_gc_frame_enter(global_addr("pcc_os_path_abspath_frame_map"), slots)
+    _path_abspath_build(path, slots, pins)
+    if not ptr_is_null(load_ptr(slots, 8)):
+        # abspath is normpath(join(cwd, path)), including dot/dotdot and
+        # the POSIX two-leading-slash rule. Reuse the existing path algorithm.
+        normalized = py_os_path_normpath(load_ptr(slots, 8))
+        store_ptr(slots, 16, normalized)
+        if not ptr_is_null(normalized):
+            store_i64(pins, 16, load_i32(normalized, 12) & 64)
+            pcc_gc_pin(normalized)
+            pcc_gc_note_write_barrier(null(), normalized)
+    _path_clear_root_prefix(slots, pins, 2)
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(ptr_add(slots, 16), load_i64(pins, 16))
+
+
+def _windows_expanduser(item):
+    data = ptr_add(item, 40)
+    size: int = load_i64(item, 16)
+    if size == 0 or load_i8(data, 0) != 126:
+        return py_str_new(data, size)
+    end: int = 1
+    while end < size and not _path_sep(load_i8(data, end)):
+        end = end + 1
+    profile = getenv(cstr("USERPROFILE"))
+    home = null()
+    if not ptr_is_null(profile):
+        home = py_str_new(profile, _path_cstr_len(profile))
+    else:
+        homepath = getenv(cstr("HOMEPATH"))
+        if ptr_is_null(homepath):
+            return py_str_new(data, size)
+        drive = getenv(cstr("HOMEDRIVE"))
+        parts = py_tuple_new(2)
+        if ptr_is_null(parts):
+            return null()
+        py_tuple_set_item(parts, 0, py_str_new(drive, 0 if ptr_is_null(drive) else _path_cstr_len(drive)))
+        py_tuple_set_item(parts, 1, py_str_new(homepath, _path_cstr_len(homepath)))
+        home = _windows_join(parts)
+        py_decref(parts)
+    if ptr_is_null(home):
+        return null()
+    if end > 1:
+        username = getenv(cstr("USERNAME"))
+        user_len: int = 0 if ptr_is_null(username) else _path_cstr_len(username)
+        target_len: int = end - 1
+        same_user: int = 0
+        if not ptr_is_null(username) and target_len == user_len:
+            same_user = _path_bytes_equal(ptr_add(data, 1), username, target_len)
+        if not same_user:
+            # A sibling profile is only a valid guess when the current
+            # profile's basename actually equals USERNAME.
+            base = py_os_path_basename(home)
+            valid: int = 0
+            if not ptr_is_null(base) and not ptr_is_null(username) and load_i64(base, 16) == user_len:
+                valid = _path_bytes_equal(ptr_add(base, 40), username, user_len)
+            py_decref(base)
+            if not valid:
+                py_decref(home)
+                return py_str_new(data, size)
+            parts = py_tuple_new(2)
+            if ptr_is_null(parts):
+                py_decref(home)
+                return null()
+            py_tuple_set_item(parts, 0, py_os_path_dirname(home))
+            py_tuple_set_item(parts, 1, py_str_new(ptr_add(data, 1), target_len))
+            replacement = _windows_join(parts)
+            py_decref(parts)
+            py_decref(home)
+            home = replacement
+            if ptr_is_null(home):
+                return null()
+    home_len: int = load_i64(home, 16)
+    out = py_str_new(null(), home_len + size - end)
+    if not ptr_is_null(out):
+        memmove(ptr_add(out, 40), ptr_add(home, 40), home_len)
+        memmove(ptr_add(out, 40 + home_len), ptr_add(data, end), size - end)
+    py_decref(home)
     return out
 
 
@@ -522,6 +857,10 @@ def py_os_path_expanduser(path):
         return null()
     data = ptr_add(item, 40)
     n: int = load_i64(item, 16)
+    if _path_windows():
+        out = _windows_expanduser(item)
+        py_decref(owned)
+        return out
 
     # Only a bare "~" or "~/..." prefix expands to $HOME. A "~user" prefix
     # (no '/' right after '~') and a path without a leading '~' (126) are
@@ -532,7 +871,7 @@ def py_os_path_expanduser(path):
             if n == 1:
                 is_home = 1
             if n > 1:
-                if load_i8(data, 1) == 47:
+                if _path_sep(load_i8(data, 1)):
                     is_home = 1
     home_ptr = null()
     if is_home == 1:
@@ -547,7 +886,7 @@ def py_os_path_expanduser(path):
     home_len: int = 0
     while load_i8(home_ptr, home_len) != 0:
         home_len = home_len + 1
-    while home_len > 0 and load_i8(home_ptr, home_len - 1) == 47:
+    while home_len > 0 and _path_sep(load_i8(home_ptr, home_len - 1)):
         home_len = home_len - 1
     rest_len: int = n - 1
     total: int = home_len + rest_len
@@ -604,10 +943,22 @@ def py_os_path_getmtime(path):
         if ptr_is_null(owned) == 0:
             py_decref(owned)
         return null()
-    raw = ptr_add(item, 40)
+    raw = py_str_utf8(item)
+    length: int = py_str_byte_len(item)
+    index: int = 0
+    while index < length:
+        if load_i8(raw, index) == 0:
+            py_decref(owned)
+            py_raise_owned(py_exc_new(2, cstr("embedded null byte")))
+            return null()
+        index = index + 1
     t: float = py_path_stat_mtime(raw)
-    if ptr_is_null(owned) == 0:
-        py_decref(owned)
+    py_decref(owned)
+    # The raw metadata boundary reserves NaN for stat failure. Epoch zero
+    # and pre-epoch timestamps are valid; neither can serve as an error flag.
+    if t != t:
+        py_raise_owned(py_exc_new(14, cstr("could not stat path")))
+        return null()
     return py_float_from_f64(t)
 
 
@@ -618,28 +969,27 @@ def py_os_path_getsize(path):
         if ptr_is_null(owned) == 0:
             py_decref(owned)
         return null()
-    mode = py_str_new(cstr("rb"), 2)
-    if ptr_is_null(mode) != 0:
-        if ptr_is_null(owned) == 0:
+    raw = py_str_utf8(item)
+    length: int = py_str_byte_len(item)
+    index: int = 0
+    while index < length:
+        if load_i8(raw, index) == 0:
             py_decref(owned)
-        return py_int_from_i64(-1)
-    f = py_file_open(item, mode)
-    py_decref(mode)
-    if ptr_is_null(f) != 0:
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return py_int_from_i64(-1)
-    data = py_file_read_all(f)
-    py_file_close(f)
-    py_decref(f)
-    if ptr_is_null(data) != 0:
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return py_int_from_i64(-1)
-    size: int = py_str_byte_len(data)
-    py_decref(data)
-    if ptr_is_null(owned) == 0:
-        py_decref(owned)
+            py_raise_owned(py_exc_new(2, cstr("embedded null byte")))
+            return null()
+        index = index + 1
+    size: int = stat_size(raw)
+    py_decref(owned)
+    if size < 0:
+        kind: int = 14
+        if size == -2:
+            kind = 34
+        elif size == -20:
+            kind = 38
+        elif size == -13 or size == -1:
+            kind = 36
+        py_raise_owned(py_exc_new(kind, cstr("could not stat path")))
+        return null()
     return py_int_from_i64(size)
 
 
@@ -658,14 +1008,17 @@ def py_os_path_splitext(path):
     i: int = 0
     while i < n:
         b: int = load_i8(data, i)
-        if b == 47:        # '/'
+        if _path_sep(b):
             slash = i
             dot = -1
         elif b == 46:      # '.'
             dot = i
         i = i + 1
 
-    if dot <= slash + 1:
+    non_dot: int = slash + 1
+    while non_dot < n and load_i8(data, non_dot) == 46:
+        non_dot = non_dot + 1
+    if dot < non_dot:
         base = py_str_new(data, n)
         ext = py_str_new(null(), 0)
     else:
@@ -695,6 +1048,15 @@ def py_os_path_normcase(path):
     data = ptr_add(item, 40)
     n: int = load_i64(item, 16)
     out = py_str_new(data, n)
+    if _path_windows() and not ptr_is_null(out):
+        index: int = 0
+        while index < n:
+            if load_i8(ptr_add(out, 40), index) == 47:
+                store_i8(ptr_add(out, 40), index, 92)
+            index = index + 1
+        lowered = py_str_lower(out)
+        py_decref(out)
+        out = lowered
     if ptr_is_null(owned) == 0:
         py_decref(owned)
     return out
@@ -707,96 +1069,107 @@ def _path_component_is_dotdot(data, start: int, n: int) -> int:
     return 0
 
 
-@c_abi_export("py_os_path_normpath")
-def py_os_path_normpath(path):
-    item, owned = _coerce_path_str(path)
-    if ptr_is_null(item) != 0:
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return null()
+def _path_normpath_build(path, slots, pins) -> None:
+    if ptr_is_null(path):
+        return
+    item = path
+    if _type_of(path) != PY_TYPE_STR:
+        converted = py_obj_str(path)
+        store_ptr(slots, 0, converted)
+        if not ptr_is_null(converted):
+            store_i64(pins, 0, load_i32(converted, 12) & 64)
+            pcc_gc_pin(converted)
+            pcc_gc_note_write_barrier(null(), converted)
+        if ptr_is_null(converted):
+            return
+        item = load_ptr(slots, 0)
     data = ptr_add(item, 40)
     n: int = load_i64(item, 16)
-    work_cap: int = n + 2
-    if work_cap < 2:
-        work_cap = 2
-    work = malloc(work_cap)
+    work = malloc(n + 4)
     starts = malloc((n + 1) * 8)
     lens = malloc((n + 1) * 8)
-    if ptr_is_null(work) != 0 or ptr_is_null(starts) != 0 or ptr_is_null(lens) != 0:
-        if ptr_is_null(work) == 0:
-            free(work)
-        if ptr_is_null(starts) == 0:
-            free(starts)
-        if ptr_is_null(lens) == 0:
-            free(lens)
-        if ptr_is_null(owned) == 0:
-            py_decref(owned)
-        return null()
-
-    initial: int = 0
-    if n > 0 and load_i8(data, 0) == 47:
-        initial = 1
-        if n > 1 and load_i8(data, 1) == 47:
-            if n == 2 or load_i8(data, 2) != 47:
-                initial = 2
-
-    out_len: int = 0
-    k: int = 0
-    while k < initial:
-        store_i8(work, out_len, 47)
+    if ptr_is_null(work) or ptr_is_null(starts) or ptr_is_null(lens):
+        free(work)
+        free(starts)
+        free(lens)
+        return
+    windows: int = _path_windows()
+    separator: int = 92 if windows else 47
+    drive: int = _path_drive_length(data, n)
+    cursor: int = 0
+    while cursor < drive:
+        byte: int = load_i8(data, cursor)
+        store_i8(work, cursor, separator if windows and _path_sep(byte) else byte)
+        cursor = cursor + 1
+    rooted: int = 0
+    if n > drive and _path_sep(load_i8(data, drive)):
+        rooted = 1
+        if not windows and n > 1 and load_i8(data, 1) == 47 and (n == 2 or load_i8(data, 2) != 47):
+            rooted = 2
+    out_len: int = drive
+    cursor = 0
+    while cursor < rooted:
+        store_i8(work, out_len, separator)
         out_len = out_len + 1
-        k = k + 1
-    base_len: int = initial
+        cursor = cursor + 1
+    base_len: int = out_len
     comps: int = 0
-    i: int = initial
-    while i < n:
-        while i < n and load_i8(data, i) == 47:
-            i = i + 1
-        start: int = i
-        while i < n and load_i8(data, i) != 47:
-            i = i + 1
-        part_len: int = i - start
-        if part_len == 0:
+    cursor = drive + rooted
+    while cursor < n:
+        while cursor < n and _path_sep(load_i8(data, cursor)):
+            cursor = cursor + 1
+        start: int = cursor
+        while cursor < n and not _path_sep(load_i8(data, cursor)):
+            cursor = cursor + 1
+        size: int = cursor - start
+        if size == 0 or (size == 1 and load_i8(data, start) == 46):
             continue
-        if part_len == 1 and load_i8(data, start) == 46:
-            continue
-        is_dotdot: int = _path_component_is_dotdot(data, start, part_len)
-        if is_dotdot != 0:
+        if _path_component_is_dotdot(data, start, size):
             if comps > 0:
                 last_start: int = load_i64(starts, (comps - 1) * 8)
-                last_len: int = load_i64(lens, (comps - 1) * 8)
-                last_is_dotdot: int = _path_component_is_dotdot(
-                    work,
-                    last_start,
-                    last_len,
-                )
-                if last_is_dotdot == 0:
+                last_size: int = load_i64(lens, (comps - 1) * 8)
+                if not _path_component_is_dotdot(work, last_start, last_size):
                     comps = comps - 1
                     out_len = last_start
-                    if out_len > base_len and load_i8(work, out_len - 1) == 47:
+                    if out_len > base_len and load_i8(work, out_len - 1) == separator:
                         out_len = out_len - 1
                     continue
-            if initial > 0:
+            if rooted:
                 continue
-        if out_len > base_len and load_i8(work, out_len - 1) != 47:
-            store_i8(work, out_len, 47)
+        if out_len > base_len and load_i8(work, out_len - 1) != separator:
+            store_i8(work, out_len, separator)
             out_len = out_len + 1
         store_i64(starts, comps * 8, out_len)
-        store_i64(lens, comps * 8, part_len)
-        memmove(ptr_add(work, out_len), ptr_add(data, start), part_len)
-        out_len = out_len + part_len
+        store_i64(lens, comps * 8, size)
+        memmove(ptr_add(work, out_len), ptr_add(data, start), size)
+        out_len = out_len + size
         comps = comps + 1
-
     if out_len == 0:
-        out = py_str_new(cstr("."), 1)
-    else:
-        out = py_str_new(work, out_len)
+        store_i8(work, out_len, 46)
+        out_len = out_len + 1
+    result = py_str_new(work, out_len)
+    store_ptr(slots, 8, result)
+    if not ptr_is_null(result):
+        store_i64(pins, 8, load_i32(result, 12) & 64)
+        pcc_gc_pin(result)
+        pcc_gc_note_write_barrier(null(), result)
     free(work)
     free(starts)
     free(lens)
-    if ptr_is_null(owned) == 0:
-        py_decref(owned)
-    return out
+    return
+
+
+@c_abi_export("py_os_path_normpath")
+def py_os_path_normpath(path):
+    slots = stack_alloc(16)
+    pins = stack_alloc(16)
+    memset(slots, 0, 16)
+    memset(pins, 0, 16)
+    pcc_gc_frame_enter(global_addr("pcc_os_path_normpath_frame_map"), slots)
+    _path_normpath_build(path, slots, pins)
+    _path_clear_root_prefix(slots, pins, 1)
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(ptr_add(slots, 8), load_i64(pins, 8))
 
 
 @c_abi_export("py_os_path_splitdrive")
@@ -808,8 +1181,9 @@ def py_os_path_splitdrive(path):
         return null()
     data = ptr_add(item, 40)
     n: int = load_i64(item, 16)
-    drive = py_str_new(null(), 0)
-    tail = py_str_new(data, n)
+    drive_length: int = _path_drive_length(data, n)
+    drive = py_str_new(data, drive_length)
+    tail = py_str_new(ptr_add(data, drive_length), n - drive_length)
     out = py_tuple_new(2)
     if ptr_is_null(out) == 0:
         py_tuple_set_item(out, 0, drive)
@@ -868,9 +1242,124 @@ def py_os_path_commonprefix(paths):
     return out
 
 
+def _windows_component_spans(data, size: int, start: int, offsets, lengths) -> int:
+    count: int = 0
+    cursor: int = start
+    while cursor < size:
+        while cursor < size and _path_sep(load_i8(data, cursor)):
+            cursor = cursor + 1
+        begin: int = cursor
+        while cursor < size and not _path_sep(load_i8(data, cursor)):
+            cursor = cursor + 1
+        length: int = cursor - begin
+        if length == 0 or (length == 1 and load_i8(data, begin) == 46):
+            continue
+        # commonpath is lexical: '..' remains a component.
+        store_i64(offsets, count * 8, begin)
+        store_i64(lengths, count * 8, length)
+        count = count + 1
+    return count
+
+
+def _windows_commonpath(paths):
+    count: int = _path_seq_len(paths)
+    if count <= 0:
+        py_raise_owned(py_exc_new(2, cstr("commonpath() arg is an empty sequence")))
+        return null()
+    first, first_owned = _coerce_path_str(_path_seq_borrow(paths, 0))
+    if ptr_is_null(first):
+        py_decref(first_owned)
+        return null()
+    data = ptr_add(first, 40)
+    size: int = load_i64(first, 16)
+    drive: int = _path_drive_length(data, size)
+    root: int = 1 if size > drive and _path_sep(load_i8(data, drive)) else 0
+    offsets = malloc((size + 1) * 8)
+    lengths = malloc((size + 1) * 8)
+    if ptr_is_null(offsets) or ptr_is_null(lengths):
+        free(offsets)
+        free(lengths)
+        py_decref(first_owned)
+        return null()
+    common: int = _windows_component_spans(data, size, drive, offsets, lengths)
+    failure: int = 0
+    index: int = 1
+    while index < count and failure == 0:
+        item, owned = _coerce_path_str(_path_seq_borrow(paths, index))
+        if ptr_is_null(item):
+            failure = 1
+        else:
+            other = ptr_add(item, 40)
+            other_size: int = load_i64(item, 16)
+            other_drive: int = _path_drive_length(other, other_size)
+            other_root: int = 1 if other_size > other_drive and _path_sep(load_i8(other, other_drive)) else 0
+            if not _path_windows_equal(data, drive, other, other_drive):
+                failure = 2
+            elif root != other_root:
+                failure = 3
+            else:
+                cursor: int = other_drive
+                matched: int = 0
+                while cursor < other_size and matched < common:
+                    while cursor < other_size and _path_sep(load_i8(other, cursor)):
+                        cursor = cursor + 1
+                    begin: int = cursor
+                    while cursor < other_size and not _path_sep(load_i8(other, cursor)):
+                        cursor = cursor + 1
+                    part_size: int = cursor - begin
+                    if part_size == 0 or (part_size == 1 and load_i8(other, begin) == 46):
+                        continue
+                    if not _path_windows_equal(ptr_add(data, load_i64(offsets, matched * 8)), load_i64(lengths, matched * 8), ptr_add(other, begin), part_size):
+                        break
+                    matched = matched + 1
+                common = matched
+        py_decref(owned)
+        index = index + 1
+    if failure:
+        free(offsets)
+        free(lengths)
+        py_decref(first_owned)
+        if failure == 2:
+            py_raise_owned(py_exc_new(2, cstr("Paths don't have the same drive")))
+        elif failure == 3:
+            py_raise_owned(py_exc_new(2, cstr("Can't mix rooted and not-rooted paths")))
+        return null()
+    out_size: int = drive + root
+    index = 0
+    while index < common:
+        out_size = out_size + load_i64(lengths, index * 8) + (1 if index else 0)
+        index = index + 1
+    out = py_str_new(null(), out_size)
+    if not ptr_is_null(out):
+        destination = ptr_add(out, 40)
+        cursor = 0
+        while cursor < drive:
+            byte: int = load_i8(data, cursor)
+            store_i8(destination, cursor, 92 if _path_sep(byte) else byte)
+            cursor = cursor + 1
+        if root:
+            store_i8(destination, cursor, 92)
+            cursor = cursor + 1
+        index = 0
+        while index < common:
+            if index:
+                store_i8(destination, cursor, 92)
+                cursor = cursor + 1
+            part_size = load_i64(lengths, index * 8)
+            memmove(ptr_add(destination, cursor), ptr_add(data, load_i64(offsets, index * 8)), part_size)
+            cursor = cursor + part_size
+            index = index + 1
+    free(offsets)
+    free(lengths)
+    py_decref(first_owned)
+    return out
+
+
 @c_abi_export("py_os_path_commonpath")
 def py_os_path_commonpath(paths):
     """Return the shared POSIX component prefix of a list or tuple."""
+    if _path_windows():
+        return _windows_commonpath(paths)
     n: int = _path_seq_len(paths)
     if n <= 0:
         return py_str_new(null(), 0)
@@ -962,7 +1451,7 @@ def _path_cstr_len(value) -> int:
 
 @c_abi_export("py_os_path_expandvars")
 def py_os_path_expandvars(path):
-    """Expand POSIX ``$name`` and ``${name}`` environment references."""
+    """Expand the selected platform's environment-reference syntax."""
     item, owned = _coerce_path_str(path)
     if ptr_is_null(item) != 0:
         if ptr_is_null(owned) == 0:
@@ -970,11 +1459,12 @@ def py_os_path_expandvars(path):
         return null()
     data = ptr_add(item, 40)
     n: int = load_i64(item, 16)
+    windows: int = _path_windows()
 
     has_dollar: int = 0
     probe: int = 0
     while probe < n:
-        if load_i8(data, probe) == 36:  # '$'
+        if load_i8(data, probe) == 36 or (windows and load_i8(data, probe) == 37):
             has_dollar = 1
             break
         probe = probe + 1
@@ -1001,9 +1491,43 @@ def py_os_path_expandvars(path):
         seg_len: int = 1
         advance: int = 1
         current: int = load_i8(data, i)
-        if current == 36 and i + 1 < n:
+        if windows and current == 39:  # single-quoted text is literal
+            quote_end: int = i + 1
+            while quote_end < n and load_i8(data, quote_end) != 39:
+                quote_end = quote_end + 1
+            if quote_end < n:
+                quote_end = quote_end + 1
+            seg_len = quote_end - i
+            advance = seg_len
+        elif windows and current == 37:
+            percent_end: int = i + 1
+            while percent_end < n and load_i8(data, percent_end) != 37:
+                percent_end = percent_end + 1
+            if percent_end == i + 1 and percent_end < n:
+                advance = 2  # %% becomes a literal percent sign
+            elif percent_end == n:
+                seg_len = n - i
+                advance = seg_len
+            else:
+                name_len3: int = percent_end - i - 1
+                name3 = malloc(name_len3 + 1)
+                if ptr_is_null(name3):
+                    failed = 1
+                else:
+                    memmove(name3, ptr_add(data, i + 1), name_len3)
+                    store_i8(name3, name_len3, 0)
+                    value3 = getenv(name3)
+                    free(name3)
+                    advance = percent_end - i + 1
+                    seg_len = advance
+                    if not ptr_is_null(value3):
+                        seg = value3
+                        seg_len = _path_cstr_len(value3)
+        elif current == 36 and i + 1 < n:
             next_value: int = load_i8(data, i + 1)
-            if next_value == 123:  # '{'
+            if windows and next_value == 36:
+                advance = 2
+            elif next_value == 123:  # '{'
                 end: int = i + 2
                 while end < n and load_i8(data, end) != 125:  # '}'
                     end = end + 1
@@ -1024,9 +1548,12 @@ def py_os_path_expandvars(path):
                             seg = ptr_add(data, i)
                             seg_len = end - i + 1
                         advance = end - i + 1
-            elif _path_env_name_char(next_value) != 0:
+                elif windows:
+                    seg_len = n - i
+                    advance = seg_len
+            elif _path_env_name_char(next_value) != 0 or (windows and next_value == 45):
                 end2: int = i + 1
-                while end2 < n and _path_env_name_char(load_i8(data, end2)) != 0:
+                while end2 < n and (_path_env_name_char(load_i8(data, end2)) != 0 or (windows and load_i8(data, end2) == 45)):
                     end2 = end2 + 1
                 name_len2: int = end2 - (i + 1)
                 name2 = malloc(name_len2 + 1)
@@ -1075,14 +1602,14 @@ def py_os_path_expandvars(path):
 
 def _path_split_normalized_components(data, n: int, offsets, lengths) -> int:
     count: int = 0
-    i: int = 0
+    i: int = _path_drive_length(data, n)
     while i < n:
-        while i < n and load_i8(data, i) == 47:
+        while i < n and _path_sep(load_i8(data, i)):
             i = i + 1
         if i >= n:
             break
         start: int = i
-        while i < n and load_i8(data, i) != 47:
+        while i < n and not _path_sep(load_i8(data, i)):
             i = i + 1
         part_len: int = i - start
         if part_len == 1 and load_i8(data, start) == 46:
@@ -1107,63 +1634,81 @@ def _path_bytes_equal(left, right, length: int) -> int:
     return 1
 
 
-@c_abi_export("py_os_path_relpath")
-def py_os_path_relpath(path, start):
-    """Return the normalized POSIX component difference from start to path."""
-    path_item, path_owned = _coerce_path_str(path)
-    start_item, start_owned = _coerce_path_str(start)
-    if ptr_is_null(path_item) != 0 or ptr_is_null(start_item) != 0:
-        if ptr_is_null(path_owned) == 0:
-            py_decref(path_owned)
-        if ptr_is_null(start_owned) == 0:
-            py_decref(start_owned)
-        return null()
-
+def _path_relpath_build(path, start, slots, pins) -> None:
+    if ptr_is_null(path):
+        return
+    path_item = path
+    if _type_of(path) != PY_TYPE_STR:
+        converted = py_obj_str(path)
+        store_ptr(slots, 0, converted)
+        if not ptr_is_null(converted):
+            store_i64(pins, 0, load_i32(converted, 12) & 64)
+            pcc_gc_pin(converted)
+            pcc_gc_note_write_barrier(null(), converted)
+        if ptr_is_null(converted):
+            return
+        path_item = load_ptr(slots, 0)
+    if load_i64(path_item, 16) == 0:
+        py_raise_owned(py_exc_new(2, cstr("no path specified")))
+        return
+    path_absolute = py_os_path_abspath(path_item)
+    store_ptr(slots, 8, path_absolute)
+    if not ptr_is_null(path_absolute):
+        store_i64(pins, 8, load_i32(path_absolute, 12) & 64)
+        pcc_gc_pin(path_absolute)
+        pcc_gc_note_write_barrier(null(), path_absolute)
+    if ptr_is_null(path_absolute):
+        return
+    start_absolute = py_os_path_abspath(start)
+    store_ptr(slots, 16, start_absolute)
+    if not ptr_is_null(start_absolute):
+        store_i64(pins, 16, load_i32(start_absolute, 12) & 64)
+        pcc_gc_pin(start_absolute)
+        pcc_gc_note_write_barrier(null(), start_absolute)
+    if ptr_is_null(start_absolute):
+        return
+    windows: int = _path_windows()
+    separator: int = 92 if windows else 47
+    path_item = load_ptr(slots, 8)
+    start_item = load_ptr(slots, 16)
     path_data = ptr_add(path_item, 40)
     path_len: int = load_i64(path_item, 16)
     start_data = ptr_add(start_item, 40)
     start_len: int = load_i64(start_item, 16)
+    if windows and not _path_windows_equal(path_data, _path_drive_length(path_data, path_len), start_data, _path_drive_length(start_data, start_len)):
+        py_raise_owned(py_exc_new(2, cstr("path and start are on different mounts")))
+        return
     path_offsets = malloc((path_len + 1) * 8)
     path_lengths = malloc((path_len + 1) * 8)
     start_offsets = malloc((start_len + 1) * 8)
     start_lengths = malloc((start_len + 1) * 8)
-    if (
-        ptr_is_null(path_offsets) != 0
-        or ptr_is_null(path_lengths) != 0
-        or ptr_is_null(start_offsets) != 0
-        or ptr_is_null(start_lengths) != 0
-    ):
+    if ptr_is_null(path_offsets) or ptr_is_null(path_lengths) or ptr_is_null(start_offsets) or ptr_is_null(start_lengths):
         free(path_offsets)
         free(path_lengths)
         free(start_offsets)
         free(start_lengths)
-        if ptr_is_null(path_owned) == 0:
-            py_decref(path_owned)
-        if ptr_is_null(start_owned) == 0:
-            py_decref(start_owned)
-        return null()
-
-    path_count: int = _path_split_normalized_components(
-        path_data, path_len, path_offsets, path_lengths
-    )
-    start_count: int = _path_split_normalized_components(
-        start_data, start_len, start_offsets, start_lengths
-    )
+        return
+    path_data = ptr_add(load_ptr(slots, 8), 40)
+    path_count: int = _path_split_normalized_components(path_data, path_len, path_offsets, path_lengths)
+    start_data = ptr_add(load_ptr(slots, 16), 40)
+    start_count: int = _path_split_normalized_components(start_data, start_len, start_offsets, start_lengths)
     common: int = 0
     while common < path_count and common < start_count:
+        # Reload from the registered owners on each iteration, including the
+        # edge after a loop safepoint. Owners stay pinned while callees use
+        # interior views. Dynamic views do not outlive the leaf comparison.
+        path_data = ptr_add(load_ptr(slots, 8), 40)
+        start_data = ptr_add(load_ptr(slots, 16), 40)
         component_len: int = load_i64(path_lengths, common * 8)
-        if component_len != load_i64(start_lengths, common * 8):
-            break
-        path_component = ptr_add(
-            path_data, load_i64(path_offsets, common * 8)
-        )
-        start_component = ptr_add(
-            start_data, load_i64(start_offsets, common * 8)
-        )
-        if _path_bytes_equal(path_component, start_component, component_len) == 0:
+        start_component_len: int = load_i64(start_lengths, common * 8)
+        path_component = ptr_add(path_data, load_i64(path_offsets, common * 8))
+        start_component = ptr_add(start_data, load_i64(start_offsets, common * 8))
+        if windows:
+            if not _path_windows_equal(path_component, component_len, start_component, start_component_len):
+                break
+        elif component_len != start_component_len or memcmp_c(path_component, start_component, component_len) != 0:
             break
         common = common + 1
-
     up: int = start_count - common
     tail: int = path_count - common
     total: int = up + tail
@@ -1172,36 +1717,37 @@ def py_os_path_relpath(path, start):
         free(path_lengths)
         free(start_offsets)
         free(start_lengths)
-        if ptr_is_null(path_owned) == 0:
-            py_decref(path_owned)
-        if ptr_is_null(start_owned) == 0:
-            py_decref(start_owned)
-        return py_str_new(cstr("."), 1)
-
+        out = py_str_new(cstr("."), 1)
+        store_ptr(slots, 24, out)
+        if not ptr_is_null(out):
+            store_i64(pins, 24, load_i32(out, 12) & 64)
+            pcc_gc_pin(out)
+            pcc_gc_note_write_barrier(null(), out)
+        return
     output_len: int = 2 * up + total - 1
     j: int = common
     while j < path_count:
         output_len = output_len + load_i64(path_lengths, j * 8)
         j = j + 1
     out = py_str_new(null(), output_len)
-    if ptr_is_null(out) != 0:
+    store_ptr(slots, 24, out)
+    if not ptr_is_null(out):
+        store_i64(pins, 24, load_i32(out, 12) & 64)
+        pcc_gc_pin(out)
+        pcc_gc_note_write_barrier(null(), out)
+    if ptr_is_null(out):
         free(path_offsets)
         free(path_lengths)
         free(start_offsets)
         free(start_lengths)
-        if ptr_is_null(path_owned) == 0:
-            py_decref(path_owned)
-        if ptr_is_null(start_owned) == 0:
-            py_decref(start_owned)
-        return null()
-
-    destination = ptr_add(out, 40)
+        return
     pos: int = 0
     written: int = 0
     k: int = 0
     while k < up:
+        destination = ptr_add(load_ptr(slots, 24), 40)
         if written > 0:
-            store_i8(destination, pos, 47)
+            store_i8(destination, pos, separator)
             pos = pos + 1
         store_i8(destination, pos, 46)
         store_i8(destination, pos + 1, 46)
@@ -1210,8 +1756,10 @@ def py_os_path_relpath(path, start):
         k = k + 1
     j2: int = common
     while j2 < path_count:
+        destination = ptr_add(load_ptr(slots, 24), 40)
+        path_data = ptr_add(load_ptr(slots, 8), 40)
         if written > 0:
-            store_i8(destination, pos, 47)
+            store_i8(destination, pos, separator)
             pos = pos + 1
         part_len2: int = load_i64(path_lengths, j2 * 8)
         part_offset2: int = load_i64(path_offsets, j2 * 8)
@@ -1219,16 +1767,24 @@ def py_os_path_relpath(path, start):
         pos = pos + part_len2
         written = written + 1
         j2 = j2 + 1
-
     free(path_offsets)
     free(path_lengths)
     free(start_offsets)
     free(start_lengths)
-    if ptr_is_null(path_owned) == 0:
-        py_decref(path_owned)
-    if ptr_is_null(start_owned) == 0:
-        py_decref(start_owned)
-    return out
+
+
+@c_abi_export("py_os_path_relpath")
+def py_os_path_relpath(path, start):
+    slots = stack_alloc(32)
+    pins = stack_alloc(32)
+    memset(slots, 0, 32)
+    memset(pins, 0, 32)
+    pcc_gc_frame_enter(global_addr("pcc_os_path_relpath_frame_map"), slots)
+    _path_relpath_build(path, start, slots, pins)
+    _path_clear_root_prefix(slots, pins, 3)
+    # The result remains pinned through the last potentially parking call.
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(ptr_add(slots, 24), load_i64(pins, 24))
 
 
 @c_abi_export("py_os_path_exists")

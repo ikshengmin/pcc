@@ -72,7 +72,7 @@ def main() -> None:
         raise RuntimeError(
             f"Linux wheel has no portable manylinux/musllinux tag: {tags!r}"
         )
-    if not any(name.endswith(".data/scripts/pcc1") for name in names):
+    if not any(name.endswith((".data/scripts/pcc1", ".data/scripts/pcc1.exe")) for name in names):
         raise RuntimeError("wheel does not contain its native pcc1 script")
     if "pcc/py_runtime/libpy_runtime_pcc_py.a" not in names:
         raise RuntimeError("wheel does not contain the matching native runtime")

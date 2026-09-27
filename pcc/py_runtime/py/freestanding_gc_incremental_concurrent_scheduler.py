@@ -534,14 +534,23 @@ def pcc_gc_complete_claimed_tracing_cycle(
 
 @c_abi_export("pcc_gc_tracing_debt_threshold")
 def pcc_gc_tracing_debt_threshold() -> i64:
-    override: i64 = load_i32(global_addr("pcc_gc_debt_threshold_override"), 0)
+    override: i64 = load_i64(global_addr("pcc_gc_debt_threshold_override"), 0)
     if override > 0:
         return override
     threshold: i64 = 65536
-    live: i64 = load_i32(global_addr("pcc_gc_live_bytes"), 0)
+    live: i64 = load_i64(global_addr("pcc_gc_live_bytes"), 0)
     pause: i64 = load_i32(global_addr("pcc_gc_pause"), 0)
     if live > 0 and pause > 100:
-        live_pause: i64 = unsigned_div_i64(live * (pause - 100), 100)
+        # Divide first without discarding the fractional contribution.  A
+        # large heap can overflow live * factor even when its final /100
+        # threshold fits.  Saturate only the final nonnegative byte count.
+        factor: i64 = pause - 100
+        whole: i64 = unsigned_div_i64(live, 100)
+        remainder: i64 = live - whole * 100
+        tail: i64 = unsigned_div_i64(remainder * factor, 100)
+        live_pause: i64 = 9223372036854775807
+        if whole <= unsigned_div_i64(9223372036854775807 - tail, factor):
+            live_pause = whole * factor + tail
         if live_pause > threshold:
             threshold = live_pause
     return threshold
@@ -549,11 +558,15 @@ def pcc_gc_tracing_debt_threshold() -> i64:
 
 @c_abi_export("pcc_gc_tracing_budget_from_debt")
 def pcc_gc_tracing_budget_from_debt() -> i64:
-    debt: i64 = load_i32(global_addr("pcc_gc_debt_bytes"), 0)
+    debt: i64 = load_i64(global_addr("pcc_gc_debt_bytes"), 0)
     stepmul: i64 = load_i32(global_addr("pcc_gc_stepmul"), 0)
-    budget: i64 = unsigned_div_i64(
-        unsigned_div_i64(debt, 64) * stepmul, 100
-    )
+    units: i64 = unsigned_div_i64(debt, 64)
+    # stepmul is configured in [1, 10000].  At this point the final budget
+    # is already capped for every legal multiplier; do not overflow an
+    # intermediate product merely to clamp it afterwards.
+    if units >= 6553600:
+        return 65536
+    budget: i64 = unsigned_div_i64(units * stepmul, 100)
     if budget < 1:
         budget: i64 = 1
     if budget > 65536:
@@ -565,15 +578,15 @@ def pcc_gc_tracing_budget_from_debt() -> i64:
 def pcc_gc_tracing_discharge_debt(processed: i64) -> None:
     if processed <= 0:
         return
-    debt: i64 = load_i32(global_addr("pcc_gc_debt_bytes"), 0)
+    debt: i64 = load_i64(global_addr("pcc_gc_debt_bytes"), 0)
     stepmul: i64 = load_i32(global_addr("pcc_gc_stepmul"), 0)
     credit: i64 = unsigned_div_i64(processed * 64 * stepmul, 100)
     if credit < 64:
         credit: i64 = 64
     if credit >= debt:
-        store_i32(global_addr("pcc_gc_debt_bytes"), 0, 0)
+        store_i64(global_addr("pcc_gc_debt_bytes"), 0, 0)
     else:
-        store_i32(global_addr("pcc_gc_debt_bytes"), 0, debt - credit)
+        store_i64(global_addr("pcc_gc_debt_bytes"), 0, debt - credit)
 
 
 @c_abi_export("pcc_gc_tracing_record_pause")
@@ -841,7 +854,7 @@ def pcc_gc_incremental_concurrent_step(budget: i64) -> i64:
     pcc_gc_tracing_discharge_debt(processed)
     if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
         if load_i32(global_addr("pcc_gc_cycle_requested"), 0) == 0:
-            store_i32(global_addr("pcc_gc_debt_bytes"), 0, 0)
+            store_i64(global_addr("pcc_gc_debt_bytes"), 0, 0)
     pcc_gc_tracing_record_pause(start_us, pcc_platform_monotonic_us())
     return processed
 
@@ -854,7 +867,7 @@ def pcc_gc_incremental_maybe_auto_step() -> None:
         return
     if pcc_threads_enabled() != 0:
         return
-    debt: i64 = load_i32(global_addr("pcc_gc_debt_bytes"), 0)
+    debt: i64 = load_i64(global_addr("pcc_gc_debt_bytes"), 0)
     if debt < pcc_gc_tracing_debt_threshold():
         return
     store_i32(global_addr("pcc_gc_in_auto_step"), 0, 1)
@@ -892,8 +905,8 @@ def pcc_gc_cms_note_alloc(bytes: i64) -> None:
     atomic_rmw_i32(
         "add", global_addr("pcc_gc_cms_queue_pushes"), 0, 1, "release"
     )
-    debt: i64 = load_i32(global_addr("pcc_gc_debt_bytes"), 0) + bytes
-    store_i32(global_addr("pcc_gc_debt_bytes"), 0, debt)
+    debt: i64 = load_i64(global_addr("pcc_gc_debt_bytes"), 0) + bytes
+    store_i64(global_addr("pcc_gc_debt_bytes"), 0, debt)
     if debt >= pcc_gc_tracing_debt_threshold():
         assists: i64 = load_i32(global_addr("pcc_gc_cms_mutator_assists"), 0)
         store_i32(global_addr("pcc_gc_cms_mutator_assists"), 0, assists + 1)
@@ -914,8 +927,8 @@ def pcc_gc_note_alloc(bytes: i64) -> None:
     allocations: i64 = load_i32(global_addr("pcc_gc_metric_alloc"), 0)
     store_i32(global_addr("pcc_gc_metric_alloc"), 0, allocations + 1)
     if backend == 1:
-        debt: i64 = load_i32(global_addr("pcc_gc_debt_bytes"), 0) + bytes
-        store_i32(global_addr("pcc_gc_debt_bytes"), 0, debt)
+        debt: i64 = load_i64(global_addr("pcc_gc_debt_bytes"), 0) + bytes
+        store_i64(global_addr("pcc_gc_debt_bytes"), 0, debt)
         pcc_gc_incremental_maybe_auto_step()
     elif backend == 2:
         pcc_gc_maybe_start_cms_worker()

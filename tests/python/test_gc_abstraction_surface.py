@@ -106,8 +106,18 @@ def test_gc_backend_kinds_are_algorithmic_not_project_branded():
 
 def test_pcc_python_refcount_backend_exports_gc_surface():
     py_obj = PY_OBJ_PORT.read_text(encoding="utf-8")
+    root_operations = (
+        REPO_ROOT / "pcc" / "py_runtime" / "py" / "freestanding_gc_root_operations.py"
+    ).read_text(encoding="utf-8")
+    # pin/unpin (bodies unchanged) are owned by the strict root-operations
+    # module, next to pcc_gc_take_pinned_slot; the rest stay in py_obj.
+    root_owned = {"pcc_gc_pin", "pcc_gc_unpin"}
     for name in GC_SURFACE[:12]:
-        assert f'@c_abi_export("{name}")' in py_obj
+        owner, other = (
+            (root_operations, py_obj) if name in root_owned else (py_obj, root_operations)
+        )
+        assert f'@c_abi_export("{name}")' in owner, name
+        assert f'@c_abi_export("{name}")' not in other, name
     # The late GC surface moved out of py_gc_backend.py/py_gc_telemetry.py
     # into the freestanding GC modules as the collector policy migrated to
     # pcc-Python.  Each symbol must be exported by exactly the module that
@@ -188,7 +198,7 @@ def test_pcc_python_collect_uses_gc_hook_not_direct_stub_return():
     py_obj = PY_OBJ_PORT.read_text(encoding="utf-8")
     assert 'extern("py_gc_collect"' in py_obj
     collect_body = py_obj.split('@c_abi_export("pcc_gc_collect")', 1)[1]
-    collect_body = collect_body.split('@c_abi_export("pcc_gc_pin")', 1)[0]
+    collect_body = collect_body.split('@c_abi_export("pcc_gc_immortalize")', 1)[0]
     assert "py_gc_collect()" in collect_body
 
 
@@ -683,19 +693,20 @@ def test_colored_relocating_gc_read_barrier_clears_candidate(tmp_path):
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"
     src.write_text(textwrap.dedent(f"""
-        from pcc.extern import extern, c_int32, c_int64, c_ptr, c_void, c_obj
+        from pcc.extern import extern, c_int32, c_int64, c_ptr, c_void, c_obj, c_rawptr
         from pcc.unsafe import free, load_i32, malloc, null, store_ptr
 
         pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_obj)
-        pcc_gc_release = extern("pcc_gc_release", (c_ptr,), c_void)
         pcc_gc_set_backend = extern("pcc_gc_set_backend", (c_int64,), c_int64)
         pcc_gc_select_relocation_set = extern("pcc_gc_select_relocation_set", (c_int64,), c_int64)
-        pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_obj)
+        # The read barrier returns a borrowed pointer; c_obj would release it.
+        pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_rawptr)
         pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
         py_list_new = extern("py_list_new", (c_int64,), c_obj)
 
         def main() -> None:
             pcc_gc_set_backend({BACKEND_COLORED_RELOCATING})
+            # obj is an owned c_obj local: the compiler releases it at exit.
             obj = py_list_new(0)
             slot = malloc(8)
             store_ptr(slot, 0, null())
@@ -705,7 +716,6 @@ def test_colored_relocating_gc_read_barrier_clears_candidate(tmp_path):
             pcc_gc_load_ptr(null(), slot)
             print(load_i32(obj, 12) & 2048)
             pcc_gc_store_ptr(null(), slot, null())
-            pcc_gc_release(obj)
             free(slot)
 
         if __name__ == "__main__":

@@ -276,6 +276,9 @@ py_bytearray_setitem = extern("py_bytearray_setitem", (c_ptr, c_ptr, c_ptr), c_i
 py_bytearray_del_slice = extern(
     "py_bytearray_del_slice", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
+py_obj_call_sync = extern("py_obj_call_sync", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_context_is_deferred = extern("py_obj_call_context_is_deferred", (), c_int64)
+
 
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -3034,15 +3037,23 @@ def py_obj_call(callable, args, kwargs):
         return py_obj_call(func, args, kwargs)
 
     if pcc_capi_type_object_is_callable(callable) != 0:
-        return _require_call_result(
-            pcc_capi_call_type_object(callable, args, kwargs),
-            cstr("pcc_capi_call_type_object"),
-            cstr(
-                "pcc_capi_call_type_object returned NULL without setting an exception"
-            ),
-        )
+        # Construction/extension invocation is itself a semantic callee,
+        # unlike transparent staticmethod or instance __call__ dispatch.
+        # Consume defer here so every internal ordinary call starts sync.
+        if py_obj_call_context_is_deferred() != 0:
+            return py_obj_call_sync(callable, args, kwargs)
+        checked_result = pcc_capi_call_type_object(callable, args, kwargs)
+        # Keep a fresh non-NULL result out of a polling diagnostic helper.
+        if ptr_is_null(checked_result):
+            py_runtime_error_if_unset(cstr('pcc_capi_call_type_object'), cstr('pcc_capi_call_type_object returned NULL without setting an exception'))
+        return checked_result
 
     if tag == PY_TYPE_CLASS:  # PY_TYPE_CLASS
+        # Construction/extension invocation is itself a semantic callee,
+        # unlike transparent staticmethod or instance __call__ dispatch.
+        # Consume defer here so every internal ordinary call starts sync.
+        if py_obj_call_context_is_deferred() != 0:
+            return py_obj_call_sync(callable, args, kwargs)
         nargs: int = 0
         if ptr_is_null(args) == 0:
             nargs = py_tuple_len(args)
@@ -3201,36 +3212,39 @@ def py_obj_call(callable, args, kwargs):
                     py_decref(out)
         return inst
     if tag == PY_TYPE_FUNC:  # PY_TYPE_FUNC
-        return _require_call_result(
-            py_func_call_kwargs(callable, args, kwargs),
-            cstr("py_func_call_kwargs"),
-            cstr("py_func_call_kwargs returned NULL without setting an exception"),
-        )
+        checked_result = py_func_call_kwargs(callable, args, kwargs)
+        # Keep a fresh non-NULL result out of a polling diagnostic helper.
+        if ptr_is_null(checked_result):
+            py_runtime_error_if_unset(cstr('py_func_call_kwargs'), cstr('py_func_call_kwargs returned NULL without setting an exception'))
+        return checked_result
     if tag == PY_TYPE_WEAKREF:  # PY_TYPE_WEAKREF
-        return _require_call_result(
-            py_weakref_call(callable),
-            cstr("py_weakref_call"),
-            cstr("py_weakref_call returned NULL without setting an exception"),
-        )
+        checked_result = py_weakref_call(callable)
+        # Keep a fresh non-NULL result out of a polling diagnostic helper.
+        if ptr_is_null(checked_result):
+            py_runtime_error_if_unset(cstr('py_weakref_call'), cstr('py_weakref_call returned NULL without setting an exception'))
+        return checked_result
     if pcc_capi_is_cext_type_tag(tag) != 0:
-        return _require_call_result(
-            pcc_capi_call_cext_object(callable, args, kwargs),
-            cstr("pcc_capi_call_cext_object"),
-            cstr(
-                "pcc_capi_call_cext_object returned NULL without setting an exception"
-            ),
-        )
+        # Construction/extension invocation is itself a semantic callee,
+        # unlike transparent staticmethod or instance __call__ dispatch.
+        # Consume defer here so every internal ordinary call starts sync.
+        if py_obj_call_context_is_deferred() != 0:
+            return py_obj_call_sync(callable, args, kwargs)
+        checked_result = pcc_capi_call_cext_object(callable, args, kwargs)
+        # Keep a fresh non-NULL result out of a polling diagnostic helper.
+        if ptr_is_null(checked_result):
+            py_runtime_error_if_unset(cstr('pcc_capi_call_cext_object'), cstr('pcc_capi_call_cext_object returned NULL without setting an exception'))
+        return checked_result
     if _is_instance_tag(tag) != 0:
         cls = pcc_gc_load_ptr(
             callable, ptr_add(callable, PYINSTANCEOBJECT_CLS_OFFSET)
         )
         method = py_class_lookup(cls, cstr("__call__"))
         if ptr_is_null(method) == 0:
-            return _require_call_result(
-                _dispatch_call_method_with_args(method, callable, args, kwargs),
-                cstr("instance __call__"),
-                cstr("instance __call__ returned NULL without setting an exception"),
-            )
+            checked_result = _dispatch_call_method_with_args(method, callable, args, kwargs)
+            # Keep a fresh non-NULL result out of a polling diagnostic helper.
+            if ptr_is_null(checked_result):
+                py_runtime_error_if_unset(cstr('instance __call__'), cstr('instance __call__ returned NULL without setting an exception'))
+            return checked_result
     return _raise_not_callable(callable, tag)
 
 

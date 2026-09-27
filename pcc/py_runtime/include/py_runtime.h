@@ -354,6 +354,16 @@ void      pcc_gc_safepoint(void);
 int64_t   pcc_gc_collect(int32_t reason);
 void      pcc_gc_pin(PyObject *o);
 void      pcc_gc_unpin(PyObject *o);
+/* Transfer one owned reference from a stable pointer slot to the return value.
+ * The caller has acquired one pin and saved the pre-acquisition pin bit in
+ * prior_pin (0 or PY_FLAG_GC_PINNED), and has completed all parking operations.
+ * The slot need not remain registered, but its storage must remain valid.
+ * Clear the slot, balance exactly that pin acquisition, restore its prior bit,
+ * and return without allocation, callbacks, parking, or reference-count changes.
+ * NULL slot/value and tagged immediates are accepted without pin-metric changes.
+ * The caller must consume/root/pin the returned owner before it can park. */
+PyObject *pcc_gc_take_pinned_slot(PyObject **slot, int64_t prior_pin);
+
 void      pcc_gc_immortalize(PyObject *o);
 int64_t   pcc_gc_object_id(PyObject *o);
 int64_t   py_obj_id(PyObject *o);
@@ -1107,6 +1117,16 @@ int64_t   py_set_len(PyObject *s);
 
 /* ---- Generic object ops ----------------------------------------------- */
 PyObject *py_obj_call(PyObject *callable, PyObject *args_tuple, PyObject *kwargs_dict);
+/* Ordinary callbacks execute compiler-lifted callees to completion. Explicit
+ * continuation callers defer one semantic callee; transparent adapters forward
+ * that request only to their actual target, not to unrelated body callbacks. */
+PyObject *py_obj_call_sync(PyObject *, PyObject *, PyObject *);
+int64_t py_obj_call_context_is_deferred(void);
+PyObject *py_obj_call_deferred(PyObject *, PyObject *, PyObject *);
+PyObject *py_obj_call_forward(PyObject *, PyObject *, PyObject *);
+/* Already-bound positional slots, including self; do not rebind */
+PyObject *py_func_call_bound_forward(PyObject *, PyObject *);
+
 PyObject *py_obj_call_method1(PyObject *o, const char *name, PyObject *arg);
 PyObject *py_obj_add(PyObject *a, PyObject *b);
 PyObject *py_obj_abs(PyObject *o);
@@ -1314,6 +1334,8 @@ PyObject *py_gen_take_completed(PyObject *gen); /* borrowed value, NULL if not r
 PyObject *py_gen_run_may_park_sync(PyObject *gen); /* new ref, NULL on error */
 void      py_gen_set_may_park(PyObject *gen);
 int64_t   py_gen_is_may_park(PyObject *gen);
+/* A source generator is data, even when its body carries MAY_PARK. */
+int64_t   py_gen_is_continuation(PyObject *gen);
 PyObject *py_gen_next(PyObject *gen);
 PyObject *py_gen_send(PyObject *gen, PyObject *value);
 PyObject *py_gen_throw(PyObject *gen, PyObject *exc);
@@ -1615,6 +1637,7 @@ void py_process_exit(int64_t code);
 PyObject *py_sys_executable_str(void);
 PyObject *py_sys_prefix_str(int64_t kind);
 PyObject *py_os_getpid(void);
+PyObject *py_os_kill(PyObject *pid, PyObject *signal_number);
 PyObject *py_subprocess_check_output(PyObject *argv);
 int64_t py_process_normalize_wait_status(int64_t status);
 int64_t py_subprocess_run(PyObject *argv, int32_t capture_output);
@@ -1634,6 +1657,7 @@ PyObject *py_sysconfig_get_config_var(PyObject *name);
 PyObject *py_os_listdir(PyObject *path);
 PyObject *py_shlex_split(PyObject *text);
 PyObject *py_shutil_which(PyObject *name);
+PyObject *py_shutil_rmtree(PyObject *path, int32_t ignore_errors);
 PyObject *py_tempdir_new(PyObject *prefix);
 void py_tempdir_cleanup(PyObject *path);
 PyObject *py_re_match(PyObject *pattern, PyObject *text);
@@ -1672,7 +1696,10 @@ PyObject *py_os_path_split(PyObject *path);
 int       py_os_path_exists(PyObject *path);
 int       py_os_path_isabs(PyObject *path);
 int       py_os_path_isfile(PyObject *path);
+int       py_os_path_islink(PyObject *path);
 int       py_os_path_isdir(PyObject *path);
+PyObject *py_fcntl_flock(PyObject *fd, PyObject *operation, PyObject *keeper);
+PyObject *py_msvcrt_locking(PyObject *fd, PyObject *mode, PyObject *nbytes);
 PyObject *py_os_path_getmtime(PyObject *path);
 PyObject *py_os_path_getsize(PyObject *path);
 PyObject *py_os_path_abspath(PyObject *path);

@@ -24,6 +24,14 @@ def _compile_platform_ir(tmp_path: Path) -> Path:
     return out
 
 
+def test_raw_cstr_ternary_stays_out_of_managed_gc(tmp_path):
+    text = _compile_platform_ir(tmp_path).read_text(encoding="utf-8")
+    assert "@pcc_platform_process_find_path" in text
+    assert "ternary.then.retain" not in text
+    assert "ternary.else.retain" not in text
+    assert "call ptr (ptr) @pcc_gc_retain(" not in text, "raw ternary retained a managed object"
+
+
 def _build_platform_object(tmp_path: Path, *, self_backend: bool) -> Path:
     llvm_ir = _compile_platform_ir(tmp_path)
     obj = tmp_path / (

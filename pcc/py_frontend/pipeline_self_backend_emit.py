@@ -39,9 +39,15 @@ def emit_in_process(
     triple = parse_target_triple(ir_text)
     if triple == "unknown-unknown-unknown":
         triple = host_target_triple()
-    if not target_supported(triple):
+    if target_supported(triple):
+        return "self-aarch64-darwin-v0", emit_asm(ir_text, False)
+    from pcc.backend.self_backend_targets import resolve_self_backend_target
+    from pcc.backend import BackendUnavailable
+    try:
+        target = resolve_self_backend_target(triple)
+    except BackendUnavailable:
         return None
-    return "self-aarch64-darwin-v0", emit_asm(ir_text, False)
+    return target.identity, target.emit_asm(ir_text)
 
 
 def emit_via_host_python(
@@ -58,6 +64,8 @@ def emit_via_host_python(
     native_result = emit_native(ir_text)
     if native_result is not None:
         return native_result
+    if sys.implementation.name == "pcc":
+        raise SelfBackendEmitError("native self emission cannot invoke host Python for an unsupported target")
     ir_path = str(os.path.join(tmp_dir, f"self_backend_input_{index}.ll"))
     with open(ir_path, "w", encoding="utf-8") as stream:
         stream.write(normalize_ir(ir_text))
@@ -96,6 +104,8 @@ def run_emit_worker(
     emit_native,
 ) -> int:
     try:
+        if cc and sys.implementation.name == "pcc":
+            raise SelfBackendEmitError("native self emission cannot invoke an external assembler")
         with open(ir_path, "r", encoding="utf-8") as stream:
             ir_text = normalize_ir(stream.read())
         native_result = emit_native(ir_text)
@@ -113,12 +123,20 @@ def run_emit_worker(
             from pcc.backend.arm64_asm_driver import assemble_file
             from pcc.backend.native_object import encode_native_object_from_sections
 
-            sections, undefined = assemble_file(asm_text)
+            if target_id in ("self-aarch64-linux-v0", "self-x86_64-linux-v0"):
+                from pcc.backend.owned_elf_link import assemble as assemble_elf
+                from pcc.backend.elf_x86_64 import emit_relocatable
+                triple = "aarch64-unknown-linux-gnu" if target_id == "self-aarch64-linux-v0" else "x86_64-unknown-linux-gnu"
+                payload = emit_relocatable(assemble_elf(asm_text, triple))
+            elif target_id == "self-x86_64-windows-v0":
+                from pcc.backend.coff_x86_64 import assemble_object
+                payload = assemble_object(asm_text)
+            else:
+                sections, undefined = assemble_file(asm_text)
+                payload = encode_native_object_from_sections(sections, undefined=undefined)
             asm_text = ""
             with open(obj_path, "wb") as stream:
-                stream.write(
-                    encode_native_object_from_sections(sections, undefined=undefined)
-                )
+                stream.write(payload)
             result_payload = obj_path
         elif obj_path:
             asm_path = obj_path if not cc else result_path + ".s"
@@ -468,14 +486,32 @@ def emit_objects_many_in_process(
     emit_in_process,
     join_strings,
 ) -> Optional[list[tuple[str, str]]]:
-    """Emit AArch64 modules as internal assembly or external Mach-O objects."""
+    """Emit one target's modules through its owned in-process/worker route."""
     if not ir_texts:
         return []
+    if not internal_link and sys.implementation.name == "pcc":
+        raise SelfBackendEmitError("native self batch emission requires owned object emission")
     first_triple = parse_target_triple(ir_texts[0])
     if first_triple == "unknown-unknown-unknown":
         first_triple = host_target_triple()
-    if not target_supported(first_triple):
+    from pcc.backend.self_backend_targets import resolve_self_backend_target
+    from pcc.backend import BackendUnavailable
+    try:
+        selected_target = resolve_self_backend_target(first_triple).identity
+    except BackendUnavailable:
         return None
+    # Cache plans and worker object formats are selected once for the batch.
+    # Reject mixed targets before writing inputs or publishing any cache entry.
+    for ir_text in ir_texts[1:]:
+        triple = parse_target_triple(ir_text)
+        if triple == "unknown-unknown-unknown":
+            triple = host_target_triple()
+        try:
+            current_target = resolve_self_backend_target(triple).identity
+        except BackendUnavailable as exc:
+            raise SelfBackendEmitError("unsupported target in self emission batch: " + triple) from exc
+        if current_target != selected_target:
+            raise SelfBackendEmitError("self emission batch contains different target platforms")
     pairs: list[tuple[str, str]] = []
     native_worker = native_worker_executable()
     inputs = ir_texts
@@ -483,7 +519,7 @@ def emit_objects_many_in_process(
         inputs = split_large_ir_modules(ir_texts)
     if native_worker:
         worker_command_prefix = [native_worker]
-    elif source_workers_worthwhile(inputs):
+    elif sys.implementation.name != "pcc" and source_workers_worthwhile(inputs):
         worker_command_prefix = worker_command_prefix_for_frontend()
     else:
         worker_command_prefix = []
@@ -612,7 +648,7 @@ def emit_objects_many_in_process(
         cache_plan_t = profile_begin(profile)
         cache_plan = plan_cache(
             worker_items,
-            "self-aarch64-darwin-v0",
+            selected_target,
             "pcc-native-pco-v1" if internal_link else cc,
             tmp_dir,
         )
@@ -833,7 +869,7 @@ def emit_objects_many_in_process(
                 worker_result_lines[1] if len(worker_result_lines) >= 2 else ""
             )
             if (
-                not target_id
+                target_id != selected_target
                 or emitted_obj_path.strip() != obj_path
                 or not os.path.isfile(obj_path)
             ):
@@ -900,6 +936,8 @@ def emit_objects_many_in_process(
             if native_result is None:
                 return None
             target_id = native_result[0]
+            if target_id != selected_target:
+                raise SelfBackendEmitError("self emitter returned a different target platform")
             asm_text = native_result[1]
             with open(asm_path, "w", encoding="utf-8") as f:
                 f.write(asm_text)
@@ -955,6 +993,10 @@ def emit_objects_many_via_host_python(
     )
     if native_results is not None:
         return native_results
+    if sys.implementation.name == "pcc":
+        raise SelfBackendEmitError(
+            "native self batch emission cannot invoke host Python for an unsupported target"
+        )
     ir_paths = []
     t = profile_begin(profile)
     for index, ir_text in enumerate(ir_texts):

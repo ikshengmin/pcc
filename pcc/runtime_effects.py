@@ -398,6 +398,13 @@ RUNTIME_ABI_ARROWS: dict[str, RuntimeArrow] = {
         (RuntimeEffect.PIN_LEAVE,),
         "Leave a pinned object/region.",
     ),
+    "pcc_gc_take_pinned_slot": _arrow(
+        "pcc_gc_take_pinned_slot",
+        (RuntimeResource.ROOT_SLOT, RuntimeResource.PINNED_REGION),
+        (RuntimeResource.HEAP_OBJECT,),
+        (RuntimeEffect.PIN_LEAVE,),
+        "Transfer an owned pinned value out of stable (possibly unregistered) slot storage; restore its prior pin without parking or changing refcount.",
+    ),
     "pcc_gc_register_continuation_root": _arrow(
         "pcc_gc_register_continuation_root",
         (RuntimeResource.ROOT_SLOT,),

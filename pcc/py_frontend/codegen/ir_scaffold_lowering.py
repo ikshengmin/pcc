@@ -18,6 +18,7 @@ from ..py_ast import (
     Expr,
     FloatLit,
     FloatType,
+    ImportFrom,
     IntLit,
     IntType,
     ListExpr,
@@ -239,7 +240,6 @@ _IR_SCAFFOLD_SIMPLE_METHODS: dict = {
     "ret": ("void", 1),
     "cbranch": ("void", 3),
     "switch": ("ptr", 2),
-    "resume": ("void", 1),
     "fence": ("void", 1),
     "add_incoming": ("void", 2),
     # Pointer-returning (handle to an LLVM IR value)
@@ -280,7 +280,6 @@ _IR_SCAFFOLD_SIMPLE_METHODS: dict = {
     "fneg": ("ptr", 1),
     "select": ("ptr", 3),
     "extract_value": ("ptr", 2),
-    "insert_value": ("ptr", 3),
     "icmp_signed": ("ptr", 3),
     "icmp_unsigned": ("ptr", 3),
     "fcmp_ordered": ("ptr", 3),
@@ -335,7 +334,6 @@ _IR_SCAFFOLD_METHOD_OPTIONAL_PARAMS: dict = {
     "frem": ("name",),
     "select": ("name",),
     "extract_value": ("name",),
-    "insert_value": ("name",),
     "icmp_signed": ("name",),
     "icmp_unsigned": ("name",),
     "fcmp_ordered": ("name",),
@@ -422,7 +420,6 @@ _IR_SCAFFOLD_METHOD_IMPL: frozenset = frozenset(
         "ret",
         "cbranch",
         "switch",
-        "resume",
         "fence",
         "add_incoming",
         "load",
@@ -462,7 +459,6 @@ _IR_SCAFFOLD_METHOD_IMPL: frozenset = frozenset(
         "fneg",
         "select",
         "extract_value",
-        "insert_value",
         "icmp_signed",
         "icmp_unsigned",
         "fcmp_ordered",
@@ -509,6 +505,302 @@ _IR_SCAFFOLD_SYMBOL_IMPL: frozenset = frozenset(
 
 
 class IrScaffoldLoweringMixin:
+    def _scaffold_stmt_has_global_ir(self, stmt) -> bool:
+        kind = _scaffold_node_kind_name(stmt)
+        if kind == "Global":
+            return "ir" in stmt.names
+        if kind in ("FuncDef", "ClassDef"):
+            return False
+        for field in ("body", "else_body", "finally_body", "handlers"):
+            for child in getattr(stmt, field, ()):
+                if self._scaffold_stmt_has_global_ir(child):
+                    return True
+        return False
+
+    def _scaffold_assignment_targets_ir(self, target) -> bool:
+        if _is_scaffold_name(target):
+            return target.ident == "ir"
+        if _is_scaffold_attr(target):
+            return self._scaffold_assignment_targets_ir(target.obj)
+        for element in getattr(target, "elems", ()):
+            if self._scaffold_assignment_targets_ir(element):
+                return True
+        return False
+
+    def _scaffold_stmt_rebinds_ir(self, stmt) -> bool:
+        kind = _scaffold_node_kind_name(stmt)
+        if kind == "ImportFrom":
+            return any((alias or imported) == "ir" for imported, alias in stmt.names)
+        if kind == "Import":
+            return any(
+                (alias or imported.split(".")[0]) == "ir"
+                for imported, alias in stmt.names
+            )
+        if kind in ("FuncDef", "ClassDef"):
+            if stmt.name == "ir":
+                return True
+            if kind == "FuncDef":
+                return any(self._scaffold_stmt_has_global_ir(inner) for inner in stmt.body)
+            return False
+        if kind == "Assign":
+            return any(self._scaffold_assignment_targets_ir(target) for target in stmt.targets)
+        if kind == "AugAssign":
+            return self._scaffold_assignment_targets_ir(stmt.target)
+        if kind == "Delete":
+            return any(self._scaffold_assignment_targets_ir(target) for target in stmt.targets)
+        if kind == "For":
+            if self._scaffold_assignment_targets_ir(stmt.target):
+                return True
+        if kind == "With":
+            for _manager, target in stmt.items:
+                if target is not None and self._scaffold_assignment_targets_ir(target):
+                    return True
+        if kind == "ExprStmt":
+            call = getattr(stmt, "expr", None)
+            func = getattr(call, "func", None)
+            if (
+                _is_scaffold_call(call)
+                and _is_scaffold_name(func)
+                and func.ident in ("setattr", "delattr")
+                and call.args
+                and _is_scaffold_name(call.args[0])
+                and call.args[0].ident == "ir"
+            ):
+                return True
+        for field in ("body", "else_body", "finally_body", "handlers"):
+            for child in getattr(stmt, field, ()):
+                if self._scaffold_stmt_rebinds_ir(child):
+                    return True
+        return False
+
+    def _scaffold_source_has_provider_binding(self) -> bool:
+        """Whether this source declares an owned IR binding at module scope.
+
+        This is only an admission filter for the migration. A provider import
+        does not prove the type of every `builder` parameter or mutable field.
+        Those sites still need receiver facts before this can replace the
+        legacy scaffold matcher altogether.
+        """
+        cached = self._ir_scaffold_source_provider_binding
+        if cached is not None:
+            return cached
+        found = self.ast_module.name == "pcc.llvm_capi.ir"
+        unstable = False
+        for statement in self.ast_module.body:
+            owned_import = False
+            if isinstance(statement, ImportFrom) and statement.module == "pcc.llvm_capi.compat":
+                for imported, bound in statement.names:
+                    if imported in ("ir", "ir_py", "ir_c") and (bound or imported) == "ir":
+                        owned_import = True
+            if isinstance(statement, ImportFrom) and statement.module == "pcc.llvm_capi":
+                for imported, bound in statement.names:
+                    if imported == "ir" and (bound or imported) == "ir":
+                        owned_import = True
+            if _scaffold_node_kind_name(statement) == "Import":
+                for imported, bound in statement.names:
+                    if imported == "pcc.llvm_capi.ir" and bound == "ir":
+                        owned_import = True
+            if owned_import:
+                found = True
+            elif self._scaffold_stmt_rebinds_ir(statement):
+                unstable = True
+        result = found and not unstable
+        self._ir_scaffold_source_provider_binding = result
+        return result
+
+    def _scaffold_local_kind(self, name: str) -> str:
+        fact = getattr(self, "_ir_builder_env_flags", {}).get(name)
+        if fact is True:
+            return "IRBuilder"
+        if isinstance(fact, str):
+            return fact
+        function = getattr(self, "current_func_def", None)
+        if (
+            self.ast_module.name == "pcc.py_frontend.codegen.class_gen"
+            and function is not None
+        ):
+            owner = self._scaffold_current_class_owner()
+            # ClassLowering.emit_methods passes only its declared ir.Function
+            # entries to _emit_method_body. The nested binder captures the
+            # same method's `parent = self.parent` L1CodeGen value. The source
+            # and direct-call shapes are guarded by the field-contract tests.
+            if owner == "ClassLowering":
+                if name == "fn" and function.name == "_emit_method_body":
+                    if any(argument.name == "fn" for argument in function.args):
+                        return "Function"
+                if name == "parent" and function.name == "__nested_bind_method_arg":
+                    if any(argument.name == "parent" for argument in function.args):
+                        return "L1CodeGen"
+            if (
+                name == "parent"
+                and function.name == "emit_instantiate"
+                and owner == "ClassLowering"
+            ):
+                return "L1CodeGen"
+            if name == "builder" and function.name == "_classgen_builder_call":
+                return "IRBuilder"
+            if name == "parent" and function.name.startswith("_classgen_"):
+                for argument in function.args:
+                    if argument.name == "parent":
+                        return "L1CodeGen"
+        return ""
+
+    def _scaffold_field_owner_roots(self) -> dict:
+        cached = self._ir_scaffold_field_owner_mro
+        if cached is not None:
+            return cached
+        from .layer1 import L1CodeGen
+        from pcc.codegen.c_codegen import LLVMCodeGenerator
+
+        owners = {}
+        for root, label in (
+            (L1CodeGen, "L1CodeGen"),
+            (LLVMCodeGenerator, "LLVMCodeGenerator"),
+        ):
+            for cls in root.__mro__:
+                # Native class objects expose __name__ and __mro__, but not
+                # __module__. The emitting ClassInfo provides its owning
+                # source module separately at the decision point below.
+                if cls.__name__ != "object":
+                    previous = owners.get(cls.__name__)
+                    if previous is not None and previous != label:
+                        raise ValueError("ambiguous self-host mixin: " + cls.__name__)
+                    owners[cls.__name__] = label
+        self._ir_scaffold_field_owner_mro = owners
+        return owners
+
+    def _scaffold_current_class_owner(self) -> str:
+        info = getattr(self, "current_class", None)
+        if info is None:
+            return ""
+        module = getattr(info, "owning_module", None) or self.ast_module.name
+        name = getattr(info, "export_class_name", None) or info.name
+        if (module, name) == ("pcc.py_frontend.codegen.class_gen", "ClassLowering"):
+            return "ClassLowering"
+        if module != self.ast_module.name:
+            return ""
+        owner = self._scaffold_field_owner_roots().get(name, "")
+        if owner == "L1CodeGen" and module.startswith("pcc.py_frontend.codegen."):
+            return owner
+        if owner == "LLVMCodeGenerator" and module.startswith("pcc.codegen."):
+            return owner
+        return ""
+
+    def _scaffold_field_receiver_kind(self, receiver: Expr) -> str:
+        if not _is_scaffold_attr(receiver):
+            return ""
+        base = receiver.obj
+        owner = self._scaffold_current_class_owner()
+        if _is_scaffold_name(base) and base.ident == "self":
+            if receiver.name == "builder" and owner in (
+                "L1CodeGen", "LLVMCodeGenerator"
+            ):
+                return "IRBuilder"
+            if receiver.name == "function" and owner == "LLVMCodeGenerator":
+                return "Function"
+            if receiver.name == "current_function" and owner == "L1CodeGen":
+                return "Function"
+            if receiver.name == "parent" and owner == "ClassLowering":
+                return "L1CodeGen"
+        base_kind = (
+            self._scaffold_local_kind(base.ident)
+            if _is_scaffold_name(base)
+            else self._scaffold_field_receiver_kind(base)
+        )
+        if receiver.name == "builder" and base_kind == "L1CodeGen":
+            return "IRBuilder"
+        if receiver.name == "current_function" and base_kind == "L1CodeGen":
+            return "Function"
+        if receiver.name == "function" and base_kind == "IRBuilder":
+            return "Function"
+        return ""
+
+    def _scaffold_kind_has_method(self, kind: str, member: str) -> bool:
+        if member == "add_incoming":
+            return kind == "PhiInstr"
+        if member == "add_case":
+            return kind == "SwitchInstr"
+        if member == "append_basic_block":
+            return kind in ("IRBuilder", "Function")
+        if member == "as_pointer":
+            return kind in ("IntType", "PointerType", "FunctionType")
+        return kind == "IRBuilder"
+
+    def _scaffold_result_class_for_call(self, expr: Expr) -> str:
+        if not _is_scaffold_call(expr) or not _is_scaffold_attr(expr.func):
+            return ""
+        attr = expr.func
+        if _is_scaffold_name(attr.obj) and attr.obj.ident == "ir":
+            if self._scaffold_receiver_admitted(attr.obj, attr.name):
+                symbol = self._ir_module_symbol_target(attr)
+                if symbol in ("IRBuilder", "IntType", "Function", "FunctionType"):
+                    return symbol
+            return ""
+        if not self._scaffold_receiver_admitted(attr.obj, attr.name):
+            return ""
+        if self._ir_scaffold_target(attr) is None:
+            return ""
+        if attr.name == "phi":
+            return "PhiInstr"
+        if attr.name == "switch":
+            return "SwitchInstr"
+        if attr.name == "append_basic_block":
+            return "Block"
+        if attr.name == "as_pointer":
+            return "PointerType"
+        return ""
+
+    def _scaffold_receiver_admitted(self, receiver: Expr, member: str = "") -> bool:
+        if self._scaffold_receiver_has_nonprovider_class(receiver):
+            return False
+        if not self._scaffold_source_has_provider_binding():
+            return False
+        if _is_scaffold_name(receiver):
+            function = getattr(self, "current_func_def", None)
+            if function is not None:
+                for argument in function.args:
+                    if argument.name == receiver.ident:
+                        return self._scaffold_kind_has_method(
+                            self._scaffold_local_kind(receiver.ident), member
+                        )
+            if receiver.ident == "ir":
+                return self.env.get("ir") is None
+            return self._scaffold_kind_has_method(
+                self._scaffold_local_kind(receiver.ident), member
+            )
+        if (
+            _is_scaffold_attr(receiver)
+            and receiver.name == "values"
+            and _is_scaffold_name(receiver.obj)
+            and receiver.obj.ident == "ir"
+        ):
+            return self._scaffold_receiver_admitted(receiver.obj, member)
+        if _is_scaffold_attr(receiver):
+            return self._scaffold_kind_has_method(
+                self._scaffold_field_receiver_kind(receiver), member
+            )
+        if _is_scaffold_call(receiver):
+            return self._scaffold_kind_has_method(
+                self._scaffold_result_class_for_call(receiver), member
+            )
+        return False
+
+    def _scaffold_receiver_has_nonprovider_class(self, receiver: Expr) -> bool:
+        """Leave calls on a known ordinary class to normal Python lookup.
+
+        A class hint is insufficient to *prove* an IRBuilder receiver: aliases
+        and reassignment can invalidate it. It is, however, sufficient to
+        reject the old spelling heuristic. Normal method dispatch will then
+        evaluate the runtime receiver and any override/descriptor normally.
+        """
+        ty = getattr(receiver, "ty", None)
+        module = getattr(ty, "module", "")
+        return (
+            _scaffold_node_kind_name(ty) == "ClassType"
+            and bool(module)
+            and module not in ("pcc.llvm_capi.ir", "pcc.llvm_capi.compat")
+        )
+
     # Method names so specific to LLVM IR types that any receiver
     # passing the same name should route through scaffold dispatch.
     # Catches ``self.current_function.append_basic_block(...)``,
@@ -523,8 +815,8 @@ class IrScaffoldLoweringMixin:
         }
     )
 
-    def _ir_scaffold_target(self, attr: Attr) -> Optional[str]:
-        """Detect whether ``attr`` is an IR method call shape.
+    def _ir_scaffold_candidate(self, attr: Attr) -> Optional[str]:
+        """Identify a legacy syntactic candidate for observation.
 
         Returns the recognised method name when:
         - ``self.builder.METHOD`` / ``host.builder.METHOD`` /
@@ -573,6 +865,12 @@ class IrScaffoldLoweringMixin:
             return attr.name
         return None
 
+    def _ir_scaffold_target(self, attr: Attr) -> Optional[str]:
+        candidate = self._ir_scaffold_candidate(attr)
+        if candidate is None or self._scaffold_receiver_has_nonprovider_class(attr.obj):
+            return None
+        return candidate
+
     def _ir_module_symbol_target(self, attr: Attr) -> Optional[str]:
         """Resolve an IR symbol or its owned ``ir.values`` alias.
 
@@ -581,6 +879,8 @@ class IrScaffoldLoweringMixin:
         SYMBOL is in the recognised ``ir.X`` set.
         """
         if not _is_scaffold_attr(attr):
+            return None
+        if self._scaffold_receiver_has_nonprovider_class(attr.obj):
             return None
         if attr.name not in _IR_MODULE_SYMBOLS:
             return None
@@ -617,6 +917,8 @@ class IrScaffoldLoweringMixin:
         if not self._ir_scaffold_enabled():
             # OFF mode leaves ``ir`` a real imported module object; normal
             # attribute lowering is correct there.
+            return None
+        if not self._scaffold_receiver_admitted(attr.obj, attr.name):
             return None
         symbol = self._ir_module_symbol_target(attr)
         if symbol is None:
@@ -672,6 +974,8 @@ class IrScaffoldLoweringMixin:
         """
         attr = expr.func
         if not _is_scaffold_attr(attr):
+            return None
+        if not self._scaffold_receiver_admitted(attr.obj, attr.name):
             return None
 
         method = self._ir_scaffold_target(attr)
@@ -1142,13 +1446,9 @@ class IrScaffoldLoweringMixin:
             name_h = self._scaffold_to_handle(name_expr)
         receiver_expr = expr.func.obj
         suffix = "scaffold_Function_append_basic_block"
-        if _is_scaffold_name(receiver_expr) and (
-            receiver_expr.ident == "builder"
-            or getattr(self, "_ir_builder_env_flags", {}).get(
-                receiver_expr.ident,
-                False,
-            )
-        ):
+        if _is_scaffold_name(receiver_expr) and self._scaffold_local_kind(
+            receiver_expr.ident
+        ) == "IRBuilder":
             suffix = "scaffold_IRBuilder_append_basic_block"
         elif _is_scaffold_attr(receiver_expr) and receiver_expr.name == "builder":
             suffix = "scaffold_IRBuilder_append_basic_block"

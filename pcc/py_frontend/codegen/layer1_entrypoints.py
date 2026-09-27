@@ -32,6 +32,11 @@ class L1CodeGenEntrypointMixin:
         )
 
     def generate(self, module: Optional[Module] = None) -> str:
+        if self._target_triple:
+            self.module.triple = self._target_triple
+        elif sys.platform.startswith("linux") or sys.platform == "win32":
+            from pcc.py_frontend.pipeline_targets import host_target_triple
+            self.module.triple = host_target_triple()
         if self._codegen_trace_is_enabled():
             target_module = self.ast_module if module is None else module
             self._codegen_trace_push(

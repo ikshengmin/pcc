@@ -20,7 +20,7 @@ def _append_hfa_members(
     members: list[tuple[TypeDesc, int]],
 ) -> bool:
     if value_type.is_fp:
-        member_size = 4 if value_type.width <= 32 else 8
+        member_size = value_type.slot_size
         members.append((value_type, len(members) * member_size))
         return len(members) <= 4
     if value_type.is_array:
@@ -65,11 +65,17 @@ def aggregate_hfa_members(value_type: TypeDesc) -> tuple[tuple[TypeDesc, int], .
     return tuple(members)
 
 
+def fp_register_prefix(width: int) -> str:
+    if width == 128:
+        return "q"
+    return "s" if width <= 32 else "d"
+
+
 def reg_name(value_type: TypeDesc, index: int) -> str:
     if value_type.is_array or value_type.is_struct:
         hfa = aggregate_hfa_members(value_type)
         if len(hfa) == 1:
-            prefix = "s" if hfa[0][0].width <= 32 else "d"
+            prefix = fp_register_prefix(hfa[0][0].width)
             return f"{prefix}{index}"
         chunks = aggregate_reg_chunks(value_type)
         if len(chunks) != 1:
@@ -78,7 +84,7 @@ def reg_name(value_type: TypeDesc, index: int) -> str:
             )
         prefix = "x" if chunks[0] > 4 else "w"
     elif value_type.is_fp:
-        prefix = "s" if value_type.width <= 32 else "d"
+        prefix = fp_register_prefix(value_type.width)
     elif value_type.is_ptr or value_type.width > 32:
         prefix = "x"
     else:
@@ -102,11 +108,6 @@ def aggregate_reg_chunks(value_type: TypeDesc) -> tuple[int, ...]:
         raise BackendUnavailable(
             f"self backend aggregate register helper expected aggregate type, got {value_type.describe()}"
         )
-    if not aggregate_is_gpr_only(value_type):
-        raise BackendUnavailable(
-            "self backend aggregate register ABI currently only supports integer/pointer-only "
-            f"aggregates, got {value_type.describe()}"
-        )
     size = value_type.slot_size
     if 1 <= size <= 8:
         return (size,)
@@ -127,7 +128,7 @@ def abi_value_reg_names(value_type: TypeDesc, start_index: int) -> tuple[str, ..
     if value_type.is_array or value_type.is_struct:
         hfa = aggregate_hfa_members(value_type)
         if hfa:
-            prefix = "s" if hfa[0][0].width <= 32 else "d"
+            prefix = fp_register_prefix(hfa[0][0].width)
             return tuple(f"{prefix}{start_index + index}" for index in range(len(hfa)))
         names: list[str] = []
         for index, chunk_size in enumerate(aggregate_reg_chunks(value_type)):
@@ -232,8 +233,6 @@ def aggregate_fits_reg_abi_indexed(
         return True
     if _indexed_hfa_code(kernel, type_id):
         return True
-    if not _indexed_aggregate_is_gpr_only(kernel, type_id):
-        return False
     size = kernel.type_slot_size(type_id)
     return 1 <= size <= 16
 
@@ -279,14 +278,14 @@ def reg_name_indexed(
     kind_id = kernel.type_kind_id(type_id)
     width = kernel.type_width(type_id)
     if kind_id == TYPE_KIND_FP:
-        return ("s" if width <= 32 else "d") + str(index)
+        return fp_register_prefix(width) + str(index)
     if kind_id == TYPE_KIND_PTR:
         return "x" + str(index)
     if kind_id == TYPE_KIND_INT:
         return ("x" if width > 32 else "w") + str(index)
     hfa_code = _indexed_hfa_code(kernel, type_id)
     if hfa_code:
-        return ("s" if hfa_code // 8 <= 32 else "d") + str(index)
+        return fp_register_prefix(hfa_code // 8) + str(index)
     return ("x" if kernel.type_slot_size(type_id) > 4 else "w") + str(index)
 
 
@@ -298,7 +297,7 @@ def stack_arg_storage_size_indexed(
     kind_id = kernel.type_kind_id(type_id)
     if kind_id == TYPE_KIND_ARRAY or kind_id == TYPE_KIND_STRUCT:
         return _align_to(kernel.type_slot_size(type_id), 8)
-    return 8
+    return max(8, kernel.type_slot_size(type_id))
 
 
 def variadic_stack_arg_storage_size_indexed(
@@ -307,7 +306,7 @@ def variadic_stack_arg_storage_size_indexed(
     kind_id = kernel.type_kind_id(type_id)
     if kind_id == TYPE_KIND_ARRAY or kind_id == TYPE_KIND_STRUCT:
         return _align_to(kernel.type_slot_size(type_id), 8)
-    return 8
+    return max(8, kernel.type_slot_size(type_id))
 
 
 def stack_arg_storage_size(arg_type: TypeDesc) -> int:
@@ -315,16 +314,36 @@ def stack_arg_storage_size(arg_type: TypeDesc) -> int:
         return 8
     if arg_type.is_array or arg_type.is_struct:
         return _align_to(arg_type.slot_size, 8)
-    return 8
+    return max(8, arg_type.slot_size)
 
 
 def variadic_stack_arg_storage_size(arg_type: TypeDesc) -> int:
     if arg_type.is_array or arg_type.is_struct:
         return _align_to(arg_type.slot_size, 8)
-    return 8
+    return max(8, arg_type.slot_size)
 
 
-def assign_abi_arg_regs(arg_types: list[TypeDesc]) -> list[tuple[str, ...]]:
+def stack_arg_alignment(arg_type: TypeDesc) -> int:
+    # An indirect aggregate has already become a pointer at AAPCS64 stage B.
+    return 8 if aggregate_passed_indirect(arg_type) else max(8, min(16, arg_type.align))
+
+
+def stack_arg_alignment_indexed(kernel: IndexedFunctionKernel, type_id: int) -> int:
+    if aggregate_passed_indirect_indexed(kernel, type_id):
+        return 8
+    return max(8, min(16, kernel.type_span(type_id).fourth))
+
+
+def assign_abi_arg_layout(
+    arg_types: list[TypeDesc], linux: bool = False,
+) -> tuple[list[tuple[str, ...]], list[int | None], int, int, int]:
+    """Return register assignments, stack offsets and final NGRN/NSRN/NSAA.
+
+    The cursors cannot be recovered from the assigned registers: spilling a
+    two-register aggregate can exhaust a bank with one register still unused.
+    Linux va_start must use this same allocation state as argument placement.
+    Stack offsets, including the final cursor, are relative to the saved FP.
+    """
     gpr_index = 0
     fpr_index = 0
     assignments: list[tuple[str, ...]] = []
@@ -357,26 +376,42 @@ def assign_abi_arg_regs(arg_types: list[TypeDesc]) -> list[tuple[str, ...]]:
                 assignments.append((f"x{gpr_index}",))
                 gpr_index += 1
             continue
+        if linux and arg_type.align >= 16:
+            gpr_index = _align_to(gpr_index, 2)
         regs = abi_value_reg_names(arg_type, gpr_index)
         if gpr_index + len(regs) > 8:
+            if linux:
+                gpr_index = 8
             assignments.append(())
         else:
             gpr_index += len(regs)
             assignments.append(regs)
-    return assignments
+    offsets = stack_arg_offsets(arg_types, assignments, linux=linux)
+    next_stack = 16
+    for arg_type, offset in zip(arg_types, offsets):
+        if offset is not None:
+            next_stack = offset + stack_arg_storage_size(arg_type)
+    return assignments, offsets, gpr_index, fpr_index, next_stack
+
+
+def assign_abi_arg_regs(arg_types: list[TypeDesc], linux: bool = False) -> list[tuple[str, ...]]:
+    return assign_abi_arg_layout(arg_types, linux=linux)[0]
 
 
 def stack_arg_offsets(
     arg_types: list[TypeDesc],
     assignments: list[tuple[str, ...]] | None = None,
+    linux: bool = False,
 ) -> list[int | None]:
-    regs = assignments if assignments is not None else assign_abi_arg_regs(arg_types)
+    regs = assignments if assignments is not None else assign_abi_arg_regs(arg_types, linux=linux)
     next_offset = 16
     offsets: list[int | None] = []
     for arg_type, assigned_regs in zip(arg_types, regs):
         if arg_type.is_void or assigned_regs:
             offsets.append(None)
             continue
+        if linux:
+            next_offset = _align_to(next_offset, stack_arg_alignment(arg_type))
         offsets.append(next_offset)
         next_offset += stack_arg_storage_size(arg_type)
     return offsets

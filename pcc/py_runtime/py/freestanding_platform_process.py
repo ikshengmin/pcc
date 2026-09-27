@@ -3,6 +3,7 @@
 from pcc import i64
 from pcc.extern import c_abi_export
 from pcc.unsafe import (
+    target_sys_platform,
     access,
     cstr,
     free,
@@ -75,23 +76,25 @@ def _process_copy_cstr(value, length: i64):
 
 @c_abi_export("pcc_platform_process_find_path")
 def _process_find_path(envp):
+    windows: i64 = 1 if load_i8(target_sys_platform(), 0) == 119 else 0
+    default = cstr(".") if windows else cstr("/usr/bin:/bin")
     if ptr_is_null(envp):
-        return cstr("/usr/bin:/bin")
+        return default
     index: i64 = 0
     while index < 1048576:
         entry = load_ptr(envp, index * 8)
         if ptr_is_null(entry):
             break
         if (
-            load_i8(entry, 0) == 80
-            and load_i8(entry, 1) == 65
-            and load_i8(entry, 2) == 84
-            and load_i8(entry, 3) == 72
+            (load_i8(entry, 0) & (223 if windows else 255)) == 80
+            and (load_i8(entry, 1) & (223 if windows else 255)) == 65
+            and (load_i8(entry, 2) & (223 if windows else 255)) == 84
+            and (load_i8(entry, 3) & (223 if windows else 255)) == 72
             and load_i8(entry, 4) == 61
         ):
             return ptr_add(entry, 5)
         index = index + 1
-    return cstr("/usr/bin:/bin")
+    return default
 
 
 @c_abi_export("pcc_platform_process_resolve")
@@ -102,9 +105,11 @@ def _process_resolve(argv, envp):
     name_len = _process_cstr_len(name, 1048576)
     if name_len <= 0:
         return null()
+    windows: i64 = 1 if load_i8(target_sys_platform(), 0) == 119 else 0
+    delimiter: i64 = 59 if windows else 58
     offset: i64 = 0
     while offset < name_len:
-        if load_i8(name, offset) == 47:
+        if load_i8(name, offset) == 47 or (windows and load_i8(name, offset) == 92):
             return _process_copy_cstr(name, name_len)
         offset = offset + 1
 
@@ -112,13 +117,13 @@ def _process_resolve(argv, envp):
     search_len = _process_cstr_len(search, 1048576)
     if search_len < 0 or search_len + name_len + 3 > 2097152:
         return null()
-    candidate = malloc(search_len + name_len + 3)
+    candidate = malloc(search_len + name_len + 7)
     if ptr_is_null(candidate):
         return candidate
     start: i64 = 0
     while start <= search_len:
         end = start
-        while end < search_len and load_i8(search, end) != 58:
+        while end < search_len and load_i8(search, end) != delimiter:
             end = end + 1
         position: i64 = 0
         if end == start:
@@ -139,6 +144,14 @@ def _process_resolve(argv, envp):
             name_offset = name_offset + 1
         if access(candidate, 1) == 0:
             return candidate
+        if windows:
+            suffix = cstr(".exe")
+            extra: i64 = 0
+            while extra < 5:
+                store_i8(candidate, position + name_len + extra, load_i8(suffix, extra))
+                extra = extra + 1
+            if access(candidate, 1) == 0:
+                return candidate
         if end >= search_len:
             break
         start = end + 1

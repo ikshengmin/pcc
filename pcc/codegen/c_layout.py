@@ -46,7 +46,18 @@ class BitFieldRef:
 
 
 def is_floating_ir_type(ir_type) -> bool:
-    return isinstance(ir_type, (ir.HalfType, ir.FloatType, ir.DoubleType))
+    return isinstance(ir_type, (ir.HalfType, ir.FloatType, ir.DoubleType)) or str(ir_type) in ("x86_fp80", "fp128")
+
+
+def floating_ir_width(ir_type):
+    """Semantic format width; x87's 80 value bits occupy 16 ABI bytes."""
+    spelling = str(ir_type)
+    if spelling == "half": return 16
+    if spelling == "float": return 32
+    if spelling == "double": return 64
+    if spelling == "x86_fp80": return 80
+    if spelling == "fp128": return 128
+    raise ValueError("not a floating type: " + spelling)
 
 
 def is_struct_ir_type(ir_type) -> bool:
@@ -67,6 +78,8 @@ def ir_type_align(ir_type):
         return floating_scalar_layout(32).alignment
     if isinstance(ir_type, ir.DoubleType):
         return floating_scalar_layout(64).alignment
+    if str(ir_type) in ("x86_fp80", "fp128"):
+        return 16
     if isinstance(ir_type, ir.PointerType):
         return pointer_scalar_layout().alignment
     if isinstance(ir_type, ir.ArrayType):
@@ -90,6 +103,8 @@ def ir_type_size(ir_type):
         return floating_scalar_layout(32).size
     if isinstance(ir_type, ir.DoubleType):
         return floating_scalar_layout(64).size
+    if str(ir_type) in ("x86_fp80", "fp128"):
+        return 16
     if isinstance(ir_type, ir.PointerType):
         return pointer_scalar_layout().size
     if isinstance(ir_type, ir.ArrayType):

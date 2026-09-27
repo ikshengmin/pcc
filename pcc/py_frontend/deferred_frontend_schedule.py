@@ -12,6 +12,9 @@ from .pipeline_exports import (
     _indexed_native_export_rows,
 )
 from .pipeline_pass_config import parallel_cpu_budget
+from .pipeline_frontend_workers import (
+    compiled_native_auto_jobs, compiled_native_worker_budget,
+)
 from .worker_process_pool import (
     run_chained_worker_processes,
     run_weighted_worker_processes,
@@ -165,12 +168,18 @@ def _manifest_module_name(lines, index):
 def run_pco_commands(commands, sidecars, oversized, safe_jobs):
     if len(commands) != len(sidecars):
         raise ValueError("PCO command/sidecar inventory mismatch")
+    if not commands:
+        return
     raw = str(os.environ.get("PCC_PY_FRONTEND_JOBS", "") or "").strip().lower()
     budget_raw = str(os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", "") or "")
     budget = int(budget_raw) if budget_raw.isdigit() else 0
     if raw not in ("auto", "on", "true", "yes") or budget <= 0:
         run_worker_processes(commands[:oversized], 1)
-        run_worker_processes(commands[oversized:], safe_jobs)
+        safe_commands = commands[oversized:]
+        if safe_commands:
+            if budget > 0:
+                safe_jobs = compiled_native_auto_jobs(safe_jobs)
+            run_worker_processes(safe_commands, safe_jobs)
         return
     sizes = [os.path.getsize(path) for path in sidecars]
     raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
@@ -181,29 +190,50 @@ def run_pco_commands(commands, sidecars, oversized, safe_jobs):
         [commands[index] for index in order],
         [floors[index] for index in order],
         min(parallel_cpu_budget(), _MAX_WIDTH),
-        max(1, budget - _DRIVER_RESERVE),
+        compiled_native_worker_budget(budget, _DRIVER_RESERVE),
     )
 
 
-def _budgeted_width_and_budget():
+def _requested_width_and_budget():
     """(width, budget) for the weighted pools, or None without auto width."""
     raw = str(os.environ.get("PCC_PY_FRONTEND_JOBS", "") or "").strip().lower()
     budget_raw = str(os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", "") or "")
     budget = int(budget_raw) if budget_raw.isdigit() else 0
     if raw not in ("auto", "on", "true", "yes") or budget <= 0:
         return None
-    return min(parallel_cpu_budget(), _MAX_WIDTH), max(1, budget - _DRIVER_RESERVE)
+    return min(parallel_cpu_budget(), _MAX_WIDTH), budget
+
+
+
+def _budgeted_width_and_budget():
+    requested = _requested_width_and_budget()
+    if requested is None:
+        return None
+    # RSS belongs to this lightweight execution driver, never the departed
+    # frontend coordinator whose plan we consume.
+    width, budget = requested
+    return width, compiled_native_worker_budget(budget, _DRIVER_RESERVE)
 
 
 def run_frontend_commands(commands, manifests, oversized, safe_jobs):
-    pool = _budgeted_width_and_budget()
+    if len(commands) != len(manifests):
+        raise ValueError("frontend command/manifest inventory mismatch")
+    if not commands:
+        return
+    pool = _requested_width_and_budget()
     if pool is None:
         # Explicit worker counts and callers without a resource budget retain
         # the plan's conservative policy. Never infer spare physical memory.
         run_worker_processes(commands[:oversized], 1)
-        run_worker_processes(commands[oversized:], safe_jobs)
+        safe_commands = commands[oversized:]
+        if safe_commands:
+            budget_raw = str(os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", "") or "")
+            if budget_raw.isdigit() and int(budget_raw) > 0:
+                safe_jobs = compiled_native_auto_jobs(safe_jobs)
+            run_worker_processes(safe_commands, safe_jobs)
         return
     floors, order = _frontend_floors_and_order(commands, manifests)
+    pool = _budgeted_width_and_budget()
     run_weighted_worker_processes(
         [commands[index] for index in order],
         [floors[index] for index in order],
@@ -226,13 +256,16 @@ def run_frontend_pco_commands(
     count = len(frontend_commands)
     if len(manifests) != count or len(pco_commands) != count or len(sidecars) != count:
         raise ValueError("frontend/PCO command inventory mismatch")
-    pool = _budgeted_width_and_budget()
+    if count == 0:
+        return
+    pool = _requested_width_and_budget()
     chain = str(os.environ.get("PCC_FRONTEND_PCO_CHAIN", "1") or "1").strip().lower()
     if pool is None or chain in ("0", "off", "no", "false"):
         run_frontend_commands(frontend_commands, manifests, oversized, safe_jobs)
         run_pco_commands(pco_commands, sidecars, oversized, safe_jobs)
         return
     floors, order = _frontend_floors_and_order(frontend_commands, manifests)
+    pool = _budgeted_width_and_budget()
     raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
     if raw_gc == "0":
         pco_floor = (_PCO_BASE, _PCO_PER_SIDECAR_MB, _PCO_CAP)

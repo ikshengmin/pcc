@@ -1,0 +1,66 @@
+{
+  "schema": "pcc.summary-worker-memory-samples.v1",
+  "compiler_sha256": "d38ebfd4229c7e39072a3af618506241d148d5bf93241a5b817cc3edf62fc948",
+  "sample_interval_ms": 250,
+  "receipt": "/tmp/pcc-summary-budget-probe-2w6nb7tr/five-gc-summary-peaks.json",
+  "receipt_sha256": "4a46011b4448bc8777c0026ff3912aa300a0a7ef1b8ab8e17ec39a3c615bcb46",
+  "limits": "Observed sampled peaks, not absolute maxima; one complete native compiler corpus and fixed effect-export size. Reservations include 25 percent plus 128 MiB margin; other inputs remain estimates.",
+  "samples": [
+    {
+      "collector": 0,
+      "ast_bytes": 26024154,
+      "export_bytes": 2381604,
+      "observed_peak_bytes": 677199872,
+      "sample_count": 9,
+      "case": "maximum_batch_sum"
+    },
+    {
+      "collector": 1,
+      "ast_bytes": 26024154,
+      "export_bytes": 2381604,
+      "observed_peak_bytes": 1252589568,
+      "sample_count": 25,
+      "case": "maximum_batch_sum"
+    },
+    {
+      "collector": 2,
+      "ast_bytes": 26024154,
+      "export_bytes": 2381604,
+      "observed_peak_bytes": 1252556800,
+      "sample_count": 25,
+      "case": "maximum_batch_sum"
+    },
+    {
+      "collector": 3,
+      "ast_bytes": 26024154,
+      "export_bytes": 2381604,
+      "observed_peak_bytes": 857636864,
+      "sample_count": 28,
+      "case": "maximum_batch_sum"
+    },
+    {
+      "collector": 4,
+      "ast_bytes": 26024154,
+      "export_bytes": 2381604,
+      "observed_peak_bytes": 1366327296,
+      "sample_count": 42,
+      "case": "maximum_batch_sum"
+    },
+    {
+      "collector": 1,
+      "ast_bytes": 20348450,
+      "export_bytes": 2381604,
+      "observed_peak_bytes": 947159040,
+      "sample_count": 22,
+      "case": "maximum_single_ast"
+    },
+    {
+      "collector": 1,
+      "ast_bytes": 471080,
+      "export_bytes": 2381604,
+      "observed_peak_bytes": 172851200,
+      "sample_count": 4,
+      "case": "minimum_batch_sum"
+    }
+  ]
+}

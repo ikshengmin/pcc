@@ -268,7 +268,7 @@ def pcc_gc_telemetry(metric: i64) -> i64:
     if metric == 118:
         return load_i64(global_addr("pcc_allocator_double_frees"), 0)
     if metric == 6:
-        return load_i32(global_addr("pcc_gc_debt_bytes"), 0)
+        return load_i64(global_addr("pcc_gc_debt_bytes"), 0)
     if metric == 7:
         return load_i32(global_addr("pcc_gc_metric_max_pause_us"), 0)
     if metric == 32:

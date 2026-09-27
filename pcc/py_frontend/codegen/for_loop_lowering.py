@@ -288,66 +288,15 @@ def _for_loop_dict_items_object(iter_expr):
 
 
 def _for_target_error_cleanup(host, target_ident: str, alloca: ir.Value) -> None:
-    """Make a replaceable owned for-target safe on the shared error exit.
-
-    Most for-targets are discovered while lowering the body, after an earlier
-    expression may already have materialised ``err.exit``.  Record the target
-    separately from exact-int locals and retro-patch a branchless release at
-    the *start* of an existing error block, before any frame-leave calls.
-    """
+    """Use the same late owned-slot error cleanup as ordinary locals."""
     if not hasattr(host, "_for_target_owned_names"):
         host._for_target_owned_names = set()
     host._for_target_owned_names.add(target_ident)
-    fn = host.current_function
-    if fn is None:
+    if host.current_function is None:
         return
-    if not hasattr(host, "_fn_err_exit_for_target_slots"):
-        host._fn_err_exit_for_target_slots = {}
-    patched = host._fn_err_exit_for_target_slots.setdefault(fn.name, [])
-    for done in patched:
-        if done is alloca:
-            return
-    err_bb = host._fn_err_exit_blocks.get(fn.name)
-    if err_bb is None:
-        # Creation sees _for_target_owned_names and emits the same cleanup;
-        # it also back-patches every already-registered root leave.
-        host._ensure_fn_err_exit()
-        patched.append(alloca)
-        return
-    save_block = host.builder._block
-    if err_bb._instrs:
-        host.builder.position_before(err_bb._instrs[0])
-    else:
-        host.builder.position_at_end(err_bb)
-    owned_flag = host._ensure_owned_local_flag(target_ident, alloca)
-    is_owned = host.builder.load(
-        owned_flag,
-        name=host._fresh(target_ident + ".for.err.owned"),
-    )
-    current = host.builder.call(
-        host.runtime["pcc_gc_load_ptr"],
-        [
-            ir.Constant(_CSTR, None),
-            host._as_gc_ptr(
-                alloca,
-                name=host._fresh(target_ident + ".for.err.gc.slot"),
-            ),
-        ],
-        name=host._fresh(target_ident + ".for.err.current"),
-    )
-    release_value = host.builder.select(
-        is_owned,
-        current,
-        ir.Constant(_CSTR, None),
-        name=host._fresh(target_ident + ".for.err.release.value"),
-    )
-    host._gc_release(
-        release_value,
-        host._release_context_label("for-target:" + target_ident),
-    )
-    host.builder.store(ir.Constant(_I1, 0), owned_flag)
-    patched.append(alloca)
-    host.builder.position_at_end(save_block)
+    host._ensure_owned_local_flag(target_ident, alloca)
+    host._ensure_fn_err_exit()
+    host._patch_fn_err_exit_gc_root_leave(target_ident, alloca)
 
 
 def _for_prepare_owned_object_target(host, target_ident: str, target_ty: Type):
@@ -1492,7 +1441,7 @@ class ForLoopLoweringMixin:
                 _CSTR,
             )
             self.builder.call(
-                self.runtime["pcc_gc_store_root"],
+                self.runtime["pcc_gc_store_root_take"],
                 [iter_slot, iterator],
             )
             self._owned_local_names.add(owned_iter_name)
@@ -1594,10 +1543,6 @@ class ForLoopLoweringMixin:
                 owned_iter_name,
                 iter_slot,
             )
-            self.builder.call(
-                self.runtime["pcc_gc_store_root"],
-                [iter_slot, ir.Constant(_CSTR, None)],
-            )
         err_target = getattr(self, "_try_err_block", None)
         if err_target is None:
             err_target = self._ensure_fn_err_exit()
@@ -1608,10 +1553,6 @@ class ForLoopLoweringMixin:
             self._emit_release_owned_local_if_flagged(
                 owned_iter_name,
                 iter_slot,
-            )
-            self.builder.call(
-                self.runtime["pcc_gc_store_root"],
-                [iter_slot, ir.Constant(_CSTR, None)],
             )
 
     def _emit_for_str_chars(self, stmt: For, iter_val: ir.Value) -> None:

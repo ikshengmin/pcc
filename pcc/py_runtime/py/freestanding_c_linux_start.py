@@ -1,4 +1,4 @@
-"""Linux x86_64 process entry for C programs using pcc-Python libc.
+"""Linux x86-64/AArch64 process entry for programs using pcc-Python libc.
 
 The self backend receives the kernel's original stack pointer, reconstructs
 the SysV ``argc``/``argv``/``envp`` values, initializes pcc's owned environment
@@ -10,6 +10,8 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int, c_ptr, extern
 from pcc.unsafe import (
     define_global_null_ptr_array,
+    define_global_i64_array,
+    store_i64,
     global_addr,
     int_to_ptr,
     load_i8,
@@ -22,20 +24,20 @@ from pcc.unsafe import (
     ptr_is_null,
     store_i8,
     store_ptr,
-    syscall6,
+    page_alloc,
+    ptr_to_int,
+    target_platform_machine,
+    linux_set_thread_pointer,
+    call_void_ptr0,
+    ptr_diff,
 )
 
 __pcc_freestanding__ = True
 
 
-# Linux x86_64 uses ELF TLS variant II: compiler-emitted local-exec accesses
-# load the thread pointer from ``%fs:0`` and address TLS at negative offsets
-# from it.  A no-libc ``_start`` has no loader to create that initial TCB, so
-# reserve one compiler-owned block, populate it from the final ELF's PT_TLS,
-# and install its final word as the self pointer before any runtime call.  The
-# boundary is deliberately finite: the image may occupy at most 4,088 bytes
-# and require no more than pointer alignment.
-define_global_null_ptr_array("pcc_linux_initial_tls_reserve", 512)
+# PT_TLS metadata shared with the owned thread substrate. Both initial and
+# subsequently cloned threads copy the same template into their private TLS.
+define_global_i64_array("pcc_linux_tls_image", 0, 0, 0, 1)
 
 
 c_main = extern("main", (c_int, c_ptr, c_ptr), c_int)
@@ -108,22 +110,48 @@ def pcc_linux_initial_tls_setup(initial_stack: c_ptr) -> i64:
             tls_alignment = load_i64(program_header, 48)
         ph_index = ph_index + 1
 
-    rounded_size: i64 = 0
-    if tls_found != 0:
-        if tls_file_size < 0 or tls_memory_size < 0:
-            return -1
-        if tls_file_size > tls_memory_size or tls_memory_size > 4088:
-            return -1
-        if tls_alignment <= 0 or tls_alignment > 8:
-            return -1
-        if (tls_alignment & (tls_alignment - 1)) != 0:
-            return -1
-        rounded_size = (tls_memory_size + tls_alignment - 1) & (0 - tls_alignment)
-        if rounded_size > 4088:
-            return -1
+    metadata = global_addr("pcc_linux_tls_image")
+    store_ptr(metadata, 0, tls_template)
+    store_i64(metadata, 8, tls_file_size)
+    store_i64(metadata, 16, tls_memory_size)
+    store_i64(metadata, 24, tls_alignment)
+    thread_pointer = pcc_linux_allocate_tls(null())
+    if ptr_is_null(thread_pointer):
+        return -1
+    return linux_set_thread_pointer(thread_pointer)
 
-    thread_pointer = ptr_add(global_addr("pcc_linux_initial_tls_reserve"), 4088)
-    tls_begin = ptr_add(thread_pointer, 0 - rounded_size)
+
+@c_abi_export("pcc_linux_allocate_tls")
+def pcc_linux_allocate_tls(allocation_out: c_ptr) -> c_ptr:
+    metadata = global_addr("pcc_linux_tls_image")
+    tls_template = load_ptr(metadata, 0)
+    tls_file_size: i64 = load_i64(metadata, 8)
+    tls_memory_size: i64 = load_i64(metadata, 16)
+    tls_alignment: i64 = load_i64(metadata, 24)
+    if tls_file_size < 0 or tls_memory_size < 0 or tls_file_size > tls_memory_size:
+        return null()
+    if tls_alignment <= 0 or (tls_alignment & (tls_alignment - 1)) != 0:
+        return null()
+    if tls_alignment > 1048576 or tls_memory_size > 1073741824:
+        return null()
+    alignment: i64 = tls_alignment
+    if alignment < 16:
+        alignment = 16
+    rounded_size: i64 = (tls_memory_size + tls_alignment - 1) & (0 - tls_alignment)
+    allocation_size: i64 = rounded_size + alignment * 2 + 32
+    reserve = page_alloc(allocation_size)
+    if ptr_is_null(reserve):
+        return null()
+    base: i64 = (ptr_to_int(reserve) + alignment - 1) & (0 - alignment)
+    machine = target_platform_machine()
+    if load_i8(machine, 0) == 97:  # arm64/aarch64: variant I, 16-byte TCB
+        thread_pointer = int_to_ptr(base)
+        gap: i64 = (16 + tls_alignment - 1) & (0 - tls_alignment)
+        tls_begin = ptr_add(thread_pointer, gap)
+    else:  # x86-64: variant II, template immediately below TP
+        tp: i64 = (base + rounded_size + alignment - 1) & (0 - alignment)
+        thread_pointer = int_to_ptr(tp)
+        tls_begin = ptr_add(thread_pointer, 0 - rounded_size)
     zero_index: i64 = 0
     while zero_index < rounded_size:
         store_i8(tls_begin, zero_index, 0)
@@ -137,8 +165,10 @@ def pcc_linux_initial_tls_setup(initial_stack: c_ptr) -> i64:
         )
         copy_index = copy_index + 1
     store_ptr(thread_pointer, 0, thread_pointer)
-    # SYS_arch_prctl(ARCH_SET_FS, thread_pointer).
-    return syscall6(158, 4098, thread_pointer, 0, 0, 0, 0)
+    if not ptr_is_null(allocation_out):
+        store_ptr(allocation_out, 0, reserve)
+        store_i64(allocation_out, 8, allocation_size)
+    return thread_pointer
 
 
 @c_abi_export("_start")
@@ -154,7 +184,18 @@ def pcc_c_linux_start(initial_stack: c_ptr) -> None:
         argv = ptr_add(initial_stack, 8)
         envp = ptr_add(argv, (argc + 1) * 8)
         if platform_env_init(envp) == 0:
+            initializers = global_addr("__init_array_start")
+            init_count: i64 = ptr_diff(global_addr("__init_array_end"), initializers) // 8
+            index: i64 = 0
+            while index < init_count:
+                call_void_ptr0(load_ptr(initializers, index * 8))
+                index = index + 1
             status = c_main(argc, argv, envp)
+            finalizers = global_addr("__fini_array_start")
+            fini_count: i64 = ptr_diff(global_addr("__fini_array_end"), finalizers) // 8
+            while fini_count > 0:
+                fini_count = fini_count - 1
+                call_void_ptr0(load_ptr(finalizers, fini_count * 8))
         else:
             status: i64 = 70
     process_exit(status)

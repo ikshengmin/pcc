@@ -436,6 +436,20 @@ def poll_readable_pair(fd0: int, fd1: int, timeout_ms: int) -> int:
     _trap("poll_readable_pair")
 
 
+def file_flock(fd: int, operation: int) -> int:
+    """POSIX flock; returns zero or negative errno (EWOULDBLOCK maps to -11)."""
+    _trap("file_flock")
+
+
+def file_lock_region(fd: int, operation: int, offset: int, length: int) -> int:
+    """One Windows region-lock attempt: operation 0 unlocks, 1 locks exclusive.
+
+    Returns zero or negative errno; locks are nonblocking and owned by the
+    opened handle. Other platforms return -ENOSYS.
+    """
+    _trap("file_lock_region")
+
+
 def getpid() -> int:
     _trap("getpid")
 
@@ -551,6 +565,15 @@ def stat_kind(path: Any) -> int:
 def stat_mtime(path: Any) -> float:
     _trap("stat_mtime")
 
+def stat_size(path: Any) -> int:
+    """Return followed-path file size without reading data, or negative errno."""
+    _trap("stat_size")
+
+
+def is_symlink(path: Any) -> int:
+    """Return one for a symlink itself (including dangling links), else zero."""
+    _trap("is_symlink")
+
 
 def target_sys_platform() -> Any:
     _trap("target_sys_platform")
@@ -624,6 +647,35 @@ def atomic_clear(ptr: Any, offset: int, order: str) -> None:
     _trap("atomic_clear")
 
 
+def windows_full_path(path: Any, output: Any, capacity: int) -> Any:
+    """Windows absolute-path ABI; returns null on other platforms."""
+    _trap("windows_full_path")
+
+
+def windows_real_path(path: Any, output: Any, capacity: int) -> Any:
+    """Windows final-path ABI; returns null on other platforms."""
+    _trap("windows_real_path")
+
+
+def directory_open(path: Any) -> Any:
+    """Open an owned directory stream; null denotes failure."""
+    _trap("directory_open")
+
+
+def directory_next(stream: Any) -> Any:
+    """Borrow a UTF-8 entry name until the next stream operation."""
+    _trap("directory_next")
+
+
+def directory_error(stream: Any) -> int:
+    """Return zero at EOF, or the stream's negative errno."""
+    _trap("directory_error")
+
+
+def directory_close(stream: Any) -> int:
+    _trap("directory_close")
+
+
 def syscall6(nr: int, a1: Any, a2: Any, a3: Any, a4: Any, a5: Any, a6: Any) -> int:
     """Raw Linux x86_64 syscall (musl syscall_arch.h ABI); returns raw i64.
 
@@ -631,6 +683,11 @@ def syscall6(nr: int, a1: Any, a2: Any, a3: Any, a4: Any, a5: Any, a6: Any) -> i
     macOS code keeps using named libSystem externs.
     """
     _trap("syscall6")
+
+
+def linux_set_thread_pointer(pointer: Any) -> int:
+    """Install the current thread TLS base using the selected Linux ABI."""
+    _trap("linux_set_thread_pointer")
 
 
 def page_alloc(size: int) -> Any:
@@ -690,6 +747,11 @@ def call_ptr1(fn: Any, arg0: Any) -> Any:
 def call_ptr0(fn: Any) -> Any:
     """Call ``void *(*)(void)``."""
     _trap("call_ptr0")
+
+
+def call_void_i32(fn: Any, argument: int) -> None:
+    """Call a raw void(int32) platform callback."""
+    _trap("call_void_i32")
 
 
 def call_void_ptr0(fn: Any) -> None:
@@ -1112,6 +1174,8 @@ __all__ = [
     "socket_setsockopt",
     "socket_getsockopt",
     "fd_control",
+    "file_flock",
+    "file_lock_region",
     "eventfd_create",
     "socket_send",
     "socket_recv",
@@ -1145,6 +1209,8 @@ __all__ = [
     "access",
     "stat_kind",
     "stat_mtime",
+    "stat_size",
+    "is_symlink",
     "target_sys_platform",
     "target_platform_machine",
     "atomic_load_i32",
@@ -1158,7 +1224,10 @@ __all__ = [
     "atomic_fence",
     "atomic_test_and_set",
     "atomic_clear",
+    "windows_full_path", "windows_real_path",
+    "directory_open", "directory_next", "directory_error", "directory_close",
     "syscall6",
+    "linux_set_thread_pointer",
     "page_alloc",
     "page_free",
     "va_start",
@@ -1171,6 +1240,7 @@ __all__ = [
     "va_end",
     "call_ptr1",
     "call_ptr0",
+    "call_void_i32",
     "call_void_ptr0",
     "call_void_ptr1",
     "call_void_ptr2",

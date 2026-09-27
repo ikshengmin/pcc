@@ -12,6 +12,17 @@ def _worker_failure(message: str) -> Exception:
     return Exception(message)
 
 
+def _concrete_direct_indexed_target(module, host_target: str):
+    """Bind only a placeholder capture to the selected host ABI."""
+    if module.triple != "unknown-unknown-unknown":
+        return module
+    if host_target == "unknown-unknown-unknown":
+        raise _worker_failure("direct indexed module has no supported host target")
+    from pcc.backend.self_backend_ir import ParsedModule
+
+    return ParsedModule(host_target, module.globals_, module.functions)
+
+
 def _direct_owned_pass_names(module_name: str) -> list[str]:
     """Select the same owned tier as ordinary self compilation."""
     from .codegen.debug_info_lowering import debug_info_requested
@@ -566,6 +577,9 @@ def run_codegen_worker(
                         emit_aarch64_darwin_indexed_transport,
                     )
 
+                    from pcc.backend.target_objects import emit_indexed_assembly, encode_assembly_object
+                    from pcc.backend.self_backend_target_match import is_aarch64_darwin_triple
+                    from pcc.backend.self_backend_dispatch import emit_self_asm
                     if validate_direct or emit_direct:
                         if direct_passes:
                             from pcc.backend.self_backend_parse import parse_self_backend_module
@@ -580,6 +594,16 @@ def run_codegen_worker(
                             raise _worker_failure(
                                 "direct indexed kernel output requested without capture"
                             )
+                        if direct_module.triple == "unknown-unknown-unknown":
+                            # The capture precedes the text path's host-target
+                            # normalization. Resolve only its placeholder;
+                            # an explicit module target remains authoritative.
+                            from .pipeline_targets import host_target_triple
+
+                            direct_module = _concrete_direct_indexed_target(
+                                direct_module, host_target_triple(),
+                            )
+                        direct_target = direct_module.triple
                         from pcc.llvm_capi.direct_indexed_kernel import (
                             direct_indexed_module_first_libpython_edge,
                         )
@@ -636,6 +660,7 @@ def run_codegen_worker(
                             and native_object_output
                             and not validate_direct
                             and not emit_text_control
+                            and is_aarch64_darwin_triple(direct_target)
                         )
                         if direct_lines_output:
                             direct_transport = (
@@ -666,7 +691,7 @@ def run_codegen_worker(
                                     + "\n"
                                 )
                         elif not indexed_sidecar_output:
-                            direct_asm = emit_aarch64_darwin_indexed_module(
+                            direct_asm = emit_indexed_assembly(
                                 direct_module,
                                 optimize=False,
                             )
@@ -725,26 +750,33 @@ def run_codegen_worker(
                                     ir_dir,
                                     "module_" + str(index) + ".direct.pco",
                                 )
-                                if direct_lines_output:
-                                    sections, undefined = direct_transport.assemble_sections()
-                                    if direct_transport.encoded_line_records is not None:
-                                        direct_transport.encoded_line_records.close()
-                                    del direct_transport
+                                if not is_aarch64_darwin_triple(direct_target):
+                                    encoded = encode_assembly_object(direct_asm, direct_target)
+                                    if not validate_direct:
+                                        direct_asm = ""
                                 else:
-                                    sections, undefined = assemble_file(direct_asm)
-                                # Parsing is complete. Drop the assembly text,
-                                # then validate and encode the Section graph
-                                # directly. The codec revalidates final packed
-                                # bytes without materializing a duplicate
-                                # NativeSymbol/NativeSection/NativeRelocation
-                                # graph.
-                                direct_asm = ""
-                                encoded = encode_native_object_from_sections(
-                                    sections,
-                                    undefined=undefined,
-                                )
-                                del sections
-                                del undefined
+                                    if direct_lines_output:
+                                        sections, undefined = direct_transport.assemble_sections()
+                                        if direct_transport.encoded_line_records is not None:
+                                            direct_transport.encoded_line_records.close()
+                                        del direct_transport
+                                    else:
+                                        sections, undefined = assemble_file(direct_asm)
+                                    # Parsing is complete. Unless the text oracle
+                                    # still needs it, drop the assembly text before
+                                    # validating and encoding the Section graph
+                                    # directly. The codec revalidates final packed
+                                    # bytes without materializing a duplicate
+                                    # NativeSymbol/NativeSection/NativeRelocation
+                                    # graph.
+                                    if not validate_direct:
+                                        direct_asm = ""
+                                    encoded = encode_native_object_from_sections(
+                                        sections,
+                                        undefined=undefined,
+                                    )
+                                    del sections
+                                    del undefined
                                 with open(direct_path, "wb") as stream:
                                     stream.write(encoded)
                                 direct_marker = "PCO"
@@ -762,10 +794,12 @@ def run_codegen_worker(
                         text_emit_started = (
                             time.monotonic() if worker_timing else 0.0
                         )
-                        text_asm = emit_aarch64_darwin_asm(
-                            ir_text,
-                            optimize=False,
-                        )
+                        from pcc.backend.self_backend_parse import parse_self_backend_target_triple
+                        text_target = parse_self_backend_target_triple(ir_text)
+                        if is_aarch64_darwin_triple(text_target) or text_target == "unknown-unknown-unknown":
+                            text_asm = emit_aarch64_darwin_asm(ir_text, optimize=False)
+                        else:
+                            text_asm = emit_self_asm(ir_text)
                         if worker_timing:
                             sys.stderr.write(
                                 "pcc text oracle emit module="
@@ -793,6 +827,10 @@ def run_codegen_worker(
                             raise _worker_failure(
                                 "direct indexed kernel assembly differs from text oracle"
                             )
+                        # The native object is already encoded. Validation was
+                        # the final consumer of its assembly text.
+                        if emit_direct and native_object_output:
+                            direct_asm = ""
                 if worker_timing:
                     codegen_ms = int((time.monotonic() - codegen_started) * 1000)
             except Exception as exc:

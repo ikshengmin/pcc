@@ -205,7 +205,7 @@ class CustomBuildHook(BuildHookInterface):
                 )
             self.app.display_info(f"reusing verified native pcc1: {out_binary}")
         else:
-            out_binary = runtime_dir / "_native" / "pcc1"
+            out_binary = runtime_dir / "_native" / ("pcc1.exe" if os.name == "nt" else "pcc1")
             bin_backend = backend
             ok = self._run_pcc_self_compile(root, out_binary, bin_backend)
             if not ok:
@@ -215,7 +215,7 @@ class CustomBuildHook(BuildHookInterface):
                     "above, or set PCC_BUILD_SKIP=1 for a dev iteration only."
                 )
 
-        build_data.setdefault("shared_scripts", {})[str(out_binary)] = "pcc1"
+        build_data.setdefault("shared_scripts", {})[str(out_binary)] = "pcc1.exe" if os.name == "nt" else "pcc1"
         build_data["pure_python"] = False
         build_data["infer_tag"] = True
         self.app.display_info("bundled native pcc1 binary at .data/scripts/pcc1")
@@ -441,6 +441,16 @@ class CustomBuildHook(BuildHookInterface):
         Returns True iff make exits 0. The caller reports failure without
         switching the selected backend or publishing an incomplete wheel.
         """
+        if backend == "self" and (sys.platform.startswith("linux") or sys.platform == "win32"):
+            command = [sys.executable, "-m", "pcc.py_frontend.owned_runtime_build",
+                       "--runtime-dir", str(runtime_dir), "--output", str(runtime_dir / target)]
+            try:
+                subprocess.run(command, cwd=self.root, check=True, capture_output=True,
+                               text=True, timeout=2400)
+                return True
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                self.app.display_warning("owned runtime build failed: " + str(exc))
+                return False
         env = dict(os.environ)
         # Inject the backend flag directly into the PCC command so
         # the Makefile doesn't need to learn a new variable. The

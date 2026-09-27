@@ -16,6 +16,7 @@ from .pipeline_frontend_workers import (
     compiled_native_auto_jobs as _compiled_native_auto_jobs,
     compiled_native_export_jobs as _compiled_native_export_jobs,
     compiled_native_summary_jobs as _compiled_native_summary_jobs,
+    compiled_native_summary_plan as _compiled_native_summary_plan,
     numeric_jobs_override as _numeric_jobs_override,
     split_codegen_chunks_by_source_size as _split_codegen_chunks_by_source_size,
     worker_tree_budget_bytes as _worker_tree_budget_bytes,
@@ -27,6 +28,34 @@ _MODULE_IR_ARTIFACT_SCHEMA = "pcc.python-module-ir-action.v1"
 _DEFERRED_CODEGEN_SCHEMA = "pcc.frontend-codegen-plan.v2"
 _DEFERRED_INDEXED_PROCESS_SPLIT = "pidx-pco-v1"
 _DEFERRED_CODEGEN_RESULT = "PCC_DEFERRED_FRONTEND_CODEGEN"
+
+
+def _copy_frontend_artifact_file(source: str, destination: str) -> None:
+    """Copy generated compiler inputs without a shell or external utility."""
+    with open(source, "rb") as reader:
+        with open(destination, "wb") as writer:
+            while True:
+                chunk = reader.read(1048576)
+                if not chunk:
+                    break
+                offset = 0
+                while offset < len(chunk):
+                    written = writer.write(chunk[offset:])
+                    if written <= 0:
+                        raise OSError("short write copying frontend artifact: " + destination)
+                    offset += written
+
+
+def _copy_frontend_artifact_tree(source: str, destination: str) -> None:
+    """Copy the compiler-created AST tree into its persistent plan directory."""
+    os.makedirs(destination, exist_ok=False)
+    for name in sorted(os.listdir(source)):
+        child_source = os.path.join(source, name)
+        child_destination = os.path.join(destination, name)
+        if os.path.isdir(child_source):
+            _copy_frontend_artifact_tree(child_source, child_destination)
+        else:
+            _copy_frontend_artifact_file(child_source, child_destination)
 
 
 def _write_deferred_codegen_plan(
@@ -201,6 +230,14 @@ def _load_noop_action_result(action_cache_plan, src_paths, module_names):
         return None
 
 
+def _summary_input_size_bytes(path: str) -> int:
+    # The older getsize provider reads the entire file. These are owned regular
+    # artifacts; seek/tell keeps observation memory independent of file size.
+    with open(path, "rb") as stream:
+        stream.seek(0, 2)
+        return int(stream.tell())
+
+
 def _build_vthread_effect_summaries(
     tmp: str,
     src_paths,
@@ -224,16 +261,29 @@ def _build_vthread_effect_summaries(
     pipeline_error,
 ) -> tuple[list[str], int]:
     summary_dir = os.path.join(tmp, "summaries")
-    subprocess.run(["mkdir", "-p", summary_dir], check=True)
+    os.makedirs(summary_dir, exist_ok=True)
     result_paths: list[str] = []
     commands: list[str] = []
     assignments: list[list[int]] = []
-    index = 0
-    while index < len(module_names):
-        # Reuse process startup and the common export graph. The worker owns
-        # only one module AST at a time; cap the process lifetime at eight
-        # modules rather than retaining the complete source closure.
-        assigned = list(range(index, min(index + 8, len(module_names))))
+    summary_parallel = _summary_worker_parallelism(max_parallel, worker_prefix)
+    summary_chunks = [list(range(index, min(index + 8, len(module_names))))
+                      for index in range(0, len(module_names), 8)]
+    selected_worker_environment = ""
+    if len(worker_prefix) == 1:
+        ast_sizes = [
+            _summary_input_size_bytes(os.path.join(ast_dir, "module_" + str(index) + ".json"))
+            for index in range(len(module_names))
+        ]
+        summary_chunks, summary_parallel, admission = _compiled_native_summary_plan(
+            summary_parallel, ast_sizes, _summary_input_size_bytes(exports_path),
+        )
+        selected_worker_environment = str(admission["worker_env"])
+        with open(os.path.join(tmp, "summary-admission.json"), "w", encoding="utf-8") as stream:
+            json.dump(admission, stream, sort_keys=True)
+    for assigned in summary_chunks:
+        # Summaries are independent per module; splitting a batch changes only
+        # process lifetime, not module order, effect wires, or the fixed point.
+        index = assigned[0]
         manifest_path = os.path.join(tmp, "summary_" + str(index) + ".manifest")
         result_path = os.path.join(tmp, "summary_" + str(index) + ".tsv")
         write_manifest(
@@ -255,13 +305,12 @@ def _build_vthread_effect_summaries(
         command_parts = [shell_quote_arg(part) for part in worker_prefix]
         command_parts.append(shell_quote_arg(worker_arg))
         command_parts.append(shell_quote_arg(manifest_path))
-        commands.append(
-            worker_env_prefix() + " " + join_strings(command_parts, " ")
-        )
+        command_environment = worker_env_prefix()
+        if selected_worker_environment:
+            command_environment += " " + selected_worker_environment
+        commands.append(command_environment + " " + join_strings(command_parts, " "))
         result_paths.append(result_path)
         assignments.append(assigned)
-        index += len(assigned)
-    summary_parallel = _summary_worker_parallelism(max_parallel, worker_prefix)
     run_worker_commands(commands, max_parallel=summary_parallel)
     summary_by_index: list[Optional[str]] = [None for _name in module_names]
     for result_index, result_path in enumerate(result_paths):
@@ -310,7 +359,7 @@ def _build_vthread_effect_summaries(
 def _summary_worker_parallelism(max_parallel: int, worker_prefix) -> int:
     """Choose bounded summary width without multiplying native worker memory."""
     if max_parallel <= 1:
-        return 1
+        return _compiled_native_summary_jobs(1) if len(worker_prefix) == 1 else 1
     raw = str(
         os.environ.get("PCC_PY_FRONTEND_SUMMARY_JOBS", "") or ""
     ).strip()
@@ -321,7 +370,8 @@ def _summary_worker_parallelism(max_parallel: int, worker_prefix) -> int:
             return 1
         if requested <= 0:
             return 1
-        return min(max_parallel, requested)
+        selected = min(max_parallel, requested)
+        return _compiled_native_summary_jobs(selected) if len(worker_prefix) == 1 else selected
     # Source-mode workers are ``python -m pcc`` and use the host allocator;
     # their private pycache makes startup cheap, so use the existing frontend
     # width.  Compiled short-lived summary workers use their measured light
@@ -383,7 +433,7 @@ def build_shared_exports(
     pipeline_error,
 ) -> str:
     export_dir = os.path.join(tmp, "exports")
-    subprocess.run(["mkdir", "-p", export_dir], check=True)
+    os.makedirs(export_dir, exist_ok=True)
     result_paths: list[str] = []
     commands: list[str] = []
     for worker_index, chunk in enumerate(chunks):
@@ -676,6 +726,18 @@ def build_shared_exports(
     return exports_path
 
 
+
+def _codegen_safe_worker_jobs(jobs: int, native_owned_lanes: bool,
+                              safe_chunk_count: int, deferred_plan: str) -> int:
+    if not native_owned_lanes or safe_chunk_count == 0:
+        return jobs
+    if deferred_plan:
+        # Nominal ceiling only. The publishing coordinator exits before work;
+        # the execution driver applies its own memory admission at launch.
+        return min(max(1, jobs), _SOURCE_WORKER_AUTO_SAFE_JOBS)
+    return _compiled_native_auto_jobs(jobs)
+
+
 def compile_parallel(
     src_paths,
     module_names,
@@ -875,6 +937,9 @@ def compile_parallel_uncached(
         worker_base = os.path.basename(str(worker_prefix[0])).lower()
         if worker_base.startswith("python") or worker_base.endswith(".py"):
             compiled_native_worker = False
+    # A numeric worker count limits concurrency; it must not turn off the
+    # native export/codegen ownership and memory-safe deferred pipeline.
+    native_owned_lanes = compiled_native_worker
     native_auto_source_lanes = auto_source_lanes and compiled_native_worker
     chunk_count = chunk_count_for_workers(len(src_paths), jobs, worker_prefix)
     chunks = codegen_chunks(src_paths, chunk_count)
@@ -886,18 +951,19 @@ def compile_parallel_uncached(
     export_chunks = codegen_chunks(src_paths, jobs)
     export_oversized_chunk_count = 0
     export_safe_jobs = jobs
-    if native_auto_source_lanes:
+    if native_owned_lanes:
         export_chunks = [[index] for index in range(len(src_paths))]
         export_oversized, export_safe = (
             _split_codegen_chunks_by_source_size(src_paths, export_chunks)
         )
         export_chunks = export_oversized + export_safe
         export_oversized_chunk_count = len(export_oversized)
-        # Light one-module export workers take their width from their own
-        # memory class and the CPU budget, not the codegen pool's `jobs`.
-        export_safe_jobs = _compiled_native_export_jobs(
-            max(jobs, _parallel_cpu_budget())
-        )
+        # Light one-module export workers have their own memory class. Auto
+        # mode can use the CPU budget; an explicit numeric width remains a cap.
+        export_requested = jobs
+        if native_auto_source_lanes:
+            export_requested = max(jobs, _parallel_cpu_budget())
+        export_safe_jobs = _compiled_native_export_jobs(export_requested)
         if _worker_tree_budget_bytes(
             os.environ.get(_WORKER_TREE_BUDGET_ENV, "")
         ) > 0:
@@ -928,11 +994,11 @@ def compile_parallel_uncached(
     profile_counter(
         profile,
         "multi_frontend_worker_concurrency",
-        export_safe_jobs if native_auto_source_lanes else jobs,
+        export_safe_jobs if native_owned_lanes else jobs,
     )
     with tempfile.TemporaryDirectory(prefix="pcc_py_frontend_workers_") as tmp:
         ir_dir = artifact_dir if artifact_dir else os.path.join(tmp, "ir")
-        subprocess.run(["mkdir", "-p", ir_dir], check=True)
+        os.makedirs(ir_dir, exist_ok=True)
         # The merged may_park fixed point is a semantic prerequisite for
         # parallel codegen, so every export worker must publish its lifted AST.
         # The same sidecars are then reused by codegen workers; no parent/host
@@ -941,7 +1007,7 @@ def compile_parallel_uncached(
         # unconditional.
         ast_wire_requested = ast_wire_enabled()
         ast_dir = os.path.join(tmp, "ast")
-        subprocess.run(["mkdir", "-p", ast_dir], check=True)
+        os.makedirs(ast_dir, exist_ok=True)
         profile_counter(profile, "multi_frontend_ast_wire_enabled", 1)
         profile_counter(
             profile,
@@ -1068,7 +1134,7 @@ def compile_parallel_uncached(
         # their budget is already applied by frontend_jobs.  Mirroring the
         # export lane's native-only predicate here is what keeps the Stage2
         # memory policy from throttling host Stage1.
-        if native_auto_source_lanes and jobs > 1:
+        if native_owned_lanes and jobs > 1:
             oversized_chunks, safe_chunks = (
                 _split_codegen_chunks_by_source_size(
                     src_paths,
@@ -1079,8 +1145,12 @@ def compile_parallel_uncached(
         scheduled_chunks = oversized_chunks + safe_chunks
         oversized_chunk_count = len(oversized_chunks)
         safe_jobs = jobs
-        if native_auto_source_lanes:
-            safe_jobs = _compiled_native_auto_jobs(safe_jobs)
+        deferred_codegen_plan = str(
+            os.environ.get("PCC_DEFER_FRONTEND_CODEGEN_PLAN", "") or ""
+        ).strip()
+        safe_jobs = _codegen_safe_worker_jobs(
+            safe_jobs, native_owned_lanes, len(safe_chunks), deferred_codegen_plan,
+        )
         profile_counter(
             profile,
             "multi_frontend_codegen_oversized_chunks",
@@ -1117,7 +1187,7 @@ def compile_parallel_uncached(
         manifest_paths: list[str] = []
         commands: list[str] = []
         oversized_assembly_handoff = (
-            native_auto_source_lanes
+            native_owned_lanes
             and oversized_chunk_count > 0
             and str(
                 os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", "") or ""
@@ -1173,10 +1243,7 @@ def compile_parallel_uncached(
                 command_environment + " " + join_strings(command_parts, " ")
             )
 
-        deferred_codegen_plan = str(
-            os.environ.get("PCC_DEFER_FRONTEND_CODEGEN_PLAN", "") or ""
-        ).strip()
-        if deferred_codegen_plan and native_auto_source_lanes:
+        if deferred_codegen_plan and native_owned_lanes:
             output_path = str(
                 os.environ.get("PCC_DEFER_FRONTEND_OUTPUT", "") or ""
             ).strip()
@@ -1201,19 +1268,11 @@ def compile_parallel_uncached(
             persistent_ast = os.path.join(state_root, "ast")
             persistent_results = os.path.join(state_root, "results")
             persistent_manifests = os.path.join(state_root, "manifests")
-            subprocess.run(
-                ["/bin/mkdir", "-p", persistent_results, persistent_manifests],
-                check=True,
-            )
-            subprocess.run(
-                ["/bin/cp", "-R", ast_dir, persistent_ast],
-                check=True,
-            )
+            os.makedirs(persistent_results, exist_ok=True)
+            os.makedirs(persistent_manifests, exist_ok=True)
+            _copy_frontend_artifact_tree(ast_dir, persistent_ast)
             persistent_exports = os.path.join(state_root, "native_exports.json")
-            subprocess.run(
-                ["/bin/cp", exports_path, persistent_exports],
-                check=True,
-            )
+            _copy_frontend_artifact_file(exports_path, persistent_exports)
             persistent_manifest_paths = []
             for worker_index, chunk in enumerate(scheduled_chunks):
                 if len(chunk) != 1:
@@ -1261,7 +1320,7 @@ def compile_parallel_uncached(
         try:
             started = profile_begin(profile)
             in_process_codegen = (
-                native_auto_source_lanes
+                native_owned_lanes
                 and run_worker_manifest_in_process is not None
                 and str(
                     os.environ.get(

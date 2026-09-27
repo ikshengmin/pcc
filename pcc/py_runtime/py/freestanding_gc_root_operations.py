@@ -2,6 +2,9 @@
 
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.py_runtime.py.py_abi_constants import (
+    PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED,
+)
 from pcc.unsafe import (
     atomic_cas_i32,
     atomic_load_i32,
@@ -12,6 +15,7 @@ from pcc.unsafe import (
     load_i32,
     load_i64,
     load_ptr,
+    null,
     ptr_eq,
     ptr_is_null,
     store_i32,
@@ -131,3 +135,52 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
     store_ptr(slot_base, slot_offset, resolved)
     py_decref(value)
     return resolved
+
+
+# Pin acquisition/release must not park before touching their raw object arg.
+# Keep this existing header/metric protocol in the strict primitive owner.
+@c_abi_export("pcc_gc_pin")
+def pcc_gc_pin(o) -> None:
+    if ptr_is_null(o) != 0:
+        return
+    if is_tagged_int(o) != 0:
+        return
+    flags: i64 = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
+    store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags | PY_FLAG_GC_PINNED)
+    # pcc_gc_note_pin(1), inline: codegen pins around most calls.
+    pin_metric = global_addr("pcc_gc_metric_pin")
+    store_i32(pin_metric, 0, load_i32(pin_metric, 0) + 1)
+    return
+
+
+@c_abi_export("pcc_gc_unpin")
+def pcc_gc_unpin(o) -> None:
+    if ptr_is_null(o) != 0:
+        return
+    if is_tagged_int(o) != 0:
+        return
+    flags: i64 = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
+    store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~PY_FLAG_GC_PINNED)
+    # pcc_gc_note_pin(-1), inline.
+    pin_metric = global_addr("pcc_gc_metric_pin")
+    store_i32(pin_metric, 0, load_i32(pin_metric, 0) - 1)
+    return
+
+
+
+
+@c_abi_export("pcc_gc_take_pinned_slot")
+def pcc_gc_take_pinned_slot(slot, prior_pin: i64):
+    # The caller owns one pinned reference stored in this stable slot and has
+    # finished every operation that can park, including frame unregistration.
+    # Transfer that reference without another callback/park or refcount change.
+    if ptr_is_null(slot) != 0:
+        return null()
+    value = load_ptr(slot, 0)
+    store_ptr(slot, 0, null())
+    pcc_gc_unpin(value)
+    if (prior_pin & PY_FLAG_GC_PINNED) != 0:
+        if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+            flags: i64 = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET)
+            store_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, flags | PY_FLAG_GC_PINNED)
+    return value

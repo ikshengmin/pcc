@@ -134,6 +134,7 @@ _PY_AST_BASE_NAME_OVERRIDES = {
     "MemoryViewType": ("Type",),
     "ListType": ("Type",),
     "SetType": ("Type",),
+    "ValueArrayType": ("Type",),
     "DictType": ("Type",),
     "TupleType": ("Type",),
     "FuncType": ("Type",),
@@ -204,6 +205,7 @@ _PY_AST_FIELD_TYPE_OVERRIDES = {
     "MemoryViewType": {"name": "str"},
     "ListType": {"name": "str", "elem": "Type"},
     "SetType": {"name": "str", "elem": "Type"},
+    "ValueArrayType": {"name": "str", "elem": "Type", "length": "int"},
     "DictType": {"name": "str", "key": "Type", "value": "Type"},
     "TupleType": {"name": "str", "elems": "tuple[Type, ...]"},
     "FuncType": {"name": "str", "params": "tuple[Type, ...]", "ret": "Type"},
@@ -667,6 +669,12 @@ def _py_ast_node_from_wire(kind: str, fields):
         return _pa.SetType(
             _py_ast_wire_field(fields, "name", "set"),
             _py_ast_wire_field(fields, "elem"),
+        )
+    if kind == "ValueArrayType":
+        return _pa.ValueArrayType(
+            _py_ast_wire_field(fields, "name", "pcc.array"),
+            _py_ast_wire_field(fields, "elem"),
+            _py_ast_wire_field(fields, "length", 0),
         )
     if kind == "DictType":
         return _pa.DictType(

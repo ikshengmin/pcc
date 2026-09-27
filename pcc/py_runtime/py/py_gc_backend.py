@@ -2542,7 +2542,7 @@ def pcc_gc_set_backend(backend: int) -> int:
     ):
         refcount_fast = 1
     store_i32(global_addr("pcc_gc_refcount_fast"), 0, refcount_fast)
-    store_i32(global_addr("pcc_gc_debt_bytes"), 0, 0)
+    store_i64(global_addr("pcc_gc_debt_bytes"), 0, 0)
     store_i32(global_addr("pcc_gc_last_alloc_bytes"), 0, 0)
     if backend == 0:
         global_store_ptr("pcc_gc_backend3_promotion_head", null())
@@ -2553,7 +2553,7 @@ def pcc_gc_set_backend(backend: int) -> int:
             load_i64(global_addr("pcc_gc_object_list_revision"), 0),
         )
         _clear_object_list()
-        store_i32(global_addr("pcc_gc_live_bytes"), 0, 0)
+        store_i64(global_addr("pcc_gc_live_bytes"), 0, 0)
     if _backend_uses_forwarding() == 0:
         _forwarding_clear_all()
         _identity_clear_all()
@@ -3993,12 +3993,12 @@ def pcc_gc_free_object_memory(o) -> None:
         if ptr_is_null(node) == 0:
             block = _object_node_minor_block(node)
             if _object_node_freeing(node) == 0:
-                live: int = load_i32(global_addr("pcc_gc_live_bytes"), 0)
+                live: int = load_i64(global_addr("pcc_gc_live_bytes"), 0)
                 size: int = _object_node_size(node)
                 if size >= live:
-                    store_i32(global_addr("pcc_gc_live_bytes"), 0, 0)
+                    store_i64(global_addr("pcc_gc_live_bytes"), 0, 0)
                 else:
-                    store_i32(global_addr("pcc_gc_live_bytes"), 0, live - size)
+                    store_i64(global_addr("pcc_gc_live_bytes"), 0, live - size)
             if backend == 4:
                 _backend4_zpage_remove(o)
             pcc_gc_object_index_remove(o)
@@ -4472,8 +4472,8 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         final_generation: int = load_i32(o, 12) & 384
         if final_generation == 128:
             _backend3_young_link_head(node)
-        live: int = load_i32(global_addr("pcc_gc_live_bytes"), 0)
-        store_i32(global_addr("pcc_gc_live_bytes"), 0, live + size)
+        live: int = load_i64(global_addr("pcc_gc_live_bytes"), 0)
+        store_i64(global_addr("pcc_gc_live_bytes"), 0, live + size)
         if backend == 4:
             store_ptr(zpage_node_owner, 0, prepared_zpage_node)
             store_ptr(zpage_owner, 0, prepared_zpage)
@@ -4580,6 +4580,16 @@ def pcc_gc_note_object_freeing(o) -> None:
     node = pcc_gc_object_index_find(o)
     if ptr_is_null(node) == 0:
         if _object_node_freeing(node) == 0:
+            # Retire this mark-cycle work before publishing freeing, including
+            # the minor-block branch that leaves the node linked. Clearing the
+            # bit and the first-transition guard make repeated notifications
+            # idempotent. Do not infer GC3/4 moving-copy ownership from color.
+            count_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+            if count_backend == 1 or count_backend == 2:
+                dying_flags: int = load_i32(o, 12)
+                if (dying_flags & 16) != 0:
+                    _gc_gray_count_decrement_acq_rel()
+                    store_i32(o, 12, dying_flags & ~16)
             _live_bytes_subtract(_object_node_size(node))
         _set_object_node_freeing(node, 1)
         if ptr_is_null(_object_node_minor_block(node)) == 0:

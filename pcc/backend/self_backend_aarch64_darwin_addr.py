@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .self_backend_target_match import is_aarch64_linux_triple
 from . import BackendUnavailable
 from .self_backend_aarch64_darwin_mem import (
     emitted_addsub_register_line,
@@ -37,6 +38,15 @@ def materialize_global_address(
 ) -> list[str]:
     symbol = asm_symbol(name, module_symbols)
     if name in module_symbols.thread_local_symbols:
+        if is_aarch64_linux_triple(module_symbols.target_triple):
+            # Initial-exec GOT entries contain offsets from TP, not addresses.
+            scratch = "x17" if reg != "x17" else "x16"
+            lines = ["  sub sp, sp, #16", f"  str {scratch}, [sp]"]
+            lines.extend(emitted_global_address_lines(reg, symbol, True))
+            lines.extend([f"  mrs {scratch}, tpidr_el0",
+                          f"  add {reg}, {reg}, {scratch}",
+                          f"  ldr {scratch}, [sp]", "  add sp, sp, #16"])
+            return lines
         return _materialize_thread_local_address(symbol, reg)
     if name not in module_symbols.defined_symbols:
         return emitted_global_address_lines(reg, symbol, True)

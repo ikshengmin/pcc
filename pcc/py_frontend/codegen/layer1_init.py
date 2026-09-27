@@ -107,6 +107,8 @@ class Layer1InitMixin:
         # timing differs between host and self-hosted stages).
         self._fn_gc_root_slot_registry: dict[str, list] = {}
         self._fn_err_exit_gc_root_slots: dict[str, list] = {}
+        self._fn_err_exit_owned_slots: dict[str, list] = {}
+        self._fn_err_exit_finish_blocks: dict[str, ir.Block] = {}
         self._fn_err_exit_for_target_slots: dict[str, list] = {}
         self._fn_valueclass_payload_root_slots: dict[str, list] = {}
         # Function-exit blocks whose cleanup already emitted root leaves;
@@ -189,7 +191,11 @@ class Layer1InitMixin:
         self._literal_dict_expr_bindings: dict[str, object] = {}
         self._virtual_literal_dict_expr_bindings: set[str] = set()
         self.env_list_elem_class_hint: dict[str, str] = {}
-        self._ir_builder_env_flags: dict[str, bool] = {}
+        # Exact constructor/result identities for local IR values. Unknown
+        # assignments clear the entry; control-flow joins intersect them.
+        self._ir_builder_env_flags: dict[str, str] = {}
+        self._ir_scaffold_source_provider_binding = None
+        self._ir_scaffold_field_owner_mro = None
         self._class_aliases: dict[str, str] = {}
         # Scaffold bindings are populated by import lowering and read back by
         # assignment/call lowering.  They cannot be lazy on a self-hosted

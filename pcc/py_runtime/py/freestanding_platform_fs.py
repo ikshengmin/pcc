@@ -8,6 +8,9 @@ libc dependency there.
 from pcc import i64
 from pcc.extern import c_abi_export
 from pcc.unsafe import (
+    windows_real_path, target_sys_platform,
+    directory_open, directory_next, directory_error, directory_close,
+    malloc, free, unlinkat,
     access,
     atomic_rmw_i64,
     define_global_i64,
@@ -94,6 +97,8 @@ def _pop_component(output, length: i64) -> i64:
 
 @c_abi_export("pcc_platform_realpath")
 def pcc_platform_realpath(path, output, size: i64):
+    if load_i8(target_sys_platform(), 0) == 119:
+        return windows_real_path(path, output, size)
     # Walk components and follow relative or absolute symlink targets with
     # readlink(2). Keep the fixed 40-link POSIX loop bound and fail instead of
     # truncating the caller's buffer.
@@ -243,3 +248,58 @@ def pcc_platform_mkdtemp(path_template):
             return path_template
         attempt = attempt + 1
     return null()
+
+
+@c_abi_export("pcc_platform_remove_tree")
+def pcc_platform_remove_tree(path) -> i64:
+    if ptr_is_null(path) or load_i8(path, 0) == 0:
+        return -22
+    probe = stack_alloc(1)
+    if readlink(path, probe, 1) >= 0:
+        return unlinkat(path, 0)
+    kind: i64 = stat_kind(path)
+    if kind == 0:
+        return -2
+    if kind != 2:
+        return unlinkat(path, 0)
+    stream = directory_open(path)
+    if ptr_is_null(stream):
+        return -13
+    path_size: i64 = _bounded_cstr_len(path, 1048576)
+    if path_size < 0:
+        directory_close(stream)
+        return -36
+    result: i64 = 0
+    while True:
+        name = directory_next(stream)
+        if ptr_is_null(name):
+            result = directory_error(stream)
+            break
+        if load_i8(name, 0) == 46:
+            if load_i8(name, 1) == 0 or (load_i8(name, 1) == 46 and load_i8(name, 2) == 0):
+                continue
+        size: i64 = _bounded_cstr_len(name, 1048576)
+        if size < 0:
+            result = -36
+            break
+        child = malloc(path_size + size + 2)
+        if ptr_is_null(child):
+            result = -12
+            break
+        index: i64 = 0
+        while index < path_size:
+            store_i8(child, index, load_i8(path, index))
+            index = index + 1
+        store_i8(child, path_size, 47)
+        index = 0
+        while index <= size:
+            store_i8(child, path_size + 1 + index, load_i8(name, index))
+            index = index + 1
+        result = pcc_platform_remove_tree(child)
+        free(child)
+        if result < 0:
+            break
+    directory_close(stream)
+    if result < 0:
+        return result
+    return unlinkat(path, 1)

@@ -102,10 +102,19 @@ int64_t pcc_platform_socket_peer_text(
 #define PY_FLAG_GC_FORWARD_RETIRING 0x20000
 #define PY_FLAG_GC_MALLOC_ALLOC 0x40000
 #define PY_FLAG_GC_DEALLOCATING 0x80000
-/* Generator-only semantic bit: this generator is a compiler-proven
- * ``may_park`` continuation and may be transparently delegated by
- * pcc.virtual_thread.call.  Ordinary Python generators never carry it. */
+/* Generator body effect. Source generators may carry MAY_PARK too;
+ * GEN_SOURCE keeps those iterator objects as data at virtual_thread.call.
+ * Explicit native continuations retain the original MAY_PARK protocol. */
 #define PY_FLAG_GEN_MAY_PARK 0x100000
+/* Native function entry roles. Descriptor-role bits 0x200000/0x400000 are
+ * reserved independently. AUTO_PARK is a compiler-created ordinary callable
+ * whose ABI entry creates a resumable state machine; it is not a Gen role.
+ * TRANSPARENT_CALL forwards call context to one actual semantic target. */
+#define PY_FLAG_FUNC_AUTO_PARK 0x800000
+#define PY_FLAG_FUNC_TRANSPARENT_CALL 0x1000000
+#define PY_FLAG_GEN_SOURCE 0x2000000
+#define PY_FLAG_FUNC_CONTINUATION_FACTORY 0x4000000
+
 #define PY_FLAG_GC_COLOR_MASK \
     (PY_FLAG_GC_WHITE | PY_FLAG_GC_GRAY | PY_FLAG_GC_BLACK)
 

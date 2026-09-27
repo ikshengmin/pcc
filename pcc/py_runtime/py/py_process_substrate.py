@@ -1,9 +1,7 @@
 """pcc-Python port of py_process_substrate.c.
 
-This preserves the existing bootstrap helper behavior. Empty temp-directory
-cleanup uses the owned ``unlinkat`` primitive; the remaining shell-backed
-subprocess/listdir and nonempty-tree cleanup paths remain an explicit semantic
-cleanup item.
+Linux/Windows subprocess helpers pass owned argv/environment vectors directly to
+the platform process ABI. Directory operations use owned platform primitives.
 """
 
 __pcc_runtime_port__ = True
@@ -18,6 +16,9 @@ from pcc.extern import (
     c_void,
 )
 from pcc.unsafe import (
+    target_sys_platform,
+    close, read, spawn_process_pipe,
+    directory_open, directory_next, directory_error, directory_close,
     cstr,
     free,
     global_load_ptr,
@@ -31,6 +32,9 @@ from pcc.unsafe import (
     ptr_add,
     ptr_is_null,
     realloc,
+    readlink,
+    stack_alloc,
+    stat_kind,
     store_i8,
     store_i32,
     store_i64,
@@ -42,6 +46,7 @@ from pcc.unsafe import (
 fgetc = extern("fgetc", (c_ptr,), c_int32)
 fread = extern("fread", (c_ptr, c_size_t, c_size_t, c_ptr), c_size_t)
 mkdtemp = extern("pcc_platform_mkdtemp", (c_ptr,), c_ptr)
+remove_tree = extern("pcc_platform_remove_tree", (c_ptr,), c_int64)
 access = extern("pcc_platform_access", (c_ptr, c_int64), c_int64)
 pclose = extern("pclose", (c_ptr,), c_int32)
 popen = extern("popen", (c_ptr, c_ptr), c_ptr)
@@ -57,9 +62,21 @@ platform_spawnp = extern(
 platform_waitpid = extern(
     "pcc_platform_waitpid", (c_int64, c_ptr, c_int64), c_int64
 )
+platform_process_resolve = extern("pcc_platform_process_resolve", (c_ptr, c_ptr), c_ptr)
+platform_kill = extern("pcc_platform_kill", (c_int64, c_int64), c_int64)
+build_exec_argv = extern("pcc_process_build_exec_argv", (c_ptr,), c_ptr)
+free_exec_argv = extern("pcc_process_free_exec_argv", (c_ptr, c_int64), c_void)
 
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
+py_index_i64_checked = extern("py_index_i64_checked", (c_ptr,), c_int64)
+py_err_occurred = extern("py_err_occurred", (), c_int64)
+pcc_gc_scheduler_root_register_handle = extern(
+    "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
+)
+pcc_gc_scheduler_root_unregister_handle = extern(
+    "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
+)
 py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
 py_obj_getitem = extern("py_obj_getitem", (c_ptr, c_ptr), c_ptr)
@@ -233,8 +250,146 @@ def _run_shell_command(command, capture_output: int) -> int:
     return result
 
 
+def _build_exec_env(env_map):
+    """Copy dictionary entries to a terminated, owned UTF-8 environment."""
+    count: int = py_dict_entries_used(env_map)
+    items = malloc((count + 1) * 8)
+    if ptr_is_null(items):
+        return null()
+    used: int = 0
+    index: int = 0
+    while index < count:
+        key = py_dict_entry_key_at(env_map, index)
+        value = py_dict_entry_value_at(env_map, index)
+        index = index + 1
+        if ptr_is_null(key) or ptr_is_null(value):
+            py_decref(key)
+            py_decref(value)
+            continue
+        key_str = py_obj_str(key)
+        value_str = py_obj_str(value)
+        py_decref(key)
+        py_decref(value)
+        if ptr_is_null(key_str) or ptr_is_null(value_str):
+            py_decref(key_str)
+            py_decref(value_str)
+            free_exec_argv(items, used)
+            return null()
+        key_raw = py_str_utf8(key_str)
+        value_raw = py_str_utf8(value_str)
+        key_size: int = strlen(key_raw)
+        value_size: int = strlen(value_raw)
+        pair = malloc(key_size + value_size + 2)
+        if ptr_is_null(pair):
+            py_decref(key_str)
+            py_decref(value_str)
+            free_exec_argv(items, used)
+            return null()
+        memcpy(pair, key_raw, key_size)
+        store_i8(pair, key_size, 61)
+        memcpy(ptr_add(pair, key_size + 1), value_raw, value_size)
+        store_i8(pair, key_size + value_size + 1, 0)
+        py_decref(key_str)
+        py_decref(value_str)
+        store_ptr(items, used * 8, pair)
+        used = used + 1
+    store_ptr(items, used * 8, null())
+    return items
+
+
+def _run_exec_argv(argv, capture_output: int, child_env) -> int:
+    count: int = py_obj_len(argv)
+    items = build_exec_argv(argv)
+    status = malloc(4)
+    if ptr_is_null(items) or ptr_is_null(status):
+        free_exec_argv(items, count)
+        free(status)
+        return 127
+    store_i32(status, 0, 0)
+    pid: int = platform_spawnp(items, child_env, capture_output)
+    free_exec_argv(items, count)
+    if pid <= 0:
+        free(status)
+        return 127
+    waited: int = platform_waitpid(pid, status, 0)
+    result: int = 127
+    if waited == pid:
+        result = py_process_normalize_wait_status(load_i32(status, 0))
+    else:
+        if platform_kill(-pid, 9) != 0:
+            platform_kill(pid, 9)
+        platform_waitpid(pid, status, 0)
+    free(status)
+    return result
+
+
+def _check_output_exec_argv(argv):
+    count: int = py_obj_len(argv)
+    items = build_exec_argv(argv)
+    child_env = platform_env_snapshot()
+    slot = malloc(8)
+    tmp = malloc(4096)
+    st = _buf_new()
+    if ptr_is_null(items) or ptr_is_null(child_env) or ptr_is_null(slot) or ptr_is_null(tmp) or ptr_is_null(st):
+        free_exec_argv(items, count)
+        platform_env_snapshot_free(child_env)
+        free(slot)
+        free(tmp)
+        _buf_free(st)
+        py_raise_owned(py_exc_new(14, cstr("subprocess allocation failed")))
+        return null()
+    path = platform_process_resolve(items, child_env)
+    pid: int = -2
+    if not ptr_is_null(path):
+        pid = spawn_process_pipe(path, items, child_env, 1, slot)
+    free(path)
+    free_exec_argv(items, count)
+    platform_env_snapshot_free(child_env)
+    if pid <= 0:
+        free(slot)
+        free(tmp)
+        _buf_free(st)
+        py_raise_owned(py_exc_new(14, cstr("subprocess spawn failed")))
+        return null()
+    descriptor: int = load_i32(slot, 0)
+    failed: int = 0
+    while True:
+        amount: int = read(descriptor, tmp, 4096)
+        if amount == -4:
+            continue
+        if amount < 0:
+            failed = 1
+            break
+        if amount == 0:
+            break
+        if _buf_append(st, tmp, amount) != 0:
+            failed = 1
+            break
+    close(descriptor)
+    if failed:
+        if platform_kill(-pid, 9) != 0:
+            platform_kill(pid, 9)
+    waited: int = platform_waitpid(pid, slot, 0)
+    if waited != pid or load_i32(slot, 0) != 0:
+        failed = 1
+    free(slot)
+    free(tmp)
+    if failed:
+        _buf_free(st)
+        py_raise_owned(py_exc_new(14, cstr("subprocess failed")))
+        return null()
+    data = _buf_data(st)
+    if ptr_is_null(data):
+        data = cstr("")
+    result = py_bytes_new(data, _buf_len(st))
+    _buf_free(st)
+    return result
+
+
 @c_abi_export("py_subprocess_check_output")
 def py_subprocess_check_output(argv):
+    if load_i8(target_sys_platform(), 0) == 119 or load_i8(target_sys_platform(), 0) == 108:
+        return _check_output_exec_argv(argv)
     cmd = _build_shell_command(argv)
     if ptr_is_null(cmd):
         return _empty_bytes()
@@ -343,6 +498,14 @@ def py_subprocess_run_env(argv, capture_output: int, env_map) -> int:
     """
     if ptr_is_null(env_map):
         return py_subprocess_run(argv, capture_output)
+    if load_i8(target_sys_platform(), 0) == 119 or load_i8(target_sys_platform(), 0) == 108:
+        child_env = _build_exec_env(env_map)
+        if ptr_is_null(child_env):
+            return 127
+        result: int = _run_exec_argv(argv, capture_output, child_env)
+        # Both snapshots and dictionary vectors own their terminated strings.
+        platform_env_snapshot_free(child_env)
+        return result
     body = _build_shell_command(argv)
     if ptr_is_null(body):
         return 127
@@ -369,6 +532,13 @@ def py_subprocess_run_env(argv, capture_output: int, env_map) -> int:
 
 @c_abi_export("py_subprocess_run")
 def py_subprocess_run(argv, capture_output: int) -> int:
+    if load_i8(target_sys_platform(), 0) == 119 or load_i8(target_sys_platform(), 0) == 108:
+        child_env = platform_env_snapshot()
+        if ptr_is_null(child_env):
+            return 127
+        result: int = _run_exec_argv(argv, capture_output, child_env)
+        platform_env_snapshot_free(child_env)
+        return result
     cmd = _build_shell_command(argv)
     if ptr_is_null(cmd):
         return 127
@@ -380,6 +550,46 @@ def py_subprocess_run(argv, capture_output: int) -> int:
 @c_abi_export("py_os_getpid")
 def py_os_getpid():
     return py_int_from_i64(getpid())
+
+
+@c_abi_export("py_os_kill")
+def py_os_kill(pid_object, signal_object):
+    # Convert through __index__, not int(): floats and oversized integers must
+    # fail before any signal is sent. The unsafe platform call returns -errno.
+    # A user-defined pid.__index__ can collect and relocate the other argument.
+    # Keep its slot registered until both conversions have finished.
+    signal_slot = stack_alloc(8)
+    store_ptr(signal_slot, 0, signal_object)
+    signal_root = pcc_gc_scheduler_root_register_handle(signal_slot)
+    if ptr_is_null(signal_root):
+        py_raise_owned(py_exc_new(19, cstr("could not root signal argument")))
+        return null()
+    pid: int = py_index_i64_checked(pid_object)
+    if py_err_occurred() != 0:
+        pcc_gc_scheduler_root_unregister_handle(signal_root)
+        return null()
+    if pid < -2147483648 or pid > 2147483647:
+        pcc_gc_scheduler_root_unregister_handle(signal_root)
+        py_raise_owned(py_exc_new(15, cstr("process id does not fit in pid_t")))
+        return null()
+    signal_number: int = py_index_i64_checked(load_ptr(signal_slot, 0))
+    pcc_gc_scheduler_root_unregister_handle(signal_root)
+    if py_err_occurred() != 0:
+        return null()
+    if signal_number < -2147483648 or signal_number > 2147483647:
+        py_raise_owned(py_exc_new(15, cstr("signal number does not fit in C int")))
+        return null()
+    result: int = platform_kill(pid, signal_number)
+    if result == -1 or result == -13:
+        py_raise_owned(py_exc_new(36, cstr("permission denied sending signal")))
+        return null()
+    if result == -3:
+        py_raise_owned(py_exc_new(39, cstr("no such process")))
+        return null()
+    if result != 0:
+        py_raise_owned(py_exc_new(14, cstr("could not send signal")))
+        return null()
+    return global_load_ptr("py_None")
 
 
 @c_abi_export("py_sys_executable_str")
@@ -525,60 +735,40 @@ def py_sysconfig_get_config_var(name):
 def py_os_listdir(path):
     path_str = py_obj_str(path)
     if ptr_is_null(path_str):
-        return py_list_new(0)
+        return null()
     raw = py_str_utf8(path_str)
-    if ptr_is_null(raw) or load_i8(raw, 0) == 0:
-        py_decref(path_str)
-        return py_list_new(0)
-    st = _buf_new()
-    ok: int = 0
-    if not ptr_is_null(st):
-        if _buf_append(st, cstr("ls -1A -- "), 10) == 0:
-            if _append_shell_quoted(st, raw) == 0:
-                ok = 1
+    stream = directory_open(raw)
     py_decref(path_str)
-    if ok == 0:
-        _buf_free(st)
-        return py_list_new(0)
-    cmd = _buf_detach(st)
-    fp = popen(cmd, cstr("r"))
-    free(cmd)
-    if ptr_is_null(fp):
-        return py_list_new(0)
-
-    out = py_list_new(8)
-    entry = _buf_new()
-    if ptr_is_null(out) or ptr_is_null(entry):
-        _buf_free(entry)
-        pclose(fp)
-        return py_list_new(0)
+    if ptr_is_null(stream):
+        py_raise_owned(py_exc_new(14, cstr("could not open directory")))
+        return null()
+    output = py_list_new(0)
+    if ptr_is_null(output):
+        directory_close(stream)
+        return null()
     while True:
-        ch: int = fgetc(fp)
-        if ch == -1:
+        entry = directory_next(stream)
+        if ptr_is_null(entry):
             break
-        if ch == 10:
-            item = py_str_new(_buf_data(entry), _buf_len(entry))
-            py_list_append(out, item)
-            py_decref(item)
-            store_i64(entry, 8, 0)
-            if not ptr_is_null(_buf_data(entry)):
-                store_i8(_buf_data(entry), 0, 0)
-        else:
-            one = malloc(1)
-            if ptr_is_null(one):
-                break
-            store_i8(one, 0, ch)
-            if _buf_append(entry, one, 1) != 0:
-                free(one)
-                break
-            free(one)
-    if _buf_len(entry) > 0:
-        item2 = py_str_new(_buf_data(entry), _buf_len(entry))
-        py_list_append(out, item2)
-        py_decref(item2)
-    _buf_free(entry)
-    pclose(fp)
-    return out
+        if load_i8(entry, 0) == 46:
+            if load_i8(entry, 1) == 0:
+                continue
+            if load_i8(entry, 1) == 46 and load_i8(entry, 2) == 0:
+                continue
+        item = py_str_new(entry, strlen(entry))
+        if ptr_is_null(item):
+            directory_close(stream)
+            py_decref(output)
+            return null()
+        py_list_append(output, item)
+        py_decref(item)
+    status: int = directory_error(stream)
+    directory_close(stream)
+    if status < 0:
+        py_decref(output)
+        py_raise_owned(py_exc_new(14, cstr("could not read directory")))
+        return null()
+    return output
 
 
 def _has_path_separator(s) -> int:
@@ -768,9 +958,14 @@ def py_tempdir_new(prefix):
     prefix_raw = py_str_utf8(prefix_str)
     if ptr_is_null(prefix_raw) or load_i8(prefix_raw, 0) == 0:
         prefix_raw = cstr("tmp")
+    windows: int = 1 if load_i8(target_sys_platform(), 0) == 119 else 0
     root = getenv(cstr("TMPDIR"))
+    if windows and (ptr_is_null(root) or load_i8(root, 0) == 0):
+        root = getenv(cstr("TEMP"))
+        if ptr_is_null(root) or load_i8(root, 0) == 0:
+            root = getenv(cstr("TMP"))
     if ptr_is_null(root) or load_i8(root, 0) == 0:
-        root = cstr("/tmp")
+        root = cstr(".") if windows else cstr("/tmp")
     root_len: int = strlen(root)
     prefix_len: int = strlen(prefix_raw)
     need_slash: int = 0
@@ -806,23 +1001,36 @@ def py_tempdir_new(prefix):
 @c_abi_export("py_tempdir_cleanup")
 def py_tempdir_cleanup(path) -> None:
     path_str = py_obj_str(path)
+    if ptr_is_null(path_str):
+        return
     raw = py_str_utf8(path_str)
-    if ptr_is_null(raw) or load_i8(raw, 0) == 0:
-        py_decref(path_str)
-        return
-    if unlinkat(raw, 1) == 0:
-        py_decref(path_str)
-        return
-    # Nonempty compiler temp directories retain the existing tracked fallback
-    # until the platform directory reader replaces the remaining shell listdir.
-    st = _buf_new()
-    if not ptr_is_null(st):
-        if _buf_append(st, cstr("rm -rf "), 7) == 0:
-            if _append_shell_quoted(st, raw) == 0:
-                cmd = _buf_detach(st)
-                _run_shell_command(cmd, 0)
-                free(cmd)
-                py_decref(path_str)
-                return
-    _buf_free(st)
+    if not ptr_is_null(raw) and load_i8(raw, 0) != 0:
+        status: int = remove_tree(raw)
+        if status < 0 and status != -2:
+            py_raise_owned(py_exc_new(14, cstr("could not remove temporary directory")))
     py_decref(path_str)
+
+
+@c_abi_export("py_shutil_rmtree")
+def py_shutil_rmtree(path, ignore_errors: int):
+    path_str = py_obj_str(path)
+    if ptr_is_null(path_str):
+        if ignore_errors:
+            return _none()
+        py_raise_owned(py_exc_new(3, cstr("path must be string-like")))
+        return null()
+    raw = py_str_utf8(path_str)
+    status: int = -22
+    if not ptr_is_null(raw) and load_i8(raw, 0) != 0:
+        # shutil.rmtree refuses a file or a directory symlink. The platform
+        # tree primitive deliberately unlinks those when reached as children.
+        probe = stack_alloc(1)
+        if readlink(raw, probe, 1) < 0 and stat_kind(raw) == 2:
+            status = remove_tree(raw)
+        else:
+            status = -20
+    py_decref(path_str)
+    if status < 0 and not ignore_errors:
+        py_raise_owned(py_exc_new(14, cstr("could not remove directory tree")))
+        return null()
+    return _none()

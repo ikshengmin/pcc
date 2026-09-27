@@ -373,6 +373,26 @@ def _populate_static_native_exports_0(out):
             ),
         ),
     }
+    # These function-local CLI imports have the same owned entrypoints in a
+    # standalone cli_bootstrap probe as in the closed-world export graph.
+    out["pcc.py_frontend.native_deferred"] = {
+        "run": _function_export(
+            ("dyn",),
+            (("dyn",),),
+            (_export_arg("plan_path"),),
+        ),
+    }
+    out["pcc.py_frontend.preload_delta_worker"] = {
+        "run": _function_export(
+            ("int", 64, True),
+            (("str",), ("str",), ("str",)),
+            (
+                _export_arg("exports_path", ("str",)),
+                _export_arg("roots_path", ("str",)),
+                _export_arg("out_path", ("str",)),
+            ),
+        ),
+    }
     # ``cli_bootstrap.py`` consumes this self-host-safe package contract in
     # standalone as well as closed-world builds.  Keep the imported constants
     # and helpers native in the raw per-module probe; otherwise every call is
@@ -1077,6 +1097,23 @@ def _populate_static_native_exports_4(out):
             ("int",),
             (("int",),),
             (_export_arg("jobs", ("int",)),),
+        ),
+        "compiled_native_worker_budget": _function_export(
+            ("int",),
+            (("int",), ("int",)),
+            (
+                _export_arg("tree_budget_bytes", ("int",)),
+                _export_arg("coordinator_floor_bytes", ("int",)),
+            ),
+        ),
+        "compiled_native_summary_plan": _function_export(
+            ("dyn",),
+            (("int",), ("dyn",), ("int",)),
+            (
+                _export_arg("jobs", ("int",)),
+                _export_arg("ast_sizes", ("dyn",)),
+                _export_arg("export_bytes", ("int",)),
+            ),
         ),
         "split_codegen_chunks_by_source_size": _function_export(
             ("dyn",),

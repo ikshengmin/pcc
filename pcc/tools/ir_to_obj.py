@@ -33,7 +33,7 @@ import tempfile
 _EMITTER_ENV = "PCC_IR_TO_OBJ_EMITTER"
 _EMITTER_PCC = "pcc"
 _EMITTER_LLVMLITE = "llvmlite"
-_PCC_OWNED_TARGET_IDENTITIES = frozenset({"self-aarch64-darwin-v0", "self-x86_64-linux-v0"})
+_PCC_OWNED_TARGET_IDENTITIES = frozenset({"self-aarch64-darwin-v0", "self-x86_64-linux-v0", "self-aarch64-linux-v0", "self-x86_64-windows-v0"})
 
 
 class _LazyLLVM:
@@ -271,24 +271,12 @@ def _select_emitter(identity: str | None) -> str:
 
 def _emit_object_pcc(ir_text: str, triple: str) -> bytes:
     """Assemble and write the object with pcc's own backend."""
-    from pcc.backend.arm64_asm_driver import assemble_file
-    from pcc.backend.native_object import NativeObject
-    from pcc.backend.self_backend_dispatch import emit_self_asm
+    from pcc.backend.owned_object_emit import emit_owned_object
 
-    if _MODULE_ASM_RE.search(ir_text):
-        # Module-level asm would have to be assembled as a separate unit and
-        # merged; no runtime module uses it, so refuse rather than drop it.
-        raise ObjectEmissionContractError(
-            "module-level assembly is unsupported by the pcc object emitter"
-        )
-    asm = emit_self_asm(ir_text, triple)
-    if _pcc_owned_target_identity(triple) == "self-x86_64-linux-v0":
-        from pcc.backend.x86_64_asm_driver import assemble_file as assemble_elf
-        from pcc.backend.elf_x86_64 import emit_relocatable
-
-        return emit_relocatable(assemble_elf(asm))
-    sections, undefined = assemble_file(asm)
-    return NativeObject.from_sections(sections, undefined=undefined).to_macho()
+    try:
+        return emit_owned_object(ir_text, triple)
+    except ValueError as exc:
+        raise ObjectEmissionContractError(str(exc)) from exc
 
 
 def _emit_object_with_triple(

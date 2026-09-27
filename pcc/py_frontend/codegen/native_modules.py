@@ -1228,7 +1228,7 @@ class NativeModuleAliasMixin:
             )
         if import_module == "os":
             return all(
-                attr_name in ("path", "sep", "linesep", "altsep", "pathsep", "urandom")
+                attr_name in ("path", "name", "sep", "linesep", "altsep", "pathsep", "urandom")
                 for attr_name, _as_name in stmt.names
             )
         if import_module == "time":
@@ -1445,7 +1445,7 @@ class NativeModuleAliasMixin:
                 )
                 continue
             if (
-                attr_name in ("sep", "linesep", "altsep", "pathsep")
+                attr_name in ("name", "sep", "linesep", "altsep", "pathsep")
                 and import_module == "os"
             ):
                 self._register_native_builtin_value_alias(
@@ -1982,6 +1982,18 @@ class NativeModuleAliasMixin:
                         as_name,
                     )
                 continue
+            if (
+                self.current_func_def is not None
+                and info.get("kind") in ("module_global", "constant")
+            ):
+                # A from-import executes a binding in this function's scope.
+                # Declaring a consumer module cell does not initialize a local
+                # value, and a constant shortcut would ignore later rebinding.
+                self._emit_compiled_module_import_from(
+                    src_module,
+                    [(attr_name, as_name)],
+                )
+                continue
             if self._bind_native_cross_module_export(
                 local_name=local_name,
                 src_module=src_module,
@@ -2321,6 +2333,37 @@ class NativeModuleAliasMixin:
         attr_name: str,
         info: dict,
     ) -> ir.Value:
+        if info.get("has_module_storage") and not self._freestanding_module:
+            # A source literal owns a normal module-global cell. Read that
+            # cell on every attribute access, including in other consumers
+            # and after the provider itself assigns to its global name.
+            owning_module = info.get("owning_module", module_name)
+            export_name = info.get("export_name", attr_name)
+            value_ty = decode_type(info["value_ty"]) or DynType(name="dyn")
+            # Constant attributes have always exposed an object. Do not use
+            # the ordinary module-global loader's consumer integer bridge:
+            # a raw-int consumer must not narrow a provider's boxed bigint.
+            if isinstance(value_ty, IntType):
+                if "box_int_abi" not in info:
+                    raise NotImplementedError("compiled module constant integer storage ABI is unknown")
+                ir_ty = self._abi_ir_type(value_ty, box_int_abi=bool(info["box_int_abi"]))
+            elif self._is_object(value_ty):
+                ir_ty = _CSTR
+            else:
+                ir_ty = self._storage_ir_type(value_ty)
+            symbol = self._module_global_symbol_name(owning_module, export_name)
+            gv = self.module.globals.get(symbol)
+            if gv is None:
+                gv = ir.GlobalVariable(self.module, ir_ty, name=symbol)
+                gv.linkage = "external"
+            elif not self._ir_type_matches(gv.value_type, ir_ty):
+                raise NotImplementedError("compiled module constant storage ABI mismatch: " + symbol)
+            value = self.builder.load(gv, name=self._fresh("modvar.constant." + attr_name))
+            if isinstance(ir_ty, ir.PointerType):
+                return value
+            return marshal.marshal_to_object(
+                self.builder, self.module, self.runtime, value, value_ty,
+            )
         gv = self._native_module_attr_global_if_exists(module_name, attr_name)
         if gv is None:
             return self._emit_native_module_constant(info)

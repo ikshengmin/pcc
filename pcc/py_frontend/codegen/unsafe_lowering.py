@@ -123,6 +123,8 @@ UNSAFE_INTRINSICS = frozenset(
         "socket_setsockopt",
         "socket_getsockopt",
         "fd_control",
+        "file_flock",
+        "file_lock_region",
         "eventfd_create",
         "socket_send",
         "socket_recv",
@@ -156,10 +158,13 @@ UNSAFE_INTRINSICS = frozenset(
         "access",
         "stat_kind",
         "stat_mtime",
+        "stat_size",
+        "is_symlink",
         "target_sys_platform",
         "target_platform_machine",
         "darwin_errno_location",
         "call_ptr1",
+        "call_void_i32",
         "call_void_ptr0",
         "call_ptr0",
         "call_void_ptr1",
@@ -224,7 +229,10 @@ UNSAFE_INTRINSICS = frozenset(
         "atomic_fence",
         "atomic_test_and_set",
         "atomic_clear",
+        "windows_full_path", "windows_real_path",
+        "directory_open", "directory_next", "directory_error", "directory_close",
         "syscall6",
+        "linux_set_thread_pointer",
         "page_alloc",
         "page_free",
         "va_start",
@@ -287,6 +295,7 @@ _UNSAFE_INTRINSIC_FAMILIES = (
         'page_alloc',
         'page_free',
         'syscall6',
+        'linux_set_thread_pointer',
         'cstr',
         'target_sys_platform',
         'target_platform_machine',
@@ -351,6 +360,8 @@ _UNSAFE_INTRINSIC_FAMILIES = (
         'socket_setsockopt',
         'socket_getsockopt',
         'fd_control',
+        'file_flock',
+        'file_lock_region',
         'eventfd_create',
     ),
     (
@@ -396,6 +407,8 @@ _UNSAFE_INTRINSIC_FAMILIES = (
         'access',
         'stat_kind',
         'stat_mtime',
+        'stat_size',
+        'is_symlink',
     ),
     (
         'call_ptr1',
@@ -470,6 +483,10 @@ def _unsafe_intrinsic_family(intrinsic: str) -> int:
 
 
 class UnsafeIntrinsicMixin:
+    def _unsafe_linux_syscall6(self, nr, a1, a2, a3, a4, a5, a6, name=""):
+        from .linux_syscalls import emit_linux_operation
+        return emit_linux_operation(self, nr, a1, a2, a3, a4, a5, a6, name=name)
+
     _UNSAFE_INTRINSICS = UNSAFE_INTRINSICS
 
     def _is_unsafe_intrinsic(self, name: str) -> bool:
@@ -1289,15 +1306,8 @@ class UnsafeIntrinsicMixin:
         triple = getattr(self, "_target_triple", "") or ""
         triple = triple.lower()
         if triple:
-            if "darwin" in triple or "apple" in triple:
-                return "darwin"
-            if "linux" in triple:
-                return "linux"
-            if "windows" in triple or "win32" in triple:
-                return "win32"
-            if "freebsd" in triple:
-                return "freebsd"
-            return "unknown"
+            from pcc.backend.self_backend_target_match import target_os_name
+            return target_os_name(triple)
         if sys.platform == "darwin":
             return "darwin"
         if sys.platform.startswith("linux"):
@@ -1361,7 +1371,9 @@ class UnsafeIntrinsicMixin:
                 return 128, 16, 88, 96
         return 144, 24, 88, 96
 
-    def _emit_unsafe_stat_call(self, path: ir.Value) -> tuple[ir.Value, ir.Value]:
+    def _emit_unsafe_stat_call(
+        self, path: ir.Value, follow_symlinks: bool = True,
+    ) -> tuple[ir.Value, ir.Value]:
         size, _mode_off, _mtime_sec_off, _mtime_nsec_off = self._stat_layout()
         stat_ty = ir.ArrayType(_I8, size)
         slot = self.builder.alloca(stat_ty, name=self._fresh("unsafe.stat.buf"))
@@ -1376,7 +1388,7 @@ class UnsafeIntrinsicMixin:
         machine = self._target_machine_text()
         if platform_name == "darwin":
             stat_fn = self._declare_external_function(
-                "stat",
+                "stat" if follow_symlinks else "lstat",
                 _I32,
                 [_CSTR, _CSTR],
             )
@@ -1386,7 +1398,7 @@ class UnsafeIntrinsicMixin:
                 name=self._fresh("unsafe.stat.rc"),
             )
             return buf, rc
-        if platform_name == "linux" and machine == "x86_64":
+        if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
             zero = ir.Constant(_I64, 0)
             path_i = self.builder.ptrtoint(
                 path,
@@ -1398,8 +1410,8 @@ class UnsafeIntrinsicMixin:
                 _I64,
                 name=self._fresh("unsafe.stat.buf.i64"),
             )
-            raw = self.builder.syscall6(
-                ir.Constant(_I64, 4),
+            raw = self._unsafe_linux_syscall6(
+                ir.Constant(_I64, 4 if follow_symlinks else 6),
                 path_i,
                 buf_i,
                 zero,
@@ -1419,6 +1431,45 @@ class UnsafeIntrinsicMixin:
         raise NotImplementedError(
             "pcc.unsafe stat helpers support Darwin libSystem and Linux x86_64 raw syscalls"
         )
+
+    def _emit_unsafe_path_metadata(self, expr: Call, symlink: bool) -> ir.Value:
+        intrinsic = "is_symlink" if symlink else "stat_size"
+        self._unsafe_expect_arity(intrinsic, expr, 1)
+        path = self._unsafe_ptr_arg(expr.args[0])
+        buffer, rc = self._emit_unsafe_stat_call(path, not symlink)
+        platform_name = self._target_sys_platform_text()
+        if platform_name == "darwin":
+            status = self._unsafe_darwin_errno_result(rc, intrinsic)
+        else:
+            status = self.builder.sext(rc, _I64, name=self._fresh("unsafe.stat.status"))
+        success = self.current_function.append_basic_block(self._fresh("unsafe.stat.success"))
+        failure = self.current_function.append_basic_block(self._fresh("unsafe.stat.failure"))
+        done = self.current_function.append_basic_block(self._fresh("unsafe.stat.done"))
+        ok = self.builder.icmp_signed("==", status, ir.Constant(_I64, 0))
+        self.builder.cbranch(ok, success, failure)
+        self.builder.position_at_end(success)
+        if symlink:
+            _size, offset, _seconds, _nanos = self._stat_layout()
+            mode_type = _I16 if platform_name == "darwin" else _I32
+            address = self._unsafe_typed_addr(buffer, ir.Constant(_I64, offset), mode_type)
+            mode = self.builder.load(address, align=1)
+            kind = self.builder.and_(mode, ir.Constant(mode_type, 0o170000))
+            matches = self.builder.icmp_unsigned("==", kind, ir.Constant(mode_type, 0o120000))
+            value = self.builder.zext(matches, _I64)
+        else:
+            # Darwin stat64 and Linux x86-64/asm-generic stat layouts.
+            offset = 96 if platform_name == "darwin" else 48
+            address = self._unsafe_typed_addr(buffer, ir.Constant(_I64, offset), _I64)
+            value = self.builder.load(address, align=1)
+        self.builder.branch(done)
+        self.builder.position_at_end(failure)
+        failed_value = ir.Constant(_I64, 0) if symlink else status
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+        result = self.builder.phi(_I64, name=self._fresh("unsafe." + intrinsic))
+        result.add_incoming(value, success)
+        result.add_incoming(failed_value, failure)
+        return result
 
     def _emit_unsafe_stat_kind(self, expr: Call) -> ir.Value:
         self._unsafe_expect_arity("stat_kind", expr, 1)
@@ -1572,6 +1623,27 @@ class UnsafeIntrinsicMixin:
         intrinsic: str,
         expr: Call,
     ) -> ir.Value:
+        if intrinsic == "call_void_i32":
+            self._unsafe_expect_arity(intrinsic, expr, 2)
+            signature = ir.FunctionType(_VOID, [_I32])
+            function = self.builder.bitcast(self._unsafe_address_arg(expr.args[0]), signature.as_pointer())
+            self.builder.call(function, [self._unsafe_i32_arg(expr.args[1])])
+            return self._unsafe_void_result()
+        if intrinsic in ("windows_full_path", "windows_real_path"):
+            self._unsafe_expect_arity(intrinsic, expr, 3)
+            if self._target_sys_platform_text() != "win32":
+                return ir.Constant(_CSTR, None)
+            symbol = "pcc_win_full_path" if intrinsic == "windows_full_path" else "pcc_win_realpath"
+            function = self._declare_external_function(symbol, _CSTR, [_CSTR, _CSTR, _I64])
+            return self.builder.call(function, [self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_ptr_arg(expr.args[1]), self._unsafe_i64_arg(expr.args[2])])
+        if intrinsic in ("directory_open", "directory_next", "directory_error", "directory_close"):
+            from .platform_directory import emit as emit_directory
+            return emit_directory(self, intrinsic, expr)
+        if self._target_sys_platform_text() == "win32":
+            from .windows_platform import handles, emit
+            if handles(intrinsic):
+                return emit(self, intrinsic, expr)
         if self._define_unsafe_global_intrinsic(intrinsic, expr):
             return self._unsafe_void_result()
         if intrinsic.startswith("atomic_"):
@@ -1911,9 +1983,9 @@ class UnsafeIntrinsicMixin:
                     mapped,
                     name=self._fresh("unsafe.page.mmap.result"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                raw = self.builder.syscall6(
+                raw = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 9),
                     zero,
                     size,
@@ -1965,14 +2037,14 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.page.munmap.i64"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 ptr_i = self.builder.ptrtoint(
                     ptr,
                     _I64,
                     name=self._fresh("unsafe.page.munmap.ptr"),
                 )
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 11),
                     ptr_i,
                     size,
@@ -1985,14 +2057,26 @@ class UnsafeIntrinsicMixin:
             raise NotImplementedError(
                 "pcc.unsafe.page_free supports Darwin libSystem and Linux x86_64 raw syscalls"
             )
+        if intrinsic == "linux_set_thread_pointer":
+            self._unsafe_expect_arity(intrinsic, expr, 1)
+            pointer = self._unsafe_ptr_arg(expr.args[0])
+            if self._target_sys_platform_text() != "linux":
+                raise NotImplementedError("TLS thread-pointer installation requires Linux")
+            if self._target_machine_text() == "x86_64":
+                zero = ir.Constant(_I64, 0)
+                return self.builder.syscall6(ir.Constant(_I64, 158), ir.Constant(_I64, 4098),
+                                             self.builder.ptrtoint(pointer, _I64),
+                                             zero, zero, zero, zero)
+            function = self._declare_external_function("pcc_linux_set_thread_pointer", _I64, [_CSTR])
+            return self.builder.call(function, [pointer])
         if intrinsic == "syscall6":
             self._unsafe_expect_arity(intrinsic, expr, 7)
             if (
                 self._target_sys_platform_text() != "linux"
-                or self._target_machine_text() != "x86_64"
+                or self._target_machine_text() not in ("x86_64", "aarch64", "arm64")
             ):
                 raise NotImplementedError(
-                    "pcc.unsafe.syscall6 is Linux x86_64 only; Darwin raw "
+                    "pcc.unsafe.syscall6 requires Linux x86_64 or AArch64; Darwin raw "
                     "syscalls are unsupported by policy (use named libSystem "
                     "externs)"
                 )
@@ -2482,7 +2566,7 @@ class UnsafeIntrinsicMixin:
                 )
             if (
                 self._target_sys_platform_text() == "linux"
-                and self._target_machine_text() == "x86_64"
+                and self._target_machine_text() in ("x86_64", "aarch64", "arm64")
             ):
                 fd_i64 = self.builder.sext(
                     fd,
@@ -2495,7 +2579,7 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe." + intrinsic + ".buf"),
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 0 if intrinsic == "read" else 1),
                     fd_i64,
                     buf_i64,
@@ -2523,13 +2607,13 @@ class UnsafeIntrinsicMixin:
                 return self.builder.sext(raw, _I64, name=self._fresh("unsafe.close"))
             if (
                 self._target_sys_platform_text() == "linux"
-                and self._target_machine_text() == "x86_64"
+                and self._target_machine_text() in ("x86_64", "aarch64", "arm64")
             ):
                 fd_i64 = self.builder.sext(
                     fd, _I64, name=self._fresh("unsafe.close.fd")
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 3),
                     fd_i64,
                     zero,
@@ -2558,7 +2642,7 @@ class UnsafeIntrinsicMixin:
                 )
             if (
                 self._target_sys_platform_text() == "linux"
-                and self._target_machine_text() == "x86_64"
+                and self._target_machine_text() in ("x86_64", "aarch64", "arm64")
             ):
                 fd_i64 = self.builder.sext(
                     fd, _I64, name=self._fresh("unsafe.seek_file.fd")
@@ -2569,7 +2653,7 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.seek_file.whence"),
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 8),
                     fd_i64,
                     offset,
@@ -2597,12 +2681,12 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.open_readonly.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "open_readonly")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 path_i = self.builder.ptrtoint(
                     path, _I64, name=self._fresh("unsafe.open_readonly.path")
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 2),
                     path_i,
                     zero,
@@ -2808,7 +2892,7 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.open_file.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "open_file")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 create_flags = self.builder.select(
                     is_truncate,
                     ir.Constant(_I32, 64 | 512),
@@ -2846,7 +2930,7 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.open_file.flags.i64"),
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 257),
                     ir.Constant(_I64, -100),
                     path_i,
@@ -2875,9 +2959,9 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.rename_file.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "rename_file")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 82),
                     self.builder.ptrtoint(source, _I64),
                     self.builder.ptrtoint(destination, _I64),
@@ -2906,9 +2990,9 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.chmod_file.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "chmod_file")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 90),
                     self.builder.ptrtoint(path, _I64),
                     self.builder.zext(mode, _I64),
@@ -2934,9 +3018,9 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.sync_file.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "sync_file")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 74),
                     self.builder.sext(fd, _I64),
                     zero,
@@ -2979,9 +3063,9 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.socket_open.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "socket_open")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 41),
                     family,
                     socket_type,
@@ -3015,12 +3099,12 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.socket_connect.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "socket_connect")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 address_i = self.builder.ptrtoint(
                     address, _I64, name=self._fresh("unsafe.socket_connect.address")
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 42),
                     fd,
                     address_i,
@@ -3054,12 +3138,12 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.socket_bind.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "socket_bind")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 address_i = self.builder.ptrtoint(
                     address, _I64, name=self._fresh("unsafe.socket_bind.address")
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 49),
                     fd,
                     address_i,
@@ -3088,9 +3172,9 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.socket_listen.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "socket_listen")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 50),
                     fd,
                     backlog,
@@ -3128,12 +3212,12 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.socket_setsockopt.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "socket_setsockopt")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 value_i = self.builder.ptrtoint(
                     value, _I64, name=self._fresh("unsafe.socket_setsockopt.value")
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 54),
                     fd,
                     level,
@@ -3179,9 +3263,9 @@ class UnsafeIntrinsicMixin:
                 result = self._unsafe_darwin_errno_result(
                     raw_i32, "socket_getsockopt"
                 )
-            elif platform_name == "linux" and machine == "x86_64":
+            elif platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                result = self.builder.syscall6(
+                result = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 55),
                     fd,
                     level,
@@ -3206,6 +3290,28 @@ class UnsafeIntrinsicMixin:
                 length,
                 name=self._fresh("unsafe.socket_getsockopt.result"),
             )
+        if intrinsic == "file_flock":
+            self._unsafe_expect_arity(intrinsic, expr, 2)
+            fd = self._unsafe_i64_arg(expr.args[0])
+            operation = self._unsafe_i64_arg(expr.args[1])
+            platform_name = self._target_sys_platform_text()
+            if platform_name == "darwin":
+                function = self._declare_external_function("flock", _I32, [_I32, _I32])
+                raw = self.builder.call(function, [self.builder.trunc(fd, _I32), self.builder.trunc(operation, _I32)])
+                result = self._unsafe_darwin_errno_result(raw, intrinsic)
+                # The raw intrinsic uses Linux errno values for the one value
+                # that differs and is consumed by the portable retry policy.
+                blocked = self.builder.icmp_signed("==", result, ir.Constant(_I64, -35))
+                return self.builder.select(blocked, ir.Constant(_I64, -11), result)
+            if platform_name == "linux":
+                zero = ir.Constant(_I64, 0)
+                return self._unsafe_linux_syscall6(ir.Constant(_I64, 73), fd, operation, zero, zero, zero, zero, name=self._fresh("unsafe.flock"))
+            return ir.Constant(_I64, -38)
+        if intrinsic == "file_lock_region":
+            self._unsafe_expect_arity(intrinsic, expr, 4)
+            # Windows routing above owns this operation via LockFileEx. No
+            # libc/CRT fallback exists on other targets.
+            return ir.Constant(_I64, -38)
         if intrinsic == "fd_control":
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fd = self._unsafe_i64_arg(expr.args[0])
@@ -3227,9 +3333,9 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe.fd_control.i32"),
                 )
                 return self._unsafe_darwin_errno_result(raw, "fd_control")
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 72),
                     fd,
                     command,
@@ -3246,11 +3352,11 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 2)
             if not (
                 self._target_sys_platform_text() == "linux"
-                and self._target_machine_text() == "x86_64"
+                and self._target_machine_text() in ("x86_64", "aarch64", "arm64")
             ):
                 return ir.Constant(_I64, -38)
             zero = ir.Constant(_I64, 0)
-            return self.builder.syscall6(
+            return self._unsafe_linux_syscall6(
                 ir.Constant(_I64, 290),
                 self._unsafe_i64_arg(expr.args[0]),
                 self._unsafe_i64_arg(expr.args[1]),
@@ -3293,12 +3399,12 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe." + intrinsic + ".i64"),
                 )
                 return self._unsafe_darwin_errno_result(raw, intrinsic)
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 buffer_i = self.builder.ptrtoint(
                     buffer, _I64, name=self._fresh("unsafe." + intrinsic + ".buffer")
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 44 if intrinsic == "socket_send" else 45),
                     fd,
                     buffer_i,
@@ -3346,9 +3452,9 @@ class UnsafeIntrinsicMixin:
                         name=self._fresh("unsafe.socket_shutdown.i32"),
                     )
                 return self._unsafe_darwin_errno_result(raw, intrinsic)
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 43 if intrinsic == "socket_accept" else 48),
                     fd,
                     how if intrinsic == "socket_shutdown" else zero,
@@ -3385,9 +3491,9 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe." + intrinsic + ".i32"),
                 )
                 result = self._unsafe_darwin_errno_result(raw_i32, intrinsic)
-            elif platform_name == "linux" and machine == "x86_64":
+            elif platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                result = self.builder.syscall6(
+                result = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 51 if intrinsic == "socket_sockname" else 52),
                     fd,
                     self.builder.ptrtoint(address, _I64),
@@ -3452,9 +3558,9 @@ class UnsafeIntrinsicMixin:
                     name=self._fresh("unsafe." + intrinsic + ".i32"),
                 )
                 result = self._unsafe_darwin_errno_result(raw_i32, intrinsic)
-            elif platform_name == "linux" and machine == "x86_64":
+            elif platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                result = self.builder.syscall6(
+                result = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 7),
                     self.builder.ptrtoint(records_ptr, _I64),
                     count,
@@ -3509,10 +3615,10 @@ class UnsafeIntrinsicMixin:
                 return self.builder.sext(raw, _I64, name=self._fresh("unsafe.getpid"))
             if (
                 self._target_sys_platform_text() == "linux"
-                and self._target_machine_text() == "x86_64"
+                and self._target_machine_text() in ("x86_64", "aarch64", "arm64")
             ):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 39),
                     zero,
                     zero,
@@ -3542,14 +3648,14 @@ class UnsafeIntrinsicMixin:
                     [buffer, size],
                     name=self._fresh("unsafe.getcwd"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 buffer_i = self.builder.ptrtoint(
                     buffer,
                     _I64,
                     name=self._fresh("unsafe.getcwd.buffer"),
                 )
-                raw = self.builder.syscall6(
+                raw = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 79),
                     buffer_i,
                     size,
@@ -3592,7 +3698,7 @@ class UnsafeIntrinsicMixin:
                     [path, buffer, size],
                     name=self._fresh("unsafe.readlink"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 path_i = self.builder.ptrtoint(
                     path,
@@ -3604,7 +3710,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.readlink.buffer"),
                 )
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 89),
                     path_i,
                     buffer_i,
@@ -3639,7 +3745,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.mkdir"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 path_i = self.builder.ptrtoint(
                     path,
@@ -3651,7 +3757,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.mkdir.mode"),
                 )
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 83),
                     path_i,
                     mode_i,
@@ -3697,7 +3803,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.unlinkat"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 path_i = self.builder.ptrtoint(
                     path,
@@ -3720,7 +3826,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.unlinkat.flags.i64"),
                 )
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 263),
                     ir.Constant(_I64, -100),
                     path_i,
@@ -3750,14 +3856,14 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.uname"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 buffer_i = self.builder.ptrtoint(
                     buffer,
                     _I64,
                     name=self._fresh("unsafe.uname.buffer"),
                 )
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 63),
                     buffer_i,
                     zero,
@@ -3778,7 +3884,7 @@ class UnsafeIntrinsicMixin:
             machine = self._target_machine_text()
             if platform_name == "darwin":
                 width = 256
-            elif platform_name == "linux" and machine == "x86_64":
+            elif platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 width = 65
             else:
                 raise NotImplementedError(
@@ -3867,13 +3973,13 @@ class UnsafeIntrinsicMixin:
                     zero,
                     name=self._fresh("unsafe.cpu_query.result"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 buffer_i = self.builder.ptrtoint(
                     buffer,
                     _I64,
                     name=self._fresh("unsafe.cpu_query.buffer"),
                 )
-                raw = self.builder.syscall6(
+                raw = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 204),
                     zero,
                     size,
@@ -3934,14 +4040,14 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.clock_gettime"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 buffer_i = self.builder.ptrtoint(
                     buffer,
                     _I64,
                     name=self._fresh("unsafe.clock_gettime.buffer"),
                 )
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 228),
                     ir.Constant(_I64, logical_kind),
                     buffer_i,
@@ -3976,7 +4082,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.nanosleep"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 request_i = self.builder.ptrtoint(
                     request,
@@ -3988,7 +4094,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.nanosleep.remaining"),
                 )
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 35),
                     request_i,
                     remaining_i,
@@ -4058,12 +4164,12 @@ class UnsafeIntrinsicMixin:
                     raw,
                     name=self._fresh("unsafe.waitpid.result"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 status_i = self.builder.ptrtoint(
                     status, _I64, name=self._fresh("unsafe.waitpid.status")
                 )
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 61),
                     pid,
                     status_i,
@@ -4132,9 +4238,9 @@ class UnsafeIntrinsicMixin:
                     raw,
                     name=self._fresh("unsafe.kill.result"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 62),
                     pid,
                     signal_number,
@@ -4159,9 +4265,9 @@ class UnsafeIntrinsicMixin:
                 exit_fn = self._declare_external_function("_exit", _VOID, [_I32])
                 self.builder.call(exit_fn, [status_i32])
                 return self._unsafe_void_result()
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 231),
                     status,
                     zero,
@@ -4416,7 +4522,7 @@ class UnsafeIntrinsicMixin:
                 result.add_incoming(spawn_error_i64, spawn_fail_end)
                 result.add_incoming(pid_i64, success_end)
                 return result
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 finish_block = self.current_function.append_basic_block(
                     self._fresh("unsafe.spawn_pipe.finish")
                 )
@@ -4429,10 +4535,10 @@ class UnsafeIntrinsicMixin:
                 fds_i64 = self.builder.ptrtoint(
                     self.builder.bitcast(fds, _CSTR), _I64
                 )
-                pipe_rc = self.builder.syscall6(
+                pipe_rc = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 293),
                     fds_i64,
-                    zero_i64,
+                    ir.Constant(_I64, 524288),  # O_CLOEXEC
                     zero_i64,
                     zero_i64,
                     zero_i64,
@@ -4463,7 +4569,7 @@ class UnsafeIntrinsicMixin:
                 fd1_i64 = self.builder.sext(fd1, _I64)
                 parent_fd_i64 = self.builder.sext(parent_fd, _I64)
                 child_fd_i64 = self.builder.sext(child_fd, _I64)
-                fork_result = self.builder.syscall6(
+                fork_result = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 57),
                     zero_i64,
                     zero_i64,
@@ -4498,11 +4604,11 @@ class UnsafeIntrinsicMixin:
                 )
 
                 self.builder.position_at_end(fork_fail_block)
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 3), fd0_i64, zero_i64, zero_i64,
                     zero_i64, zero_i64, zero_i64,
                 )
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 3), fd1_i64, zero_i64, zero_i64,
                     zero_i64, zero_i64, zero_i64,
                 )
@@ -4510,19 +4616,58 @@ class UnsafeIntrinsicMixin:
                 fork_fail_end = self.builder.block
 
                 self.builder.position_at_end(child_block)
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 109), zero_i64, zero_i64, zero_i64,
+                    zero_i64, zero_i64, zero_i64,
+                    name=self._fresh("unsafe.spawn_pipe.setpgid"),
+                )
+                dup_result = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 33), child_fd_i64, child_target,
                     zero_i64, zero_i64, zero_i64, zero_i64,
                 )
-                self.builder.syscall6(
-                    ir.Constant(_I64, 3), fd0_i64, zero_i64, zero_i64,
+                # dup2(fd, fd) preserves FD_CLOEXEC. Explicitly clear it on
+                # the selected standard descriptor, including that case.
+                inherit_result = self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 72), child_target, ir.Constant(_I64, 2),
+                    zero_i64, zero_i64, zero_i64, zero_i64,
+                )
+                exec_block = self.current_function.append_basic_block(
+                    self._fresh("unsafe.spawn_pipe.exec")
+                )
+                child_exit_block = self.current_function.append_basic_block(
+                    self._fresh("unsafe.spawn_pipe.child_exit")
+                )
+                self.builder.cbranch(
+                    self.builder.and_(
+                        self.builder.icmp_signed(">=", dup_result, zero_i64),
+                        self.builder.icmp_signed(">=", inherit_result, zero_i64),
+                    ),
+                    exec_block,
+                    child_exit_block,
+                )
+                self.builder.position_at_end(exec_block)
+                # A pipe end can occupy stdin/stdout when the caller closed
+                # it. After dup2, closing that numeric fd would close the new
+                # stream; close only the other descriptors.
+                close_fd0 = self.builder.select(
+                    self.builder.icmp_signed("!=", fd0_i64, child_target),
+                    fd0_i64,
+                    ir.Constant(_I64, -1),
+                )
+                close_fd1 = self.builder.select(
+                    self.builder.icmp_signed("!=", fd1_i64, child_target),
+                    fd1_i64,
+                    ir.Constant(_I64, -1),
+                )
+                self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 3), close_fd0, zero_i64, zero_i64,
                     zero_i64, zero_i64, zero_i64,
                 )
-                self.builder.syscall6(
-                    ir.Constant(_I64, 3), fd1_i64, zero_i64, zero_i64,
+                self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 3), close_fd1, zero_i64, zero_i64,
                     zero_i64, zero_i64, zero_i64,
                 )
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 59),
                     self.builder.ptrtoint(path, _I64),
                     self.builder.ptrtoint(argv, _I64),
@@ -4531,7 +4676,9 @@ class UnsafeIntrinsicMixin:
                     zero_i64,
                     zero_i64,
                 )
-                self.builder.syscall6(
+                self.builder.branch(child_exit_block)
+                self.builder.position_at_end(child_exit_block)
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 231),
                     ir.Constant(_I64, 127),
                     zero_i64,
@@ -4543,7 +4690,7 @@ class UnsafeIntrinsicMixin:
                 self.builder.unreachable()
 
                 self.builder.position_at_end(parent_block)
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 3), child_fd_i64, zero_i64, zero_i64,
                     zero_i64, zero_i64, zero_i64,
                 )
@@ -4851,9 +4998,9 @@ class UnsafeIntrinsicMixin:
                 result.add_incoming(negative_init_error, init_done_block)
                 result.add_incoming(setup_result, setup_done_block)
                 return result
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
-                fork_result = self.builder.syscall6(
+                fork_result = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 57),
                     zero,
                     zero,
@@ -4877,7 +5024,7 @@ class UnsafeIntrinsicMixin:
                     parent_block,
                 )
                 self.builder.position_at_end(child_block)
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 109),
                     zero,
                     zero,
@@ -4907,7 +5054,7 @@ class UnsafeIntrinsicMixin:
                     )
                 )
                 devnull_i = self.builder.ptrtoint(devnull, _I64)
-                null_fd = self.builder.syscall6(
+                null_fd = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 2),
                     devnull_i,
                     ir.Constant(_I64, 1),
@@ -4917,7 +5064,7 @@ class UnsafeIntrinsicMixin:
                     zero,
                     name=self._fresh("unsafe.spawn.open_devnull"),
                 )
-                self.builder.syscall6(
+                dup_stdout = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 33),
                     null_fd,
                     ir.Constant(_I64, 1),
@@ -4927,7 +5074,7 @@ class UnsafeIntrinsicMixin:
                     zero,
                     name=self._fresh("unsafe.spawn.dup_stdout"),
                 )
-                self.builder.syscall6(
+                dup_stderr = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 33),
                     null_fd,
                     ir.Constant(_I64, 2),
@@ -4937,9 +5084,12 @@ class UnsafeIntrinsicMixin:
                     zero,
                     name=self._fresh("unsafe.spawn.dup_stderr"),
                 )
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 3),
-                    null_fd,
+                    self.builder.select(
+                        self.builder.icmp_signed(">", null_fd, ir.Constant(_I64, 2)),
+                        null_fd, ir.Constant(_I64, -1),
+                    ),
                     zero,
                     zero,
                     zero,
@@ -4947,9 +5097,23 @@ class UnsafeIntrinsicMixin:
                     zero,
                     name=self._fresh("unsafe.spawn.close_devnull"),
                 )
-                self.builder.branch(exec_block)
+                capture_failed = self.current_function.append_basic_block(
+                    self._fresh("unsafe.spawn.capture_failed")
+                )
+                self.builder.cbranch(
+                    self.builder.and_(
+                        self.builder.icmp_signed(">=", dup_stdout, zero),
+                        self.builder.icmp_signed(">=", dup_stderr, zero),
+                    ), exec_block, capture_failed,
+                )
+                self.builder.position_at_end(capture_failed)
+                self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 231), ir.Constant(_I64, 127),
+                    zero, zero, zero, zero, zero,
+                )
+                self.builder.unreachable()
                 self.builder.position_at_end(exec_block)
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 59),
                     self.builder.ptrtoint(path, _I64),
                     self.builder.ptrtoint(argv, _I64),
@@ -4959,7 +5123,7 @@ class UnsafeIntrinsicMixin:
                     zero,
                     name=self._fresh("unsafe.spawn.execve"),
                 )
-                self.builder.syscall6(
+                self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 231),
                     ir.Constant(_I64, 127),
                     zero,
@@ -5076,7 +5240,7 @@ class UnsafeIntrinsicMixin:
                     environ_global,
                     name=self._fresh("unsafe.environ"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 envp_global = self.module.globals.get("pcc_initial_envp")
                 if not isinstance(envp_global, ir.GlobalVariable):
                     envp_global = self._declare_external_global(
@@ -5111,7 +5275,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.access"),
                 )
-            if platform_name == "linux" and machine == "x86_64":
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
                 zero = ir.Constant(_I64, 0)
                 path_i = self.builder.ptrtoint(
                     path,
@@ -5123,7 +5287,7 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.access.mode"),
                 )
-                return self.builder.syscall6(
+                return self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 21),
                     path_i,
                     mode_i,
@@ -5140,6 +5304,10 @@ class UnsafeIntrinsicMixin:
             return self._emit_unsafe_stat_kind(expr)
         if intrinsic == "stat_mtime":
             return self._emit_unsafe_stat_mtime(expr)
+        if intrinsic == "stat_size":
+            return self._emit_unsafe_path_metadata(expr, False)
+        if intrinsic == "is_symlink":
+            return self._emit_unsafe_path_metadata(expr, True)
         raise NotImplementedError(
             "pcc.unsafe internal intrinsic family mismatch"
         )
@@ -6203,11 +6371,11 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 1)
             if not (
                 self._target_sys_platform_text() == "linux"
-                and self._target_machine_text() == "x86_64"
+                and self._target_machine_text() in ("x86_64", "aarch64", "arm64")
             ):
                 return ir.Constant(_I64, -38)
             zero = ir.Constant(_I64, 0)
-            return self.builder.syscall6(
+            return self._unsafe_linux_syscall6(
                 ir.Constant(_I64, 291),
                 self._unsafe_i64_arg(expr.args[0]),
                 zero,
@@ -6221,11 +6389,12 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 5)
             if not (
                 self._target_sys_platform_text() == "linux"
-                and self._target_machine_text() == "x86_64"
+                and self._target_machine_text() in ("x86_64", "aarch64", "arm64")
             ):
                 return ir.Constant(_I64, -38)
+            token_offset = 4 if self._target_machine_text() == "x86_64" else 8
             event_storage = self.builder.alloca(
-                ir.ArrayType(_I8, 12),
+                ir.ArrayType(_I8, token_offset + 8),
                 name=self._fresh("unsafe.epoll_ctl.event"),
             )
             zero = ir.Constant(_I64, 0)
@@ -6237,10 +6406,10 @@ class UnsafeIntrinsicMixin:
             )
             events_ptr = self._unsafe_typed_addr(event, zero, _I32)
             token_low_ptr = self._unsafe_typed_addr(
-                event, ir.Constant(_I64, 4), _I32
+                event, ir.Constant(_I64, token_offset), _I32
             )
             token_high_ptr = self._unsafe_typed_addr(
-                event, ir.Constant(_I64, 8), _I32
+                event, ir.Constant(_I64, token_offset + 4), _I32
             )
             self.builder.store(
                 self.builder.trunc(self._unsafe_i64_arg(expr.args[3]), _I32),
@@ -6254,7 +6423,7 @@ class UnsafeIntrinsicMixin:
                 ),
                 token_high_ptr,
             )
-            return self.builder.syscall6(
+            return self._unsafe_linux_syscall6(
                 ir.Constant(_I64, 233),
                 self._unsafe_i64_arg(expr.args[0]),
                 self._unsafe_i64_arg(expr.args[1]),
@@ -6268,12 +6437,18 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4)
             if not (
                 self._target_sys_platform_text() == "linux"
-                and self._target_machine_text() == "x86_64"
+                and self._target_machine_text() in ("x86_64", "aarch64", "arm64")
             ):
                 return ir.Constant(_I64, -38)
+            if self._target_machine_text() in ("aarch64", "arm64"):
+                helper = self._declare_external_function("pcc_linux_aarch64_epoll_wait", _I64,
+                                                         [_I64, _CSTR, _I64, _I64])
+                return self.builder.call(helper, [self._unsafe_i64_arg(expr.args[0]),
+                    self._unsafe_ptr_arg(expr.args[1]), self._unsafe_i64_arg(expr.args[2]),
+                    self._unsafe_i64_arg(expr.args[3])])
             events = self._unsafe_ptr_arg(expr.args[1])
             zero = ir.Constant(_I64, 0)
-            return self.builder.syscall6(
+            return self._unsafe_linux_syscall6(
                 ir.Constant(_I64, 232),
                 self._unsafe_i64_arg(expr.args[0]),
                 self.builder.ptrtoint(events, _I64),

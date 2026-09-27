@@ -137,6 +137,19 @@ def test_py_ast_wire_roundtrips_first_class_set_type() -> None:
     assert _py_ast_from_wire(_py_ast_to_wire(set_ty)) == set_ty
 
 
+def test_py_ast_wire_roundtrips_value_array_type() -> None:
+    # A module annotating pcc.array[...] failed in the frontend worker with
+    # "unknown py_ast wire node kind ValueArrayType".
+    from pcc.py_frontend.pipeline import _py_ast_from_wire, _py_ast_to_wire
+    from pcc.py_frontend.py_ast import ClassType, ValueArrayType
+
+    elem = ClassType(name="Point", module="m", fields=(), bases=(), properties=(),
+                     valueclass=True)
+    array_ty = ValueArrayType(name="pcc.array", elem=elem, length=3)
+
+    assert _py_ast_from_wire(_py_ast_to_wire(array_ty)) == array_ty
+
+
 def test_stdlib_ast_lifter_preserves_interleaved_call_operand_order() -> None:
     from pcc.py_frontend.parser import parse
     from pcc.py_frontend.py_ast import Call, ExprStmt

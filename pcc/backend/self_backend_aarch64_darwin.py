@@ -140,7 +140,7 @@ from .self_backend_target_passes import (
     require_closed_aarch64_memory_pair_barrier,
     run_self_target_memory_pass_pipeline,
 )
-from .self_backend_target_match import is_aarch64_darwin_triple
+from .self_backend_target_match import is_aarch64_darwin_triple, is_aarch64_linux_triple
 from .self_backend_terminator_dispatch import emit_terminator_dispatch
 from .self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntArena
 from .self_backend_aarch64_fragments import (
@@ -624,7 +624,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
     global _MODULE_SYMBOLS
     direct_instruction_capture = encoded_line_records is not None and not optimize
     triple = prepared.triple
-    if triple != "unknown-unknown-unknown" and not is_aarch64_darwin_triple(triple):
+    if triple != "unknown-unknown-unknown" and not (is_aarch64_darwin_triple(triple) or is_aarch64_linux_triple(triple)):
         raise BackendUnavailable(
             f"self backend asm MVP only supports AArch64 Darwin, got {triple!r}"
         )
@@ -725,10 +725,11 @@ def _emit_prepared_aarch64_darwin_lines_active(
             if close_native_tables:
                 for func in functions:
                     get_indexed_function_kernel(func).close_native_tables()
-        native_sink.extend(_append_compact_unwind(
-            [], functions, _MODULE_SYMBOLS, target_offsets,
-            native_sink.builder.text_size(),
-        ))
+        if not is_aarch64_linux_triple(triple):
+            native_sink.extend(_append_compact_unwind(
+                [], functions, _MODULE_SYMBOLS, target_offsets,
+                native_sink.builder.text_size(),
+            ))
         native_sink.append(".subsections_via_symbols")
         sections, undefined = native_sink.builder.finish(structured_sections)
         structured_sections.clear()
@@ -800,7 +801,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
         if close_native_tables:
             for func in functions:
                 get_indexed_function_kernel(func).close_native_tables()
-    lines = _append_compact_unwind(lines, functions, _MODULE_SYMBOLS)
+    if not is_aarch64_linux_triple(triple):
+        lines = _append_compact_unwind(lines, functions, _MODULE_SYMBOLS)
     direct_instruction_records = None
     direct_instruction_symbols = None
     if direct_instruction_capture:
