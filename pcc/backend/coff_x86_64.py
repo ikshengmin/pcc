@@ -200,10 +200,16 @@ def _unwind_source(text):
 
 
 def assemble(text: str) -> CoffObject:
-    from .x86_64_asm_driver import assemble_file
+    from .x86_64_asm_driver import assemble_file_keeping_labels
     from .elf_x86_64 import SHF_EXECINSTR, SHF_WRITE, SHF_TLS, STB_LOCAL, STT_FUNC
     clean, procedures = _unwind_source(text)
-    elf = assemble_file(clean)
+    # The unwind markers are unreferenced local labels, which the assembler
+    # otherwise leaves out of .symtab; _append_unwind reads their offsets.
+    markers = set()
+    for _name, actions, prolog_end, end in procedures:
+        markers.update(label for label, _op, _args in actions)
+        markers.update((prolog_end, end))
+    elf = assemble_file_keeping_labels(clean, markers)
     symbols = [CoffSymbol(sym.name, sym.section_index, sym.value,
                           sym.binding != STB_LOCAL, sym.type == STT_FUNC) for sym in elf.symbols[1:]]
     sections = []

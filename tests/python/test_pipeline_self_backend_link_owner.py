@@ -46,7 +46,7 @@ def test_profiled_packed_native_link_executes_without_a_host_interpreter(tmp_pat
             pcc_native_object_inputs=() if manifest_input else (str(packed),),
             pcc_internal_input_manifest=str(manifest) if manifest_input else None,
             link_profile_path=str(profile),
-            resolve_self_link_mode=lambda: "pcc",
+            resolve_self_link_mode=lambda **_kwargs: "pcc",
             validate_pcc_self_link_surface=lambda **kwargs: None,
             repo_root_for_link=forbidden, host_python_command=forbidden,
             build_pcc_link_command=forbidden, log=lambda *args: None,
@@ -99,7 +99,7 @@ def test_cc_link_owner_runs_the_exact_prepared_command(monkeypatch):
         None,
         (),
         False,
-        resolve_self_link_mode=lambda: "cc",
+        resolve_self_link_mode=lambda **_kwargs: "cc",
         validate_pcc_self_link_surface=lambda **_kwargs: None,
         repo_root_for_link=lambda: "/unused",
         host_python_command=lambda: "/unused/python3",
@@ -139,7 +139,7 @@ def test_semantic_policy_cannot_cross_cc_or_linux_link_boundary(
             (),
             False,
             semantic_layout_policy="policy.json",
-            resolve_self_link_mode=lambda: mode,
+            resolve_self_link_mode=lambda **_kwargs: mode,
             validate_pcc_self_link_surface=lambda **_kwargs: None,
             repo_root_for_link=lambda: "/unused",
             host_python_command=lambda: "/unused/python3",
@@ -160,14 +160,14 @@ def test_facade_routes_ir_text_linking_to_the_owner(monkeypatch, tmp_path):
 
     monkeypatch.setattr(self_link, "link_ir_texts", fake_link_ir_texts)
     pipeline._link_with_self_backend_ir_texts(
-        ["define i32 @main() { ret i32 0 }"],
+        ['target triple = "arm64-apple-darwin23.6.0"\n' "define i32 @main() { ret i32 0 }"],
         str(tmp_path / "program"),
         None,
         False,
         tmp_dir=str(tmp_path),
     )
 
-    assert observed["args"][0] == ["define i32 @main() { ret i32 0 }"]
+    assert observed["args"][0] == ['target triple = "arm64-apple-darwin23.6.0"\n' "define i32 @main() { ret i32 0 }"]
     assert observed["kwargs"]["tmp_dir"] == str(tmp_path)
     assert observed["kwargs"]["link_run"] is pipeline._link_self_backend_ir_texts_run
 
@@ -179,17 +179,19 @@ def test_link_facade_has_no_second_file_path_owner():
 
 @pytest.mark.parametrize("consume", [False, True])
 def test_owned_ir_is_released_after_emission_before_linking(monkeypatch, tmp_path, consume):
-    texts = ["first module", "second module"]
+    first = 'target triple = "arm64-apple-darwin23.6.0"\n; first module'
+    second = 'target triple = "arm64-apple-darwin23.6.0"\n; second module'
+    texts = [first, second]
     normalized = []
     linked = []
 
     def emit(values, *_args, **_kwargs):
-        assert values == texts == ["first module", "second module"]
+        assert values == texts == [first, second]
         normalized.append(values)
         return [("self-aarch64-darwin-v0", str(tmp_path / "module.s"))]
 
     def link(*_args, **_kwargs):
-        expected = [] if consume else ["first module", "second module"]
+        expected = [] if consume else [first, second]
         assert texts == normalized[0] == expected
         linked.append(True)
 
@@ -218,14 +220,14 @@ def test_semantic_layout_rejects_split_module_before_emission(
         match="does not yet own split-module symbol renaming",
     ):
         self_link.link_ir_texts_run(
-            ["define i32 @main() { ret i32 0 }"],
+            ['target triple = "arm64-apple-darwin23.6.0"\n' "define i32 @main() { ret i32 0 }"],
             str(tmp_path / "program"),
             None,
             False,
             needs_libpython=False,
             tmp=str(tmp_path),
             profile=None,
-            resolve_self_link_mode=lambda: "pcc",
+            resolve_self_link_mode=lambda **_kwargs: "pcc",
             validate_pcc_self_link_surface=lambda **_kwargs: None,
             profile_begin=lambda _profile: 0,
             profile_end=lambda *_args: None,
@@ -264,7 +266,7 @@ def test_pcc_link_selection_fails_before_silent_cc_fallback(tmp_path, monkeypatc
             None,
             (),
             False,
-            resolve_self_link_mode=lambda: "pcc",
+            resolve_self_link_mode=lambda **_kwargs: "pcc",
             validate_pcc_self_link_surface=lambda **_kwargs: None,
             repo_root_for_link=lambda: str(tmp_path),
             host_python_command=lambda: "/unused/python3",
@@ -282,22 +284,25 @@ def test_pcc_link_selection_fails_before_silent_cc_fallback(tmp_path, monkeypatc
 def test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly(
     monkeypatch, tmp_path
 ):
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    driver = scripts / "pcc_link_elf.py"
-    driver.write_text("# owned ELF driver\n", encoding="utf-8")
+    # The Linux pcc route links in process through the owned ELF linker:
+    # no host Python, no driver subprocess, internal assembly kept separate.
+    from pcc.backend import owned_elf_link
+
     output = tmp_path / "program"
     calls = []
 
-    def fake_run(command, *, check):
-        calls.append(list(command))
-        assert check is True
+    def owned_link(**kwargs):
+        calls.append(kwargs)
         output.write_bytes(b"ELF")
         output.chmod(0o755)
 
+    def no_subprocess(command, **_kwargs):
+        raise AssertionError("owned ELF link started " + repr(command))
+
     monkeypatch.setattr(self_link.sys, "platform", "linux")
     monkeypatch.setattr(self_link.sys, "executable", "/compiled/pcc1")
-    monkeypatch.setattr(self_link.subprocess, "run", fake_run)
+    monkeypatch.setattr(self_link.subprocess, "run", no_subprocess)
+    monkeypatch.setattr(owned_elf_link, "link_inputs", owned_link)
     self_link.run_link_command(
         ["cc", "ignored"],
         None,
@@ -306,30 +311,21 @@ def test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly(
         ("extra.o",),
         False,
         pcc_asm_inputs=("first.s", "second.s"),
-        resolve_self_link_mode=lambda: "pcc",
+        resolve_self_link_mode=lambda **_kwargs: "pcc",
         validate_pcc_self_link_surface=lambda **_kwargs: None,
         repo_root_for_link=lambda: str(tmp_path),
-        host_python_command=lambda: "/repo/.venv/bin/python3",
+        host_python_command=lambda: (_ for _ in ()).throw(
+            AssertionError("owned ELF link resolved a host Python")
+        ),
         build_pcc_link_command=link_contract.build_pcc_link_command,
         log=lambda *_args: None,
         join_strings=lambda values, sep: sep.join(values),
     )
     assert len(calls) == 1
-    command = calls[0]
-    assert command[0] == "/repo/.venv/bin/python3"
-    assert "/compiled/pcc1" not in command
-    assert str(driver) in command
-    assert [
-        command[index + 1]
-        for index, value in enumerate(command)
-        if value == "--asm"
-    ] == ["first.s", "second.s"]
-    assert [
-        command[index + 1]
-        for index, value in enumerate(command)
-        if value == "--object"
-    ] == ["extra.o"]
-    assert command[command.index("--archive") + 1] == "/runtime/libpcc.a"
+    assert calls[0]["assembly"] == ["first.s", "second.s"]
+    assert calls[0]["objects"] == ["extra.o"]
+    assert calls[0]["archives"] == ["/runtime/libpcc.a"]
+    assert calls[0]["output"] == str(output)
 
 
 def test_parallel_codegen_container_does_not_retain_prepass_ir(monkeypatch, tmp_path):
@@ -338,7 +334,7 @@ def test_parallel_codegen_container_does_not_retain_prepass_ir(monkeypatch, tmp_
         pass
     references = []
     def codegen(*_args, **_kwargs):
-        batch = TextBatch([("entry", "define i32 @main() { ret i32 0 }")])
+        batch = TextBatch([("entry", 'target triple = "arm64-apple-darwin23.6.0"\n' "define i32 @main() { ret i32 0 }")])
         references.append(weakref.ref(batch))
         return batch, False, False, 38, []
     def link(texts, *_args, **kwargs):

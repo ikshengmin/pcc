@@ -388,6 +388,23 @@ def _enc_movewide(opc: int, rd, imm16: int, shift: int, is64: bool) -> int:
     )
 
 
+def _enc_mov_immediate(rd, value, is64, line):
+    """``mov Rd, #imm``: the MOVZ or MOVN form an assembler selects.
+
+    Like as(1), MOVZ wins over MOVN.  The 16-bit chunks of a signed value
+    stay within i64, which matters because pcc1 compiles this module.
+    """
+    count = 4 if is64 else 2
+    chunks = [(value >> (16 * index)) & 0xFFFF for index in range(count)]
+    for fill, opc in ((0, 2), (0xFFFF, 0)):
+        others = [index for index in range(count) if chunks[index] != fill]
+        if len(others) <= 1:
+            index = others[0] if others else 0
+            imm16 = chunks[index] if opc == 2 else ~chunks[index] & 0xFFFF
+            return _enc_movewide(opc, rd, imm16, 16 * index, is64)
+    raise EncodeError(f"mov immediate needs more than one move-wide: {line!r}")
+
+
 def _enc_ldst_unscaled(size: int, opc: int, rt, rn, imm9: int) -> int:
     if not -256 <= imm9 <= 255:
         raise EncodeError(f"unscaled offset {imm9} out of 9-bit signed range")
@@ -2825,6 +2842,8 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         rd_tok = ops[0].strip().lower()
         rd, d64 = _reg(ops[0])
         rm_tok = ops[1].strip().lower()
+        if rm_tok.startswith("#"):
+            return _enc_mov_immediate(rd, _imm(ops[1]), d64, line)
         rm, m64 = _reg(ops[1])
         if d64 != m64:
             raise EncodeError(f"mov register widths differ: {line!r}")

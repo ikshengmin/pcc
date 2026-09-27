@@ -181,6 +181,8 @@ def test_native_codegen_orders_results_and_rejects_stale_artifacts(tmp_path, mon
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto" if auto_pco else "2")
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * 1073741824))
     monkeypatch.setattr(deferred_frontend_schedule, "parallel_cpu_budget", lambda: 12)
+    # Memory admission reads this process's RSS; ordering is the contract here.
+    monkeypatch.setattr(deferred_frontend_schedule, "compiled_native_auto_jobs", lambda jobs: jobs)
     monkeypatch.setattr(driver, "_link", lambda *args: linked.append(args))
     driver._codegen(plan)
     assert calls == ([("chained", 2, 12)] if auto_pco else [(1, 1), (1, 2), (1, 1), (1, 2)])
@@ -244,10 +246,14 @@ def test_native_unsupported_link_surface_never_resolves_host_python(monkeypatch)
     def forbidden():
         pytest.fail("native compiler requested host Python")
 
+    # Plain internal inputs link in process; semantic layout is a surface the
+    # in-process owner does not cover, so it reaches the native refusal.
     with pytest.raises(linker.SelfBackendLinkError, match="host Python fallback is forbidden"):
         linker.run_link_command(
             [], "input.s", "out", None, (), False,
-            resolve_self_link_mode=lambda: "pcc",
+            semantic_layout_policy="policy.json",
+            target_triple="arm64-apple-darwin23.6.0",
+            resolve_self_link_mode=lambda **_kwargs: "pcc",
             validate_pcc_self_link_surface=lambda **kwargs: None,
             repo_root_for_link=forbidden, host_python_command=forbidden,
             build_pcc_link_command=None, log=None, join_strings=None,

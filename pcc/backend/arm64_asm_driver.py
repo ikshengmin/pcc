@@ -387,7 +387,10 @@ class AArch64ModuleBuilder:
                 self.current.append(struct.pack("<q", offset))
             return
 
-        if line.startswith("."):
+        # A one-token "name:" line is a label even when the name starts with
+        # a dot: ELF symbols carry no "_" prefix, so module globals such as
+        # ``.modvar.<mod>.<name>`` reach this driver as dot-leading labels.
+        if line.startswith(".") and not (line.endswith(":") and len(line.split()) == 1):
             raise EncodeError(f"directive {line.split()[0]!r} not proven")
 
         if line.endswith(":"):

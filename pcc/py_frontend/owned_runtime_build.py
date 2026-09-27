@@ -39,6 +39,23 @@ def runtime_build_config() -> dict:
     return {"threads": threads, "refcount": refcount}
 
 
+# The Makefile compiles this module without the runtime pass list and with
+# automatic safepoint polls off; the owned builder mirrors both settings.
+_THREAD_KERNEL_MODULE = "freestanding_thread_kernel_pthread"
+
+
+def runtime_ir_passes(runtime_dir: str) -> str:
+    """The Makefile's PCC_RUNTIME_IR_PASSES; like its ``?=``, the environment wins."""
+    explicit = str(os.environ.get("PCC_RUNTIME_IR_PASSES", "") or "").strip()
+    if explicit:
+        return explicit
+    with open(os.path.join(runtime_dir, "Makefile"), encoding="utf-8") as stream:
+        for line in stream:
+            if line.startswith("PCC_RUNTIME_IR_PASSES ?="):
+                return line.split("=", 1)[1].strip()
+    raise ValueError("runtime Makefile does not define PCC_RUNTIME_IR_PASSES")
+
+
 def runtime_modules(runtime_dir: str, target: str, threads: bool = False) -> list[str]:
     names = []
     with open(os.path.join(runtime_dir, "Makefile"), encoding="utf-8") as stream:
@@ -71,7 +88,7 @@ def _compile_runtime_module(name, source, ir_path, target):
     # The kernel implements pcc_thread_safepoint itself. Match the Makefile's
     # per-module setting: instrumenting its entry or helpers would recurse
     # back into the kernel before it has initialized its synchronization.
-    suppress_polls = name == "freestanding_thread_kernel_pthread"
+    suppress_polls = name == _THREAD_KERNEL_MODULE
     names = list(_RUNTIME_IR_OUTPUT_ENV)
     if suppress_polls:
         names.append("PCC_WITH_THREADS")
@@ -95,6 +112,7 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
     from .pipeline_runtime_archive import _acquire_runtime_build_lock, _remove_runtime_build_lock
     from pcc.backend.owned_object_emit import emit_owned_object
     from pcc.backend.ar_writer import write_archive, _defined_symbols
+    from pcc.native_ir.driver import optimize_ir
     from pcc.tools.runtime_archive_provenance import (
         write_pcc_python_receipt, assemble_runtime_archive_manifest,
     )
@@ -102,6 +120,7 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
         raise ValueError("owned platform runtime builder target is unsupported: " + target)
     config = runtime_build_config()
     threads = config["threads"]
+    passes = runtime_ir_passes(runtime_dir)
     output_dir = archive + ".objects"
     os.makedirs(output_dir, exist_ok=True)
     lock = os.path.join(runtime_dir, ".pcc-runtime-build.lock")
@@ -117,6 +136,13 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
             _compile_runtime_module(name, source, ir_path, target)
             with open(ir_path, encoding="utf-8") as stream:
                 ir_text = stream.read()
+            # As in the Makefile rule, the object and its receipt describe the
+            # optimized IR: precise stack maps expect promoted frame-slot
+            # locals, and unoptimized runtime code is not what Darwin ships.
+            if name != _THREAD_KERNEL_MODULE:
+                ir_text = optimize_ir(ir_text, passes)
+                with open(ir_path, "w", encoding="utf-8") as stream:
+                    stream.write(ir_text)
             data = emit_owned_object(ir_text, target)
             with open(object_path, "wb") as stream:
                 stream.write(data)

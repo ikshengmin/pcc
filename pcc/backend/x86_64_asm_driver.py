@@ -418,6 +418,15 @@ def _measure_sections(plans, order, symbols):
 
 def assemble_file(asm_text: str) -> ElfObject:
     """Assemble one complete self-backend file into a validated ElfObject."""
+    return assemble_file_keeping_labels(asm_text, ())
+
+
+def assemble_file_keeping_labels(asm_text: str, keep_labels) -> ElfObject:
+    """``assemble_file``, also publishing the named unreferenced local labels.
+
+    The COFF writer reads its unwind markers from .symtab.  No default
+    argument: pcc's closed-world frontend compiles this module into pcc1.
+    """
     plans, order, symbol_meta = _parse_file(asm_text)
     labels, measured_sizes = _measure_sections(plans, order, symbol_meta)
     missing_definitions = sorted(set(symbol_meta) - set(labels))
@@ -508,6 +517,7 @@ def assemble_file(asm_text: str) -> ElfObject:
             and meta.type == STT_NOTYPE
             and meta.size is None
             and name not in referenced
+            and name not in keep_labels
         ):
             # Block/edge labels have already served the two-pass local branch
             # resolver.  GAS does not publish its temporary, unreferenced

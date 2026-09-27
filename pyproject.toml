@@ -1,11 +1,11 @@
 [project]
 name = "python-cc"
 version = "0.1.7"
-description = "A Python-authored compiler toolchain that compiles C and Python to native code (LLVM and LLVM-free backends)."
+description = "A Python-authored compiler toolchain that compiles C and Python to native code with its own backend."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
-keywords = ["c", "python", "compiler", "llvm", "self-hosting", "bootstrap", "ply"]
+keywords = ["c", "python", "compiler", "self-hosting", "bootstrap", "ply"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -76,6 +76,4 @@ dev = [
     "click",
     "pytest>=9.0.2",
     "pytest-xdist>=3.8.0",
-    {include-group = "llvm-reference"},
 ]
-llvm-reference = ["llvmlite==0.47.0"]

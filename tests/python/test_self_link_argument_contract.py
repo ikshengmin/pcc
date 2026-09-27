@@ -205,26 +205,32 @@ def test_darwin_arm64_default_routes_through_the_pcc_driver(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[list[str]] = []
+    from pcc.py_frontend import pipeline_self_backend_link
+
+    calls: list[dict] = []
     output = tmp_path / "output"
 
-    def fake_run(command, **kwargs):
-        calls.append(list(command))
-        assert kwargs == {"check": True}
-        produced = Path(command[command.index("--out") + 1])
+    def owned_link(**kwargs):
+        calls.append(kwargs)
+        produced = Path(kwargs["tmp_out_path"])
         produced.write_bytes(b"pcc-link-output")
         produced.chmod(0o755)
-        return subprocess.CompletedProcess(command, 0)
+
+    def no_subprocess(command, **_kwargs):
+        raise AssertionError("default Darwin link started " + repr(command))
 
     monkeypatch.setattr(pipeline.sys, "platform", "darwin")
     monkeypatch.setattr(
         pipeline.os,
         "uname",
-        lambda: SimpleNamespace(machine="arm64"),
+        lambda: pipeline.os.uname_result(("Darwin", "host", "23.6.0", "", "arm64")),
     )
     monkeypatch.delenv("PCC_SELF_LINK", raising=False)
     monkeypatch.setenv("PCC_HOST_PYTHON", "/host/python")
-    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    monkeypatch.setattr(pipeline.subprocess, "run", no_subprocess)
+    monkeypatch.setattr(
+        pipeline_self_backend_link, "_owned_macho_link_in_process", owned_link
+    )
 
     pipeline._run_self_link_command(
         ["cc", "input.s", "-o", str(output)],
@@ -235,10 +241,10 @@ def test_darwin_arm64_default_routes_through_the_pcc_driver(
         False,
     )
 
+    # Neither cc nor a host-Python link driver: pcc links in process.
     assert len(calls) == 1
-    assert calls[0][0] == "/host/python"
-    assert calls[0][1].endswith("/scripts/pcc_link_macho.py")
-    assert calls[0][0] != "cc"
+    assert calls[0]["asm_path"] == "input.s"
+    assert calls[0]["tmp_out_path"] == str(output)
 
 
 def test_frontend_semantic_layout_policy_is_explicit_and_reaches_owned_driver(
@@ -394,20 +400,20 @@ def test_pcc_self_link_rejects_unimplemented_link_arguments(
     ("ir_texts", "options", "message"),
     [
         (
-            ["define i64 @single() { ret i64 1 }"],
+            ['target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @single() { ret i64 1 }"],
             {"extra_link_args": ("-Wl,-map,map.txt",)},
             "link arguments",
         ),
         (
             [
-                "define i64 @first() { ret i64 1 }",
-                "define i64 @second() { ret i64 2 }",
+                'target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @first() { ret i64 1 }",
+                'target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @second() { ret i64 2 }",
             ],
             {"needs_libpython": True},
             "libpython link surface",
         ),
         (
-            ["define i64 @single() { ret i64 1 }"],
+            ['target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @single() { ret i64 1 }"],
             {"needs_native_extension_exports": True},
             "native-extension export anchors",
         ),
@@ -507,17 +513,18 @@ def test_pcc_self_link_accepts_indexed_internal_asm_inputs_separately(
     first = tmp_path / "first.s"
     second = tmp_path / "second.s"
     external = tmp_path / "external.o"
-    calls: list[list[str]] = []
+    calls: list[dict] = []
+    from pcc.py_frontend import pipeline_self_backend_link
 
-    def fake_run(command, **kwargs):
-        calls.append(list(command))
-        assert kwargs == {"check": True}
-        produced = Path(command[command.index("--out") + 1])
+    def owned_link(**kwargs):
+        calls.append(kwargs)
+        produced = Path(kwargs["tmp_out_path"])
         produced.write_bytes(b"pcc-link-output")
         produced.chmod(0o755)
-        return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        pipeline_self_backend_link, "_owned_macho_link_in_process", owned_link
+    )
     pipeline._run_self_link_command(
         ["cc", str(first), str(second), str(external), "-o", str(tmp_path / "out")],
         None,
@@ -528,46 +535,33 @@ def test_pcc_self_link_accepts_indexed_internal_asm_inputs_separately(
         pcc_asm_inputs=(str(first), str(second)),
     )
 
-    command = calls[0]
-    assert [
-        command[index + 1]
-        for index, value in enumerate(command)
-        if value == "--asm"
-    ] == [str(first), str(second)]
-    assert [
-        command[index + 1]
-        for index, value in enumerate(command)
-        if value == "--object"
-    ] == [str(external)]
+    # Internal assembly and caller objects reach the in-process owned link as
+    # separate, ordered inputs.
+    assert calls[0]["asm_path"] is None
+    assert calls[0]["pcc_asm_inputs"] == (str(first), str(second))
+    assert calls[0]["extra_link_inputs"] == (str(external),)
 
 
 def test_pcc_self_link_passes_the_stable_output_as_incremental_patch_base(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("PCC_SELF_LINK", "pcc")
-    calls: list[list[str]] = []
+    # A plain internal-input link now runs in process; the subprocess command
+    # (semantic layout, mixed ASM+PCO inputs) still owns the patch base.
+    from pcc.py_frontend import pipeline_self_link
+
     final_output = tmp_path / "compiler"
     temporary_output = Path(str(final_output) + ".tmp")
-
-    def fake_run(command, **kwargs):
-        calls.append(list(command))
-        assert kwargs == {"check": True}
-        temporary_output.write_bytes(b"pcc-link-output")
-        temporary_output.chmod(0o755)
-        return subprocess.CompletedProcess(command, 0)
-
-    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
-    pipeline._run_self_link_command(
-        ["cc", "input.s", "-o", str(temporary_output)],
-        "input.s",
-        str(temporary_output),
-        None,
-        (),
-        False,
+    command = pipeline_self_link.build_pcc_link_command(
+        host_python="/unused/python3",
+        driver="/unused/link_macho.py",
+        output=str(temporary_output),
+        asm_path="input.s",
+        internal_asm_inputs=(),
+        runtime_archive=None,
+        extra_link_inputs=(),
     )
 
-    command = calls[0]
     assert command[command.index("--previous-output") + 1] == str(final_output)
 
 
@@ -636,15 +630,19 @@ def test_pcc_self_link_rejects_success_without_an_executable_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PCC_SELF_LINK", "pcc")
+    # The plain internal-input link runs in process: a linker that returns
+    # without writing the output must still be rejected.
+    from pcc.py_frontend import pipeline_self_backend_link
+
     monkeypatch.setattr(
-        pipeline.subprocess,
-        "run",
-        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0),
+        pipeline_self_backend_link,
+        "_owned_macho_link_in_process",
+        lambda **_kwargs: None,
     )
 
     with pytest.raises(
         pipeline.PyPipelineError,
-        match="returned success without an executable regular output file",
+        match="owned in-process link produced no executable output",
     ):
         pipeline._run_self_link_command(
             ["cc", "input.s", "-o", str(tmp_path / "output")],
@@ -688,8 +686,8 @@ def test_large_multi_module_branch_uses_shared_self_link_contract(
 
     pipeline._link_self_backend_ir_texts_run(
         [
-            "define i64 @first() { ret i64 1 }",
-            "define i64 @second() { ret i64 2 }",
+            'target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @first() { ret i64 1 }",
+            'target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @second() { ret i64 2 }",
         ],
         str(tmp_path / "output"),
         None,
@@ -709,7 +707,9 @@ def test_large_multi_module_branch_uses_shared_self_link_contract(
         "needs_libpython": False,
             "needs_native_extension_exports": False,
             "pcc_asm_inputs": (),
+            "pcc_native_object_inputs": (),
             "semantic_layout_policy": None,
+            "target_triple": "arm64-apple-darwin23.6.0",
         }
 
 
@@ -750,8 +750,8 @@ def test_pcc_mode_marks_multi_object_output_as_already_signed(
 
     pipeline._link_self_backend_ir_texts_run(
         [
-            "define i64 @first() { ret i64 1 }",
-            "define i64 @second() { ret i64 2 }",
+            'target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @first() { ret i64 1 }",
+            'target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @second() { ret i64 2 }",
         ],
         str(tmp_path / "output"),
         None,
