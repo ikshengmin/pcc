@@ -11,7 +11,7 @@ intentionally narrow and explicit:
 - direct calls
 - finite ELF TLS definitions/accesses via the initial-exec model
 - the `pcc.unsafe.syscall6` inline-asm shape (musl x86_64 syscall ABI)
-- i32/i64 atomics (`load atomic`, `store atomic`, `atomicrmw`
+- i8/i16/i32/i64 atomics (`load atomic`, `store atomic`, `atomicrmw`
   add/sub/and/or/xchg, `cmpxchg`, `fence`) via x86-TSO `mov`/`xchg`/
   `lock xadd`/`lock cmpxchg`/`mfence`
 - `ret` / `ret void`
@@ -20,11 +20,14 @@ Anything outside this slice still raises ``BackendUnavailable`` instead of
 guessing.
 """
 
-import struct
-
 from . import BackendUnavailable
 from .code_profile import apply_function_order_profile
 from .self_backend_emit import emit_function_blocks
+from .self_backend_float_bits import (
+    float32_to_bits,
+    float64_to_bits,
+)
+from .wide_float import encode_float_bits
 from .self_backend_instruction_dispatch import emit_instruction_dispatch
 from .self_backend_kernel import get_indexed_function_kernel
 from .self_backend_aarch64_darwin_symbols import sanitize_label
@@ -787,20 +790,30 @@ def _fill_address_with_byte(dst_reg: str, size: int, byte_value: int) -> list[st
     return lines
 
 
-def _materialize_fp_constant(value: str, type_desc: TypeDesc, reg: str) -> list[str]:
+def _materialize_fp_bits(bits: int, type_desc: TypeDesc, reg: str) -> list[str]:
+    """Move already decoded natural-width bits without interpreting IR text."""
     if type_desc.width <= 32:
-        if value.startswith("0x"):
-            bits = int(value, 16) & 0xFFFFFFFF
-        else:
-            bits = struct.unpack("<I", struct.pack("<f", float(value)))[0]
+        bits = bits & 0xFFFFFFFF
         gp_reg = "r10d" if reg == "xmm10" else "r11d"
         return [f"  mov {gp_reg}, 0x{bits:08x}", f"  movd {reg}, {gp_reg}"]
-    if value.startswith("0x"):
-        bits = int(value, 16) & ((0xFFFFFFFF << 32) | 0xFFFFFFFF)
-    else:
-        bits = struct.unpack("<Q", struct.pack("<d", float(value)))[0]
+    bits = bits & ((0xFFFFFFFF << 32) | 0xFFFFFFFF)
     gp_reg = "r10" if reg == "xmm10" else "r11"
     return [f"  mov {gp_reg}, 0x{bits:016x}", f"  movq {reg}, {gp_reg}"]
+
+
+def _materialize_fp_constant(value: str, type_desc: TypeDesc, reg: str) -> list[str]:
+    if type_desc.width <= 32:
+        # LLVM float hex tokens carry the widened binary64 representation.
+        # Raw vector-lane bytes use _materialize_fp_bits directly instead.
+        if value.startswith("0x"):
+            bits = encode_float_bits(value, 32)
+        else:
+            bits = float32_to_bits(float(value))
+    elif value.startswith("0x"):
+        bits = int(value, 16)
+    else:
+        bits = float64_to_bits(float(value))
+    return _materialize_fp_bits(bits, type_desc, reg)
 
 
 def _materialize_value(func: ParsedFunction, value: str, type_desc: TypeDesc, reg: str) -> list[str]:
@@ -814,6 +827,17 @@ def _materialize_value(func: ParsedFunction, value: str, type_desc: TypeDesc, re
         return [f"  xor {reg}, {reg}"]
     if value in func.alloca_slots and type_desc.is_ptr:
         return [f"  lea {reg}, {_slot_addr(func.alloca_slots[value].offset)}"]
+    if value.startswith("inttoptrconst:"):
+        if not type_desc.is_ptr:
+            raise BackendUnavailable(
+                f"x86_64 self backend cannot materialize inttoptr constant as non-pointer in {func.name!r}: {value}"
+            )
+        const_value = const_int_from_value(value.split(":", 1)[1])
+        if const_value is None:
+            raise BackendUnavailable(
+                f"x86_64 self backend expected integer constant inside inttoptr expression in {func.name!r}: {value}"
+            )
+        return [f"  mov {reg}, {const_value}"]
     if _is_constant_gep_value(value):
         if not type_desc.is_ptr:
             raise BackendUnavailable(
@@ -859,6 +883,7 @@ def _materialize_pointer_storage_address(func: ParsedFunction, value: str, reg: 
     if (
         value in func.value_slots
         or value.startswith("@")
+        or value.startswith("inttoptrconst:")
         or _is_constant_gep_value(value)
         or value in {"null", "poison", "undef"}
     ):
@@ -898,7 +923,7 @@ def _materialize_vector_lane_to_reg(
         lane_bytes = data[lane_offset : lane_offset + elem_type.slot_size]
         if elem_type.is_fp:
             int_value = int.from_bytes(lane_bytes, "little", signed=False)
-            return _materialize_fp_constant(f"0x{int_value:x}", elem_type, reg)
+            return _materialize_fp_bits(int_value, elem_type, reg)
         int_value = int.from_bytes(lane_bytes, "little", signed=False)
         if elem_type.is_int and elem_type.width > 0 and int_value >= (1 << (elem_type.width - 1)):
             int_value -= 1 << elem_type.width
@@ -1307,13 +1332,50 @@ def _emit_smul_overflow_intrinsic_call(
     return lines
 
 
-def _sign_extend_reg_to_r10(src_type: TypeDesc) -> list[str]:
+def _validate_integer_register_type(type_desc: TypeDesc) -> None:
+    if not type_desc.is_int or not 1 <= type_desc.width <= 64:
+        raise BackendUnavailable(
+            "x86_64 self backend integer register cast requires i1..i64, "
+            f"got {type_desc.describe()}"
+        )
+
+
+def _truncate_reg_to_r10(dst_type: TypeDesc) -> list[str]:
+    """Keep the declared IR bits, not the rounded x86 storage lane."""
+    _validate_integer_register_type(dst_type)
+    width = dst_type.width
+    if width in (8, 16, 32, 64):
+        return []
+    if width < 32:
+        return [f"  and {_reg_name(dst_type, 10)}, {(1 << width) - 1}"]
+    shift = 64 - width
+    # x86 AND r64, imm32 sign-extends its immediate. A shift pair handles
+    # every 33..63-bit mask without a second scratch register or large imm.
+    return [f"  shl r10, {shift}", f"  shr r10, {shift}"]
+
+
+def _zero_extend_reg_to_r10(src_type: TypeDesc) -> list[str]:
+    lines = _truncate_reg_to_r10(src_type)
     if src_type.width <= 8:
+        lines.append("  movzx r10d, r10b")
+    elif src_type.width <= 16:
+        lines.append("  movzx r10d, r10w")
+    elif src_type.width == 32:
+        lines.append("  mov r10d, r10d")
+    return lines
+
+
+def _sign_extend_reg_to_r10(src_type: TypeDesc) -> list[str]:
+    _validate_integer_register_type(src_type)
+    if src_type.width == 8:
         return ["  movsx r10, r10b"]
-    if src_type.width <= 16:
+    if src_type.width == 16:
         return ["  movsx r10, r10w"]
-    if src_type.width <= 32:
+    if src_type.width == 32:
         return ["  movsxd r10, r10d"]
+    if src_type.width < 64:
+        shift = 64 - src_type.width
+        return [f"  shl r10, {shift}", f"  sar r10, {shift}"]
     return []
 
 
@@ -1547,7 +1609,7 @@ def _atomic_width_check(
     func: ParsedFunction,
     kind: str,
     value_type: TypeDesc,
-    widths: tuple = (32, 64),
+    widths: tuple = (8, 16, 32, 64),
 ) -> None:
     if value_type.is_int and value_type.width in widths:
         return
@@ -1689,7 +1751,7 @@ def _emit_memory_instruction(func: ParsedFunction, kind: str, data: tuple) -> li
 
     if kind == "store_atomic":
         value_type, value, ptr_type, ptr_name, ordering = data[:5]
-        _atomic_width_check(func, kind, value_type, widths=(8, 32, 64))
+        _atomic_width_check(func, kind, value_type)
         val_reg = _reg_name(value_type, 10)
         lines = _materialize_value(func, value, value_type, val_reg)
         lines.extend(_materialize_value(func, ptr_name, ptr_type, "r11"))
@@ -1703,12 +1765,7 @@ def _emit_memory_instruction(func: ParsedFunction, kind: str, data: tuple) -> li
 
     if kind == "atomicrmw":
         dest, op, ptr_type, ptr_name, value_type, value, _ordering = data
-        if value_type.is_int and value_type.width == 8 and op != "xchg":
-            raise BackendUnavailable(
-                f"x86_64 self backend atomicrmw i8 supports only xchg "
-                f"(byte flags) in {func.name!r}: {op}"
-            )
-        _atomic_width_check(func, kind, value_type, widths=(8, 32, 64))
+        _atomic_width_check(func, kind, value_type)
         val_reg = _reg_name(value_type, 10)
         acc_reg = _reg_name(value_type, 0)
         mem = f"{_mem_size(value_type)} [r11]"
@@ -2053,47 +2110,44 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
         op, dest, src_type, value, dst_type = data
         if dest not in func.value_slots:
             return []
+        if op in {"trunc", "zext", "sext"} and src_type.is_int and dst_type.is_int:
+            _validate_integer_register_type(src_type)
+            _validate_integer_register_type(dst_type)
         if op == "zext" and src_type.is_int and dst_type.is_int and src_type.width <= dst_type.width:
-            if value in func.value_slots and src_type.width <= 8:
+            if value in func.value_slots and src_type.width == 8 and dst_type.width > 8:
                 lines = [f"  movzx {_reg_name(dst_type, 10)}, BYTE PTR {_slot_addr(func.value_slots[value].offset)}"]
-            elif value in func.value_slots and src_type.width <= 16:
+            elif value in func.value_slots and src_type.width == 16 and dst_type.width > 16:
                 lines = [f"  movzx {_reg_name(dst_type, 10)}, WORD PTR {_slot_addr(func.value_slots[value].offset)}"]
             else:
                 lines = _materialize_value(func, value, src_type, _reg_name(src_type, 10))
-                if src_type.width < dst_type.width:
-                    src_reg = _reg_name(src_type, 10)
-                    dst_reg = _reg_name(dst_type, 10)
-                    if src_type.width <= 8:
-                        lines.append(f"  movzx {dst_reg}, {src_reg}")
-                    elif src_type.width <= 16:
-                        lines.append(f"  movzx {dst_reg}, {src_reg}")
-                    elif src_type.width <= 32 and dst_type.width > 32:
-                        # Writing the 32-bit subregister already zero-extends
-                        # into the full 64-bit register on x86_64.
-                        pass
+                # Materializing i32 writes r10d, which already clears the
+                # upper half; retain this common width's no-op fastpath.
+                if src_type.width != 32:
+                    lines.extend(_zero_extend_reg_to_r10(src_type))
             lines.extend(_store_reg_to_slot(_reg_name(dst_type, 10), func.value_slots[dest].offset, dst_type))
             return lines
         if op == "sext" and src_type.is_int and dst_type.is_int and src_type.width <= dst_type.width:
             lines = _materialize_value(func, value, src_type, _reg_name(src_type, 10))
             if src_type.width < dst_type.width:
                 lines.extend(_sign_extend_reg_to_r10(src_type))
+            lines.extend(_truncate_reg_to_r10(dst_type))
             lines.extend(_store_reg_to_slot(_reg_name(dst_type, 10), func.value_slots[dest].offset, dst_type))
             return lines
         if op == "trunc" and src_type.is_int and dst_type.is_int and src_type.width >= dst_type.width:
             lines = _materialize_value(func, value, src_type, _reg_name(src_type, 10))
+            lines.extend(_truncate_reg_to_r10(dst_type))
             lines.extend(_store_reg_to_slot(_reg_name(dst_type, 10), func.value_slots[dest].offset, dst_type))
             return lines
         if op == "ptrtoint" and src_type.is_ptr and dst_type.is_int:
+            _validate_integer_register_type(dst_type)
             lines = _materialize_value(func, value, src_type, "r10")
             dest_reg = _reg_name(dst_type, 10)
-            if dest_reg != "r10" and dst_type.width > 64:
-                lines.append(f"  mov {dest_reg}, r10")
+            lines.extend(_truncate_reg_to_r10(dst_type))
             lines.extend(_store_reg_to_slot(dest_reg, func.value_slots[dest].offset, dst_type))
             return lines
         if op == "inttoptr" and src_type.is_int and dst_type.is_ptr:
             lines = _materialize_value(func, value, src_type, _reg_name(src_type, 10))
-            if src_type.width <= 32:
-                lines.append("  mov r10d, r10d")
+            lines.extend(_zero_extend_reg_to_r10(src_type))
             lines.extend(_store_reg_to_slot("r10", func.value_slots[dest].offset, dst_type))
             return lines
         if op == "bitcast":

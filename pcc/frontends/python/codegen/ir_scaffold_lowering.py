@@ -10,8 +10,31 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.codegen.self_module_contracts import IR_SCAFFOLD_CONTRACT, module_has_contract
-from pcc.frontends.python.py_ast import Arg, Attr, BoolLit, BoolType, Call, Expr, FloatLit, FloatType, ImportFrom, IntLit, IntType, ListExpr, Name, NoneLit, NoneType, StrLit, StrType, TupleExpr
-from pcc.frontends.python.codegen.method_call_lowering import _method_emit_ast_args, _method_pinned_arg_cleanup, _method_release_arg_provenance
+from pcc.frontends.python.py_ast import (
+    Arg,
+    Attr,
+    BoolLit,
+    BoolType,
+    Call,
+    Expr,
+    FloatLit,
+    FloatType,
+    ImportFrom,
+    IntLit,
+    IntType,
+    ListExpr,
+    Name,
+    NoneLit,
+    NoneType,
+    StrLit,
+    StrType,
+    TupleExpr,
+)
+from pcc.frontends.python.codegen.method_call_lowering import (
+    _method_emit_ast_args,
+    _method_pinned_arg_cleanup,
+    _method_release_arg_provenance,
+)
 
 
 def _literal_fits_i64(value) -> bool:

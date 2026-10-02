@@ -6,7 +6,22 @@ dispatch to native generator objects.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_DICT, PY_TYPE_FILE, PY_TYPE_GEN, PY_TYPE_INT, PY_TYPE_ITER, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import (
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_FLAG_GC_PINNED,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_DICT,
+    PY_TYPE_FILE,
+    PY_TYPE_GEN,
+    PY_TYPE_INT,
+    PY_TYPE_ITER,
+    PY_TYPE_LIST,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_SET,
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+)
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.unsafe import (

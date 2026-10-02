@@ -42,18 +42,8 @@ from ctypes import (
 _TYPEDEF_CLEANUP = re.compile(
     r"typedef\s+(int|char|short|long|double|float|void)\s+\1\s*;"
 )
-# Compiler builtins that survive cc -E but pycparser doesn't know about.
-# Replace all occurrences with va_list, then clean up self-referential typedefs.
-_VA_TYPEDEF_NORMALIZE = re.compile(
-    r"^typedef\s+(?:__builtin_va_list|__darwin_va_list|__gnuc_va_list)\s+(\w+)\s*;$",
-    re.MULTILINE,
-)
 _SELF_TYPEDEF = re.compile(
     r"^typedef\s+(\w+)\s+\1\s*;$", re.MULTILINE
-)
-_SIZEOF_TYPEOF_SIZE_T = re.compile(
-    r"^\s*typedef\s+__typeof\s*\(\s*sizeof\s*\(\s*int\s*\)\s*\)\s+size_t\s*;$",
-    re.MULTILINE,
 )
 _TYPEOF_ID = re.compile(r"\b(?:__typeof__|__typeof|typeof)\s*\(\s*([A-Za-z_]\w*)\s*\)")
 _TAGGED_VAR_DECL = re.compile(
@@ -76,9 +66,6 @@ _CLANG_TEST_SIMULATOR_INCLUDE = re.compile(
     r'(?m)^[ \t]*#\s*include\s+"(?:\.\./)?Inputs/'
     r"(system-header-simulator(?:-for-malloc)?\.h)\"\s*$"
 )
-_TYPEDEF_WCHAR_T = re.compile(r"\btypedef\b[^;]*\bwchar_t\b")
-_TYPEDEF_BOOL = re.compile(r"\btypedef\b[^;]*\bbool\b")
-_TRUE_FALSE_ENUM = re.compile(r"\benum\b[^;{]*\{[^}]*\btrue\b[^}]*\bfalse\b|\benum\b[^;{]*\{[^}]*\bfalse\b[^}]*\btrue\b")
 _SIMPLE_TYPE_SPECIFIERS = {
     "void",
     "char",
@@ -809,7 +796,10 @@ def _expand_simple_gnu_range_designators(codestr):
     return _SIMPLE_RANGE_DESIGNATOR.sub(repl, codestr)
 
 
-def _normalize_preprocessed_source(codestr):
+def _normalize_preprocessed_source(codestr, target_triple=None):
+    from pcc.frontends.c.c_builtin_compat import normalize_builtin_type_compat
+
+    codestr = normalize_builtin_type_compat(codestr, target_triple)
     codestr = _normalize_simple_typeof_identifiers(codestr)
     codestr = _normalize_typeof_declaration_fallbacks(codestr)
     codestr = _strip_gnu_asm_statements(codestr)
@@ -837,28 +827,6 @@ def _rewrite_missing_clang_test_headers(source):
         return _CLANG_TEST_SIMULATOR_HEADER_STUB
 
     return _CLANG_TEST_SIMULATOR_INCLUDE.sub(repl, source)
-
-
-def _inject_system_cpp_keyword_compat(codestr):
-    compat_lines = []
-
-    if "wchar_t" in codestr and _TYPEDEF_WCHAR_T.search(codestr) is None:
-        compat_lines.append("typedef int wchar_t;")
-
-    needs_bool = "bool" in codestr and _TYPEDEF_BOOL.search(codestr) is None
-    needs_true_false = (
-        ("true" in codestr or "false" in codestr)
-        and _TRUE_FALSE_ENUM.search(codestr) is None
-    )
-
-    if needs_bool:
-        compat_lines.append("typedef int bool;")
-    if needs_true_false:
-        compat_lines.append("enum { false = 0, true = 1 };")
-
-    if not compat_lines:
-        return codestr
-    return "\n".join(compat_lines) + "\n" + codestr
 
 
 # GCC/Clang extensions pycparser does not understand, mapped to plain C.
@@ -948,12 +916,7 @@ def _preprocess_translation_unit_source(
             cpp_args=cpp_args,
         )
         codestr = _TYPEDEF_CLEANUP.sub("", codestr)
-        # Normalize compiler-specific va_list typedef chains to plain pointer
-        # typedefs that pycparser can ingest.
-        codestr = _VA_TYPEDEF_NORMALIZE.sub(r"typedef char * \1;", codestr)
         codestr = _SELF_TYPEDEF.sub("", codestr)
-        codestr = _SIZEOF_TYPEOF_SIZE_T.sub("typedef unsigned long size_t;", codestr)
-        codestr = _inject_system_cpp_keyword_compat(codestr)
     else:
         codestr = preprocess(
             codestr,
@@ -962,7 +925,7 @@ def _preprocess_translation_unit_source(
             cpp_args=list(_C_EXTENSION_COMPAT_DEFINES) + list(cpp_args or []),
             target_triple=target_triple,
         )
-    return _normalize_preprocessed_source(codestr)
+    return _normalize_preprocessed_source(codestr, target_triple)
 
 
 def _compile_preprocessed_translation_unit_artifact(
@@ -1458,8 +1421,18 @@ class CEvaluator(object):
 
     def emit_executable(self, compiled_units, output: str, *, optimize=True, link_args=None):
         """Publish a C executable with the explicitly selected backend owner."""
-        if link_args:
-            raise BackendUnavailable("owned C executable linking does not yet support extra link arguments")
+        external_objects = []
+        external_archives = []
+        for argument in link_args or ():
+            path = os.fspath(argument)
+            if path.startswith("-") or not path.lower().endswith((".o", ".obj", ".a", ".lib")):
+                raise BackendUnavailable("unsupported owned C executable link argument: " + path)
+            if os.path.realpath(path) == os.path.realpath(output):
+                raise ValueError("link output aliases an input: " + path)
+            if path.lower().endswith((".a", ".lib")):
+                external_archives.append(path)
+            else:
+                external_objects.append(path)
         prepared = self._prepare_self_backend_units(compiled_units, optimize=optimize) if self._normalize_opt_level(optimize) > 0 else compiled_units
         target_id = self._self_link_target_identity(prepared)
         if target_id in ("self-aarch64-linux-v0", "self-x86_64-linux-v0", "self-x86_64-windows-v0"):
@@ -1480,9 +1453,11 @@ class CEvaluator(object):
                     runtime_root = os.path.join(resolve_pcc_dir_from_environment(__file__), "runtime")
                     runtime = ensure_target_runtime(runtime_root, self.target_triple)
                 if "windows" in self.target_triple:
-                    pe_link(output=output, assembly=paths, archives=[runtime])
+                    pe_link(output=output, assembly=paths, objects=external_objects,
+                            archives=external_archives + [runtime])
                 else:
-                    elf_link(output=output, target=self.target_triple, assembly=paths, archives=[runtime])
+                    elf_link(output=output, target=self.target_triple, assembly=paths,
+                             objects=external_objects, archives=external_archives + [runtime])
             return
         from pcc.backend.arm64_asm_driver import assemble_file
         from pcc.backend.native_object import NativeObject
@@ -1494,7 +1469,14 @@ class CEvaluator(object):
             # boundaries until the relocatable linker merges those tables.
             sections, undefined = assemble_file(self._self_backend_asm_text([unit]))
             objects.append(NativeObject.from_sections(sections, undefined=undefined))
-        image = link_executable(objects, entry="_main")
+        for path in external_objects:
+            with open(path, "rb") as stream:
+                objects.append(stream.read())
+        archives = []
+        for path in external_archives:
+            with open(path, "rb") as stream:
+                archives.append(stream.read())
+        image = link_executable(objects, archives=archives, entry="_main")
         temporary = output + ".pcc-link.tmp"
         with open(temporary, "wb") as stream:
             stream.write(image)

@@ -2715,6 +2715,17 @@ class ClassLowering:
                                 (Name(cd.span, DynType("dyn"), base_expr.ident), IntLit(span, IntType("int"), default_index)), (),
                             )
                             default = Call(span, DynType("dyn"), default.func, (factory,), ())
+                        elif a.has_default:
+                            # Inherit the object already captured by the base
+                            # signature, not its class-local default expression.
+                            # That name is out of scope in the child, and even
+                            # a resolvable expression must not be evaluated twice.
+                            span = SourceSpan("<pcc-dataclass-default>", 0, 0, 0, 0)
+                            default = Call(
+                                span, DynType("dyn"),
+                                Name(span, DynType("dyn"), "__pcc_dataclass_inherited_default__"),
+                                (Name(cd.span, DynType("dyn"), base_expr.ident), IntLit(span, IntType("int"), default_index)), (),
+                            )
                         inherited_fields.append(
                             (a.name, _classgen_annotation_or_none(a), default)
                         )
@@ -5430,22 +5441,16 @@ class ClassLowering:
             self.parent.runtime["py_tuple_set_item"],
             [wrapped_captures, ir.Constant(_I64, 1), signature],
         )
+        metadata_root = self.parent._new_slot_call_root("method.metadata.result")
         func_obj = self.parent.builder.call(
             self.parent.runtime["py_func_new_named"],
             [adapter, wrapped_captures, method_name_ptr],
             name=self._fresh(f"{suffix}.{method_name}.func"),
         )
-        emit_function_auto_park_role(self.parent, method_def, func_obj)
-        # CPython's __qualname__ for a method is ``Class.method``; reprs and
-        # argument errors print it.
-        self.parent.builder.call(
-            self.parent.runtime["py_obj_setattr"],
-            [
-                func_obj,
-                self.parent._attr_name_ptr("__qualname__"),
-                self.parent._emit_str_literal(f"{cd.name}.{method_name}"),
-            ],
+        func_obj = self.parent._finish_native_callable_metadata(
+            metadata_root, func_obj, cd.name + "." + method_name, method_def.span,
         )
+        emit_function_auto_park_role(self.parent, method_def, func_obj)
         self.parent._gc_release(captures)
         self.parent._gc_release(signature)
         self.parent._gc_release(wrapped_captures)
@@ -5486,10 +5491,14 @@ class ClassLowering:
                 f"property.{info.name}.{prop_name}.{accessor_kind}.captures"
             ),
         )
+        metadata_root = self.parent._new_slot_call_root("property.metadata.result")
         func_obj = self.parent.builder.call(
             self.parent.runtime["py_func_new_named"],
             [adapter, captures, self.parent._attr_name_ptr(prop_name)],
             name=self._fresh(f"property.{info.name}.{prop_name}.{accessor_kind}"),
+        )
+        func_obj = self.parent._finish_native_callable_metadata(
+            metadata_root, func_obj, cd.name + "." + prop_name, accessor_def.span,
         )
         emit_function_auto_park_role(self.parent, accessor_def, func_obj)
         self.parent._gc_release(captures)
@@ -5956,10 +5965,14 @@ class ClassLowering:
             self.parent.runtime["py_tuple_set_item"],
             [wrapped_captures, ir.Constant(_I64, 1), signature],
         )
+        metadata_root = self.parent._new_slot_call_root("namespace.method.metadata.result")
         fn_obj = self.parent.builder.call(
             self.parent.runtime["py_func_new_named"],
             [adapter, wrapped_captures, self.parent._attr_name_ptr(fd.name)],
             name=self._fresh(f"namespace.method.{fd.name}"),
+        )
+        fn_obj = self.parent._finish_native_callable_metadata(
+            metadata_root, fn_obj, cd.name + "." + fd.name, fd.span,
         )
         emit_function_auto_park_role(self.parent, fd, fn_obj)
         self.parent._gc_release(captures)
@@ -5983,11 +5996,14 @@ class ClassLowering:
             "__name__",
             cd.span,
         )
+        module_name = "__main__"
+        if self.parent._skip_program_main and self.parent.ast_module.name:
+            module_name = self.parent.ast_module.name
         self._emit_namespace_setitem(
             ns_obj,
             ns_info,
             "__module__",
-            self.parent._emit_str_literal("__main__"),
+            self.parent._emit_str_literal(module_name),
         )
         self._emit_namespace_setitem(
             ns_obj,

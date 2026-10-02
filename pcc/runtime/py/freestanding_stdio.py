@@ -20,6 +20,7 @@ from pcc.unsafe import (
     free,
     f64_bits,
     f64_signbit,
+    global_addr,
     initial_environ,
     load_i32,
     load_i64,
@@ -40,6 +41,7 @@ from pcc.unsafe import (
     store_i64,
     store_i8,
     store_ptr,
+    target_sys_platform,
     unlinkat,
     unsigned_rem_i64,
     unsigned_div_i64,
@@ -1482,6 +1484,19 @@ def vsnprintf(output, capacity: i64, format, ap) -> i64:
 @c_abi_variadic_export("fprintf")
 def fprintf(stream, format) -> i64:
     cursor = va_start()
+    result = _format_core(null(), 0, stream, format, cursor)
+    va_end(cursor)
+    return result
+
+
+@c_abi_typed_export("printf", "i32", ("ptr",))
+@c_abi_variadic_export("printf")
+def printf(format) -> i64:
+    cursor = va_start()
+    stream = load_ptr(global_addr("stdout"), 0)
+    # The public Darwin C header spells stdout as __stdoutp.
+    if load_i8(target_sys_platform(), 0) == 100:
+        stream = load_ptr(global_addr("__stdoutp"), 0)
     result = _format_core(null(), 0, stream, format, cursor)
     va_end(cursor)
     return result

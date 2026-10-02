@@ -3937,6 +3937,8 @@ entry:
 
 
 def test_self_backend_parse_and_materialize_support_inttoptr_constant_expr():
+    # LangRef inttoptr zero-extends the i32 bitvector, even when its textual
+    # spelling is negative: https://llvm.org/docs/LangRef.html#inttoptr-to-instruction
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
 
@@ -3955,7 +3957,7 @@ entry:
         "p",
         TypeDesc("ptr", pointee=TypeDesc("void")),
         "cond",
-        "inttoptrconst:-1",
+        "inttoptrconst:4294967295",
         "null",
     )
 
@@ -3966,15 +3968,13 @@ entry:
     assign_stack_slots(func, aggregate_returned_indirect=lambda _ty: False)
     assert materialize_value(
         func,
-        "inttoptrconst:-1",
+        "inttoptrconst:4294967295",
         TypeDesc("ptr", pointee=TypeDesc("void")),
         9,
         symbols,
     ) == [
         "  movz x9, #65535, lsl #0",
         "  movk x9, #65535, lsl #16",
-        "  movk x9, #65535, lsl #32",
-        "  movk x9, #65535, lsl #48",
     ]
     assert materialize_pointer(func, "inttoptrconst:1", 9, symbols) == [
         "  movz x9, #1, lsl #0",
@@ -7252,15 +7252,37 @@ def test_self_backend_layout_aware_branches_keep_semantics(tmp_path, optimize):
     assert result == 0
 
 
+def _deny_external_compiler_owners(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+    original_popen = subprocess.Popen
+
+    def checked_import(name, *args, **kwargs):
+        if name.split(".")[0] in ("llvmlite", "pycparser", "ply"):
+            raise AssertionError("owned C path imported " + name)
+        return original_import(name, *args, **kwargs)
+
+    def checked_popen(command, *args, **kwargs):
+        executable = command[0] if isinstance(command, (list, tuple)) else command
+        name = os.path.basename(os.fspath(executable))
+        if kwargs.get("shell") or name in (
+            "cc", "clang", "gcc", "as", "ld", "ld.lld", "ar", "codesign",
+            "sh", "bash", "zsh",
+        ) or name.startswith(("python", "clang-", "gcc-")):
+            raise AssertionError("owned C path invoked " + str(command))
+        return original_popen(command, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", checked_import)
+    monkeypatch.setattr(subprocess, "Popen", checked_popen)
+
+
 def test_self_backend_evaluate_does_not_publish_llvm_native_cache(
     tmp_path, monkeypatch
 ):
     import pcc.frontends.c.evaluator.c_evaluator as c_evaluator
 
-    def fail_native_cache(*_args, **_kwargs):
-        raise AssertionError("self backend must not enter LLVM native cache")
-
-    monkeypatch.setattr(c_evaluator, "_build_native_cache", fail_native_cache)
+    _deny_external_compiler_owners(monkeypatch)
     result = c_evaluator.CEvaluator(
         backend="self",
         allow_unimplemented_backend=True,
@@ -7286,34 +7308,22 @@ def test_self_backend_system_link_uses_self_emitter_not_llvm_object_path(
         calls.append(ir_text)
         return original_emit_self_asm(ir_text)
 
-    def fail_llvm_object_path(self, *args, **kwargs):
-        raise AssertionError("strict self backend gate reached LLVM object path")
-
     monkeypatch.setattr(c_evaluator, "emit_self_asm", recording_emit_self_asm)
-    monkeypatch.setattr(
-        c_evaluator.CEvaluator, "_prepare_llvm_module", fail_llvm_object_path
-    )
+    _deny_external_compiler_owners(monkeypatch)
     unit = TranslationUnit(
         name="main.c",
         path=str(tmp_path / "main.c"),
         source="int main(void) { return 7; }\n",
     )
 
-    result = c_evaluator.CEvaluator(
-        backend="self",
-        allow_unimplemented_backend=True,
-    ).run_translation_units_with_system_cc(
-        [unit],
-        optimize=0,
-        use_system_cpp=False,
-        timeout=30,
-        capture_output=True,
-        text=True,
+    result = c_evaluator.CEvaluator(backend="self").evaluate_translation_units(
+        [unit], optimize=0, use_system_cpp=False, use_compile_cache=False,
     )
 
-    assert result.returncode == 7
-    assert len(calls) == 1
-    assert "define i32 @main" in calls[0]
+    assert result == 7
+    assert calls
+    assert any("@__pcc_evaluate_entry" in text for text in calls)
+    assert any("define i32 @main" in text for text in calls)
 
 
 def test_self_backend_emitter_failure_does_not_fallback_to_llvm(tmp_path, monkeypatch):
@@ -7322,13 +7332,8 @@ def test_self_backend_emitter_failure_does_not_fallback_to_llvm(tmp_path, monkey
     def fail_self_emitter(_ir_text):
         raise BackendUnavailable("strict self backend sentinel")
 
-    def fail_llvm_object_path(self, *args, **kwargs):
-        raise AssertionError("strict self backend gate fell back to LLVM object path")
-
     monkeypatch.setattr(c_evaluator, "emit_self_asm", fail_self_emitter)
-    monkeypatch.setattr(
-        c_evaluator.CEvaluator, "_prepare_llvm_module", fail_llvm_object_path
-    )
+    _deny_external_compiler_owners(monkeypatch)
     unit = TranslationUnit(
         name="main.c",
         path=str(tmp_path / "main.c"),
@@ -7339,13 +7344,8 @@ def test_self_backend_emitter_failure_does_not_fallback_to_llvm(tmp_path, monkey
         c_evaluator.CEvaluator(
             backend="self",
             allow_unimplemented_backend=True,
-        ).run_translation_units_with_system_cc(
-            [unit],
-            optimize=0,
-            use_system_cpp=False,
-            timeout=30,
-            capture_output=True,
-            text=True,
+        ).evaluate_translation_units(
+            [unit], optimize=0, use_system_cpp=False, use_compile_cache=False,
         )
 
 
@@ -7355,13 +7355,8 @@ def test_self_backend_emit_obj_failure_does_not_fallback_to_llvm(tmp_path, monke
     def fail_self_emitter(_ir_text):
         raise BackendUnavailable("strict self emit-obj sentinel")
 
-    def fail_llvm_object_path(self, *args, **kwargs):
-        raise AssertionError("strict self emit-obj gate fell back to LLVM object path")
-
     monkeypatch.setattr(c_evaluator, "emit_self_asm", fail_self_emitter)
-    monkeypatch.setattr(
-        c_evaluator.CEvaluator, "_prepare_llvm_module", fail_llvm_object_path
-    )
+    _deny_external_compiler_owners(monkeypatch)
     ev, compiled_units = _compile_units(
         "int main(void) { return 0; }\n",
         tmp_path,

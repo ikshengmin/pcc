@@ -33,7 +33,24 @@ from typing import Mapping
 from pcc.ir.compat import ir
 from pcc.ir.support._float_bits import _float64_to_bits
 
-from pcc.frontends.python.py_ast import RawPointerType, BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, FloatType, IntType, ListType, MemoryViewType, NoneType, SetType, StrType, TupleType, Type
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    ClassType,
+    ComplexType,
+    DictType,
+    FloatType,
+    IntType,
+    ListType,
+    MemoryViewType,
+    NoneType,
+    SetType,
+    StrType,
+    TupleType,
+    Type,
+)
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 # -- Canonical IR types ------------------------------------------------------

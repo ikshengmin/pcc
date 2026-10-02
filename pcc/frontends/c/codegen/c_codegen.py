@@ -11,21 +11,87 @@ from itertools import count
 from pcc.ir.compat import ir_c as ir
 from pcc.frontends.python.pipeline_targets import host_target_triple
 from pcc.ir.compat import add_raw_function_attribute
-from pcc.frontends.c.c_abi_layout import builtin_integer_is_unsigned, builtin_scalar_layout, c_target_triple, floating_scalar_layout, integer_literal_type_name, integer_literal_value, integer_scalar_layout, pointer_scalar_layout
-from pcc.frontends.c.codegen.c_declaration_state import CodegenError, ExternGlobalRef, FileScopeFunctionState, FileScopeObjectState, is_thread_local_storage
-from pcc.frontends.c.codegen.c_layout import BitFieldRef, StructFieldLayout, StructStorageSegment, ir_type_align as _ir_type_align_static, ir_type_size as _ir_type_size_static, is_floating_ir_type as _is_floating_ir_type_static, is_struct_ir_type as _is_struct_ir_type
-from pcc.frontends.c.codegen.c_scope_context import NewFunctionContext as _NewFunctionCtx, NewScopeContext as _NewScopeCtx
-from pcc.frontends.c.codegen.c_types import bool_t, cstring, double_t as _double, false_bit, false_byte, float_t as _float, get_ir_type, get_ir_type_from_names, get_ir_type_from_node, int8_t, int16_t, int32_t, int64_t, int64ptr_t, int128_t, names_to_key as _names_to_key, resolve_node_type as _resolve_node_type, true_bit, true_byte, void_t as _VOID, voidptr_t
-from pcc.frontends.c.codegen.c_libc_declarations import LIBC_FUNCTIONS, _FILE_ptr, _LEGACY_LIBC_FUNCTIONS, _libc_registry_ir_type, _libc_registry_signature_to_codegen, _size_t, _time_t, libc_registry_shadow_names, refresh_libc_registry_from_declarative
+from pcc.frontends.c.c_abi_layout import (
+    builtin_integer_is_unsigned,
+    builtin_scalar_layout,
+    c_target_triple,
+    floating_scalar_layout,
+    integer_literal_type_name,
+    integer_literal_value,
+    integer_scalar_layout,
+    pointer_scalar_layout,
+)
+from pcc.frontends.c.codegen.c_declaration_state import (
+    CodegenError,
+    ExternGlobalRef,
+    FileScopeFunctionState,
+    FileScopeObjectState,
+    is_thread_local_storage,
+)
+from pcc.frontends.c.codegen.c_layout import (
+    BitFieldRef,
+    StructFieldLayout,
+    StructStorageSegment,
+    ir_type_align as _ir_type_align_static,
+    ir_type_size as _ir_type_size_static,
+    is_floating_ir_type as _is_floating_ir_type_static,
+    is_struct_ir_type as _is_struct_ir_type,
+)
+from pcc.frontends.c.codegen.c_scope_context import (
+    NewFunctionContext as _NewFunctionCtx,
+    NewScopeContext as _NewScopeCtx,
+)
+from pcc.frontends.c.codegen.c_types import (
+    bool_t,
+    cstring,
+    double_t as _double,
+    false_bit,
+    false_byte,
+    float_t as _float,
+    get_ir_type,
+    get_ir_type_from_names,
+    get_ir_type_from_node,
+    int8_t,
+    int16_t,
+    int32_t,
+    int64_t,
+    int64ptr_t,
+    int128_t,
+    names_to_key as _names_to_key,
+    resolve_node_type as _resolve_node_type,
+    true_bit,
+    true_byte,
+    void_t as _VOID,
+    voidptr_t,
+)
+from pcc.frontends.c.codegen.c_libc_declarations import (
+    LIBC_FUNCTIONS,
+    _FILE_ptr,
+    _LEGACY_LIBC_FUNCTIONS,
+    _libc_registry_ir_type,
+    _libc_registry_signature_to_codegen,
+    _size_t,
+    _time_t,
+    libc_registry_shadow_names,
+    refresh_libc_registry_from_declarative,
+)
 from pcc.frontends.c.codegen.c_expression_flow import CExpressionFlowMixin
 from pcc.frontends.c.codegen.c_control_flow import CControlFlowMixin
 from pcc.frontends.c.codegen.c_declaration_lowering import CDeclarationLoweringMixin
 from pcc.frontends.c.codegen.c_initializer_lowering import CInitializerLoweringMixin
-from pcc.frontends.c.codegen.c_integer_fold_contract import FOLD_CONSTANT as _C_FOLD_CONSTANT, FOLD_POISON as _C_FOLD_POISON, fold_c_integer_binary as _fold_c_integer_binary, fold_c_integer_unary as _fold_c_integer_unary
+from pcc.frontends.c.codegen.c_integer_fold_contract import (
+    FOLD_CONSTANT as _C_FOLD_CONSTANT,
+    FOLD_POISON as _C_FOLD_POISON,
+    fold_c_integer_binary as _fold_c_integer_binary,
+    fold_c_integer_unary as _fold_c_integer_unary,
+)
 from pcc.frontends.c.codegen.c_switch_flow import CSwitchFlowMixin
 from pcc.frontends.c.codegen.c_ssa_lowering import CSSALoweringMixin
 IRBuilder = ir.IRBuilder
-from pcc.frontends.c.codegen.c_varargs import build_report as _build_varargs_report, postprocess_varargs_ir as _postprocess_varargs_ir
+from pcc.frontends.c.codegen.c_varargs import (
+    build_report as _build_varargs_report,
+    postprocess_varargs_ir as _postprocess_varargs_ir,
+)
 from pcc.frontends.c.ast import c_ast as c_ast
 
 _logger = logging.getLogger("pcc.frontends.c.codegen")
@@ -1717,9 +1783,16 @@ class CCodeGenerator(
         if (
             self.builder is not None
             and current_block is entry_block
-            and not current_block.is_terminated
         ):
-            self.builder.position_at_end(current_block)
+            # A second builder inserted the allocation, invalidating the
+            # active builder's numeric insertion position. Forward-label
+            # declarations also visit an already terminated entry block;
+            # their stores must follow the allocation and precede its branch.
+            if current_block.is_terminated:
+                terminator = current_block.instructions[-1]
+                self.builder.position_before(terminator)
+            else:
+                self.builder.position_at_end(current_block)
         return ret
 
     _codegen_dispatch = None
@@ -4527,11 +4600,6 @@ class CCodeGenerator(
         return self._materialize_compound_literal(node.type.type, node.init)
 
     def codegen_FuncCall(self, node):
-        if isinstance(node.name, c_ast.ID):
-            _alias = self._BUILTIN_SYMBOL_ALIASES.get(node.name.name)
-            if _alias is not None and node.name.name not in self.env:
-                node.name = c_ast.ID(_alias, coord=node.name.coord)
-
         callee = None
         if isinstance(node.name, c_ast.ID):
             callee = node.name.name
@@ -4655,9 +4723,9 @@ class CCodeGenerator(
                 )
             if callee == "__builtin_islessgreater":
                 return self._codegen_builtin_islessgreater(node)
-            if callee == "__builtin_copysign":
+            if callee == "__builtin_copysign" and callee not in self.env:
                 return self._codegen_builtin_copysign(node, _double)
-            if callee == "__builtin_copysignf":
+            if callee == "__builtin_copysignf" and callee not in self.env:
                 return self._codegen_builtin_copysign(node, _float)
             if callee == "__builtin_copysignl":
                 return self._codegen_builtin_copysign(node, _double)
@@ -4703,6 +4771,12 @@ class CCodeGenerator(
                 return self._codegen_builtin_atomic_clear(node)
             if callee == "__atomic_thread_fence":
                 return self._codegen_builtin_atomic_thread_fence(node)
+            # Only unmatched builtins fall back to libc aliases. In
+            # particular, copysign's owned handlers preserve the float ABI
+            # and must run before any alias can hide their builtin spelling.
+            alias = self._BUILTIN_SYMBOL_ALIASES.get(callee)
+            if alias is not None and callee not in self.env:
+                callee = alias
         else:
             # Calling function pointer in struct: s.fn(args)
             call_args = []
@@ -4952,19 +5026,28 @@ class CCodeGenerator(
         value, addr = self.codegen(expr)
         storage = addr if addr is not None else value
         from pcc.backend.self_backend_target_match import is_x86_64_linux_triple
+        value_type = getattr(value, "type", None)
         if is_x86_64_linux_triple(str(self.module.triple)) and isinstance(
-            getattr(value, "type", None), ir.PointerType
-        ) and _is_struct_ir_type(value.type.pointee):
-            members = self._aggregate_member_ir_types(value.type.pointee)
-            if (len(members) == 4
+            value_type, ir.PointerType
+        ):
+            cursor_type = value_type.pointee
+            indirect_cursor = isinstance(cursor_type, ir.PointerType)
+            if indirect_cursor:
+                cursor_type = cursor_type.pointee
+            if _is_struct_ir_type(cursor_type):
+                members = self._aggregate_member_ir_types(cursor_type)
+                if (len(members) == 4
                     and isinstance(members[0], ir.IntType) and members[0].width == 32
                     and isinstance(members[1], ir.IntType) and members[1].width == 32
                     and isinstance(members[2], ir.PointerType)
                     and isinstance(members[3], ir.PointerType)):
-                # SysV va_list is an array of one record. A local array and
-                # an adjusted function parameter both produce record* here;
-                # the latter's local variable address would be record**.
-                storage = value
+                    # SysV va_list parameters adjust from record[1] to record*.
+                    # The stdarg macros take &ap, yielding record** for those
+                    # parameters but an array address for local va_list objects.
+                    # Load the cursor, never the pointer variable's bytes.
+                    storage = value
+                    if indirect_cursor:
+                        storage = self.builder.load(value, name="va_list.cursor")
         if not isinstance(getattr(storage, "type", None), ir.PointerType):
             return None
         return storage

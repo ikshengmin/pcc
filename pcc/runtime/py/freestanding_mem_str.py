@@ -157,6 +157,24 @@ def pcc_strnlen(ptr, limit: i64) -> i64:
     return size
 
 
+@c_abi_export("strcpy")
+def pcc_strcpy(dst, src) -> c_ptr:
+    index: i64 = 0
+    while True:
+        byte: i64 = load_i8(src, index) & 255
+        store_i8(dst, index, byte)
+        if byte == 0:
+            return dst
+        index = index + 1
+
+
+@c_abi_export("strcat")
+def pcc_strcat(dst, src) -> c_ptr:
+    length = pcc_strlen(dst)
+    pcc_strcpy(ptr_add(dst, length), src)
+    return dst
+
+
 @c_abi_export("strchrnul")
 def pcc_strchrnul(ptr, value: i64) -> c_ptr:
     target: i64 = value & 255

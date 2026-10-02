@@ -4,13 +4,13 @@ Each file under ``tests/python/gc/test_pcc_bootstrap_full_gc*.py`` runs one GC
 backend's real self-host chain. One backend-agnostic ``pcc1`` is built once per
 pytest session and shared, then that GC file runs ``pcc1 -> pcc2 -> pcc3`` via
 ``bootstrap.py --reuse-stage1`` and checks stages present, no libpython linkage,
-and ``pcc2 == pcc3`` after normalization.
+and ``pcc2 == pcc3`` in their original bytes.
 
 Speed comes from sharing stage1 and content-addressed completed backend
 results, never from accepting partial evidence. ``pcc1`` does not depend on
 ``PCC_GC_BACKEND`` because the collector is selected at stage2+ runtime. A
 backend success manifest is written only after its real ``pcc1 -> pcc2 ->
-pcc3`` chain, no-libpython checks, publish barriers, and normalized fixed-point
+pcc3`` chain, no-libpython checks, publish barriers, and raw-byte fixed-point
 comparison pass. Interrupted runs can validate and resume those complete
 same-source results; stale, partial, or mismatched results rebuild.
 
@@ -46,7 +46,7 @@ import pytest
 from pcc.diagnostics.bootstrap_profile_report import build_bootstrap_profile_report
 from tests.python.test_bootstrap_gate_baseline import (
     _REPO_ROOT,
-    _byte_identical_after_normalize,
+    _byte_identical,
     _is_macos_arm64,
     _links_libpython,
 )
@@ -247,10 +247,10 @@ def _completed_backend_output_records(
         pcc1_record["size"] == shared_pcc1_record["size"]
         and pcc1_record["sha256"] == shared_pcc1_record["sha256"]
     ), f"backend GC {gc_backend} pcc1 does not match the shared stage1 input"
-    assert _byte_identical_after_normalize(pcc2, pcc3), (
+    assert _byte_identical(pcc2, pcc3), (
         "Self-host determinism failed under "
         f"PCC_GC_BACKEND={gc_backend}: pcc2 and pcc3 are not "
-        "byte-identical after normalization"
+        "byte-identical in their original bytes"
     )
     profile_dir = _bootstrap_profile_dir(gc_backend)
     return {
@@ -259,6 +259,7 @@ def _completed_backend_output_records(
         "pcc3": _path_record(pcc3),
         "stage2_result": _successful_stage_result_record(profile_dir, 2, pcc2),
         "stage3_result": _successful_stage_result_record(profile_dir, 3, pcc3),
+        # Historical schema key; the check above requires strict raw-byte equality.
         "normalized_pcc2_pcc3_equal": True,
         "links_libpython": False,
     }
@@ -1793,10 +1794,24 @@ def _fake_completed_backend_tree(
     monkeypatch.setattr(module, "_bootstrap_source_sha256", lambda: "source-a")
     monkeypatch.setattr(module, "_links_libpython", lambda _path: False)
     monkeypatch.setattr(
-        module, "_byte_identical_after_normalize", lambda _left, _right: True
+        module, "_byte_identical", lambda _left, _right: True
     )
     monkeypatch.delenv("PCC_BOOTSTRAP_FULL_REBUILD", raising=False)
     return out_dir, shared_pcc1, runtime_archive
+
+
+def test_bootstrap_success_manifest_rejects_raw_byte_drift(tmp_path, monkeypatch):
+    from tests.python import test_bootstrap_gate_baseline as baseline
+
+    out_dir, shared_pcc1, runtime_archive = _fake_completed_backend_tree(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_byte_identical", baseline._byte_identical)
+    (out_dir / "pcc3").write_bytes(b"different-fixed-point")
+
+    with pytest.raises(AssertionError, match="byte-identical in their original bytes"):
+        _write_bootstrap_success_manifest("0", shared_pcc1, runtime_archive)
+    assert not (out_dir / _BOOTSTRAP_SUCCESS_MANIFEST).exists()
 
 
 def test_bootstrap_success_manifest_reuses_only_complete_content_addressed_result(

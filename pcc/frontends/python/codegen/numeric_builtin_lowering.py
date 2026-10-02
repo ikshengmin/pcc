@@ -7,7 +7,27 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import BoolType, ByteArrayType, BytesType, Call, ClassType, ComplexType, DictType, DynType, FloatType, IntType, Lambda, ListExpr, ListType, MemoryViewType, Name, SetType, StrType, TupleExpr, TupleType
+from pcc.frontends.python.py_ast import (
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    Call,
+    ClassType,
+    ComplexType,
+    DictType,
+    DynType,
+    FloatType,
+    IntType,
+    Lambda,
+    ListExpr,
+    ListType,
+    MemoryViewType,
+    Name,
+    SetType,
+    StrType,
+    TupleExpr,
+    TupleType,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_FLOAT, PY_TYPE_STR
 

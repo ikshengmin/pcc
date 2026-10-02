@@ -7,7 +7,15 @@ but uses pcc.unsafe.write instead of variadic fprintf.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PYCLASSOBJECT_NAME_OFFSET, PY_FLAG_EXC_SUPPRESS_CONTEXT, PY_TYPE_EXC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_STR, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import (
+    PYCLASSOBJECT_NAME_OFFSET,
+    PY_FLAG_EXC_SUPPRESS_CONTEXT,
+    PY_TYPE_EXC,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_STR,
+    PY_TYPE_USER_CLASS_START,
+)
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i32,

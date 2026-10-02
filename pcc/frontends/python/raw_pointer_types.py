@@ -64,7 +64,17 @@ def resolve_raw_pointer_annotation(ty, marker_names):
 
 def verified_c_abi_export_symbol(module, function):
     """The actual supported export spelling, backed by a real extern import."""
-    from pcc.frontends.python.py_ast import Attr, BoolType, Call, DynType, FloatType, IntType, NoneType, StrLit, TupleExpr
+    from pcc.frontends.python.py_ast import (
+        Attr,
+        BoolType,
+        Call,
+        DynType,
+        FloatType,
+        IntType,
+        NoneType,
+        StrLit,
+        TupleExpr,
+    )
     factories = ('c_abi_export', 'c_abi_variadic_export', 'c_abi_typed_export')
     names = {}
     modules = {}

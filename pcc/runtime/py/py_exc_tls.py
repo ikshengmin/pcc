@@ -25,7 +25,14 @@ The runtime-error exception-table code remains owned by the exception ABI.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, PY_TYPE_EXC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import (
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_FLAG_GC_PINNED,
+    PY_TYPE_EXC,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_USER_CLASS_START,
+)
 from pcc.extern import extern, c_abi_export, c_int32, c_ptr, c_int64, c_void
 from pcc.unsafe import (
     cstr,

@@ -8,7 +8,31 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import RawPointerType, Arg, BoolType, ByteArrayType, BytesType, ClassDef, ClassType, ComplexType, DictType, DynType, FloatType, FuncDef, FuncType, IntType, Import, ImportFrom, ListType, MemoryViewType, NoneType, StrType, TupleType, Type, ValueArrayType
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    Arg,
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    ClassDef,
+    ClassType,
+    ComplexType,
+    DictType,
+    DynType,
+    FloatType,
+    FuncDef,
+    FuncType,
+    IntType,
+    Import,
+    ImportFrom,
+    ListType,
+    MemoryViewType,
+    NoneType,
+    StrType,
+    TupleType,
+    Type,
+    ValueArrayType,
+)
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.layer1_support import _import_from_module_or_empty, _stmt_kind_name
 

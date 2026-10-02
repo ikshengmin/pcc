@@ -4,7 +4,28 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pcc.frontends.python.py_ast import Call, DictExpr, DictType, DynType, Expr, FuncDef, IntLit, IntType, ListType, Name, NoneLit, NoneType, RawPointerType, SourceSpan, StrLit, StrType, Subscript, TupleExpr, TupleType, ValueArrayType
+from pcc.frontends.python.py_ast import (
+    Call,
+    DictExpr,
+    DictType,
+    DynType,
+    Expr,
+    FuncDef,
+    IntLit,
+    IntType,
+    ListType,
+    Name,
+    NoneLit,
+    NoneType,
+    RawPointerType,
+    SourceSpan,
+    StrLit,
+    StrType,
+    Subscript,
+    TupleExpr,
+    TupleType,
+    ValueArrayType,
+)
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
@@ -25,7 +46,7 @@ def _call_kwargs_merge(span, operands):
 
 
 class CallResolutionLoweringMixin:
-    def _ordinary_call_needs_runtime_binding(self, expr, fd, skip_self=False):
+    def _ordinary_call_needs_runtime_binding(self, expr, fd, skip_self=False, require_object_result=False):
         """Classify before emitting anything or rearranging the original Call.
 
         A direct ordinary-Python ABI call is admitted only when every runtime
@@ -47,6 +68,11 @@ class CallResolutionLoweringMixin:
                     or isinstance(ty, IntType) and ty.name != "int"
                     or ty is not None and self._is_valueclass_payload_type(ty)):
                 return False
+        if require_object_result:
+            # Some direct ABIs still return a raw object after argument
+            # cleanup. An object-operand consumer requires publication into
+            # its pre-registered output slot at the actual return boundary.
+            return True
         if expr.kwargs or self._has_starred_unpack(expr.args):
             return True
         if self._split_starstar_kwargs_unpack(expr.args) is not None:

@@ -423,7 +423,10 @@ class MemoryOptIRPass(IRPass):
             # same slot are never forwarded back to the original incoming ptr.
             if "= va_arg " in stripped or stripped.startswith("va_arg "):
                 _clear_memory_facts(block_stores, block_loads, removable_store_positions)
-                new_lines.append(line)
+                # Loads already eliminated earlier in this block still have
+                # SSA aliases. Rewrite the cursor use while invalidating the
+                # mutable memory facts, or va_arg refers to a removed load.
+                new_lines.append(_rewrite_operands(line, value_aliases))
                 continue
 
             alloca_slot = _parse_alloca_slot(line)

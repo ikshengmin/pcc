@@ -26,9 +26,11 @@ over any procedure in this file, including its gates and checks.
    sibling repositories track work; dated handoffs and retired goal documents
    are not task queues. Preserve unfinished scope when handling a short subtask.
    Resume parent work after the subtask unless the user stops or replaces it.
-   Record new actionable work in the relevant issue. Before a long pause,
-   leave a dated handoff with source identity, unfinished state and repro steps
-   at `docs/knowledge/YYYY-MM-DD-<topic>-handoff.md`, not in a temp directory.
+   Record new actionable work in the relevant issue. Keep [current status](docs/status.md)
+   up to date with source identity, unfinished goals, blockers and repro commands.
+   Preserve detailed run receipts and historical handoffs in a durable recovery
+   archive outside the working repository; link its location from current status.
+   Do not create another dated in-repository handoff.
 
 ## Project contracts
 
@@ -72,6 +74,9 @@ These are required outcomes, not assertions that migration is complete. See
   the user did not ask for are proposed, never taken silently.
 - Do not investigate other sessions through author/timestamp/process heuristics.
   Check relevant input identities for measurement stability, not attribution.
+- Keep imports readable with parenthesized multiline lists; do not mechanically
+  flatten them into long lines. Name each scratch-frame layout and reuse its
+  slot names rather than scattering numeric indices and byte offsets.
 - Fix the generic implementation. Enumerate repeated shapes and check enclosing
   owners/counts before replacement. Run `git diff --check` and focused checks
   after each semantic change; do not stack speculative shared-codegen edits.

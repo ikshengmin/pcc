@@ -7,7 +7,24 @@ does not replace the C helper with a call back into ``snprintf``.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_FLAG_EXC_UNICODE_PAYLOAD, PYCLASSOBJECT_NAME_OFFSET, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FLOAT, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import (
+    PY_FLAG_EXC_UNICODE_PAYLOAD,
+    PYCLASSOBJECT_NAME_OFFSET,
+    PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_COMPLEX,
+    PY_TYPE_DICT,
+    PY_TYPE_EXC,
+    PY_TYPE_FLOAT,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_NONE,
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+    PY_TYPE_USER_CLASS_START,
+)
 
 from pcc.extern import c_abi_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (

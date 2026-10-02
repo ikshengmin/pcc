@@ -17,8 +17,69 @@ handles its own int width.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
-from pcc.runtime.py.py_abi_constants import PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET
-from pcc.runtime.py.py_abi_constants import PY_FLAG_FUNC_TRANSPARENT_CALL, C_POINTER_SIZE, DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYCLASSMETHOD_FUNC_OFFSET, PYCLASSMETHOD_NAME_HASH_OFFSET, PYCLASSMETHOD_NAME_LENGTH_OFFSET, PYCLASSMETHOD_NAME_OFFSET, PYCLASSMETHOD_SIZE, PYCLASSMETHODOBJECT_FUNC_OFFSET, PYCLASSMETHODOBJECT_SIZE, PYCLASSOBJECT_ATTRS_OFFSET, PYCLASSOBJECT_BASES_OFFSET, PYCLASSOBJECT_DEL_METHOD_OFFSET, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYCLASSOBJECT_INSTANCE_SIZE_OFFSET, PYCLASSOBJECT_METACLASS_OFFSET, PYCLASSOBJECT_METHODS_OFFSET, PYCLASSOBJECT_MRO_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_BASES_OFFSET, PYCLASSOBJECT_N_FIELDS_OFFSET, PYCLASSOBJECT_N_METHODS_OFFSET, PYCLASSOBJECT_N_MRO_OFFSET, PYCLASSOBJECT_SIZE, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYINSTANCEOBJECT_SIZE, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_IMMORTAL, PYPROPERTYOBJECT_FDEL_OFFSET, PYPROPERTYOBJECT_FGET_OFFSET, PYPROPERTYOBJECT_FSET_OFFSET, PYPROPERTYOBJECT_SIZE, PYSTATICMETHODOBJECT_FUNC_OFFSET, PYSTATICMETHODOBJECT_SIZE, PY_TYPE_CLASS, PY_TYPE_CLASSMETHOD, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_LIST, PY_TYPE_PROPERTY, PY_TYPE_STATICMETHOD, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_VALUEBOX
+from pcc.runtime.py.py_abi_constants import (
+    PYSTROBJECT_BYTE_LEN_OFFSET,
+    PYSTROBJECT_DATA_OFFSET,
+    PYTUPLEOBJECT_ITEMS_OFFSET,
+)
+from pcc.runtime.py.py_abi_constants import (
+    PY_FLAG_FUNC_TRANSPARENT_CALL,
+    C_POINTER_SIZE,
+    DICTENTRY_KEY_OFFSET,
+    DICTENTRY_SIZE,
+    DICTENTRY_VALUE_OFFSET,
+    PYCLASSMETHOD_FUNC_OFFSET,
+    PYCLASSMETHOD_NAME_HASH_OFFSET,
+    PYCLASSMETHOD_NAME_LENGTH_OFFSET,
+    PYCLASSMETHOD_NAME_OFFSET,
+    PYCLASSMETHOD_SIZE,
+    PYCLASSMETHODOBJECT_FUNC_OFFSET,
+    PYCLASSMETHODOBJECT_SIZE,
+    PYCLASSOBJECT_ATTRS_OFFSET,
+    PYCLASSOBJECT_BASES_OFFSET,
+    PYCLASSOBJECT_DEL_METHOD_OFFSET,
+    PYCLASSOBJECT_FIELD_NAMES_OFFSET,
+    PYCLASSOBJECT_INSTANCE_SIZE_OFFSET,
+    PYCLASSOBJECT_METACLASS_OFFSET,
+    PYCLASSOBJECT_METHODS_OFFSET,
+    PYCLASSOBJECT_MRO_OFFSET,
+    PYCLASSOBJECT_NAME_OFFSET,
+    PYCLASSOBJECT_N_BASES_OFFSET,
+    PYCLASSOBJECT_N_FIELDS_OFFSET,
+    PYCLASSOBJECT_N_METHODS_OFFSET,
+    PYCLASSOBJECT_N_MRO_OFFSET,
+    PYCLASSOBJECT_SIZE,
+    PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET,
+    PYDICTOBJECT_ENTRIES_OFFSET,
+    PYDICTOBJECT_ENTRIES_USED_OFFSET,
+    PYINSTANCEOBJECT_CLS_OFFSET,
+    PYINSTANCEOBJECT_FIELDS_OFFSET,
+    PYINSTANCEOBJECT_SIZE,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PYOBJECTHEADER_REFCOUNT_OFFSET,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_FLAG_GC_MALLOC_ALLOC,
+    PY_FLAG_IMMORTAL,
+    PYPROPERTYOBJECT_FDEL_OFFSET,
+    PYPROPERTYOBJECT_FGET_OFFSET,
+    PYPROPERTYOBJECT_FSET_OFFSET,
+    PYPROPERTYOBJECT_SIZE,
+    PYSTATICMETHODOBJECT_FUNC_OFFSET,
+    PYSTATICMETHODOBJECT_SIZE,
+    PY_TYPE_CLASS,
+    PY_TYPE_CLASSMETHOD,
+    PY_TYPE_DICT,
+    PY_TYPE_EXC,
+    PY_TYPE_FUNC,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_LIST,
+    PY_TYPE_PROPERTY,
+    PY_TYPE_STATICMETHOD,
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+    PY_TYPE_USER_CLASS_START,
+    PY_TYPE_VALUEBOX,
+)
 from pcc.unsafe import (
     atomic_cas_i64,
     atomic_load_i64,
@@ -95,6 +156,7 @@ pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,)
 pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
 py_func_call_kwargs = extern("py_func_call_kwargs", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_call_validate_kwargs = extern("py_call_validate_kwargs", (c_ptr,), c_int64)
 py_dict_subclass_getattr = extern("py_dict_subclass_getattr", (c_ptr, c_ptr), c_ptr)
 py_func_call_bound_forward = extern("py_func_call_bound_forward", (c_ptr, c_ptr), c_ptr)
 py_func_new_bound = extern(
@@ -987,6 +1049,63 @@ def py_instance_bind_method(method, self_obj, name):
         py_decref(bound_captures)
     py_decref(captures)
     return bound
+
+
+def _bound_method_function_slot_locked(bound):
+    # The caller holds the graph transaction and an address lease on bound.
+    # Only this exact wrapper owns the (method, self) capture convention.
+    if not _ptr_can_have_header(bound):
+        return null()
+    if load_i32(bound, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
+        return null()
+    if ptr_eq(load_ptr(bound, 56), _instance_bound_method_entry) == 0:
+        return null()
+    captures = pcc_gc_resolve_root_slot_unlocked(ptr_add(bound, 64), 0)
+    if not _ptr_can_have_header(captures):
+        return null()
+    if load_i32(captures, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_TUPLE:
+        return null()
+    if py_tuple_len(captures) != 2:
+        return null()
+    source = ptr_add(captures, PYTUPLEOBJECT_ITEMS_OFFSET)
+    first = pcc_gc_resolve_root_slot_unlocked(source, 0)
+    if not _ptr_can_have_header(first):
+        # A native method's first capture may be an untraced code address.
+        return null()
+    if load_i32(first, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE:
+        # _wrap_bound_captures stores (original captures, bound signature).
+        if py_tuple_len(first) != 2:
+            return null()
+        source = ptr_add(first, PYTUPLEOBJECT_ITEMS_OFFSET)
+        first = pcc_gc_resolve_root_slot_unlocked(source, 0)
+        if not _ptr_can_have_header(first):
+            return null()
+    if load_i32(first, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
+        return null()
+    return source
+
+
+@c_abi_export("py_bound_method_function")
+def py_bound_method_function(bound):
+    """NEW live original function, or NULL for non-wrapper/native entries.
+
+    Diagnostic callers already hold the bound object stable. Inspect existing
+    owning capture slots under the graph lock; only after managed FUNC proof
+    acquire the result reference and pin. No raw code pointer becomes a root.
+    """
+    result_slot = stack_alloc(C_POINTER_SIZE)
+    store_ptr(result_slot, 0, null())
+    prior_pin: int = 0
+    pcc_py_gc_minor_graph_lock()
+    source = _bound_method_function_slot_locked(bound)
+    if ptr_is_null(source) == 0:
+        original = load_ptr(source, 0)
+        prior_pin = load_i32(original, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        py_incref(original)
+        pcc_gc_pin(original)
+        store_ptr(result_slot, 0, original)
+    pcc_py_gc_minor_graph_unlock()
+    return pcc_gc_take_pinned_slot(result_slot, prior_pin)
 
 
 # Instance attribute resolution cache, one table per thread.  Resolving
@@ -1936,15 +2055,17 @@ def py_class_metaclass_call(cls, args, kwargs):
         _class_require_result(null(), cstr("metaclass __call__"),
                               cstr("metaclass temporary root registration failed"))
     prior_result_pin: int = load_i64(pins, 0)
+    saved_error_index: int = 7
+    saved_error_offset: int = saved_error_index * C_POINTER_SIZE
     if py_err_occurred() != 0:
-        _instance_lookup_hold(slots, pins, 7, py_current_exception(), 1)
+        _instance_lookup_hold(slots, pins, saved_error_index, py_current_exception(), 1)
     index: int = 6
     while index > 0:
         _instance_lookup_release(slots, pins, index)
         index = index - 1
-    if ptr_is_null(load_ptr(slots, 7)) == 0:
-        py_raise(load_ptr(slots, 7))
-        _instance_lookup_release(slots, pins, 7)
+    if ptr_is_null(load_ptr(slots, saved_error_offset)) == 0:
+        py_raise(load_ptr(slots, saved_error_offset))
+        _instance_lookup_release(slots, pins, saved_error_index)
     index = 0
     while index < count:
         pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
@@ -2488,17 +2609,19 @@ def _instance_getattr_default_rooted(inst, cls, name, custom_lookup: int):
         if ptr_eq(load_ptr(slots, 0), load_ptr(slots, index * C_POINTER_SIZE)) != 0:
             prior_result_pin = load_i64(pins, index * C_POINTER_SIZE)
         index = index - 1
+    saved_error_index: int = 7
+    saved_error_offset: int = saved_error_index * C_POINTER_SIZE
     if py_err_occurred() != 0:
-        _instance_lookup_hold(slots, pins, 7, py_current_exception(), 1)
+        _instance_lookup_hold(slots, pins, saved_error_index, py_current_exception(), 1)
     # Release every owner once, keeping any remaining aliased lease pinned.
     # The result and original exception survive arbitrary finalizer callbacks.
     index = 6
     while index > 0:
         _instance_lookup_release(slots, pins, index)
         index = index - 1
-    if ptr_is_null(load_ptr(slots, 7)) == 0:
-        py_raise(load_ptr(slots, 7))
-        _instance_lookup_release(slots, pins, 7)
+    if ptr_is_null(load_ptr(slots, saved_error_offset)) == 0:
+        py_raise(load_ptr(slots, saved_error_offset))
+        _instance_lookup_release(slots, pins, saved_error_index)
     index = 0
     while index < count:
         pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
@@ -4148,7 +4271,7 @@ def _special_validate_arguments(slots) -> int:
         if is_tagged_int(kwargs) != 0 or load_i32(kwargs, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_DICT:
             py_raise_owned(py_exc_new(3, cstr("call keyword arguments must be a dict")))
             return -1
-    return 0
+    return py_call_validate_kwargs(kwargs)
 
 
 def _special_call_native(slots, tokens, native) -> int:
@@ -4382,3 +4505,32 @@ def py_obj_call_slots(callable_slot, args_slot, kwargs_slot, result_slot) -> int
         _special_error(cstr("call failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
     return status
+
+
+@c_abi_export("py_obj_special_present")
+def py_obj_special_present(value, name) -> int:
+    """Type-level presence only, for an independently address-leased value.
+
+    The caller retains an owning source slot and its counted address lease.
+    This graph transaction reads namespace/method slots without binding a
+    descriptor or invoking user code. A present None descriptor still counts
+    as present; raw native method addresses are never traced as objects.
+    """
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0 or ptr_is_null(name) != 0:
+        return 0
+    found: int = 0
+    record = stack_alloc(2 * C_POINTER_SIZE)
+    pcc_py_gc_minor_graph_lock()
+    owner_source = null()
+    if _ptr_is_class(value):
+        owner_source = ptr_add(value, PYCLASSOBJECT_METACLASS_OFFSET)
+    elif _special_native_instance(value):
+        owner_source = ptr_add(value, PYINSTANCEOBJECT_CLS_OFFSET)
+    if ptr_is_null(owner_source) == 0:
+        owner = pcc_gc_resolve_root_slot_unlocked(owner_source, 1)
+        if ptr_is_null(owner) == 0:
+            _special_lookup_locked(owner, name, record)
+            if load_i64(record, 0) != 0:
+                found = 1
+    pcc_py_gc_minor_graph_unlock()
+    return found

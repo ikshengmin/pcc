@@ -7,7 +7,25 @@ storage/methods.  The C source remains a host-C oracle.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PY_TYPE_DICT, PYCLASSOBJECT_N_FIELDS_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PY_TYPE_BOOL, PY_TYPE_COMPLEX, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_NONE, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
+    PYCLASSOBJECT_FIELD_NAMES_OFFSET,
+    PYTUPLEOBJECT_ITEMS_OFFSET,
+    PY_TYPE_DICT,
+    PYCLASSOBJECT_N_FIELDS_OFFSET,
+    PYINSTANCEOBJECT_CLS_OFFSET,
+    PYINSTANCEOBJECT_FIELDS_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_TYPE_BOOL,
+    PY_TYPE_COMPLEX,
+    PY_TYPE_FLOAT,
+    PY_TYPE_FUNC,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_NONE,
+    PY_TYPE_TUPLE,
+    PY_TYPE_USER_CLASS_START,
+)
 
 from pcc.extern import c_abi_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
@@ -1346,17 +1364,34 @@ py_dict_setdefault_slots = extern("py_dict_setdefault_slots", (c_ptr, c_ptr, c_p
 py_dict_update_slots = extern("py_dict_update_slots", (c_ptr, c_ptr), c_int64)
 
 
+# Scratch indices shared by the root, lease-token and registration arrays.
+# Slot zero saves entry TLS; the final slot preserves an error during cleanup.
+_BUILTIN_INIT_OLD_EXCEPTION_SLOT = 0
+_BUILTIN_INIT_RECEIVER_SLOT = 1
+_BUILTIN_INIT_FROM_CLASS_SLOT = 2
+_BUILTIN_INIT_ARGS_SLOT = 3
+_BUILTIN_INIT_KWARGS_SLOT = 4
+_BUILTIN_INIT_CLASS_SLOT = 5
+_BUILTIN_INIT_ENV_SLOT = 6
+_BUILTIN_INIT_KEY_SLOT = 7
+_BUILTIN_INIT_DICT_SLOT = 8
+_BUILTIN_INIT_SOURCE_SLOT = 9
+_BUILTIN_INIT_TEMP_SLOT = 10
+_BUILTIN_INIT_ERROR_SLOT = 11
+_BUILTIN_INIT_SLOT_COUNT = 12
+
+
 def _builtin_init_error(message) -> int:
     py_runtime_error_if_unset(cstr("builtin-base initializer"), message)
     return -1
 
 
 def _builtin_init_open(slots, tokens, handles) -> int:
-    memset(slots, 0, 12 * C_POINTER_SIZE)
-    memset(tokens, 0, 12 * C_POINTER_SIZE)
-    memset(handles, 0, 12 * C_POINTER_SIZE)
+    memset(slots, 0, _BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(handles, 0, _BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
     count: int = 0
-    while count < 12:
+    while count < _BUILTIN_INIT_SLOT_COUNT:
         handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
         if ptr_is_null(handle) != 0:
             return count
@@ -1404,17 +1439,17 @@ def _builtin_init_drop(slots, tokens, index: int) -> None:
 
 def _builtin_init_close(slots, tokens, handles, count: int, suspended: int) -> None:
     if suspended != 0:
-        py_tls_exc_swap_slot(ptr_add(slots, 11 * C_POINTER_SIZE))
-    index: int = 10
+        py_tls_exc_swap_slot(ptr_add(slots, _BUILTIN_INIT_ERROR_SLOT * C_POINTER_SIZE))
+    index: int = _BUILTIN_INIT_TEMP_SLOT
     while index > 0:
         _builtin_init_drop(slots, tokens, index)
         index = index - 1
     if suspended != 0:
         py_clear_exception()
-        if ptr_is_null(load_ptr(slots, 11 * C_POINTER_SIZE)) == 0:
+        if ptr_is_null(load_ptr(slots, _BUILTIN_INIT_ERROR_SLOT * C_POINTER_SIZE)) == 0:
             pcc_gc_store_root(slots, null())
             py_clear_exception()
-            py_tls_exc_swap_slot(ptr_add(slots, 11 * C_POINTER_SIZE))
+            py_tls_exc_swap_slot(ptr_add(slots, _BUILTIN_INIT_ERROR_SLOT * C_POINTER_SIZE))
         else:
             py_tls_exc_swap_slot(slots)
     index = 0
@@ -1424,109 +1459,109 @@ def _builtin_init_close(slots, tokens, handles, count: int, suspended: int) -> N
 
 
 def _builtin_init_env(slots, tokens) -> int:
-    count: int = load_i32(load_ptr(slots, 5 * C_POINTER_SIZE), PYCLASSOBJECT_N_FIELDS_OFFSET)
+    count: int = load_i32(load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE), PYCLASSOBJECT_N_FIELDS_OFFSET)
     if count < 0:
         count = 0
     offset: int = PYINSTANCEOBJECT_FIELDS_OFFSET + count * C_POINTER_SIZE
-    if _builtin_init_copy(slots, tokens, 6,
-            ptr_add(load_ptr(slots, C_POINTER_SIZE), offset), 0) != 0:
+    if _builtin_init_copy(slots, tokens, _BUILTIN_INIT_ENV_SLOT,
+            ptr_add(load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE), offset), 0) != 0:
         return -1
-    if ptr_is_null(load_ptr(slots, 6 * C_POINTER_SIZE)) == 0:
+    if ptr_is_null(load_ptr(slots, _BUILTIN_INIT_ENV_SLOT * C_POINTER_SIZE)) == 0:
         return 0
-    store_ptr(slots, 10 * C_POINTER_SIZE, py_dict_new())
-    if _builtin_init_adopt(slots, tokens, 10) != 0:
+    store_ptr(slots, _BUILTIN_INIT_TEMP_SLOT * C_POINTER_SIZE, py_dict_new())
+    if _builtin_init_adopt(slots, tokens, _BUILTIN_INIT_TEMP_SLOT) != 0:
         return -1
     plan = stack_alloc(128)
-    pcc_gc_store_ptr_plan_init(plan, load_ptr(slots, C_POINTER_SIZE), pcc_gc_backend())
+    pcc_gc_store_ptr_plan_init(plan, load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE), pcc_gc_backend())
     committed: int = 1
     pcc_py_gc_minor_graph_lock()
-    receiver = load_ptr(slots, C_POINTER_SIZE)
+    receiver = load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE)
     field = ptr_add(receiver, offset)
     # Allocation may reenter and create an environment. Never replace it.
     if ptr_is_null(pcc_gc_resolve_root_slot_unlocked(field, 0)) != 0:
         committed = pcc_gc_store_ptr_plan_commit_locked(plan, receiver, field,
-            load_ptr(slots, 10 * C_POINTER_SIZE))
+            load_ptr(slots, _BUILTIN_INIT_TEMP_SLOT * C_POINTER_SIZE))
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
-    _builtin_init_drop(slots, tokens, 10)
+    _builtin_init_drop(slots, tokens, _BUILTIN_INIT_TEMP_SLOT)
     if committed == 0:
         return _builtin_init_error(cstr("initializer environment publication failed"))
-    return _builtin_init_copy(slots, tokens, 6,
-        ptr_add(load_ptr(slots, C_POINTER_SIZE), offset), 0)
+    return _builtin_init_copy(slots, tokens, _BUILTIN_INIT_ENV_SLOT,
+        ptr_add(load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE), offset), 0)
 
 
 def _builtin_init_dict(slots, tokens) -> int:
-    nargs: int = py_tuple_len(load_ptr(slots, 3 * C_POINTER_SIZE))
+    nargs: int = py_tuple_len(load_ptr(slots, _BUILTIN_INIT_ARGS_SLOT * C_POINTER_SIZE))
     if nargs > 1:
         py_raise_owned(py_exc_new(3, cstr("dict expected at most 1 argument")))
         return -1
-    if (load_i32(load_ptr(slots, 5 * C_POINTER_SIZE), PYOBJECTHEADER_FLAGS_OFFSET) & 4) == 0:
+    if (load_i32(load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE), PYOBJECTHEADER_FLAGS_OFFSET) & 4) == 0:
         py_raise_owned(py_exc_new(3, cstr("dict.__init__ requires a dict instance")))
         return -1
     if _builtin_init_env(slots, tokens) != 0:
         return -1
-    store_ptr(slots, 7 * C_POINTER_SIZE, _dict_items_key())
-    if _builtin_init_adopt(slots, tokens, 7) != 0:
+    store_ptr(slots, _BUILTIN_INIT_KEY_SLOT * C_POINTER_SIZE, _dict_items_key())
+    if _builtin_init_adopt(slots, tokens, _BUILTIN_INIT_KEY_SLOT) != 0:
         return -1
-    store_ptr(slots, 10 * C_POINTER_SIZE, py_dict_new())
-    if _builtin_init_adopt(slots, tokens, 10) != 0:
+    store_ptr(slots, _BUILTIN_INIT_TEMP_SLOT * C_POINTER_SIZE, py_dict_new())
+    if _builtin_init_adopt(slots, tokens, _BUILTIN_INIT_TEMP_SLOT) != 0:
         return -1
-    if py_dict_setdefault_slots(ptr_add(slots, 6 * C_POINTER_SIZE),
-            ptr_add(slots, 7 * C_POINTER_SIZE), ptr_add(slots, 10 * C_POINTER_SIZE),
-            ptr_add(slots, 8 * C_POINTER_SIZE)) != 0:
+    if py_dict_setdefault_slots(ptr_add(slots, _BUILTIN_INIT_ENV_SLOT * C_POINTER_SIZE),
+            ptr_add(slots, _BUILTIN_INIT_KEY_SLOT * C_POINTER_SIZE), ptr_add(slots, _BUILTIN_INIT_TEMP_SLOT * C_POINTER_SIZE),
+            ptr_add(slots, _BUILTIN_INIT_DICT_SLOT * C_POINTER_SIZE)) != 0:
         return -1
-    if _builtin_init_adopt(slots, tokens, 8) != 0:
+    if _builtin_init_adopt(slots, tokens, _BUILTIN_INIT_DICT_SLOT) != 0:
         return -1
-    _builtin_init_drop(slots, tokens, 10)
+    _builtin_init_drop(slots, tokens, _BUILTIN_INIT_TEMP_SLOT)
     if nargs == 1:
-        if _builtin_init_copy(slots, tokens, 9,
-                ptr_add(load_ptr(slots, 3 * C_POINTER_SIZE), PYTUPLEOBJECT_ITEMS_OFFSET), 0) != 0:
+        if _builtin_init_copy(slots, tokens, _BUILTIN_INIT_SOURCE_SLOT,
+                ptr_add(load_ptr(slots, _BUILTIN_INIT_ARGS_SLOT * C_POINTER_SIZE), PYTUPLEOBJECT_ITEMS_OFFSET), 0) != 0:
             return -1
-        if py_dict_update_slots(ptr_add(slots, 8 * C_POINTER_SIZE),
-                                ptr_add(slots, 9 * C_POINTER_SIZE)) != 0:
+        if py_dict_update_slots(ptr_add(slots, _BUILTIN_INIT_DICT_SLOT * C_POINTER_SIZE),
+                                ptr_add(slots, _BUILTIN_INIT_SOURCE_SLOT * C_POINTER_SIZE)) != 0:
             return -1
-    kwargs = load_ptr(slots, 4 * C_POINTER_SIZE)
+    kwargs = load_ptr(slots, _BUILTIN_INIT_KWARGS_SLOT * C_POINTER_SIZE)
     if ptr_is_null(kwargs) == 0 and _type_of(kwargs) != PY_TYPE_NONE:
-        return py_dict_update_slots(ptr_add(slots, 8 * C_POINTER_SIZE),
-                                    ptr_add(slots, 4 * C_POINTER_SIZE))
+        return py_dict_update_slots(ptr_add(slots, _BUILTIN_INIT_DICT_SLOT * C_POINTER_SIZE),
+                                    ptr_add(slots, _BUILTIN_INIT_KWARGS_SLOT * C_POINTER_SIZE))
     return 0
 
 
 def _builtin_init_exception(slots, tokens) -> int:
-    kwargs = load_ptr(slots, 4 * C_POINTER_SIZE)
+    kwargs = load_ptr(slots, _BUILTIN_INIT_KWARGS_SLOT * C_POINTER_SIZE)
     if ptr_is_null(kwargs) == 0 and _type_of(kwargs) != PY_TYPE_NONE:
         if py_dict_len(kwargs) != 0:
             py_raise_owned(py_exc_new(3, cstr("BaseException.__init__ takes no keyword arguments")))
             return -1
-    cls = load_ptr(slots, 5 * C_POINTER_SIZE)
+    cls = load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE)
     names = load_ptr(cls, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
     count: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
     index: int = 0
     while index < count:
         if _cstr_equal(load_ptr(names, index * C_POINTER_SIZE), cstr("args")) != 0:
-            receiver = load_ptr(slots, C_POINTER_SIZE)
+            receiver = load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE)
             pcc_gc_store_ptr(receiver,
                 ptr_add(receiver, PYINSTANCEOBJECT_FIELDS_OFFSET + index * C_POINTER_SIZE),
-                load_ptr(slots, 3 * C_POINTER_SIZE))
+                load_ptr(slots, _BUILTIN_INIT_ARGS_SLOT * C_POINTER_SIZE))
             return -1 if py_err_occurred() != 0 else 0
         index = index + 1
     if _builtin_init_env(slots, tokens) != 0:
         return -1
-    store_ptr(slots, 7 * C_POINTER_SIZE, py_str_new(cstr("args"), 4))
-    if _builtin_init_adopt(slots, tokens, 7) != 0:
+    store_ptr(slots, _BUILTIN_INIT_KEY_SLOT * C_POINTER_SIZE, py_str_new(cstr("args"), 4))
+    if _builtin_init_adopt(slots, tokens, _BUILTIN_INIT_KEY_SLOT) != 0:
         return -1
-    return py_dict_set_slots(ptr_add(slots, 6 * C_POINTER_SIZE),
-        ptr_add(slots, 7 * C_POINTER_SIZE), ptr_add(slots, 3 * C_POINTER_SIZE))
+    return py_dict_set_slots(ptr_add(slots, _BUILTIN_INIT_ENV_SLOT * C_POINTER_SIZE),
+        ptr_add(slots, _BUILTIN_INIT_KEY_SLOT * C_POINTER_SIZE), ptr_add(slots, _BUILTIN_INIT_ARGS_SLOT * C_POINTER_SIZE))
 
 
 def _builtin_init_validate(slots, tokens) -> int:
-    if _is_user_instance(load_ptr(slots, C_POINTER_SIZE)) == 0:
+    if _is_user_instance(load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE)) == 0:
         py_raise_owned(py_exc_new(3, cstr("builtin-base initializer requires an instance")))
         return -1
-    if _builtin_init_copy(slots, tokens, 5,
-            ptr_add(load_ptr(slots, C_POINTER_SIZE), PYINSTANCEOBJECT_CLS_OFFSET), 1) != 0:
+    if _builtin_init_copy(slots, tokens, _BUILTIN_INIT_CLASS_SLOT,
+            ptr_add(load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE), PYINSTANCEOBJECT_CLS_OFFSET), 1) != 0:
         return -1
-    matches: int = py_obj_issubclass(load_ptr(slots, 5 * C_POINTER_SIZE), load_ptr(slots, 2 * C_POINTER_SIZE))
+    matches: int = py_obj_issubclass(load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE), load_ptr(slots, _BUILTIN_INIT_FROM_CLASS_SLOT * C_POINTER_SIZE))
     if matches < 0 or py_err_occurred() != 0:
         return -1
     if matches == 0:
@@ -1538,18 +1573,18 @@ def _builtin_init_validate(slots, tokens) -> int:
 @c_abi_export("py_builtin_super_validate_slots")
 def py_builtin_super_validate_slots(receiver_slot, from_class_slot) -> int:
     # Attribute-call evaluation binds super before evaluating call operands.
-    slots = stack_alloc(12 * C_POINTER_SIZE)
-    tokens = stack_alloc(12 * C_POINTER_SIZE)
-    handles = stack_alloc(12 * C_POINTER_SIZE)
+    slots = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
     count: int = _builtin_init_open(slots, tokens, handles)
     suspended: int = 0
     status: int = -1
-    if count == 12:
+    if count == _BUILTIN_INIT_SLOT_COUNT:
         py_tls_exc_swap_slot(slots)
         suspended = 1
-        status = _builtin_init_copy(slots, tokens, 1, receiver_slot, 0)
+        status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_RECEIVER_SLOT, receiver_slot, 0)
         if status == 0:
-            status = _builtin_init_copy(slots, tokens, 2, from_class_slot, 0)
+            status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_FROM_CLASS_SLOT, from_class_slot, 0)
         if status == 0:
             status = _builtin_init_validate(slots, tokens)
     if status != 0:
@@ -1559,27 +1594,27 @@ def py_builtin_super_validate_slots(receiver_slot, from_class_slot) -> int:
 
 
 def _builtin_init_dispatch(receiver_slot, from_slot, args_slot, kwargs_slot, kind: int) -> int:
-    slots = stack_alloc(12 * C_POINTER_SIZE)
-    tokens = stack_alloc(12 * C_POINTER_SIZE)
-    handles = stack_alloc(12 * C_POINTER_SIZE)
+    slots = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
     count: int = _builtin_init_open(slots, tokens, handles)
     suspended: int = 0
     status: int = -1
-    if count == 12:
+    if count == _BUILTIN_INIT_SLOT_COUNT:
         py_tls_exc_swap_slot(slots)
         suspended = 1
-        status = _builtin_init_copy(slots, tokens, 1, receiver_slot, 0)
+        status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_RECEIVER_SLOT, receiver_slot, 0)
         if status == 0:
-            status = _builtin_init_copy(slots, tokens, 2, from_slot, 0)
+            status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_FROM_CLASS_SLOT, from_slot, 0)
         if status == 0:
-            status = _builtin_init_copy(slots, tokens, 3, args_slot, 0)
+            status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_ARGS_SLOT, args_slot, 0)
         if status == 0:
-            status = _builtin_init_copy(slots, tokens, 4, kwargs_slot, 0)
+            status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_KWARGS_SLOT, kwargs_slot, 0)
         if status == 0:
             status = _builtin_init_validate(slots, tokens)
         if status == 0:
-            args = load_ptr(slots, 3 * C_POINTER_SIZE)
-            kwargs = load_ptr(slots, 4 * C_POINTER_SIZE)
+            args = load_ptr(slots, _BUILTIN_INIT_ARGS_SLOT * C_POINTER_SIZE)
+            kwargs = load_ptr(slots, _BUILTIN_INIT_KWARGS_SLOT * C_POINTER_SIZE)
             if ptr_is_null(args) != 0 or _type_of(args) != PY_TYPE_TUPLE:
                 status = _builtin_init_error(cstr("initializer args must be a tuple"))
             elif ptr_is_null(kwargs) == 0 and _type_of(kwargs) != PY_TYPE_NONE and _type_of(kwargs) != PY_TYPE_DICT:
@@ -1610,6 +1645,15 @@ pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 py_obj_special_call_slots = extern("py_obj_special_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 
 
+# Scratch indices shared by the root, lease-token and registration arrays.
+# Slot zero saves entry TLS; the final slot preserves an error during cleanup.
+_INDEX_OLD_EXCEPTION_SLOT = 0
+_INDEX_RECEIVER_SLOT = 1
+_INDEX_RESULT_SLOT = 2
+_INDEX_ERROR_SLOT = 3
+_INDEX_SLOT_COUNT = 4
+
+
 def _index_slot_error(message) -> int:
     py_runtime_error_if_unset(cstr("slot-based index"), message)
     return -1
@@ -1618,11 +1662,11 @@ def _index_slot_error(message) -> int:
 def _index_slot_open(slots, tokens, handles) -> int:
     # old TLS, receiver, integer result, new TLS. No input value is loaded
     # until every potentially parking registration has finished.
-    memset(slots, 0, 4 * C_POINTER_SIZE)
-    memset(tokens, 0, 4 * C_POINTER_SIZE)
-    memset(handles, 0, 4 * C_POINTER_SIZE)
+    memset(slots, 0, _INDEX_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _INDEX_SLOT_COUNT * C_POINTER_SIZE)
+    memset(handles, 0, _INDEX_SLOT_COUNT * C_POINTER_SIZE)
     count: int = 0
-    while count < 4:
+    while count < _INDEX_SLOT_COUNT:
         handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
         if ptr_is_null(handle) != 0:
             return count
@@ -1642,11 +1686,11 @@ def _index_slot_copy(slots, tokens, index: int, source) -> int:
 def _index_slot_adopt(slots, tokens) -> int:
     # A producer has already published its NEW result directly into this
     # registered empty root. Lease acquisition reloads it after any wait.
-    slot = ptr_add(slots, 2 * C_POINTER_SIZE)
+    slot = ptr_add(slots, _INDEX_RESULT_SLOT * C_POINTER_SIZE)
     token: int = pcc_gc_foreign_lease_acquire(slot)
     if token < 0:
         return _index_slot_error(cstr("index result lease acquisition failed"))
-    store_i64(tokens, 2 * C_POINTER_SIZE, token)
+    store_i64(tokens, _INDEX_RESULT_SLOT * C_POINTER_SIZE, token)
     pcc_py_gc_minor_graph_lock()
     pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
     pcc_py_gc_minor_graph_unlock()
@@ -1655,8 +1699,8 @@ def _index_slot_adopt(slots, tokens) -> int:
 
 def _index_slot_close(slots, tokens, handles, count: int, suspended: int) -> None:
     if suspended != 0:
-        py_tls_exc_swap_slot(ptr_add(slots, 3 * C_POINTER_SIZE))
-    index: int = 2
+        py_tls_exc_swap_slot(ptr_add(slots, _INDEX_ERROR_SLOT * C_POINTER_SIZE))
+    index: int = _INDEX_RESULT_SLOT
     while index > 0:
         if index < count:
             slot = ptr_add(slots, index * C_POINTER_SIZE)
@@ -1669,10 +1713,10 @@ def _index_slot_close(slots, tokens, handles, count: int, suspended: int) -> Non
         # A callback/validation error wins over old TLS and finalizer errors.
         # On success restore the entry exception after releasing operands.
         py_clear_exception()
-        if ptr_is_null(load_ptr(slots, 3 * C_POINTER_SIZE)) == 0:
+        if ptr_is_null(load_ptr(slots, _INDEX_ERROR_SLOT * C_POINTER_SIZE)) == 0:
             pcc_gc_store_root(slots, null())
             py_clear_exception()
-            py_tls_exc_swap_slot(ptr_add(slots, 3 * C_POINTER_SIZE))
+            py_tls_exc_swap_slot(ptr_add(slots, _INDEX_ERROR_SLOT * C_POINTER_SIZE))
         else:
             py_tls_exc_swap_slot(slots)
     index = 0
@@ -1682,15 +1726,15 @@ def _index_slot_close(slots, tokens, handles, count: int, suspended: int) -> Non
 
 
 def _index_slot_dispatch(slots, tokens) -> int:
-    receiver_slot = ptr_add(slots, C_POINTER_SIZE)
-    result_slot = ptr_add(slots, 2 * C_POINTER_SIZE)
+    receiver_slot = ptr_add(slots, _INDEX_RECEIVER_SLOT * C_POINTER_SIZE)
+    result_slot = ptr_add(slots, _INDEX_RESULT_SLOT * C_POINTER_SIZE)
     receiver = load_ptr(receiver_slot, 0)
     if ptr_is_null(receiver) != 0:
         py_raise_owned(py_exc_new(3, cstr("object cannot be interpreted as an integer")))
         return -1
     tag: int = _type_of(receiver)
     if tag == PY_TYPE_INT:
-        return _index_slot_copy(slots, tokens, 2, receiver_slot)
+        return _index_slot_copy(slots, tokens, _INDEX_RESULT_SLOT, receiver_slot)
     if tag == PY_TYPE_BOOL:
         truth: int = ptr_eq(receiver, global_load_ptr("py_True"))
         store_ptr(result_slot, 0, py_int_from_i64(1 if truth != 0 else 0))
@@ -1735,26 +1779,26 @@ def py_obj_index_slots(receiver_slot, result_slot) -> int:
     """
     if ptr_is_null(receiver_slot) != 0 or ptr_is_null(result_slot) != 0:
         return _index_slot_error(cstr("index requires source and output root slots"))
-    slots = stack_alloc(4 * C_POINTER_SIZE)
-    tokens = stack_alloc(4 * C_POINTER_SIZE)
-    handles = stack_alloc(4 * C_POINTER_SIZE)
+    slots = stack_alloc(_INDEX_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_INDEX_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_INDEX_SLOT_COUNT * C_POINTER_SIZE)
     count: int = _index_slot_open(slots, tokens, handles)
     status: int = -1
     suspended: int = 0
-    if count == 4:
+    if count == _INDEX_SLOT_COUNT:
         py_tls_exc_swap_slot(slots)
         suspended = 1
         if ptr_eq(receiver_slot, result_slot) != 0 or ptr_is_null(load_ptr(result_slot, 0)) == 0:
             status = _index_slot_error(cstr("index result destination must be distinct and empty"))
         else:
-            status = _index_slot_copy(slots, tokens, 1, receiver_slot)
+            status = _index_slot_copy(slots, tokens, _INDEX_RECEIVER_SLOT, receiver_slot)
             if status == 0:
                 status = _index_slot_dispatch(slots, tokens)
             if status == 0:
-                status = pcc_gc_root_move(result_slot, ptr_add(slots, 2 * C_POINTER_SIZE))
+                status = pcc_gc_root_move(result_slot, ptr_add(slots, _INDEX_RESULT_SLOT * C_POINTER_SIZE))
                 if status == 0:
-                    token: int = load_i64(tokens, 2 * C_POINTER_SIZE)
-                    store_i64(tokens, 2 * C_POINTER_SIZE, 0)
+                    token: int = load_i64(tokens, _INDEX_RESULT_SLOT * C_POINTER_SIZE)
+                    store_i64(tokens, _INDEX_RESULT_SLOT * C_POINTER_SIZE, 0)
                     if pcc_gc_foreign_lease_release(result_slot, token) != 0:
                         pcc_platform_abort()
                         return -1
@@ -1770,23 +1814,23 @@ def _index_slot_checked(receiver_slot, container_index: int) -> int:
     if ptr_is_null(receiver_slot) != 0:
         _index_slot_error(cstr("checked index requires a source root slot"))
         return 0
-    slots = stack_alloc(4 * C_POINTER_SIZE)
-    tokens = stack_alloc(4 * C_POINTER_SIZE)
-    handles = stack_alloc(4 * C_POINTER_SIZE)
+    slots = stack_alloc(_INDEX_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_INDEX_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_INDEX_SLOT_COUNT * C_POINTER_SIZE)
     count: int = _index_slot_open(slots, tokens, handles)
     status: int = -1
     suspended: int = 0
     result: int = 0
-    if count == 4:
+    if count == _INDEX_SLOT_COUNT:
         py_tls_exc_swap_slot(slots)
         suspended = 1
-        status = _index_slot_copy(slots, tokens, 1, receiver_slot)
+        status = _index_slot_copy(slots, tokens, _INDEX_RECEIVER_SLOT, receiver_slot)
         if status == 0:
             status = _index_slot_dispatch(slots, tokens)
         if status == 0:
             overflow = stack_alloc(4)
             store_i32(overflow, 0, 0)
-            result = py_int_to_i64(load_ptr(slots, 2 * C_POINTER_SIZE), overflow)
+            result = py_int_to_i64(load_ptr(slots, _INDEX_RESULT_SLOT * C_POINTER_SIZE), overflow)
             if load_i32(overflow, 0) != 0:
                 if container_index != 0:
                     py_raise_owned(py_exc_new(5, cstr("cannot fit integer into an index-sized integer")))

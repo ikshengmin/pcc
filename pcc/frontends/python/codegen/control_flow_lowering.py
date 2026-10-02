@@ -6,7 +6,27 @@ import os
 from pcc.ir.compat import ir
 from pcc.driver.python_target import PYTHON_TARGET_VERSION_INFO
 
-from pcc.frontends.python.py_ast import RawPointerType, Assign, Attr, BoolExpr, BoolLit, BoolType, Break, Compare, DynType, If, IfExpr, IntLit, Name, NoneLit, NoneType, StrLit, Try, TupleExpr, While
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    Assign,
+    Attr,
+    BoolExpr,
+    BoolLit,
+    BoolType,
+    Break,
+    Compare,
+    DynType,
+    If,
+    IfExpr,
+    IntLit,
+    Name,
+    NoneLit,
+    NoneType,
+    StrLit,
+    Try,
+    TupleExpr,
+    While,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.method_call_lowering import _method_pointer_provenance
 

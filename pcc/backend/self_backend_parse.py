@@ -11,9 +11,13 @@ IR text handling per target.
 import re
 
 from . import BackendUnavailable
-from .self_backend_float_bits import float32_to_bits, float64_to_bits
+from .self_backend_float_bits import (
+    bits_to_float32,
+    float32_to_bits,
+    float64_to_bits,
+)
+from .wide_float import encode_float_bits
 from .self_backend_kernel import IndexedFunctionSeed, get_indexed_function_kernel
-from .self_backend_float_bits import bits_to_float32, float64_to_bits
 from .self_backend_literals import (
     _is_float_token,
     _is_hex_token,
@@ -990,7 +994,27 @@ def _decode_parenthesized_constant_cast(token: str) -> str | None:
         return f"cexpr:{original_text}"
     if not dst_type.is_ptr:
         return None
-    return f"inttoptrconst:{decoded_value}"
+    try:
+        src_type = _parse_type(_src_type_text.strip())
+    except BackendUnavailable:
+        return None
+    if not src_type.is_int or src_type.width < 1:
+        return None
+    const_value = const_int_from_value(decoded_value)
+    if const_value is None:
+        return None
+    # inttoptr zero-extends a narrow integer and truncates a wide one; it
+    # never sign-extends. Preserve the source bit width before the compact
+    # token drops its type. See LangRef's inttoptr semantics:
+    # https://llvm.org/docs/LangRef.html#inttoptr-to-instruction
+    pointer_width = dst_type.slot_size * 8
+    value_width = min(src_type.width, pointer_width)
+    pointer_bits = const_value & ((1 << value_width) - 1)
+    # Keep a signed spelling for full-width high-bit patterns, as consumed
+    # by both target assemblers, without changing the pointer bit pattern.
+    if pointer_bits >= (1 << (pointer_width - 1)):
+        pointer_bits -= 1 << pointer_width
+    return f"inttoptrconst:{pointer_bits}"
 
 
 def _decode_parenthesized_constant_expr(token: str) -> str | None:
@@ -1522,7 +1546,8 @@ def aggregate_literal_to_bytes(value_type: TypeDesc, value: str) -> bytes:
             return bytes(value_type.slot_size)
         if value_type.width <= 32:
             if text.startswith("0x"):
-                bits = int(text, 16) & 0xFFFFFFFF
+                # LLVM uses widened binary64 hex tokens for float elements.
+                bits = encode_float_bits(text, 32)
             else:
                 bits = float32_to_bits(float(text))
             return bits.to_bytes(4, "little")

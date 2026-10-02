@@ -6,7 +6,32 @@ from typing import Optional
 from pcc.ir.compat import ir
 from pcc.runtime.py.py_abi_constants import PY_TYPE_TUPLE
 
-from pcc.frontends.python.py_ast import Attr, BinOp, BoolLit, Call, DictExpr, DictType, DynType, Expr, FloatLit, IntLit, IntType, ListExpr, Name, NoneLit, NoneType, RawPointerType, SourceSpan, StrLit, StrType, TupleExpr, TupleType, Type, UnaryOp
+from pcc.frontends.python.py_ast import (
+    Attr,
+    BinOp,
+    BoolLit,
+    Call,
+    DictExpr,
+    DictType,
+    DynType,
+    Expr,
+    FloatLit,
+    IfExpr,
+    IntLit,
+    IntType,
+    ListExpr,
+    Name,
+    NoneLit,
+    NoneType,
+    RawPointerType,
+    SourceSpan,
+    StrLit,
+    StrType,
+    TupleExpr,
+    TupleType,
+    Type,
+    UnaryOp,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
@@ -307,6 +332,8 @@ class CallObjectLoweringMixin:
             raise L1CodegenError("raw pointer cannot be a slot-call operand: " + type(expr).__name__)
         if getattr(self, "_generator_ctx_stack", ()) and self._generator_expr_may_suspend(expr):
             raise L1CodegenError("suspending slot-call operand requires a persistent generator-frame output slot")
+        if isinstance(expr, IfExpr):
+            return self._emit_slot_call_conditional(expr, label)
         published = self._slot_call_published_module_ref(expr)
         if published is not None:
             return self._emit_slot_call_module_value(published[0], published[1], expr.span, label)
@@ -377,6 +404,51 @@ class CallObjectLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
         return slot
+
+    def _emit_slot_call_conditional(self, expr, label):
+        """Evaluate one selected branch into a shared authoritative owner.
+
+        A pointer phi does not establish ownership and must never be rooted
+        after another operand has run. Each branch instead uses the normal
+        operand producer, transfers its owner into the pre-registered result,
+        and retires its temporary before joining. Unselected branches have
+        no runtime evaluations, registrations, or releases.
+        """
+        known = self._static_bool_condition(expr.cond)
+        if known is not None:
+            return self._emit_slot_call_operand(expr.then_e if known else expr.else_e, label)
+        output = self._new_slot_call_root(label + ".conditional")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            condition = self._emit_condition_value(expr.cond)
+            yes = self.current_function.append_basic_block(self._fresh("call.slot.if.true"))
+            no = self.current_function.append_basic_block(self._fresh("call.slot.if.false"))
+            done = self.current_function.append_basic_block(self._fresh("call.slot.if.done"))
+            self.builder.cbranch(condition, yes, no)
+            for block, branch in ((yes, expr.then_e), (no, expr.else_e)):
+                self.builder.position_at_end(block)
+                self._try_err_block = self._slot_call_cleanup_block((output,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                value = self._emit_slot_call_operand(branch, label + ".branch")
+                self._try_err_block = self._slot_call_cleanup_block((output, value), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                moved = self.builder.call(
+                    self.runtime["pcc_gc_root_move"],
+                    [self._as_gc_ptr(output), self._as_gc_ptr(value)],
+                    name=self._fresh("call.slot.if.move"),
+                )
+                self._slot_call_check_status(moved, "conditional result move", expr.span)
+                self._release_slot_call_roots((value,))
+                self.builder.branch(done)
+            self.builder.position_at_end(done)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
 
     def _slot_call_literal_integer_kind(self, expr):
         """Return 1 for a proven int tree, 2 for a bool literal, else 0.
@@ -606,6 +678,8 @@ class CallObjectLoweringMixin:
                 roots.append(item)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
+                if splat:
+                    self._slot_call_runtime_call("py_call_require_star_iterable", (item,), span=source.span)
                 self._slot_call_runtime_call(
                     "py_list_extend" if splat else "py_list_append",
                     (sequence, item), span=source.span,
@@ -624,6 +698,47 @@ class CallObjectLoweringMixin:
 
     def _emit_slot_call_args_tuple(self, args, label="call.args"):
         return self._emit_slot_call_sequence(args, label, True)
+
+    def _slot_call_deferred_star(self, args):
+        """A sole * operand is converted only after the keyword merge."""
+        if len(args) != 1:
+            return None
+        argument = args[0]
+        if (isinstance(argument, Call) and isinstance(argument.func, Name)
+                and argument.func.ident in ("*", "__starred__")
+                and len(argument.args) == 1 and not argument.kwargs):
+            return argument.args[0]
+        return None
+
+    def _finish_slot_call_deferred_star(self, args_root, span, label):
+        """Replace the sole iterable owner with its argument tuple in place.
+
+        Keeping the original physical slot lets module LIFO frames remain
+        balanced while keyword roots are above it. Clear the iterable owner
+        before invocation, so its finalizer runs at Python's conversion point.
+        """
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sequence = self._new_slot_call_root(label + ".list")
+        output = self._new_slot_call_root(label + ".tuple")
+        self._try_err_block = self._slot_call_cleanup_block((sequence, output), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            value = self.builder.call(self.runtime["py_list_new"], [ir.Constant(_I64, 0)])
+            self._publish_slot_call_owned(sequence, value, label="deferred positional list")
+            self._slot_call_runtime_call("py_call_require_star_iterable", (args_root,), span=span)
+            self._slot_call_runtime_call("py_list_extend", (sequence, args_root), span=span)
+            self._slot_call_runtime_call("py_tuple_from_list", (sequence,), result_slot=output, span=span)
+            self.builder.call(self.runtime["pcc_gc_store_root"],
+                              [self._as_gc_ptr(args_root), ir.Constant(_CSTR, None)])
+            moved = self.builder.call(self.runtime["pcc_gc_root_move"],
+                                      [self._as_gc_ptr(args_root), self._as_gc_ptr(output)])
+            self._slot_call_check_status(moved, "deferred positional tuple move", span)
+            self._release_slot_call_roots((sequence, output))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_slot_call_set(self, expr, label):
         """Root the set constructor/literal before element callbacks run."""
@@ -719,7 +834,9 @@ class CallObjectLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             positional, keywords = self._slot_call_split_operands(expr)
-            args = self._emit_slot_call_args_tuple(positional, label + ".args")
+            deferred_star = self._slot_call_deferred_star(positional)
+            args = (self._emit_slot_call_operand(deferred_star, label + ".args")
+                    if deferred_star is not None else self._emit_slot_call_args_tuple(positional, label + ".args"))
             roots.append(args)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
@@ -729,6 +846,8 @@ class CallObjectLoweringMixin:
             roots.append(kwargs)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
+            if deferred_star is not None:
+                self._finish_slot_call_deferred_star(args, expr.span, label + ".star")
             status = self.builder.call(
                 self.runtime["py_obj_call_slots"],
                 [self._as_gc_ptr(callable_root), self._as_gc_ptr(args),

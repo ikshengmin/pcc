@@ -261,7 +261,11 @@ def pcc_capi_exception_tag(type) -> int:
     return 1  # PY_EXC_EXCEPTION
 
 
-def _capi_is_unicode_sentinel(type: c_ptr) -> int:
+# These helpers share the runtime's implicit pointer ABI with their callers.
+# The type may be a raw PyExc sentinel or a managed class, and value is a
+# manually rooted PyObject*. A physical C-ABI ptr does not establish the
+# explicit c_ptr view required by raw-pointer-annotated Python parameters.
+def _capi_is_unicode_sentinel(type) -> int:
     if ptr_eq(type, global_load_ptr("PyExc_UnicodeError")):
         return 1
     if ptr_eq(type, global_load_ptr("PyExc_UnicodeDecodeError")):
@@ -280,7 +284,7 @@ def pcc_capi_exception_class(type):
     return py_exc_builtin_class(pcc_capi_exception_tag(type))
 
 
-def _capi_is_unicode_encode_type(type: c_ptr) -> int:
+def _capi_is_unicode_encode_type(type) -> int:
     if ptr_eq(type, global_load_ptr("PyExc_UnicodeEncodeError")):
         return 1
     # Sentinel symbols are raw addresses, not managed objects with headers.
@@ -289,7 +293,7 @@ def _capi_is_unicode_encode_type(type: c_ptr) -> int:
     return 0 if ptr_is_null(cached) else ptr_eq(type, cached)
 
 
-def _capi_set_unicode_encode_value(value: c_ptr) -> None:
+def _capi_set_unicode_encode_value(value) -> None:
     error = py_unicode_encode_error_normalize(value)
     # Failed normalization already installed its TypeError/OverflowError.
     # Raising NULL here would replace that with a spurious RuntimeError.

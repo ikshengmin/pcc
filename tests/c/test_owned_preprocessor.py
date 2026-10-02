@@ -78,6 +78,34 @@ def test_macro_expansion_respects_literals_and_comments():
     assert 'const char *value = "NAME";' in result
 
 
+def test_function_macro_arguments_can_span_physical_lines():
+    result = preprocess(
+        '#define DEPRECATED(message)\n'
+        'DEPRECATED("first ( fragment"\n "second ) fragment") int value;\n'
+        '#define ADD(left, right) ((left) + (right))\n'
+        'int sum = ADD(20,\n ADD(10,\n 12));\n'
+    )
+    assert 'int value;' in result
+    assert 'DEPRECATED' not in result
+    assert 'ADD' not in result
+    assert '((20) + (((10) + (12))))' in result
+
+
+def test_function_macro_name_and_opening_can_span_physical_lines():
+    result = preprocess('#define VALUE(x) x\nint value = VALUE\n\n(42);\n')
+    assert 'int value = 42;' in result
+
+
+def test_line_after_multiline_macro_keeps_physical_line_number():
+    result = preprocess('#define DROP(x)\nDROP(\n  ignored\n)\nint line = __LINE__;\n')
+    assert 'int line = 5;' in result
+
+
+def test_truly_unterminated_multiline_macro_is_a_diagnostic():
+    with pytest.raises(RuntimeError, match='unterminated macro invocation: VALUE'):
+        preprocess('#define VALUE(x) x\nint value = VALUE(\n42;\n')
+
+
 def test_self_c_frontend_does_not_probe_or_run_a_system_preprocessor(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("external preprocessor was consulted")
@@ -144,3 +172,31 @@ def test_c_output_option_publishes_without_running_or_delegating(tmp_path, monke
     run = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
     assert run.returncode == 0, run.stderr
     assert run.stdout == "42\n"
+
+
+def test_literal_and_expanded_stringification():
+    result = preprocess('#define STRING(x) #x\n#define EXPAND_STRING(x) STRING(x)\n#define VERSION 1.10.0\nchar *raw = STRING(VERSION);\nchar *expanded = EXPAND_STRING(VERSION);\n')
+    assert 'char *raw = "VERSION";' in result
+    assert 'char *expanded = "1.10.0";' in result
+
+def test_substitution_preserves_literals_and_argument_escaping():
+    result = preprocess('#define TEXT(x) "x" x\n#define STRING(x) #x\nchar *text = TEXT("z");\nchar *quoted = STRING("a  b\\n");\n')
+    assert 'char *text = "x" "z";' in result
+    assert 'char *quoted = "\\"a  b\\\\n\\"";' in result
+
+def test_raw_token_paste_and_argument_prescan():
+    result = preprocess('#define CAT(a,b) a##b\n#define XCAT(a,b) CAT(a,b)\n#define NAME foo\nint CAT(NAME,bar);\nint XCAT(NAME,bar);\nint CAT(,tail);\nint CAT(head,);\n')
+    assert 'int NAMEbar;' in result
+    assert 'int foobar;' in result
+    assert 'int tail;' in result
+    assert 'int head;' in result
+
+def test_macro_substitution_preserves_adjacent_operators():
+    result = preprocess('#define BUMP(x) x++\nint value = BUMP(n);\n')
+    assert 'int value = n++;' in result
+
+def test_gnu_optional_variadic_comma():
+    result = preprocess('#define CALL(f,...) f(0,##__VA_ARGS__)\nint a=CALL(foo);\nint b=CALL(foo,1,2);\nint c=CALL(foo,);\n')
+    assert 'int a=foo(0);' in result
+    assert 'int b=foo(0,1, 2);' in result
+    assert 'int c=foo(0,);' in result

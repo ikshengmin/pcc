@@ -54,6 +54,12 @@ CASES = {
     "nonstring_key_after_evaluation": ("all", "1, **mark('first', {1: 2}), later=mark('later', 5), **mark('last', {})", None, "nonstring", ["first", "later", "last"]),
     "nonmapping_stops_evaluation": ("all", "1, **mark('bad', 5), later=mark('unreached', 6)", None, "nonmapping", ["bad"]),
     "definition_defaults_once": ("defaults", "", None, None, ["default:pos", "default:kw", "body", "body"]),
+    "sole_star_iteration_late": ("all", "*iteration_source(), c=mark('kw', 3)", "(1, 2, (4,), 3, {})", None, ["source", "kw", "iter:source", "body"]),
+    "mixed_star_iteration_early": ("all", "1, *iteration_tail(), c=mark('kw', 3)", "(1, 2, (4,), 3, {})", None, ["tail", "iter:tail", "kw", "body"]),
+    "multiple_star_iteration_early": ("all", "*iteration_head(), *iteration_tail(), c=mark('kw', 3)", "(1, 2, (4,), 3, {})", None, ["head", "iter:head", "tail", "iter:tail", "kw", "body"]),
+    "sole_noniterable_after_keyword": ("all", "*mark('star', 5), c=mark('kw', 3)", None, "noniterable", ["star", "kw"]),
+    "mixed_noniterable_before_keyword": ("all", "1, *mark('star', 5), c=mark('unreached', 3)", None, "noniterable", ["star"]),
+    "duplicate_keywords_preempt_iteration": ("all", "*iteration_source(), **mark('first', {'c': 3}), c=mark('duplicate', 4)", None, "mapping-duplicate", ["source", "first", "duplicate"]),
 }
 
 CELL_IDS = tuple(surface + "--" + case for surface in SURFACES for case in CASES)
@@ -101,6 +107,17 @@ def matrix_sources(cell_id):
     for label in operand_labels:
         entry += ("def step_" + label + "(value):\n    events.append(" + repr(label) + ")\n"
                   "    return value\n")
+    if "iteration_" in arguments:
+        entry += ("class CallIterable:\n"
+                  "    def __init__(self, label, values):\n"
+                  "        self.label = label\n        self.values = values\n"
+                  "    def __iter__(self):\n"
+                  "        events.append('iter:' + self.label)\n"
+                  "        return iter(self.values)\n")
+        for label, values in (("source", "(1, 2, 4)"), ("head", "(1,)"), ("tail", "(2, 4)")):
+            entry += ("def iteration_" + label + "():\n"
+                      "    events.append(" + repr(label) + ")\n"
+                      "    return CallIterable(" + repr(label) + ", " + values + ")\n")
     # Mutating the provider name after definition proves default capture belongs
     # to its defining module, rather than re-evaluation in the importing caller.
     if signature_kind == "defaults":
@@ -126,6 +143,8 @@ def matrix_sources(cell_id):
             # CPython 3.15's merged-keyword operand diagnostic is deliberately
             # unqualified, unlike its repeated-key diagnostic above.
             message = "Value after ** must be a mapping, not int"
+        elif error == "noniterable":
+            message = "Value after * must be an iterable, not int"
         elif error == "surplus":
             count = 3 if is_method or is_constructor else 2
             message = (binding_name + "() takes " + str(count) + " positional arguments but "
@@ -222,7 +241,13 @@ def test_binder_contract_owned_ir(tmp_path, monkeypatch, cell_id):
     actual = re.findall(r"\bcall [^\n]*@user_binder_entry_step_([a-z]+)\(", body.group(0))
     expected = re.findall(r"step_([a-z]+)\(", source)
     assert actual == expected, (cell_id, actual, expected)
+    iterator_calls = re.findall(r"\bcall [^\n]*@user_binder_entry_iteration_([a-z]+)\(", body.group(0))
+    assert iterator_calls == re.findall(r"iteration_([a-z]+)\(", source)
     surface, case = cell_id.split("--")
+    if case in ("sole_star_iteration_late", "mixed_star_iteration_early", "multiple_star_iteration_early"):
+        kw = body.group(0).index("@user_binder_entry_step_kw(")
+        expansion = body.group(0).index("@py_list_extend(")
+        assert (kw < expansion) is (case == "sole_star_iteration_late")
     if case == "required_mixed":
         owner = "binder_provider" if surface.startswith("imported_") else "binder_entry"
         suffix = ("Box___init__" if surface.endswith("_constructor") else

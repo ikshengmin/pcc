@@ -9,7 +9,39 @@ from __future__ import annotations
 
 from dataclasses import replace as _replace
 
-from pcc.frontends.python.py_ast import Assign, AugAssign, BoolLit, BoolType, Call, ClassDef, Delete, Global, Nonlocal, DynType, ExprStmt, For, FuncDef, If, IntLit, IntType, Import, Lambda, TupleExpr, TupleType, ListExpr, ListType, Name, Raise, Return, StrLit, StrType, Subscript, Try, While, With
+from pcc.frontends.python.py_ast import (
+    Assign,
+    AugAssign,
+    BoolLit,
+    BoolType,
+    Call,
+    ClassDef,
+    Delete,
+    Global,
+    Nonlocal,
+    DynType,
+    ExprStmt,
+    For,
+    FuncDef,
+    If,
+    IntLit,
+    IntType,
+    Import,
+    Lambda,
+    TupleExpr,
+    TupleType,
+    ListExpr,
+    ListType,
+    Name,
+    Raise,
+    Return,
+    StrLit,
+    StrType,
+    Subscript,
+    Try,
+    While,
+    With,
+)
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value, _is_import_from_stmt, _import_names_from_stmt, append_name_once, clone_funcdef, name_in
 
 

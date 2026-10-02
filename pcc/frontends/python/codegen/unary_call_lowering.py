@@ -6,7 +6,28 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import RawPointerType, Attr, BoolLit, BoolType, Call, ClassType, ComplexType, DynType, Expr, FloatType, IntLit, IntType, Name, SetType, SourceSpan, StrLit, StrType, Subscript, Type, UnaryOp
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    Attr,
+    BoolLit,
+    BoolType,
+    Call,
+    ClassType,
+    ComplexType,
+    DynType,
+    Expr,
+    FloatType,
+    IntLit,
+    IntType,
+    Name,
+    SetType,
+    SourceSpan,
+    StrLit,
+    StrType,
+    Subscript,
+    Type,
+    UnaryOp,
+)
 from pcc.frontends.python.codegen import marshal
 
 _DOUBLE = ir.DoubleType()

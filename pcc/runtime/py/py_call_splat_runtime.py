@@ -2,10 +2,10 @@
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_DICT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PY_TYPE_DICT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_STR, PY_TYPE_TUPLE
 
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
-from pcc.unsafe import cstr, global_load_ptr, is_tagged_int, load_i32, null, ptr_eq, ptr_is_null, strlen
+from pcc.unsafe import cstr, global_load_ptr, is_tagged_int, load_i32, load_i64, load_ptr, memset, null, ptr_add, ptr_eq, ptr_is_null, stack_alloc, store_i64, store_ptr, strlen
 
 
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
@@ -31,6 +31,19 @@ py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_eq = extern("py_str_eq", (c_ptr, c_ptr), c_int64)
 py_obj_str = extern("py_obj_str", (c_ptr,), c_ptr)
 py_obj_repr = extern("py_obj_repr", (c_ptr,), c_ptr)
+py_bound_method_function = extern("py_bound_method_function", (c_ptr,), c_ptr)
+pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
+pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_current_exception = extern("py_current_exception", (), c_ptr)
 py_clear_exception = extern("py_clear_exception", (), c_void)
@@ -330,48 +343,203 @@ def _call_optional_attr(callable_obj, name):
     return value
 
 
-def _call_error_prefix(callable_obj):
-    """NEW diagnostic prefix; called only after a keyword collision.
+def _call_diagnostic_open(slots, tokens, handles) -> int:
+    memset(slots, 0, 56)
+    memset(tokens, 0, 56)
+    memset(handles, 0, 56)
+    count: int = 0
+    while count < 7:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * 8))
+        if ptr_is_null(handle):
+            return count
+        store_ptr(handles, count * 8, handle)
+        count = count + 1
+    return count
+
+
+def _call_diagnostic_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * 8)
+    if ptr_is_null(load_ptr(slot, 0)):
+        _require_result(null(), cstr("call diagnostic"), cstr("diagnostic value allocation failed"))
+        return -1
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        _require_result(null(), cstr("call diagnostic"), cstr("diagnostic value lease failed"))
+        return -1
+    store_i64(tokens, index * 8, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+def _call_diagnostic_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * 8)
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * 8)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(tokens, index * 8, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _call_diagnostic_append(slots, tokens) -> int:
+    # acc3 + piece4 -> temporary5; all sources keep independent counted leases.
+    store_ptr(slots, 40, py_str_concat(load_ptr(slots, 24), load_ptr(slots, 32)))
+    if _call_diagnostic_adopt(slots, tokens, 5) != 0:
+        return -1
+    _call_diagnostic_drop(slots, tokens, 3)
+    _call_diagnostic_drop(slots, tokens, 4)
+    token: int = load_i64(tokens, 40)
+    if pcc_gc_root_move(ptr_add(slots, 24), ptr_add(slots, 40)) != 0:
+        _require_result(null(), cstr("call diagnostic"), cstr("diagnostic result publication failed"))
+        return -1
+    store_i64(tokens, 24, token)
+    store_i64(tokens, 40, 0)
+    return 0
+
+
+def _call_diagnostic_append_literal(slots, tokens, text) -> int:
+    store_ptr(slots, 32, _call_lit(text))
+    if _call_diagnostic_adopt(slots, tokens, 4) != 0:
+        return -1
+    return _call_diagnostic_append(slots, tokens)
+
+
+def _call_diagnostic_prefix(slots, tokens, callable_obj) -> int:
+    # The incoming callable has its caller's address lease. The optional
+    # original and every allocating metadata/text result publish immediately.
+    store_ptr(slots, 0, py_bound_method_function(callable_obj))
+    if not ptr_is_null(load_ptr(slots, 0)):
+        if _call_diagnostic_adopt(slots, tokens, 0) != 0:
+            return -1
+        callable_obj = load_ptr(slots, 0)
+    store_ptr(slots, 8, _call_optional_attr(callable_obj, cstr("__qualname__")))
+    if ptr_is_null(load_ptr(slots, 8)):
+        if py_err_occurred() != 0:
+            return -1
+        store_ptr(slots, 24, py_obj_repr(callable_obj))
+        if _call_diagnostic_adopt(slots, tokens, 3) != 0:
+            return -1
+        return _call_diagnostic_append_literal(slots, tokens, cstr(" "))
+    if _call_diagnostic_adopt(slots, tokens, 1) != 0:
+        return -1
+    store_ptr(slots, 16, _call_optional_attr(callable_obj, cstr("__module__")))
+    if ptr_is_null(load_ptr(slots, 16)):
+        if py_err_occurred() != 0:
+            return -1
+    elif _call_diagnostic_adopt(slots, tokens, 2) != 0:
+        return -1
+    include_module: int = 0
+    if not _is_none(load_ptr(slots, 16)):
+        store_ptr(slots, 32, _call_lit(cstr("builtins")))
+        if _call_diagnostic_adopt(slots, tokens, 4) != 0:
+            return -1
+        include_module = 1
+        if _type_of(load_ptr(slots, 16)) == PY_TYPE_STR:
+            if py_str_eq(load_ptr(slots, 16), load_ptr(slots, 32)) != 0:
+                include_module = 0
+        _call_diagnostic_drop(slots, tokens, 4)
+    if include_module != 0:
+        store_ptr(slots, 24, py_obj_str(load_ptr(slots, 16)))
+        if _call_diagnostic_adopt(slots, tokens, 3) != 0:
+            return -1
+        if _call_diagnostic_append_literal(slots, tokens, cstr(".")) != 0:
+            return -1
+        store_ptr(slots, 32, py_obj_str(load_ptr(slots, 8)))
+        if _call_diagnostic_adopt(slots, tokens, 4) != 0:
+            return -1
+        if _call_diagnostic_append(slots, tokens) != 0:
+            return -1
+    else:
+        store_ptr(slots, 24, py_obj_str(load_ptr(slots, 8)))
+        if _call_diagnostic_adopt(slots, tokens, 3) != 0:
+            return -1
+    return _call_diagnostic_append_literal(slots, tokens, cstr("() "))
+
+
+def _call_diagnostic_close(slots, tokens, handles, count: int) -> None:
+    if count == 7:
+        py_tls_exc_swap_slot(ptr_add(slots, 48))
+        index: int = 5
+        while index >= 0:
+            _call_diagnostic_drop(slots, tokens, index)
+            index = index - 1
+        py_clear_exception()
+        py_tls_exc_swap_slot(ptr_add(slots, 48))
+    index = 0
+    while index < count:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * 8))
+        index = index + 1
+
+
+def _raise_duplicate_keyword(callable_obj, key) -> None:
+    """Build and raise the entire duplicate error inside its rooted frame.
 
     The defining callable supplies its identity, never the importing caller.
     Objects without a qualname use their repr, like CPython's function display.
     """
-    if ptr_is_null(callable_obj):
-        return _call_lit(cstr(""))
-    qualname = _call_optional_attr(callable_obj, cstr("__qualname__"))
-    if ptr_is_null(qualname):
-        if py_err_occurred() != 0:
-            return null()
-        return _cat_owned(py_obj_repr(callable_obj), _call_lit(cstr(" ")))
-    module = _call_optional_attr(callable_obj, cstr("__module__"))
-    if ptr_is_null(module) and py_err_occurred() != 0:
-        py_decref(qualname)
-        return null()
-    name = py_obj_str(qualname)
-    py_decref(qualname)
-    if not _is_none(module):
-        builtins = _call_lit(cstr("builtins"))
-        is_builtin: int = 0
-        if _type_of(module) == PY_TYPE_STR and not ptr_is_null(builtins):
-            is_builtin = py_str_eq(module, builtins)
-        py_decref(builtins)
-        if is_builtin == 0:
-            name = _cat_owned(_cat_owned(py_obj_str(module), _call_lit(cstr("."))), name)
-    if not ptr_is_null(module):
-        py_decref(module)
-    return _cat_owned(name, _call_lit(cstr("() ")))
+    slots = stack_alloc(56)
+    tokens = stack_alloc(56)
+    handles = stack_alloc(56)
+    count: int = _call_diagnostic_open(slots, tokens, handles)
+    status: int = -1
+    if count == 7:
+        if ptr_is_null(callable_obj):
+            store_ptr(slots, 24, _call_lit(cstr("")))
+            status = _call_diagnostic_adopt(slots, tokens, 3)
+        else:
+            status = _call_diagnostic_prefix(slots, tokens, callable_obj)
+        if status == 0:
+            status = _call_diagnostic_append_literal(slots, tokens, cstr("got multiple values for keyword argument '"))
+        if status == 0:
+            store_ptr(slots, 32, py_obj_str(key))
+            status = _call_diagnostic_adopt(slots, tokens, 4)
+        if status == 0:
+            status = _call_diagnostic_append(slots, tokens)
+        if status == 0:
+            status = _call_diagnostic_append_literal(slots, tokens, cstr("'"))
+        if status == 0:
+            py_raise_owned(py_exc_new(3, py_str_utf8(load_ptr(slots, 24))))
+    else:
+        _require_result(null(), cstr("call diagnostic"), cstr("diagnostic root registration failed"))
+    _call_diagnostic_close(slots, tokens, handles, count)
 
 
 def _check_keyword_unique(out, key, callable_obj) -> int:
     """Check before fetching a mapping value; non-string keys bind later."""
     if py_dict_contains(out, key) != 0:
-        text = _call_error_prefix(callable_obj)
-        text = _cat_owned(text, _call_lit(cstr("got multiple values for keyword argument '")))
-        text = _cat_owned(text, py_obj_str(key))
-        text = _cat_owned(text, _call_lit(cstr("'")))
-        _raise_type_error_text(text)
+        _raise_duplicate_keyword(callable_obj, key)
         return -1
     if py_err_occurred() != 0:
+        return -1
+    return 0
+
+
+@c_abi_export("py_call_validate_kwargs")
+def py_call_validate_kwargs(kwargs) -> int:
+    """Validate once operands finish, before any callable's binding errors."""
+    if _is_none(kwargs):
+        return 0
+    if _type_of(kwargs) != PY_TYPE_DICT:
+        py_raise_owned(py_exc_new(3, cstr("call keyword arguments must be a dict")))
+        return -1
+    # The caller keeps the dictionary address leased. Inspect its owning key
+    # slots only while the graph transaction prevents moves and table changes;
+    # no allocating key snapshot, raw child lifetime, or user callback escapes.
+    valid: int = 1
+    pcc_py_gc_minor_graph_lock()
+    entries = load_ptr(kwargs, PYDICTOBJECT_ENTRIES_OFFSET)
+    count: int = load_i64(kwargs, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+    index: int = 0
+    while index < count and valid != 0:
+        key = pcc_gc_resolve_root_slot_unlocked(ptr_add(entries, index * DICTENTRY_SIZE + DICTENTRY_KEY_OFFSET), 0)
+        if not ptr_is_null(key):
+            if _type_of(key) != PY_TYPE_STR:
+                valid = 0
+        index = index + 1
+    pcc_py_gc_minor_graph_unlock()
+    if valid == 0:
+        py_raise_owned(py_exc_new(3, cstr("keywords must be strings")))
         return -1
     return 0
 
@@ -489,3 +657,52 @@ def py_obj_call_splat(callable_obj, base_args, star_args, base_kwargs, star_kwar
     py_decref(args)
     py_decref(kwargs)
     return out
+
+
+# Syntax-level iterable diagnostics use capability, never exception-text
+# rewriting. Inputs remain address-leased by the slot-producing caller.
+from pcc.runtime.py.py_abi_constants import PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_FILE, PY_TYPE_GEN, PY_TYPE_ITER, PY_TYPE_MEMORYVIEW, PY_TYPE_SET
+
+py_obj_special_present = extern("py_obj_special_present", (c_ptr, c_ptr), c_int64)
+_call_star_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
+
+
+@c_abi_export("py_call_require_star_iterable")
+def py_call_require_star_iterable(value) -> int:
+    """Check a * operand's capability while its caller's counted lease lives.
+
+    Presence includes None and descriptors: their ordinary iterator dispatch
+    owns any eventual error. Opaque extension iteration remains in its C-API
+    owner. Only a proven absent protocol gets Python's syntax-level error.
+    """
+    tag: int = _type_of(value)
+    if (tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE or tag == PY_TYPE_STR
+            or tag == PY_TYPE_DICT or tag == PY_TYPE_SET or tag == PY_TYPE_BYTES
+            or tag == PY_TYPE_BYTEARRAY or tag == PY_TYPE_MEMORYVIEW
+            or tag == PY_TYPE_ITER or tag == PY_TYPE_GEN or tag == PY_TYPE_FILE):
+        return 0
+    if _call_star_cext_type_tag(tag) != 0:
+        return 0
+    if py_obj_special_present(value, cstr("__iter__")) != 0:
+        return 0
+    if py_obj_special_present(value, cstr("__getitem__")) != 0:
+        return 0
+    slots = stack_alloc(56)
+    tokens = stack_alloc(56)
+    handles = stack_alloc(56)
+    count: int = _call_diagnostic_open(slots, tokens, handles)
+    status: int = -1
+    if count == 7:
+        store_ptr(slots, 24, _call_lit(cstr("Value after * must be an iterable, not ")))
+        status = _call_diagnostic_adopt(slots, tokens, 3)
+        if status == 0:
+            store_ptr(slots, 32, py_obj_type_name(value))
+            status = _call_diagnostic_adopt(slots, tokens, 4)
+        if status == 0:
+            status = _call_diagnostic_append(slots, tokens)
+        if status == 0:
+            py_raise_owned(py_exc_new(3, py_str_utf8(load_ptr(slots, 24))))
+    else:
+        _require_result(null(), cstr("call star diagnostic"), cstr("star diagnostic root registration failed"))
+    _call_diagnostic_close(slots, tokens, handles, count)
+    return -1

@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import RawPointerType, BoolType, ClassType, DynType, FloatType, IntType, NoneType, Type, ValueArrayType
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    BoolType,
+    ClassType,
+    DynType,
+    FloatType,
+    IntType,
+    NoneType,
+    Type,
+    ValueArrayType,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.raw_pointer_provenance import raw_abi_expression_provenance
 from pcc.frontends.python.codegen.errors import L1CodegenError
@@ -345,7 +355,12 @@ class CoercionLoweringMixin:
                     and isinstance(v.type, ir.PointerType)
                     and v.value is None):
                 return v
-            raise NotImplementedError("raw pointer cannot cross an implicit Python value boundary; use ptr_to_int or int_to_ptr explicitly")
+            span = getattr(source_expr, "span", None)
+            where = f" at {span.file}:{span.line}:{span.col}" if span is not None else ""
+            raise NotImplementedError(
+                "raw pointer cannot cross an implicit Python value boundary; "
+                "use ptr_to_int or int_to_ptr explicitly" + where
+            )
         if isinstance(from_ty, ValueArrayType) and (
             isinstance(to_ty, DynType) or self._is_object(to_ty)
         ):

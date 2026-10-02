@@ -53,7 +53,16 @@ _With = With
 _DYN = DynType(name="dyn")
 
 from pcc.frontends.python.codegen.hoist_analysis import _PY_BUILTINS_NS, _dataclass_field_names, _dataclass_field_value, _import_names_from_stmt, _is_import_from_stmt, _is_import_stmt, append_name_once, body_augassigns_free_name, body_reads_self, body_returns_name, body_uses_name_as_value, clone_funcdef, copy_name_map, copy_names, extend_names_once, filter_capture_names, filter_self_capture_names, hoist_stat_inc, is_discard_capture_name, module_may_need_hoist_fast, name_in, update_name_map, write_hoist_profile
-from pcc.frontends.python.codegen.hoist_boxing import CELL_CAPTURE, box_outer_body, collect_scope_bindings, function_boxed_names, function_local_bindings, late_bound_lambda_captures, scope_declared_names, stable_capture_parameters
+from pcc.frontends.python.codegen.hoist_boxing import (
+    CELL_CAPTURE,
+    box_outer_body,
+    collect_scope_bindings,
+    function_boxed_names,
+    function_local_bindings,
+    late_bound_lambda_captures,
+    scope_declared_names,
+    stable_capture_parameters,
+)
 from pcc.frontends.python.codegen.hoist_free_names import compute_free_names as analyze_free_names
 from pcc.frontends.python.codegen.hoist_predicates import body_has_yield, body_needs_nested_rewrite, hoist_stmt_kind
 

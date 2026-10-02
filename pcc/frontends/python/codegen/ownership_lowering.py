@@ -6,7 +6,38 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import RawPointerType, Attr, BinOp, BoolLit, BoolType, BytesLit, Call, ClassType, ComplexType, DictExpr, DictType, DynType, Expr, FloatType, IfExpr, IntType, Lambda, ListExpr, ListType, Name, NoneLit, NoneType, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType, Type, UnaryOp
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    Attr,
+    BinOp,
+    BoolLit,
+    BoolType,
+    BytesLit,
+    Call,
+    ClassType,
+    ComplexType,
+    DictExpr,
+    DictType,
+    DynType,
+    Expr,
+    FloatType,
+    IfExpr,
+    IntType,
+    Lambda,
+    ListExpr,
+    ListType,
+    Name,
+    NoneLit,
+    NoneType,
+    SetType,
+    StrLit,
+    StrType,
+    Subscript,
+    TupleExpr,
+    TupleType,
+    Type,
+    UnaryOp,
+)
 
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
@@ -688,24 +719,21 @@ class OwnershipLoweringMixin:
             # borrows those stable addresses, so there is no fresh temporary
             # owner to consume.
             return False
-        # Native method dispatch may prove a NEW result even when inference
-        # leaves the expression dynamic, and only the emitter knows it. Kept
-        # to the case its own reasoning describes -- a DYNAMIC expression --
-        # because as an unconditional first answer it also overrode every
-        # deliberate False below. That over-released a container literal's
-        # value when the store had already consumed the owner: a module
-        # registering itself as `{"source": <self>}` then reached refcount 0
-        # while its own slot still pointed at it, and `py_dealloc_dict` tripped
-        # the fail-closed `pcc_debug_bad_dict_slot` guard on every from-scratch
-        # runtime build.
+        # The emitter proves the ownership of fresh expression results,
+        # including representation joins whose semantic type stays concrete.
+        # Preserve the borrowed concrete-Name rules below: this ledger records
+        # SSA provenance and can outlive a transfer into a cached/rooted name.
+        # Letting it override those Name rules previously consumed a module's
+        # own reference while registering `{"source": <self>}`. Dynamic Names
+        # retain their existing emitted-ownership treatment.
         if (
             value is not None
-            and (isinstance(value_ty, DynType) or isinstance(expr, Lambda))
+            and (isinstance(value_ty, DynType) or not isinstance(expr, Name))
             and self._value_is_owned_object(value)
         ):
-            # Native lambda emitters prove a fresh function object even when
-            # inference gives it FunctionType. A keyword/container insertion
-            # retains it, so the original lambda owner must also be consumed.
+            # A container insertion retains its operand; consume the distinct
+            # expression owner for normalized joins, lambdas and other NEW
+            # results, without re-deriving it from the outer AST type.
             return True
         if self._expr_returns_owned_object(expr):
             return True

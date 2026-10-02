@@ -15,6 +15,36 @@ from tests.python.test_set_call_slot_roots import Block, Object, Memory
 ROOT = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
 
 
+EXPECTED_SCRATCH_LAYOUT = {
+    '_BUILTIN_INIT_OLD_EXCEPTION_SLOT': 0,
+    '_BUILTIN_INIT_RECEIVER_SLOT': 1,
+    '_BUILTIN_INIT_FROM_CLASS_SLOT': 2,
+    '_BUILTIN_INIT_ARGS_SLOT': 3,
+    '_BUILTIN_INIT_KWARGS_SLOT': 4,
+    '_BUILTIN_INIT_CLASS_SLOT': 5,
+    '_BUILTIN_INIT_ENV_SLOT': 6,
+    '_BUILTIN_INIT_KEY_SLOT': 7,
+    '_BUILTIN_INIT_DICT_SLOT': 8,
+    '_BUILTIN_INIT_SOURCE_SLOT': 9,
+    '_BUILTIN_INIT_TEMP_SLOT': 10,
+    '_BUILTIN_INIT_ERROR_SLOT': 11,
+    '_BUILTIN_INIT_SLOT_COUNT': 12,
+}
+
+
+def _scratch_layout(tree):
+    values = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in EXPECTED_SCRATCH_LAYOUT):
+            value = ast.literal_eval(node.value)
+            assert type(value) is int
+            values[node.targets[0].id] = value
+    assert values == EXPECTED_SCRATCH_LAYOUT
+    return values
+
+
 class DictMemory(Memory):
     def __init__(self, phase="register", **kwargs):
         super().__init__(phase, **kwargs)
@@ -50,7 +80,10 @@ class DictMemory(Memory):
             ("py_protocol_runtime.py", "_builtin_init_", {"_type_of", "_is_user_instance", "_dict_items_key", "_cstr_equal", "py_dict_subclass_init_slots", "py_exception_subclass_init_slots", "py_builtin_super_validate_slots"}),
         ):
             path = ROOT / filename
-            body = [node for node in ast.parse(path.read_text()).body if isinstance(node, ast.FunctionDef)
+            tree = ast.parse(path.read_text())
+            if filename == "py_protocol_runtime.py":
+                self.ns.update(_scratch_layout(tree))
+            body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and (node.name.startswith(prefix) or node.name in additional)]
             for node in body:
                 node.decorator_list = []
@@ -386,3 +419,10 @@ def test_full_entry_storage_growth_failure_does_not_retry_forever():
     memory.ns["_maybe_grow"] = lambda owner: growths.append(owner) or -1
     assert memory.ns["py_dict_set_slots"](caller, memory.add(caller, 8), memory.add(caller, 16)) == -1
     assert growths == [target] and memory.error[0] == 19
+
+
+def test_builtin_initializer_scratch_layout_preserves_slot_numbers():
+    tree = ast.parse((ROOT / "py_protocol_runtime.py").read_text())
+    layout = _scratch_layout(tree)
+    assert layout["_BUILTIN_INIT_SLOT_COUNT"] * abi.C_POINTER_SIZE == 12 * abi.C_POINTER_SIZE
+    assert layout["_BUILTIN_INIT_ERROR_SLOT"] == layout["_BUILTIN_INIT_SLOT_COUNT"] - 1

@@ -1704,6 +1704,9 @@ PyObject *py_time_monotonic_ns(void);
 PyObject *py_time_time_ns(void);
 /* fn.__qualname__ when set, else __name__ (NEW str). */
 PyObject *py_func_display_name(PyObject *fn);
+/* NEW original function for a managed native bound-method wrapper, or NULL
+ * without an exception for other callables. Never returns raw native code. */
+PyObject *py_bound_method_function(PyObject *bound);
 /* f(**a, **b) keyword merge with CPython's duplicate-key TypeError. */
 PyObject *py_call_merge_kwargs_unique(PyObject *base_kwargs, PyObject *star_kwargs);
 /* Ordinary calls supply the live callable for qualified duplicate-key errors.
@@ -1711,6 +1714,11 @@ PyObject *py_call_merge_kwargs_unique(PyObject *base_kwargs, PyObject *star_kwar
  * keys survive merging and are validated only after call operands finish. */
 PyObject *py_call_merge_kwargs_for_call(PyObject *base_kwargs, PyObject *star_kwargs,
                                       PyObject *callable_obj);
+/* After all operands are evaluated: 0 for string keys, -1 with an exception. */
+int64_t py_call_validate_kwargs(PyObject *kwargs);
+/* Inputs keep an independent counted address lease throughout these calls. */
+int64_t py_obj_special_present(PyObject *value, const char *name);
+int64_t py_call_require_star_iterable(PyObject *value);
 /* print(..., file=<object>): writes through file.write; -1 on error. */
 int64_t   py_print_to_file(PyObject *file, PyObject *args_tuple, PyObject *sep,
                            PyObject *end, PyObject *flush);

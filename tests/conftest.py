@@ -299,15 +299,22 @@ def _pcc_gate_blocked_reason(item) -> str | None:
         dep = marker.kwargs.get("dep")
         if dep and importlib.util.find_spec(dep) is None:
             return f"dependency {dep!r} not installed"
-        if marker.kwargs.get("probe") == "tsan":
+        probe = marker.kwargs.get("probe")
+        if callable(probe):
+            available = probe()
+            if not isinstance(available, bool):
+                raise TypeError("pcc_gate callable probe must return bool")
+            if not available:
+                return "callable probe returned False"
+        elif probe == "tsan":
             reason = _tsan_unavailable_reason()
             if reason:
                 return reason
-        if marker.kwargs.get("probe") == "metal":
+        elif probe == "metal":
             reason = _metal_unavailable_reason()
             if reason:
                 return reason
-        if marker.kwargs.get("probe") == "pcc1":
+        elif probe == "pcc1":
             _provision_pcc1()  # provisioning step, never a deselect reason
     return None
 

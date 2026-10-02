@@ -3739,7 +3739,9 @@ class NativeModuleAliasMixin:
             ast_func_def = self._extern_info_to_funcdef(attr.name, info)
             if ast_func_def is None:
                 return None
-            if self._ordinary_call_needs_runtime_binding(expr, ast_func_def):
+            if self._ordinary_call_needs_runtime_binding(
+                expr, ast_func_def, False, self._slot_call_result_sink(expr) is not None,
+            ):
                 return self._emit_runtime_bound_user_call(expr, attr.name, fn)
             if self._call_would_use_callee_defaults(
                 expr.args,

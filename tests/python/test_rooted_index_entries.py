@@ -15,6 +15,28 @@ from test_runtime_entry_handoff import SpecialCallModel
 PORT = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_protocol_runtime.py"
 
 
+EXPECTED_SCRATCH_LAYOUT = {
+    '_INDEX_OLD_EXCEPTION_SLOT': 0,
+    '_INDEX_RECEIVER_SLOT': 1,
+    '_INDEX_RESULT_SLOT': 2,
+    '_INDEX_ERROR_SLOT': 3,
+    '_INDEX_SLOT_COUNT': 4,
+}
+
+
+def _scratch_layout(tree):
+    values = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in EXPECTED_SCRATCH_LAYOUT):
+            value = ast.literal_eval(node.value)
+            assert type(value) is int
+            values[node.targets[0].id] = value
+    assert values == EXPECTED_SCRATCH_LAYOUT
+    return values
+
+
 class IndexModel(SpecialCallModel):
     def __init__(self, *, legacy=False):
         super().__init__()
@@ -38,6 +60,7 @@ class IndexModel(SpecialCallModel):
             names |= {node.name for node in ast.parse(PORT.read_text()).body
                       if isinstance(node, ast.FunctionDef) and node.name.startswith("_index_slot_")}
             names |= {"py_obj_index_slots", "py_obj_index_i64_slots", "py_index_i64_checked_slots"}
+        self.ns.update(_scratch_layout(ast.parse(PORT.read_text())))
         _functions(PORT, names, self.ns)
 
     def load(self, base, offset=0):
@@ -351,3 +374,9 @@ def test_compiler_index_retains_machine_and_cpython_lanes():
     cpython = _emit_index_probe("def run(index):\n    return index_probe(index)\n", cpython=True)
     assert _calls(cpython, "py_cpy_to_i64")
     assert not _calls(cpython, "py_obj_index_i64_slots")
+
+
+def test_index_scratch_layout_preserves_slot_numbers():
+    layout = _scratch_layout(ast.parse(PORT.read_text()))
+    assert layout["_INDEX_SLOT_COUNT"] == 4
+    assert layout["_INDEX_ERROR_SLOT"] == layout["_INDEX_SLOT_COUNT"] - 1

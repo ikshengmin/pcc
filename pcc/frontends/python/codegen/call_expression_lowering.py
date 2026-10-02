@@ -6,7 +6,35 @@ import sys
 import os
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import RawPointerType, Arg, Attr, BoolLit, BoolType, Call, ClassType, DictExpr, DictType, DynType, Expr, FloatLit, FloatType, IntLit, IntType, ListExpr, ListType, Name, NoneLit, NoneType, Slice, StrLit, StrType, Subscript, TupleExpr, TupleType, ValueArrayType
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    Arg,
+    Attr,
+    BoolLit,
+    BoolType,
+    Call,
+    ClassType,
+    DictExpr,
+    DictType,
+    DynType,
+    Expr,
+    FloatLit,
+    FloatType,
+    IntLit,
+    IntType,
+    ListExpr,
+    ListType,
+    Name,
+    NoneLit,
+    NoneType,
+    Slice,
+    StrLit,
+    StrType,
+    Subscript,
+    TupleExpr,
+    TupleType,
+    ValueArrayType,
+)
 from pcc.frontends.python.codegen.hoist_boxing import cell_capture_key
 from pcc.frontends.python.codegen.bootstrap_trace import bootstrap_trace_enabled
 from pcc.frontends.python.codegen import marshal
@@ -2110,7 +2138,10 @@ class CallExpressionLoweringMixin:
                                         and argument.func.ident == "**"):
                                     ordered_keywords.append(("**", argument.args[0]))
                         call_kwargs = tuple(ordered_keywords)
-                    args_root = self._emit_slot_call_args_tuple(arg_exprs, "ctor.unpack.args")
+                    deferred_star = self._slot_call_deferred_star(arg_exprs)
+                    args_root = (self._emit_slot_call_operand(deferred_star, "ctor.unpack.args")
+                                 if deferred_star is not None else
+                                 self._emit_slot_call_args_tuple(arg_exprs, "ctor.unpack.args"))
                     roots.append(args_root)
                     self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                     self._cpy_operand_cleanup_block = self._try_err_block
@@ -2120,6 +2151,8 @@ class CallExpressionLoweringMixin:
                     roots.append(kwargs_root)
                     self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                     self._cpy_operand_cleanup_block = self._try_err_block
+                    if deferred_star is not None:
+                        self._finish_slot_call_deferred_star(args_root, span, "ctor.unpack.star")
                     status = self.builder.call(
                         self.runtime["py_obj_call_slots"],
                         [self._as_gc_ptr(callable_root), self._as_gc_ptr(args_root),

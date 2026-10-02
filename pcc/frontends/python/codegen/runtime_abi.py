@@ -107,6 +107,7 @@ def _runtime_signatures_part_0():
     "py_print_to_file": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_call_merge_kwargs_unique": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_call_merge_kwargs_for_call": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_call_require_star_iterable": (_I64, [_PYOBJ], False),
     "py_exc_handle_uncaught": (_I64, [_PYOBJ], False),
     "pcc_gc_reset_relocation_set": (_VOID, [], False),
     }

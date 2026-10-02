@@ -11,6 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import subprocess
+from types import SimpleNamespace
+
+import pytest
 
 ROOT = Path(__file__).absolute().parents[1]
 TESTS = ROOT / "tests"
@@ -56,6 +59,115 @@ _NESTED_PYTEST_STRATEGIES = {
     "tests/python/test_install_pcc1_toolchain.py": '"--collect-only"',
 }
 _NESTED_PYTEST_ARGV = re.compile(r"""["']-m["'],\s*["']pytest["']""")
+
+
+def _pcc_gate_test_item(*markers, nodeid="probe"):
+    return SimpleNamespace(
+        nodeid=nodeid,
+        iter_markers=lambda name: iter(mark for mark in markers if mark.name == name),
+    )
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_pcc_gate_callable_probe_runs_once(available):
+    from tests.conftest import _pcc_gate_blocked_reason
+
+    calls = []
+
+    def probe():
+        calls.append(True)
+        return available
+
+    item = _pcc_gate_test_item(pytest.mark.pcc_gate(probe=probe).mark)
+    reason = _pcc_gate_blocked_reason(item)
+    assert calls == [True]
+    assert reason == (None if available else "callable probe returned False")
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError, TypeError])
+def test_pcc_gate_callable_probe_errors_are_not_deselections(error_type):
+    from tests.conftest import _pcc_gate_blocked_reason
+
+    error = error_type("broken probe")
+    calls = []
+
+    def probe():
+        calls.append(True)
+        raise error
+
+    item = _pcc_gate_test_item(pytest.mark.pcc_gate(probe=probe).mark)
+    with pytest.raises(error_type, match="broken probe") as raised:
+        _pcc_gate_blocked_reason(item)
+    assert raised.value is error
+    assert calls == [True]
+
+
+@pytest.mark.parametrize("result", [None, 0, 1, "unavailable", [], object()])
+def test_pcc_gate_callable_probe_requires_boolean_result(result):
+    from tests.conftest import _pcc_gate_blocked_reason
+
+    calls = []
+
+    def probe():
+        calls.append(True)
+        return result
+
+    item = _pcc_gate_test_item(pytest.mark.pcc_gate(probe=probe).mark)
+    with pytest.raises(TypeError, match="pcc_gate callable probe must return bool"):
+        _pcc_gate_blocked_reason(item)
+    assert calls == [True]
+
+
+@pytest.mark.parametrize(
+    "sys_platform,system,machine,available",
+    [
+        ("linux", "Linux", "x86_64", True),
+        ("darwin", "Darwin", "arm64", False),
+        ("darwin", "Darwin", "x86_64", False),
+        ("linux", "Linux", "aarch64", False),
+    ],
+)
+def test_pcc_gate_linux_execution_markers_respect_simulated_platform(
+    monkeypatch, sys_platform, system, machine, available
+):
+    from tests.conftest import pytest_collection_modifyitems
+    from tests.python import (
+        test_direct_indexed_syscall,
+        test_freestanding_libc_numeric,
+        test_freestanding_linux_libc,
+        test_typed_indirect_c_abi,
+    )
+
+    def unexpected_execution(*args, **kwargs):
+        raise AssertionError("platform gate simulation must not execute binaries")
+
+    monkeypatch.setattr(subprocess, "run", unexpected_execution)
+    platform = SimpleNamespace(system=lambda: system, machine=lambda: machine)
+    items = []
+    for module in (
+        test_direct_indexed_syscall,
+        test_freestanding_libc_numeric,
+        test_freestanding_linux_libc,
+        test_typed_indirect_c_abi,
+    ):
+        monkeypatch.setattr(module, "platform", platform)
+        if hasattr(module, "sys"):
+            monkeypatch.setattr(module, "sys", SimpleNamespace(platform=sys_platform))
+        for name, function in vars(module).items():
+            if not name.startswith("test_"):
+                continue
+            for marker in getattr(function, "pytestmark", ()):
+                if marker.name == "pcc_gate" and callable(marker.kwargs.get("probe")):
+                    items.append(_pcc_gate_test_item(marker, nodeid=name))
+    assert len(items) == 7
+    original = items.copy()
+    deselected = []
+    config = SimpleNamespace(
+        hook=SimpleNamespace(pytest_deselected=lambda *, items: deselected.extend(items))
+    )
+    pytest_collection_modifyitems(config, items)
+    assert items == (original if available else [])
+    assert deselected == ([] if available else original)
 
 
 def _python_test_sources():

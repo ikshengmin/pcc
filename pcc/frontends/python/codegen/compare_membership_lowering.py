@@ -6,7 +6,42 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import RawPointerType, BoolExpr, BoolLit, BoolType, ByteArrayType, BytesType, Call, ClassType, Compare, ComplexType, DictType, DynType, Expr, FloatLit, FloatType, IntLit, IntType, ListType, MemoryViewType, Name, NoneLit, NoneType, Slice, StrLit, StrType, Subscript, TupleExpr, TupleType, Type
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    BoolExpr,
+    BoolLit,
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    Call,
+    ClassType,
+    Compare,
+    ComplexType,
+    DictType,
+    DynType,
+    Expr,
+    FloatLit,
+    FloatType,
+    IntLit,
+    IntType,
+    ListType,
+    MemoryViewType,
+    Name,
+    NoneLit,
+    NoneType,
+    Slice,
+    StrLit,
+    StrType,
+    Subscript,
+    TupleExpr,
+    TupleType,
+    Type,
+    IfExpr,
+)
+from pcc.frontends.python.codegen.method_call_lowering import (
+    _method_pointer_provenance,
+    _method_source_arg_type,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.unary_call_lowering import is_i64_int_literal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
@@ -1704,6 +1739,159 @@ class CompareMembershipLoweringMixin:
             return self.builder.not_(acc, name=self._fresh("tup.not_in"))
         return acc
 
+    def _claim_boolexpr_pcc_operand(
+        self,
+        value: ir.Value,
+        source: Expr,
+        *,
+        newly_owned: bool = False,
+    ):
+        """Give a managed Boolean operand exactly one expression owner.
+
+        Physical boxing and the emitted-value ledger outrank AST shape. Raw
+        ABI values and CPython pointers keep their existing ownership domain.
+        The owner starts before truth testing: a user __bool__ can rebind the
+        local/global/container which supplied a borrowed operand.
+        """
+        if getattr(self, "_freestanding_module", False) or (
+            self._expr_returns_unsafe_raw_pointer(source)
+        ):
+            return value, False
+        provenance = _method_pointer_provenance(
+            self,
+            value,
+            _method_source_arg_type(self, source),
+            source_expr=source,
+            newly_owned=newly_owned or self._value_is_owned_object(value),
+        )
+        if not provenance[1]:
+            return value, False
+        if not provenance[3]:
+            value = self._gc_retain(value, name=self._fresh("bool.operand.retain"))
+        self._note_owned_object_value(value)
+        return value, True
+
+    def _truthy_boolexpr_operand(self, value, source_ty, pcc_owned: bool):
+        """Keep the operand live through truth callbacks and their error edge."""
+        if not pcc_owned:
+            return self._truthy(value, source_ty)
+        self._gc_pin(value)
+        old_error = self._current_try_err_block()
+        target = old_error if old_error is not None else self._ensure_fn_err_exit()
+        self._try_err_block = self._make_cpy_operand_cleanup_block(
+            (),
+            (),
+            target,
+            "bool.truth.error",
+            ((value, True),),
+        )
+        try:
+            result = self._truthy(value, DynType(name="dyn"))
+        finally:
+            self._try_err_block = old_error
+        self._gc_unpin(value)
+        return result
+
+    def _coerce_boolexpr_operand(self, value, source, result_ty, pcc_owned: bool):
+        old_error = self._current_try_err_block()
+        if pcc_owned:
+            self._gc_pin(value)
+            target = old_error if old_error is not None else self._ensure_fn_err_exit()
+            self._try_err_block = self._make_cpy_operand_cleanup_block(
+                (),
+                (),
+                target,
+                "bool.coerce.error",
+                ((value, True),),
+            )
+        try:
+            coerced = self._coerce(value, source.ty, result_ty, source)
+        finally:
+            self._try_err_block = old_error
+        if pcc_owned:
+            self._gc_unpin(value)
+            if isinstance(coerced.type, ir.PointerType):
+                # Native pointer-to-pointer coercions preserve the object;
+                # a representation alias transfers the same single owner.
+                self._note_owned_object_value(coerced)
+                return coerced, True
+            # A scalar result no longer carries the source object's owner.
+            self._gc_release(value)
+            return coerced, False
+        return self._claim_boolexpr_pcc_operand(
+            coerced,
+            source,
+            newly_owned=(
+                isinstance(coerced.type, ir.PointerType)
+                and not isinstance(value.type, ir.PointerType)
+            ),
+        )
+
+    def _bridge_boolexpr_operand(self, value, source, pcc_owned: bool):
+        if not pcc_owned:
+            return self._marshal_to_cpython_consuming_source(
+                value,
+                source.ty,
+                source,
+            )
+        # This is a proven native object, including a borrowed Name promoted
+        # above. The source-shape bridge cannot consume that new owner, and a
+        # scalar-typed pointer must not take its foreign-pointer passthrough.
+        self._gc_pin(value)
+        converted, converted_owned = self._marshal_to_cpython(
+            value,
+            DynType(name="dyn"),
+        )
+        self._guard_cpy_value_not_null(
+            converted,
+            pinned_pcc_on_error=((value, True),),
+        )
+        self._gc_unpin(value)
+        self._gc_release(value)
+        return converted, converted_owned
+
+    def _emit_boolexpr_pcc_object_operand(self, source: Expr):
+        """Project one operand while preserving evidence of a newly made box."""
+        if isinstance(source.ty, IntType):
+            exact = self._maybe_emit_exact_int_object(source)
+            if exact is not None:
+                return self._claim_boolexpr_pcc_operand(exact, source)
+        if isinstance(source, IfExpr):
+            value = self._emit_if_expr_as_pcc_object(source)
+            return self._claim_boolexpr_pcc_operand(value, source)
+        if isinstance(source, BoolExpr):
+            value = self._emit_boolexpr_as_pcc_object(source)
+            return self._claim_boolexpr_pcc_operand(value, source)
+        payload = self._maybe_emit_valueclass_constructor_payload(source.ty, source)
+        if payload is not None:
+            boxed = self._emit_valueclass_payload_to_object(
+                payload,
+                source.ty,
+                consume_fields=True,
+            )
+            if boxed is not None:
+                return self._claim_boolexpr_pcc_operand(
+                    boxed,
+                    source,
+                    newly_owned=True,
+                )
+        value = self._emit_expr(source)
+        source_is_cpy = value in getattr(self, "_cpy_values", ())
+        boxed = self._emit_value_as_pcc_object_or_bridge(
+            value,
+            source.ty,
+            "bool.obj.bridge",
+        )
+        return self._claim_boolexpr_pcc_operand(
+            boxed,
+            source,
+            newly_owned=(
+                source_is_cpy
+                or not isinstance(value.type, ir.PointerType)
+                or boxed is not value
+            ),
+        )
+
     def _emit_boolexpr(self, expr: BoolExpr) -> ir.Value:
         # Short-circuit via branch. ``and`` / ``or`` return either the
         # left operand or the right operand; only the pure-bool case
@@ -1713,18 +1901,25 @@ class CompareMembershipLoweringMixin:
         lhs = self._emit_expr(expr.left)
         lhs_is_cpy = lhs in getattr(self, "_cpy_values", ())
         lhs_owned = False
+        lhs_pcc_owned = False
         if lhs_is_cpy:
             self._guard_cpy_value_not_null(lhs)
             lhs_owned = self._cpy_value_is_owned(lhs)
-        lhs_b = self._truthy(lhs, expr.left.ty)
+        else:
+            lhs, lhs_pcc_owned = self._claim_boolexpr_pcc_operand(lhs, expr.left)
+        lhs_b = self._truthy_boolexpr_operand(lhs, expr.left.ty, lhs_pcc_owned)
         result_ty = expr.ty
         lhs_val = None
         if not isinstance(result_ty, BoolType):
-            lhs_val = self._coerce(lhs, expr.left.ty, result_ty)
+            lhs_val, lhs_pcc_owned = self._coerce_boolexpr_operand(
+                lhs, expr.left, result_ty, lhs_pcc_owned,
+            )
         elif lhs_is_cpy and lhs_owned:
             # Bool-typed and/or keeps only truthiness, never the operand ref.
             self.builder.call(self.runtime["py_cpy_decref"], [lhs])
             self._forget_owned_cpy_value(lhs)
+        elif lhs_pcc_owned:
+            self._gc_release(lhs)
 
         rhs_bb = fn.append_basic_block(name=self._fresh("bool.rhs"))
         short_bb = fn.append_basic_block(name=self._fresh("bool.short"))
@@ -1754,13 +1949,20 @@ class CompareMembershipLoweringMixin:
             self.builder.position_at_end(rhs_bb)
             if lhs_is_cpy and lhs_owned:
                 self.builder.call(self.runtime["py_cpy_decref"], [lhs])
+            elif lhs_pcc_owned:
+                self._gc_release(lhs_val)
             rhs = self._emit_expr(expr.right)
             rhs_is_cpy = rhs in getattr(self, "_cpy_values", ())
             rhs_owned = False
+            rhs_pcc_owned = False
             if rhs_is_cpy:
                 self._guard_cpy_value_not_null(rhs)
                 rhs_owned = self._cpy_value_is_owned(rhs)
-            rhs_val = self._coerce(rhs, expr.right.ty, result_ty)
+            else:
+                rhs, rhs_pcc_owned = self._claim_boolexpr_pcc_operand(rhs, expr.right)
+            rhs_val, rhs_pcc_owned = self._coerce_boolexpr_operand(
+                rhs, expr.right, result_ty, rhs_pcc_owned,
+            )
             rhs_exit = self.builder._block
 
             cpy_result = lhs_is_cpy or rhs_is_cpy
@@ -1768,10 +1970,10 @@ class CompareMembershipLoweringMixin:
                 self.builder.position_at_end(short_exit)
                 if not lhs_is_cpy:
                     short_val, short_owned = (
-                        self._marshal_to_cpython_consuming_source(
-                        short_val,
-                        expr.left.ty,
-                        expr.left,
+                        self._bridge_boolexpr_operand(
+                            short_val,
+                            expr.left,
+                            lhs_pcc_owned,
                         )
                     )
                     self._guard_cpy_value_not_null(short_val)
@@ -1789,10 +1991,10 @@ class CompareMembershipLoweringMixin:
                 self.builder.position_at_end(rhs_exit)
                 if not rhs_is_cpy:
                     rhs_val, rhs_owned = (
-                        self._marshal_to_cpython_consuming_source(
-                        rhs_val,
-                        expr.right.ty,
-                        expr.right,
+                        self._bridge_boolexpr_operand(
+                            rhs_val,
+                            expr.right,
+                            rhs_pcc_owned,
                         )
                     )
                     self._guard_cpy_value_not_null(rhs_val)
@@ -1815,6 +2017,8 @@ class CompareMembershipLoweringMixin:
             phi.add_incoming(rhs_val, rhs_exit)
             if cpy_result:
                 return self._mark_owned_cpy_value(phi)
+            if lhs_pcc_owned and rhs_pcc_owned:
+                self._note_owned_object_value(phi)
             return phi
 
         self.builder.position_at_end(short_bb)
@@ -1824,12 +2028,17 @@ class CompareMembershipLoweringMixin:
         self.builder.position_at_end(rhs_bb)
         rhs = self._emit_expr(expr.right)
         rhs_is_cpy = rhs in getattr(self, "_cpy_values", ())
+        rhs_pcc_owned = False
         if rhs_is_cpy:
             self._guard_cpy_value_not_null(rhs)
-        rhs_b = self._truthy(rhs, expr.right.ty)
+        else:
+            rhs, rhs_pcc_owned = self._claim_boolexpr_pcc_operand(rhs, expr.right)
+        rhs_b = self._truthy_boolexpr_operand(rhs, expr.right.ty, rhs_pcc_owned)
         if rhs_is_cpy and self._cpy_value_is_owned(rhs):
             self.builder.call(self.runtime["py_cpy_decref"], [rhs])
             self._forget_owned_cpy_value(rhs)
+        elif rhs_pcc_owned:
+            self._gc_release(rhs)
         rhs_exit = self.builder._block
         self.builder.branch(end_bb)
 
@@ -1852,10 +2061,10 @@ class CompareMembershipLoweringMixin:
         old_prefer_native = self._prefer_native_callable_values
         self._prefer_native_callable_values = True
         try:
-            lhs_obj = self._emit_expr_as_pcc_object(expr.left)
+            lhs_obj, lhs_owned = self._emit_boolexpr_pcc_object_operand(expr.left)
         finally:
             self._prefer_native_callable_values = old_prefer_native
-        lhs_b = self._truthy(lhs_obj, dyn_ty)
+        lhs_b = self._truthy_boolexpr_operand(lhs_obj, dyn_ty, lhs_owned)
 
         rhs_bb = fn.append_basic_block(name=self._fresh("bool.obj.rhs"))
         end_bb = fn.append_basic_block(name=self._fresh("bool.obj.end"))
@@ -1869,10 +2078,12 @@ class CompareMembershipLoweringMixin:
             raise NotImplementedError(f"Layer 1 bool op {expr.op!r} not supported")
 
         self.builder.position_at_end(rhs_bb)
+        if lhs_owned:
+            self._gc_release(lhs_obj)
         old_prefer_native = self._prefer_native_callable_values
         self._prefer_native_callable_values = True
         try:
-            rhs_obj = self._emit_expr_as_pcc_object(expr.right)
+            rhs_obj, rhs_owned = self._emit_boolexpr_pcc_object_operand(expr.right)
         finally:
             self._prefer_native_callable_values = old_prefer_native
         rhs_exit = self.builder._block
@@ -1882,4 +2093,6 @@ class CompareMembershipLoweringMixin:
         phi = self.builder.phi(_CSTR, name=self._fresh(f"{expr.op}.obj"))
         phi.add_incoming(lhs_obj, entry_bb)
         phi.add_incoming(rhs_obj, rhs_exit)
+        if lhs_owned and rhs_owned:
+            self._note_owned_object_value(phi)
         return phi

@@ -74,17 +74,39 @@ def _body(text, name='probe'):
 ])
 def test_imported_constructor_uses_one_published_binder(tmp_path, monkeypatch, expression):
     body = _body(_compile(tmp_path, monkeypatch, 'def probe():\n    return ' + expression + '\n'))
-    if expression == 'provider.AllKinds(1)':
-        assert len(re.findall(r'\bcall [^\n]*@user_binding_provider_AllKinds___init__\(', body)) == 1
-        assert not re.search(r'\bcall [^\n]*@py_obj_call\(', body)
-        return
-    assert len(re.findall(r'\bcall [^\n]*@py_obj_call\(', body)) == 1
+    calls = list(re.finditer(r'\bcall [^\n]*@py_obj_call_slots\(([^\n)]*)\)', body))
+    assert len(calls) == 1
+    assert not re.search(r'\bcall [^\n]*@py_obj_call\(', body)
     assert not re.search(r'\bcall [^\n]*@user_binding_provider_[^\n]*__init__\(', body)
-    assert 'compiled.call.callable' in body
-    assert 'compiled.call.args' in body
-    assert 'compiled.call.kwargs' in body
-    assert 'compiled.call.result' in body
-    assert '@pcc_gc_take_pinned_slot(' in body
+    aliases = dict(re.findall(r'(%[^\s]+) = bitcast ptr (%[^\s]+) to ptr', body))
+
+    def root_slot(value):
+        seen = set()
+        while value in aliases:
+            assert value not in seen, value
+            seen.add(value)
+            value = aliases[value]
+        return value
+
+    slots = [root_slot(value) for value in re.findall(r'ptr (%[^,\s]+)', calls[0].group(1))]
+    assert len(slots) == len(set(slots)) == 4
+    class_name = expression.split('provider.', 1)[1].split('(', 1)[0]
+    registrations = list(re.finditer(
+        r'\bcall [^\n]*@pcc_gc_frame_enter\(ptr [^,\n]+, ptr ([^\n)]+)\)', body))
+    for role, slot in zip(('callable', 'args', 'kwargs', 'result'), slots):
+        assert slot.startswith('%compiled.module.call.' + class_name + '.' + role + '.operand.')
+        allocation = re.search(re.escape(slot) + r' = alloca ptr\b', body)
+        initialized = re.search(r'store ptr null, ptr ' + re.escape(slot) + r'(?=\s|$)', body)
+        registered = [match for match in registrations if root_slot(match.group(1)) == slot]
+        assert allocation is not None and initialized is not None
+        assert len(registered) == 1
+        assert allocation.start() < initialized.start() < registered[0].start() < calls[0].start()
+    # The slot ABI returns status; its fourth argument retains the new owner
+    # through operand cleanup and transfers that same owner at the return.
+    takes = list(re.finditer(r'\bcall [^\n]*@pcc_gc_take_pinned_slot\(ptr ([^,\n]+),', body))
+    assert len(takes) == 1
+    assert root_slot(takes[0].group(1)) == slots[3]
+    assert calls[0].start() < takes[0].start()
 
 
 @pytest.mark.parametrize('expression,order', [

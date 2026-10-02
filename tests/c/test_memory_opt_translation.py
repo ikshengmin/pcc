@@ -338,3 +338,27 @@ entry:
     assert "%next = load i8*, i8** %ap" in out
     assert "call void @sink(i8* %incoming)" not in out
     assert "memory_opt.store_load_forward" not in ctx.stats
+
+
+def test_memory_opt_rewrites_forwarded_cursor_at_va_arg_barrier():
+    ir_text = """
+define i32 @consume(ptr %incoming) {
+entry:
+  %ap = alloca ptr
+  store ptr %incoming, ptr %ap
+  %cursor = load ptr, ptr %ap
+  %arg = va_arg ptr %cursor, i32
+  %next = load ptr, ptr %ap
+  %same = icmp eq ptr %next, %incoming
+  %result = select i1 %same, i32 %arg, i32 0
+  ret i32 %result
+}
+""".strip()
+    ctx = PassContext()
+
+    out = MemoryOptIRPass().run(ir_text, ctx)
+
+    assert "%cursor = load" not in out
+    assert "%arg = va_arg ptr %incoming, i32" in out
+    assert "%next = load ptr, ptr %ap" in out
+    assert ctx.stats["memory_opt.store_load_forward"] == 1

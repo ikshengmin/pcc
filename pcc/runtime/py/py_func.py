@@ -59,6 +59,7 @@ py_dict_del = extern("py_dict_del", (c_ptr, c_ptr), c_int64)
 py_dict_get = extern("py_dict_get", (c_ptr, c_ptr), c_ptr)
 py_dict_len = extern("py_dict_len", (c_ptr,), c_int64)
 py_call_merge_kwargs = extern("py_call_merge_kwargs", (c_ptr, c_ptr), c_ptr)
+py_call_validate_kwargs = extern("py_call_validate_kwargs", (c_ptr,), c_int64)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_call_default = extern("py_obj_call_default", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_call_slots = extern("py_obj_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
@@ -106,12 +107,23 @@ pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
+pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_lease_prepare_locked = extern("pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64)
+pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
+pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
 pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
 pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
 pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 py_gen_run_may_park_sync = extern("py_gen_run_may_park_sync", (c_ptr,), c_ptr)
 py_current_exception = extern("py_current_exception", (), c_ptr)
+py_bound_method_function = extern("py_bound_method_function", (c_ptr,), c_ptr)
 
 # A deferred request is consumed by the actual semantic callee. Ordinary
 # function bodies run with synchronous dynamic-call semantics. Transparent
@@ -675,7 +687,7 @@ def _sig_name_list(names_list):
 def py_func_display_name(fn):
     """NEW str: ``fn.__qualname__`` when set (nested defs, methods), else its
     ``__name__`` -- what reprs and argument errors print."""
-    if ptr_is_null(fn) == 0 and load_i32(fn, 8) == PY_TYPE_FUNC:
+    if ptr_is_null(fn) == 0 and is_tagged_int(fn) == 0 and load_i32(fn, 8) == PY_TYPE_FUNC:
         attrs = pcc_gc_load_ptr(fn, ptr_add(fn, 88))
         if ptr_is_null(attrs) == 0:
             key = py_str_new(cstr("__qualname__"), 12)
@@ -723,39 +735,97 @@ def _sig_has_default(has_defaults, index: int) -> int:
     return out
 
 
-def _signature_keyword_types(kwargs) -> int:
-    """1 for string keys, 0 for a bad key, -1 for a failed read.
+def _signature_diagnostic_open(slots, tokens, handles) -> int:
+    memset(slots, 0, 24)
+    memset(tokens, 0, 24)
+    memset(handles, 0, 24)
+    count: int = 0
+    while count < 3:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * 8))
+        if ptr_is_null(handle):
+            return count
+        store_ptr(handles, count * 8, handle)
+        count = count + 1
+    return count
 
-    Merge accepts all hashable keys so every required operand can execute.
-    Validate at binding, even when **extras would otherwise accept every key.
-    The error path still scans in keyword order to select the first error.
-    """
-    if _kwargs_empty(kwargs) != 0:
-        return 1
-    keys = py_dict_keys(kwargs)
-    if ptr_is_null(keys):
+
+def _signature_diagnostic_adopt(slots, tokens) -> int:
+    token: int = pcc_gc_foreign_lease_acquire(slots)
+    if token < 0:
         return -1
-    count: int = py_list_len(keys)
-    index: int = 0
+    store_i64(tokens, 0, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slots, load_ptr(slots, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+def _signature_diagnostic_copy_signature(slots, tokens) -> int:
+    plan = stack_alloc(256)
+    prepared: int = 0
+    token: int = 0
+    pcc_py_gc_minor_graph_lock()
+    original = load_ptr(slots, 0)
+    captures = pcc_gc_resolve_root_slot_unlocked(ptr_add(original, 64), 0)
+    if _is_tuple(captures) != 0 and load_i64(captures, 16) == 2:
+        token = pcc_gc_root_copy_lease_prepare_locked(ptr_add(slots, 8), ptr_add(captures, 32), 0, plan)
+        prepared = 1
+        if token >= 0:
+            store_i64(tokens, 8, token)
+    pcc_py_gc_minor_graph_unlock()
+    if prepared != 0:
+        pcc_gc_root_copy_lease_finish(plan)
+    return -1 if token < 0 else 0
+
+
+def _signature_diagnostic_close(slots, tokens, handles, count: int) -> None:
+    if count == 3:
+        py_tls_exc_swap_slot(ptr_add(slots, 16))
+        index: int = 1
+        while index >= 0:
+            slot = ptr_add(slots, index * 8)
+            if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * 8)) != 0:
+                pcc_platform_abort()
+                return
+            store_i64(tokens, index * 8, 0)
+            pcc_gc_store_root(slot, null())
+            index = index - 1
+        py_clear_exception()
+        py_tls_exc_swap_slot(ptr_add(slots, 16))
+    index = 0
     while index < count:
-        key = py_list_get(keys, index)
-        if ptr_is_null(key):
-            py_decref(keys)
-            return -1
-        valid: int = 0
-        if is_tagged_int(key) == 0:
-            if load_i32(key, 8) == PY_TYPE_STR:
-                valid = 1
-        py_decref(key)
-        if valid == 0:
-            py_decref(keys)
-            return 0
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * 8))
         index = index + 1
-    py_decref(keys)
-    return 1
 
 
 def _signature_error(fn, sig, nargs: int, kwargs):
+    # Bound wrappers bind a signature with self removed, but CPython diagnoses
+    # the original function with self counted. Read its live identity and
+    # signature only on failure; never snapshot mutable diagnostic metadata.
+    slots = stack_alloc(24)
+    tokens = stack_alloc(24)
+    handles = stack_alloc(24)
+    count: int = _signature_diagnostic_open(slots, tokens, handles)
+    if count != 3:
+        _func_runtime_error_if_unset(cstr("function binding diagnostic"), cstr("diagnostic root registration failed"))
+        _signature_diagnostic_close(slots, tokens, handles, count)
+        return null()
+    # Immediate publication precedes the first parking lease acquisition.
+    store_ptr(slots, 0, py_bound_method_function(fn))
+    if ptr_is_null(load_ptr(slots, 0)) == 0:
+        if _signature_diagnostic_adopt(slots, tokens) != 0 or _signature_diagnostic_copy_signature(slots, tokens) != 0:
+            _func_runtime_error_if_unset(cstr("function binding diagnostic"), cstr("diagnostic source lease failed"))
+        elif _signature_valid(load_ptr(slots, 8)) != 0:
+            _signature_error_unbound(load_ptr(slots, 0), load_ptr(slots, 8), nargs + 1, kwargs)
+        else:
+            _signature_error_unbound(fn, sig, nargs, kwargs)
+    else:
+        _signature_error_unbound(fn, sig, nargs, kwargs)
+    _signature_diagnostic_close(slots, tokens, handles, count)
+    return null()
+
+
+def _signature_error_unbound(fn, sig, nargs: int, kwargs):
     """Raise the TypeError CPython gives when ``nargs`` positional arguments
     and ``kwargs`` do not bind to ``sig``, checked in CPython's order: keyword problems, too many
     positional arguments, missing positional, missing keyword-only.
@@ -1073,14 +1143,11 @@ def _bind_signature(sig, args_tuple, kwargs, fn):
         return _func_type_error(cstr("native function args must be a tuple"))
 
     nargs: int = py_tuple_len(args)
-    keyword_types: int = _signature_keyword_types(kwargs)
-    if keyword_types != 1:
+    if py_call_validate_kwargs(kwargs) != 0:
         if made_args != 0:
             py_decref(args)
         _cleanup_signature_parts(names, kinds, has_defaults, defaults)
-        if keyword_types < 0:
-            return null()
-        return _signature_error(fn, sig, nargs, kwargs)
+        return null()
 
     remaining = py_call_merge_kwargs(null(), kwargs)
     if ptr_is_null(remaining):
@@ -1709,6 +1776,87 @@ def _func_clear_call_root(slots, pins, offset: int) -> None:
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
+def _func_call_pin_resolved(slots, pins, offset: int) -> None:
+    # Only called after a counted lease has resolved this authoritative slot.
+    value = load_ptr(slots, offset)
+    store_i64(pins, offset, 0)
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        store_i64(pins, offset, load_i32(value, 12) & 64)
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), ptr_add(slots, offset), load_ptr(slots, offset))
+    pcc_py_gc_minor_graph_unlock()
+
+
+def _func_call_adopt_owned(slots, pins, offset: int) -> int:
+    # Producer stores NEW directly into its preregistered slot, then acquires
+    # before inspecting a header: the returned address may already forward.
+    store_i64(pins, offset, -1)
+    token: int = pcc_gc_foreign_lease_acquire(ptr_add(slots, offset))
+    if token < 0:
+        pcc_gc_store_root(ptr_add(slots, offset), null())
+        _func_runtime_error_if_unset(cstr("function call"), cstr("returned owner lease acquisition failed"))
+        return -1
+    store_i64(pins, 88 + offset, token)
+    _func_call_pin_resolved(slots, pins, offset)
+    return 0
+
+
+def _func_call_copy_captures(slots, pins) -> int:
+    # fn.captures is an owning managed field. Copy its actual slot, not a
+    # borrowed value loaded before a lock wait or callback can move the child.
+    store_i64(pins, 24, -1)
+    fn = load_ptr(slots, 64)
+    token: int = pcc_gc_root_copy_lease(ptr_add(slots, 24), ptr_add(fn, 64))
+    if token < 0:
+        _func_runtime_error_if_unset(cstr("function call"), cstr("captures owner transfer failed"))
+        return -1
+    store_i64(pins, 112, token)
+    _func_call_pin_resolved(slots, pins, 24)
+    return 0
+
+
+def _func_call_drop(slots, pins, offset: int) -> None:
+    slot = ptr_add(slots, offset)
+    if pcc_gc_foreign_lease_release(slot, load_i64(pins, 88 + offset)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(pins, 88 + offset, 0)
+    if load_i64(pins, offset) < 0:
+        # An adoption failure did not acquire the legacy pin protocol.
+        pcc_gc_store_root(slot, null())
+    else:
+        _func_clear_call_root(slots, pins, offset)
+
+
+def _func_call_keep_error(slots, pins) -> None:
+    if ptr_is_null(load_ptr(slots, 16)) == 0:
+        return
+    # Transfer TLS's owner into the registered slot before any header access.
+    py_tls_exc_swap_slot(ptr_add(slots, 16))
+    if ptr_is_null(load_ptr(slots, 16)) == 0:
+        _func_call_adopt_owned(slots, pins, 16)
+
+
+def _func_call_restore_error(slots, pins) -> None:
+    if ptr_is_null(load_ptr(slots, 16)):
+        return
+    py_clear_exception()
+    error = load_ptr(slots, 16)
+    prior: int = load_i64(pins, 16)
+    # Release through the token-bearing slot BEFORE transferring it to TLS.
+    if pcc_gc_foreign_lease_release(ptr_add(slots, 16), load_i64(pins, 104)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(pins, 104, 0)
+    py_tls_exc_swap_slot(ptr_add(slots, 16))
+    if ptr_is_null(error) == 0 and is_tagged_int(error) == 0 and prior >= 0:
+        pcc_gc_unpin(error)
+        if prior != 0:
+            atomic_rmw_i32("or", error, 12, 64, "relaxed")
+    store_i64(pins, 16, 0)
+
+
 @c_abi_export("py_func_call_kwargs")
 def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
     # The existing C ABI borrows inputs for this call. Keep each input stable
@@ -1736,9 +1884,11 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
     store_i32(global_addr("pcc_native_callable_forward_context"), 0, forward)
     drive: int = 1 if (context & 1) != 0 and (roles & (PY_FLAG_FUNC_AUTO_PARK | PY_FLAG_FUNC_CONTINUATION_FACTORY)) != 0 and (roles & PY_FLAG_FUNC_TRANSPARENT_CALL) == 0 else 0
     slots = stack_alloc(88)
-    pins = stack_alloc(88)
+    # First lane preserves the legacy raw-ABI pin state; the independent
+    # second lane owns counted leases for extracted children and NEW results.
+    pins = stack_alloc(176)
     memset(slots, 0, 88)
-    memset(pins, 0, 88)
+    memset(pins, 0, 176)
     pcc_gc_frame_enter(global_addr("pcc_native_callable_result_frame_map"), slots)
     store_i64(pins, 64, load_i64(argument_pins, 0))
     pcc_gc_store_root(ptr_add(slots, 64), callable_obj)
@@ -1752,14 +1902,10 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
     output_offset: int = 0 if drive else 8
     _func_call_kwargs_body(slots, pins, output_offset, context & 2)
     if drive and ptr_is_null(load_ptr(slots, 0)) == 0:
-        result = py_gen_run_may_park_sync(load_ptr(slots, 0))
-        store_ptr(slots, 8, result)
-        if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-            store_i64(pins, 8, load_i32(result, 12) & 64)
-            pcc_gc_pin(result)
-            pcc_gc_note_write_barrier(null(), result)
+        store_ptr(slots, 8, py_gen_run_may_park_sync(load_ptr(slots, 0)))
+        _func_call_adopt_owned(slots, pins, 8)
     if ptr_is_null(load_ptr(slots, 8)):
-        _func_keep_call_error(slots, pins, 16)
+        _func_call_keep_error(slots, pins)
     index: int = 0
     result = load_ptr(slots, 8)
     prior_result_pin: int = load_i64(pins, 8)
@@ -1778,19 +1924,16 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
             index = index - 1
             if ptr_eq(result, load_ptr(slots, 64 + index * 8)):
                 prior_result_pin = load_i64(pins, 64 + index * 8)
-    _func_clear_call_root(slots, pins, 0)
-    _func_clear_call_root(slots, pins, 56)
-    _func_clear_call_root(slots, pins, 48)
-    _func_clear_call_root(slots, pins, 40)
-    _func_clear_call_root(slots, pins, 32)
-    _func_clear_call_root(slots, pins, 24)
-    _func_clear_call_root(slots, pins, 80)
-    _func_clear_call_root(slots, pins, 72)
-    _func_clear_call_root(slots, pins, 64)
-    error = load_ptr(slots, 16)
-    if ptr_is_null(error) == 0:
-        py_raise(error)
-        _func_clear_call_root(slots, pins, 16)
+    _func_call_drop(slots, pins, 0)
+    _func_call_drop(slots, pins, 56)
+    _func_call_drop(slots, pins, 48)
+    _func_call_drop(slots, pins, 40)
+    _func_call_drop(slots, pins, 32)
+    _func_call_drop(slots, pins, 24)
+    _func_call_drop(slots, pins, 80)
+    _func_call_drop(slots, pins, 72)
+    _func_call_drop(slots, pins, 64)
+    _func_call_restore_error(slots, pins)
     # Argument/child unpins may have cleared the same bit on an aliased
     # result. The result lease still exists; reload the healed root and
     # restore that bit without acquiring an extra metric-counted pin.
@@ -1800,6 +1943,13 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
     pcc_gc_frame_leave(slots)
     store_i32(global_addr("pcc_native_callable_forward_context"), 0, previous_forward)
     store_i32(global_addr("pcc_native_callable_sync_context"), 0, context)
+    # This is the strictly terminal raw-ABI bridge. The counted output owner
+    # stayed live through every callback; its legacy pin now bridges the last
+    # lease release and the nonparking transfer to the caller.
+    if pcc_gc_foreign_lease_release(ptr_add(slots, 8), load_i64(pins, 96)) != 0:
+        pcc_platform_abort()
+        return null()
+    store_i64(pins, 96, 0)
     return pcc_gc_take_pinned_slot(ptr_add(slots, 8), prior_result_pin)
 
 
@@ -1875,6 +2025,8 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
     callable_obj = load_ptr(slots, 64)
     args_tuple = load_ptr(slots, 72)
     kwargs = load_ptr(slots, 80)
+    if py_call_validate_kwargs(kwargs) != 0:
+        return
     fn = _checked_func(callable_obj)
     if ptr_is_null(fn):
         if ptr_is_null(callable_obj):

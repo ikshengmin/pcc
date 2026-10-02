@@ -7,7 +7,13 @@ managed Python objects and is safe during runtime bootstrap.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int32, c_void, extern
+from pcc.extern import (
+    c_abi_export,
+    c_abi_typed_export,
+    c_int32,
+    c_void,
+    extern,
+)
 from pcc.unsafe import (
     cstr,
     f64_div,
@@ -34,6 +40,15 @@ __pcc_freestanding__ = True
 
 
 pcc_errno_set = extern("pcc_errno_set", (c_int32,), c_void)
+
+
+@c_abi_typed_export("toupper", "i32", ("i32",))
+def pcc_toupper(value: i64) -> i64:
+    # The owned runtime currently uses the fixed C locale. Valid inputs are
+    # unsigned-char values or EOF; bytes outside ASCII lowercase stay intact.
+    if value >= 97 and value <= 122:
+        return value - 32
+    return value
 
 
 @c_abi_export("pcc_numeric_ascii_lower")

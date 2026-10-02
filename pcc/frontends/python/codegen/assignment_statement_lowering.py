@@ -6,7 +6,39 @@ import sys
 import os
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BinOp, BoolExpr, BoolType, ByteArrayType, BytesType, Call, ClassType, DictExpr, DictType, DynType, Expr, ExprStmt, FloatType, FuncType, IfExpr, IntType, ListExpr, ListType, MemoryViewType, Name, NoneType, Slice, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType
+from pcc.frontends.python.py_ast import (
+    Assign,
+    Attr,
+    AugAssign,
+    BinOp,
+    BoolExpr,
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    Call,
+    ClassType,
+    DictExpr,
+    DictType,
+    DynType,
+    Expr,
+    ExprStmt,
+    FloatType,
+    FuncType,
+    IfExpr,
+    IntType,
+    ListExpr,
+    ListType,
+    MemoryViewType,
+    Name,
+    NoneType,
+    Slice,
+    SetType,
+    StrLit,
+    StrType,
+    Subscript,
+    TupleExpr,
+    TupleType,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.py_ast import assignment_storage_annotation
@@ -828,9 +860,9 @@ class AssignmentStatementLoweringMixin:
             else:
                 self._cpy_module_flags.pop(target.ident, None)
                 is_cpy_value = False
-            value_is_owned = exact_int_value is not None or (
-                self._raw_scaffold_object_rhs_is_owned(stmt.value)
-                and self._expr_returns_owned_object(stmt.value)
+            value_is_owned = exact_int_value is not None or self._owned_release_needed(
+                value,
+                stmt.value,
             )
             self._store_module_global_root_value(
                 gv,

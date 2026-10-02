@@ -13,7 +13,25 @@ from pcc.ir.ir import (
     IRBuilder_try_inline_error_edge,
 )
 
-from pcc.frontends.python.py_ast import Assign, Attr, Call, DynType, Expr, For, If, Import, Name, NoneLit, Raise, SourceSpan, StrLit, StrType, Try, While, With
+from pcc.frontends.python.py_ast import (
+    Assign,
+    Attr,
+    Call,
+    DynType,
+    Expr,
+    For,
+    If,
+    Import,
+    Name,
+    NoneLit,
+    Raise,
+    SourceSpan,
+    StrLit,
+    StrType,
+    Try,
+    While,
+    With,
+)
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_terminal_frame_clear
 from pcc.frontends.python.codegen.local_bound_lowering import local_bound_flag, mark_local_bound
 

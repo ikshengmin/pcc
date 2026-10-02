@@ -8,7 +8,20 @@ delegates canonical tagged-vs-heap construction to py_int_from_i64.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int64, c_void, c_double
-from pcc.runtime.py.py_abi_constants import PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYMEMORYVIEWOBJECT_BASE_OFFSET, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_FLOAT, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_MEMORYVIEW, PY_TYPE_STR, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import (
+    PYBYTESOBJECT_BYTE_LEN_OFFSET,
+    PYBYTESOBJECT_DATA_OFFSET,
+    PYMEMORYVIEWOBJECT_BASE_OFFSET,
+    PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_FLOAT,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_STR,
+    PY_TYPE_USER_CLASS_START,
+)
 from pcc.unsafe import (
     cstr,
     f64_bits,

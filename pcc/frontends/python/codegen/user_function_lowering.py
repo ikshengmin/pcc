@@ -9,7 +9,39 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python import low_ir as pcc_low_ir
-from pcc.frontends.python.py_ast import RawPointerType, Arg, Assign, Attr, BinOp, BoolLit, BoolType, BytesLit, Call, Compare, DynType, Expr, ExprStmt, FloatLit, FloatType, FuncDef, If, IfExpr, IntLit, IntType, ListType, Name, NoneLit, NoneType, Return, StrLit, StrType, Type, UnaryOp, ValueArrayType, While
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    Arg,
+    Assign,
+    Attr,
+    BinOp,
+    BoolLit,
+    BoolType,
+    BytesLit,
+    Call,
+    Compare,
+    DynType,
+    Expr,
+    ExprStmt,
+    FloatLit,
+    FloatType,
+    FuncDef,
+    If,
+    IfExpr,
+    IntLit,
+    IntType,
+    ListType,
+    Name,
+    NoneLit,
+    NoneType,
+    Return,
+    StrLit,
+    StrType,
+    Type,
+    UnaryOp,
+    ValueArrayType,
+    While,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.generator_lowering import emit_function_auto_park_role
@@ -2138,8 +2170,12 @@ class UserFunctionLoweringMixin:
         if (
             isinstance(expr, Call)
             and isinstance(expr.func, Name)
-            and expr.func.ident == "__pcc_dataclass_inherited_factory__"
-            and expr.span.file == "<pcc-dataclass-factory>"
+            and (
+                (expr.func.ident == "__pcc_dataclass_inherited_factory__"
+                 and expr.span.file == "<pcc-dataclass-factory>")
+                or (expr.func.ident == "__pcc_dataclass_inherited_default__"
+                    and expr.span.file == "<pcc-dataclass-default>")
+            )
             and len(expr.args) == 2
         ):
             base = self._emit_expr(expr.args[0])
@@ -2425,6 +2461,44 @@ class UserFunctionLoweringMixin:
         result.add_incoming(created, create_exit)
         return result
 
+    def _finish_native_callable_metadata(self, output, value, qualname, span):
+        """Set defining-namespace metadata while the new callable is rooted.
+
+        ``value`` is the immediately preceding function constructor. The
+        name strings and callable retain separate owners and address leases
+        through setattr; no diagnostic name lookup is added to normal calls.
+        """
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            self._publish_slot_call_owned(output, value, label="function constructor")
+            module_name = "__main__"
+            if self._skip_program_main and self.ast_module.name:
+                module_name = self.ast_module.name
+            pairs = [("__module__", module_name)]
+            if qualname:
+                pairs.append(("__qualname__", qualname))
+            for attribute, text in pairs:
+                value = self._emit_slot_call_operand(
+                    StrLit(span=span, ty=StrType(name="str"), value=text), "function.metadata",
+                )
+                self._try_err_block = self._slot_call_cleanup_block((output, value), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_setattr", (output, value), suffix_args=(self._attr_name_ptr(attribute),),
+                    argument_order=(0, 2, 1), span=span,
+                )
+                self._release_slot_call_roots((value,))
+                self._try_err_block = self._slot_call_cleanup_block((output,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            return self._take_slot_call_root(output)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_native_func_value(
         self,
         orig_name: str,
@@ -2552,22 +2626,16 @@ class UserFunctionLoweringMixin:
         else:
             # ``<lambda>`` is not a valid symbol suffix for ``.pyattr.*``.
             display_name_ptr = self._pooled_cstr_ptr(display_name, ".pyfunc.name")
+        metadata_root = self._new_slot_call_root("function.metadata.result")
         fn_obj = self.builder.call(
             self.runtime["py_func_new_named"],
             [adapter, wrapped_captures, display_name_ptr],
             name=self._fresh(f"{orig_name}.func"),
         )
+        fn_obj = self._finish_native_callable_metadata(
+            metadata_root, fn_obj, qualname or display_name, fd.span,
+        )
         emit_function_auto_park_role(self, fd, fn_obj)
-        if qualname and qualname != display_name:
-            self.builder.call(
-                self.runtime["py_obj_setattr"],
-                [
-                    fn_obj,
-                    self._attr_name_ptr("__qualname__"),
-                    self._emit_str_literal(qualname),
-                ],
-            )
-            self._emit_post_call_err_check(fd.span)
         if (
             fd.body
             and isinstance(fd.body[0], ExprStmt)

@@ -24,13 +24,39 @@ from pcc.driver.paths import resolve_pcc_dir_from_environment
 IDENTIFIER_RE = re.compile(r"[a-zA-Z_]\w*")
 _CPP_TOKEN_RE = re.compile(
     r'''(?:u8|u|U|L)?"(?:\\.|[^"\\])*"|(?:u|U|L)?'(?:\\.|[^'\\])*'|'''
-    r"[A-Za-z_]\w*|(?:\d|\.\d)[\w.]*(?:[eEpP][+-][\w.]*)?|##|\S",
+    r"[A-Za-z_]\w*|(?:\d|\.\d)(?:[eEpP][+-]|[\w.])*|"
+    r"%:%:|>>=|<<=|\.\.\.|->|\+\+|--|<<|>>|<=|>=|==|!=|&&|\|\||"
+    r"\*=|/=|%=|\+=|-=|&=|\^=|\|=|##|<:|:>|<%|%>|%:|\S",
 )
 
 
-def _source_lines(source):
+class _SourceLine:
+    __slots__ = ("text", "physical_line")
+
+    def __init__(self, text, physical_line):
+        self.text = text
+        self.physical_line = physical_line
+
+
+def _source_line_records(source):
     """Translation-phase splicing and comments, preserving literal contents."""
-    source = source.replace("\\\r\n", "").replace("\\\n", "")
+    source = source.replace("\r\n", "\n").replace("\r", "\n")
+    spliced = []
+    physical_lines = [1]
+    physical_line = 1
+    index = 0
+    while index < len(source):
+        if source.startswith("\\\r\n", index) or source.startswith("\\\n", index):
+            index += 3 if source.startswith("\\\r\n", index) else 2
+            physical_line += 1
+            continue
+        char = source[index]
+        spliced.append(char)
+        if char == "\n":
+            physical_line += 1
+            physical_lines.append(physical_line)
+        index += 1
+    source = "".join(spliced)
     pieces = []
     i = 0
     while i < len(source):
@@ -60,7 +86,17 @@ def _source_lines(source):
         else:
             pieces.append(ch)
             i += 1
-    return "".join(pieces).splitlines()
+    lines = "".join(pieces).split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return [_SourceLine(text, physical_lines[index])
+            for index, text in enumerate(lines)]
+
+
+def _source_lines(source):
+    """Keep the string-list utility contract used by native compiler tests."""
+    return [line.text for line in _source_line_records(source)]
+
 
 # System headers silently ignored (libc functions auto-declared from LIBC_FUNCTIONS)
 SYSTEM_HEADERS = {
@@ -155,6 +191,10 @@ class _CppExprError(Exception):
     """Raised by ``_eval_cpp_expr`` when a ``#if`` expression is
     malformed or contains a construct beyond the narrow subset we
     recognize."""
+
+
+class _IncompleteMacroInvocation(RuntimeError):
+    """More physical source lines may complete a function-like invocation."""
 
 
 def _eval_cpp_expr(src: str) -> int:
@@ -415,18 +455,49 @@ class _CppExprParser:
 class Macro:
     """Represents a #define macro (object-like or function-like)."""
 
-    __slots__ = ("name", "params", "body", "is_function", "_pattern")
+    __slots__ = (
+        "name", "params", "body", "is_function", "variadic_parameter", "_pattern",
+    )
 
     def __init__(self, name, body, params=None):
         self.name = name
         self.body = body
         self.params = params  # None for object-like, list for function-like
+        self.variadic_parameter = None
+        if params:
+            if params[-1] == "...":
+                self.variadic_parameter = "__VA_ARGS__"
+            else:
+                named_variadic = re.fullmatch(r"([A-Za-z_]\w*)\s*\.\.\.", params[-1])
+                if named_variadic:
+                    self.variadic_parameter = named_variadic.group(1)
+                    self.params = params[:-1] + ["..."]
         self.is_function = params is not None
         self._pattern = (
             re.compile(r"\b" + re.escape(name) + r"\b")
             if not self.is_function
             else None
         )
+
+
+class _MacroToken:
+    """A preprocessing token and the macros unavailable on its rescan."""
+
+    __slots__ = ("leading", "text", "hide_set")
+
+    def __init__(self, leading, text, hide_set=None):
+        self.leading = leading
+        self.text = text
+        self.hide_set = frozenset() if hide_set is None else hide_set
+
+
+class _MacroReplacement:
+    __slots__ = ("tokens", "parameter", "paste")
+
+    def __init__(self, tokens, parameter=None, paste=False):
+        self.tokens = tokens
+        self.parameter = parameter
+        self.paste = paste
 
 
 class Preprocessor:
@@ -442,9 +513,11 @@ class Preprocessor:
         self._expand_cache = {}
         self._identifier_cache = {}
         self.once_files = set()
+        self._macro_stacks = {}
         self._include_depth = 0
         self._line_no = 0
         self._file = "<string>"
+        self._physical_file = "<string>"
 
         # Language/platform predefines only. Library names and typedefs come
         # from headers, so an undeclared name cannot acquire a fake definition.
@@ -460,6 +533,14 @@ class Preprocessor:
         # rely on them; ``__GNUC__`` stays undefined so headers keep their
         # portable branches.
         predefines.update({
+            # GCC-compatible builtin memory-order constants, also consumed by
+            # the owned stdatomic.h. These encode language operations, not ABI.
+            "__ATOMIC_RELAXED": "0",
+            "__ATOMIC_CONSUME": "1",
+            "__ATOMIC_ACQUIRE": "2",
+            "__ATOMIC_RELEASE": "3",
+            "__ATOMIC_ACQ_REL": "4",
+            "__ATOMIC_SEQ_CST": "5",
             "__CHAR_BIT__": "8",
             "__SCHAR_MAX__": "127",
             "__SHRT_MAX__": "32767",
@@ -668,7 +749,7 @@ class Preprocessor:
         prefix = []
         for filename in self.forced_includes:
             self._include('"' + filename + '"', prefix, self.base_dir)
-        prefix.append(self._process_lines(_source_lines(source), self.base_dir))
+        prefix.append(self._process_lines(_source_line_records(source), self.base_dir))
         return "\n".join(prefix)
 
     def _include(self, spelling, output, base_dir):
@@ -696,12 +777,15 @@ class Preprocessor:
         with open(filepath, "r", encoding="utf-8", errors="surrogateescape") as stream:
             source = stream.read()
         old_file, old_line = self._file, self._line_no
+        old_physical_file = self._physical_file
         self._file = filepath
+        self._physical_file = filepath
         self._include_depth += 1
         try:
-            output.append(self._process_lines(_source_lines(source), os.path.dirname(filepath)))
+            output.append(self._process_lines(_source_line_records(source), os.path.dirname(filepath)))
         finally:
             self._file, self._line_no = old_file, old_line
+            self._physical_file = old_physical_file
             self._include_depth -= 1
 
     def _invalidate_expand_cache(self):
@@ -711,16 +795,20 @@ class Preprocessor:
         output = []
         i = 0
         skip_stack = []  # stack of (skipping: bool, branch_taken: bool)
+        line_offset = 0
 
         while i < len(lines):
-            self._line_no = i + 1
-            line = lines[i]
+            self._line_no = lines[i].physical_line + line_offset
+            # A function argument may expand an alias of __LINE__/__FILE__.
+            # Do not reuse its prescanned numeric/string result on another line.
+            self._invalidate_expand_cache()
+            line = lines[i].text
             stripped = line.strip()
 
             # Line continuation
             while stripped.endswith("\\") and i + 1 < len(lines):
                 i += 1
-                next_line = lines[i].strip()
+                next_line = lines[i].text.strip()
                 stripped = stripped[:-1] + " " + next_line
                 line = stripped
 
@@ -731,9 +819,13 @@ class Preprocessor:
                 parts = directive.split(None, 1)
                 if len(parts) == 2:
                     directive = parts[0] + " " + parts[1]
-                self._handle_directive(
+                next_line_number = self._handle_directive(
                     directive, output, skip_stack, skipping, base_dir
                 )
+                if next_line_number is not None:
+                    next_physical = (lines[i + 1].physical_line if i + 1 < len(lines)
+                                     else lines[i].physical_line + 1)
+                    line_offset = next_line_number - next_physical
                 i += 1
                 continue
 
@@ -741,8 +833,29 @@ class Preprocessor:
                 i += 1
                 continue
 
-            # Apply macro expansion
-            processed = self._expand_line(line)
+            # Newlines are whitespace inside an ordinary macro invocation.
+            # Retry only incomplete calls, without consuming a directive as an
+            # argument or weakening the diagnostic for a genuinely open call.
+            while True:
+                try:
+                    processed = self._expand_line(line)
+                except _IncompleteMacroInvocation:
+                    if i + 1 >= len(lines) or lines[i + 1].text.lstrip().startswith("#"):
+                        raise
+                else:
+                    tokens = _CPP_TOKEN_RE.findall(processed)
+                    tail = self.macros.get(tokens[-1]) if tokens else None
+                    following = i + 1
+                    while following < len(lines) and not lines[following].text.strip():
+                        following += 1
+                    if not (
+                        tail is not None and tail.is_function
+                        and following < len(lines)
+                        and lines[following].text.lstrip().startswith("(")
+                    ):
+                        break
+                i += 1
+                line += "\n" + lines[i].text
             output.append(processed)
             i += 1
 
@@ -855,13 +968,38 @@ class Preprocessor:
             self._invalidate_expand_cache()
             return
 
-        # ``#line N "file"`` and the GNU ``# N "file"`` linemarker only
-        # relabel diagnostics; the owned output carries no line map.
-        if re.match(r"line\b", directive) or re.match(r"\d+(\s|$)", directive):
+        line_directive = re.match(r"line\b(.*)", directive)
+        if line_directive or re.match(r"\d+(\s|$)", directive):
+            spelling = (self._expand_line(line_directive.group(1)).strip()
+                        if line_directive else directive)
+            marker = re.fullmatch(r'(\d+)(?:\s+("(?:\\.|[^"\\])*"))?(.*)', spelling)
+            if marker is None or (line_directive and marker.group(3).strip()):
+                raise RuntimeError("malformed line directive: #" + directive)
+            if not line_directive and not re.fullmatch(r"(?:\s+[1-4])*\s*", marker.group(3)):
+                raise RuntimeError("malformed linemarker: #" + directive)
+            if marker.group(2):
+                # Filename escapes quote/backslash exactly as __FILE__ emits.
+                self._file = re.sub(r'\\([\\"])', r'\1', marker.group(2)[1:-1])
+            self._invalidate_expand_cache()
+            return int(marker.group(1))
+
+        stack_pragma = re.fullmatch(r'pragma\s+(push_macro|pop_macro)\s*\(\s*"([A-Za-z_]\w*)"\s*\)', directive)
+        if stack_pragma:
+            operation, name = stack_pragma.groups()
+            stack = self._macro_stacks.setdefault(name, [])
+            if operation == "push_macro":
+                stack.append(self.macros.get(name))
+            elif stack:
+                saved = stack.pop()
+                if saved is None:
+                    self.macros.pop(name, None)
+                else:
+                    self.macros[name] = saved
+                self._invalidate_expand_cache()
             return
 
         if directive == "pragma once":
-            self.once_files.add(self._file)
+            self.once_files.add(self._physical_file)
         elif directive.startswith("error"):
             raise RuntimeError("owned preprocessor: #" + directive)
         elif directive.startswith("warning"):
@@ -901,177 +1039,244 @@ class Preprocessor:
                 f"owned preprocessor: failed to evaluate #if expression: {expanded!r} ({exc})"
             ) from exc
 
-    def _expand_line(self, line):
-        """Expand all macros in a line, handling both object and function macros."""
-        prev = None
-        iterations = 0
-        while line != prev and iterations < 30:
-            prev = line
-            line = self._expand_once(line)
-            iterations += 1
-        if line != prev:
-            raise RuntimeError("owned preprocessor: macro expansion did not converge")
-        return line
+    @staticmethod
+    def _macro_tokens(text):
+        tokens = []
+        end = 0
+        for match in _CPP_TOKEN_RE.finditer(text):
+            tokens.append(_MacroToken(text[end:match.start()], match.group()))
+            end = match.end()
+        return tokens
 
-    def _expand_once(self, line):
-        """One pass of macro expansion — optimized."""
-        original_line = line
-        dynamic = "__LINE__" in line or "__FILE__" in line
-        cached = None if dynamic else self._expand_cache.get(line)
+    @staticmethod
+    def _copy_macro_tokens(tokens, leading=None, hide_set=None):
+        copied = []
+        for token in tokens:
+            hidden = token.hide_set
+            if hide_set is not None:
+                hidden = hidden | hide_set
+            copied.append(_MacroToken(token.leading, token.text, hidden))
+        if copied and leading is not None:
+            copied[0].leading = leading
+        return copied
+
+    def _expand_line(self, line):
+        """Rescan tokens once, retaining macro-disable state on replacements.
+
+        A string fixed point loses this state: a macro which calls a function
+        of its own name then expands forever. Argument prescan and ## also
+        have to preserve unavailable tokens, so neither a global disabled set
+        nor caching intermediate strings implements the C rescan rules.
+        """
+        cached = self._expand_cache.get(line)
         if cached is not None:
             return cached
+        tokens = self._expand_tokens(self._macro_tokens(line))
+        trailing = line[len(line.rstrip()):]
+        result = self._serialize_macro_fragments(
+            [token.leading + token.text for token in tokens] + [trailing]
+        )
+        self._expand_cache[line] = result
+        return result
 
-        pieces = []
-        pos = 0
-        for token in _CPP_TOKEN_RE.finditer(line):
-            if token.start() < pos:
-                continue
-            name = token.group()
+    def _expand_tokens(self, tokens):
+        tokens = list(tokens)
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            name = token.text
             macro = self.macros.get(name)
-            end = token.end()
+            end = index + 1
             if name == "__LINE__":
-                body = str(self._line_no)
+                replacement = [_MacroToken("", str(self._line_no))]
+                hidden = token.hide_set
             elif name == "__FILE__":
-                body = '"' + self._file.replace("\\", "\\\\").replace('"', '\\"') + '"'
-            elif macro is None:
+                spelling = '"' + self._file.replace("\\", "\\\\").replace('"', '\\"') + '"'
+                replacement = [_MacroToken("", spelling)]
+                hidden = token.hide_set
+            elif macro is None or name in token.hide_set:
+                index += 1
                 continue
             elif not macro.is_function:
-                body = macro.body
+                replacement = self._substitute_params(macro, [])
+                hidden = token.hide_set | {name}
             else:
-                opening = end
-                while opening < len(line) and line[opening].isspace():
-                    opening += 1
-                if opening == len(line) or line[opening] != "(":
+                if end == len(tokens) or tokens[end].text != "(":
+                    index += 1
                     continue
-                args, end = self._find_macro_args(line, opening + 1)
-                if args is None:
-                    raise RuntimeError("unterminated macro invocation: " + name)
-                body = self._substitute_params(macro, args)
-            pieces.append(line[pos:token.start()])
-            pieces.append(body)
-            pos = end
-        pieces.append(line[pos:])
-        line = "".join(pieces)
-        if not dynamic:
-            self._expand_cache[original_line] = line
-        return line
+                args, end = self._macro_arguments(tokens, end + 1, name)
+                # Only disable macros common to both ends of the invocation.
+                # An alias can provide the name while the original source
+                # provides its parentheses, or vice versa.
+                hidden = (token.hide_set & tokens[end - 1].hide_set) | {name}
+                replacement = self._substitute_params(macro, args)
+            replacement = self._copy_macro_tokens(
+                replacement, leading=token.leading, hide_set=hidden,
+            )
+            if not replacement and end < len(tokens):
+                following = tokens[end]
+                tokens[end] = _MacroToken(
+                    token.leading + following.leading,
+                    following.text, following.hide_set,
+                )
+            tokens[index:end] = replacement
+            # Rescan the replacement together with the unconsumed input. This
+            # permits an expanded alias to meet a following argument list.
+        return tokens
 
-    def _expand_func_macro(self, line, macro):
-        """Expand function-like macro invocations in line."""
-        result = []
-        pos = 0
-        while pos < len(line):
-            match = self._find_func_macro_call(line, macro.name, pos)
-            if match is None:
-                result.append(line[pos:])
-                break
-            start, args_start = match
-            result.append(line[pos:start])
-            args, end = self._find_macro_args(line, args_start)
-            if args is not None:
-                expanded = self._substitute_params(macro, args)
-                result.append(expanded)
-                pos = end
-            else:
-                result.append(line[pos:args_start])
-                pos = args_start
-        return "".join(result)
-
-    def _find_func_macro_call(self, line, name, start):
-        """Find the next function-like macro invocation using string scanning."""
-        name_len = len(name)
-        pos = start
-
-        while True:
-            idx = line.find(name, pos)
-            if idx == -1:
-                return None
-
-            # The match must start at an identifier boundary.
-            if idx > 0:
-                prev = line[idx - 1]
-                if prev == "_" or prev.isalnum():
-                    pos = idx + name_len
-                    continue
-
-            arg_pos = idx + name_len
-            while arg_pos < len(line) and line[arg_pos].isspace():
-                arg_pos += 1
-
-            if arg_pos < len(line) and line[arg_pos] == "(":
-                return idx, arg_pos + 1
-
-            pos = idx + name_len
-
-    def _find_macro_args(self, line, start):
-        """Find comma-separated arguments within balanced parentheses.
-        Returns (list_of_args, end_position) or (None, 0)."""
-        depth = 1
-        pos = start
+    def _macro_arguments(self, tokens, start, name):
         args = []
-        arg_start = start
-
-        while pos < len(line) and depth > 0:
-            c = line[pos]
-            if c == "(":
+        depth = 1
+        argument_start = start
+        index = start
+        while index < len(tokens):
+            spelling = tokens[index].text
+            if spelling == "(":
                 depth += 1
-            elif c == ")":
+            elif spelling == ")":
                 depth -= 1
                 if depth == 0:
-                    args.append(line[arg_start:pos].strip())
-                    return args, pos + 1
-            elif c == "," and depth == 1:
-                args.append(line[arg_start:pos].strip())
-                arg_start = pos + 1
-            elif c == '"':
-                # Skip string literal
-                pos += 1
-                while pos < len(line) and line[pos] != '"':
-                    if line[pos] == "\\":
-                        pos += 1
-                    pos += 1
-            elif c == "'":
-                pos += 1
-                while pos < len(line) and line[pos] != "'":
-                    if line[pos] == "\\":
-                        pos += 1
-                    pos += 1
-            pos += 1
+                    args.append(self._copy_macro_tokens(
+                        tokens[argument_start:index], leading="",
+                    ))
+                    return args, index + 1
+            elif spelling == "," and depth == 1:
+                args.append(self._copy_macro_tokens(
+                    tokens[argument_start:index], leading="",
+                ))
+                argument_start = index + 1
+            index += 1
+        raise _IncompleteMacroInvocation("unterminated macro invocation: " + name)
 
-        return None, 0
+    @staticmethod
+    def _serialize_macro_fragments(fragments):
+        """Keep token boundaries unless ## explicitly made one token.
+
+        Substitution can put separately produced tokens next to each other.
+        Relexing their concatenation must not invent an operator, identifier,
+        pp-number, literal prefix, or comment.
+        """
+        pieces = []
+        previous = ""
+        separated = True
+        for fragment in fragments:
+            end = 0
+            for token in _CPP_TOKEN_RE.finditer(fragment):
+                leading = fragment[end:token.start()]
+                spelling = token.group()
+                if leading:
+                    pieces.append(leading)
+                    separated = True
+                if previous and not separated and (
+                    _CPP_TOKEN_RE.findall(previous + spelling) != [previous, spelling]
+                    or (previous == "/" and spelling in ("/", "*"))
+                    or (previous == "." and spelling == ".")
+                ):
+                    pieces.append(" ")
+                pieces.append(spelling)
+                previous = spelling
+                separated = False
+                end = token.end()
+            trailing = fragment[end:]
+            if trailing:
+                pieces.append(trailing)
+                separated = True
+        return "".join(pieces)
+
+    @staticmethod
+    def _stringify_argument(argument):
+        pieces = []
+        end = 0
+        for token in _CPP_TOKEN_RE.finditer(argument):
+            if pieces and argument[end:token.start()]:
+                pieces.append(" ")
+            pieces.append(token.group())
+            end = token.end()
+        spelling = "".join(pieces).replace("\\", "\\\\").replace('"', '\\"')
+        return '"' + spelling + '"'
 
     def _substitute_params(self, macro, args):
-        """Replace parameter names with arguments in macro body."""
-        body = macro.body
-        if not macro.params:
-            return body
-        # Handle __VA_ARGS__
-        if macro.params[-1] == "...":
-            regular = macro.params[:-1]
-            va_args = (
-                ", ".join(args[len(regular) :]) if len(args) > len(regular) else ""
-            )
-            for i, param in enumerate(regular):
-                if i < len(args):
-                    arg = args[i]
-                    body = re.sub(
-                        r"\b" + re.escape(param) + r"\b",
-                        lambda _m, arg=arg: arg,
-                        body,
-                    )
-            body = body.replace("__VA_ARGS__", va_args)
-        else:
-            for i, param in enumerate(macro.params):
-                if i < len(args):
-                    arg = args[i]
-                    body = re.sub(
-                        r"\b" + re.escape(param) + r"\b",
-                        lambda _m, arg=arg: arg,
-                        body,
-                    )
-        # Handle ## token pasting
-        body = re.sub(r"\s*##\s*", "", body)
-        return body
+        """Prescan ordinary arguments, stringify raw tokens, and then paste."""
+        variadic = macro.variadic_parameter is not None
+        parameters = macro.params[:-1] if variadic else (macro.params or [])
+        if not parameters and len(args) == 1 and not args[0]:
+            args = []
+        if len(args) < len(parameters) or (not variadic and len(args) != len(parameters)):
+            raise RuntimeError("wrong number of arguments for macro: " + macro.name)
+        raw = {name: args[index] for index, name in enumerate(parameters)}
+        if variadic:
+            varargs = []
+            for offset, argument in enumerate(args[len(parameters):]):
+                if offset:
+                    varargs.append(_MacroToken("", ","))
+                varargs.extend(self._copy_macro_tokens(
+                    argument, leading=" " if offset else "",
+                ))
+            raw[macro.variadic_parameter] = varargs
+        missing_variadic = variadic and len(args) <= len(parameters)
+        expanded = {}
+        body = self._macro_tokens(macro.body)
+        records = []
+        index = 0
+        while index < len(body):
+            token = body[index]
+            spelling = token.text
+            parameter = spelling if spelling in raw else None
+            paste = spelling == "##"
+            if spelling == "#" and index + 1 < len(body) and body[index + 1].text in raw:
+                index += 1
+                argument = self._serialize_macro_fragments(
+                    [part.leading + part.text for part in raw[body[index].text]]
+                )
+                replacement = [_MacroToken(token.leading, self._stringify_argument(argument))]
+            elif parameter is not None:
+                pasted = ((index > 0 and body[index - 1].text == "##")
+                          or (index + 1 < len(body) and body[index + 1].text == "##"))
+                if pasted:
+                    replacement = raw[parameter]
+                else:
+                    if parameter not in expanded:
+                        expanded[parameter] = self._expand_tokens(raw[parameter])
+                    replacement = expanded[parameter]
+                replacement = self._copy_macro_tokens(replacement, leading=token.leading)
+            else:
+                replacement = [token]
+            records.append(_MacroReplacement(replacement, parameter, paste))
+            index += 1
+
+        pasted = []
+        index = 0
+        while index < len(records):
+            record = records[index]
+            if record.paste:
+                if not pasted or index + 1 >= len(records) or records[index + 1].paste:
+                    raise RuntimeError("token paste at macro replacement boundary: " + macro.name)
+                left = pasted.pop()
+                right = records[index + 1]
+                left_tokens = left.tokens
+                right_tokens = right.tokens
+                if (variadic and len(left_tokens) == 1 and left_tokens[0].text == ","
+                        and right.parameter == macro.variadic_parameter):
+                    replacement = [] if missing_variadic else left_tokens + right_tokens
+                elif not left_tokens:
+                    replacement = right_tokens
+                elif not right_tokens:
+                    replacement = left_tokens
+                else:
+                    last = left_tokens[-1]
+                    first = right_tokens[0]
+                    joined = last.text + first.text
+                    if _CPP_TOKEN_RE.findall(joined) != [joined]:
+                        raise RuntimeError("invalid token paste in macro: " + macro.name)
+                    replacement = left_tokens[:-1] + [_MacroToken(
+                        last.leading, joined, last.hide_set & first.hide_set,
+                    )] + right_tokens[1:]
+                pasted.append(_MacroReplacement(replacement))
+                index += 2
+            else:
+                pasted.append(record)
+                index += 1
+        return [token for record in pasted for token in record.tokens]
 
 
 def preprocess(source, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None):

@@ -8,7 +8,34 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BinOp, BoolLit, BoolType, ByteArrayType, BytesType, Call, ClassType, ComplexType, DictType, DynType, Expr, FloatType, IntLit, IntType, ListType, MemoryViewType, Name, NoneType, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType, Type
+from pcc.frontends.python.py_ast import (
+    Attr,
+    BinOp,
+    BoolLit,
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    Call,
+    ClassType,
+    ComplexType,
+    DictType,
+    DynType,
+    Expr,
+    FloatType,
+    IntLit,
+    IntType,
+    ListType,
+    MemoryViewType,
+    Name,
+    NoneType,
+    SetType,
+    StrLit,
+    StrType,
+    Subscript,
+    TupleExpr,
+    TupleType,
+    Type,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_STR
 from pcc.frontends.python.codegen.errors import L1CodegenError
@@ -539,7 +566,9 @@ class MethodCallExpressionLoweringMixin:
             if binding_owner is not None and not binding_owner.valueclass:
                 kind = binding_owner.method_kinds.get(attr.name, "instance")
                 bound_receiver = kind == "classmethod" or kind != "static" and class_object is None
-                if self._ordinary_call_needs_runtime_binding(expr, binding_fd, bound_receiver):
+                if self._ordinary_call_needs_runtime_binding(
+                    expr, binding_fd, bound_receiver, self._slot_call_result_sink(expr) is not None,
+                ):
                     binding_fn = binding_owner.methods.get(attr.name)
                     if binding_fn is not None:
                         return self._emit_runtime_bound_user_call(

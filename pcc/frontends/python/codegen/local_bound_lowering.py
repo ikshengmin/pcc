@@ -1,7 +1,20 @@
 """Lexical boundness, separate from value representation and reference ownership."""
 
 from pcc.ir.compat import ir
-from pcc.frontends.python.py_ast import RawPointerType, Assign, Call, ClassDef, DynType, FuncDef, Import, ImportFrom, Lambda, Name, TupleExpr, ListExpr
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    Assign,
+    Call,
+    ClassDef,
+    DynType,
+    FuncDef,
+    Import,
+    ImportFrom,
+    Lambda,
+    Name,
+    TupleExpr,
+    ListExpr,
+)
 from pcc.frontends.python.codegen.exact_int_lowering import _collect_local_binding_types
 from pcc.frontends.python.codegen.hoist_boxing import function_local_bindings
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value

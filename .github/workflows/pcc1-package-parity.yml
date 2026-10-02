@@ -107,7 +107,7 @@ jobs:
 
   pcc1-package-parity:
     name: macOS arm64 native pcc1 and installed wheel
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       PCC_REQUIRE_CURRENT_PCC1: "1"
@@ -116,7 +116,7 @@ jobs:
       PCC_BOOTSTRAP_RUNTIME_CC: "pcc"
       PCC_BOOTSTRAP_RUNTIME_HIGH: "py"
       PCC_BOOTSTRAP_PYTHON_LIBPYTHON: "off"
-      # macos-14 runners have 7 GB of RAM. The Darwin preflight requires
+      # macos-15 runners have 7 GB of RAM. The Darwin preflight requires
       # reclaimable memory >= tree cap + host reserve, and the reserve defaults
       # to 8 GiB for development machines, so it can never pass here. Stage1
       # with two frontend workers peaks near 2.1 GB.

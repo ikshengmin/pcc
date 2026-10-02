@@ -134,10 +134,9 @@ pcc1 app.py -o app
 ./app
 ```
 
-The current local installation is the **v84 historical baseline**, with
-matching successful Stage1/Stage2 receipts and a freshly executed installed
-canary; see the [installation receipt](docs/knowledge/2026-09-06-release-0.1.8-handoff.md).
-It is not the 0.1.8 release candidate. Initial installation is reproducible with
+The September 6 installation receipt records the **v84 historical baseline**,
+not the 0.1.8 release candidate. It does not establish today's installed compiler.
+See [current status and historical receipt recovery](docs/status.md). Initial installation is reproducible with
 `scripts/install_pcc1_toolchain.py`; initial installation refuses to replace an
 existing entry. Use `--stage-only` to prepare a later candidate. The same tool's
 `--qualify`, `--promote` and `--rollback` commands bind validation receipts to a

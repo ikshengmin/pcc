@@ -1,6 +1,26 @@
 from __future__ import annotations
 
-from pcc.frontends.python.py_ast import RawPointerType, BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, DynType, FloatType, FuncType, IntType, ListType, MemoryViewType, NoneType, SetType, StrType, TupleType, Type, ValueClassType
+from pcc.frontends.python.py_ast import (
+    RawPointerType,
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    ClassType,
+    ComplexType,
+    DictType,
+    DynType,
+    FloatType,
+    FuncType,
+    IntType,
+    ListType,
+    MemoryViewType,
+    NoneType,
+    SetType,
+    StrType,
+    TupleType,
+    Type,
+    ValueClassType,
+)
 
 
 def _is_value_class_type(ty) -> bool:
