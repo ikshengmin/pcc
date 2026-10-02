@@ -30,6 +30,7 @@ from pcc.tools.runtime_archive_provenance import (
     manifest_path_for_archive,
     verify_runtime_archive_manifest,
 )
+from tests.native_provisioning import require_native_provisioning_allowed
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -249,6 +250,7 @@ def cache_runtime_build(
         )
         if key in cache:
             return cache[key]
+        require_native_provisioning_allowed()
         artifact = builder(tmp_path, *args, **kwargs)
         cache[key] = artifact
         return artifact
@@ -375,6 +377,7 @@ def _cached_pcc_python_runtime(
                 key=key,
             ):
                 return runtime
+            require_native_provisioning_allowed()
             if runtime.exists():
                 shutil.rmtree(runtime)
             staging_root = Path(tempfile.mkdtemp(prefix=key + ".", dir=str(cache_root)))

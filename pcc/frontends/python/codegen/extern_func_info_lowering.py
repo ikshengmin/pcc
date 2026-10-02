@@ -97,6 +97,8 @@ class ExternFuncInfoLoweringMixin:
             body=(),
             decorators=(),
             is_async=bool(info.get("is_async", False)),
+            has_return_annotation=bool(info.get("has_return_annotation", False)),
+            manual_pointer_abi=bool(info.get("manual_pointer_abi", False)),
         )
 
     def _find_user_funcdef(self, name: str) -> FuncDef:

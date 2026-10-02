@@ -27,6 +27,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_is_sweep_candidate",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_is_address_pinned",
     "pcc_gc_backend0_is_unreachable",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_visit_object_slots",

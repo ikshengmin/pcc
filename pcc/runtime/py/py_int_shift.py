@@ -2,12 +2,14 @@
 
 __pcc_runtime_port__ = True
 
-from pcc.extern import extern, c_abi_export, c_int64, c_ptr
+from pcc.extern import extern, c_abi_export, c_int64, c_ptr, c_void
 from pcc.runtime.py.py_abi_constants import PYINTOBJECT_DIGITS_OFFSET, PYINTOBJECT_NDIGITS_OFFSET, PYINTOBJECT_SIGN_OFFSET
 from pcc.unsafe import (
+    cstr,
     free,
     load_i32,
     logical_shift_left_i64,
+    null,
     ptr_is_null,
     store_i32,
 )
@@ -15,6 +17,8 @@ from pcc.unsafe import (
 
 py_bigint_alloc = extern("py_bigint_alloc", (c_int64,), c_ptr)
 py_bigint_from_i64 = extern("py_bigint_from_i64", (c_int64,), c_ptr)
+py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
+py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 
 
 def _load_u32(obj, offset: int) -> int:
@@ -80,6 +84,16 @@ def py_bigint_shl(a, bits: int):
     nd: int = bits // 32
     nb: int = bits % 32
     src_len: int = load_i32(a, PYINTOBJECT_NDIGITS_OFFSET)
+    # ndigits is stored in a signed i32. Check capacity before addition,
+    # allocation, or store_i32 can wrap it into an invalid object layout.
+    # This is PCC allocation inability, not Python's enormous-count overflow;
+    # the public shift entry classifies the latter before entering this kernel.
+    extra: int = 0
+    if nb != 0:
+        extra = 1
+    if nd > 2147483647 - src_len - extra:
+        py_raise_owned(py_exc_new(19, cstr("")))
+        return null()
     if nb == 0:
         r = py_bigint_alloc(src_len + nd)
         if ptr_is_null(r):

@@ -262,7 +262,7 @@ class _Lifter:
         ann_type: Optional[pa.Type] = None
         if s.annotation is not None and s.annotation != "walrus":
             ann_type = _lift_type(s.annotation)
-        return pa.Assign(self._span(s.line), (target,), value, ann_type)
+        return pa.Assign(self._span(s.line), (target,), value, ann_type, s.has_value)
 
     def _s_AugAssign(self, s: pp._AugAssign) -> pa.AugAssign:
         return pa.AugAssign(
@@ -317,6 +317,7 @@ class _Lifter:
             decos,
             False,
             bool(getattr(s, "is_async", False)),
+            s.returns is not None,
         )
 
     def _lift_arg(self, param) -> pa.Arg:
@@ -937,7 +938,10 @@ class _Lifter:
         args = tuple(arg_list)
         span = self._span(e.line)
         list_literal = pa.ListExpr(span, _DYN, args)
-        return pa.Call(span, _DYN, pa.Name(span, _DYN, "set"), (list_literal,), ())
+        return pa.Call(
+            span, _DYN, pa.Name(span, _DYN, "set"), (list_literal,), (),
+            is_set_literal=True,
+        )
 
     def _e_Ternary(self, e: pp._Ternary) -> pa.IfExpr:
         return pa.IfExpr(
@@ -1091,17 +1095,22 @@ def _lift_type(node) -> pa.Type:
     if isinstance(node, pp._None):
         return pa.NoneType("None")
     if isinstance(node, pp._Attr):
-        # e.g. ``pcc.IntType`` — resolve the tail token only. If the
-        # tail name isn't in the builtin map, emit a ``ClassType`` shell
-        # so ``resolve_type_refs`` can rebind it against the local +
-        # cross-module ``class_types`` table during type inference.
-        # Unknown names that never get registered fall back to DynType
-        # via ``resolve_type_refs`` returning the unresolved shell as-is.
+        # Builtin projections keep their established tail-name behavior.
+        # Unknown nominal types preserve the qualifier for import resolution;
+        # dropping it conflates an imported marker with an unrelated class.
         attr_name = _node_attr_name(node)
         ty = _lookup_type_name(attr_name)
         if ty is not None:
             return ty
-        return _class_type(attr_name)
+        parts = [attr_name]
+        owner = node.obj
+        while isinstance(owner, pp._Attr):
+            parts.insert(0, _node_attr_name(owner))
+            owner = owner.obj
+        if isinstance(owner, pp._Name):
+            parts.insert(0, _node_ident(owner))
+            return pa.ClassType(parts[-1], ".".join(parts[:-1]), (), ())
+        return _DYN
     if isinstance(node, pp._Subscript):
         base = node.obj
         base_name = ""

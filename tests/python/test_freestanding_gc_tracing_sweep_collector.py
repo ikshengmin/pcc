@@ -25,6 +25,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_sweep_unreachable",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_is_address_pinned",
     "pcc_capi_dealloc_cext_object",
     "pcc_capi_is_cext_type_tag",
     "pcc_gc_drain_all_gray_unlocked",
@@ -142,7 +143,7 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
     assert sweep.index("pcc_gc_tracing_clear_unreachable(obj)") < sweep.index(
         "pcc_gc_tracing_finalize_unreachable(obj)"
     )
-    assert "(flags & (64 | 16384)) == 0" in sweep
+    assert "(flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0" in sweep
     assert "pcc_capi_is_cext_type_tag(tag) == 0" in sweep
 
     finalize = strict.split(

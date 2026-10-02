@@ -1,7 +1,7 @@
 """Raw object-node pool, object list, and Backend 3 young worklist."""
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int64, c_ptr, extern
+from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     free,
     global_addr,
@@ -23,6 +23,11 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+# Internal object-node tail: i64 foreign-address lease count at byte 80.
+# This is not a PyObjectHeader field. Live promotion state never resets it.
 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_node_is_active = extern(
@@ -192,16 +197,24 @@ def pcc_gc_object_node_alloc() -> c_ptr:
         count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
         if count > 0:
             store_i32(global_addr("pcc_gc_object_node_free_count"), 0, count - 1)
+        if load_i64(head, 80) != 0:
+            pcc_platform_abort()
+            return null()
         _clear_promotion_state(head)
         return head
-    node = malloc(80)
+    node = malloc(88)
+    if ptr_is_null(node) == 0:
+        store_i64(node, 80, 0)
     _clear_promotion_state(node)
     return node
 
 
 @c_abi_export("pcc_gc_object_node_prepare")
 def pcc_gc_object_node_prepare() -> c_ptr:
-    return malloc(80)
+    node = malloc(88)
+    if ptr_is_null(node) == 0:
+        store_i64(node, 80, 0)
+    return node
 
 
 @c_abi_export("pcc_gc_object_node_plan_requires_prepare")
@@ -221,10 +234,16 @@ def pcc_gc_object_node_take_prepared(prepared_io: c_ptr) -> c_ptr:
         count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
         if count > 0:
             store_i32(global_addr("pcc_gc_object_node_free_count"), 0, count - 1)
+        if load_i64(head, 80) != 0:
+            pcc_platform_abort()
+            return null()
         _clear_promotion_state(head)
         return head
     node = load_ptr(prepared_io, 0)
     store_ptr(prepared_io, 0, null())
+    if ptr_is_null(node) == 0 and load_i64(node, 80) != 0:
+        pcc_platform_abort()
+        return null()
     _clear_promotion_state(node)
     return node
 
@@ -232,6 +251,9 @@ def pcc_gc_object_node_take_prepared(prepared_io: c_ptr) -> c_ptr:
 @c_abi_export("pcc_gc_object_node_release")
 def pcc_gc_object_node_release(node: c_ptr) -> None:
     if ptr_is_null(node) != 0:
+        return
+    if load_i64(node, 80) != 0:
+        pcc_platform_abort()
         return
     _clear_promotion_state(node)
     count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
@@ -248,6 +270,9 @@ def pcc_gc_object_node_finish_detached(nodes: c_ptr) -> None:
     while ptr_is_null(nodes) == 0:
         node = nodes
         nodes = load_ptr(node, 16)
+        if load_i64(node, 80) != 0:
+            pcc_platform_abort()
+            return
         store_ptr(node, 16, null())
         free(node)
 

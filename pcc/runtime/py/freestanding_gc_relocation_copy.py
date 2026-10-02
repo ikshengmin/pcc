@@ -27,6 +27,9 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+
+
 pcc_gc_alloc = extern(
     "pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr
 )
@@ -128,7 +131,7 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
     if ptr_is_null(relocation_node) != 0:
         return null()
     flags: i64 = load_i32(from_obj, 12)
-    if (flags & (64 | 524288)) != 0:
+    if (flags & 524288) != 0 or pcc_gc_object_is_address_pinned(from_obj) != 0:
         return null()
     tag: i64 = load_i32(from_obj, 8)
     if pcc_gc_backend4_relocate_copy_supported_tag(tag) == 0:
@@ -330,7 +333,7 @@ def pcc_gc_relocate_copy(from_obj, size: i64):
         else:
             flags = load_i32(from_obj, 12)
             tag = load_i32(from_obj, 8)
-            if (flags & (64 | 524288)) != 0:
+            if (flags & 524288) != 0 or pcc_gc_object_is_address_pinned(from_obj) != 0:
                 eligible = 0
             elif pcc_gc_backend4_relocate_copy_supported_tag(tag) == 0:
                 eligible = 0

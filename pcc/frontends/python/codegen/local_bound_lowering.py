@@ -1,7 +1,7 @@
 """Lexical boundness, separate from value representation and reference ownership."""
 
 from pcc.ir.compat import ir
-from pcc.frontends.python.py_ast import Assign, Call, ClassDef, DynType, FuncDef, Import, ImportFrom, Lambda, Name, TupleExpr, ListExpr
+from pcc.frontends.python.py_ast import RawPointerType, Assign, Call, ClassDef, DynType, FuncDef, Import, ImportFrom, Lambda, Name, TupleExpr, ListExpr
 from pcc.frontends.python.codegen.exact_int_lowering import _collect_local_binding_types
 from pcc.frontends.python.codegen.hoist_boxing import function_local_bindings
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value
@@ -86,7 +86,9 @@ def prepare_local_boundness(host, fd) -> None:
         ir_ty = host._local_slot_ir_type(name, ty)
         slot = host._alloca_in_entry(ir_ty, name=name + ".addr", init_null=isinstance(ir_ty, ir.PointerType))
         host.env[name] = (slot, ir_ty, host._local_slot_decl_type(name, ty))
-        if isinstance(ir_ty, ir.PointerType) and host._ir_type_matches(ir_ty, ir.IntType(8).as_pointer()):
+        if (isinstance(ir_ty, ir.PointerType)
+                and not isinstance(ty, RawPointerType)
+                and host._ir_type_matches(ir_ty, ir.IntType(8).as_pointer())):
             host._ensure_owned_local_gc_root(name, slot, ir_ty)
             host._ensure_owned_local_flag(name, slot)
 

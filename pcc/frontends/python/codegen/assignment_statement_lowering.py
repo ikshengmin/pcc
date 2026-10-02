@@ -6,9 +6,10 @@ import sys
 import os
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BinOp, BoolExpr, BoolType, ByteArrayType, BytesType, Call, ClassType, DictExpr, DictType, DynType, Expr, FloatType, FuncType, IfExpr, IntType, ListExpr, ListType, MemoryViewType, Name, NoneType, Slice, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType
+from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BinOp, BoolExpr, BoolType, ByteArrayType, BytesType, Call, ClassType, DictExpr, DictType, DynType, Expr, ExprStmt, FloatType, FuncType, IfExpr, IntType, ListExpr, ListType, MemoryViewType, Name, NoneType, Slice, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.py_ast import assignment_storage_annotation
 
 _I1 = ir.IntType(1)
 _I64 = ir.IntType(64)
@@ -343,6 +344,20 @@ class AssignmentStatementLoweringMixin:
 
     def _emit_assign(self, stmt: Assign) -> None:
         from pcc.frontends.python.codegen.local_bound_lowering import mark_bound_target
+        if not stmt.has_value:
+            # ``receiver.attr: T`` and ``receiver[key]: T`` evaluate the
+            # receiver/key, but never load or store the annotated location.
+            for target in stmt.targets:
+                if isinstance(target, (Attr, Subscript)):
+                    self._emit_expr_stmt(ExprStmt(stmt.span, target.obj))
+                if isinstance(target, Subscript):
+                    if isinstance(target.idx, Slice):
+                        for part in (target.idx.lo, target.idx.hi, target.idx.step):
+                            if part is not None:
+                                self._emit_expr_stmt(ExprStmt(stmt.span, part))
+                    else:
+                        self._emit_expr_stmt(ExprStmt(stmt.span, target.idx))
+            return
         self._emit_assign_unchecked(stmt)
         for target in stmt.targets:
             mark_bound_target(self, target)
@@ -655,7 +670,8 @@ class AssignmentStatementLoweringMixin:
         else:
             self.env_list_elem_class_hint.pop(target.ident, None)
         target_ty_for_hints = (
-            stmt.annotation if stmt.annotation is not None else target.ty
+            assignment_storage_annotation(stmt.annotation, stmt.value, stmt.has_value)
+            if stmt.annotation is not None else target.ty
         )
         threading_elem_kind = self._threading_list_elem_kind_for_type(
             target_ty_for_hints
@@ -686,7 +702,7 @@ class AssignmentStatementLoweringMixin:
         if inspect_fullargspec is not None:
             self._inspect_fullargspec_aliases[target.ident] = inspect_fullargspec
 
-        target_ty = stmt.annotation if stmt.annotation is not None else target.ty
+        target_ty = assignment_storage_annotation(stmt.annotation, stmt.value, stmt.has_value) if stmt.annotation is not None else target.ty
         if self._maybe_emit_virtual_literal_dispatch_assign(
             target,
             stmt.value,
@@ -785,7 +801,7 @@ class AssignmentStatementLoweringMixin:
             self.current_func_def is not None
             and target.ident in self._current_global_names
         ):
-            target_ty = stmt.annotation if stmt.annotation is not None else target.ty
+            target_ty = assignment_storage_annotation(stmt.annotation, stmt.value, stmt.has_value) if stmt.annotation is not None else target.ty
             self._ensure_module_global_name(target.ident, target_ty)
         if target.ident in module_globals and (
             self.current_func_def is None or target.ident in self._current_global_names
@@ -805,7 +821,7 @@ class AssignmentStatementLoweringMixin:
                         stmt.value.ty,
                     )
             else:
-                value = self._coerce(value, stmt.value.ty, declared_ty)
+                value = self._coerce(value, stmt.value.ty, declared_ty, stmt.value)
             if value in getattr(self, "_cpy_values", ()):
                 self._cpy_module_flags[target.ident] = True
                 is_cpy_value = True
@@ -937,7 +953,7 @@ class AssignmentStatementLoweringMixin:
         else:
             if not forced_exact_int_target:
                 self._exact_int_env_flags.pop(target.ident, None)
-            value = self._coerce(value, stmt.value.ty, declared_ty)
+            value = self._coerce(value, stmt.value.ty, declared_ty, stmt.value)
         rhs_local_copy_is_owned = False
         exact_int_name_source_is_borrowed = False
         if exact_int_value is not None and isinstance(stmt.value, Name):
@@ -1346,11 +1362,13 @@ class AssignmentStatementLoweringMixin:
                     [tup_obj, idx_val],
                     name=self._fresh(f"tup.{i}"),
                 )
-                # Marshal the PyObject* back to the declared element
-                # type so downstream stores see a native value when
-                # possible.
+                # Ordinary int elements already carry their exact Python
+                # value. Let the target's planned storage choose whether a
+                # checked machine conversion is required; unboxing here
+                # first loses the bignum before an object slot can keep it.
                 native_val = elem_obj
-                if not _assign_is_dyn_type(elem_ty):
+                ordinary_int = isinstance(elem_ty, IntType) and elem_ty.name == "int"
+                if not _assign_is_dyn_type(elem_ty) and not ordinary_int:
                     native_val = marshal.marshal_from_object(
                         self.builder,
                         self.module,

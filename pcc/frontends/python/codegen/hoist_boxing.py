@@ -9,11 +9,43 @@ from __future__ import annotations
 
 from dataclasses import replace as _replace
 
-from pcc.frontends.python.py_ast import Assign, AugAssign, BoolLit, Call, ClassDef, Delete, Global, Nonlocal, DynType, ExprStmt, For, FuncDef, If, IntLit, IntType, Import, Lambda, TupleExpr, TupleType, ListExpr, ListType, Name, NoneLit, NoneType, Raise, Return, Subscript, Try, While, With
+from pcc.frontends.python.py_ast import Assign, AugAssign, BoolLit, BoolType, Call, ClassDef, Delete, Global, Nonlocal, DynType, ExprStmt, For, FuncDef, If, IntLit, IntType, Import, Lambda, TupleExpr, TupleType, ListExpr, ListType, Name, Raise, Return, StrLit, StrType, Subscript, Try, While, With
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value, _is_import_from_stmt, _import_names_from_stmt, append_name_once, clone_funcdef, name_in
 
 
 _DYN = DynType(name="dyn")
+
+# These are typed-AST operations, not Python-callable magic names. Neither
+# identifier can be spelled by a Python source Name.
+CELL_READ = "<pcc.cell.read>"
+CELL_UNBOUND = "<pcc.cell.unbound>"
+CELL_CAPTURE = "<pcc.cell.capture>"
+
+
+def cell_capture_key(name):
+    return ".pcc.capture." + name
+
+
+
+def _cell_unbound(span):
+    return Call(span=span, ty=_DYN,
+                func=Name(span=span, ty=_DYN, ident=CELL_UNBOUND), args=())
+
+
+def _cell_read(name, span, suffix="", free=False):
+    return Call(
+        span=span, ty=_DYN,
+        func=Name(span=span, ty=_DYN, ident=CELL_READ),
+        args=(Name(span=span, ty=_DYN, ident=_cell_ident(name, suffix)),
+              StrLit(span=span, ty=StrType(name="str"), value=name),
+              BoolLit(span=span, ty=BoolType(name="bool"), value=free)),
+    )
+
+
+def _cell_clear(name, span):
+    return Assign(span=span, targets=(_cell_slot(name, span, _DYN),),
+                  value=_cell_unbound(span), annotation=None)
+
 
 _COMPREHENSION_SENTINELS = (
     "__listcomp__",
@@ -134,9 +166,47 @@ def function_local_bindings(fd):
     return tuple(names)
 
 
+def stable_capture_parameters(body, param_names):
+    """Entry-bound parameters remain bound unless a lexical operation clears them.
+
+    This deliberately over-approximates descendant deletions/handler cleanup:
+    shadowing can box an extra parameter, but cannot retain an unsafe by-value
+    direct-call capture. Ordinary locals need a stronger definite-assignment
+    proof and therefore do not use this fast path.
+    """
+    unbound = []
+    pending = list(body)
+    while pending:
+        node = pending.pop()
+        if node is None or _is_scalar(node):
+            continue
+        if isinstance(node, (tuple, list)):
+            pending.extend(node)
+            continue
+        if isinstance(node, Delete):
+            for target in node.targets:
+                _target_names(target, unbound)
+        if isinstance(node, Try):
+            for handler in node.handlers:
+                name = _dataclass_field_value(handler, "name", None)
+                if name:
+                    append_name_once(unbound, name)
+        for field in _dataclass_field_names(node):
+            if field not in _CELL_SKIP_FIELDS:
+                pending.append(_dataclass_field_value(node, field, None))
+    return tuple(name for name in param_names if not name_in(unbound, name))
+
+
 def function_boxed_names(fd, requested):
     local = function_local_bindings(fd)
-    return tuple(name for name in requested if name_in(local, name))
+    needed = list(requested)
+    lambda_reads = []
+    _names_read_in_lambdas(fd.body, (), False, lambda_reads)
+    stable_params = stable_capture_parameters(fd.body, tuple(arg.name for arg in fd.args))
+    for name in lambda_reads:
+        if not name_in(stable_params, name):
+            append_name_once(needed, name)
+    return tuple(name for name in needed if name_in(local, name))
 
 
 def _is_scalar(node):
@@ -285,7 +355,7 @@ def _rebuild_comprehension(node, heads, clauses):
     return _replace(node, args=tuple(heads) + tuple(calls))
 
 
-def _box_expr(expr, boxed, suffix=""):
+def _box_expr(expr, boxed, suffix="", free=False):
     """Rewrite reads of boxed names through their one-element cell list.
 
     Lambda parameters and comprehension targets bind names of their own, so
@@ -299,7 +369,7 @@ def _box_expr(expr, boxed, suffix=""):
         items = []
         changed = False
         for item in expr:
-            new_item = _box_expr(item, boxed, suffix)
+            new_item = _box_expr(item, boxed, suffix, free=free)
             if new_item is not item:
                 changed = True
             items.append(new_item)
@@ -308,18 +378,18 @@ def _box_expr(expr, boxed, suffix=""):
         return expr
     if isinstance(expr, Name):
         if name_in(boxed, expr.ident):
-            return Subscript(
-                span=expr.span,
-                ty=_DYN,
-                obj=_replace(expr, ty=_DYN, ident=_cell_ident(expr.ident, suffix)),
-                idx=IntLit(span=expr.span, ty=IntType(name="int"), value=0),
-            )
+            return _cell_read(expr.ident, expr.span, suffix, free)
         return expr
+    if _is_walrus(expr):
+        return _replace(expr, args=(
+            _box_store_target(expr.args[0], boxed, free),
+            _box_expr(expr.args[1], boxed, suffix, free),
+        ))
     if isinstance(expr, Lambda):
-        return _box_lambda(expr, boxed, suffix)
+        return _box_lambda(expr, boxed, suffix, free)
     parts = _comprehension_parts(expr)
     if parts is not None:
-        return _box_comprehension(expr, parts, boxed, suffix)
+        return _box_comprehension(expr, parts, boxed, suffix, free)
     fields = _dataclass_field_names(expr)
     if not fields:
         return expr
@@ -328,7 +398,7 @@ def _box_expr(expr, boxed, suffix=""):
         if slot == "span" or slot == "ty":
             continue
         value = _dataclass_field_value(expr, slot, None)
-        new_value = _box_expr(value, boxed, suffix)
+        new_value = _box_expr(value, boxed, suffix, free=free)
         if new_value is not value:
             new_fields[slot] = new_value
     if new_fields:
@@ -336,21 +406,23 @@ def _box_expr(expr, boxed, suffix=""):
     return expr
 
 
-def _box_lambda(expr, boxed, suffix):
+def _box_lambda(expr, boxed, suffix, free):
     # Defaults run in the enclosing scope; the parameters shadow the body.
     params = []
     shadow = []
     changed = False
     for param in expr.params:
         default = _dataclass_field_value(param, "default", None)
-        new_default = _box_expr(default, boxed, suffix)
+        new_default = _box_expr(default, boxed, suffix, free=free)
         if new_default is not default:
             param = _replace(param, default=new_default)
             changed = True
         params.append(param)
         if param.name:
             append_name_once(shadow, param.name)
-    body = _box_expr(expr.body, _without_names(boxed, shadow), suffix)
+    for name in collect_scope_bindings((Return(span=expr.span, value=expr.body),)):
+        append_name_once(shadow, name)
+    body = _box_expr(expr.body, _without_names(boxed, shadow), suffix, free=True)
     if body is not expr.body:
         changed = True
     if changed:
@@ -358,24 +430,31 @@ def _box_lambda(expr, boxed, suffix):
     return expr
 
 
-def _box_comprehension(expr, parts, boxed, suffix):
+def _box_comprehension(expr, parts, boxed, suffix, free):
     heads, clauses = parts
     visible = boxed
     new_clauses = []
     changed = False
+    # Generator-expression bodies own a deferred scope; PEP 709 list/set/dict
+    # bodies remain inlined in the lexical owner. Their first iterable always
+    # evaluates here, before entering the deferred scope.
+    deferred = isinstance(expr.func, Name) and expr.func.ident in ("_gen_comp", "__genexpr__")
+    body_free = free or deferred
+    first = True
     for target, iter_expr, ifs, source in clauses:
         # The first iterable evaluates in the enclosing scope; every later
         # part sees the comprehension targets bound so far.
-        new_iter = _box_expr(iter_expr, visible, suffix)
+        new_iter = _box_expr(iter_expr, visible, suffix, free=free if first else body_free)
+        first = False
         bound = []
         _target_names(target, bound)
         visible = _without_names(visible, bound)
-        new_target = _box_target_reads(target, visible, suffix)
-        new_ifs = _box_expr(ifs, visible, suffix)
+        new_target = _box_target_reads(target, visible, suffix, body_free)
+        new_ifs = _box_expr(ifs, visible, suffix, free=body_free)
         if new_iter is not iter_expr or new_target is not target or new_ifs is not ifs:
             changed = True
         new_clauses.append((new_target, new_iter, new_ifs, source))
-    new_heads = _box_expr(heads, visible, suffix)
+    new_heads = _box_expr(heads, visible, suffix, free=body_free)
     if new_heads is not heads:
         changed = True
     if changed:
@@ -383,7 +462,7 @@ def _box_comprehension(expr, parts, boxed, suffix):
     return expr
 
 
-def _box_target_reads(target, boxed, suffix):
+def _box_target_reads(target, boxed, suffix, free=False):
     """Rewrite the reads inside a binding target; the bound names stay."""
     if isinstance(target, Name):
         return target
@@ -391,7 +470,7 @@ def _box_target_reads(target, boxed, suffix):
         elems = []
         changed = False
         for elem in target.elems:
-            new_elem = _box_target_reads(elem, boxed, suffix)
+            new_elem = _box_target_reads(elem, boxed, suffix, free)
             if new_elem is not elem:
                 changed = True
             elems.append(new_elem)
@@ -399,20 +478,26 @@ def _box_target_reads(target, boxed, suffix):
             return _replace(target, elems=tuple(elems))
         return target
     if _is_starred(target):
-        inner = _box_target_reads(target.args[0], boxed, suffix)
+        inner = _box_target_reads(target.args[0], boxed, suffix, free)
         if inner is not target.args[0]:
             return _replace(target, args=(inner,) + tuple(target.args[1:]))
         return target
-    return _box_expr(target, boxed, suffix)
+    return _box_expr(target, boxed, suffix, free=free)
 
 
-def _box_store_target(target, boxed):
+def _box_store_target(target, boxed, free):
     if isinstance(target, Name) and name_in(boxed, target.ident):
         return _cell_slot(target.ident, target.span, target.ty)
-    return _box_expr(target, boxed)
+    if isinstance(target, (TupleExpr, ListExpr)):
+        return _replace(target, elems=tuple(
+            _box_store_target(elem, boxed, free) for elem in target.elems))
+    if _is_starred(target) or _is_walrus(target):
+        return _replace(target, args=tuple(
+            _box_store_target(arg, boxed, free) for arg in target.args))
+    return _box_expr(target, boxed, free=free)
 
 
-def _bind_through_temps(target, boxed, stores):
+def _bind_through_temps(target, boxed, stores, free):
     if isinstance(target, Name):
         if not name_in(boxed, target.ident):
             return target
@@ -429,15 +514,15 @@ def _bind_through_temps(target, boxed, stores):
     if isinstance(target, (TupleExpr, ListExpr)):
         elems = []
         for elem in target.elems:
-            elems.append(_bind_through_temps(elem, boxed, stores))
+            elems.append(_bind_through_temps(elem, boxed, stores, free))
         return _replace(target, elems=tuple(elems))
     if _is_starred(target):
-        inner = _bind_through_temps(target.args[0], boxed, stores)
+        inner = _bind_through_temps(target.args[0], boxed, stores, free)
         return _replace(target, args=(inner,) + tuple(target.args[1:]))
-    return _box_expr(target, boxed)
+    return _box_expr(target, boxed, free=free)
 
 
-def _box_bound_target(target, boxed):
+def _box_bound_target(target, boxed, free):
     """Bind a loop or ``with`` target through fresh names, then fill the cells.
 
     Layer 1 binds these targets only as plain names (or tuples of them), so
@@ -445,19 +530,19 @@ def _box_bound_target(target, boxed):
     must run first in the body.
     """
     stores = []
-    new_target = _bind_through_temps(target, boxed, stores)
+    new_target = _bind_through_temps(target, boxed, stores, free)
     return new_target, tuple(stores)
 
 
-def _box_with(stmt, boxed, boxed_function_defs):
+def _box_with(stmt, boxed, boxed_function_defs, free):
     items = []
     for index in range(len(stmt.items)):
         context_expr, as_var = stmt.items[index]
-        new_context = _box_expr(context_expr, boxed)
+        new_context = _box_expr(context_expr, boxed, free=free)
         if as_var is None:
             items.append((new_context, None))
             continue
-        new_var, stores = _box_bound_target(as_var, boxed)
+        new_var, stores = _box_bound_target(as_var, boxed, free)
         items.append((new_context, new_var))
         if stores:
             # Later items may read the name just bound, so they nest under the
@@ -469,22 +554,21 @@ def _box_with(stmt, boxed, boxed_function_defs):
             return _replace(
                 stmt,
                 items=tuple(items),
-                body=stores + _box_stmts(body, boxed, boxed_function_defs),
+                body=stores + _box_stmts(body, boxed, boxed_function_defs, free),
             )
     return _replace(
         stmt,
         items=tuple(items),
-        body=_box_stmts(stmt.body, boxed, boxed_function_defs),
+        body=_box_stmts(stmt.body, boxed, boxed_function_defs, free),
     )
 
 
-def _box_handlers(handlers, boxed, boxed_function_defs):
+def _box_handlers(handlers, boxed, boxed_function_defs, free):
     out = []
     for handler in handlers:
         body = _box_stmts(
-            _dataclass_field_value(handler, "body", ()), boxed, boxed_function_defs
-        )
-        exc_type = _box_expr(_dataclass_field_value(handler, "exc_type", None), boxed)
+            _dataclass_field_value(handler, "body", ()), boxed, boxed_function_defs, free)
+        exc_type = _box_expr(_dataclass_field_value(handler, "exc_type", None), boxed, free=free)
         name = _dataclass_field_value(handler, "name", None)
         if name and name_in(boxed, name):
             # Like a loop target: bind a fresh name, then fill the cell.
@@ -496,50 +580,72 @@ def _box_handlers(handlers, boxed, boxed_function_defs):
                 value=Name(span=span, ty=_DYN, ident=temp),
                 annotation=None,
             )
-            out.append(_replace(handler, exc_type=exc_type, name=temp, body=(store,) + body))
+            cleanup = Try(span=span, body=body, handlers=(), else_body=(),
+                          finally_body=(_cell_clear(name, span),))
+            out.append(_replace(handler, exc_type=exc_type, name=temp,
+                                body=(store, cleanup)))
         else:
             out.append(_replace(handler, exc_type=exc_type, body=body))
     return tuple(out)
 
 
-def _box_delete(stmt, boxed):
+def _box_delete(stmt, boxed, free):
     out = []
     kept = []
     for target in stmt.targets:
+        if isinstance(target, (TupleExpr, ListExpr)):
+            if kept:
+                out.append(_replace(stmt, targets=tuple(kept)))
+                kept = []
+            out.extend(_box_delete(_replace(stmt, targets=target.elems), boxed, free))
+            continue
         if isinstance(target, Name) and name_in(boxed, target.ident):
             if kept:
                 out.append(_replace(stmt, targets=tuple(kept)))
                 kept = []
-            # Closures share the cell, so clearing it is what they observe.
-            # Cells have no unbound marker: a later read sees None, not an error.
-            out.append(Assign(
-                span=stmt.span,
-                targets=(_cell_slot(target.ident, stmt.span, _DYN),),
-                value=NoneLit(span=stmt.span, ty=NoneType(name="None")),
-                annotation=None,
-            ))
+            # Check before the store: deleting an already-empty cell raises.
+            # The single payload store publishes unbound before old-value
+            # finalizers can re-enter a closure and read this same cell.
+            out.append(ExprStmt(span=stmt.span,
+                                 expr=_cell_read(target.ident, stmt.span, free=free)))
+            out.append(_cell_clear(target.ident, stmt.span))
         else:
-            kept.append(_box_expr(target, boxed))
+            kept.append(_box_expr(target, boxed, free=free))
     if kept:
         out.append(_replace(stmt, targets=tuple(kept)))
     return tuple(out)
 
 
-def _box_class_header(stmt, boxed):
+def _box_class_header(stmt, boxed, free):
     # Bases, keywords and decorators evaluate in the enclosing scope.
-    bases = _box_expr(stmt.bases, boxed)
-    keywords = _box_expr(stmt.keywords, boxed)
-    decorators = _box_expr(stmt.decorators, boxed)
-    if bases is stmt.bases and keywords is stmt.keywords and decorators is stmt.decorators:
+    bases = _box_expr(stmt.bases, boxed, free=free)
+    keywords = _box_expr(stmt.keywords, boxed, free=free)
+    decorators = _box_expr(stmt.decorators, boxed, free=free)
+    body = []
+    changed = False
+    for member in stmt.body:
+        if isinstance(member, FuncDef):
+            # Class locals do not enclose method bodies. Only the method's
+            # own locals/globals shadow the enclosing function's cells.
+            shadowed = function_local_bindings(member) + scope_declared_names(member.body, True, False)
+            inherited = tuple(name for name in boxed if not name_in(shadowed, name))
+            method_body = _box_stmts(member.body, inherited, free=True)
+            if method_body != member.body:
+                member = _replace(member, body=method_body)
+                changed = True
+        body.append(member)
+    if (not changed and bases is stmt.bases and keywords is stmt.keywords
+            and decorators is stmt.decorators):
         return stmt
-    return _replace(stmt, bases=bases, keywords=keywords, decorators=decorators)
+    return _replace(stmt, bases=bases, keywords=keywords, decorators=decorators,
+                    body=tuple(body))
 
 
 def _box_import(stmt, boxed):
     """Bind a boxed import target through a temporary, then store the cell.
 
     Imports count as scope bindings, so a captured import name is boxed; left
-    alone, the statement never wrote the cell and closures read None.  An
+    alone, the statement never wrote the cell and closures remained unbound.  An
     unaliased ``import a.b`` binds package ``a``, whose object a non-native
     package ``__init__`` cannot provide; it keeps the old binding.
     """
@@ -569,15 +675,15 @@ def _box_import(stmt, boxed):
     return (_replace(stmt, names=tuple(names)),) + cells
 
 
-def _box_stmts(stmts, boxed, boxed_function_defs=None):
+def _box_stmts(stmts, boxed, boxed_function_defs=None, free=False):
     """Rewrite reads and writes of boxed names through their cell list."""
     out = []
     for stmt in stmts:
         if isinstance(stmt, Assign):
-            new_value = _box_expr(stmt.value, boxed)
+            new_value = _box_expr(stmt.value, boxed, free=free)
             new_targets = []
             for target in stmt.targets:
-                new_targets.append(_box_store_target(target, boxed))
+                new_targets.append(_box_store_target(target, boxed, free))
             out.append(
                 _replace(
                     stmt,
@@ -587,11 +693,14 @@ def _box_stmts(stmts, boxed, boxed_function_defs=None):
             )
             continue
         if isinstance(stmt, AugAssign):
-            new_value = _box_expr(stmt.value, boxed)
+            if isinstance(stmt.target, Name) and name_in(boxed, stmt.target.ident):
+                out.append(ExprStmt(span=stmt.span,
+                    expr=_cell_read(stmt.target.ident, stmt.span, free=free)))
+            new_value = _box_expr(stmt.value, boxed, free=free)
             out.append(
                 _replace(
                     stmt,
-                    target=_box_store_target(stmt.target, boxed),
+                    target=_box_store_target(stmt.target, boxed, free),
                     value=new_value,
                 )
             )
@@ -600,9 +709,9 @@ def _box_stmts(stmts, boxed, boxed_function_defs=None):
             out.append(
                 _replace(
                     stmt,
-                    cond=_box_expr(stmt.cond, boxed),
-                    body=_box_stmts(stmt.body, boxed, boxed_function_defs),
-                    else_body=_box_stmts(stmt.else_body, boxed, boxed_function_defs),
+                    cond=_box_expr(stmt.cond, boxed, free=free),
+                    body=_box_stmts(stmt.body, boxed, boxed_function_defs, free),
+                    else_body=_box_stmts(stmt.else_body, boxed, boxed_function_defs, free),
                 )
             )
             continue
@@ -610,21 +719,21 @@ def _box_stmts(stmts, boxed, boxed_function_defs=None):
             out.append(
                 _replace(
                     stmt,
-                    cond=_box_expr(stmt.cond, boxed),
-                    body=_box_stmts(stmt.body, boxed, boxed_function_defs),
-                    else_body=_box_stmts(stmt.else_body, boxed, boxed_function_defs),
+                    cond=_box_expr(stmt.cond, boxed, free=free),
+                    body=_box_stmts(stmt.body, boxed, boxed_function_defs, free),
+                    else_body=_box_stmts(stmt.else_body, boxed, boxed_function_defs, free),
                 )
             )
             continue
         if isinstance(stmt, For):
-            target, stores = _box_bound_target(stmt.target, boxed)
+            target, stores = _box_bound_target(stmt.target, boxed, free)
             out.append(
                 _replace(
                     stmt,
                     target=target,
-                    iter=_box_expr(stmt.iter, boxed),
-                    body=stores + _box_stmts(stmt.body, boxed, boxed_function_defs),
-                    else_body=_box_stmts(stmt.else_body, boxed, boxed_function_defs),
+                    iter=_box_expr(stmt.iter, boxed, free=free),
+                    body=stores + _box_stmts(stmt.body, boxed, boxed_function_defs, free),
+                    else_body=_box_stmts(stmt.else_body, boxed, boxed_function_defs, free),
                 )
             )
             continue
@@ -632,36 +741,36 @@ def _box_stmts(stmts, boxed, boxed_function_defs=None):
             out.append(
                 _replace(
                     stmt,
-                    body=_box_stmts(stmt.body, boxed, boxed_function_defs),
-                    else_body=_box_stmts(stmt.else_body, boxed, boxed_function_defs),
-                    finally_body=_box_stmts(stmt.finally_body, boxed, boxed_function_defs),
-                    handlers=_box_handlers(stmt.handlers, boxed, boxed_function_defs),
+                    body=_box_stmts(stmt.body, boxed, boxed_function_defs, free),
+                    else_body=_box_stmts(stmt.else_body, boxed, boxed_function_defs, free),
+                    finally_body=_box_stmts(stmt.finally_body, boxed, boxed_function_defs, free),
+                    handlers=_box_handlers(stmt.handlers, boxed, boxed_function_defs, free),
                 )
             )
             continue
         if isinstance(stmt, With):
-            out.append(_box_with(stmt, boxed, boxed_function_defs))
+            out.append(_box_with(stmt, boxed, boxed_function_defs, free))
             continue
         if isinstance(stmt, ExprStmt):
-            out.append(_replace(stmt, expr=_box_expr(stmt.expr, boxed)))
+            out.append(_replace(stmt, expr=_box_expr(stmt.expr, boxed, free=free)))
             continue
         if isinstance(stmt, Return):
             if stmt.value is None:
                 out.append(stmt)
             else:
-                out.append(_replace(stmt, value=_box_expr(stmt.value, boxed)))
+                out.append(_replace(stmt, value=_box_expr(stmt.value, boxed, free=free)))
             continue
         if isinstance(stmt, Raise):
             out.append(
                 _replace(
                     stmt,
-                    exc=_box_expr(stmt.exc, boxed),
-                    cause=_box_expr(stmt.cause, boxed),
+                    exc=_box_expr(stmt.exc, boxed, free=free),
+                    cause=_box_expr(stmt.cause, boxed, free=free),
                 )
             )
             continue
         if isinstance(stmt, Delete):
-            out.extend(_box_delete(stmt, boxed))
+            out.extend(_box_delete(stmt, boxed, free))
             continue
         if isinstance(stmt, Import) or _is_import_from_stmt(stmt):
             out.extend(_box_import(stmt, boxed))
@@ -675,15 +784,15 @@ def _box_stmts(stmts, boxed, boxed_function_defs=None):
             args = []
             for arg in stmt.args:
                 default = _dataclass_field_value(arg, "default", None)
-                new_default = _box_expr(default, boxed)
+                new_default = _box_expr(default, boxed, free=free)
                 if new_default is not default:
                     arg = _replace(arg, default=new_default)
                 args.append(arg)
             rewritten = clone_funcdef(
                 stmt, stmt.name, tuple(args), stmt.return_ty,
-                _box_stmts(stmt.body, inherited, boxed_function_defs),
+                _box_stmts(stmt.body, inherited, boxed_function_defs, True),
             )
-            decorators = _box_expr(stmt.decorators, boxed)
+            decorators = _box_expr(stmt.decorators, boxed, free=free)
             if decorators is not stmt.decorators:
                 rewritten = _replace(rewritten, decorators=decorators)
             if boxed_function_defs is not None and name_in(boxed, stmt.name):
@@ -693,7 +802,7 @@ def _box_stmts(stmts, boxed, boxed_function_defs=None):
             out.append(rewritten)
             continue
         if isinstance(stmt, ClassDef):
-            out.append(_box_class_header(stmt, boxed))
+            out.append(_box_class_header(stmt, boxed, free))
             continue
         out.append(stmt)
     return tuple(out)
@@ -738,7 +847,7 @@ def box_outer_body(
                 value=ListExpr(
                     span=span,
                     ty=ListType(name="list", elem=DynType(name="dyn")),
-                    elems=(NoneLit(span=span, ty=NoneType(name="None")),),
+                    elems=(_cell_unbound(span),),
                 ),
                 annotation=None,
             )
@@ -1031,7 +1140,7 @@ def _comprehension_with_cells(node):
         cell_list = ListExpr(
             span=span,
             ty=ListType(name="list", elem=DynType(name="dyn")),
-            elems=(NoneLit(span=span, ty=NoneType(name="None")),),
+            elems=(_cell_unbound(span),),
         )
         new_clauses.append((
             Name(span=span, ty=_DYN, ident=_cell_ident(name, suffix)),
@@ -1106,7 +1215,7 @@ def rewrite_comprehension_cells(stmts):
     through a cell list that a leading clause binds once per run::
 
         [lambda: __pcc_cell_v_L_C[0]
-         for __pcc_cell_v_L_C in ([None],)
+         for __pcc_cell_v_L_C in ([<unbound>],)
          for __pcc_cell_v_L_C[0] in xs]
 
     The first source iterable stays unrewritten: CPython evaluates it in the

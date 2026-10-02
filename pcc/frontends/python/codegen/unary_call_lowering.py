@@ -6,7 +6,7 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BoolType, Call, ClassType, ComplexType, DynType, Expr, FloatType, IntLit, IntType, Name, SetType, SourceSpan, Subscript, Type, UnaryOp
+from pcc.frontends.python.py_ast import RawPointerType, Attr, BoolLit, BoolType, Call, ClassType, ComplexType, DynType, Expr, FloatType, IntLit, IntType, Name, SetType, SourceSpan, StrLit, StrType, Subscript, Type, UnaryOp
 from pcc.frontends.python.codegen import marshal
 
 _DOUBLE = ir.DoubleType()
@@ -131,7 +131,8 @@ class UnaryCallLoweringMixin:
                 )
             if isinstance(ty, FloatType):
                 return self.builder.fneg(operand, name=self._fresh("fneg"))
-            if self._int_exprs_are_boxed() and isinstance(ty, (IntType, BoolType)):
+            if (self._int_exprs_are_boxed() and isinstance(ty, (IntType, BoolType))
+                    and not (isinstance(ty, IntType) and ty.name in ("pcc.i64", "pcc.u64"))):
                 operand_obj = marshal.marshal_to_object(
                     self.builder,
                     self.module,
@@ -173,7 +174,8 @@ class UnaryCallLoweringMixin:
             ival = self._to_int64(operand, ty)
             return self.builder.neg(ival, name=self._fresh("neg"))
         if expr.op == "~":
-            if self._int_exprs_are_boxed() and isinstance(ty, (IntType, BoolType)):
+            if (self._int_exprs_are_boxed() and isinstance(ty, (IntType, BoolType))
+                    and not (isinstance(ty, IntType) and ty.name in ("pcc.i64", "pcc.u64"))):
                 operand_obj = marshal.marshal_to_object(
                     self.builder,
                     self.module,
@@ -266,6 +268,7 @@ class UnaryCallLoweringMixin:
         span: Optional[SourceSpan] = None,
         root_result: bool = False,
         pinned_arg_temps: tuple[tuple[ir.Value, bool], ...] = (),
+        result_slot=None,
     ) -> ir.Value:
         """Call a user function; after the call, check py_err_occurred()
         and branch to the active error-propagation block if a Python
@@ -286,8 +289,14 @@ class UnaryCallLoweringMixin:
         result = self.builder.call(fn, args_ir, name=call_name)
         root_slot = None
         root_ptr = None
+        if result_slot is not None and isinstance(result.type, ir.PointerType):
+            # The expression consumer registered this empty owning output
+            # before any operand evaluation. Publish at the actual return
+            # instruction, ahead of error checks and argument cleanup.
+            self._publish_slot_call_owned(result_slot, result, label="user call")
         if (
             root_result
+            and result_slot is None
             and isinstance(result.type, ir.PointerType)
             and not getattr(self, "_suppress_implicit_gc_roots", False)
             and not (self.ast_module.name or "").startswith("pcc.runtime.py.")
@@ -361,9 +370,17 @@ class UnaryCallLoweringMixin:
         self._last_call_arg_owned_temp = False
         if isinstance(target_ty, IntType):
             if isinstance(param_ir_ty, ir.PointerType):
-                if self._int_expr_needs_exact_object_boundary(ast_arg):
+                raw = None
+                if isinstance(ast_arg.ty, IntType) and ast_arg.ty.name == "int":
+                    # The callee requires the object projection, regardless
+                    # of the caller's local scalar optimization policy.
+                    # Field/subscript reads already own exact Python ints;
+                    # scalar lowering followed by reboxing would first narrow
+                    # their values through a checked i64 conversion.
+                    raw = self._maybe_emit_exact_int_object(ast_arg)
+                elif self._int_expr_needs_exact_object_boundary(ast_arg):
                     raw = self._emit_exact_int_operand_object(ast_arg)
-                else:
+                if raw is None:
                     raw = self._emit_expr(ast_arg)
                 if raw in getattr(self, "_cpy_values", ()):
                     self._last_call_arg_owned_temp = True
@@ -420,7 +437,7 @@ class UnaryCallLoweringMixin:
                 if boxed_valueclass is not None:
                     self._last_call_arg_owned_temp = True
                     return boxed_valueclass
-                coerced_payload = self._coerce(payload, ast_arg.ty, target_ty)
+                coerced_payload = self._coerce(payload, ast_arg.ty, target_ty, ast_arg)
                 if (
                     isinstance(param_ir_ty, ir.PointerType)
                     and isinstance(coerced_payload.type, ir.PointerType)
@@ -437,7 +454,7 @@ class UnaryCallLoweringMixin:
             )
         ):
             v = self._emit_expr_with_native_callable_values(ast_arg)
-            return self._coerce(v, ast_arg.ty, target_ty)
+            return self._coerce(v, ast_arg.ty, target_ty, ast_arg)
         v = self._emit_expr(ast_arg)
         if isinstance(param_ir_ty, ir.PointerType) and self._is_object(target_ty):
             source_ty = ast_arg.ty
@@ -453,13 +470,19 @@ class UnaryCallLoweringMixin:
             param_ir_ty,
             ir.PointerType,
         ):
+            if isinstance(target_ty, RawPointerType):
+                raise NotImplementedError("CPython object cannot implicitly become a raw pointer")
             self._last_call_arg_owned_temp = True
             return self.builder.call(
                 self.runtime["py_cpy_to_pcc_obj"],
                 [v],
                 name=self._fresh("cpy.arg.to_pcc"),
             )
-        coerced = self._coerce(v, ast_arg.ty, target_ty)
+        coerced = self._coerce(v, ast_arg.ty, target_ty, ast_arg)
+        if isinstance(target_ty, RawPointerType):
+            # A numeric address converted to ptr is not a new Python box.
+            self._last_call_arg_owned_temp = False
+            return coerced
         if (
             isinstance(param_ir_ty, ir.PointerType)
             and isinstance(coerced.type, ir.PointerType)
@@ -639,42 +662,146 @@ class UnaryCallLoweringMixin:
             )
             self._emit_post_call_err_check(getattr(expr, "span", None))
             return result
-        if (
-            builtin_name == "int"
-            and attr.name == "from_bytes"
-            and len(expr.args) == 2
-            and not expr.kwargs
-        ):
-            # Native int.from_bytes(bytes, byteorder) — unsigned form;
-            # raises ValueError/TypeError per CPython, so emit the
-            # post-call err check. signed= falls through (rejected
-            # honestly under --python-libpython=off).
-            bytes_obj = self._emit_expr_as_pcc_object(expr.args[0])
-            if not self._owned_release_needed(bytes_obj, expr.args[0]):
-                bytes_obj = self._gc_retain(bytes_obj, name=self._fresh("from_bytes.buffer.retain"))
-            self._gc_pin(bytes_obj)
-            order_obj = self._emit_expr_with_cpy_operand_cleanup(
-                expr.args[1], (), pinned_pcc=((bytes_obj, True),), as_pcc_object=True,
-            )
-            if not self._owned_release_needed(order_obj, expr.args[1]):
-                order_obj = self._gc_retain(order_obj, name=self._fresh("from_bytes.order.retain"))
-            self._gc_pin(order_obj)
-            result = self.builder.call(
-                self.runtime["py_int_from_bytes"],
-                [bytes_obj, order_obj],
-                name=self._fresh("int.from_bytes"),
-            )
-            self._emit_post_call_err_check(
-                getattr(expr, "span", None),
-                pinned_release_on_error=((bytes_obj, True), (order_obj, True)),
-            )
+        if builtin_name == "int" and attr.name == "from_bytes":
+            if self._has_starred_unpack(expr.args):
+                return None
+            for keyword, _operand in expr.kwargs:
+                if keyword == "**":
+                    return None
+            # Bind the Python signature without changing source evaluation
+            # order: bytes and byteorder are positional-or-keyword, signed
+            # is keyword-only. Keep every evaluated owner pinned until both
+            # binding and conversion finish (including a signed.__bool__ call).
+            operands = list(expr.args)
+            bytes_index = 0 if operands else -1
+            order_index = 1 if len(operands) >= 2 else -1
+            signed_index = -1
+            binding_error = ""
+            if len(operands) > 2:
+                binding_error = "from_bytes() takes at most 2 positional arguments"
+            for keyword, operand in expr.kwargs:
+                index = len(operands)
+                operands.append(operand)
+                if keyword == "bytes":
+                    if bytes_index >= 0:
+                        binding_error = "from_bytes() got multiple values for argument 'bytes'"
+                    bytes_index = index
+                elif keyword == "byteorder":
+                    if order_index >= 0:
+                        binding_error = "from_bytes() got multiple values for argument 'byteorder'"
+                    order_index = index
+                elif keyword == "signed":
+                    if signed_index >= 0:
+                        binding_error = "from_bytes() got multiple values for argument 'signed'"
+                    signed_index = index
+                else:
+                    binding_error = "from_bytes() got an unexpected keyword argument '" + keyword + "'"
+            if bytes_index < 0 and not binding_error:
+                binding_error = "from_bytes() missing required argument 'bytes'"
+            if order_index < 0:
+                order_index = len(operands)
+                operands.append(StrLit(span=expr.span, ty=StrType(name="str"), value="big"))
+
+            roots = []
+            previous = self._current_try_err_block()
+            previous_cpy = getattr(self, "_cpy_operand_cleanup_block", None)
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            leases = []
+            try:
+                for operand in operands:
+                    cleanup = self._extern_cleanup_block(tuple(roots), target)
+                    self._try_err_block = cleanup
+                    self._cpy_operand_cleanup_block = cleanup
+                    value = self._emit_expr_with_cpy_operand_cleanup(
+                        operand, (), as_pcc_object=True,
+                    )
+                    roots.append(self._extern_enter_root(
+                        value, self._owned_release_needed(value, operand), "from_bytes.argument.root",
+                    ))
+                cleanup = self._extern_cleanup_block(tuple(roots), target)
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                if binding_error:
+                    message = self._pooled_cstr_ptr(binding_error, ".from_bytes.binding_error")
+                    exc = self.builder.call(
+                        self.runtime["py_exc_new"], [ir.Constant(ir.IntType(64), 3), message],
+                        name=self._fresh("from_bytes.binding.exc"),
+                    )
+                    self.builder.call(self.runtime["py_raise"], [exc])
+                    self._gc_release(exc)
+                    self._emit_post_call_err_check(expr.span)
+                    self._extern_release_roots(tuple(roots))
+                    return self._emit_none_literal()
+                # A traced slot follows moves while evaluating later operands.
+                # Counted leases additionally protect raw ABI arguments across
+                # callbacks that clear an aliased object's Boolean pin flag.
+                for root in roots:
+                    acquired = self.builder.call(
+                        self.runtime["pcc_gc_foreign_lease_acquire"],
+                        [self._as_gc_ptr(root[0])], name=self._fresh("from_bytes.lease.acquire"),
+                    )
+                    failed = self.builder.icmp_signed("<", acquired, ir.Constant(ir.IntType(64), 0))
+                    error = self.current_function.append_basic_block(self._fresh("from_bytes.lease.error"))
+                    ready = self.current_function.append_basic_block(self._fresh("from_bytes.lease.ready"))
+                    self.builder.cbranch(failed, error, ready)
+                    self.builder.position_at_end(error)
+                    cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+                    self._try_err_block = cleanup
+                    self._cpy_operand_cleanup_block = cleanup
+                    overflow = self.current_function.append_basic_block(self._fresh("bytes.lease.overflow"))
+                    invalid = self.current_function.append_basic_block(self._fresh("bytes.lease.invalid"))
+                    self.builder.cbranch(
+                        self.builder.icmp_signed("==", acquired, ir.Constant(ir.IntType(64), -2)), overflow, invalid,
+                    )
+                    self.builder.position_at_end(overflow)
+                    self._emit_builtin_exception_and_branch(
+                        "OverflowError", "integer byte conversion address lease overflow", expr.span,
+                    )
+                    self.builder.position_at_end(invalid)
+                    self._emit_builtin_exception_and_branch(
+                        "RuntimeError", "integer byte conversion requires a stable managed owner", expr.span,
+                    )
+                    self.builder.position_at_end(ready)
+                    leases.append((root, acquired))
+                cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                signed_value = None
+                if signed_index >= 0:
+                    signed_expr = operands[signed_index]
+                    if isinstance(signed_expr, BoolLit):
+                        if signed_expr.value:
+                            signed_value = ir.Constant(ir.IntType(64), 1)
+                    else:
+                        signed_value = self.builder.call(
+                            self.runtime["py_obj_truthy"], [self._extern_load_root(roots[signed_index])],
+                            name=self._fresh("from_bytes.signed.truth"),
+                        )
+                        self._emit_post_call_err_check(expr.span)
+                call_args = [self._extern_load_root(roots[bytes_index]), self._extern_load_root(roots[order_index])]
+                helper = "py_int_from_bytes"
+                if signed_value is not None:
+                    helper = "py_int_from_bytes_signed"
+                    call_args.append(signed_value)
+                result = self.builder.call(self.runtime[helper], call_args, name=self._fresh("int.from_bytes"))
+                self._emit_post_call_err_check(expr.span)
+                result_root = self._extern_enter_root(result, True, "from_bytes.result.root")
+                # Root teardown may call finalizers and move the result. The
+                # shared take helper consumes the source owner exactly once,
+                # then transfers the root owner after restoring prior pin state.
+                prior = result_root[2]
+                for root in reversed(roots):
+                    alias = self.builder.icmp_unsigned("==", self._extern_load_root(result_root), self._extern_load_root(root))
+                    prior = self.builder.select(alias, root[2], prior)
+                result_root = (result_root[0], True, prior)
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = previous_cpy
+            release_failed = self._extern_release_foreign_leases(tuple(leases))
+            self._extern_check_lease_cleanup(release_failed, tuple(roots) + (result_root,))
+            self._extern_release_roots(tuple(roots))
+            result = self._extern_take_root(result_root)
             self._note_owned_object_value(result)
-            self._gc_pin(result)
-            self._gc_unpin(order_obj)
-            self._gc_release(order_obj)
-            self._gc_unpin(bytes_obj)
-            self._gc_release(bytes_obj)
-            self._gc_unpin(result)
             return result
         if (
             builtin_name == "str"

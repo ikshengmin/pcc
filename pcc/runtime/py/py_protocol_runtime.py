@@ -7,7 +7,7 @@ storage/methods.  The C source remains a host-C oracle.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE, PYCLASSOBJECT_N_FIELDS_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PY_TYPE_BOOL, PY_TYPE_COMPLEX, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_NONE, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PY_TYPE_DICT, PYCLASSOBJECT_N_FIELDS_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PY_TYPE_BOOL, PY_TYPE_COMPLEX, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_NONE, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START
 
 from pcc.extern import c_abi_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
@@ -26,6 +26,7 @@ from pcc.unsafe import (
     load_i32,
     load_i64,
     load_ptr,
+    memset,
     null,
     ptr_add,
     ptr_eq,
@@ -315,10 +316,9 @@ def _dict_subclass_env(obj, create: int):
     if _class_is_dict_subclass(obj) == 0:
         return null()
     cls = _instance_class(obj)
-    if (
-        ptr_is_null(cls) != 0
-        or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) != 0
-    ):
+    # Dict item backing uses the reserved hidden slot even for __slots__
+    # subclasses. Ordinary dynamic attribute access still enforces its flag.
+    if ptr_is_null(cls) != 0:
         return null()
     n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
     if n_fields < 0:
@@ -1322,3 +1322,503 @@ def py_dict_subclass_getitem(obj, key):
         return _call_binary(missing, obj, key)
     py_raise_owned(py_exc_new(4, cstr("key not found")))
     return null()
+
+
+# Builtin-base initialization starts from caller-owned slots. The hidden
+# dictionary environment and its backing remain the generic storage owners.
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
+pcc_gc_store_ptr_plan_init = extern("pcc_gc_store_ptr_plan_init", (c_ptr, c_ptr, c_int64), c_void)
+pcc_gc_store_ptr_plan_commit_locked = extern("pcc_gc_store_ptr_plan_commit_locked", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+pcc_gc_store_ptr_plan_finish = extern("pcc_gc_store_ptr_plan_finish", (c_ptr,), c_void)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+py_dict_set_slots = extern("py_dict_set_slots", (c_ptr, c_ptr, c_ptr), c_int64)
+py_dict_setdefault_slots = extern("py_dict_setdefault_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+py_dict_update_slots = extern("py_dict_update_slots", (c_ptr, c_ptr), c_int64)
+
+
+def _builtin_init_error(message) -> int:
+    py_runtime_error_if_unset(cstr("builtin-base initializer"), message)
+    return -1
+
+
+def _builtin_init_open(slots, tokens, handles) -> int:
+    memset(slots, 0, 12 * C_POINTER_SIZE)
+    memset(tokens, 0, 12 * C_POINTER_SIZE)
+    memset(handles, 0, 12 * C_POINTER_SIZE)
+    count: int = 0
+    while count < 12:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            return count
+        store_ptr(handles, count * C_POINTER_SIZE, handle)
+        count = count + 1
+    return count
+
+
+def _builtin_init_copy(slots, tokens, index: int, source, borrowed: int) -> int:
+    if ptr_is_null(source) != 0:
+        return _builtin_init_error(cstr("initializer requires authoritative source slots"))
+    token: int = 0
+    if borrowed != 0:
+        token = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, index * C_POINTER_SIZE), source)
+    else:
+        token = pcc_gc_root_copy_lease(ptr_add(slots, index * C_POINTER_SIZE), source)
+    if token < 0:
+        return _builtin_init_error(cstr("initializer source transfer failed"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    return 0
+
+
+def _builtin_init_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(slot, 0)) != 0:
+        return _builtin_init_error(cstr("initializer allocation returned NULL without an exception"))
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        return _builtin_init_error(cstr("initializer result lease failed"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return -1 if py_err_occurred() != 0 else 0
+
+
+def _builtin_init_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(tokens, index * C_POINTER_SIZE, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _builtin_init_close(slots, tokens, handles, count: int, suspended: int) -> None:
+    if suspended != 0:
+        py_tls_exc_swap_slot(ptr_add(slots, 11 * C_POINTER_SIZE))
+    index: int = 10
+    while index > 0:
+        _builtin_init_drop(slots, tokens, index)
+        index = index - 1
+    if suspended != 0:
+        py_clear_exception()
+        if ptr_is_null(load_ptr(slots, 11 * C_POINTER_SIZE)) == 0:
+            pcc_gc_store_root(slots, null())
+            py_clear_exception()
+            py_tls_exc_swap_slot(ptr_add(slots, 11 * C_POINTER_SIZE))
+        else:
+            py_tls_exc_swap_slot(slots)
+    index = 0
+    while index < count:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
+        index = index + 1
+
+
+def _builtin_init_env(slots, tokens) -> int:
+    count: int = load_i32(load_ptr(slots, 5 * C_POINTER_SIZE), PYCLASSOBJECT_N_FIELDS_OFFSET)
+    if count < 0:
+        count = 0
+    offset: int = PYINSTANCEOBJECT_FIELDS_OFFSET + count * C_POINTER_SIZE
+    if _builtin_init_copy(slots, tokens, 6,
+            ptr_add(load_ptr(slots, C_POINTER_SIZE), offset), 0) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, 6 * C_POINTER_SIZE)) == 0:
+        return 0
+    store_ptr(slots, 10 * C_POINTER_SIZE, py_dict_new())
+    if _builtin_init_adopt(slots, tokens, 10) != 0:
+        return -1
+    plan = stack_alloc(128)
+    pcc_gc_store_ptr_plan_init(plan, load_ptr(slots, C_POINTER_SIZE), pcc_gc_backend())
+    committed: int = 1
+    pcc_py_gc_minor_graph_lock()
+    receiver = load_ptr(slots, C_POINTER_SIZE)
+    field = ptr_add(receiver, offset)
+    # Allocation may reenter and create an environment. Never replace it.
+    if ptr_is_null(pcc_gc_resolve_root_slot_unlocked(field, 0)) != 0:
+        committed = pcc_gc_store_ptr_plan_commit_locked(plan, receiver, field,
+            load_ptr(slots, 10 * C_POINTER_SIZE))
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_ptr_plan_finish(plan)
+    _builtin_init_drop(slots, tokens, 10)
+    if committed == 0:
+        return _builtin_init_error(cstr("initializer environment publication failed"))
+    return _builtin_init_copy(slots, tokens, 6,
+        ptr_add(load_ptr(slots, C_POINTER_SIZE), offset), 0)
+
+
+def _builtin_init_dict(slots, tokens) -> int:
+    nargs: int = py_tuple_len(load_ptr(slots, 3 * C_POINTER_SIZE))
+    if nargs > 1:
+        py_raise_owned(py_exc_new(3, cstr("dict expected at most 1 argument")))
+        return -1
+    if (load_i32(load_ptr(slots, 5 * C_POINTER_SIZE), PYOBJECTHEADER_FLAGS_OFFSET) & 4) == 0:
+        py_raise_owned(py_exc_new(3, cstr("dict.__init__ requires a dict instance")))
+        return -1
+    if _builtin_init_env(slots, tokens) != 0:
+        return -1
+    store_ptr(slots, 7 * C_POINTER_SIZE, _dict_items_key())
+    if _builtin_init_adopt(slots, tokens, 7) != 0:
+        return -1
+    store_ptr(slots, 10 * C_POINTER_SIZE, py_dict_new())
+    if _builtin_init_adopt(slots, tokens, 10) != 0:
+        return -1
+    if py_dict_setdefault_slots(ptr_add(slots, 6 * C_POINTER_SIZE),
+            ptr_add(slots, 7 * C_POINTER_SIZE), ptr_add(slots, 10 * C_POINTER_SIZE),
+            ptr_add(slots, 8 * C_POINTER_SIZE)) != 0:
+        return -1
+    if _builtin_init_adopt(slots, tokens, 8) != 0:
+        return -1
+    _builtin_init_drop(slots, tokens, 10)
+    if nargs == 1:
+        if _builtin_init_copy(slots, tokens, 9,
+                ptr_add(load_ptr(slots, 3 * C_POINTER_SIZE), PYTUPLEOBJECT_ITEMS_OFFSET), 0) != 0:
+            return -1
+        if py_dict_update_slots(ptr_add(slots, 8 * C_POINTER_SIZE),
+                                ptr_add(slots, 9 * C_POINTER_SIZE)) != 0:
+            return -1
+    kwargs = load_ptr(slots, 4 * C_POINTER_SIZE)
+    if ptr_is_null(kwargs) == 0 and _type_of(kwargs) != PY_TYPE_NONE:
+        return py_dict_update_slots(ptr_add(slots, 8 * C_POINTER_SIZE),
+                                    ptr_add(slots, 4 * C_POINTER_SIZE))
+    return 0
+
+
+def _builtin_init_exception(slots, tokens) -> int:
+    kwargs = load_ptr(slots, 4 * C_POINTER_SIZE)
+    if ptr_is_null(kwargs) == 0 and _type_of(kwargs) != PY_TYPE_NONE:
+        if py_dict_len(kwargs) != 0:
+            py_raise_owned(py_exc_new(3, cstr("BaseException.__init__ takes no keyword arguments")))
+            return -1
+    cls = load_ptr(slots, 5 * C_POINTER_SIZE)
+    names = load_ptr(cls, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
+    count: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
+    index: int = 0
+    while index < count:
+        if _cstr_equal(load_ptr(names, index * C_POINTER_SIZE), cstr("args")) != 0:
+            receiver = load_ptr(slots, C_POINTER_SIZE)
+            pcc_gc_store_ptr(receiver,
+                ptr_add(receiver, PYINSTANCEOBJECT_FIELDS_OFFSET + index * C_POINTER_SIZE),
+                load_ptr(slots, 3 * C_POINTER_SIZE))
+            return -1 if py_err_occurred() != 0 else 0
+        index = index + 1
+    if _builtin_init_env(slots, tokens) != 0:
+        return -1
+    store_ptr(slots, 7 * C_POINTER_SIZE, py_str_new(cstr("args"), 4))
+    if _builtin_init_adopt(slots, tokens, 7) != 0:
+        return -1
+    return py_dict_set_slots(ptr_add(slots, 6 * C_POINTER_SIZE),
+        ptr_add(slots, 7 * C_POINTER_SIZE), ptr_add(slots, 3 * C_POINTER_SIZE))
+
+
+def _builtin_init_validate(slots, tokens) -> int:
+    if _is_user_instance(load_ptr(slots, C_POINTER_SIZE)) == 0:
+        py_raise_owned(py_exc_new(3, cstr("builtin-base initializer requires an instance")))
+        return -1
+    if _builtin_init_copy(slots, tokens, 5,
+            ptr_add(load_ptr(slots, C_POINTER_SIZE), PYINSTANCEOBJECT_CLS_OFFSET), 1) != 0:
+        return -1
+    matches: int = py_obj_issubclass(load_ptr(slots, 5 * C_POINTER_SIZE), load_ptr(slots, 2 * C_POINTER_SIZE))
+    if matches < 0 or py_err_occurred() != 0:
+        return -1
+    if matches == 0:
+        py_raise_owned(py_exc_new(3, cstr("super(type, obj): obj must be an instance or subtype of type")))
+        return -1
+    return 0
+
+
+@c_abi_export("py_builtin_super_validate_slots")
+def py_builtin_super_validate_slots(receiver_slot, from_class_slot) -> int:
+    # Attribute-call evaluation binds super before evaluating call operands.
+    slots = stack_alloc(12 * C_POINTER_SIZE)
+    tokens = stack_alloc(12 * C_POINTER_SIZE)
+    handles = stack_alloc(12 * C_POINTER_SIZE)
+    count: int = _builtin_init_open(slots, tokens, handles)
+    suspended: int = 0
+    status: int = -1
+    if count == 12:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _builtin_init_copy(slots, tokens, 1, receiver_slot, 0)
+        if status == 0:
+            status = _builtin_init_copy(slots, tokens, 2, from_class_slot, 0)
+        if status == 0:
+            status = _builtin_init_validate(slots, tokens)
+    if status != 0:
+        _builtin_init_error(cstr("super binding failed without an exception"))
+    _builtin_init_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+def _builtin_init_dispatch(receiver_slot, from_slot, args_slot, kwargs_slot, kind: int) -> int:
+    slots = stack_alloc(12 * C_POINTER_SIZE)
+    tokens = stack_alloc(12 * C_POINTER_SIZE)
+    handles = stack_alloc(12 * C_POINTER_SIZE)
+    count: int = _builtin_init_open(slots, tokens, handles)
+    suspended: int = 0
+    status: int = -1
+    if count == 12:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _builtin_init_copy(slots, tokens, 1, receiver_slot, 0)
+        if status == 0:
+            status = _builtin_init_copy(slots, tokens, 2, from_slot, 0)
+        if status == 0:
+            status = _builtin_init_copy(slots, tokens, 3, args_slot, 0)
+        if status == 0:
+            status = _builtin_init_copy(slots, tokens, 4, kwargs_slot, 0)
+        if status == 0:
+            status = _builtin_init_validate(slots, tokens)
+        if status == 0:
+            args = load_ptr(slots, 3 * C_POINTER_SIZE)
+            kwargs = load_ptr(slots, 4 * C_POINTER_SIZE)
+            if ptr_is_null(args) != 0 or _type_of(args) != PY_TYPE_TUPLE:
+                status = _builtin_init_error(cstr("initializer args must be a tuple"))
+            elif ptr_is_null(kwargs) == 0 and _type_of(kwargs) != PY_TYPE_NONE and _type_of(kwargs) != PY_TYPE_DICT:
+                status = _builtin_init_error(cstr("initializer keywords must be a dict"))
+        if status == 0:
+            status = _builtin_init_dict(slots, tokens) if kind == 1 else _builtin_init_exception(slots, tokens)
+    if status != 0:
+        _builtin_init_error(cstr("builtin-base initialization failed without an exception"))
+    _builtin_init_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+@c_abi_export("py_dict_subclass_init_slots")
+def py_dict_subclass_init_slots(receiver_slot, from_class_slot, args_slot, kwargs_slot) -> int:
+    return _builtin_init_dispatch(receiver_slot, from_class_slot, args_slot, kwargs_slot, 1)
+
+
+@c_abi_export("py_exception_subclass_init_slots")
+def py_exception_subclass_init_slots(receiver_slot, from_class_slot, args_slot, kwargs_slot) -> int:
+    return _builtin_init_dispatch(receiver_slot, from_class_slot, args_slot, kwargs_slot, 2)
+
+
+# Index entry owns slot addresses, including across the compiled thread-entry
+# poll before this function's body. Passing the address of a raw callee copy
+# does not satisfy this ABI: both caller slots must already be registered.
+# The older raw index/slice APIs above remain compatibility boundaries.
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+py_obj_special_call_slots = extern("py_obj_special_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+
+
+def _index_slot_error(message) -> int:
+    py_runtime_error_if_unset(cstr("slot-based index"), message)
+    return -1
+
+
+def _index_slot_open(slots, tokens, handles) -> int:
+    # old TLS, receiver, integer result, new TLS. No input value is loaded
+    # until every potentially parking registration has finished.
+    memset(slots, 0, 4 * C_POINTER_SIZE)
+    memset(tokens, 0, 4 * C_POINTER_SIZE)
+    memset(handles, 0, 4 * C_POINTER_SIZE)
+    count: int = 0
+    while count < 4:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            return count
+        store_ptr(handles, count * C_POINTER_SIZE, handle)
+        count = count + 1
+    return count
+
+
+def _index_slot_copy(slots, tokens, index: int, source) -> int:
+    token: int = pcc_gc_root_copy_lease(ptr_add(slots, index * C_POINTER_SIZE), source)
+    if token < 0:
+        return _index_slot_error(cstr("index source root copy failed"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    return 0
+
+
+def _index_slot_adopt(slots, tokens) -> int:
+    # A producer has already published its NEW result directly into this
+    # registered empty root. Lease acquisition reloads it after any wait.
+    slot = ptr_add(slots, 2 * C_POINTER_SIZE)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        return _index_slot_error(cstr("index result lease acquisition failed"))
+    store_i64(tokens, 2 * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+def _index_slot_close(slots, tokens, handles, count: int, suspended: int) -> None:
+    if suspended != 0:
+        py_tls_exc_swap_slot(ptr_add(slots, 3 * C_POINTER_SIZE))
+    index: int = 2
+    while index > 0:
+        if index < count:
+            slot = ptr_add(slots, index * C_POINTER_SIZE)
+            if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * C_POINTER_SIZE)) != 0:
+                pcc_platform_abort()
+                return
+            pcc_gc_store_root(slot, null())
+        index = index - 1
+    if suspended != 0:
+        # A callback/validation error wins over old TLS and finalizer errors.
+        # On success restore the entry exception after releasing operands.
+        py_clear_exception()
+        if ptr_is_null(load_ptr(slots, 3 * C_POINTER_SIZE)) == 0:
+            pcc_gc_store_root(slots, null())
+            py_clear_exception()
+            py_tls_exc_swap_slot(ptr_add(slots, 3 * C_POINTER_SIZE))
+        else:
+            py_tls_exc_swap_slot(slots)
+    index = 0
+    while index < count:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
+        index = index + 1
+
+
+def _index_slot_dispatch(slots, tokens) -> int:
+    receiver_slot = ptr_add(slots, C_POINTER_SIZE)
+    result_slot = ptr_add(slots, 2 * C_POINTER_SIZE)
+    receiver = load_ptr(receiver_slot, 0)
+    if ptr_is_null(receiver) != 0:
+        py_raise_owned(py_exc_new(3, cstr("object cannot be interpreted as an integer")))
+        return -1
+    tag: int = _type_of(receiver)
+    if tag == PY_TYPE_INT:
+        return _index_slot_copy(slots, tokens, 2, receiver_slot)
+    if tag == PY_TYPE_BOOL:
+        truth: int = ptr_eq(receiver, global_load_ptr("py_True"))
+        store_ptr(result_slot, 0, py_int_from_i64(1 if truth != 0 else 0))
+    elif pcc_capi_is_cext_type_tag(tag) != 0:
+        # The input owns an independent address lease through the raw C-API
+        # call; the NEW result's first operation is publication in its root.
+        store_ptr(result_slot, 0, PyNumber_Index(load_ptr(receiver_slot, 0)))
+    else:
+        handled = stack_alloc(8)
+        store_i64(handled, 0, 0)
+        status: int = py_obj_special_call_slots(receiver_slot, cstr("__index__"), null(), null(), result_slot, handled)
+        if status != 0:
+            return -1
+        if load_i64(handled, 0) == 0:
+            py_raise_owned(py_exc_new(3, cstr("object cannot be interpreted as an integer")))
+            return -1
+    if _index_slot_adopt(slots, tokens) != 0:
+        return -1
+    if ptr_is_null(load_ptr(result_slot, 0)) != 0:
+        return _index_slot_error(cstr("index callback returned NULL without an exception"))
+    if py_err_occurred() != 0:
+        return -1
+    result_tag: int = _type_of(load_ptr(result_slot, 0))
+    if result_tag == PY_TYPE_INT:
+        return 0
+    if result_tag == PY_TYPE_BOOL:
+        # Preserve the existing explicit capability boundary: CPython emits
+        # a DeprecationWarning here, and owned warning emission is not ready.
+        py_raise_owned(py_exc_new(11, cstr("pcc operator.index: non-exact __index__ results require owned warning emission")))
+        return -1
+    py_raise_owned(py_exc_new(3, cstr("__index__ returned non-int")))
+    return -1
+
+
+@c_abi_export("py_obj_index_slots")
+def py_obj_index_slots(receiver_slot, result_slot) -> int:
+    """Publish one arbitrary-precision int owner; status 0/-1 is success/error.
+
+    Receiver is an authoritative registered owning CALLER root. Result is a
+    distinct, empty registered owning CALLER root. No raw operand may be
+    materialized into a nominal local slot just before entering this helper.
+    """
+    if ptr_is_null(receiver_slot) != 0 or ptr_is_null(result_slot) != 0:
+        return _index_slot_error(cstr("index requires source and output root slots"))
+    slots = stack_alloc(4 * C_POINTER_SIZE)
+    tokens = stack_alloc(4 * C_POINTER_SIZE)
+    handles = stack_alloc(4 * C_POINTER_SIZE)
+    count: int = _index_slot_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 4:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        if ptr_eq(receiver_slot, result_slot) != 0 or ptr_is_null(load_ptr(result_slot, 0)) == 0:
+            status = _index_slot_error(cstr("index result destination must be distinct and empty"))
+        else:
+            status = _index_slot_copy(slots, tokens, 1, receiver_slot)
+            if status == 0:
+                status = _index_slot_dispatch(slots, tokens)
+            if status == 0:
+                status = pcc_gc_root_move(result_slot, ptr_add(slots, 2 * C_POINTER_SIZE))
+                if status == 0:
+                    token: int = load_i64(tokens, 2 * C_POINTER_SIZE)
+                    store_i64(tokens, 2 * C_POINTER_SIZE, 0)
+                    if pcc_gc_foreign_lease_release(result_slot, token) != 0:
+                        pcc_platform_abort()
+                        return -1
+    else:
+        _index_slot_error(cstr("index root registration failed"))
+    if status != 0:
+        _index_slot_error(cstr("index conversion failed without an exception"))
+    _index_slot_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+def _index_slot_checked(receiver_slot, container_index: int) -> int:
+    if ptr_is_null(receiver_slot) != 0:
+        _index_slot_error(cstr("checked index requires a source root slot"))
+        return 0
+    slots = stack_alloc(4 * C_POINTER_SIZE)
+    tokens = stack_alloc(4 * C_POINTER_SIZE)
+    handles = stack_alloc(4 * C_POINTER_SIZE)
+    count: int = _index_slot_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    result: int = 0
+    if count == 4:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _index_slot_copy(slots, tokens, 1, receiver_slot)
+        if status == 0:
+            status = _index_slot_dispatch(slots, tokens)
+        if status == 0:
+            overflow = stack_alloc(4)
+            store_i32(overflow, 0, 0)
+            result = py_int_to_i64(load_ptr(slots, 2 * C_POINTER_SIZE), overflow)
+            if load_i32(overflow, 0) != 0:
+                if container_index != 0:
+                    py_raise_owned(py_exc_new(5, cstr("cannot fit integer into an index-sized integer")))
+                else:
+                    py_raise_owned(py_exc_new(15, cstr("Python int too large to convert to platform index")))
+                status = -1
+            elif py_err_occurred() != 0:
+                status = -1
+    else:
+        _index_slot_error(cstr("checked index root registration failed"))
+    if status != 0:
+        _index_slot_error(cstr("checked index conversion failed without an exception"))
+        result = 0
+    _index_slot_close(slots, tokens, handles, count, suspended)
+    return result
+
+
+@c_abi_export("py_index_i64_checked_slots")
+def py_index_i64_checked_slots(receiver_slot) -> int:
+    """Checked platform conversion from an authoritative owning CALLER root.
+
+    Unlike slice saturation, conversion overflow raises OverflowError. The
+    integer remains rooted and leased through conversion/errors/cleanup.
+    """
+    return _index_slot_checked(receiver_slot, 0)
+
+
+@c_abi_export("py_obj_index_i64_slots")
+def py_obj_index_i64_slots(receiver_slot) -> int:
+    """Container index conversion; only integer narrowing raises IndexError.
+
+    Callback exceptions, including OverflowError from __index__, propagate
+    unchanged. This is not a saturating slice-bound conversion.
+    """
+    return _index_slot_checked(receiver_slot, 1)

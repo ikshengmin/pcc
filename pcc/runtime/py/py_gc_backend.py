@@ -81,6 +81,8 @@ pcc_gc_object_index_plan_commit = extern(
     (c_ptr, c_int64, c_int64),
     c_int64,
 )
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+
 pcc_gc_object_index_insert_preallocated = extern(
     "pcc_gc_object_index_insert_preallocated", (c_ptr, c_ptr), c_int64
 )
@@ -989,6 +991,10 @@ def _clear_object_list() -> None:
     node = _object_head()
     while ptr_is_null(node) == 0:
         nxt = _object_node_next(node)
+        if load_i64(node, 80) != 0:
+            abort_extern()
+            _object_graph_unlock()
+            return
         free(node)
         node = nxt
     _set_object_head(null())
@@ -1093,7 +1099,7 @@ def _relocation_set_add(obj) -> int:
     ) != 0:
         return 0
     flags: int = load_i32(obj, 12)
-    if (flags & (64 | 8192 | 16384 | 524288)) != 0:
+    if (flags & (8192 | 16384 | 524288)) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
         return 0
     if ptr_is_null(_forwarding_find(obj)) == 0:
         return 0
@@ -2473,6 +2479,9 @@ def pcc_gc_set_backend(backend: int) -> int:
     # same-backend reset remains legal.
     _object_graph_lock()
     old_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if load_i64(global_addr("pcc_gc_foreign_lease_active"), 0) != 0:
+        _object_graph_unlock()
+        return -1
     if old_backend == 4 and load_i32(global_addr("pcc_gc_in_auto_step"), 0) != 0:
         _object_graph_unlock()
         return -1
@@ -2520,6 +2529,9 @@ def pcc_gc_set_backend(backend: int) -> int:
     store_i64(global_addr("pcc_gc_trace_extension_roots_backend"), 0, -1)
     global_store_ptr("pcc_gc_trace_cursor", null())
     _set_gray_count(0)
+    # Reserve the transition across unlocked worker/teardown operations.
+    # Acquisition refuses this sentinel; no raw pointer can race list reset.
+    store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, -1)
     _object_graph_unlock()
     if backend == 3 or backend == 4:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1)
@@ -2554,6 +2566,9 @@ def pcc_gc_set_backend(backend: int) -> int:
     if backend != 4:
         pcc_gc_reset_relocation_set()
         _backend4_store_buffer_clear()
+    _object_graph_lock()
+    store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0)
+    _object_graph_unlock()
     if old_backend == 2 and backend != 2:
         _stop_cms_worker()
     _maybe_start_cms_worker()
@@ -3957,6 +3972,14 @@ def pcc_gc_free_object_memory(o) -> None:
         backend = _init_config()
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    _object_graph_lock()
+    lease_node = pcc_gc_object_index_find(o)
+    leased: int = 0
+    if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 80) != 0:
+        leased = 1
+    _object_graph_unlock()
+    if leased != 0:
+        return
     flags: int = load_i32(o, 12)
     # Direct constructor cleanup does not necessarily pass through decref.
     # The ordinary dealloc path already emitted this idempotent event; when
@@ -4539,6 +4562,10 @@ def pcc_gc_note_object_freeing(o) -> None:
     store_ptr(finish, 32, null())
     store_ptr(finish, 40, null())
     _object_graph_lock()
+    lease_node = pcc_gc_object_index_find(o)
+    if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 80) != 0:
+        _object_graph_unlock()
+        return
     if pcc_gc_granule_is_object_start(o) != 1:
         if pcc_gc_managed_pointer_index_insert(o) < 0:
             _object_graph_unlock()

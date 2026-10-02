@@ -328,6 +328,14 @@ def _retire_forwarded_source_into_finish(from_obj, finish) -> None:
         or ptr_is_null(finish) != 0
     ):
         return
+    lease_node = pcc_gc_object_index_find(from_obj)
+    if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 80) != 0:
+        pcc_py_gc_defer_tripwire(
+            cstr("forwarded source retains a foreign-address lease"),
+            cstr("pcc/runtime/py/freestanding_gc_forwarding_retirement.py"),
+            324,
+        )
+        return
     identity = pcc_gc_identity_detach(from_obj)
     if ptr_is_null(identity) == 0:
         store_ptr(identity, 16, load_ptr(finish, 16))

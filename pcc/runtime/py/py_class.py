@@ -17,6 +17,7 @@ handles its own int width.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
+from pcc.runtime.py.py_abi_constants import PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET
 from pcc.runtime.py.py_abi_constants import PY_FLAG_FUNC_TRANSPARENT_CALL, C_POINTER_SIZE, DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYCLASSMETHOD_FUNC_OFFSET, PYCLASSMETHOD_NAME_HASH_OFFSET, PYCLASSMETHOD_NAME_LENGTH_OFFSET, PYCLASSMETHOD_NAME_OFFSET, PYCLASSMETHOD_SIZE, PYCLASSMETHODOBJECT_FUNC_OFFSET, PYCLASSMETHODOBJECT_SIZE, PYCLASSOBJECT_ATTRS_OFFSET, PYCLASSOBJECT_BASES_OFFSET, PYCLASSOBJECT_DEL_METHOD_OFFSET, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYCLASSOBJECT_INSTANCE_SIZE_OFFSET, PYCLASSOBJECT_METACLASS_OFFSET, PYCLASSOBJECT_METHODS_OFFSET, PYCLASSOBJECT_MRO_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_BASES_OFFSET, PYCLASSOBJECT_N_FIELDS_OFFSET, PYCLASSOBJECT_N_METHODS_OFFSET, PYCLASSOBJECT_N_MRO_OFFSET, PYCLASSOBJECT_SIZE, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYINSTANCEOBJECT_SIZE, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_IMMORTAL, PYPROPERTYOBJECT_FDEL_OFFSET, PYPROPERTYOBJECT_FGET_OFFSET, PYPROPERTYOBJECT_FSET_OFFSET, PYPROPERTYOBJECT_SIZE, PYSTATICMETHODOBJECT_FUNC_OFFSET, PYSTATICMETHODOBJECT_SIZE, PY_TYPE_CLASS, PY_TYPE_CLASSMETHOD, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_LIST, PY_TYPE_PROPERTY, PY_TYPE_STATICMETHOD, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_VALUEBOX
 from pcc.unsafe import (
     atomic_cas_i64,
@@ -80,6 +81,18 @@ py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_default = extern("py_obj_call_default", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_context_is_deferred = extern("py_obj_call_context_is_deferred", (), c_int64)
+py_obj_call_slots_sync = extern("py_obj_call_slots_sync", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy_lease_prepare_locked = extern("pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64)
+pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
+pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
 py_func_call_kwargs = extern("py_func_call_kwargs", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_dict_subclass_getattr = extern("py_dict_subclass_getattr", (c_ptr, c_ptr), c_ptr)
@@ -98,6 +111,7 @@ py_dict_keys = extern("py_dict_keys", (c_ptr,), c_ptr)
 py_dict_update = extern("py_dict_update", (c_ptr, c_ptr), c_void)
 py_dict_del = extern("py_dict_del", (c_ptr, c_ptr), c_int64)
 py_builtin_type_class_tag = extern("py_builtin_type_class_tag", (c_ptr,), c_int32)
+pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_bool_from_bit = extern("py_bool_from_bit", (c_int32,), c_ptr)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
@@ -1114,6 +1128,18 @@ def _attr_res_method_cacheable() -> int:
     return 1
 
 
+def _instance_reserved_owner_slot(inst, cls):
+    # Every native instance physically reserves this owning slot, including
+    # slots-only dict/exception subclasses. Public __dict__ visibility is a
+    # separate policy; GC, teardown and physical copies must not use it.
+    n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
+    if n_fields < 0:
+        n_fields = 0
+    return ptr_add(
+        inst, PYINSTANCEOBJECT_FIELDS_OFFSET + n_fields * C_POINTER_SIZE
+    )
+
+
 def _dynamic_attr_slot(inst):
     if not _ptr_is_instance(inst):
         return null()
@@ -1121,12 +1147,22 @@ def _dynamic_attr_slot(inst):
     flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
     if (flags & 2) != 0:
         return null()
-    n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
-    if n_fields < 0:
-        n_fields = 0
-    return ptr_add(
-        inst, PYINSTANCEOBJECT_FIELDS_OFFSET + n_fields * C_POINTER_SIZE
-    )
+    return _instance_reserved_owner_slot(inst, cls)
+
+
+def _copy_instance_reserved_owner(obj, dst, cls) -> None:
+    # The surrounding legacy replace entry still owns its raw object-entry
+    # contract. Within this physical copy, heal the owning source and publish
+    # the additional destination owner in one graph transaction.
+    pcc_py_gc_minor_graph_lock()
+    source = _instance_reserved_owner_slot(obj, cls)
+    destination = _instance_reserved_owner_slot(dst, cls)
+    value = pcc_gc_resolve_root_slot_unlocked(source, 0)
+    if ptr_is_null(value) == 0:
+        py_incref(value)
+        store_ptr(destination, 0, value)
+        pcc_gc_note_slot_write_barrier(dst, destination, value)
+    pcc_py_gc_minor_graph_unlock()
 
 
 def _instance_dict_of(inst, cls):
@@ -1811,6 +1847,111 @@ def _class_new_lookup(cls) -> c_ptr:
     return null()
 
 
+def _metaclass_call_body(slots, pins):
+    # The namespace owns descriptors; the native method table can also
+    # contain a raw entry point. Preserve that distinction while binding.
+    meta = load_ptr(slots, 4 * C_POINTER_SIZE)
+    descriptor = _class_attr_lookup_in_mro(meta, cstr("__call__"))
+    borrowed: int = 0
+    if ptr_is_null(descriptor) != 0:
+        if py_err_occurred() != 0:
+            return null()
+        descriptor = py_class_lookup(load_ptr(slots, 4 * C_POINTER_SIZE), cstr("__call__"))
+        borrowed = 1
+    if ptr_is_null(descriptor) != 0:
+        # No override, including inherited default type.__call__. The caller
+        # performs ordinary type construction instead of calling itself.
+        return null()
+    _instance_lookup_hold(slots, pins, 5, descriptor, borrowed)
+    descriptor = load_ptr(slots, 5 * C_POINTER_SIZE)
+    cls = load_ptr(slots, C_POINTER_SIZE)
+    meta = load_ptr(slots, 4 * C_POINTER_SIZE)
+    if not _ptr_can_have_header(descriptor):
+        # py_instance_bind_method's owned wrapper already supports native
+        # entries. Never read a PyObject header from an unmanaged code address.
+        bound = py_instance_bind_method(descriptor, cls, cstr("__call__"))
+    else:
+        tag: int = load_i32(descriptor, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        if tag == PY_TYPE_FUNC:
+            bound = py_instance_bind_method(descriptor, cls, cstr("__call__"))
+        elif tag == PY_TYPE_CLASSMETHOD:
+            # A classmethod descriptor belongs to the metaclass, so bind its
+            # owner once; do not also prepend the class being constructed.
+            bound = _classmethod_bind(descriptor, meta)
+        else:
+            bound = _descriptor_call_get(descriptor, cls, meta)
+            if ptr_is_null(bound) != 0:
+                if py_err_occurred() != 0:
+                    return null()
+                bound = load_ptr(slots, 5 * C_POINTER_SIZE)
+                py_incref(bound)
+    if ptr_is_null(bound) != 0:
+        return _class_require_result(null(), cstr("metaclass __call__ binding"),
+                                     cstr("metaclass __call__ binding returned NULL without an exception"))
+    _instance_lookup_hold(slots, pins, 6, bound, 0)
+    result = py_obj_call(load_ptr(slots, 6 * C_POINTER_SIZE),
+                         load_ptr(slots, 2 * C_POINTER_SIZE),
+                         load_ptr(slots, 3 * C_POINTER_SIZE))
+    return _class_require_result(result, cstr("metaclass __call__"),
+                                 cstr("metaclass __call__ returned NULL without an exception"))
+
+
+@c_abi_export("py_class_metaclass_call")
+def py_class_metaclass_call(cls, args, kwargs):
+    """One owned override result; NULL/no-error means ordinary construction.
+
+    Special-method lookup uses the actual class's metaclass, never the class
+    or instance namespace. Descriptor failures and failed callbacks preserve
+    their exception and must not select the default construction path.
+    """
+    meta = _metaclass(cls)
+    if ptr_is_null(meta) != 0:
+        return null()
+    if py_builtin_type_class_tag(meta) == PY_TYPE_CLASS:
+        return null()
+    # Reuse the eight-slot lookup lease protocol, including raw-method
+    # classification, original pin states, aliasing and exception retirement.
+    # result, cls, args, kwargs, metaclass, descriptor, bound callable, error.
+    slots = stack_alloc(8 * C_POINTER_SIZE)
+    pins = stack_alloc(8 * C_POINTER_SIZE)
+    handles = stack_alloc(8 * C_POINTER_SIZE)
+    memset(slots, 0, 8 * C_POINTER_SIZE)
+    memset(pins, 0, 8 * C_POINTER_SIZE)
+    memset(handles, 0, 8 * C_POINTER_SIZE)
+    _instance_lookup_hold(slots, pins, 1, cls, 1)
+    _instance_lookup_hold(slots, pins, 2, args, 1)
+    _instance_lookup_hold(slots, pins, 3, kwargs, 1)
+    _instance_lookup_hold(slots, pins, 4, meta, 1)
+    count: int = 0
+    while count < 8:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            break
+        store_ptr(handles, count * C_POINTER_SIZE, handle)
+        count = count + 1
+    if count == 8:
+        result = _metaclass_call_body(slots, pins)
+        _instance_lookup_hold(slots, pins, 0, result, 0)
+    else:
+        _class_require_result(null(), cstr("metaclass __call__"),
+                              cstr("metaclass temporary root registration failed"))
+    prior_result_pin: int = load_i64(pins, 0)
+    if py_err_occurred() != 0:
+        _instance_lookup_hold(slots, pins, 7, py_current_exception(), 1)
+    index: int = 6
+    while index > 0:
+        _instance_lookup_release(slots, pins, index)
+        index = index - 1
+    if ptr_is_null(load_ptr(slots, 7)) == 0:
+        py_raise(load_ptr(slots, 7))
+        _instance_lookup_release(slots, pins, 7)
+    index = 0
+    while index < count:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
+        index = index + 1
+    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
+
+
 @c_abi_export("py_class_getattr")
 def py_class_getattr(cls, name):
     if not _ptr_is_class(cls) or ptr_is_null(name) != 0:
@@ -2064,9 +2205,9 @@ def py_instance_new(cls) -> c_ptr:
         return null()
     cls = pcc_gc_note_relocation_read(cls)
     n_fields_i32: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
+    if n_fields_i32 < 0:
+        n_fields_i32 = 0
     n_slots: int = n_fields_i32 + 1
-    if n_slots < 0:
-        n_slots = 1
     size: int = PYINSTANCEOBJECT_SIZE + n_slots * C_POINTER_SIZE
     inst = pcc_gc_alloc(
         size,
@@ -2118,6 +2259,8 @@ def py_instance_get_field(inst, idx: int):
         field = load_ptr(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + idx * C_POINTER_SIZE)
         if ptr_is_null(field) == 0:
             py_incref(field)
+        else:
+            return _instance_missing_field_lookup(inst, idx)
         return field
     if not _ptr_is_instance(inst):
         return null()
@@ -2134,7 +2277,85 @@ def py_instance_get_field(inst, idx: int):
     v = pcc_gc_load_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE))
     if ptr_is_null(v) == 0:
         py_incref(v)
+    else:
+        return _instance_missing_field_lookup(inst, idx)
     return v
+
+
+def _instance_missing_field_lookup(inst, idx: int, default_only: int = 0):
+    """A valid but unbound physical slot still obeys ordinary lookup.
+
+    NULL is absence, not Python None. Resolve the stable field name and let
+    semantic lookup handle class defaults, descriptors, __getattr__, and the
+    missing-attribute exception. Invalid indices never enter this helper.
+    """
+    roots = stack_alloc(3 * C_POINTER_SIZE)
+    handles = stack_alloc(3 * C_POINTER_SIZE)
+    pins = stack_alloc(2 * C_POINTER_SIZE)
+    memset(roots, 0, 3 * C_POINTER_SIZE)
+    memset(handles, 0, 3 * C_POINTER_SIZE)
+    memset(pins, 0, 2 * C_POINTER_SIZE)
+    pcc_py_gc_minor_graph_lock()
+    inst = pcc_gc_note_relocation_read(inst)
+    cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
+    store_ptr(roots, 0, inst)
+    store_ptr(roots, C_POINTER_SIZE, cls)
+    index: int = 0
+    while index < 2:
+        value = load_ptr(roots, index * C_POINTER_SIZE)
+        store_i64(pins, index * C_POINTER_SIZE, load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64)
+        pcc_gc_pin(value)
+        index = index + 1
+    index = 0
+    while index < 3:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(roots, index * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            break
+        store_ptr(handles, index * C_POINTER_SIZE, handle)
+        index = index + 1
+    pcc_py_gc_minor_graph_unlock()
+    if index == 3:
+        cls = pcc_gc_load_ptr(null(), ptr_add(roots, C_POINTER_SIZE))
+        names = load_ptr(cls, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
+        name = load_ptr(names, idx * C_POINTER_SIZE)
+        if default_only != 0:
+            result = _instance_getattr_default_rooted(
+                pcc_gc_load_ptr(null(), roots), cls, name, default_only - 1,
+            )
+        else:
+            result = py_obj_getattr(pcc_gc_load_ptr(null(), roots), name)
+        store_ptr(roots, 2 * C_POINTER_SIZE, result)
+    prior_result_pin: int = 0
+    pcc_py_gc_minor_graph_lock()
+    result = pcc_gc_load_ptr(null(), ptr_add(roots, 2 * C_POINTER_SIZE))
+    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+        prior_result_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        if ptr_eq(result, load_ptr(roots, 0)):
+            prior_result_pin = load_i64(pins, 0)
+        if ptr_eq(result, load_ptr(roots, C_POINTER_SIZE)):
+            prior_result_pin = load_i64(pins, C_POINTER_SIZE)
+        pcc_gc_pin(result)
+    pcc_py_gc_minor_graph_unlock()
+    cleanup_index: int = 0
+    pcc_py_gc_minor_graph_lock()
+    while cleanup_index < 2:
+        value = pcc_gc_load_ptr(null(), ptr_add(roots, cleanup_index * C_POINTER_SIZE))
+        pcc_gc_unpin(value)
+        if ptr_eq(value, result) != 0 or load_i64(pins, cleanup_index * C_POINTER_SIZE) != 0:
+            # Balance this input's pin lease, but preserve the original bit
+            # or the independent result lease. No moving window under lock.
+            atomic_rmw_i32("or", value, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+        cleanup_index = cleanup_index + 1
+    pcc_py_gc_minor_graph_unlock()
+    cleanup_index = 0
+    while cleanup_index < 3:
+        handle = load_ptr(handles, cleanup_index * C_POINTER_SIZE)
+        if ptr_is_null(handle) == 0:
+            pcc_gc_scheduler_root_unregister_handle(handle)
+        cleanup_index = cleanup_index + 1
+    if index != 3:
+        return _class_require_result(null(), cstr("instance field lookup"), cstr("instance field lookup root registration failed"))
+    return pcc_gc_take_pinned_slot(ptr_add(roots, 2 * C_POINTER_SIZE), prior_result_pin)
 
 
 @c_abi_export("py_instance_set_field")
@@ -2182,11 +2403,239 @@ def py_instance_getattr_default(inst, name):
 
 
 def _instance_getattr_default(inst, cls, name):
+    return _instance_getattr_default_body(inst, cls, name, null(), null())
+
+
+def _instance_lookup_hold(slots, pins, index: int, value, borrowed: int):
+    """Keep one slow-lookup temporary current and owned across callbacks.
+
+    Each slot is assigned once. Inputs are already protected by the missing
+    field wrapper. Native method entries are not managed objects or owners.
+    """
+    if ptr_is_null(slots) != 0:
+        return value
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    store_ptr(slot, 0, value)
+    store_i64(pins, index * C_POINTER_SIZE, -1)
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), slot)
+    store_ptr(slot, 0, value)
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        if _ptr_can_have_header(value):
+            prior: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+            other: int = 0
+            while other < 8:
+                if other != index and ptr_eq(value, load_ptr(slots, other * C_POINTER_SIZE)) != 0:
+                    other_pin: int = load_i64(pins, other * C_POINTER_SIZE)
+                    if other_pin >= 0:
+                        prior = prior & other_pin
+                other = other + 1
+            store_i64(pins, index * C_POINTER_SIZE, prior)
+            pcc_gc_pin(value)
+            if borrowed != 0:
+                py_incref(value)
+    pcc_py_gc_minor_graph_unlock()
+    return value
+
+
+def _instance_lookup_release(slots, pins, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    value = load_ptr(slot, 0)
+    if ptr_is_null(value) != 0:
+        return
+    prior_pin: int = load_i64(pins, index * C_POINTER_SIZE)
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        if prior_pin < 0:
+            # A raw native method pointer has no refcount or pin lease.
+            store_ptr(slot, 0, null())
+            return
+        other: int = 0
+        while other < 8:
+            if other != index and ptr_eq(value, load_ptr(slots, other * C_POINTER_SIZE)) != 0:
+                if load_i64(pins, other * C_POINTER_SIZE) >= 0:
+                    prior_pin = prior_pin | 64
+            other = other + 1
+    # This strict primitive clears the root and balances exactly one lease
+    # without a park before decref takes over ownership of the raw argument.
+    py_decref(pcc_gc_take_pinned_slot(slot, prior_pin))
+
+
+def _instance_getattr_default_rooted(inst, cls, name, custom_lookup: int):
+    # result, class attribute, dynamic dict, dict key, method, callback key,
+    # callback arguments, saved error. Input leases belong to the caller.
+    slots = stack_alloc(8 * C_POINTER_SIZE)
+    pins = stack_alloc(8 * C_POINTER_SIZE)
+    handles = stack_alloc(8 * C_POINTER_SIZE)
+    memset(slots, 0, 8 * C_POINTER_SIZE)
+    memset(pins, 0, 8 * C_POINTER_SIZE)
+    memset(handles, 0, 8 * C_POINTER_SIZE)
+    count: int = 0
+    while count < 8:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            break
+        store_ptr(handles, count * C_POINTER_SIZE, handle)
+        count = count + 1
+    if count == 8:
+        if custom_lookup != 0:
+            result = _instance_getattr_custom_body(inst, cls, name, slots, pins)
+        else:
+            result = _instance_getattr_default_body(inst, cls, name, slots, pins)
+        _instance_lookup_hold(slots, pins, 0, result, 0)
+    prior_result_pin: int = load_i64(pins, 0)
+    index: int = 7
+    while index > 0:
+        if ptr_eq(load_ptr(slots, 0), load_ptr(slots, index * C_POINTER_SIZE)) != 0:
+            prior_result_pin = load_i64(pins, index * C_POINTER_SIZE)
+        index = index - 1
+    if py_err_occurred() != 0:
+        _instance_lookup_hold(slots, pins, 7, py_current_exception(), 1)
+    # Release every owner once, keeping any remaining aliased lease pinned.
+    # The result and original exception survive arbitrary finalizer callbacks.
+    index = 6
+    while index > 0:
+        _instance_lookup_release(slots, pins, index)
+        index = index - 1
+    if ptr_is_null(load_ptr(slots, 7)) == 0:
+        py_raise(load_ptr(slots, 7))
+        _instance_lookup_release(slots, pins, 7)
+    index = 0
+    while index < count:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
+        index = index + 1
+    if count != 8:
+        return _class_require_result(null(), cstr("instance field lookup"),
+                                     cstr("instance field temporary root registration failed"))
+    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
+
+
+def _instance_lookup_descriptor(descriptor, inst, cls, slots, pins):
+    if ptr_is_null(slots) != 0:
+        return _descriptor_call_get(descriptor, inst, cls)
+    if ptr_is_null(descriptor) != 0 or is_tagged_int(descriptor) != 0:
+        return null()
+    tag: int = load_i32(descriptor, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    if tag == PY_TYPE_STATICMETHOD:
+        value = pcc_gc_load_ptr(descriptor, ptr_add(descriptor, PYSTATICMETHODOBJECT_FUNC_OFFSET))
+        py_incref(value)
+        return value
+    count: int = 3
+    method = null()
+    if tag == PY_TYPE_PROPERTY:
+        method = pcc_gc_load_ptr(descriptor, ptr_add(descriptor, PYPROPERTYOBJECT_FGET_OFFSET))
+        if ptr_is_null(method) != 0:
+            py_raise_owned(py_exc_new(6, cstr("unreadable attribute")))
+            return null()
+        if ptr_eq(inst, global_load_ptr("py_None")) != 0:
+            py_incref(descriptor)
+            return descriptor
+        count = 1
+    else:
+        method = _descriptor_method(descriptor, cstr("__get__"))
+        if ptr_is_null(method) != 0:
+            return null()
+    method = _instance_lookup_hold(slots, pins, 4, method, 1)
+    args = _instance_lookup_hold(slots, pins, 6, py_tuple_new(count), 0)
+    if ptr_is_null(args) != 0:
+        return _class_require_result(null(), cstr("py_tuple_new"),
+                                     cstr("class callback argument tuple allocation failed"))
+    if count == 1:
+        py_tuple_set_item(args, 0, inst)
+    else:
+        py_tuple_set_item(args, 0, descriptor)
+        if py_err_occurred() != 0:
+            return null()
+        py_tuple_set_item(args, 1, inst)
+        if py_err_occurred() != 0:
+            return null()
+        py_tuple_set_item(args, 2, cls)
+    if py_err_occurred() != 0:
+        return null()
+    return _class_require_result(
+        py_obj_call(method, args, global_load_ptr("py_None")),
+        cstr("descriptor __get__"),
+        cstr("class callback returned NULL without setting an exception"),
+    )
+
+
+def _instance_lookup_call(method, inst, key, slots, pins, args_index: int):
+    if _ptr_can_have_header(method):
+        if load_i32(method, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
+            args = _instance_lookup_hold(slots, pins, args_index, py_tuple_new(2), 0)
+            if ptr_is_null(args) != 0:
+                return _class_require_result(null(), cstr("py_tuple_new"),
+                                             cstr("class callback argument tuple allocation failed"))
+            py_tuple_set_item(args, 0, inst)
+            if py_err_occurred() != 0:
+                return null()
+            py_tuple_set_item(args, 1, key)
+            if py_err_occurred() != 0:
+                return null()
+            return py_obj_call(method, args, null())
+    return call_ptr2(method, inst, key)
+
+
+def _instance_getattr_custom_body(inst, cls, name, slots, pins):
+    # Empty-field custom lookup uses the same temporary ownership frame as
+    # default lookup. Function objects and native method pointers are distinct.
+    method = _instance_lookup_hold(
+        slots, pins, 4, _class_lookup_in_mro(cls, cstr("__getattribute__")), 1,
+    )
+    if py_err_occurred() != 0:
+        return null()
+    if ptr_is_null(method) != 0:
+        return _instance_getattr_default_body(inst, cls, name, slots, pins)
+    key = _instance_lookup_hold(slots, pins, 5, py_str_new(name, strlen(name)), 0)
+    if ptr_is_null(key) != 0:
+        return _class_require_result(null(), cstr("py_str_new"),
+                                     cstr("instance attribute key allocation failed"))
+    got = _instance_lookup_call(method, inst, key, slots, pins, 6)
+    _class_require_result(got, cstr("__getattribute__"),
+                          cstr("class callback returned NULL without setting an exception"))
+    if ptr_is_null(got) == 0:
+        return got
+    if py_err_occurred() != 0:
+        current = _instance_lookup_hold(slots, pins, 1, py_current_exception(), 1)
+        attr_cls = py_exc_builtin_class(6)
+        if ptr_is_null(attr_cls) == 0:
+            if py_exc_matches(current, attr_cls) != 0:
+                fallback = _instance_lookup_hold(
+                    slots, pins, 2, _class_lookup_in_mro(cls, cstr("__getattr__")), 1,
+                )
+                if ptr_is_null(fallback) == 0:
+                    py_clear_exception()
+                    got = _instance_lookup_call(fallback, inst, key, slots, pins, 3)
+                    return _class_require_result(
+                        got, cstr("__getattr__"),
+                        cstr("class callback returned NULL without setting an exception"),
+                    )
+    return null()
+
+
+def _instance_getattr_default_body(inst, cls, name, slots, pins):
     """`py_instance_getattr_default` for an instance the caller validated,
     with its class `cls` and a non-NULL `name`."""
     # `__class__` and `__dict__` return below before any outcome is recorded,
     # so a cached entry can never answer for them.
+    field_fallback_rooted: int = 0
+    if ptr_is_null(slots) == 0:
+        field_fallback_rooted = 1
     entry = _attr_res_find_any(cls, name)
+    if field_fallback_rooted != 0:
+        # Resolve mutable descriptors afresh on the uncommon empty-slot path.
+        entry = null()
+    # A generic lookup can reach an empty field without the indexed getter.
+    # Protect its newly exposed allocating/callback path, while keeping the
+    # populated field-cache hit constant-time. The rooted helper enters this
+    # body with the guard disabled rather than recursively looking up itself.
+    if field_fallback_rooted == 0:
+        if ptr_is_null(entry) != 0 or load_i32(entry, 12) == _ATTR_RES_DATA_DESCRIPTOR:
+            empty_index: int = _lookup_field_index(cls, name)
+            if empty_index >= 0:
+                inst = pcc_gc_note_relocation_read(inst)
+                empty_value = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + empty_index * C_POINTER_SIZE))
+                if ptr_is_null(empty_value) != 0:
+                    return _instance_missing_field_lookup(inst, empty_index, 1)
     if ptr_is_null(entry) == 0:
         kind: int = load_i32(entry, 12)
         if kind == _ATTR_RES_FIELD:
@@ -2196,7 +2645,9 @@ def _instance_getattr_default(inst, cls, name):
             )
             if ptr_is_null(field_hit) == 0:
                 py_incref(field_hit)
-            return field_hit
+                return field_hit
+            if field_fallback_rooted == 0:
+                return _instance_missing_field_lookup(inst, load_i64(entry, 16), 1)
         if kind == _ATTR_RES_METHOD:
             if ptr_is_null(_instance_dict_of(inst, cls)) != 0:
                 return py_instance_bind_method(load_ptr(entry, 16), inst, name)
@@ -2222,11 +2673,19 @@ def _instance_getattr_default(inst, cls, name):
             dyn = py_dict_new()
             if ptr_is_null(dyn) != 0:
                 return null()
+            dyn = _instance_lookup_hold(slots, pins, 2, dyn, 0)
             pcc_gc_store_ptr(inst, dyn_slot, dyn)
-            py_decref(dyn)
+            if field_fallback_rooted == 0:
+                py_decref(dyn)
+        else:
+            dyn = _instance_lookup_hold(slots, pins, 2, dyn, 1)
         py_incref(dyn)
         return dyn
-    class_attr = _class_attr_lookup_in_mro(cls, name)
+    class_attr = _instance_lookup_hold(
+        slots, pins, 1, _class_attr_lookup_in_mro(cls, name), 0,
+    )
+    if py_err_occurred() != 0:
+        return null()
     if ptr_is_null(class_attr) == 0:
         if _descriptor_is_data(class_attr):
             if _attr_res_method_cacheable() != 0:
@@ -2234,11 +2693,14 @@ def _instance_getattr_default(inst, cls, name):
                     cls, name, _ATTR_RES_DATA_DESCRIPTOR,
                     ptr_to_int(class_attr), outcome_epoch,
                 )
-            got = _descriptor_call_get(class_attr, inst, cls)
-            py_decref(class_attr)
+            got = _instance_lookup_descriptor(class_attr, inst, cls, slots, pins)
             if ptr_is_null(got) == 0:
+                if field_fallback_rooted == 0:
+                    py_decref(class_attr)
                 return got
             if py_err_occurred() != 0:
+                if field_fallback_rooted == 0:
+                    py_decref(class_attr)
                 return null()
     idx: int = _lookup_field_index(cls, name)
     if idx >= 0:
@@ -2248,19 +2710,36 @@ def _instance_getattr_default(inst, cls, name):
         v = pcc_gc_load_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE))
         if ptr_is_null(v) == 0:
             py_incref(v)
-        return v
+            if field_fallback_rooted == 0:
+                py_decref(class_attr)
+            return v
     # A method outcome holds only while the instance has no dynamic dict.
     method_cacheable: int = _attr_res_method_cacheable()
+    if idx >= 0:
+        # A later direct slot store must immediately shadow a callable class
+        # default; a cached method outcome cannot observe that store.
+        method_cacheable = 0
     dyn_slot = _dynamic_attr_slot(inst)
     if ptr_is_null(dyn_slot) == 0:
         dyn = pcc_gc_load_ptr(inst, dyn_slot)
         if ptr_is_null(dyn) == 0:
             method_cacheable = 0
-            key = py_str_new(name, strlen(name))
+            dyn = _instance_lookup_hold(slots, pins, 2, dyn, 1)
+            key = _instance_lookup_hold(slots, pins, 3, py_str_new(name, strlen(name)), 0)
+            if ptr_is_null(key) != 0:
+                return _class_require_result(null(), cstr("py_str_new"),
+                                             cstr("instance attribute key allocation failed"))
             got = py_dict_get(dyn, key)
-            py_decref(key)
+            if field_fallback_rooted == 0:
+                py_decref(key)
             if ptr_is_null(got) == 0:
+                if field_fallback_rooted == 0:
+                    py_decref(class_attr)
                 return got
+            if py_err_occurred() != 0:
+                if field_fallback_rooted == 0:
+                    py_decref(class_attr)
+                return null()
     if ptr_is_null(class_attr) == 0:
         if is_tagged_int(class_attr) == 0:
             if load_i32(class_attr, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
@@ -2270,19 +2749,27 @@ def _instance_getattr_default(inst, cls, name):
                         outcome_epoch,
                     )
                 bound = py_instance_bind_method(class_attr, inst, name)
-                py_decref(class_attr)
+                if field_fallback_rooted == 0:
+                    py_decref(class_attr)
                 return bound
-        got = _descriptor_call_get(class_attr, inst, cls)
+        got = _instance_lookup_descriptor(class_attr, inst, cls, slots, pins)
         if ptr_is_null(got) == 0:
-            py_decref(class_attr)
+            if field_fallback_rooted == 0:
+                py_decref(class_attr)
             return got
         if py_err_occurred() != 0:
-            py_decref(class_attr)
+            if field_fallback_rooted == 0:
+                py_decref(class_attr)
             return null()
+        if field_fallback_rooted != 0:
+            # The temporary frame owns the lookup reference until cleanup.
+            py_incref(class_attr)
         return class_attr
     if ptr_is_null(cls) != 0:
         return null()
-    method = _class_lookup_in_mro(cls, name)
+    method = _instance_lookup_hold(slots, pins, 4, _class_lookup_in_mro(cls, name), 1)
+    if py_err_occurred() != 0:
+        return null()
     if ptr_is_null(method) == 0:
         # Method tables may hold raw entry points; only function objects are
         # recorded, so a cached method is always safe to call directly.
@@ -2305,41 +2792,57 @@ def _instance_getattr_default(inst, cls, name):
             return dm
         if py_err_occurred() != 0:
             return null()
-    getattr_method = _class_lookup_in_mro(cls, cstr("__getattr__"))
+    getattr_method = _instance_lookup_hold(
+        slots, pins, 4, _class_lookup_in_mro(cls, cstr("__getattr__")), 1,
+    )
+    if py_err_occurred() != 0:
+        return null()
     if ptr_is_null(getattr_method) != 0:
-        if (ds_flags & 4) == 0:
+        if (ds_flags & 4) == 0 and idx < 0:
             # No class attribute, field or method answered and the instance
             # dict (checked above) did not either.
             _attr_res_store(cls, name, _ATTR_RES_ABSENT, 0, outcome_epoch)
         return null()
-    key = py_str_new(name, strlen(name))
+    key = _instance_lookup_hold(slots, pins, 5, py_str_new(name, strlen(name)), 0)
     if ptr_is_null(key) != 0:
         return null()
     # The method-table slot for a compiled __getattr__ holds a PY_TYPE_FUNC
     # object, not a raw code pointer; invoke it via py_obj_call in that case.
     # call_ptr2 alone treats the object as a code address and crashes. Mirrors
     # class_call_binary_method in py_class.c.
-    if is_tagged_int(getattr_method) == 0:
+    if _ptr_can_have_header(getattr_method):
         if load_i32(getattr_method, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
-            gargs = py_tuple_new(2)
+            gargs = _instance_lookup_hold(slots, pins, 6, py_tuple_new(2), 0)
             if ptr_is_null(gargs) != 0:
                 _class_require_result(
                     null(),
                     cstr("py_tuple_new"),
                     cstr("class callback argument tuple allocation failed"),
                 )
-                py_decref(key)
+                if field_fallback_rooted == 0:
+                    py_decref(key)
                 return null()
             py_tuple_set_item(gargs, 0, inst)
+            if py_err_occurred() != 0:
+                if field_fallback_rooted == 0:
+                    py_decref(gargs)
+                    py_decref(key)
+                return null()
             py_tuple_set_item(gargs, 1, key)
+            if py_err_occurred() != 0:
+                if field_fallback_rooted == 0:
+                    py_decref(gargs)
+                    py_decref(key)
+                return null()
             got = py_obj_call(getattr_method, gargs, null())
             _class_require_result(
                 got,
                 cstr("__getattr__"),
                 cstr("class callback returned NULL without setting an exception"),
             )
-            py_decref(gargs)
-            py_decref(key)
+            if field_fallback_rooted == 0:
+                py_decref(gargs)
+                py_decref(key)
             return got
     got = call_ptr2(getattr_method, inst, key)
     _class_require_result(
@@ -2347,7 +2850,8 @@ def _instance_getattr_default(inst, cls, name):
         cstr("__getattr__"),
         cstr("class callback returned NULL without setting an exception"),
     )
-    py_decref(key)
+    if field_fallback_rooted == 0:
+        py_decref(key)
     return got
 
 
@@ -2368,6 +2872,12 @@ def py_instance_getattr(inst, name):
     if ptr_is_null(getattribute_method) != 0:
         _no_getattribute_store(cls, probe_epoch)
     if ptr_is_null(getattribute_method) == 0:
+        index: int = _lookup_field_index(cls, name)
+        if index >= 0:
+            inst = pcc_gc_note_relocation_read(inst)
+            value = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + index * C_POINTER_SIZE))
+            if ptr_is_null(value) != 0:
+                return _instance_missing_field_lookup(inst, index, 2)
         key = py_str_new(name, strlen(name))
         if ptr_is_null(key) != 0:
             return null()
@@ -2730,12 +3240,10 @@ def py_instance_dealloc(o) -> None:
                 store_ptr(fields_base, i * C_POINTER_SIZE, null())
                 py_decref(v)
             i = i + 1
-        dyn_slot = _dynamic_attr_slot(o)
-        if ptr_is_null(dyn_slot) == 0:
-            dyn = pcc_gc_load_ptr(o, dyn_slot)
-            if ptr_is_null(dyn) == 0:
-                store_ptr(dyn_slot, 0, null())
-                py_decref(dyn)
+        # Detach before deferred decref/finalizers, including slots-only
+        # protocol backing stores. The store owner resolves forwarding and
+        # preserves the NULL-before-reentrant-cleanup invariant.
+        pcc_gc_store_ptr(o, _instance_reserved_owner_slot(o, cls), null())
     delayed_zpage_note: int = 0
     if _gc_backend_selected_fast() == 4:
         if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & 65536) != 0:
@@ -2770,13 +3278,7 @@ def py_dataclass_replace(obj, n_overrides: int, names, values):
             py_incref(v)
             store_ptr(dst_fields, i * C_POINTER_SIZE, v)
         i = i + 1
-    src_dyn_slot = _dynamic_attr_slot(obj)
-    dst_dyn_slot = _dynamic_attr_slot(dst)
-    if ptr_is_null(src_dyn_slot) == 0:
-        dyn = pcc_gc_load_ptr(obj, src_dyn_slot)
-        if ptr_is_null(dyn) == 0:
-            py_incref(dyn)
-            store_ptr(dst_dyn_slot, 0, dyn)
+    _copy_instance_reserved_owner(obj, dst, cls)
 
     j: int = 0
     while j < n_overrides:
@@ -2828,6 +3330,8 @@ def py_dataclass_replace_from_dict(obj, overrides):
             py_incref(v)
             store_ptr(dst_fields, i * C_POINTER_SIZE, v)
         i = i + 1
+
+    _copy_instance_reserved_owner(obj, dst, cls)
 
     entries = load_ptr(overrides, PYDICTOBJECT_ENTRIES_OFFSET)
     entries_used: int = load_i64(overrides, PYDICTOBJECT_ENTRIES_USED_OFFSET)
@@ -2983,6 +3487,8 @@ def _class_construct_finish(roots, borrowed, success: int):
 def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     # Fixed frames reuse ordinary tuple/slot contracts; class and MergeSeq
     # public layouts are unchanged. Inputs remain borrowed until copied.
+    if n_fields < 0:
+        n_fields = 0
     handles = _class_construct_input_roots(bases, n_bases)
     roots = stack_alloc(40)
     memset(roots, 0, 40)
@@ -3046,8 +3552,6 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     c = pcc_gc_load_ptr(null(), roots)
     store_i32(c, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET, user_tag)
     n_slots: int = n_fields + 1
-    if n_slots < 0:
-        n_slots = 1
     inst_size: int = PYINSTANCEOBJECT_SIZE + n_slots * C_POINTER_SIZE
     if inst_size > 0x7FFFFFFF:
         inst_size = 0x7FFFFFFF
@@ -3423,3 +3927,458 @@ pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 define_global_i32("pcc_bound_callback_frame_map", 11)
 
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+
+
+# Slot-based call boundary. Every managed scratch slot is registered EMPTY
+# before reading any incoming operand. Native code pointers live exclusively
+# in the untraced lookup record, never in this managed root array.
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+
+def _special_open(slots, tokens, handles) -> int:
+    memset(slots, 0, 14 * C_POINTER_SIZE)
+    memset(tokens, 0, 14 * C_POINTER_SIZE)
+    memset(handles, 0, 14 * C_POINTER_SIZE)
+    count: int = 0
+    while count < 14:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            return count
+        store_ptr(handles, count * C_POINTER_SIZE, handle)
+        count = count + 1
+    return count
+
+
+def _special_error(message) -> int:
+    py_runtime_error_if_unset(cstr("slot-based special call"), message)
+    return -1
+
+
+def _special_copy(slots, tokens, index: int, source, borrowed: int) -> int:
+    destination = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = 0
+    if ptr_is_null(source) == 0:
+        if borrowed != 0:
+            token = pcc_gc_root_copy_borrowed_lease(destination, source)
+        else:
+            token = pcc_gc_root_copy_lease(destination, source)
+    if token < 0:
+        # Lookup can hold an outer graph transaction. Allocate the diagnostic
+        # only in the public caller after that transaction has been released.
+        return -1
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    return 0
+
+
+def _special_adopt(slots, tokens, index: int) -> int:
+    # The producer must have stored its owned result directly into this
+    # already registered empty slot, with no intervening call or poll.
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        return _special_error(cstr("special-call result lease acquisition failed"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+def _special_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = load_i64(tokens, index * C_POINTER_SIZE)
+    if pcc_gc_foreign_lease_release(slot, token) != 0:
+        # Returning would leave a counted lease referring to dead stack
+        # storage. This is an internal token invariant, not a Python error.
+        pcc_platform_abort()
+        return
+    store_i64(tokens, index * C_POINTER_SIZE, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _special_close(slots, tokens, handles, count: int, suspended: int) -> None:
+    if suspended != 0:
+        # Keep callback failure independent of the exception that was pending
+        # on entry, and protect it from operand finalizers during cleanup.
+        py_tls_exc_swap_slot(ptr_add(slots, 13 * C_POINTER_SIZE))
+    index: int = 12
+    while index > 0:
+        _special_drop(slots, tokens, index)
+        index = index - 1
+    if suspended != 0:
+        py_clear_exception()
+        if ptr_is_null(load_ptr(slots, 13 * C_POINTER_SIZE)) == 0:
+            pcc_gc_store_root(slots, null())
+            py_clear_exception()
+            py_tls_exc_swap_slot(ptr_add(slots, 13 * C_POINTER_SIZE))
+        else:
+            py_tls_exc_swap_slot(slots)
+    index = 0
+    while index < count:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
+        index = index + 1
+
+
+def _special_name_equal(key, name, length: int) -> int:
+    if ptr_is_null(key) != 0 or is_tagged_int(key) != 0:
+        return 0
+    if load_i32(key, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_STR:
+        return 0
+    if load_i64(key, PYSTROBJECT_BYTE_LEN_OFFSET) != length:
+        return 0
+    index: int = 0
+    while index < length:
+        if load_i8(key, PYSTROBJECT_DATA_OFFSET + index) != load_i8(name, index):
+            return 0
+        index = index + 1
+    return 1
+
+
+def _special_native_instance(value) -> bool:
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        return False
+    # Extension tags occupy the same high range, but extension instances do
+    # not have PyInstanceObject.cls. Their call protocol belongs to the C-API
+    # kernel, not this native class/descriptor lookup.
+    tag: int = load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    if pcc_capi_is_cext_type_tag(tag) != 0:
+        return False
+    return _ptr_is_instance(value)
+
+
+def _special_lookup_locked(cls, name, record):
+    """One C3 pass: namespace then native table at each individual owner.
+
+    record.kind: 0 absent, 1 owning namespace slot, 2 borrowed managed native
+    metadata, 3 raw native address. Only record.raw may contain a code pointer.
+    No key allocation, descriptor callback or foreign invocation occurs here.
+    """
+    store_i64(record, 0, 0)
+    store_ptr(record, C_POINTER_SIZE, null())
+    length: int = strlen(name)
+    count: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
+    mro = load_ptr(cls, PYCLASSOBJECT_MRO_OFFSET)
+    index: int = 0
+    while index < count:
+        owner = pcc_gc_load_ptr(cls, ptr_add(mro, index * C_POINTER_SIZE))
+        if ptr_is_null(owner) == 0:
+            attrs = pcc_gc_resolve_root_slot_unlocked(ptr_add(owner, PYCLASSOBJECT_ATTRS_OFFSET), 0)
+            if ptr_is_null(attrs) == 0:
+                entries = load_ptr(attrs, PYDICTOBJECT_ENTRIES_OFFSET)
+                used: int = load_i64(attrs, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+                entry: int = 0
+                while entry < used:
+                    offset: int = entry * DICTENTRY_SIZE
+                    # Dictionary entries own their keys. GC3 forwarding must
+                    # transfer that slot's reference, not just heal a borrowed
+                    # raw copy or overwrite it with the uncounted read barrier.
+                    key = pcc_gc_resolve_root_slot_unlocked(ptr_add(entries, offset + DICTENTRY_KEY_OFFSET), 0)
+                    if _special_name_equal(key, name, length) != 0:
+                        slot = ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET)
+                        if ptr_is_null(load_ptr(slot, 0)) == 0:
+                            store_i64(record, 0, 1)
+                            return slot
+                    entry = entry + 1
+            methods = load_ptr(owner, PYCLASSOBJECT_METHODS_OFFSET)
+            method_count: int = load_i32(owner, PYCLASSOBJECT_N_METHODS_OFFSET)
+            entry = 0
+            while entry < method_count:
+                offset = entry * PYCLASSMETHOD_SIZE
+                method_name = load_ptr(methods, offset + PYCLASSMETHOD_NAME_OFFSET)
+                if _strs_eq(method_name, name) != 0:
+                    slot = ptr_add(methods, offset + PYCLASSMETHOD_FUNC_OFFSET)
+                    value = load_ptr(slot, 0)
+                    if ptr_is_null(value) == 0:
+                        if is_tagged_int(value) != 0 or _ptr_can_have_header(value):
+                            store_i64(record, 0, 2)
+                            return slot
+                        store_i64(record, 0, 3)
+                        store_ptr(record, C_POINTER_SIZE, value)
+                        return null()
+                entry = entry + 1
+        index = index + 1
+    return null()
+
+
+def _special_tuple_item(slots, tokens, index: int, tuple_index: int, item: int) -> int:
+    # The tuple has a counted address lease; its inline slot address remains
+    # valid while copy_lease acquires its own graph transaction.
+    owner = load_ptr(slots, tuple_index * C_POINTER_SIZE)
+    source = ptr_add(owner, PYTUPLEOBJECT_ITEMS_OFFSET + item * C_POINTER_SIZE)
+    return _special_copy(slots, tokens, index, source, 0)
+
+
+def _special_tuple_new(slots, tokens, index: int, length: int) -> int:
+    store_ptr(slots, index * C_POINTER_SIZE, py_tuple_new(length))
+    if _special_adopt(slots, tokens, index) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, index * C_POINTER_SIZE)) != 0:
+        return _special_error(cstr("special-call argument tuple allocation failed"))
+    return 0
+
+
+def _special_prepend(slots, tokens) -> int:
+    # slots6 binding receiver, 2 original args, 7 full args, 8 current item.
+    count: int = 0
+    if ptr_is_null(load_ptr(slots, 2 * C_POINTER_SIZE)) == 0:
+        count = py_tuple_len(load_ptr(slots, 2 * C_POINTER_SIZE))
+    if _special_tuple_new(slots, tokens, 7, count + 1) != 0:
+        return -1
+    py_tuple_set_item(load_ptr(slots, 7 * C_POINTER_SIZE), 0, load_ptr(slots, 6 * C_POINTER_SIZE))
+    index: int = 0
+    while index < count:
+        if _special_tuple_item(slots, tokens, 8, 2, index) != 0:
+            return -1
+        py_tuple_set_item(load_ptr(slots, 7 * C_POINTER_SIZE), index + 1, load_ptr(slots, 8 * C_POINTER_SIZE))
+        _special_drop(slots, tokens, 8)
+        if py_err_occurred() != 0:
+            return -1
+        index = index + 1
+    return 0
+
+
+def _special_validate_arguments(slots) -> int:
+    args = load_ptr(slots, 2 * C_POINTER_SIZE)
+    if ptr_is_null(args) == 0:
+        if is_tagged_int(args) != 0 or load_i32(args, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_TUPLE:
+            py_raise_owned(py_exc_new(3, cstr("call positional arguments must be a tuple")))
+            return -1
+    kwargs = load_ptr(slots, 3 * C_POINTER_SIZE)
+    if ptr_is_null(kwargs) == 0 and ptr_eq(kwargs, global_load_ptr("py_None")) == 0:
+        if is_tagged_int(kwargs) != 0 or load_i32(kwargs, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_DICT:
+            py_raise_owned(py_exc_new(3, cstr("call keyword arguments must be a dict")))
+            return -1
+    return 0
+
+
+def _special_call_native(slots, tokens, native) -> int:
+    count: int = 0
+    if ptr_is_null(load_ptr(slots, 2 * C_POINTER_SIZE)) == 0:
+        count = py_tuple_len(load_ptr(slots, 2 * C_POINTER_SIZE))
+    kwargs = load_ptr(slots, 3 * C_POINTER_SIZE)
+    if ptr_is_null(kwargs) == 0 and ptr_eq(kwargs, global_load_ptr("py_None")) == 0:
+        if py_dict_len(kwargs) != 0:
+            py_raise_owned(py_exc_new(3, cstr("native special method does not accept keyword arguments")))
+            return -1
+    if count > 3:
+        py_raise_owned(py_exc_new(3, cstr("native special method accepts at most three arguments")))
+        return -1
+    index: int = 0
+    while index < count:
+        if _special_tuple_item(slots, tokens, 6 + index, 2, index) != 0:
+            return -1
+        index = index + 1
+    if count == 0:
+        store_ptr(slots, 12 * C_POINTER_SIZE, call_ptr1(native, load_ptr(slots, C_POINTER_SIZE)))
+    elif count == 1:
+        store_ptr(slots, 12 * C_POINTER_SIZE, call_ptr2(native, load_ptr(slots, C_POINTER_SIZE), load_ptr(slots, 6 * C_POINTER_SIZE)))
+    elif count == 2:
+        store_ptr(slots, 12 * C_POINTER_SIZE, call_ptr3(native, load_ptr(slots, C_POINTER_SIZE), load_ptr(slots, 6 * C_POINTER_SIZE), load_ptr(slots, 7 * C_POINTER_SIZE)))
+    else:
+        store_ptr(slots, 12 * C_POINTER_SIZE, call_ptr4(native, load_ptr(slots, C_POINTER_SIZE), load_ptr(slots, 6 * C_POINTER_SIZE), load_ptr(slots, 7 * C_POINTER_SIZE), load_ptr(slots, 8 * C_POINTER_SIZE)))
+    return _special_adopt(slots, tokens, 12)
+
+
+def _special_bind_and_call(slots, tokens, record) -> int:
+    if load_i64(record, 0) == 3:
+        return _special_call_native(slots, tokens, load_ptr(record, C_POINTER_SIZE))
+    descriptor = load_ptr(slots, 5 * C_POINTER_SIZE)
+    tag: int = -1
+    if is_tagged_int(descriptor) == 0:
+        tag = load_i32(descriptor, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    prepend: int = 0
+    if tag == PY_TYPE_FUNC:
+        if _special_copy(slots, tokens, 9, ptr_add(slots, 5 * C_POINTER_SIZE), 0) != 0:
+            return -1
+        if _special_copy(slots, tokens, 6, ptr_add(slots, C_POINTER_SIZE), 0) != 0:
+            return -1
+        prepend = 1
+    elif tag == PY_TYPE_STATICMETHOD or tag == PY_TYPE_CLASSMETHOD:
+        offset: int = PYSTATICMETHODOBJECT_FUNC_OFFSET
+        if tag == PY_TYPE_CLASSMETHOD:
+            offset = PYCLASSMETHODOBJECT_FUNC_OFFSET
+        source = ptr_add(load_ptr(slots, 5 * C_POINTER_SIZE), offset)
+        result: int = _special_copy(slots, tokens, 9, source, 0)
+        if result != 0:
+            return -1
+        if tag == PY_TYPE_CLASSMETHOD:
+            if _special_copy(slots, tokens, 6, ptr_add(slots, 4 * C_POINTER_SIZE), 0) != 0:
+                return -1
+            prepend = 1
+    elif tag == PY_TYPE_PROPERTY:
+        source = ptr_add(load_ptr(slots, 5 * C_POINTER_SIZE), PYPROPERTYOBJECT_FGET_OFFSET)
+        result = _special_copy(slots, tokens, 11, source, 0)
+        if result != 0:
+            return -1
+        if ptr_is_null(load_ptr(slots, 11 * C_POINTER_SIZE)) != 0:
+            py_raise_owned(py_exc_new(6, cstr("unreadable attribute")))
+            return -1
+        if _special_tuple_new(slots, tokens, 10, 1) != 0:
+            return -1
+        py_tuple_set_item(load_ptr(slots, 10 * C_POINTER_SIZE), 0, load_ptr(slots, C_POINTER_SIZE))
+        if py_obj_call_slots(ptr_add(slots, 11 * C_POINTER_SIZE), ptr_add(slots, 10 * C_POINTER_SIZE), null(), ptr_add(slots, 9 * C_POINTER_SIZE)) != 0:
+            return -1
+        if _special_adopt(slots, tokens, 9) != 0:
+            return -1
+    else:
+        if _special_tuple_new(slots, tokens, 10, 2) != 0:
+            return -1
+        py_tuple_set_item(load_ptr(slots, 10 * C_POINTER_SIZE), 0, load_ptr(slots, C_POINTER_SIZE))
+        py_tuple_set_item(load_ptr(slots, 10 * C_POINTER_SIZE), 1, load_ptr(slots, 4 * C_POINTER_SIZE))
+        get_handled = stack_alloc(8)
+        store_i64(get_handled, 0, 0)
+        if py_obj_special_call_slots(ptr_add(slots, 5 * C_POINTER_SIZE), cstr("__get__"), ptr_add(slots, 10 * C_POINTER_SIZE), null(), ptr_add(slots, 9 * C_POINTER_SIZE), get_handled) != 0:
+            return -1
+        if load_i64(get_handled, 0) == 0:
+            if _special_copy(slots, tokens, 9, ptr_add(slots, 5 * C_POINTER_SIZE), 0) != 0:
+                return -1
+        elif _special_adopt(slots, tokens, 9) != 0:
+            return -1
+    args_slot = ptr_add(slots, 2 * C_POINTER_SIZE)
+    if prepend != 0:
+        if _special_prepend(slots, tokens) != 0:
+            return -1
+        args_slot = ptr_add(slots, 7 * C_POINTER_SIZE)
+    if py_obj_call_slots(ptr_add(slots, 9 * C_POINTER_SIZE), args_slot, ptr_add(slots, 3 * C_POINTER_SIZE), ptr_add(slots, 12 * C_POINTER_SIZE)) != 0:
+        return -1
+    return _special_adopt(slots, tokens, 12)
+
+
+def _special_publish(slots, tokens, result_slot) -> int:
+    source = ptr_add(slots, 12 * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(source, 0)) != 0:
+        return _special_error(cstr("special-call callback returned NULL without an exception"))
+    if py_err_occurred() != 0:
+        return -1
+    if pcc_gc_root_move(result_slot, source) != 0:
+        return _special_error(cstr("special-call result destination must be empty"))
+    token: int = load_i64(tokens, 12 * C_POINTER_SIZE)
+    store_i64(tokens, 12 * C_POINTER_SIZE, 0)
+    if pcc_gc_foreign_lease_release(result_slot, token) != 0:
+        pcc_platform_abort()
+        return -1
+    return 0
+
+
+@c_abi_export("py_obj_special_call_slots")
+def py_obj_special_call_slots(receiver_slot, name, args_slot, kwargs_slot, result_slot, handled) -> int:
+    """Call a named type-level special method from authoritative owning roots.
+
+    Status 0 means absent or success; handled distinguishes them. It is zero
+    only on absence, one on selection or any failure. result_slot receives one
+    owned result on success. NULL args/kwargs slot pointers denote emptiness.
+    """
+    if ptr_is_null(handled) == 0:
+        store_i64(handled, 0, 1)
+    if ptr_is_null(receiver_slot) != 0 or ptr_is_null(result_slot) != 0 or ptr_is_null(name) != 0:
+        return _special_error(cstr("special call requires source and output root slots"))
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, 1, receiver_slot, 0)
+        if status == 0:
+            status = _special_copy(slots, tokens, 2, args_slot, 0)
+        if status == 0:
+            status = _special_copy(slots, tokens, 3, kwargs_slot, 0)
+        if status == 0:
+            status = _special_validate_arguments(slots)
+        if status == 0:
+            record = stack_alloc(2 * C_POINTER_SIZE)
+            memset(record, 0, 2 * C_POINTER_SIZE)
+            receiver = load_ptr(slots, C_POINTER_SIZE)
+            owner_source = null()
+            if _ptr_is_class(receiver):
+                owner_source = ptr_add(receiver, PYCLASSOBJECT_METACLASS_OFFSET)
+            elif _special_native_instance(receiver):
+                owner_source = ptr_add(receiver, PYINSTANCEOBJECT_CLS_OFFSET)
+            if ptr_is_null(owner_source) == 0:
+                status = _special_copy(slots, tokens, 4, owner_source, 1)
+            if status == 0 and ptr_is_null(load_ptr(slots, 4 * C_POINTER_SIZE)) == 0:
+                plan = stack_alloc(256)
+                prepared: int = 0
+                pcc_py_gc_minor_graph_lock()
+                method_slot = _special_lookup_locked(load_ptr(slots, 4 * C_POINTER_SIZE), name, record)
+                kind: int = load_i64(record, 0)
+                if kind == 1 or kind == 2:
+                    token: int = pcc_gc_root_copy_lease_prepare_locked(ptr_add(slots, 5 * C_POINTER_SIZE), method_slot, 1 if kind == 2 else 0, plan)
+                    prepared = 1
+                    if token < 0:
+                        status = -1
+                    else:
+                        store_i64(tokens, 5 * C_POINTER_SIZE, token)
+                pcc_py_gc_minor_graph_unlock()
+                if prepared != 0:
+                    pcc_gc_root_copy_lease_finish(plan)
+            if status == 0:
+                if load_i64(record, 0) == 0:
+                    if ptr_is_null(handled) == 0:
+                        store_i64(handled, 0, 0)
+                else:
+                    status = _special_bind_and_call(slots, tokens, record)
+                    if status == 0:
+                        status = _special_publish(slots, tokens, result_slot)
+    else:
+        _special_error(cstr("special-call root registration failed"))
+    if status < 0:
+        _special_error(cstr("special-call binding failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+@c_abi_export("py_obj_call_slots")
+def py_obj_call_slots(callable_slot, args_slot, kwargs_slot, result_slot) -> int:
+    """Slot entry for generic calls; raw py_obj_call remains compatibility ABI."""
+    if ptr_is_null(callable_slot) != 0 or ptr_is_null(result_slot) != 0:
+        return _special_error(cstr("call requires source and output root slots"))
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, 1, callable_slot, 0)
+        if status == 0:
+            status = _special_copy(slots, tokens, 2, args_slot, 0)
+        if status == 0:
+            status = _special_copy(slots, tokens, 3, kwargs_slot, 0)
+        if status == 0:
+            status = _special_validate_arguments(slots)
+        if status == 0:
+            selected = stack_alloc(8)
+            store_i64(selected, 0, 0)
+            callable_obj = load_ptr(slots, C_POINTER_SIZE)
+            tag: int = -1
+            if ptr_is_null(callable_obj) == 0 and is_tagged_int(callable_obj) == 0:
+                tag = load_i32(callable_obj, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+            if tag == PY_TYPE_STATICMETHOD:
+                source = ptr_add(callable_obj, PYSTATICMETHODOBJECT_FUNC_OFFSET)
+                status = _special_copy(slots, tokens, 9, source, 0)
+                if status == 0:
+                    status = py_obj_call_slots(ptr_add(slots, 9 * C_POINTER_SIZE), ptr_add(slots, 2 * C_POINTER_SIZE), ptr_add(slots, 3 * C_POINTER_SIZE), ptr_add(slots, 12 * C_POINTER_SIZE))
+                store_i64(selected, 0, 1)
+            elif _ptr_is_class(callable_obj) and py_obj_call_context_is_deferred() != 0:
+                status = py_obj_call_slots_sync(ptr_add(slots, C_POINTER_SIZE), ptr_add(slots, 2 * C_POINTER_SIZE), ptr_add(slots, 3 * C_POINTER_SIZE), ptr_add(slots, 12 * C_POINTER_SIZE))
+                store_i64(selected, 0, 1)
+            elif _ptr_is_class(callable_obj) or _special_native_instance(callable_obj):
+                status = py_obj_special_call_slots(ptr_add(slots, C_POINTER_SIZE), cstr("__call__"), ptr_add(slots, 2 * C_POINTER_SIZE), ptr_add(slots, 3 * C_POINTER_SIZE), ptr_add(slots, 12 * C_POINTER_SIZE), selected)
+            if status == 0 and load_i64(selected, 0) == 0:
+                store_ptr(slots, 12 * C_POINTER_SIZE, py_obj_call_default(load_ptr(slots, C_POINTER_SIZE), load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE)))
+            if status == 0:
+                status = _special_adopt(slots, tokens, 12)
+            if status == 0:
+                status = _special_publish(slots, tokens, result_slot)
+    else:
+        _special_error(cstr("call root registration failed"))
+    if status < 0:
+        _special_error(cstr("call failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    return status

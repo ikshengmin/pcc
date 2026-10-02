@@ -31,6 +31,9 @@ class Layer1InitMixin:
         # make the stack real constructor state so pcc1 observes handler
         # pushes performed by exception lowering.
         self._active_handler_excs: list = []
+        self._handled_exception_scopes: list = []
+        self._return_handoff_sites: list = []
+        self._return_cleanup_roots: list = []
         # The for-loop currently being lowered, so the for-target
         # representation-join analysis can find its position in the
         # enclosing function body.  Real constructor state for the
@@ -94,6 +97,7 @@ class Layer1InitMixin:
         # body belonging to every executable FuncDef statement.
         self._funcdef_functions: dict[int, ir.Function] = {}
         self._native_symbol_funcdefs: dict[str, FuncDef] = {}
+        self._manual_pointer_abi_functions: set[str] = set()
         self._function_definition_ordinals: dict[str, int] = {}
         self._duplicate_module_function_names: set[str] = set()
         self._c_abi_export_symbols: set[str] = set()
@@ -169,7 +173,7 @@ class Layer1InitMixin:
         self._async_body_depth = 0
         self.class_lowering: ClassLowering = ClassLowering(self)
         self._current_global_names: set[str] = set()
-        self.env: dict[str, tuple[ir.AllocaInstr, ir.Type, Type]] = {}
+        self.env: dict[str, tuple[ir.Value, ir.Type, Type]] = {}
         self._module_globals: dict[str, tuple[ir.GlobalVariable, Type]] = {}
         self._module_global_init_flags: dict[str, ir.GlobalVariable] = {}
         # The pipeline fills this with the parser input path.  Keep it explicit
@@ -257,6 +261,7 @@ class Layer1InitMixin:
             module.name
         )
         self._native_function_object_exports: dict[str, bool] = {}
+        self._native_boxed_int_functions: dict[str, bool] = {}
         self._native_module_aliases: dict[str, str] = {}
         self._native_module_constant_bindings: dict[str, dict] = {}
         self._native_module_object_aliases: dict[str, str] = {}

@@ -6,7 +6,7 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import BoolExpr, BoolLit, BoolType, ByteArrayType, BytesType, Call, ClassType, Compare, ComplexType, DictType, DynType, Expr, FloatLit, FloatType, IntLit, IntType, ListType, MemoryViewType, Name, NoneLit, NoneType, Slice, StrLit, StrType, Subscript, TupleExpr, TupleType, Type
+from pcc.frontends.python.py_ast import RawPointerType, BoolExpr, BoolLit, BoolType, ByteArrayType, BytesType, Call, ClassType, Compare, ComplexType, DictType, DynType, Expr, FloatLit, FloatType, IntLit, IntType, ListType, MemoryViewType, Name, NoneLit, NoneType, Slice, StrLit, StrType, Subscript, TupleExpr, TupleType, Type
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.unary_call_lowering import is_i64_int_literal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
@@ -171,6 +171,20 @@ class CompareMembershipLoweringMixin:
         return hit
 
     def _emit_compare(self, expr: Compare) -> ir.Value:
+        if isinstance(expr.lhs.ty, RawPointerType) or isinstance(expr.rhs.ty, RawPointerType):
+            manual = (getattr(self, "_runtime_port_module", False)
+                      or getattr(self, "_freestanding_module", False))
+            types_ok = (isinstance(expr.lhs.ty, RawPointerType) and isinstance(expr.rhs.ty, RawPointerType)) or (
+                manual and isinstance(expr.lhs.ty, (RawPointerType, DynType))
+                and isinstance(expr.rhs.ty, (RawPointerType, DynType)))
+            if not types_ok or expr.op not in ("==", "!=", "is", "is not"):
+                raise NotImplementedError("raw pointer comparison requires compatible pointer views")
+            lhs = self._emit_expr(expr.lhs)
+            rhs = self._emit_expr(expr.rhs)
+            if not isinstance(lhs.type, ir.PointerType) or not isinstance(rhs.type, ir.PointerType):
+                raise NotImplementedError("raw pointer comparison requires ptr ABI values")
+            op = "==" if expr.op == "is" else "!=" if expr.op == "is not" else expr.op
+            return self.builder.icmp_unsigned(op, lhs, rhs, name=self._fresh("raw.ptr.compare"))
         builtin_type_cmp = self._emit_builtin_type_name_compare(expr)
         if builtin_type_cmp is not None:
             return builtin_type_cmp

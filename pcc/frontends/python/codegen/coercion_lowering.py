@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import BoolType, ClassType, DynType, FloatType, IntType, NoneType, Type, ValueArrayType
+from pcc.frontends.python.py_ast import RawPointerType, BoolType, ClassType, DynType, FloatType, IntType, NoneType, Type, ValueArrayType
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.raw_pointer_provenance import raw_abi_expression_provenance
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
 _I1 = ir.IntType(1)
@@ -308,7 +309,7 @@ class CoercionLoweringMixin:
             f"Layer 1 cannot compute truthiness of {type(ty).__name__}"
         )
 
-    def _coerce(self, v: ir.Value, from_ty: Type, to_ty: Type) -> ir.Value:
+    def _coerce(self, v: ir.Value, from_ty: Type, to_ty: Type, source_expr=None) -> ir.Value:
         """Coerce ``v`` (typed ``from_ty``) to ``to_ty``.
 
         Covers the L1 scalar matrix plus the L2 object-pass-through and
@@ -316,6 +317,35 @@ class CoercionLoweringMixin:
         """
         if from_ty is None or to_ty is None:
             return v
+        if isinstance(from_ty, RawPointerType) or isinstance(to_ty, RawPointerType):
+            if isinstance(from_ty, RawPointerType) and isinstance(to_ty, RawPointerType):
+                return v
+            if (isinstance(to_ty, RawPointerType)
+                    and isinstance(from_ty, (DynType, IntType))
+                    and source_expr is not None
+                    and raw_abi_expression_provenance(self, source_expr)):
+                if isinstance(from_ty, IntType):
+                    return self._pointer_or_address_operand(v, from_ty)
+                if isinstance(v.type, ir.PointerType):
+                    return v
+            # The existing freestanding implicit ABI maps missing/dyn
+            # annotations to ptr, never an object slot or unknown scalar.
+            if (getattr(self, "_freestanding_module", False)
+                    and isinstance(v.type, ir.PointerType)
+                    and isinstance(from_ty, (DynType, RawPointerType))
+                    and isinstance(to_ty, (DynType, RawPointerType))):
+                return v
+            # Runtime helpers use the exact raw NULL constant as an absent
+            # pointer/error sentinel. It is not Python None and carries no
+            # owner. No non-null raw value or computed cast qualifies.
+            if (getattr(self, "_runtime_port_module", False)
+                    and isinstance(from_ty, RawPointerType)
+                    and isinstance(to_ty, DynType)
+                    and isinstance(v, ir.Constant)
+                    and isinstance(v.type, ir.PointerType)
+                    and v.value is None):
+                return v
+            raise NotImplementedError("raw pointer cannot cross an implicit Python value boundary; use ptr_to_int or int_to_ptr explicitly")
         if isinstance(from_ty, ValueArrayType) and (
             isinstance(to_ty, DynType) or self._is_object(to_ty)
         ):
@@ -323,7 +353,8 @@ class CoercionLoweringMixin:
                 "pcc.array cannot cross an object or Any boundary; "
                 "select an element first"
             )
-        if isinstance(to_ty, IntType) and self._int_exprs_are_boxed():
+        if (isinstance(to_ty, IntType) and self._int_exprs_are_boxed()
+                and to_ty.name not in ("pcc.i64", "pcc.u64")):
             if isinstance(v.type, ir.PointerType):
                 return v
             i64 = self._to_int64(v, from_ty)
@@ -460,7 +491,8 @@ class CoercionLoweringMixin:
         """
         if self._is_object(target_ty) or isinstance(target_ty, DynType):
             return pyobj
-        if isinstance(target_ty, IntType) and self._int_exprs_are_boxed():
+        if (isinstance(target_ty, IntType) and self._int_exprs_are_boxed()
+                and target_ty.name not in ("pcc.i64", "pcc.u64")):
             return pyobj
         if self._is_native_scalar_type(target_ty):
             return marshal.marshal_from_object(

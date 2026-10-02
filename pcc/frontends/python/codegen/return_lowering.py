@@ -7,9 +7,10 @@ import sys
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import IntType, Name, Return
+from pcc.frontends.python.py_ast import DynType, IntType, Name, RawPointerType, Return
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
 
 
 class ReturnLoweringMixin:
@@ -24,29 +25,62 @@ class ReturnLoweringMixin:
             "[pcc.frontends.c.codegen] " + mod_name + ":" + func_name + ":return " + label + "\n"
         )
 
+    def _emit_cancel_pending_return_roots(self, loop_exit: bool = False, root_base: int = 0) -> None:
+        for owner, slot, loop_depth in reversed(self._return_cleanup_roots[root_base:]):
+            if owner is self.current_function and (
+                not loop_exit or len(self.loop_stack) <= loop_depth
+            ):
+                self._clear_exception_selection_owner_slot(slot)
+
     def _emit_finally_entry(self, entry) -> None:
         if callable(entry):
             entry()
-        else:
-            self._emit_stmts(entry)
+            return
+        if isinstance(entry, tuple) and len(entry) == 4 and entry[0] in ("pcc.finally.body", "pcc.finally.call"):
+            outer_error = entry[2]
+            root_base = entry[3]
+            cleanup = None
+            for owner, _slot, _loop_depth in self._return_cleanup_roots[root_base:]:
+                if owner is self.current_function:
+                    cleanup = self.current_function.append_basic_block(name=self._fresh("finally.return.error"))
+                    break
+            previous = self._push_try_err_block(cleanup or outer_error)
+            try:
+                if entry[0] == "pcc.finally.call":
+                    entry[1]()
+                else:
+                    self._emit_stmts(entry[1])
+            finally:
+                self._restore_try_err_block(previous)
+            continuation = self.builder._block
+            if cleanup is not None:
+                self.builder.position_at_end(cleanup)
+                self._emit_cancel_pending_return_roots(root_base=root_base)
+                self.builder.branch(outer_error or self._ensure_fn_err_exit())
+                self.builder.position_at_end(continuation)
+            return
+        self._emit_stmts(entry)
 
     def _emit_pending_finally_blocks(self) -> None:
         self._return_log("finally begin")
         stack = self._finally_stack
-        if not stack or self._emitting_finally:
-            self._return_log("finally skip")
+        if not stack:
             return
-        prev = self._emitting_finally
-        self._emitting_finally = True
-        idx = len(stack) - 1
-        while idx >= 0:
-            if self._builder_block_is_terminated():
-                self._emitting_finally = prev
-                self._return_log("finally terminated")
-                return
-            self._emit_finally_entry(stack[idx])
-            idx -= 1
-        self._emitting_finally = prev
+        previous = self._emitting_finally
+        try:
+            index = len(stack) - 1
+            while index >= 0:
+                if self._builder_block_is_terminated():
+                    return
+                # An overriding exit must unwind the remaining OUTER entries,
+                # without recursively running the finally currently executing.
+                self._finally_stack = stack[:index]
+                self._emitting_finally = False
+                self._emit_finally_entry(stack[index])
+                index -= 1
+        finally:
+            self._finally_stack = stack
+            self._emitting_finally = previous
         self._return_log("finally end")
 
     def _return_value_needs_retain(self, value: ir.Value, stmt: Return) -> bool:
@@ -62,6 +96,9 @@ class ReturnLoweringMixin:
         if stmt.value is None:
             return False
         if not isinstance(value.type, ir.PointerType):
+            return False
+        if isinstance(self.current_func_def.return_ty, RawPointerType):
+            # _emit_return validates the explicit raw boundary before this.
             return False
         if value in getattr(self, "_cpy_values", ()):
             return False
@@ -105,6 +142,15 @@ class ReturnLoweringMixin:
         if getattr(self, "_suppress_borrowed_return_retain", False):
             return value
         expr = stmt.value
+        if (
+            self._finally_stack
+            and isinstance(value.type, ir.PointerType)
+            and value not in self._cpy_values
+            and isinstance(expr, Name)
+            and expr.ident in self._owned_local_names
+            and not self._expr_returns_unsafe_raw_pointer(expr)
+        ):
+            return self._gc_retain(value, name=self._fresh("ret.cleanup.owner"))
         if (
             isinstance(value.type, ir.PointerType)
             and value not in getattr(self, "_cpy_values", ())
@@ -157,6 +203,8 @@ class ReturnLoweringMixin:
             return False
         if not isinstance(value.type, ir.PointerType):
             return False
+        if isinstance(self.current_func_def.return_ty, RawPointerType):
+            return False
         if value in getattr(self, "_cpy_values", ()):
             return False
         if self._expr_returns_unsafe_raw_pointer(stmt.value):
@@ -206,6 +254,74 @@ class ReturnLoweringMixin:
         )
         self._emit_gc_frame_leave_lifo_for_slot(slot)
         return current
+
+    def _emit_owned_return_through_finally(self, value, stmt: Return) -> None:
+        # Only non-resumable activations use this path. Generator returns use
+        # their preplanned managed heap-frame slots in generator_lowering.
+        hidden = self._fresh("return.cleanup.owner")
+        slot = self._exception_selection_owner_slot(value, "return.cleanup", hidden)
+        owned = self.builder.call(
+            self.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(value.type, None), self._as_gc_ptr(slot)],
+            name=self._fresh("return.cleanup.transfer"),
+        )
+        self._gc_release(owned)
+        error = self.current_function.append_basic_block(name=self._fresh("return.cleanup.error"))
+        saved_error = self._push_try_err_block(error)
+        saved_roots = self._return_cleanup_roots
+        self._return_cleanup_roots = list(saved_roots) + [(self.current_function, slot, len(self.loop_stack))]
+        try:
+            self._emit_pending_finally_blocks()
+        finally:
+            self._return_cleanup_roots = saved_roots
+            self._restore_try_err_block(saved_error)
+        if not self._builder_block_is_terminated():
+            value = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(value.type, None), self._as_gc_ptr(slot)],
+                name=self._fresh("return.cleanup.current"),
+            )
+            # Preserve an existing pin lease. The new owned return remains
+            # pinned through every local finalizer and root unregistration.
+            bits = self.builder.ptrtoint(value, ir.IntType(64))
+            tagged = self.builder.icmp_unsigned(
+                "!=", self.builder.and_(bits, ir.Constant(ir.IntType(64), 1)),
+                ir.Constant(ir.IntType(64), 0),
+            )
+            nonnull = self.builder.icmp_unsigned("!=", value, ir.Constant(value.type, None))
+            managed = self.builder.and_(nonnull, self.builder.not_(tagged))
+            header = self.current_function.append_basic_block(name=self._fresh("return.pin.header"))
+            ready = self.current_function.append_basic_block(name=self._fresh("return.pin.ready"))
+            empty = self.builder._block
+            self.builder.cbranch(managed, header, ready)
+            self.builder.position_at_end(header)
+            address = self.builder.gep(value, [ir.Constant(ir.IntType(64), PYOBJECTHEADER_FLAGS_OFFSET)])
+            flags = self.builder.load(self.builder.bitcast(address, ir.IntType(32).as_pointer()))
+            prior_bits = self.builder.and_(flags, ir.Constant(ir.IntType(32), PY_FLAG_GC_PINNED))
+            prior_value = self.builder.zext(prior_bits, ir.IntType(64))
+            previous = self.builder._block
+            self.builder.branch(ready)
+            self.builder.position_at_end(ready)
+            prior = self.builder.phi(ir.IntType(64), name=self._fresh("return.pin.prior"))
+            prior.add_incoming(ir.Constant(ir.IntType(64), 0), empty)
+            prior.add_incoming(prior_value, previous)
+            self._gc_pin(value)
+            self._emit_owned_local_cleanup(skip_name=hidden)
+            result = self.builder.call(
+                self.runtime["pcc_gc_take_pinned_slot"], [self._as_gc_ptr(slot), prior],
+                name=self._fresh("return.cleanup.take"),
+            )
+            # Later-discovered frame leaves and recursion accounting must run
+            # before the no-park ownership handoff, never after its unpin.
+            self._return_handoff_sites.append((self.current_function, self.builder._block, self.builder._block._instrs[-1]))
+            self.builder.ret(result)
+        continuation = self.builder._block
+        self.builder.position_at_end(error)
+        self.builder.call(
+            self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(slot), ir.Constant(value.type, None)],
+        )
+        self.builder.branch(saved_error or self._ensure_fn_err_exit())
+        self.builder.position_at_end(continuation)
 
     def _emit_return(self, stmt: Return) -> None:
         self._return_log("begin")
@@ -277,6 +393,9 @@ class ReturnLoweringMixin:
             self._return_log("exact int object")
             value = self._emit_exact_int_operand_object(stmt.value)
             value = self._retain_borrowed_return_value(value, stmt)
+            if self._finally_stack and self._return_value_needs_cleanup_root(value, stmt, force_object=True):
+                self._emit_owned_return_through_finally(value, stmt)
+                return
             self._emit_pending_finally_blocks()
             if self._builder_block_is_terminated():
                 self._return_log("exact int terminated")
@@ -378,7 +497,30 @@ class ReturnLoweringMixin:
                     self.current_func_def.return_ty,
                 )
         else:
-            value = self._coerce(value, stmt.value.ty, self.current_func_def.return_ty)
+            # Legacy runtime C exports may omit their ptr return annotation.
+            # Keep that native ABI without claiming a managed conversion or
+            # changing the unknown export's ownership metadata. Explicit
+            # Python object annotations and ordinary helpers remain strict.
+            raw_c_return = (
+                getattr(self, "_runtime_port_module", False)
+                and isinstance(stmt.value.ty, RawPointerType)
+                and isinstance(self.current_func_def.return_ty, DynType)
+                and not self.current_func_def.has_return_annotation
+                and isinstance(value.type, ir.PointerType)
+                and isinstance(ret_ty, ir.PointerType)
+                and self._func_c_abi_export_symbol(self.current_func_def)
+                    == self.current_function.name
+            )
+            raw_return_view = (
+                (getattr(self, "_runtime_port_module", False)
+                 or getattr(self, "_freestanding_module", False))
+                and isinstance(self.current_func_def.return_ty, RawPointerType)
+                and isinstance(stmt.value.ty, DynType)
+                and isinstance(value.type, ir.PointerType)
+                and isinstance(ret_ty, ir.PointerType)
+            )
+            if not raw_c_return and not raw_return_view:
+                value = self._coerce(value, stmt.value.ty, self.current_func_def.return_ty, stmt.value)
         if value.type != ret_ty:
             self._return_log("value fix ret type")
             if isinstance(ret_ty, ir.IntType) and isinstance(value.type, ir.IntType):
@@ -418,6 +560,9 @@ class ReturnLoweringMixin:
             # the join, and the frames were left twice).
             self._guard_cpy_value_not_null(value)
         value = self._retain_borrowed_return_value(value, stmt)
+        if self._finally_stack and self._return_value_needs_cleanup_root(value, stmt):
+            self._emit_owned_return_through_finally(value, stmt)
+            return
         self._return_log("value finally")
         self._emit_pending_finally_blocks()
         if self._builder_block_is_terminated():

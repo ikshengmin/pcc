@@ -48,6 +48,8 @@ py_gc_track          = extern("py_gc_track",          (c_ptr,),         c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
 pcc_gc_publish_initialized = extern(
@@ -367,9 +369,10 @@ def py_gen_finish(gen, value):
     if ptr_is_null(gen):
         return null()
     store_i64(gen, 40, 1)
-    if ptr_is_null(value):
-        value = global_load_ptr("py_None")
-    stop = py_exc_new_with_value(8, value)       # PY_EXC_STOPITERATION
+    if ptr_is_null(value) or ptr_eq(value, global_load_ptr("py_None")):
+        stop = py_exc_new(8, null())
+    else:
+        stop = py_exc_new_with_value(8, value)       # PY_EXC_STOPITERATION
     if ptr_is_null(stop):
         return _require_result(
             null(),
@@ -648,7 +651,7 @@ def py_gen_close(gen):
                 py_raise(root_error)
                 py_decref(root_error)
                 return null()
-            exc = py_exc_new(0, null())       # GeneratorExit ~= BaseException
+            exc = py_exc_new(55, null())      # PY_EXC_GENERATOREXIT
             if ptr_is_null(exc):
                 pcc_gc_store_root(exc_slot, null())
                 pcc_gc_scheduler_root_unregister_handle(exc_root)
@@ -668,13 +671,11 @@ def py_gen_close(gen):
             result = call_ptr2(resume, gen, frame)
             if not ptr_is_null(result):
                 py_decref(result)
-                gen = load_ptr(gen_slot, 0)
-                store_i64(gen, 40, 1)
                 pcc_gc_store_root(exc_slot, null())
                 pcc_gc_scheduler_root_unregister_handle(exc_root)
                 pcc_gc_store_root(gen_slot, null())
                 pcc_gc_scheduler_root_unregister_handle(gen_root)
-                runtime_error = py_exc_new(7, null())
+                runtime_error = py_exc_new(7, cstr("generator ignored GeneratorExit"))
                 py_raise(runtime_error)
                 py_decref(runtime_error)
                 return null()
@@ -686,21 +687,39 @@ def py_gen_close(gen):
                         "generator close resume returned NULL without setting an exception"
                     ),
                 )
-            cur = py_current_exception()
             stop_cls = py_exc_builtin_class(8)
-            injected = load_ptr(exc_slot, 0)
-            injected_propagated = ptr_eq(cur, injected)
-            stopped = 0
-            if injected_propagated == 0:
-                stopped = py_exc_matches(cur, stop_cls)
+            stopped = py_exc_matches(py_current_exception(), stop_cls)
+            exit_cls = py_exc_builtin_class(55)
+            exiting = py_exc_matches(py_current_exception(), exit_cls)
             gen = load_ptr(gen_slot, 0)
             if stopped != 0:
                 store_i64(gen, 40, 1)
+                # Python 3.13+: close() returns the generator's return value.
+                # Reuse the registered injected-exception slot for that owner
+                # before clearing the StopIteration that lends its field.
+                value = py_exc_get_message(py_current_exception())
+                if ptr_is_null(value):
+                    value = global_load_ptr("py_None")
+                pcc_gc_store_root(exc_slot, value)
                 py_clear_exception()
-            elif injected_propagated != 0:
-                # Our injected GeneratorExit propagated back unhandled:
-                # that IS the normal close path in CPython — swallow it.
-                # Any OTHER exception from the body keeps propagating.
+                # Acquiring the graph lease can park and move the rooted
+                # result. Reload only under that lease, then pin before any
+                # cleanup operation can expose another safepoint.
+                pcc_py_gc_minor_graph_lock()
+                value = pcc_gc_load_ptr(null(), exc_slot)
+                store_ptr(exc_slot, 0, value)
+                prior_pin: int = 0
+                if is_tagged_int(value) == 0:
+                    prior_pin = load_i32(value, 12) & 64
+                    pcc_gc_pin(value)
+                pcc_py_gc_minor_graph_unlock()
+                pcc_gc_store_root(gen_slot, null())
+                pcc_gc_scheduler_root_unregister_handle(gen_root)
+                pcc_gc_scheduler_root_unregister_handle(exc_root)
+                return pcc_gc_take_pinned_slot(exc_slot, prior_pin)
+            elif exiting != 0:
+                # Any GeneratorExit is a successful close, including one
+                # explicitly raised by the body. Other BaseExceptions escape.
                 store_i64(gen, 40, 1)
                 py_clear_exception()
             else:

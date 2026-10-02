@@ -28,6 +28,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_generational_oldify_supported_tag",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_is_address_pinned",
     "free",
     "malloc",
     "memmove",

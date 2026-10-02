@@ -427,8 +427,45 @@ def assemble_file_keeping_labels(asm_text: str, keep_labels) -> ElfObject:
     The COFF writer reads its unwind markers from .symtab.  No default
     argument: pcc's closed-world frontend compiles this module into pcc1.
     """
+    return _assemble_file(asm_text, keep_labels, None, None, None)
+
+
+def assemble_file_with_stack_maps(
+    asm_text: str, stack_map_plans, *, function_symbol, block_label,
+) -> ElfObject:
+    """Assemble code plus structured maps, retaining the ordinary ELF checks."""
+    return _assemble_file(
+        asm_text, (), stack_map_plans, function_symbol, block_label,
+    )
+
+
+def _assemble_file(
+    asm_text: str, keep_labels, stack_map_plans, function_symbol, block_label,
+) -> ElfObject:
     plans, order, symbol_meta = _parse_file(asm_text)
     labels, measured_sizes = _measure_sections(plans, order, symbol_meta)
+    pending: list[_PendingRelocation] = []
+    if stack_map_plans:
+        from .self_backend_precise_stackmaps import build_x86_64_stack_map_payload
+
+        stack_section = plans.get(".pcc_stackmaps")
+        if stack_section is None or measured_sizes[".pcc_stackmaps"] != 0:
+            raise X86EncodeError("structured stack maps require an empty section marker")
+        offsets = {
+            name: location[1]
+            for name, location in labels.items()
+            if location[0] == ".text"
+        }
+        packed, function_relocations = build_x86_64_stack_map_payload(
+            tuple(stack_map_plans), offsets,
+            function_symbol=function_symbol, block_label=block_label,
+        )
+        stack_section.entries = [_Data(packed)]
+        measured_sizes[".pcc_stackmaps"] = len(packed)
+        for offset, symbol in function_relocations:
+            pending.append(_PendingRelocation(
+                ".pcc_stackmaps", offset, symbol, R_X86_64_64, 0,
+            ))
     # A .type declaration is also legal for an external reference. A size
     # describes a definition and still requires a label in this object.
     missing_definitions = sorted(name for name, meta in symbol_meta.items()
@@ -447,7 +484,6 @@ def assemble_file_keeping_labels(asm_text: str, keep_labels) -> ElfObject:
         for name, location in labels.items()
         if not symbol_meta.get(name, _SymbolMeta()).global_
     }
-    pending: list[_PendingRelocation] = []
     section_payloads: dict[str, bytes] = {}
     for name in order:
         plan = plans[name]

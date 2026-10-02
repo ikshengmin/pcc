@@ -59,6 +59,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_trace_cursor_store",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_platform_abort",
     "free",
     "malloc",
     "pcc_gc_object_index_find",

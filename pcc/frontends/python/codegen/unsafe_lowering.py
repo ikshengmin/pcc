@@ -63,6 +63,9 @@ UNSAFE_INTRINSICS = frozenset(
         "f64_div",
         "f64_signbit",
         "f64_bits",
+        "call_c_abi",
+        "c_abi_sizeof",
+        "c_abi_alignof",
         "f64_pair_make",
         "f64_pair_first",
         "f64_pair_second",
@@ -1630,6 +1633,12 @@ class UnsafeIntrinsicMixin:
         intrinsic: str,
         expr: Call,
     ) -> ir.Value:
+        if intrinsic in ("c_abi_sizeof", "c_abi_alignof"):
+            from pcc.frontends.python.codegen.typed_indirect_abi import emit_layout
+            return emit_layout(self, intrinsic, expr)
+        if intrinsic == "call_c_abi":
+            from pcc.frontends.python.codegen.typed_indirect_abi import emit_call
+            return emit_call(self, expr)
         if intrinsic == "call_void_i32":
             self._unsafe_expect_arity(intrinsic, expr, 2)
             signature = ir.FunctionType(_VOID, [_I32])

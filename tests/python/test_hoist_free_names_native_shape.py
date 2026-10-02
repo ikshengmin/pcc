@@ -26,7 +26,12 @@ def test_compiled_free_name_analysis_stays_in_closed_world(tmp_path):
     )
 
     probe = _load_probe_module()
-    srcs, mods = probe._tightened_closure(str(_REPO_ROOT / "pcc" / "__main__.py"))
+    # The public CLI is now a two-module lazy entry, so its shallow closure
+    # does not contain this analysis module. Build the actual subject's
+    # same-package import context and require membership before compiling.
+    entry = _REPO_ROOT / "pcc/frontends/python/codegen/hoist_free_names.py"
+    srcs, mods = probe._tightened_closure(str(entry))
+    assert _MODULE in mods
     ir_dir = tmp_path / "ir"
     ir_dir.mkdir()
     counts = compile_contextual_per_module_fallback_counts(

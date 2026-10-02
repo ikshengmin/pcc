@@ -240,20 +240,21 @@ def test_translation_unit_contexts_do_not_retain_other_targets():
     assert emit_owned_object(text, "arm64-apple-darwin")
 
 
-def test_native_context_constructor_shape_reaches_owned_emitter(tmp_path, monkeypatch):
+@pytest.mark.parametrize("target", tuple(row[0] for row in TARGETS))
+def test_native_context_constructor_shape_reaches_owned_emitter(tmp_path, monkeypatch, target):
     from pcc.frontends.python.pipeline import compile_python
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     source = tmp_path / "c_context_owner.py"
     output = tmp_path / "c_context_owner.ll"
     source.write_text(C_CONTEXT_PROGRAM)
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   libpython_mode="off", ir_scaffold_mode="on", target_triple=target)
     text = output.read_text()
     constructor = _body(text, "user_c_context_owner_TranslationUnit___init__")
     assert "@user_pcc_ir_ir_scaffold_Module___init__(" in constructor
     assert "@user_pcc_ir_ir_scaffold_Context(" in constructor
     assert "strict.nolib.stub" not in constructor
-    assert emit_owned_object(text, "arm64-apple-darwin")
+    assert emit_owned_object(text, target)
 
 
 def test_windows_gnu_long_double_keeps_extended_format():

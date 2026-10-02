@@ -13,7 +13,7 @@ from pcc.ir.ir import (
     IRBuilder_try_inline_error_edge,
 )
 
-from pcc.frontends.python.py_ast import Assign, Attr, Call, DynType, Expr, For, If, Import, Name, NoneLit, Raise, SourceSpan, StrLit, StrType, Try, TupleExpr, While, With
+from pcc.frontends.python.py_ast import Assign, Attr, Call, DynType, Expr, For, If, Import, Name, NoneLit, Raise, SourceSpan, StrLit, StrType, Try, While, With
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_terminal_frame_clear
 from pcc.frontends.python.codegen.local_bound_lowering import local_bound_flag, mark_local_bound
 
@@ -44,6 +44,83 @@ _DIRECT_INLINE_ERROR_EDGE_ENABLED = (
 
 
 class ExceptionLoweringMixin:
+    def _begin_handled_exception_scope(self, exception_slot):
+        node = self._alloca_in_entry(
+            ir.ArrayType(_CSTR, 2), name=self._fresh("handled.context"),
+        )
+        entry = (self.current_function, node, exception_slot)
+        self.builder.call(
+            self.runtime["py_handled_context_push"],
+            [self._as_gc_ptr(node), self._as_gc_ptr(exception_slot)],
+        )
+        self._handled_exception_scopes = list(self._handled_exception_scopes) + [entry]
+        return entry
+
+    def _emit_handled_exception_scope_exit(self, entry, clear_root: bool = True, binding_slot=None, binding_name=None):
+        active = self.builder.call(
+            self.runtime["py_handled_context_pop"], [self._as_gc_ptr(entry[1])],
+            name=self._fresh("handled.context.popped"),
+        )
+        if not clear_root:
+            return
+        if self.current_func_def is None:
+            # Module roots use explicit LIFO registration. Their lexical exits
+            # must publish identical root-stack state on every CFG edge.
+            if binding_name is not None:
+                mark_local_bound(self, binding_name, False)
+            if binding_slot is not None:
+                self._clear_exception_selection_owner_slot(binding_slot)
+            self._clear_exception_selection_owner_slot(entry[2])
+            return
+        clear = self.current_function.append_basic_block(name=self._fresh("handled.context.clear"))
+        done = self.current_function.append_basic_block(name=self._fresh("handled.context.done"))
+        self.builder.cbranch(
+            self.builder.icmp_signed("!=", active, ir.Constant(_I64, 0)), clear, done,
+        )
+        self.builder.position_at_end(clear)
+        if binding_name is not None:
+            mark_local_bound(self, binding_name, False)
+        if binding_slot is not None:
+            self._clear_exception_selection_owner_slot(binding_slot)
+        self._clear_exception_selection_owner_slot(entry[2])
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+
+    def _emit_suspend_handled_exception_scopes(self):
+        for entry in reversed(self._handled_exception_scopes):
+            if entry[0] is self.current_function:
+                self._emit_handled_exception_scope_exit(entry, False)
+
+    def _emit_resume_handled_exception_scopes(self):
+        for entry in self._handled_exception_scopes:
+            if entry[0] is not self.current_function:
+                continue
+            value = self.builder.load(entry[2], name=self._fresh("handled.context.resume.value"))
+            enter = self.current_function.append_basic_block(name=self._fresh("handled.context.resume"))
+            done = self.current_function.append_basic_block(name=self._fresh("handled.context.resume.done"))
+            self.builder.cbranch(
+                self.builder.icmp_unsigned("!=", value, ir.Constant(_CSTR, None)), enter, done,
+            )
+            self.builder.position_at_end(enter)
+            self.builder.call(
+                self.runtime["py_handled_context_push"],
+                [self._as_gc_ptr(entry[1]), self._as_gc_ptr(entry[2])],
+            )
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+
+    def _emit_chain_pending_handled_exception(self):
+        # Incoming throw/close TLS is chained only after generator-owned
+        # handled scopes have been reinstalled from their managed frame slots.
+        context_slot = self.builder.call(self.runtime["py_handled_exception_slot"], [])
+        pending = self.builder.call(self.runtime["py_current_exception"], [])
+        pending_slot = self._exception_selection_owner_slot(pending, "handled.resume.pending")
+        self.builder.call(
+            self.runtime["py_exc_set_implicit_context_slots"],
+            [self._as_gc_ptr(pending_slot), context_slot],
+        )
+        self._clear_exception_selection_owner_slot(pending_slot)
+
     def _active_handler_exception_for_current_function(self):
         """Return the innermost handler exception owned by this IR function.
 
@@ -109,17 +186,7 @@ class ExceptionLoweringMixin:
             exception_slot = frame_entry[1]
             active_roots = ctx["active_exception_unwind_roots"]
         else:
-            hidden = self._fresh("finally.exception.owner")
-            exception_slot = self._alloca_in_entry(
-                _CSTR, name=self._fresh("finally.exception.slot")
-            )
-            self._store_entry_initializer(exception_slot, ir.Constant(_CSTR, None))
-            self.env[hidden] = (exception_slot, _CSTR, DynType(name="dyn"))
-            self._ensure_owned_local_gc_root(hidden, exception_slot, _CSTR)
-            self._owned_local_names.add(hidden)
-            self._owned_local_has_value.add(hidden)
-            owned_flag = self._ensure_owned_local_flag(hidden, exception_slot)
-            self.builder.store(ir.Constant(_I1, 1), owned_flag)
+            exception_slot = self._exception_selection_owner_slot(current_exc, "finally.exception")
         root_ptr = self._as_gc_ptr(
             exception_slot,
             name=self._fresh("finally.exception.root"),
@@ -128,6 +195,7 @@ class ExceptionLoweringMixin:
             self.runtime["pcc_gc_store_root"],
             [root_ptr, current_exc],
         )
+        scope = self._begin_handled_exception_scope(exception_slot)
         self.builder.call(self.runtime["py_clear_exception"], [])
 
         cleanup_error_bb = self.current_function.append_basic_block(
@@ -139,9 +207,15 @@ class ExceptionLoweringMixin:
             (self.current_function, current_exc, exception_slot)
         ]
         active_roots.append(root_ptr)
+        def leave_finally_scope():
+            self._emit_handled_exception_scope_exit(scope)
+        saved_finally = self._finally_stack
+        self._finally_stack = list(saved_finally) + [leave_finally_scope]
         try:
             self._emit_stmts(stmt.finally_body)
         finally:
+            self._finally_stack = saved_finally
+            self._handled_exception_scopes = self._handled_exception_scopes[:-1]
             active_roots.pop()
             self._active_handler_excs = saved_active_excs
             self._restore_try_err_block(saved_err_block)
@@ -160,10 +234,7 @@ class ExceptionLoweringMixin:
                 name=self._fresh("finally.exception.restore"),
             )
             self.builder.call(self.runtime["py_raise"], [saved_exc])
-            self.builder.call(
-                self.runtime["pcc_gc_store_root"],
-                [restore_root_ptr, ir.Constant(_CSTR, None)],
-            )
+            self._emit_handled_exception_scope_exit(scope)
             self.builder.branch(outer_err_block)
 
         self.builder.position_at_end(cleanup_error_bb)
@@ -176,6 +247,7 @@ class ExceptionLoweringMixin:
             [],
             name=self._fresh("finally.cleanup.exception"),
         )
+        replacement_slot = self._exception_selection_owner_slot(cleanup_exc, "finally.cleanup")
         saved_exc = self.builder.call(
             self.runtime["pcc_gc_load_ptr"],
             [ir.Constant(_CSTR, None), cleanup_root_ptr],
@@ -213,15 +285,13 @@ class ExceptionLoweringMixin:
         self.builder.cbranch(set_context, context_bb, release_bb)
         self.builder.position_at_end(context_bb)
         self.builder.call(
-            self.runtime["py_exc_set_context"],
-            [cleanup_exc, saved_exc],
+            self.runtime["py_exc_set_implicit_context_slots"],
+            [self._as_gc_ptr(replacement_slot), self._as_gc_ptr(exception_slot)],
         )
         self.builder.branch(release_bb)
         self.builder.position_at_end(release_bb)
-        self.builder.call(
-            self.runtime["pcc_gc_store_root"],
-            [cleanup_root_ptr, ir.Constant(_CSTR, None)],
-        )
+        self._clear_exception_selection_owner_slot(replacement_slot)
+        self._emit_handled_exception_scope_exit(scope)
         self.builder.branch(outer_err_block)
         return True
 
@@ -340,17 +410,8 @@ class ExceptionLoweringMixin:
             self.builder.call(self.runtime["py_raise"], [cur])
         else:
             exc_val = self._build_exception_value(stmt.exc)
-            # PEP 3134 implicit chaining: when a new exception is raised while
-            # a handler exception is active (`raise Y` inside `except X:`), the
-            # new exception's __context__ is the exception being handled. The
-            # runtime `py_raise` auto-chains from TLS, but pcc clears TLS at
-            # handler entry (py_clear_exception) and tracks the active handler
-            # exception only in `_active_handler_excs`, so TLS is NULL here and
-            # the runtime auto-chain never fires. Set __context__ explicitly
-            # from the active handler exception. CPython sets __context__ even
-            # when an explicit `raise ... from ...` cause is present (it only
-            # flips __suppress_context__), so this runs regardless of cause.
-            self._emit_set_implicit_exception_context(exc_val)
+            # py_raise applies dynamic, cycle-safe implicit chaining. This
+            # includes helpers called from another function's active handler.
             if stmt.cause is not None:
                 cause_val = self._emit_expr(stmt.cause)
                 self.builder.call(
@@ -375,39 +436,6 @@ class ExceptionLoweringMixin:
         if err_target is None:
             err_target = self._ensure_fn_err_exit()
         self.builder.branch(err_target)
-
-    def _emit_set_implicit_exception_context(self, exc_val: ir.Value) -> None:
-        """Set ``exc_val.__context__`` to the active handler exception
-        (PEP 3134 implicit chaining) when raising a new exception inside
-        an ``except`` handler.
-
-        The active handler exception lives in ``_active_handler_excs``
-        (its top is the currently-handled exception). We guard against a
-        self-cycle: re-raising the caught exception by name (``raise e``)
-        would make ``exc_val`` identical to the active exception, and
-        CPython does not set ``__context__`` to the exception itself.
-        The runtime ``py_exc_set_context`` writes the ``context`` slot
-        unconditionally, so the identity guard is emitted here.
-        """
-        active = self._active_handler_exception_for_current_function()
-        if active is None:
-            return
-        # Only chain when the new exception is a distinct object from the
-        # exception being handled (avoid __context__ self-reference).
-        distinct = self.builder.icmp_signed(
-            "!=",
-            exc_val,
-            active,
-            name=self._fresh("exc.ctx.distinct"),
-        )
-        fn = self.current_function
-        set_bb = fn.append_basic_block(name=self._fresh("exc.ctx.set"))
-        cont_bb = fn.append_basic_block(name=self._fresh("exc.ctx.cont"))
-        self.builder.cbranch(distinct, set_bb, cont_bb)
-        self.builder.position_at_end(set_bb)
-        self.builder.call(self.runtime["py_exc_set_context"], [exc_val, active])
-        self.builder.branch(cont_bb)
-        self.builder.position_at_end(cont_bb)
 
     def _emit_try(self, stmt: Try) -> None:
         if stmt.handlers and stmt.finally_body:
@@ -466,7 +494,9 @@ class ExceptionLoweringMixin:
         try_log("finally stack begin")
         if stmt.finally_body:
             finally_stack = list(getattr(self, "_finally_stack", ()))
-            finally_stack.append(stmt.finally_body)
+            # Return/break/continue execute this suite outside the owning
+            # try's error handler; failures must not enter it a second time.
+            finally_stack.append(("pcc.finally.body", stmt.finally_body, prev_err_block, len(self._return_cleanup_roots)))
             self._finally_stack = finally_stack
         try_log("finally stack end")
         try:
@@ -480,6 +510,8 @@ class ExceptionLoweringMixin:
                     finally_stack.pop()
                 self._finally_stack = finally_stack
 
+        # Else and normal finally are outside this try's protected body.
+        self._restore_try_err_block(prev_err_block)
         try_log("normal exit begin")
         if not self._builder_block_is_terminated():
             if stmt.else_body:
@@ -569,38 +601,12 @@ class ExceptionLoweringMixin:
 
             if h.exc_type is None:
                 cond = ir.Constant(_I1, 1)
-            elif isinstance(h.exc_type, TupleExpr):
-                cond = None
-                for sub in h.exc_type.elems:
-                    cls_val = self._emit_exception_class_ref(sub)
-                    match_i32 = self.builder.call(
-                        self.runtime["py_exc_matches"],
-                        [current_exc, cls_val],
-                        name=self._fresh("exc.matches"),
-                    )
-                    this = self.builder.icmp_signed(
-                        "!=",
-                        match_i32,
-                        ir.Constant(_I64, 0),
-                        name=self._fresh("exc.matches.i1"),
-                    )
-                    cond = (
-                        this
-                        if cond is None
-                        else self.builder.or_(
-                            cond,
-                            this,
-                            name=self._fresh("exc.or"),
-                        )
-                    )
-                assert cond is not None
             else:
-                cls_val = self._emit_exception_class_ref(h.exc_type)
-                match_i32 = self.builder.call(
-                    self.runtime["py_exc_matches"],
-                    [current_exc, cls_val],
-                    name=self._fresh("exc.matches"),
-                )
+                selection_slot = None
+                if self._generator_ctx_stack:
+                    hidden = self._generator_handler_exception_name(stmt, i)
+                    selection_slot = self._generator_ctx_stack[-1]["frame_slots"][hidden][1]
+                match_i32 = self._emit_exception_class_match(h.exc_type, selection_slot)
                 cond = self.builder.icmp_signed(
                     "!=",
                     match_i32,
@@ -620,6 +626,10 @@ class ExceptionLoweringMixin:
                 self.builder.cbranch(cond, body_bb, propagate_bb)
                 next_test_bb = None
                 self.builder.position_at_end(propagate_bb)
+                current_exc = self.builder.call(
+                    self.runtime["py_current_exception"], [],
+                    name=self._fresh("except.unmatched.exception"),
+                )
                 # No handler matched: the finally block must STILL run before
                 # the exception propagates to the outer handler (Python
                 # guarantees finally always executes). Mirrors the no-handlers
@@ -640,127 +650,73 @@ class ExceptionLoweringMixin:
                     self.builder.branch(outer)
 
             self.builder.position_at_end(body_bb)
-            handler_exc = current_exc
-            # Retain the handled exception across the handler body when:
-            #  - it is name-bound (`except X as e:`), or
-            #  - the body re-raises bare (`raise`), or
-            #  - the body raises a NEW exception (`raise Y`): PEP 3134 implicit
-            #    chaining sets the new exception's __context__ to the exception
-            #    being handled, so it must be kept alive and tracked in
-            #    `_active_handler_excs` for `_emit_set_implicit_exception_context`.
-            retain_handler_exc = h.name is not None or body_has_raise(
-                h.body, bare_only=False
+            handler_exc = self.builder.call(
+                self.runtime["py_current_exception"], [],
+                name=self._fresh("except.handler.exception"),
             )
-            handler_slot = None
-            if retain_handler_exc:
-                if self._generator_ctx_stack:
-                    ctx = self._generator_ctx_stack[-1]
-                    hidden = self._generator_handler_exception_name(stmt, i)
-                    handler_slot = ctx["frame_slots"][hidden][1]
-                    self.builder.call(
-                        self.runtime["pcc_gc_store_root"],
-                        [self._as_gc_ptr(handler_slot), handler_exc],
-                    )
-                else:
-                    handler_exc = self._gc_retain(handler_exc)
+            # Every handler owns dynamic handled state: a called helper can
+            # bare-raise or construct an implicitly chained exception even if
+            # there is no syntactic raise or exception binding in this body.
+            if self._generator_ctx_stack:
+                ctx = self._generator_ctx_stack[-1]
+                hidden = self._generator_handler_exception_name(stmt, i)
+                handler_slot = ctx["frame_slots"][hidden][1]
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(handler_slot), handler_exc],
+                )
+            else:
+                handler_slot = self._exception_selection_owner_slot(handler_exc, "except.handler")
+            scope = self._begin_handled_exception_scope(handler_slot)
             self.builder.call(self.runtime["py_clear_exception"], [])
             binding_slot = None
             if h.name is not None:
-                if handler_slot is not None:
-                    # Use the planned frame slot, not a fresh stack local
-                    # that the generator save/restore loop cannot see.
-                    slot = self._generator_ctx_stack[-1]["frame_slots"][h.name][1]
-                    handler_exc = self.builder.load(handler_slot)
+                handler_exc = self.builder.call(
+                    self.runtime["pcc_gc_load_ptr"],
+                    [ir.Constant(_CSTR, None), self._as_gc_ptr(handler_slot)],
+                    name=self._fresh("except.binding.value"),
+                )
+                if self._generator_ctx_stack:
+                    binding_slot = self._generator_ctx_stack[-1]["frame_slots"][h.name][1]
                     self.builder.call(
                         self.runtime["pcc_gc_store_root"],
-                        [self._as_gc_ptr(slot), handler_exc],
+                        [self._as_gc_ptr(binding_slot), handler_exc],
                     )
                 else:
-                    slot = self._alloca_in_entry(_CSTR, name=f"{h.name}.addr")
-                    self.builder.store(handler_exc, slot)
-                self.env[h.name] = (slot, _CSTR, DynType(name="dyn"))
+                    binding_slot = self._exception_selection_owner_slot(
+                        handler_exc, "except.binding", h.name,
+                    )
+                self.env[h.name] = (binding_slot, _CSTR, DynType(name="dyn"))
                 mark_local_bound(self, h.name)
-                binding_slot = slot
-                # Mark `e` as an except-binding so a later `saved = e` GC-roots
-                # `saved` (the surviving reference once the handler's retain is
-                # released at handler end). Otherwise the borrowed-copy local is
-                # not a frame root and the tracing collect sweeps the exception's
-                # message. See gc-5backend-exception-referent-roots-no-libpython.md.
                 binding_names = getattr(self, "_except_binding_names", None)
                 if binding_names is not None:
                     binding_names.add(h.name)
-            active_excs = list(self._active_handler_excs)
-            if retain_handler_exc:
-                if handler_slot is not None:
-                    active_excs.append((self.current_function, handler_exc, handler_slot))
-                else:
-                    active_excs.append((self.current_function, handler_exc))
-                self._active_handler_excs = active_excs
-            if stmt.finally_body:
-                finally_stack = list(getattr(self, "_finally_stack", ()))
-                finally_stack.append(stmt.finally_body)
-                self._finally_stack = finally_stack
+            saved_active = self._active_handler_excs
+            self._active_handler_excs = list(saved_active) + [
+                (self.current_function, handler_exc, handler_slot)
+            ]
             binding_name = h.name
-            local_binding = binding_name is not None and local_bound_flag(self, binding_name) is not None
-            handler_error = None
-            saved_handler_error = self._current_try_err_block()
-            if local_binding:
-                def unbind_handler_name():
-                    mark_local_bound(self, binding_name, False)
-                self._finally_stack = list(self._finally_stack) + [unbind_handler_name]
-                handler_error = fn.append_basic_block(name=self._fresh("except.binding.error"))
-                self._try_err_block = handler_error
+            def leave_handler():
+                self._emit_handled_exception_scope_exit(
+                    scope, True, binding_slot, binding_name,
+                )
+            saved_finally = self._finally_stack
+            self._finally_stack = list(saved_finally) + [leave_handler]
+            handler_error = fn.append_basic_block(name=self._fresh("except.handler.error"))
+            saved_handler_error = self._push_try_err_block(handler_error)
             try:
                 self._emit_stmts(h.body)
             finally:
-                if local_binding:
-                    finally_stack = list(self._finally_stack)
-                    finally_stack.pop()
-                    self._finally_stack = finally_stack
-                    self._try_err_block = saved_handler_error
-                if stmt.finally_body:
-                    finally_stack = list(getattr(self, "_finally_stack", ()))
-                    if finally_stack:
-                        finally_stack.pop()
-                    self._finally_stack = finally_stack
-                if retain_handler_exc:
-                    active_excs.pop()
-                    if active_excs:
-                        self._active_handler_excs = active_excs
-                    else:
-                        self._active_handler_excs = []
+                self._finally_stack = saved_finally
+                self._restore_try_err_block(saved_handler_error)
+                self._active_handler_excs = saved_active
+                self._handled_exception_scopes = self._handled_exception_scopes[:-1]
             if not self._builder_block_is_terminated():
-                if local_binding:
-                    mark_local_bound(self, binding_name, False)
-                if stmt.finally_body:
-                    self._emit_stmts(stmt.finally_body)
-                if not self._builder_block_is_terminated():
-                    if handler_slot is not None:
-                        self.builder.call(
-                            self.runtime["pcc_gc_store_root"],
-                            [self._as_gc_ptr(handler_slot), ir.Constant(_CSTR, None)],
-                        )
-                    elif retain_handler_exc:
-                        release_value = handler_exc
-                        if binding_slot is not None:
-                            # A may_park handler body may resume into a block
-                            # the retain does not dominate; the binding slot
-                            # is the frame-visible home of the same reference.
-                            release_value = self.builder.load(
-                                binding_slot,
-                                name=self._fresh(f"{h.name}.release"),
-                            )
-                        self._gc_release(release_value)
-                    self.builder.branch(done_bb)
-
-            if handler_error is not None:
-                self.builder.position_at_end(handler_error)
-                mark_local_bound(self, binding_name, False)
-                outer = saved_handler_error or self._ensure_fn_err_exit()
-                error = self.builder.call(self.runtime["py_current_exception"], [],
-                                          name=self._fresh("except.binding.exception"))
-                if not self._emit_exceptional_finally(stmt, error, outer):
-                    self.builder.branch(outer)
+                leave_handler()
+                self.builder.branch(done_bb)
+            self.builder.position_at_end(handler_error)
+            leave_handler()
+            self.builder.branch(saved_handler_error or self._ensure_fn_err_exit())
 
             if next_test_bb is not None:
                 self.builder.position_at_end(next_test_bb)
@@ -941,7 +897,7 @@ class ExceptionLoweringMixin:
                         msg_expr = value
                         break
             if msg_expr is None:
-                return self._pooled_cstr_ptr("", ".exc.msg")
+                return ir.Constant(_CSTR, None)
             first = msg_expr
             if isinstance(first, StrLit):
                 return self._pooled_cstr_ptr(first.value, ".exc.msg")
@@ -964,6 +920,55 @@ class ExceptionLoweringMixin:
         if isinstance(exc_expr, Call) and isinstance(exc_expr.func, Name):
             cls_name = exc_expr.func.ident
             tag = _builtin_exc_tag_or_missing(cls_name)
+            if tag == 59:  # UnicodeEncodeError has a five-field constructor.
+                cls = self.builder.call(
+                    self.runtime["py_exc_builtin_class"], [ir.Constant(_I64, tag)],
+                    name=self._fresh("exc.unicode.class"),
+                )
+                roots = [self._extern_enter_root(cls, False, "exc.unicode.class")]
+                previous = self._current_try_err_block()
+                target = previous if previous is not None else self._ensure_fn_err_exit()
+                saved_error = self._push_try_err_block(
+                    self._extern_cleanup_block(tuple(roots), target),
+                )
+                saved_cpy_error = self._cpy_operand_cleanup_block
+                self._cpy_operand_cleanup_block = self._current_try_err_block()
+                try:
+                    unpack = self._split_starstar_kwargs_unpack(exc_expr.args)
+                    args = exc_expr.args
+                    kwargs_expr = None
+                    if unpack is not None:
+                        args, kwargs_expr = unpack
+                    args_tuple = self._emit_dynamic_call_args_tuple(args)
+                    args_root = self._extern_enter_root(args_tuple, True, "exc.unicode.args")
+                    roots.append(args_root)
+                    self._try_err_block = self._extern_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    kwargs_obj = self._emit_dynamic_call_kwargs_object(
+                        exc_expr.kwargs, kwargs_expr, self._expr_span_or_none(exc_expr),
+                    )
+                    kwargs_root = self._extern_enter_root(
+                        kwargs_obj, bool(exc_expr.kwargs) or kwargs_expr is not None,
+                        "exc.unicode.kwargs",
+                    )
+                    roots.append(kwargs_root)
+                    self._try_err_block = self._extern_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    result = self.builder.call(
+                        self.runtime["py_obj_call"],
+                        [self._extern_load_root(roots[0]), self._extern_load_root(args_root),
+                         self._extern_load_root(kwargs_root)],
+                        name=self._fresh("exc.unicode"),
+                    )
+                    self._emit_post_call_err_check(self._expr_span_or_none(exc_expr))
+                    result_root = self._extern_enter_root(result, True, "exc.unicode.result")
+                finally:
+                    self._restore_try_err_block(saved_error)
+                    self._cpy_operand_cleanup_block = saved_cpy_error
+                self._extern_release_roots(tuple(roots))
+                result = self._extern_take_root(result_root)
+                self._note_owned_dynamic_call_value(result)
+                return result
             if tag >= 0:
                 if (
                     len(exc_expr.args) == 1
@@ -1014,6 +1019,13 @@ class ExceptionLoweringMixin:
         if isinstance(exc_expr, Name) and exc_expr.ident not in self.env:
             cls_name = exc_expr.ident
             tag = _builtin_exc_tag_or_missing(cls_name)
+            if tag == 59:
+                # A bare class raise must still validate its constructor,
+                # then propagate the resulting TypeError before py_raise.
+                return self._build_exception_value(Call(
+                    span=exc_expr.span, ty=DynType(name="dyn"), func=exc_expr,
+                    args=(), kwargs=(),
+                ))
             if tag >= 0:
                 return self.builder.call(
                     self.runtime["py_exc_new"],
@@ -1091,12 +1103,169 @@ class ExceptionLoweringMixin:
                     name=self._fresh(f"exc.cpy.{expr.ident}"),
                 )
             return self._emit_as_object(expr)
-        if isinstance(expr, Attr):
-            return self._emit_as_object(expr)
-        raise NotImplementedError(
-            f"Layer 1 except-clause class expression {type(expr).__name__} "
-            "not supported"
+        # Closure conversion represents a captured name as a cell subscript.
+        # Python also allows arbitrary expressions here, including calls and
+        # indexed class selections. Use the normal expression implementation
+        # so its diagnostics and returned-reference contract remain intact.
+        return self._emit_as_object(expr)
+
+    def _exception_selection_owner_slot(self, value: ir.Value, label: str, owner_name=None) -> ir.Value:
+        """Keep selection state in a collector-visible, independently owned slot.
+
+        The ordinary local-root protocol handles every exceptional function
+        exit. Clearing the slot is the final use of its object, so cleanup never
+        consumes an SSA pointer after a root-unregister or unpin safepoint.
+        """
+        hidden = owner_name or self._fresh(label + ".owner")
+        slot = self._alloca_in_entry(_CSTR, name=self._fresh(label + ".slot"))
+        self._store_entry_initializer(slot, ir.Constant(_CSTR, None))
+        self.env[hidden] = (slot, _CSTR, DynType(name="dyn"))
+        self._ensure_local_gc_frame_root(hidden, slot, _CSTR, self._gc_one_slot_frame_map())
+        self._owned_local_names.add(hidden)
+        self._owned_local_has_value.add(hidden)
+        owned_flag = self._ensure_owned_local_flag(hidden, slot)
+        self.builder.store(ir.Constant(_I1, 1), owned_flag)
+        self.builder.call(
+            self.runtime["pcc_gc_store_root"],
+            [self._as_gc_ptr(slot), value],
         )
+        if self.current_func_def is None:
+            # Module initializers do not participate in local-root registration.
+            # Their selection never suspends, so a scoped LIFO frame suffices.
+            self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), slot)
+        return slot
+
+    def _clear_exception_selection_owner_slot(self, slot: ir.Value) -> None:
+        if self._generator_ctx_stack:
+            ctx = self._generator_ctx_stack[-1]
+            for _name, (index, saved_slot) in ctx["frame_slots"].items():
+                if saved_slot is slot:
+                    # A prior suspension left a second owner in the heap
+                    # frame. Retire it before the activation owner so cleanup
+                    # and finalizers are observable before the next yield.
+                    frame = self.builder.call(
+                        self.runtime["pcc_gc_load_ptr"],
+                        [ir.Constant(_CSTR, None), self._as_gc_ptr(ctx["frame_root"])],
+                        name=self._fresh("cleanup.saved.frame"),
+                    )
+                    self.builder.call(
+                        self._generator_frame_helper("set"),
+                        [frame, ir.Constant(_I64, index), self._emit_none_literal()],
+                    )
+                    break
+        self.builder.call(
+            self.runtime["pcc_gc_store_root"],
+            [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
+        )
+        if self.current_func_def is None:
+            self._emit_gc_frame_leave_lifo_for_slot(slot)
+
+    def _emit_exception_class_match(self, expr: Expr, frame_slot=None) -> ir.Value:
+        """Evaluate and validate one complete except expression with clear TLS.
+
+        The original exception survives class evaluation and its error edges.
+        A generator uses the handler's preplanned frame slot so suspension saves
+        the exception and a fresh resume activation can reload it. Ordinary
+        functions use an owned local root with balanced exit cleanup.
+        """
+        original = self.builder.call(
+            self.runtime["py_current_exception"], [],
+            name=self._fresh("except.match.exception"),
+        )
+        root = frame_slot
+        if root is None:
+            root = self._exception_selection_owner_slot(original, "except.match")
+        else:
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [self._as_gc_ptr(root), original],
+            )
+        scope = self._begin_handled_exception_scope(root)
+        self.builder.call(self.runtime["py_clear_exception"], [])
+        error_bb = self.current_function.append_basic_block(
+            name=self._fresh("except.class.error"),
+        )
+        saved_error = self._push_try_err_block(error_bb)
+        saved_active = self._active_handler_excs
+        self._active_handler_excs = list(saved_active) + [
+            (self.current_function, original, root)
+        ]
+        try:
+            # Evaluate the entire tuple before validation. Python rejects an
+            # invalid later member even when an earlier member would match.
+            cls_val = self._emit_exception_class_ref(expr)
+            # Validation can allocate TypeError. Keep a returned tuple/class
+            # rooted until that call and its cleanup have completed.
+            cls_owned = self._owned_release_needed(cls_val, expr)
+            cls_root = self._exception_selection_owner_slot(cls_val, "except.class")
+            # Transfer the expression's owner while the root remains live.
+            # Root registration/store may have relocated the returned object.
+            cls_live = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(cls_root)],
+                name=self._fresh("except.class.live"),
+            )
+            if cls_owned:
+                self._gc_release(cls_live, self._release_expr_label("owned", expr))
+            original = self._active_handler_exception_for_current_function()
+            cls_live = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(cls_root)],
+                name=self._fresh("except.class.match"),
+            )
+            match = self.builder.call(
+                self.runtime["py_exc_match_handler"], [original, cls_live],
+                name=self._fresh("exc.matches"),
+            )
+            self._clear_exception_selection_owner_slot(cls_root)
+            self._emit_post_call_err_check(expr.span)
+        finally:
+            self._restore_try_err_block(saved_error)
+            self._active_handler_excs = saved_active
+            self._handled_exception_scopes = self._handled_exception_scopes[:-1]
+        original = self.builder.call(
+            self.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(root)],
+            name=self._fresh("except.match.restore"),
+        )
+        self.builder.call(self.runtime["py_raise"], [original])
+        self._emit_handled_exception_scope_exit(scope)
+        continuation = self.builder._block
+
+        self.builder.position_at_end(error_bb)
+        replacement = self.builder.call(
+            self.runtime["py_current_exception"], [],
+            name=self._fresh("except.class.exception"),
+        )
+        replacement_slot = self._exception_selection_owner_slot(replacement, "except.class.replacement")
+        original = self.builder.call(
+            self.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(root)],
+            name=self._fresh("except.class.original"),
+        )
+        distinct = self.builder.icmp_unsigned(
+            "!=", replacement, original,
+            name=self._fresh("except.class.distinct"),
+        )
+        context_bb = self.current_function.append_basic_block(
+            name=self._fresh("except.class.context"),
+        )
+        release_bb = self.current_function.append_basic_block(
+            name=self._fresh("except.class.release"),
+        )
+        self.builder.cbranch(distinct, context_bb, release_bb)
+        self.builder.position_at_end(context_bb)
+        self.builder.call(
+            self.runtime["py_exc_set_implicit_context_slots"],
+            [self._as_gc_ptr(replacement_slot), self._as_gc_ptr(root)],
+        )
+        self.builder.branch(release_bb)
+        self.builder.position_at_end(release_bb)
+        self._clear_exception_selection_owner_slot(replacement_slot)
+        self._emit_handled_exception_scope_exit(scope)
+        self.builder.branch(saved_error or self._ensure_fn_err_exit())
+        self.builder.position_at_end(continuation)
+        return match
 
     def _traceback_source_text(self, span: SourceSpan) -> str:
         """The stripped source line a traceback frame prints for ``span``."""

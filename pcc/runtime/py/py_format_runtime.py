@@ -7,13 +7,16 @@ does not replace the C helper with a call back into ``snprintf``.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PYCLASSOBJECT_NAME_OFFSET, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FLOAT, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import PY_FLAG_EXC_UNICODE_PAYLOAD, PYCLASSOBJECT_NAME_OFFSET, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FLOAT, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START
 
 from pcc.extern import c_abi_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     call_i64_i64_ptr,
     cstr,
     define_global_ptr_null,
+    define_global_i32,
+    global_addr,
+    memset,
     f64_bits,
     f64_signbit,
     free,
@@ -82,6 +85,7 @@ py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_func_call = extern("py_func_call", (c_ptr, c_ptr), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_note_relocation_read = extern("pcc_gc_note_relocation_read", (c_ptr,), c_ptr)
 pcc_stdio_format_float_raw = extern(
     "pcc_stdio_format_float_raw",
     (c_ptr, c_double, c_int64, c_int64, c_int64, c_int64, c_int64),
@@ -658,8 +662,11 @@ def py_complex_repr(value):
 
 @c_abi_export("py_exc_repr")
 def py_exc_repr(value):
+    value = pcc_gc_note_relocation_read(value)
     if ptr_is_null(value) != 0 or _type_of(value) != PY_TYPE_EXC:
         return null()
+    if (load_i32(value, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
+        return py_unicode_error_format(value, 1)
     cls = pcc_gc_load_ptr(value, ptr_add(value, 16))
     name = cstr("Exception")
     if ptr_is_null(cls) == 0:
@@ -671,14 +678,10 @@ def py_exc_repr(value):
         return null()
     _buffer_append(state, name, strlen(name))
     _buffer_char(state, 40)
-    message = py_exc_get_message(value)
-    none_obj = global_load_ptr("py_None")
-    empty: int = 0
-    if ptr_is_null(message) != 0 or ptr_eq(message, none_obj) != 0:
-        empty = 1
-    elif _type_of(message) == PY_TYPE_STR and py_str_byte_len(message) == 0:
-        empty = 1
-    if empty == 0:
+    # Buffer helpers may park; get the borrowed argument only after them and
+    # consume it once in py_obj_repr, without keeping it across conversion.
+    message = py_exc_get_message(pcc_gc_note_relocation_read(value))
+    if ptr_is_null(message) == 0:
         rendered = py_obj_repr(message)
         if ptr_is_null(rendered) != 0:
             _buffer_free(state)
@@ -2482,3 +2485,135 @@ def py_bytes_mod(format_obj, arguments):
         py_decref(result)
         return bytearray
     return result
+
+
+py_unicode_error_get_field = extern("py_unicode_error_get_field", (c_ptr, c_int64), c_ptr)
+py_str_len = extern("py_str_len", (c_ptr,), c_int64)
+py_str_ord_at_i64 = extern("py_str_ord_at_i64", (c_ptr, c_int64), c_int64)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+define_global_i32("pcc_unicode_format_borrowed_map", -1)
+define_global_i32("pcc_unicode_format_owned_map", 8)
+
+
+def _unicode_format_pin(slot) -> int:
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), slot)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, 12) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    return prior
+
+
+def _unicode_format_append(state, slots, index: int, repr_mode: int) -> int:
+    source_slot = ptr_add(slots, index * 8)
+    source_pin: int = _unicode_format_pin(source_slot)
+    value = load_ptr(source_slot, 0)
+    if repr_mode != 0:
+        rendered = py_obj_repr(value)
+    else:
+        rendered = py_obj_str(value)
+    store_ptr(slots, 40, rendered)
+    store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, source_pin))
+    if ptr_is_null(rendered):
+        return -1
+    slot = ptr_add(slots, 40)
+    prior: int = _unicode_format_pin(slot)
+    rc: int = _append_pystr(state, load_ptr(slot, 0))
+    store_ptr(slot, 0, pcc_gc_take_pinned_slot(slot, prior))
+    pcc_gc_store_root(slot, null())
+    return rc
+
+
+def _unicode_format_decimal(state, number: int) -> None:
+    if number == -9223372036854775807 - 1:
+        _buffer_cstr(state, cstr("-9223372036854775808"))
+    else:
+        _buffer_decimal(state, number)
+
+
+def _unicode_format_body(state, slots, repr_mode: int) -> int:
+    if repr_mode != 0:
+        _buffer_cstr(state, cstr("UnicodeEncodeError"))
+        return _unicode_format_append(state, slots, 7, 1)
+    source = pcc_gc_load_ptr(null(), ptr_add(slots, 8))
+    if _type_of(source) != PY_TYPE_STR:
+        py_raise_owned(py_exc_new(3, cstr("UnicodeError 'object' attribute must be a string")))
+        return -1
+    start: int = py_int_value_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 16)))
+    end: int = py_int_value_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 24)))
+    length: int = py_str_len(pcc_gc_load_ptr(null(), ptr_add(slots, 8)))
+    code: int = -1
+    if start >= 0 and start < length and end == start + 1:
+        code = py_str_ord_at_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 8)), start)
+    _buffer_char(state, 39)
+    if _unicode_format_append(state, slots, 0, 0) != 0:
+        return -1
+    if code >= 0:
+        _buffer_cstr(state, cstr("' codec can't encode character '\\"))
+        width: int = 2
+        if code <= 255:
+            _buffer_char(state, 120)
+        elif code <= 65535:
+            _buffer_char(state, 117)
+            width = 4
+        else:
+            _buffer_char(state, 85)
+            width = 8
+        shift: int = (width - 1) * 4
+        while shift >= 0:
+            digit: int = (code >> shift) & 15
+            _buffer_char(state, 48 + digit if digit < 10 else 87 + digit)
+            shift = shift - 4
+        _buffer_cstr(state, cstr("' in position "))
+        _unicode_format_decimal(state, start)
+    else:
+        _buffer_cstr(state, cstr("' codec can't encode characters in position "))
+        _unicode_format_decimal(state, start)
+        _buffer_char(state, 45)
+        # CPython formats this descriptor through Py_ssize_t, including the
+        # wrap at its minimum. Spell it explicitly instead of signed overflow.
+        if end == -9223372036854775807 - 1:
+            _buffer_cstr(state, cstr("9223372036854775807"))
+        else:
+            _unicode_format_decimal(state, end - 1)
+    _buffer_cstr(state, cstr(": "))
+    return _unicode_format_append(state, slots, 4, 0)
+
+
+@c_abi_export("py_unicode_error_format")
+def py_unicode_error_format(value, repr_mode: int):
+    borrowed = stack_alloc(8)
+    store_ptr(borrowed, 0, value)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_format_borrowed_map"), borrowed)
+    slots = stack_alloc(64)
+    memset(slots, 0, 64)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_format_owned_map"), slots)
+    if repr_mode != 0:
+        store_ptr(slots, 56, py_unicode_error_get_field(pcc_gc_load_ptr(null(), borrowed), 0))
+    else:
+        i: int = 0
+        while i < 5:
+            store_ptr(slots, i * 8, py_unicode_error_get_field(pcc_gc_load_ptr(null(), borrowed), i + 1))
+            i = i + 1
+    state = _buffer_new(128)
+    if ptr_is_null(state) == 0:
+        if _unicode_format_body(state, slots, repr_mode) == 0:
+            store_ptr(slots, 48, _buffer_string(state))
+        _buffer_free(state)
+    prior: int = _unicode_format_pin(ptr_add(slots, 48))
+    i = 0
+    while i < 8:
+        if i != 6:
+            pcc_gc_store_root(ptr_add(slots, i * 8), null())
+        i = i + 1
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(ptr_add(slots, 48), prior)

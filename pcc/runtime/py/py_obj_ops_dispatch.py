@@ -12,9 +12,11 @@ second numeric copy of the public object ABI in its docstring.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_int32, c_ptr, c_int64, c_void, c_double
-from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE, PYCLASSOBJECT_MRO_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_MRO_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYSTATICMETHODOBJECT_FUNC_OFFSET, PY_TYPE_CONTINUATION, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL
+from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE, PYCLASSOBJECT_MRO_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_MRO_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYSTATICMETHODOBJECT_FUNC_OFFSET, PY_FLAG_EXC_SUPPRESS_CONTEXT, PY_FLAG_EXC_UNICODE_PAYLOAD, PY_TYPE_CONTINUATION, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL
 from pcc.runtime.py.py_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PY_TYPE_COMPLEX, PY_TYPE_COROUTINE, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FILE, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STATICMETHOD, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_WEAKREF
 from pcc.unsafe import (
+    atomic_load_i32,
+    atomic_rmw_i32,
     call_ptr1,
     call_ptr2,
     cstr,
@@ -115,6 +117,7 @@ py_set_symmetric_difference = extern(
 py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr)
 py_class_lookup = extern("py_class_lookup", (c_ptr, c_ptr), c_ptr)
 py_class_getattr = extern("py_class_getattr", (c_ptr, c_ptr), c_ptr)
+py_class_metaclass_call = extern("py_class_metaclass_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_class_setattr = extern("py_class_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 py_class_delattr = extern("py_class_delattr", (c_ptr, c_ptr), c_int64)
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
@@ -128,6 +131,9 @@ py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_traceback_object = extern("py_exc_traceback_object", (c_ptr,), c_ptr)
 py_file_getattr = extern("py_file_getattr", (c_ptr, c_ptr), c_ptr)
+py_unicode_encode_error_new = extern("py_unicode_encode_error_new", (c_ptr,), c_ptr)
+py_unicode_error_get_field = extern("py_unicode_error_get_field", (c_ptr, c_int64), c_ptr)
+py_unicode_error_set_field = extern("py_unicode_error_set_field", (c_ptr, c_int64, c_ptr), c_int64)
 py_exc_new_with_class = extern("py_exc_new_with_class", (c_ptr, c_ptr), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 py_file_type_kind = extern("py_file_type_kind", (c_ptr,), c_int64)
@@ -242,6 +248,7 @@ py_bytearray_del_slice = extern(
     "py_bytearray_del_slice", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
 py_obj_call_sync = extern("py_obj_call_sync", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_default_sync = extern("py_obj_call_default_sync", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_call_context_is_deferred = extern("py_obj_call_context_is_deferred", (), c_int64)
 
 
@@ -2759,6 +2766,12 @@ def py_obj_getattr(o, name):
             return py_complex_imag(o)
         return _raise_attribute_error(o, name)
     if tag == PY_TYPE_EXC:  # PY_TYPE_EXC
+        if (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
+            field: int = _unicode_error_attribute_index(name)
+            if field >= 0:
+                return py_unicode_error_get_field(o, field)
+            if _cstr_is_value(name) != 0:
+                return _raise_attribute_error(o, name)
         result = null()
         if _cstr_is_dunder_class(name) != 0:
             result = pcc_gc_load_ptr(o, ptr_add(o, 16))
@@ -2770,6 +2783,10 @@ def py_obj_getattr(o, name):
             result = pcc_gc_load_ptr(o, ptr_add(o, 40))
             if ptr_is_null(result) != 0:
                 result = global_load_ptr("py_None")
+        elif strcmp(name, cstr("__suppress_context__")) == 0:
+            o = pcc_gc_note_relocation_read(o)
+            suppressed: int = atomic_load_i32(o, 12, "relaxed") & PY_FLAG_EXC_SUPPRESS_CONTEXT
+            return py_bool_from_bit(1 if suppressed != 0 else 0)
         elif strcmp(name, cstr("__traceback__")) == 0:
             # A NEW reference already (built from the frame records).
             return py_exc_traceback_object(o)
@@ -2800,23 +2817,16 @@ def py_obj_getattr(o, name):
             # capturing args[1:] needs a dedicated field (documented follow-up,
             # shared with multi-arg str(exc)). Return () or (message,).
             msg = pcc_gc_load_ptr(o, ptr_add(o, 24))
-            none = global_load_ptr("py_None")
-            empty: int = 0
-            if ptr_is_null(msg) != 0 or ptr_eq(msg, none) != 0:
-                empty = 1
-            elif _type_of(msg) == PY_TYPE_STR and load_i64(msg, 16) == 0:
-                # PY_TYPE_STR(4) with byte_len 0: a no-arg exception stores ""
-                # as message, so args == () like CPython.  ``_type_of`` is
-                # tag-aware: KeyError(-1) stores a tagged small int here and a
-                # raw header read of it dereferenced the tag (mirrors
-                # py_type_of in py_obj_ops_dispatch.c).
-                empty = 1
-            if empty != 0:
+            if ptr_is_null(msg) != 0:
                 return py_tuple_new(0)
             t = py_tuple_new(1)
             if ptr_is_null(t) == 0:
+                # Tuple allocation can move the exception and its borrowed
+                # argument. Reload the field after that allocation.
+                o = pcc_gc_note_relocation_read(o)
+                msg = pcc_gc_load_ptr(o, ptr_add(o, 24))
                 py_tuple_set_item(t, 0, msg)
-            return t
+            return pcc_gc_note_relocation_read(t)
         if ptr_is_null(result) == 0:
             py_incref(result)
             return result
@@ -2904,6 +2914,22 @@ def py_obj_getattr_maybe(o, name):
     return py_obj_getattr(o, name)
 
 
+def _unicode_error_attribute_index(name) -> int:
+    if strcmp(name, cstr("args")) == 0:
+        return 0
+    if strcmp(name, cstr("encoding")) == 0:
+        return 1
+    if strcmp(name, cstr("object")) == 0:
+        return 2
+    if strcmp(name, cstr("start")) == 0:
+        return 3
+    if strcmp(name, cstr("end")) == 0:
+        return 4
+    if strcmp(name, cstr("reason")) == 0:
+        return 5
+    return -1
+
+
 @c_abi_export("py_obj_setattr")
 def py_obj_setattr(o, name, v) -> int:
     if ptr_is_null(o) != 0:
@@ -2914,6 +2940,23 @@ def py_obj_setattr(o, name, v) -> int:
         return _raise_attribute_status(o, name)
     tag: int = load_i32(o, 8)
     pcc_diagnostics_runtime_log_event_code(7, 6, tag, 0, o)
+
+    if tag == PY_TYPE_EXC and (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
+        field: int = _unicode_error_attribute_index(name)
+        if field > 0:
+            return py_unicode_error_set_field(o, field, v)
+
+    if tag == PY_TYPE_EXC and strcmp(name, cstr("__suppress_context__")) == 0:
+        if ptr_eq(v, global_load_ptr("py_True")) != 0:
+            o = pcc_gc_note_relocation_read(o)
+            atomic_rmw_i32("or", o, 12, PY_FLAG_EXC_SUPPRESS_CONTEXT, "relaxed")
+            return 0
+        if ptr_eq(v, global_load_ptr("py_False")) != 0:
+            o = pcc_gc_note_relocation_read(o)
+            atomic_rmw_i32("and", o, 12, ~PY_FLAG_EXC_SUPPRESS_CONTEXT, "relaxed")
+            return 0
+        py_raise_owned(py_exc_new(3, cstr("attribute value type must be bool")))
+        return -1
 
     if pcc_capi_is_cext_type_tag(tag) != 0:
         rc: int = pcc_capi_cext_object_setattr(o, name, v)
@@ -2973,6 +3016,10 @@ def py_obj_delattr(o, name) -> int:
         return -1
     tag: int = load_i32(o, 8)
     pcc_diagnostics_runtime_log_event_code(7, 7, tag, 0, o)
+
+    if tag == PY_TYPE_EXC and strcmp(name, cstr("__suppress_context__")) == 0:
+        py_raise_owned(py_exc_new(3, cstr("can't delete numeric/char attribute")))
+        return -1
 
     if _is_instance_tag(tag) != 0:
         return py_instance_delattr(o, name)
@@ -3058,8 +3105,10 @@ def _builtin_exception_call(cls, args, nargs: int):
     plain instance with no message and no ``args``, so ``warnings.warn``
     printed an empty ``UserWarning:``.
     """
+    if _builtin_exception_class_tag(cls) == 59:
+        return py_unicode_encode_error_new(args)
     if nargs == 0:
-        return py_exc_new_with_class(cls, cstr(""))
+        return py_exc_new_with_class(cls, null())
     e = py_exc_new_with_class(cls, null())
     if ptr_is_null(e) != 0:
         return null()
@@ -3116,6 +3165,19 @@ def _class_call_new(callable_obj, args, kwargs):
 
 @c_abi_export("py_obj_call")
 def py_obj_call(callable, args, kwargs):
+    # Raw compatibility entry. Its existing caller-address contract is not
+    # repaired by the slot ABI; keep its semantics while callers migrate.
+    return _py_obj_call_body(callable, args, kwargs, 1)
+
+
+@c_abi_export("py_obj_call_default")
+def py_obj_call_default(callable, args, kwargs):
+    # Only the slot dispatcher selects this after authoritative special
+    # lookup. Inputs have caller-owned address leases for the entire call.
+    return _py_obj_call_body(callable, args, kwargs, 0)
+
+
+def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
     if ptr_is_null(callable) != 0:
         return py_runtime_error_if_unset(
             cstr("py_obj_call"),
@@ -3128,6 +3190,8 @@ def py_obj_call(callable, args, kwargs):
 
     if tag == PY_TYPE_STATICMETHOD:
         func = pcc_gc_load_ptr(callable, ptr_add(callable, PYSTATICMETHODOBJECT_FUNC_OFFSET))
+        if include_metaclass == 0:
+            return py_obj_call_default(func, args, kwargs)
         return py_obj_call(func, args, kwargs)
 
     if pcc_capi_type_object_is_callable(callable) != 0:
@@ -3135,6 +3199,8 @@ def py_obj_call(callable, args, kwargs):
         # unlike transparent staticmethod or instance __call__ dispatch.
         # Consume defer here so every internal ordinary call starts sync.
         if py_obj_call_context_is_deferred() != 0:
+            if include_metaclass == 0:
+                return py_obj_call_default_sync(callable, args, kwargs)
             return py_obj_call_sync(callable, args, kwargs)
         checked_result = pcc_capi_call_type_object(callable, args, kwargs)
         # Keep a fresh non-NULL result out of a polling diagnostic helper.
@@ -3147,7 +3213,15 @@ def py_obj_call(callable, args, kwargs):
         # unlike transparent staticmethod or instance __call__ dispatch.
         # Consume defer here so every internal ordinary call starts sync.
         if py_obj_call_context_is_deferred() != 0:
+            if include_metaclass == 0:
+                return py_obj_call_default_sync(callable, args, kwargs)
             return py_obj_call_sync(callable, args, kwargs)
+        if include_metaclass != 0:
+            metaclass_result = py_class_metaclass_call(callable, args, kwargs)
+            if ptr_is_null(metaclass_result) == 0:
+                return metaclass_result
+            if py_err_occurred() != 0:
+                return null()
         nargs: int = 0
         if ptr_is_null(args) == 0:
             nargs = py_tuple_len(args)
@@ -3258,6 +3332,9 @@ def py_obj_call(callable, args, kwargs):
             if ptr_is_null(arg) == 0:
                 py_decref(arg)
             return out
+        if nkwargs != 0 and _builtin_exception_class_tag(callable) == 59:
+            py_raise_owned(py_exc_new(3, cstr("UnicodeEncodeError() takes no keyword arguments")))
+            return null()
         if nkwargs == 0 and _builtin_exception_class_tag(callable) >= 0:
             return _builtin_exception_call(callable, args, nargs)
         # CPython: ``obj = cls.__new__(cls, *args)`` first.  Going straight
@@ -3329,13 +3406,15 @@ def py_obj_call(callable, args, kwargs):
         # unlike transparent staticmethod or instance __call__ dispatch.
         # Consume defer here so every internal ordinary call starts sync.
         if py_obj_call_context_is_deferred() != 0:
+            if include_metaclass == 0:
+                return py_obj_call_default_sync(callable, args, kwargs)
             return py_obj_call_sync(callable, args, kwargs)
         checked_result = pcc_capi_call_cext_object(callable, args, kwargs)
         # Keep a fresh non-NULL result out of a polling diagnostic helper.
         if ptr_is_null(checked_result):
             py_runtime_error_if_unset(cstr('pcc_capi_call_cext_object'), cstr('pcc_capi_call_cext_object returned NULL without setting an exception'))
         return checked_result
-    if _is_instance_tag(tag) != 0:
+    if include_metaclass != 0 and _is_instance_tag(tag) != 0:
         cls = pcc_gc_load_ptr(
             callable, ptr_add(callable, PYINSTANCEOBJECT_CLS_OFFSET)
         )

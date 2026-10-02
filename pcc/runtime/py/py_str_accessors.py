@@ -15,10 +15,13 @@ PyStrObject layout (from py_internal.h):
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
-from pcc.runtime.py.py_abi_constants import PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_CP_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET, PYSTROBJECT_HASH_OFFSET, PYSTROBJECT_SIZE, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_IMMORTAL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_CP_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET, PYSTROBJECT_HASH_OFFSET, PYSTROBJECT_SIZE, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_GC_PINNED, PY_FLAG_IMMORTAL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_STR, PY_TYPE_TUPLE
 from pcc.unsafe import (
     cstr,
     define_global_ptr_null,
+    define_global_i32,
+    global_addr,
+    stack_alloc,
     free,
     global_load_ptr,
     global_store_ptr,
@@ -45,6 +48,18 @@ py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
+py_unicode_encode_error = extern("py_unicode_encode_error", (c_ptr, c_ptr, c_int64, c_int64, c_ptr), c_void)
+py_err_occurred = extern("py_err_occurred", (), c_int64)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+define_global_i32("pcc_str_encode_borrowed_frame_map", -3)
+define_global_i32("pcc_str_encode_owned_frame_map", 4)
 py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
@@ -411,161 +426,379 @@ def py_str_byte_at_i64(s, idx: int) -> int:
     return load_i8(ptr_add(s, PYSTROBJECT_DATA_OFFSET), idx) & 255
 
 
+def _encode_name_equal(obj, expected: c_ptr, size: int) -> int:
+    if load_i64(obj, PYSTROBJECT_BYTE_LEN_OFFSET) != size:
+        return 0
+    data = ptr_add(obj, PYSTROBJECT_DATA_OFFSET)
+    index: int = 0
+    while index < size:
+        if (load_i8(data, index) & 255) != (load_i8(expected, index) & 255):
+            return 0
+        index = index + 1
+    return 1
+
+
+def _encode_codec_equal(obj, expected: c_ptr, size: int) -> int:
+    # codecs.normalize_encoding: lowercase ASCII, collapse punctuation to an
+    # underscore and drop leading/trailing separators. Dots are significant.
+    data = ptr_add(obj, PYSTROBJECT_DATA_OFFSET)
+    length: int = load_i64(obj, PYSTROBJECT_BYTE_LEN_OFFSET)
+    index: int = 0
+    output: int = 0
+    separator: int = 0
+    while index < length:
+        char: int = load_i8(data, index) & 255
+        if char >= 65 and char <= 90:
+            char = char + 32
+        if (char >= 97 and char <= 122) or (char >= 48 and char <= 57) or char == 46:
+            if separator != 0 and output != 0:
+                if output >= size or load_i8(expected, output) != 95:
+                    return 0
+                output = output + 1
+            separator = 0
+            if output >= size or (load_i8(expected, output) & 255) != char:
+                return 0
+            output = output + 1
+        else:
+            separator = 1
+        index = index + 1
+    if output == size:
+        return 1
+    return 0
+
+
+def _encode_codec_id(encoding) -> int:
+    if ptr_is_null(encoding):
+        return 0
+    if (_encode_codec_equal(encoding, cstr("utf_8"), 5)
+        or _encode_codec_equal(encoding, cstr("utf8"), 4)
+        or _encode_codec_equal(encoding, cstr("csutf8"), 6)
+        or _encode_codec_equal(encoding, cstr("utf8_ucs2"), 9)
+        or _encode_codec_equal(encoding, cstr("utf8_ucs4"), 9)
+        or _encode_codec_equal(encoding, cstr("utf"), 3)
+        or _encode_codec_equal(encoding, cstr("u8"), 2)
+        or _encode_codec_equal(encoding, cstr("cp65001"), 7)):
+        return 0
+    if (_encode_codec_equal(encoding, cstr("ascii"), 5)
+        or _encode_codec_equal(encoding, cstr("us_ascii"), 8)
+        or _encode_codec_equal(encoding, cstr("646"), 3)
+        or _encode_codec_equal(encoding, cstr("ansi_x3_4_1968"), 14)
+        or _encode_codec_equal(encoding, cstr("csascii"), 7)
+        or _encode_codec_equal(encoding, cstr("iso_ir_6"), 8)
+        or _encode_codec_equal(encoding, cstr("us"), 2)
+        or _encode_codec_equal(encoding, cstr("ansi_x3.4_1968"), 14)
+        or _encode_codec_equal(encoding, cstr("ansi_x3.4_1986"), 14)
+        or _encode_codec_equal(encoding, cstr("cp367"), 5)
+        or _encode_codec_equal(encoding, cstr("ibm367"), 6)
+        or _encode_codec_equal(encoding, cstr("iso646_us"), 9)
+        or _encode_codec_equal(encoding, cstr("iso_646.irv_1991"), 16)):
+        return 1
+    if (_encode_codec_equal(encoding, cstr("latin_1"), 7)
+        or _encode_codec_equal(encoding, cstr("latin1"), 6)
+        or _encode_codec_equal(encoding, cstr("8859"), 4)
+        or _encode_codec_equal(encoding, cstr("iso8859"), 7)
+        or _encode_codec_equal(encoding, cstr("latin"), 5)
+        or _encode_codec_equal(encoding, cstr("l1"), 2)
+        or _encode_codec_equal(encoding, cstr("iso8859_1"), 9)
+        or _encode_codec_equal(encoding, cstr("iso_8859_1"), 10)
+        or _encode_codec_equal(encoding, cstr("iso_8859_1_1987"), 15)
+        or _encode_codec_equal(encoding, cstr("iso_ir_100"), 10)
+        or _encode_codec_equal(encoding, cstr("cp819"), 5)
+        or _encode_codec_equal(encoding, cstr("ibm819"), 6)
+        or _encode_codec_equal(encoding, cstr("csisolatin1"), 11)):
+        return 2
+    return -1
+
+
+def _encode_error_id(errors) -> int:
+    if ptr_is_null(errors):
+        return 0
+    if _encode_name_equal(errors, cstr("strict"), 6):
+        return 0
+    if _encode_name_equal(errors, cstr("ignore"), 6):
+        return 1
+    if _encode_name_equal(errors, cstr("replace"), 7):
+        return 2
+    if _encode_name_equal(errors, cstr("surrogateescape"), 15):
+        return 3
+    if _encode_name_equal(errors, cstr("surrogatepass"), 13):
+        return 4
+    if _encode_name_equal(errors, cstr("backslashreplace"), 16):
+        return 5
+    if _encode_name_equal(errors, cstr("xmlcharrefreplace"), 17):
+        return 6
+    if _encode_name_equal(errors, cstr("namereplace"), 11):
+        return 7
+    return -1
+
+
+def _encode_width(cp: int) -> int:
+    if cp < 128:
+        return 1
+    if cp < 2048:
+        return 2
+    if cp < 65536:
+        return 3
+    return 4
+
+
+def _encode_invalid(cp: int, codec: int) -> int:
+    if codec == 0:
+        if cp >= 55296 and cp <= 57343:
+            return 1
+        return 0
+    if codec == 1:
+        return 1 if cp > 127 else 0
+    return 1 if cp > 255 else 0
+
+
+def _encode_raise_unicode(s, codec: int, byte_at: int, start: int) -> None:
+    end: int = start
+    length: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
+    while byte_at < length:
+        cp: int = _utf8_ord_at_byte(s, byte_at)
+        if _encode_invalid(cp, codec) == 0:
+            break
+        byte_at = byte_at + _encode_width(cp)
+        end = end + 1
+    if codec == 0:
+        py_unicode_encode_error(s, cstr("utf-8"), start, end, cstr("surrogates not allowed"))
+    elif codec == 1:
+        py_unicode_encode_error(s, cstr("ascii"), start, end, cstr("ordinal not in range(128)"))
+    else:
+        py_unicode_encode_error(s, cstr("latin-1"), start, end, cstr("ordinal not in range(256)"))
+
+
+def _encode_validate_name(name) -> int:
+    if ptr_is_null(name):
+        return 1
+    if is_tagged_int(name) or load_i32(name, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_STR:
+        py_raise_owned(py_exc_new(3, cstr("encode() argument must be str")))
+        return 0
+    length: int = load_i64(name, PYSTROBJECT_BYTE_LEN_OFFSET)
+    byte_at: int = 0
+    index: int = 0
+    while byte_at < length:
+        cp: int = _utf8_ord_at_byte(name, byte_at)
+        if cp == 0:
+            py_raise_owned(py_exc_new(2, cstr("embedded null character")))
+            return 0
+        if cp >= 55296 and cp <= 57343:
+            _encode_raise_unicode(name, 0, byte_at, index)
+            return 0
+        byte_at = byte_at + _encode_width(cp)
+        index = index + 1
+    return 1
+
+
+def _str_encode_codec(s, codec: int, mode: int):
+    # The guarded exports hold a counted address lease for s throughout this
+    # body, including malloc, character helpers, error construction and the
+    # result allocation. Scratch storage is independent of the moving GC.
+    if ptr_is_null(s) or is_tagged_int(s) or load_i32(s, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_STR:
+        py_raise_owned(py_exc_new(3, cstr("encode() requires str")))
+        return null()
+    byte_len: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
+    capacity: int = byte_len
+    if mode == 5 or mode == 6:
+        if byte_len > 922337203685477580:
+            py_raise_owned(py_exc_new(15, cstr("encoded string is too long")))
+            return null()
+        capacity = byte_len * 10
+    buf = malloc(capacity + 1)
+    if ptr_is_null(buf):
+        py_raise_owned(py_exc_new(19, cstr("cannot allocate encoded string")))
+        return null()
+    raw = ptr_add(s, PYSTROBJECT_DATA_OFFSET)
+    byte_at: int = 0
+    index: int = 0
+    output: int = 0
+    while byte_at < byte_len:
+        cp: int = _utf8_ord_at_byte(s, byte_at)
+        width: int = _encode_width(cp)
+        invalid: int = _encode_invalid(cp, codec)
+        if invalid == 0 or (codec == 0 and mode == 4):
+            if codec == 0:
+                step: int = 0
+                while step < width:
+                    store_i8(buf, output, load_i8(raw, byte_at + step))
+                    output = output + 1
+                    step = step + 1
+            else:
+                store_i8(buf, output, cp)
+                output = output + 1
+        elif mode == 1:
+            pass
+        elif mode == 2:
+            store_i8(buf, output, 63)
+            output = output + 1
+        elif mode == 3 and cp >= 56448 and cp <= 56575:
+            store_i8(buf, output, cp - 56320)
+            output = output + 1
+        elif mode == 5:
+            store_i8(buf, output, 92)
+            digits: int = 4
+            marker: int = 117
+            if cp < 256:
+                digits = 2
+                marker = 120
+            elif cp >= 65536:
+                digits = 8
+                marker = 85
+            store_i8(buf, output + 1, marker)
+            output = output + 2
+            shift: int = (digits - 1) * 4
+            while shift >= 0:
+                digit: int = (cp >> shift) & 15
+                store_i8(buf, output, 48 + digit if digit < 10 else 87 + digit)
+                output = output + 1
+                shift = shift - 4
+        elif mode == 6:
+            store_i8(buf, output, 38)
+            store_i8(buf, output + 1, 35)
+            output = output + 2
+            divisor: int = 1
+            while divisor <= cp // 10:
+                divisor = divisor * 10
+            while divisor > 0:
+                store_i8(buf, output, 48 + ((cp // divisor) % 10))
+                output = output + 1
+                divisor = divisor // 10
+            store_i8(buf, output, 59)
+            output = output + 1
+        else:
+            free(buf)
+            if mode == -1:
+                py_raise_owned(py_exc_new(13, cstr("unknown error handler name")))
+            elif mode == 7:
+                py_raise_owned(py_exc_new(11, cstr("pcc-native namereplace requires Unicode character names")))
+            else:
+                _encode_raise_unicode(s, codec, byte_at, index)
+            return null()
+        byte_at = byte_at + width
+        index = index + 1
+    result = py_bytes_new(buf, output)
+    free(buf)
+    return result
+
+
+def _str_encode_names_leased(s, encoding, errors):
+    # NULL denotes an omitted argument. Python None remains a TypeError.
+    if _encode_validate_name(encoding) == 0:
+        return null()
+    if _encode_validate_name(errors) == 0:
+        return null()
+    codec: int = _encode_codec_id(encoding)
+    if codec < 0:
+        py_raise_owned(py_exc_new(13, cstr("unknown or unsupported native encoding")))
+        return null()
+    return _str_encode_codec(s, codec, _encode_error_id(errors))
+
+
+def _encode_guard_error(kind: int, message: c_ptr) -> None:
+    # Infrastructure cleanup must never replace the original codec exception.
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(kind, message))
+
+
+@c_abi_export("_pcc_str_encode_guarded")
+def _str_encode_guarded(s, encoding, errors, forced_codec: int):
+    # Stage incoming borrowed pointers before retention, then keep separate
+    # owned slots and local counted leases for every raw codec view. Initial
+    # frame publication still consumes the shared runtime-entry contract:
+    # threaded raw ABI callers must keep incoming addresses leased until it
+    # completes, because frame_enter itself may park before linking slots.
+    borrowed = stack_alloc(24)
+    store_ptr(borrowed, 0, s)
+    store_ptr(borrowed, 8, encoding)
+    store_ptr(borrowed, 16, errors)
+    pcc_gc_frame_enter(global_addr("pcc_str_encode_borrowed_frame_map"), borrowed)
+    owned = stack_alloc(32)
+    memset(owned, 0, 32)
+    pcc_gc_frame_enter(global_addr("pcc_str_encode_owned_frame_map"), owned)
+    index: int = 0
+    while index < 3:
+        pcc_py_gc_minor_graph_lock()
+        value = pcc_gc_load_ptr(null(), ptr_add(borrowed, index * 8))
+        pcc_gc_store_root(ptr_add(owned, index * 8), value)
+        pcc_py_gc_minor_graph_unlock()
+        index = index + 1
+    pcc_gc_frame_leave(borrowed)
+    tokens = stack_alloc(24)
+    store_i64(tokens, 0, -1)
+    store_i64(tokens, 8, -1)
+    store_i64(tokens, 16, -1)
+    index = 0
+    while index < 3 and py_err_occurred() == 0:
+        acquired: int = pcc_gc_foreign_lease_acquire(ptr_add(owned, index * 8))
+        store_i64(tokens, index * 8, acquired)
+        if acquired < 0:
+            if acquired == -2:
+                _encode_guard_error(15, cstr("string encoding address lease overflow"))
+            else:
+                _encode_guard_error(7, cstr("string encoding requires a stable managed owner"))
+            break
+        index = index + 1
+    result_slot = ptr_add(owned, 24)
+    if index == 3:
+        if forced_codec < 0:
+            result = _str_encode_names_leased(
+                pcc_gc_load_ptr(null(), owned),
+                pcc_gc_load_ptr(null(), ptr_add(owned, 8)),
+                pcc_gc_load_ptr(null(), ptr_add(owned, 16)),
+            )
+        else:
+            result = _str_encode_codec(pcc_gc_load_ptr(null(), owned), forced_codec, 0)
+        # Transfer the newly produced owner directly into the already traced
+        # result slot before lease release or any source-owner finalizer.
+        store_ptr(result_slot, 0, result)
+    index = 2
+    while index >= 0:
+        acquired = load_i64(tokens, index * 8)
+        if acquired >= 0:
+            status: int = pcc_gc_foreign_lease_release(ptr_add(owned, index * 8), acquired)
+            if status < 0:
+                _encode_guard_error(7, cstr("string encoding address lease cleanup failed"))
+        index = index - 1
+    index = 2
+    while index >= 0:
+        pcc_gc_store_root(ptr_add(owned, index * 8), null())
+        index = index - 1
+    # Use the shared final no-park transfer after all allocating/error/finalizer
+    # work. The result stays in its authoritative slot until frame retirement.
+    prior: int = 0
+    pcc_py_gc_minor_graph_lock()
+    result = pcc_gc_load_ptr(null(), result_slot)
+    if not ptr_is_null(result) and not is_tagged_int(result):
+        prior = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+    pcc_gc_pin(result)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave(owned)
+    result = pcc_gc_take_pinned_slot(result_slot, prior)
+    if py_err_occurred() != 0:
+        py_decref(result)
+        return null()
+    return result
+
+
+@c_abi_export("py_str_encode_with_encoding")
+def py_str_encode_with_encoding(s, encoding, errors):
+    return _str_encode_guarded(s, encoding, errors, -1)
+
+
 @c_abi_export("py_str_utf8_encode")
 def py_str_utf8_encode(s):
-    if ptr_is_null(s) != 0:
-        return py_bytes_new(null(), 0)
-    byte_len: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
-    if byte_len <= 0:
-        return py_bytes_new(null(), 0)
-    return py_bytes_new(ptr_add(s, PYSTROBJECT_DATA_OFFSET), byte_len)
+    return _str_encode_guarded(s, null(), null(), 0)
 
 
 @c_abi_export("py_str_latin1_encode")
 def py_str_latin1_encode(s):
-    if ptr_is_null(s) != 0:
-        return py_bytes_new(null(), 0)
-    byte_len: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
-    if byte_len <= 0:
-        return py_bytes_new(null(), 0)
-    buf = malloc(byte_len)
-    if ptr_is_null(buf):
-        return null()
-    raw = ptr_add(s, PYSTROBJECT_DATA_OFFSET)
-    i: int = 0
-    out: int = 0
-    while i < byte_len:
-        b0: int = load_i8(raw, i)
-        if b0 < 0:
-            b0 = b0 + 256
-        cp: int = 0
-        step: int = 1
-        if b0 < 128:
-            cp = b0
-        elif (b0 & 224) == 192 and i + 1 < byte_len:
-            b1: int = load_i8(raw, i + 1)
-            if b1 < 0:
-                b1 = b1 + 256
-            cp = ((b0 & 31) << 6) | (b1 & 63)
-            step = 2
-        elif (b0 & 240) == 224 and i + 2 < byte_len:
-            b1 = load_i8(raw, i + 1)
-            b2: int = load_i8(raw, i + 2)
-            if b1 < 0:
-                b1 = b1 + 256
-            if b2 < 0:
-                b2 = b2 + 256
-            cp = ((b0 & 15) << 12) | ((b1 & 63) << 6) | (b2 & 63)
-            step = 3
-        elif (b0 & 248) == 240 and i + 3 < byte_len:
-            b1 = load_i8(raw, i + 1)
-            b2 = load_i8(raw, i + 2)
-            b3: int = load_i8(raw, i + 3)
-            if b1 < 0:
-                b1 = b1 + 256
-            if b2 < 0:
-                b2 = b2 + 256
-            if b3 < 0:
-                b3 = b3 + 256
-            cp = ((b0 & 7) << 18) | ((b1 & 63) << 12) | ((b2 & 63) << 6) | (b3 & 63)
-            step = 4
-        else:
-            free(buf)
-            return null()
-        if cp > 255:
-            free(buf)
-            # CPython raises UnicodeEncodeError, a ValueError subclass. The
-            # builtin table has no UnicodeError, so ValueError is the closest
-            # correct supertype: `except ValueError` still catches it and
-            # `except UnicodeError` does not. Returning NULL alone raised
-            # nothing at all -- `"\u65e5".encode(...)` produced EMPTY BYTES and a
-            # caller built a malformed message from it, which is worse than
-            # either exception.
-            py_raise_owned(py_exc_new(2, cstr("latin-1 codec cannot encode character")))
-            return null()
-        store_i8(buf, out, cp)
-        out = out + 1
-        i = i + step
-    result = py_bytes_new(buf, out)
-    free(buf)
-    return result
+    return _str_encode_guarded(s, null(), null(), 2)
 
 
 @c_abi_export("py_str_ascii_encode")
 def py_str_ascii_encode(s):
-    # `str.encode("ascii")`. Structurally the latin-1 encoder above with the
-    # bound at 127: pcc strings are UTF-8, so the decode loop and the
-    # out-of-range exit are the reviewed ones rather than a second dialect.
-    # Out-of-range returns NULL exactly as latin-1 does, so the caller's
-    # error check raises. CPython raises UnicodeEncodeError specifically;
-    # the runtime has no native UnicodeEncodeError yet, and inventing one
-    # here would make this encoder disagree with its own latin-1 mirror.
-    if ptr_is_null(s) != 0:
-        return py_bytes_new(null(), 0)
-    byte_len: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
-    if byte_len <= 0:
-        return py_bytes_new(null(), 0)
-    buf = malloc(byte_len)
-    if ptr_is_null(buf):
-        return null()
-    raw = ptr_add(s, PYSTROBJECT_DATA_OFFSET)
-    i: int = 0
-    out: int = 0
-    while i < byte_len:
-        b0: int = load_i8(raw, i)
-        if b0 < 0:
-            b0 = b0 + 256
-        cp: int = 0
-        step: int = 1
-        if b0 < 128:
-            cp = b0
-        elif (b0 & 224) == 192 and i + 1 < byte_len:
-            b1: int = load_i8(raw, i + 1)
-            if b1 < 0:
-                b1 = b1 + 256
-            cp = ((b0 & 31) << 6) | (b1 & 63)
-            step = 2
-        elif (b0 & 240) == 224 and i + 2 < byte_len:
-            b1 = load_i8(raw, i + 1)
-            b2: int = load_i8(raw, i + 2)
-            if b1 < 0:
-                b1 = b1 + 256
-            if b2 < 0:
-                b2 = b2 + 256
-            cp = ((b0 & 15) << 12) | ((b1 & 63) << 6) | (b2 & 63)
-            step = 3
-        elif (b0 & 248) == 240 and i + 3 < byte_len:
-            b1 = load_i8(raw, i + 1)
-            b2 = load_i8(raw, i + 2)
-            b3: int = load_i8(raw, i + 3)
-            if b1 < 0:
-                b1 = b1 + 256
-            if b2 < 0:
-                b2 = b2 + 256
-            if b3 < 0:
-                b3 = b3 + 256
-            cp = ((b0 & 7) << 18) | ((b1 & 63) << 12) | ((b2 & 63) << 6) | (b3 & 63)
-            step = 4
-        else:
-            free(buf)
-            return null()
-        if cp > 127:
-            free(buf)
-            # CPython raises UnicodeEncodeError, a ValueError subclass. The
-            # builtin table has no UnicodeError, so ValueError is the closest
-            # correct supertype: `except ValueError` still catches it and
-            # `except UnicodeError` does not. Returning NULL alone raised
-            # nothing at all -- `"caf\u00e9".encode(...)` produced EMPTY BYTES and a
-            # caller built a malformed message from it, which is worse than
-            # either exception.
-            py_raise_owned(py_exc_new(2, cstr("ascii codec cannot encode character")))
-            return null()
-        store_i8(buf, out, cp)
-        out = out + 1
-        i = i + step
-    result = py_bytes_new(buf, out)
-    free(buf)
-    return result
+    return _str_encode_guarded(s, null(), null(), 1)
 
 
 @c_abi_export("py_str_byte_slice_i64")

@@ -8,10 +8,11 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, BytesType, Call, ClassType, ComplexType, DictType, DynType, Expr, FloatType, IntType, ListType, MemoryViewType, Name, NoneType, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType, Type
+from pcc.frontends.python.py_ast import Attr, BinOp, BoolLit, BoolType, ByteArrayType, BytesType, Call, ClassType, ComplexType, DictType, DynType, Expr, FloatType, IntLit, IntType, ListType, MemoryViewType, Name, NoneType, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType, Type
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_STR
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.builtin_exceptions import builtin_exc_tag_or_missing
 
 _I1 = ir.IntType(1)
 _I32 = ir.IntType(32)
@@ -526,6 +527,25 @@ class MethodCallExpressionLoweringMixin:
             if scaffold_value is not None:
                 return scaffold_value
 
+        # Decide from signature/receiver metadata before loading a receiver
+        # or evaluating any call operand. Descriptor binding remains a runtime
+        # getattr of the original receiver, so static/class/unbound methods
+        # keep their Python behavior on the shared signature-binding path.
+        class_object = self._class_object_hint_for_expr(attr.obj)
+        receiver_class = class_object or self._class_hint_for_expr(attr.obj)
+        if receiver_class is not None:
+            binding_owner = self._resolve_method_mro(receiver_class, attr.name)
+            binding_fd = self._native_class_method_def(binding_owner, attr.name)
+            if binding_owner is not None and not binding_owner.valueclass:
+                kind = binding_owner.method_kinds.get(attr.name, "instance")
+                bound_receiver = kind == "classmethod" or kind != "static" and class_object is None
+                if self._ordinary_call_needs_runtime_binding(expr, binding_fd, bound_receiver):
+                    binding_fn = binding_owner.methods.get(attr.name)
+                    if binding_fn is not None:
+                        return self._emit_runtime_bound_user_call(
+                            expr, binding_owner.name + "." + attr.name, binding_fn,
+                        )
+
         if attr.name in ("format", "format_map"):
             if self._resolve_str_literal_value(attr.obj) is not None:
                 native = self._maybe_emit_str_method(expr)
@@ -1030,6 +1050,16 @@ class MethodCallExpressionLoweringMixin:
                     )
                     self._emit_post_call_err_check(self._expr_span_or_none(expr))
                     return result
+            if from_class is not None and attr.name == "__init__":
+                declared_bases = self.class_lowering._class_declared_base_names(from_class)
+                if len(declared_bases) > 1 and any(
+                    base == "dict" or builtin_exc_tag_or_missing(base) >= 0
+                    for base in declared_bases
+                ):
+                    raise L1CodegenError(
+                        "native super().__init__ for a mixed builtin-base MRO "
+                        "requires builtin-base descriptor lookup"
+                    )
             parent_info = (
                 self._resolve_super_method(from_class, attr.name)
                 if from_class is not None
@@ -1230,23 +1260,19 @@ class MethodCallExpressionLoweringMixin:
                 )
                 self._emit_post_call_err_check(getattr(expr, "span", None))
                 return self._emit_none_literal()
-            # Parent is a foreign base (e.g. ``Exception``) not tracked
-            # by pcc's ClassInfo registry. For the well-known dunders
-            # (``__init__`` / ``__new__``) we fall through quietly —
-            # pcc-emitted classes already have their ctor state
-            # populated by ``_pcc_py_module_init_*``, and calling an
-            # unknown foreign super is typically only used for its
-            # side effects which have no equivalent on the pcc side.
             if attr.name in ("__init__", "__new__"):
-                # super().__init__(*args) to a builtin Exception base: the call
-                # itself is a no-op on the pcc side, but BaseException stores
-                # the args tuple on the instance, and str(e) / e.args read it.
-                # Persist args so a raised user-exception-subclass instance
-                # behaves like an exception (otherwise str(e) -> <null>,
-                # e.args -> AttributeError).
                 if attr.name == "__init__":
-                    self._emit_store_exception_args(expr.args)
-                return ir.Constant(_CSTR, None)
+                    base = self._foreign_super_initializer_base(from_class)
+                    if base == "dict" or base == "BaseException":
+                        return self._emit_foreign_super_init_slots(
+                            expr, from_class, super_args, base,
+                        )
+                    if base == "object" and not super_args and not expr.args and not expr.kwargs:
+                        return self._emit_none_literal()
+                raise L1CodegenError(
+                    "native super()." + attr.name
+                    + " has no implemented initializer for this foreign base"
+                )
 
         # Case 1: ``self.method(...)`` inside a method body of the
         # currently-lowered class. Try the method on the class itself,
@@ -1944,6 +1970,142 @@ class MethodCallExpressionLoweringMixin:
         # methods there surface as NotImplementedError so we can add a
         # dedicated fast path rather than silently pulling libpython in.
         obj_ty = attr.obj.ty
+        expanded_int_bytes_call = False
+        if attr.name == "to_bytes":
+            expanded_int_bytes_call = self._has_starred_unpack(expr.args)
+            for keyword, _operand in expr.kwargs:
+                if keyword == "**":
+                    expanded_int_bytes_call = True
+        if (
+            attr.name == "to_bytes"
+            and isinstance(obj_ty, (IntType, DynType, BoolType))
+            and not expanded_int_bytes_call
+        ):
+            # One binder for inferred ints and dynamic integer results. Keep
+            # the receiver and all source-order operands owned and pinned while
+            # the runtime performs __index__ and signed.__bool__ conversion.
+            operands = [attr.obj] + list(expr.args)
+            length_index = 1 if expr.args else -1
+            order_index = 2 if len(expr.args) >= 2 else -1
+            signed_index = -1
+            binding_error = ""
+            if len(expr.args) > 2:
+                binding_error = "to_bytes() takes at most 2 positional arguments"
+            for keyword, operand in expr.kwargs:
+                index = len(operands)
+                operands.append(operand)
+                if keyword == "length":
+                    if length_index >= 0:
+                        binding_error = "to_bytes() got multiple values for argument 'length'"
+                    length_index = index
+                elif keyword == "byteorder":
+                    if order_index >= 0:
+                        binding_error = "to_bytes() got multiple values for argument 'byteorder'"
+                    order_index = index
+                elif keyword == "signed":
+                    if signed_index >= 0:
+                        binding_error = "to_bytes() got multiple values for argument 'signed'"
+                    signed_index = index
+                else:
+                    binding_error = "to_bytes() got an unexpected keyword argument '" + keyword + "'"
+            if length_index < 0:
+                length_index = len(operands)
+                operands.append(IntLit(span=expr.span, ty=IntType(name="int"), value=1))
+            if order_index < 0:
+                order_index = len(operands)
+                operands.append(StrLit(span=expr.span, ty=StrType(name="str"), value="big"))
+            if signed_index < 0:
+                signed_index = len(operands)
+                operands.append(BoolLit(span=expr.span, ty=BoolType(name="bool"), value=False))
+            roots = []
+            previous = self._current_try_err_block()
+            previous_cpy = getattr(self, "_cpy_operand_cleanup_block", None)
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            leases = []
+            try:
+                for operand in operands:
+                    cleanup = self._extern_cleanup_block(tuple(roots), target)
+                    self._try_err_block = cleanup
+                    self._cpy_operand_cleanup_block = cleanup
+                    value = self._emit_expr_with_cpy_operand_cleanup(
+                        operand, (), as_pcc_object=True,
+                    )
+                    roots.append(self._extern_enter_root(
+                        value, self._owned_release_needed(value, operand), "to_bytes.argument.root",
+                    ))
+                cleanup = self._extern_cleanup_block(tuple(roots), target)
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                if binding_error:
+                    message = self._pooled_cstr_ptr(binding_error, ".to_bytes.binding_error")
+                    exc = self.builder.call(
+                        self.runtime["py_exc_new"], [ir.Constant(ir.IntType(64), 3), message],
+                        name=self._fresh("to_bytes.binding.exc"),
+                    )
+                    self.builder.call(self.runtime["py_raise"], [exc])
+                    self._gc_release(exc)
+                    self._emit_post_call_err_check(expr.span)
+                    self._extern_release_roots(tuple(roots))
+                    return self._emit_none_literal()
+                # A traced slot follows moves while evaluating later operands.
+                # Counted leases additionally protect raw ABI arguments across
+                # callbacks that clear an aliased object's Boolean pin flag.
+                for root in roots:
+                    acquired = self.builder.call(
+                        self.runtime["pcc_gc_foreign_lease_acquire"],
+                        [self._as_gc_ptr(root[0])], name=self._fresh("to_bytes.lease.acquire"),
+                    )
+                    failed = self.builder.icmp_signed("<", acquired, ir.Constant(ir.IntType(64), 0))
+                    error = self.current_function.append_basic_block(self._fresh("to_bytes.lease.error"))
+                    ready = self.current_function.append_basic_block(self._fresh("to_bytes.lease.ready"))
+                    self.builder.cbranch(failed, error, ready)
+                    self.builder.position_at_end(error)
+                    cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+                    self._try_err_block = cleanup
+                    self._cpy_operand_cleanup_block = cleanup
+                    overflow = self.current_function.append_basic_block(self._fresh("bytes.lease.overflow"))
+                    invalid = self.current_function.append_basic_block(self._fresh("bytes.lease.invalid"))
+                    self.builder.cbranch(
+                        self.builder.icmp_signed("==", acquired, ir.Constant(ir.IntType(64), -2)), overflow, invalid,
+                    )
+                    self.builder.position_at_end(overflow)
+                    self._emit_builtin_exception_and_branch(
+                        "OverflowError", "integer byte conversion address lease overflow", expr.span,
+                    )
+                    self.builder.position_at_end(invalid)
+                    self._emit_builtin_exception_and_branch(
+                        "RuntimeError", "integer byte conversion requires a stable managed owner", expr.span,
+                    )
+                    self.builder.position_at_end(ready)
+                    leases.append((root, acquired))
+                cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                result = self.builder.call(
+                    self.runtime["py_int_to_bytes_args"],
+                    [self._extern_load_root(roots[0]), self._extern_load_root(roots[length_index]),
+                     self._extern_load_root(roots[order_index]), self._extern_load_root(roots[signed_index])],
+                    name=self._fresh("int.to_bytes"),
+                )
+                self._emit_post_call_err_check(expr.span)
+                result_root = self._extern_enter_root(result, True, "to_bytes.result.root")
+                # Root teardown may call finalizers and move the result. The
+                # shared take helper consumes the source owner exactly once,
+                # then transfers the root owner after restoring prior pin state.
+                prior = result_root[2]
+                for root in reversed(roots):
+                    alias = self.builder.icmp_unsigned("==", self._extern_load_root(result_root), self._extern_load_root(root))
+                    prior = self.builder.select(alias, root[2], prior)
+                result_root = (result_root[0], True, prior)
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = previous_cpy
+            release_failed = self._extern_release_foreign_leases(tuple(leases))
+            self._extern_check_lease_cleanup(release_failed, tuple(roots) + (result_root,))
+            self._extern_release_roots(tuple(roots))
+            result = self._extern_take_root(result_root)
+            self._note_owned_object_value(result)
+            return result
         if isinstance(obj_ty, DynType):
             if attr.name == "clear" and not expr.args and not expr.kwargs:
                 self.builder.call(
@@ -2011,21 +2173,6 @@ class MethodCallExpressionLoweringMixin:
                     [obj],
                     name=self._fresh("dyn.bit_count"),
                 )
-            if attr.name == "to_bytes" and len(expr.args) == 2 and not expr.kwargs:
-                # n.to_bytes(length, byteorder) — unsigned form; raises
-                # OverflowError/ValueError per CPython (err check
-                # required). signed= falls through to dynamic dispatch
-                # (rejected honestly under --python-libpython=off).
-                obj = self._emit_as_object(attr.obj)
-                length_val = self._emit_expr_as_i64(expr.args[0])
-                order_obj = self._emit_as_object(expr.args[1])
-                result = self.builder.call(
-                    self.runtime["py_int_to_bytes"],
-                    [obj, length_val, order_obj],
-                    name=self._fresh("dyn.to_bytes"),
-                )
-                self._emit_post_call_err_check(getattr(expr, "span", None))
-                return result
             recv_obj = self._emit_as_object(attr.obj)
             if not expr.kwargs and self._split_starstar_kwargs_unpack(expr.args) is None:
                 return self._emit_loaded_method_call(
@@ -2582,28 +2729,6 @@ class MethodCallExpressionLoweringMixin:
                 [obj],
                 name=self._fresh("int.bit_count"),
             )
-        if (
-            isinstance(obj_ty, (IntType, DynType))
-            and attr.name == "to_bytes"
-            and len(expr.args) == 2
-            and not expr.kwargs
-        ):
-            # Native int.to_bytes(length, byteorder) — unsigned form;
-            # exact for bignums (py_int_to_bytes walks the limbs).
-            # Raises OverflowError/ValueError per CPython, so the
-            # post-call err check is required. signed= falls through
-            # to the fallback (rejected honestly under
-            # --python-libpython=off).
-            obj = self._emit_as_object(attr.obj)
-            length_val = self._emit_expr_as_i64(expr.args[0])
-            order_obj = self._emit_as_object(expr.args[1])
-            result = self.builder.call(
-                self.runtime["py_int_to_bytes"],
-                [obj, length_val, order_obj],
-                name=self._fresh("int.to_bytes"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
         if isinstance(obj_ty, (IntType, FloatType, BoolType)):
             # Numeric method call (``int.to_bytes``, ``float.is_integer``,
             # ``bool.conjugate``, etc.) — box to a CPython object and
@@ -2681,40 +2806,95 @@ class MethodCallExpressionLoweringMixin:
             expr.span,
         )
 
-    def _emit_store_exception_args(self, args) -> None:
-        """Persist ``self.args = tuple(args)`` for ``super().__init__(*args)``
-        to a builtin Exception base.
+    def _foreign_super_initializer_base(self, info):
+        """Identify a foreign terminal base, never infer it from call syntax.
 
-        The super-init call is a no-op on the pcc side, but BaseException stores
-        the constructor args on the instance; ``str(e)`` derives its message
-        from them and ``e.args`` returns the tuple. Without this, a raised user
-        exception-subclass instance has no message (``str(e)`` -> ``<null>``)
-        and no ``args`` attribute.
+        Native class metadata omits builtin bases. A single-inheritance chain
+        is unambiguous here; mixed foreign MROs require a runtime builtin-base
+        descriptor and must not silently acquire exception semantics.
         """
+        seen = set()
+        while info is not None and info.name not in seen:
+            seen.add(info.name)
+            names = self.class_lowering._class_declared_base_names(info)
+            if not names:
+                if getattr(info, "bases_ast", ()):
+                    return None
+                return "object"
+            if len(names) != 1:
+                return None
+            name = self._resolve_class_alias(names[0])
+            parent = self.class_lowering.classes.get(name)
+            if parent is not None:
+                info = parent
+                continue
+            if name == "dict" or name == "object":
+                return name
+            if builtin_exc_tag_or_missing(name) >= 0:
+                return "BaseException"
+            return None
+        return None
+
+    def _emit_foreign_super_init_slots(self, expr, from_class, super_args, base):
+        """Expand a builtin-base initializer into authoritative caller roots."""
         fd = getattr(self, "current_func_def", None)
-        if fd is None or not fd.args:
-            return
-        self_name = fd.args[0].name or "self"
-        recv_slot = self.env.get(self_name)
-        if recv_slot is None:
-            return
-        self_val = self.builder.load(recv_slot[0], name=self._fresh("exc.self"))
-        n = len(args)
-        tup = self.builder.call(
-            self.runtime["py_tuple_new"],
-            [ir.Constant(_I64, n)],
-            name=self._fresh("exc.args.tuple"),
-        )
-        idx = 0
-        for a in args:
-            a_obj = self._emit_as_object(a)
-            self.builder.call(
-                self.runtime["py_tuple_set_item"],
-                [tup, ir.Constant(_I64, idx), a_obj],
+        if not super_args and (fd is None or not fd.args):
+            raise L1CodegenError("super() initializer has no receiver parameter")
+        method_kind = getattr(self, "current_method_kind", None) or "instance"
+        if self.current_class is not None and fd is not None:
+            method_kind = self.current_class.method_kinds.get(fd.name, method_kind)
+        if not super_args and method_kind == "static":
+            self._emit_builtin_exception_and_branch("RuntimeError", "super(): no arguments", expr.span)
+            return self._emit_none_literal()
+        receiver_expr = (super_args[1] if super_args else Name(
+            span=expr.span, ty=DynType(name="dyn"), ident=fd.args[0].name or "self",
+        ))
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = []
+        try:
+            if super_args:
+                origin = self._emit_slot_call_operand(super_args[0], "super.init.from")
+            else:
+                origin = self._new_slot_call_root("super.init.from")
+            roots.append(origin)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if not super_args:
+                self._slot_call_copy_source(origin, from_class.global_var, False, expr.span)
+            receiver = self._emit_slot_call_operand(receiver_expr, "super.init.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            checked = self.builder.call(
+                self.runtime["py_builtin_super_validate_slots"],
+                [self._as_gc_ptr(receiver), self._as_gc_ptr(origin)],
+                name=self._fresh("super.init.validate"),
             )
-            idx += 1
-        name_ptr = self._pooled_cstr_ptr("args", ".exc.args.name")
-        self.builder.call(
-            self.runtime["py_instance_setattr"],
-            [self_val, name_ptr, tup],
-        )
+            self._slot_call_check_status(checked, "super binding", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            positional, keywords = self._slot_call_split_operands(expr)
+            args = self._emit_slot_call_args_tuple(positional, "super.init.args")
+            roots.append(args)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            kwargs = self._emit_slot_call_kwargs_object(keywords, None, expr.span, "super.init.kwargs")
+            roots.append(kwargs)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            helper = ("py_dict_subclass_init_slots" if base == "dict"
+                      else "py_exception_subclass_init_slots")
+            status = self.builder.call(
+                self.runtime[helper],
+                [self._as_gc_ptr(receiver), self._as_gc_ptr(origin),
+                 self._as_gc_ptr(args), self._as_gc_ptr(kwargs)],
+                name=self._fresh("super.init.invoke"),
+            )
+            self._slot_call_check_status(status, "builtin-base initialization", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots(tuple(roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return self._emit_none_literal()

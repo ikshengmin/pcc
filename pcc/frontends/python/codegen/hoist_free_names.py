@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pcc.frontends.python.py_ast import Assign as _Assign, AugAssign as _AugAssign, Call as _Call, ClassDef as _ClassDef, For as _For, FuncDef as _FuncDef, Global as _GL, If as _If, Lambda as _Lambda, Name as _Name, Nonlocal as _NL, Try as _Try, TupleExpr as _TupleExpr, While as _While, With as _With
 from pcc.frontends.python.codegen.hoist_analysis import _PY_BUILTINS_NS, _dataclass_field_names, _dataclass_field_value, _import_names_from_stmt, _is_import_from_stmt, _is_import_stmt, append_name_once, copy_names, extend_names_once, filter_capture_names, hoist_stat_inc, name_in
-from pcc.frontends.python.codegen.hoist_boxing import collect_scope_bindings, function_local_bindings, scope_declared_names
+from pcc.frontends.python.codegen.hoist_boxing import CELL_CAPTURE, CELL_READ, CELL_UNBOUND, collect_scope_bindings, function_local_bindings, scope_declared_names
 
 
 def _hoist_cache_key4(prefix, fd, names_a, names_b, names_c):
@@ -88,6 +88,9 @@ def compute_free_names(
     # position (comprehensions, walrus, yield). They never
     # refer to a user binding, so never count as a capture.
     sentinel_ns = (
+        CELL_CAPTURE,
+        CELL_READ,
+        CELL_UNBOUND,
         "__listcomp__",
         "_list_comp",
         "_gen_comp",
@@ -134,7 +137,10 @@ def compute_free_names(
     for scope_name in local_scope:
         resolved_scope[scope_name] = True
     for scope_name in builtins_ns:
-        resolved_scope[scope_name] = True
+        # Enclosing lexical bindings shadow builtins just as they shadow
+        # module symbols. An ordinary call must capture that real binding.
+        if not name_in(outer_scope_names, scope_name):
+            resolved_scope[scope_name] = True
     free = []
 
     def _collect_target_names(t, acc):
@@ -260,6 +266,11 @@ def compute_free_names(
                 append_name_once(free, x.ident)
             return
         if _is_call_node(x):
+            if getattr(x, "is_set_literal", False):
+                # A set display reads its elements, never the synthetic
+                # callee name, even when an outer scope binds ``set``.
+                walk(x.args, bound)
+                return
             # Use getattr-with-default rather than direct .ident
             # access: pcc-py self-host's isinstance dispatch can
             # return True against ``Name`` for a base ``Expr``

@@ -790,6 +790,23 @@ def pcc_floor(value: float) -> float:
     return result
 
 
+@c_abi_export("ceil")
+def pcc_ceil(value: float) -> float:
+    if _is_nan(value):
+        return _nan_result(value)
+    if value == 0.0 or _is_infinite(value):
+        return value
+    if _absolute(value) >= 4503599627370496.0:
+        return value
+    truncated: i64 = float_to_i64(value)
+    result: float = i64_to_float(truncated)
+    if result < value:
+        result = result + 1.0
+    if result == 0.0 and f64_signbit(value) != 0:
+        return -0.0
+    return result
+
+
 @c_abi_export("pcc_numeric_round_ties_even")
 def _round_ties_even(value: float) -> float:
     if _is_nan(value):
@@ -1006,6 +1023,45 @@ def pcc_log(value: float) -> float:
     exponent_float: float = i64_to_float(exponent)
     result = result + exponent_float * 0.6931471803691238
     return result + exponent_float * 1.9082149292705877e-10
+
+
+@c_abi_export("log2")
+def pcc_log2(value: float) -> float:
+    # Reuse log's domain/NaN/errno behavior before normalization. Reducing
+    # first avoids multiplying a rounded large log and makes powers of two
+    # exact, including every subnormal power down to 2**-1074.
+    if _is_nan(value) or value <= 0.0 or _is_infinite(value):
+        return pcc_log(value)
+    mantissa: float = value
+    exponent: i64 = 0
+    while mantissa >= 1.4142135623730951:
+        mantissa = mantissa * 0.5
+        exponent = exponent + 1
+    while mantissa < 0.7071067811865476:
+        mantissa = mantissa * 2.0
+        exponent = exponent - 1
+    return i64_to_float(exponent) + pcc_log(mantissa) * 1.4426950408889634
+
+
+@c_abi_export("log10")
+def pcc_log10(value: float) -> float:
+    if _is_nan(value) or value <= 0.0 or _is_infinite(value):
+        return pcc_log(value)
+    mantissa: float = value
+    exponent: i64 = 0
+    while mantissa >= 1.4142135623730951:
+        mantissa = mantissa * 0.5
+        exponent = exponent + 1
+    while mantissa < 0.7071067811865476:
+        mantissa = mantissa * 2.0
+        exponent = exponent - 1
+    # Split log10(2) keeps the exponent contribution's low part through the
+    # addition to the reduced logarithm (the fdlibm split constants).
+    exponent_float: float = i64_to_float(exponent)
+    reduced: float = pcc_log(mantissa) * 0.4342944819032518
+    return exponent_float * 0.30102999566361177 + (
+        reduced + exponent_float * 3.694239077158931e-13
+    )
 
 
 # The Payne-Hanek reducer below is a freestanding pcc-Python port of fdlibm's
@@ -1412,6 +1468,27 @@ def pcc_cos(value: float) -> float:
     if lane == 2:
         return 0.0 - _kernel_cos(reduced, tail)
     return _kernel_sin(reduced, tail)
+
+
+@c_abi_export("tan")
+def pcc_tan(value: float) -> float:
+    if _is_nan(value):
+        return _nan_result(value)
+    if _is_infinite(value):
+        return _math_invalid(value)
+    if value == 0.0:
+        return value
+    reduction = stack_alloc(16)
+    quadrant: i64 = _trig_reduce(value, reduction)
+    reduced: float = load_f64(reduction, 0)
+    tail: float = load_f64(reduction, 8)
+    sine: float = _kernel_sin(reduced, tail)
+    cosine: float = _kernel_cos(reduced, tail)
+    # A single high/low Payne-Hanek reduction retains the tiny remainder
+    # near odd multiples of pi/2, unlike reducing two independent calls.
+    if (quadrant & 1) != 0:
+        return f64_div(0.0 - cosine, sine)
+    return f64_div(sine, cosine)
 
 
 @c_abi_export("pcc_numeric_atan_positive")

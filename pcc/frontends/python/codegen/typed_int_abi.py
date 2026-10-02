@@ -233,7 +233,7 @@ class TypedIntAbiMixin:
         mode = _typed_int_unboxed_abi_mode()
         bounded_proof = False
         for bounded_name in self._bounded_int_abi_function_names:
-            if bounded_name == fd.name:
+            if bounded_name == fd.name and not self._python_library:
                 bounded_proof = True
                 break
         result = False

@@ -9,7 +9,7 @@ __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import PY_TYPE_CONTINUATION, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL
-from pcc.runtime.py.py_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COROUTINE, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FLOAT, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import PY_FLAG_EXC_UNICODE_PAYLOAD, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COROUTINE, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FLOAT, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START
 from pcc.unsafe import (
     cstr,
     free,
@@ -409,21 +409,24 @@ def _format(o) -> None:
         _write_lit(cstr("<virtual thread object>"), 23)
     elif tag == PY_TYPE_VTHREAD_CHANNEL:
         _write_lit(cstr("<vthread channel object>"), 24)
-    elif tag == PY_TYPE_EXC:                 # PY_TYPE_EXC
-        # str(exc) is the str of its single message value (CPython: the
-        # exception args). py_exc_get_message returns a borrowed ref, so
-        # no decref here; an arg-less exception (NULL message) renders as
-        # the empty string. KeyError is special: its __str__ is repr(key)
-        # (CPython str(KeyError('x'))=="'x'").
-        msg = py_exc_get_message(o)
-        if ptr_is_null(msg) == 0:
-            if py_exc_matches(o, py_exc_builtin_class(4)) != 0:  # PY_EXC_KEYERROR
-                r = py_obj_repr(msg)
-                if ptr_is_null(r) == 0:
-                    _format_str(r)
-                    py_decref(r)
-            else:
-                _format(msg)
+    elif tag == PY_TYPE_EXC:
+        if (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
+            rendered = py_obj_str(o)
+            if ptr_is_null(rendered) == 0:
+                _format_str(rendered)
+                py_decref(rendered)
+        else:
+            # Preserve ordinary exception printing's existing single-message
+            # path; only the explicitly marked Unicode record needs dispatch.
+            msg = py_exc_get_message(o)
+            if ptr_is_null(msg) == 0:
+                if py_exc_matches(o, py_exc_builtin_class(4)) != 0:
+                    r = py_obj_repr(msg)
+                    if ptr_is_null(r) == 0:
+                        _format_str(r)
+                        py_decref(r)
+                else:
+                    _format(msg)
     else:
         # User-class instances and other objects: str(x) routes through
         # py_obj_str, which dispatches __str__ (then __repr__). This is what

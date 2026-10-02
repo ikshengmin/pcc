@@ -285,3 +285,488 @@ def test_instance_field_getter_keeps_nonmoving_fast_path(backend):
     result = memory.namespace["py_instance_get_field"](memory.record, 0)
     assert result is memory.item and result.references == 2
     assert not memory.moves and not memory.handles and not memory.pins
+
+
+class _MissingFieldMemory(_FieldMemory):
+    """Execute the complete new field-null wrapper and semantic field walk."""
+    def __init__(self, backend=4, phase='lookup', cache=False, fail_register=0,
+                 result='default', prior_pin=False):
+        super().__init__(backend=backend)
+        self.phase = phase
+        self.release_depth = 0
+        self.fail_register = fail_register
+        self.klass.flags = 0
+        self.record.fields[abi.PYINSTANCEOBJECT_FIELDS_OFFSET] = None
+        names = _Slots(8)
+        names.fields[0] = 'value'
+        self.klass.fields[abi.PYCLASSOBJECT_FIELD_NAMES_OFFSET] = names
+        self.klass.fields[abi.PYOBJECTHEADER_FLAGS_OFFSET] = 0
+        self.cache = _Slots(24) if cache else None
+        if self.cache is not None:
+            self.cache.fields.update({12: 1, 16: 0})
+        self.cached_kinds = []
+        self.result_kind = result
+        if prior_pin:
+            self.record.flags |= abi.PY_FLAG_GC_PINNED
+            self.klass.flags |= abi.PY_FLAG_GC_PINNED
+            self.item.flags |= abi.PY_FLAG_GC_PINNED
+        self.expected_pin = abi.PY_FLAG_GC_PINNED if prior_pin else 0
+        self.actual_descriptor = self.namespace['_instance_lookup_descriptor']
+        self.namespace.update({
+            'memset': lambda slot, _value, size: [self.write(slot, i, None) for i in range(0, size, 8)],
+            'store_i64': self.write,
+            'atomic_rmw_i32': self.atomic_flags,
+            'pcc_gc_unpin': self.unpin,
+            'py_obj_getattr': self.semantic_getattr,
+            '_class_require_result': self.require_result,
+            '_ATTR_RES_FIELD': 1, '_ATTR_RES_METHOD': 2,
+            '_ATTR_RES_ABSENT': 3, '_ATTR_RES_DATA_DESCRIPTOR': 4,
+            '_attr_res_find_any': lambda cls, name: self.cache,
+            '_class_attr_cache_epoch': lambda: 1,
+            '_cstr_is_dunder_class': lambda name: False,
+            '_cstr_is_dunder_dict': lambda name: False,
+            '_class_attr_lookup_in_mro': self.class_attribute,
+            '_descriptor_is_data': lambda value: False,
+            '_descriptor_call_get': lambda value, inst, cls: None,
+            '_instance_lookup_descriptor': lambda value, inst, cls, slots, pins: self.namespace['_descriptor_call_get'](value, inst, cls),
+            '_lookup_field_index': lambda cls, name: 0,
+            '_attr_res_store': lambda cls, name, kind, payload, epoch: self.cached_kinds.append(kind),
+            '_attr_res_method_cacheable': lambda: 1,
+            '_dynamic_attr_slot': lambda inst: None,
+            '_class_lookup_in_mro': lambda cls, name: None,
+            'py_err_occurred': lambda: self.error is not None,
+            'py_current_exception': lambda: self.error,
+            'py_raise': lambda error: setattr(self, 'error', error),
+            'py_decref': self.decref,
+            'strlen': len,
+        })
+
+    def class_attribute(self, cls, name):
+        assert cls.alive and name == 'value'
+        self.gc('lookup')
+        assert cls.alive, 'class moved during fallback lookup'
+        if self.result_kind in ('missing', 'error'):
+            if self.result_kind == 'error':
+                self.error = (4, 'lookup failed')
+            return None
+        value = (self.resolve(self.record) if self.result_kind == 'receiver'
+                 else self.resolve(self.klass) if self.result_kind == 'class'
+                 else self.item)
+        self.incref(value)
+        return value
+
+    def semantic_getattr(self, inst, name):
+        assert inst.alive and inst.flags & abi.PY_FLAG_GC_PINNED
+        cls = self.read(inst, abi.PYINSTANCEOBJECT_CLS_OFFSET)
+        assert cls.alive and cls.flags & abi.PY_FLAG_GC_PINNED
+        value = self.namespace['_instance_getattr_default'](inst, cls, name)
+        if value is None and self.error is None:
+            self.error = (6, 'missing value')
+        return value
+
+    def require_result(self, value, name, message):
+        if value is None and self.error is None:
+            self.error = (7, message)
+        return value
+
+    def decref(self, value):
+        assert self.depth == 0, 'finalizers must run outside the graph lease'
+        self.release_depth += 1
+        if isinstance(value, _Object):
+            assert value.alive, 'stale temporary during release'
+            if not value.flags & abi.PY_FLAG_IMMORTAL:
+                value.references -= 1
+                if value.references == 0:
+                    value.alive = False
+                    if value.tag == abi.PY_TYPE_TUPLE:
+                        for offset, item in value.fields.items():
+                            if offset >= abi.PYTUPLEOBJECT_ITEMS_OFFSET:
+                                self.decref(item)
+        self.release_depth -= 1
+        if self.release_depth == 0:
+            self.gc('decref')
+
+    def unpin(self, value):
+        assert value.alive
+        value.flags &= ~abi.PY_FLAG_GC_PINNED
+        self.pins -= 1
+
+    def atomic_flags(self, operation, value, offset, bits, order):
+        assert value.alive
+        assert operation == 'or' and offset == abi.PYOBJECTHEADER_FLAGS_OFFSET
+        value.flags |= bits
+
+
+@pytest.mark.parametrize('backend', [3, 4])
+@pytest.mark.parametrize('phase', ['graph_lock', 'graph_unlock', 'lookup', 'unregister'])
+@pytest.mark.parametrize('cache', [False, True])
+def test_missing_field_fallback_roots_receiver_class_and_result(backend, phase, cache):
+    memory = _MissingFieldMemory(backend=backend, phase=phase, cache=cache)
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result is memory.item and result.alive and result.references == 2
+    assert memory.moves > 0
+    assert not memory.handles and memory.depth == 0 and memory.error is None
+    assert memory.pins == 0
+    assert memory.resolve(memory.record).flags & abi.PY_FLAG_GC_PINNED == 0
+    assert memory.resolve(memory.klass).flags & abi.PY_FLAG_GC_PINNED == 0
+    assert result.flags & abi.PY_FLAG_GC_PINNED == 0
+
+
+@pytest.mark.parametrize('result_kind', ['default', 'receiver', 'class'])
+@pytest.mark.parametrize('prior_pin', [False, True])
+def test_missing_field_fallback_restores_existing_and_aliased_pins(result_kind, prior_pin):
+    memory = _MissingFieldMemory(result=result_kind, prior_pin=prior_pin)
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result.alive
+    for value in (memory.resolve(memory.record), memory.resolve(memory.klass), memory.item):
+        assert value.flags & abi.PY_FLAG_GC_PINNED == memory.expected_pin
+    assert not memory.handles and memory.depth == 0
+    assert memory.pins == 0
+
+
+@pytest.mark.parametrize('result_kind', ['missing', 'error'])
+@pytest.mark.parametrize('cache', [False, True])
+def test_missing_field_fallback_preserves_error_and_field_cache(result_kind, cache):
+    memory = _MissingFieldMemory(result=result_kind, cache=cache)
+    assert memory.namespace['py_instance_get_field'](memory.record, 0) is None
+    assert memory.error == ((6, 'missing value') if result_kind == 'missing' else (4, 'lookup failed'))
+    assert 3 not in memory.cached_kinds, 'declared empty field must not become an absent-name cache entry'
+    assert not memory.handles and memory.depth == 0
+
+
+@pytest.mark.parametrize('failed_root', [1, 2, 3])
+def test_missing_field_root_failure_balances_registration_and_pin_state(failed_root):
+    memory = _MissingFieldMemory(fail_register=failed_root)
+    assert memory.namespace['py_instance_get_field'](memory.record, 0) is None
+    assert memory.error == (7, 'instance field lookup root registration failed')
+    assert not memory.handles and memory.depth == 0
+    assert memory.resolve(memory.record).flags & abi.PY_FLAG_GC_PINNED == 0
+    assert memory.resolve(memory.klass).flags & abi.PY_FLAG_GC_PINNED == 0
+
+
+@pytest.mark.parametrize('index', [-1, 1])
+def test_missing_field_fallback_keeps_invalid_index_low_level_contract(index):
+    memory = _MissingFieldMemory()
+    assert memory.namespace['py_instance_get_field'](memory.record, index) is None
+    assert memory.registrations == 0 and memory.error is None
+
+
+@pytest.mark.parametrize('backend', [0, 1, 2])
+def test_missing_field_nonmoving_lookup_preserves_reference_and_pin_contract(backend):
+    memory = _MissingFieldMemory(backend=backend)
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result is memory.item and result.references == 2
+    assert not memory.moves and not memory.handles
+    assert memory.record.flags & abi.PY_FLAG_GC_PINNED == 0
+    assert memory.klass.flags & abi.PY_FLAG_GC_PINNED == 0
+
+
+def test_empty_field_callable_default_does_not_hide_later_instance_store():
+    memory = _MissingFieldMemory()
+    memory.item.tag = abi.PY_TYPE_FUNC
+    def decrement(value):
+        assert value.alive
+        value.references -= 1
+    def bind_method(value, inst, name):
+        memory.incref(value)
+        return value
+    memory.namespace.update({'py_decref': decrement, 'py_instance_bind_method': bind_method})
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result is memory.item and result.references == 2
+    assert 2 not in memory.cached_kinds, 'empty field callable must not be cached as a method'
+    replacement = memory.make(abi.PY_TYPE_STR)
+    memory.resolve(memory.record).fields[abi.PYINSTANCEOBJECT_FIELDS_OFFSET] = replacement
+    assert memory.namespace['py_instance_get_field'](memory.resolve(memory.record), 0) is replacement
+
+
+def _install_missing_field_dynamic_dict(memory, *, found=False, fail=''):
+    dynamic = memory.make(abi.PY_TYPE_DICT)
+    offset = abi.PYINSTANCEOBJECT_FIELDS_OFFSET + abi.C_POINTER_SIZE
+    memory.record.fields[offset] = dynamic
+    memory.keys = []
+
+    def new_key(name, length):
+        memory.gc('dict_key')
+        if fail == 'key':
+            return None
+        key = memory.make(abi.PY_TYPE_STR)
+        memory.keys.append(key)
+        return key
+
+    def get_item(dyn, key):
+        memory.gc('dict_get')
+        assert dyn.alive and key.alive
+        if fail == 'dict':
+            memory.error = (4, 'dict lookup failed')
+            return None
+        if found:
+            result = memory.resolve(dynamic)
+            memory.incref(result)
+            return result
+        return None
+
+    memory.namespace.update({
+        '_dynamic_attr_slot': lambda inst: memory.add(inst, offset),
+        'py_str_new': new_key,
+        'py_dict_get': get_item,
+    })
+    return dynamic
+
+
+@pytest.mark.parametrize('backend', [3, 4])
+@pytest.mark.parametrize('cache', [False, True])
+@pytest.mark.parametrize('phase', ['dict_key', 'dict_get', 'decref'])
+@pytest.mark.parametrize('found', [False, True])
+def test_missing_field_dynamic_lookup_keeps_all_live_temporaries(backend, cache, phase, found):
+    memory = _MissingFieldMemory(backend=backend, phase=phase, cache=cache)
+    dynamic = _install_missing_field_dynamic_dict(memory, found=found)
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result is (memory.resolve(dynamic) if found else memory.item)
+    assert result.alive and result.references == 2
+    assert memory.item.references == (1 if found else 2)
+    assert memory.resolve(dynamic).references == (2 if found else 1)
+    assert all(memory.resolve(key).references == 0 for key in memory.keys)
+    assert memory.moves > 0
+    assert not memory.handles and memory.depth == memory.pins == 0
+    assert memory.error is None
+    assert result.flags & abi.PY_FLAG_GC_PINNED == 0
+
+
+@pytest.mark.parametrize('cache', [False, True])
+@pytest.mark.parametrize('data_descriptor', [False, True])
+@pytest.mark.parametrize('alias', [False, True])
+@pytest.mark.parametrize('phase', ['descriptor', 'decref'])
+def test_missing_field_descriptor_result_survives_temporary_cleanup(cache, data_descriptor, alias, phase):
+    memory = _MissingFieldMemory(cache=cache, phase=phase)
+    answer = memory.item if alias else memory.make(abi.PY_TYPE_STR)
+
+    def describe(descriptor, inst, cls):
+        memory.gc('descriptor')
+        assert descriptor.alive and inst.alive and cls.alive
+        value = memory.resolve(answer)
+        memory.incref(value)
+        return value
+
+    memory.namespace.update({
+        '_descriptor_is_data': lambda value: data_descriptor,
+        '_descriptor_call_get': describe,
+        'ptr_to_int': lambda value: value,
+    })
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result is memory.resolve(answer) and result.alive and result.references == 2
+    assert memory.item.references == (2 if alias else 1)
+    assert not memory.handles and memory.depth == memory.pins == 0
+    assert result.flags & abi.PY_FLAG_GC_PINNED == 0
+    assert memory.error is None and memory.moves > 0
+
+
+@pytest.mark.parametrize('cache', [False, True])
+@pytest.mark.parametrize('failure', ['class', 'key', 'dict', 'method'])
+def test_missing_field_pending_error_stops_later_lookup_paths(cache, failure):
+    memory = _MissingFieldMemory(cache=cache, result='error' if failure == 'class' else 'missing')
+    calls = []
+    if failure in ('key', 'dict'):
+        _install_missing_field_dynamic_dict(memory, fail=failure)
+
+    def method_lookup(cls, name):
+        calls.append(name)
+        if failure == 'method':
+            memory.error = (4, 'method lookup failed')
+            return None
+        return memory.item
+
+    memory.namespace['_class_lookup_in_mro'] = method_lookup
+    memory.namespace['py_instance_bind_method'] = lambda *args: pytest.fail('bound after producer error')
+    assert memory.namespace['py_instance_get_field'](memory.record, 0) is None
+    expected = {'class': (4, 'lookup failed'), 'key': (7, 'instance attribute key allocation failed'),
+                'dict': (4, 'dict lookup failed'), 'method': (4, 'method lookup failed')}
+    assert memory.error == expected[failure]
+    assert calls == (['value'] if failure == 'method' else [])
+    assert not memory.handles and memory.depth == memory.pins == 0
+
+
+@pytest.mark.parametrize('phase', ['callback_key', 'callback_tuple', 'callback_store', 'callback_call', 'decref'])
+@pytest.mark.parametrize('raw_method', [False, True])
+@pytest.mark.parametrize('method_name', ['__getattr__', '__getattribute__'])
+def test_missing_field_getattr_keeps_method_key_and_arguments_current(phase, raw_method, method_name):
+    memory = _MissingFieldMemory(phase=phase, result='missing')
+    method = object() if raw_method else memory.make(abi.PY_TYPE_FUNC)
+    memory.arguments = None
+    memory.key = None
+    memory.namespace['_class_lookup_in_mro'] = lambda cls, name: method if name == method_name else None
+    if method_name == '__getattribute__':
+        memory.namespace['_no_getattribute_known'] = lambda cls: 0
+        memory.namespace['py_obj_getattr'] = memory.namespace['py_instance_getattr']
+
+    def new_key(name, length):
+        memory.gc('callback_key')
+        memory.key = memory.make(abi.PY_TYPE_STR)
+        return memory.key
+
+    def new_tuple(size):
+        memory.gc('callback_tuple')
+        memory.arguments = memory.make(abi.PY_TYPE_TUPLE)
+        return memory.arguments
+
+    def set_item(args, index, value):
+        memory.gc('callback_store')
+        assert args.alive and value.alive
+        memory.incref(value)
+        args.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
+
+    def call(method_arg, args, kwargs):
+        memory.gc('callback_call')
+        assert method_arg.alive and args.alive
+        assert memory.key.alive
+        memory.incref(memory.item)
+        return memory.item
+
+    def raw_call(method_arg, inst, key):
+        memory.gc('callback_call')
+        assert method_arg is method and inst.alive and key.alive
+        memory.incref(memory.item)
+        return memory.item
+
+    memory.namespace.update({'py_str_new': new_key, 'py_tuple_new': new_tuple,
+                             'py_tuple_set_item': set_item, 'py_obj_call': call,
+                             'call_ptr2': raw_call})
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result is memory.item and result.alive and result.references == 2
+    if not raw_method:
+        assert memory.resolve(method).references == 1
+    assert memory.resolve(memory.key).references == 0
+    assert not memory.handles and memory.depth == memory.pins == 0
+    assert memory.error is None
+
+
+@pytest.mark.parametrize('failed_root', range(7, 15))
+def test_missing_field_temporary_root_failure_balances_all_leases(failed_root):
+    # The indexed wrapper and semantic default wrapper have three roots each.
+    memory = _MissingFieldMemory(fail_register=failed_root)
+    assert memory.namespace['py_instance_get_field'](memory.record, 0) is None
+    assert memory.error == (7, 'instance field temporary root registration failed')
+    assert not memory.handles and memory.depth == memory.pins == 0
+    assert memory.item.references == 1
+
+
+@pytest.mark.parametrize('cache', [False, True])
+@pytest.mark.parametrize('property_descriptor', [False, True])
+@pytest.mark.parametrize('phase', ['callback_tuple', 'callback_store', 'callback_call', 'decref'])
+def test_missing_field_real_descriptor_callback_roots_internal_owners(cache, property_descriptor, phase):
+    memory = _MissingFieldMemory(cache=cache, phase=phase)
+    memory.item.tag = abi.PY_TYPE_PROPERTY if property_descriptor else abi.PY_TYPE_USER_CLASS_START + 1
+    method = memory.make(abi.PY_TYPE_FUNC)
+    answer = memory.make(abi.PY_TYPE_STR)
+    memory.item.fields[abi.PYPROPERTYOBJECT_FGET_OFFSET] = method
+    arguments = []
+
+    def new_tuple(size):
+        memory.gc('callback_tuple')
+        value = memory.make(abi.PY_TYPE_TUPLE)
+        arguments.append(value)
+        return value
+
+    def set_item(args, index, value):
+        memory.gc('callback_store')
+        assert args.alive and value.alive
+        memory.incref(value)
+        args.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
+
+    def call(function, args, kwargs):
+        memory.gc('callback_call')
+        assert function.alive and args.alive
+        value = memory.resolve(answer)
+        memory.incref(value)
+        return value
+
+    memory.namespace.update({
+        '_instance_lookup_descriptor': memory.actual_descriptor,
+        '_descriptor_is_data': lambda value: property_descriptor,
+        '_descriptor_method': lambda value, name: memory.resolve(method),
+        'ptr_to_int': lambda value: value,
+        'global_load_ptr': lambda name: None,
+        'py_tuple_new': new_tuple, 'py_tuple_set_item': set_item, 'py_obj_call': call,
+    })
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result is memory.resolve(answer) and result.references == 2 and result.alive
+    assert memory.item.references == 1 and memory.resolve(method).references == 1
+    assert memory.resolve(memory.record).references == 1 and memory.resolve(memory.klass).references == 1
+    assert all(memory.resolve(value).references == 0 for value in arguments)
+    assert memory.error is None and memory.moves > 0
+    assert not memory.handles and memory.depth == memory.pins == 0
+
+
+@pytest.mark.parametrize('populated', [False, True])
+def test_setter_only_descriptor_preserves_lookup_owner_when_get_is_absent(populated):
+    memory = _MissingFieldMemory(backend=0)
+    descriptor = memory.make(abi.PY_TYPE_USER_CLASS_START + 1)
+    if populated:
+        memory.record.fields[abi.PYINSTANCEOBJECT_FIELDS_OFFSET] = memory.item
+
+    def class_attribute(cls, name):
+        memory.incref(descriptor)
+        return descriptor
+
+    memory.namespace.update({
+        '_class_attr_lookup_in_mro': class_attribute,
+        '_descriptor_is_data': lambda value: True,
+        '_descriptor_call_get': lambda value, inst, cls: None,
+        'ptr_to_int': lambda value: value,
+    })
+    result = memory.namespace['_instance_getattr_default'](memory.record, memory.klass, 'value')
+    assert result is (memory.item if populated else descriptor)
+    assert descriptor.references == (1 if populated else 2)
+    assert result.references == 2 and result.alive
+    assert not memory.handles and memory.depth == memory.pins == 0
+
+
+@pytest.mark.parametrize('phase', ['callback_tuple', 'callback_store', 'callback_call', 'decref'])
+@pytest.mark.parametrize('aliased_method', [False, True])
+def test_missing_field_custom_getattribute_fallback_preserves_alias_leases(phase, aliased_method):
+    memory = _MissingFieldMemory(phase=phase)
+    method = memory.make(abi.PY_TYPE_FUNC)
+    fallback = method if aliased_method else memory.make(abi.PY_TYPE_FUNC)
+    exception = memory.make(abi.PY_TYPE_EXC)
+    calls = []
+    memory.namespace.update({
+        '_no_getattribute_known': lambda cls: 0,
+        'py_obj_getattr': memory.namespace['py_instance_getattr'],
+        '_class_lookup_in_mro': lambda cls, name: memory.resolve(method if name == '__getattribute__' else fallback),
+        'py_str_new': lambda name, length: memory.make(abi.PY_TYPE_STR),
+        'py_exc_builtin_class': lambda tag: 6,
+        'py_exc_matches': lambda error, cls: 1,
+    })
+
+    def clear_error():
+        old, memory.error = memory.error, None
+        memory.decref(old)
+
+    def new_tuple(size):
+        memory.gc('callback_tuple')
+        return memory.make(abi.PY_TYPE_TUPLE)
+
+    def set_item(args, index, value):
+        memory.gc('callback_store')
+        assert args.alive and value.alive
+        memory.incref(value)
+        args.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
+
+    def call(function, args, kwargs):
+        memory.gc('callback_call')
+        assert function.alive and args.alive
+        calls.append(function)
+        if len(calls) == 1:
+            memory.error = memory.resolve(exception)
+            return None
+        memory.incref(memory.item)
+        return memory.item
+
+    memory.namespace.update({'py_clear_exception': clear_error, 'py_tuple_new': new_tuple,
+                             'py_tuple_set_item': set_item, 'py_obj_call': call})
+    result = memory.namespace['py_instance_get_field'](memory.record, 0)
+    assert result is memory.item and result.alive and result.references == 2
+    assert len(calls) == 2 and memory.error is None
+    assert memory.resolve(method).references == memory.resolve(fallback).references == 1
+    assert memory.resolve(exception).references == 0
+    assert memory.resolve(method).flags & abi.PY_FLAG_GC_PINNED == 0
+    assert not memory.handles and memory.depth == memory.pins == 0

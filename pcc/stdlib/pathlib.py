@@ -10,7 +10,7 @@ import os
 from os import path as _op
 
 
-class PurePath:
+class PurePath(os.PathLike):
     def __init__(self, path="", *extra) -> None:
         raw = str(path)
         for part in extra:
@@ -19,6 +19,9 @@ class PurePath:
 
     def __str__(self) -> str:
 
+        return self._raw
+
+    def __fspath__(self) -> str:
         return self._raw
 
     def __repr__(self) -> str:

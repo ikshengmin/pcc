@@ -50,9 +50,11 @@ from pcc.unsafe import (
     define_global_ptr_to_global,
     free,
     global_load_ptr,
+    global_addr,
     is_tagged_int,
     load_i32,
     load_i64,
+    load_ptr,
     load_i8,
     malloc,
     memcpy,
@@ -85,6 +87,11 @@ py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+define_global_i32("pcc_capi_unicode_string_owned_map", 1)
+py_unicode_encode_error_normalize = extern("py_unicode_encode_error_normalize", (c_ptr,), c_ptr)
 py_exc_new_with_value = extern("py_exc_new_with_value", (c_int64, c_ptr), c_ptr)
 py_exc_new_with_class = extern("py_exc_new_with_class", (c_ptr, c_ptr), c_ptr)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
@@ -241,8 +248,12 @@ def pcc_capi_exception_tag(type) -> int:
         return 18
     if ptr_eq(type, global_load_ptr("PyExc_MemoryError")):
         return 19
+    if ptr_eq(type, global_load_ptr("PyExc_UnicodeError")):
+        return 57
     if ptr_eq(type, global_load_ptr("PyExc_UnicodeDecodeError")):
-        return 2
+        return 58
+    if ptr_eq(type, global_load_ptr("PyExc_UnicodeEncodeError")):
+        return 59
     if ptr_eq(type, global_load_ptr("PyExc_ImportError")):
         return 20
     if ptr_eq(type, global_load_ptr("PyExc_ModuleNotFoundError")):
@@ -250,29 +261,72 @@ def pcc_capi_exception_tag(type) -> int:
     return 1  # PY_EXC_EXCEPTION
 
 
+def _capi_is_unicode_sentinel(type: c_ptr) -> int:
+    if ptr_eq(type, global_load_ptr("PyExc_UnicodeError")):
+        return 1
+    if ptr_eq(type, global_load_ptr("PyExc_UnicodeDecodeError")):
+        return 1
+    return ptr_eq(type, global_load_ptr("PyExc_UnicodeEncodeError"))
+
+
 @c_abi_typed_export("pcc_capi_exception_class", "ptr", ("ptr",))
 def pcc_capi_exception_class(type):
     if ptr_is_null(type):
         return null()
+    if _capi_is_unicode_sentinel(type) != 0:
+        return py_exc_builtin_class(pcc_capi_exception_tag(type))
     if not is_tagged_int(type) and load_i32(type, 8) == PY_TYPE_CLASS:  # PY_TYPE_CLASS
         return type
     return py_exc_builtin_class(pcc_capi_exception_tag(type))
+
+
+def _capi_is_unicode_encode_type(type: c_ptr) -> int:
+    if ptr_eq(type, global_load_ptr("PyExc_UnicodeEncodeError")):
+        return 1
+    # Sentinel symbols are raw addresses, not managed objects with headers.
+    # A direct builtin class can only exist after its canonical cache entry.
+    cached = load_ptr(global_addr("py_exc_classes"), 59 * 8)
+    return 0 if ptr_is_null(cached) else ptr_eq(type, cached)
+
+
+def _capi_set_unicode_encode_value(value: c_ptr) -> None:
+    error = py_unicode_encode_error_normalize(value)
+    # Failed normalization already installed its TypeError/OverflowError.
+    # Raising NULL here would replace that with a spurious RuntimeError.
+    if ptr_is_null(error) == 0:
+        py_raise_owned(error)
 
 
 @c_abi_typed_export("PyErr_SetString", "void", ("ptr", "ptr"))
 def PyErr_SetString(type, message) -> None:
     if ptr_is_null(message):
         message = cstr("")
+    if _capi_is_unicode_encode_type(type) != 0:
+        owned = stack_alloc(8)
+        store_ptr(owned, 0, null())
+        pcc_gc_frame_enter(global_addr("pcc_capi_unicode_string_owned_map"), owned)
+        store_ptr(owned, 0, py_str_new(message, strlen(message)))
+        if ptr_is_null(load_ptr(owned, 0)) == 0:
+            _capi_set_unicode_encode_value(pcc_gc_load_ptr(null(), owned))
+        pcc_gc_store_root(owned, null())
+        pcc_gc_frame_leave(owned)
+        return
     py_raise_owned(py_exc_new(pcc_capi_exception_tag(type), message))
 
 
 @c_abi_typed_export("PyErr_SetNone", "void", ("ptr",))
 def PyErr_SetNone(type) -> None:
+    if _capi_is_unicode_encode_type(type) != 0:
+        _capi_set_unicode_encode_value(null())
+        return
     PyErr_SetString(type, cstr(""))
 
 
 @c_abi_typed_export("PyErr_SetObject", "void", ("ptr", "ptr"))
 def PyErr_SetObject(type, value) -> None:
+    if _capi_is_unicode_encode_type(type) != 0:
+        _capi_set_unicode_encode_value(value)
+        return
     cls = pcc_capi_exception_class(type)
     exc = null()
     if (
@@ -377,6 +431,8 @@ def PyErr_GivenExceptionMatches(given, exc) -> int:
     cls = pcc_capi_exception_class(exc)
     if ptr_is_null(cls):
         return 0
+    if _capi_is_unicode_sentinel(given) != 0:
+        given = pcc_capi_exception_class(given)
     if py_exc_matches(given, cls) != 0:
         return 1
     return 0

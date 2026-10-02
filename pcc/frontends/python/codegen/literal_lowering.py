@@ -2003,7 +2003,113 @@ class LiteralLoweringMixin:
         self._leave_container_temp_root(out_root)
         return out
 
+    def _emit_suspending_tuple_literal(self, expr: TupleExpr, build_slot, item_slot) -> ir.Value:
+        """Build a tuple in managed generator state, one operand at a time.
+
+        A partially evaluated literal cannot keep earlier operands in SSA or
+        stack-only temporary roots: a later operand can resume through a fresh
+        activation. A private list also expands starred operands at their source
+        position; no partially constructed container escapes to Python code.
+        """
+        builder = self.builder.call(
+            self.runtime["py_list_new"], [ir.Constant(_I64, 0)],
+            name=self._fresh("tuple.resume.builder"),
+        )
+        self.builder.call(
+            self.runtime["pcc_gc_store_root_take"],
+            [self._as_gc_ptr(build_slot), builder],
+        )
+        cleanup = self.current_function.append_basic_block(
+            name=self._fresh("tuple.resume.error"),
+        )
+        saved_error = self._push_try_err_block(cleanup)
+        saved_cpy_error = self._cpy_operand_cleanup_block
+        self._cpy_operand_cleanup_block = cleanup
+        try:
+            for element in expr.elems:
+                is_splat = (
+                    isinstance(element, Call)
+                    and isinstance(element.func, Name)
+                    and element.func.ident in ("*", "__starred__")
+                    and len(element.args) == 1
+                )
+                operand = element.args[0] if is_splat else element
+                value = self._emit_expr_as_pcc_object(operand)
+                owned = self._container_store_temp_needs_release(
+                    operand, operand.ty, False, value,
+                )
+                store = "pcc_gc_store_root_take" if owned else "pcc_gc_store_root"
+                self.builder.call(
+                    self.runtime[store], [self._as_gc_ptr(item_slot), value],
+                )
+                container = self.builder.call(
+                    self.runtime["pcc_gc_load_ptr"],
+                    [ir.Constant(_CSTR, None), self._as_gc_ptr(build_slot)],
+                    name=self._fresh("tuple.resume.container"),
+                )
+                item = self.builder.call(
+                    self.runtime["pcc_gc_load_ptr"],
+                    [ir.Constant(_CSTR, None), self._as_gc_ptr(item_slot)],
+                    name=self._fresh("tuple.resume.item"),
+                )
+                append = "py_list_extend" if is_splat else "py_list_append"
+                self.builder.call(self.runtime[append], [container, item])
+                self._emit_post_call_err_check(operand.span)
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(item_slot), ir.Constant(_CSTR, None)],
+                )
+            container = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(build_slot)],
+                name=self._fresh("tuple.resume.complete"),
+            )
+            result = self.builder.call(
+                self.runtime["py_tuple_from_list"], [container],
+                name=self._fresh("tuple.resume.result"),
+            )
+            self.builder.call(
+                self.runtime["pcc_gc_store_root_take"],
+                [self._as_gc_ptr(item_slot), result],
+            )
+            self._emit_post_call_err_check(expr.span)
+        finally:
+            self._restore_try_err_block(saved_error)
+            self._cpy_operand_cleanup_block = saved_cpy_error
+        self.builder.call(
+            self.runtime["pcc_gc_store_root"],
+            [self._as_gc_ptr(build_slot), ir.Constant(_CSTR, None)],
+        )
+        result = self.builder.call(
+            self.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(item_slot)],
+            name=self._fresh("tuple.resume.take"),
+        )
+        # Transfer the slot's owner with no call/park between reload and return.
+        self.builder.store(ir.Constant(_CSTR, None), item_slot)
+        self._note_owned_object_value(result)
+        continuation = self.builder._block
+        self.builder.position_at_end(cleanup)
+        for slot in (item_slot, build_slot):
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
+            )
+        self.builder.branch(saved_error or self._ensure_fn_err_exit())
+        self.builder.position_at_end(continuation)
+        return result
+
     def _emit_tuple_literal(self, expr: TupleExpr) -> ir.Value:
+        # Internal call-argument tuples have no source span and are not part
+        # of the generator's source-AST frame plan (e.g. a zero-argument f()).
+        if self._generator_ctx_stack and expr.span is not None:
+            slots = self._generator_ctx_stack[-1]["frame_slots"]
+            hidden = self._generator_tuple_build_name(expr)
+            frame_entry = slots.get(hidden)
+            if frame_entry is not None:
+                return self._emit_suspending_tuple_literal(
+                    expr, frame_entry[1], slots[hidden + "_item"][1],
+                )
         static_tuple = self._maybe_emit_static_constant_tuple(expr)
         if static_tuple is not None:
             return static_tuple

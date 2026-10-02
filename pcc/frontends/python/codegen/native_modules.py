@@ -1717,6 +1717,9 @@ class NativeModuleAliasMixin:
                 )
                 fn = ir.Function(self.module, fnty, name=sym)
                 fn.linkage = "external"
+            if (bool(info.get("manual_pointer_abi", False))
+                    and info.get("manual_pointer_abi_symbol", "") == sym):
+                self._manual_pointer_abi_functions.add(sym)
             self.functions[local_name] = fn
             self._cross_module_func_defs[local_name] = self._extern_info_to_funcdef(
                 local_name,
@@ -3337,6 +3340,30 @@ class NativeModuleAliasMixin:
 
             sys.stderr.write("debug: native_class_instantiate before_method_def\n")
         init_ast_fd = self._native_class_method_def(init_info, "__init__")
+        if init_fn is not None:
+            # Imported initializers obey their declared operand ABI just like
+            # ordinary method calls. In a scaffold caller, an ordinary int
+            # expression can be machine-valued even though the provider's
+            # Python-int parameter is boxed. Share the established adapter,
+            # including defaults, argument ownership and exceptional cleanup.
+            instance_root = self._extern_enter_root(
+                inst, True, "native.constructor.instance"
+            )
+            previous_err = self._current_try_err_block()
+            error_target = previous_err
+            if error_target is None:
+                error_target = self._ensure_fn_err_exit()
+            self._try_err_block = self._extern_cleanup_block(
+                (instance_root,), error_target
+            )
+            try:
+                self._emit_direct_method_call(
+                    init_fn, self._extern_load_root(instance_root),
+                    init_info, "__init__", args,
+                )
+            finally:
+                self._try_err_block = previous_err
+            return self._extern_take_root(instance_root)
         if str(
             os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
         ).strip().lower() in (
@@ -3432,19 +3459,9 @@ class NativeModuleAliasMixin:
                         arg.default.ty,
                     )
                 init_args.append(v)
-            if init_fn is None:
-                # Same fix as class_gen.py:5566 — no __init__ found in the
-                # class or any pcc-known base via MRO; synthesising a phantom
-                # @user_<current_module>_<class>___init__ produces an
-                # undefined-symbol link error. Skip the call. See
-                # docs/investigations/python-class-init-phantom-symbol-link-fail.md.
-                pass
-            else:
-                self.builder.call(init_fn, init_args)
-                # Imported constructors use the same exception channel as
-                # local __init__ calls. Do not return a failed instance and
-                # leave its exception pending past the caller's try block.
-                self._emit_post_call_err_check(None, release_on_error=(inst,))
+            # No __init__ was found in the class or a pcc-known base. Keep
+            # evaluation above, but do not invent a phantom initializer.
+            # See python-class-init-phantom-symbol-link-fail.md.
         return inst
 
     def _emit_no_init_field_instance(
@@ -3653,6 +3670,9 @@ class NativeModuleAliasMixin:
             )
             fn = ir.Function(self.module, fnty, name=sym)
             fn.linkage = "external"
+        if (bool(info.get("manual_pointer_abi", False))
+                and info.get("manual_pointer_abi_symbol", "") == sym):
+            self._manual_pointer_abi_functions.add(sym)
         if bind_name is not None:
             self.functions[bind_name] = fn
             self._cross_module_func_defs[bind_name] = self._extern_info_to_funcdef(
@@ -3679,43 +3699,10 @@ class NativeModuleAliasMixin:
         cannot supply omitted defaults.  The compiled function object's native
         signature binder owns those defaults, so this remains no-libpython.
         """
-        module_name_ptr = self._ptr_to_cstr(
-            self._cstr_global(
-                module_name,
-                f".pcc.compiled.call.module.{module_name}",
-            )
+        result = self._emit_slot_call_object(
+            expr, "compiled.module.call." + attr.name, module_name, attr.name,
         )
-        callable_obj = self.builder.call(
-            self.runtime["py_module_attr_get"],
-            [module_name_ptr, self._attr_name_ptr(attr.name)],
-            name=self._fresh(f"compiled.module.callable.{attr.name}"),
-        )
-        self._emit_attribute_error_if_null(
-            callable_obj,
-            attr.name,
-            attr.span,
-        )
-        kwdict_unpack = self._split_starstar_kwargs_unpack(expr.args)
-        arg_exprs = expr.args
-        kwargs_expr = None
-        if kwdict_unpack is not None:
-            arg_exprs, kwargs_expr = kwdict_unpack
-        args_tuple = self._emit_dynamic_call_args_tuple(arg_exprs)
-        kwargs_obj = self._emit_dynamic_call_kwargs_object(
-            expr.kwargs,
-            kwargs_expr,
-            expr.span,
-        )
-        result = self.builder.call(
-            self.runtime["py_obj_call"],
-            [callable_obj, args_tuple, kwargs_obj],
-            name=self._fresh(f"compiled.module.call.{attr.name}"),
-        )
-        self._gc_release(args_tuple)
-        if expr.kwargs or kwargs_expr is not None:
-            self._gc_release(kwargs_obj)
-        self._gc_release(callable_obj)
-        self._emit_post_call_err_check(expr.span)
+        self._note_owned_dynamic_call_value(result)
         return result
 
     def _maybe_emit_native_module_alias_call(self, expr: Call) -> Optional[ir.Value]:
@@ -3743,33 +3730,7 @@ class NativeModuleAliasMixin:
         kind = info.get("kind")
         if kind == "function":
             if info.get("semantic_decorator"):
-                callable_obj = self._emit_native_module_export_value(
-                    module_name,
-                    attr.name,
-                    info,
-                )
-                kwdict_unpack = self._split_starstar_kwargs_unpack(expr.args)
-                arg_exprs = expr.args
-                kwargs_expr = None
-                if kwdict_unpack is not None:
-                    arg_exprs, kwargs_expr = kwdict_unpack
-                args_tuple = self._emit_dynamic_call_args_tuple(arg_exprs)
-                kwargs_obj = self._emit_dynamic_call_kwargs_object(
-                    expr.kwargs,
-                    kwargs_expr,
-                    expr.span,
-                )
-                result = self.builder.call(
-                    self.runtime["py_obj_call"],
-                    [callable_obj, args_tuple, kwargs_obj],
-                    name=self._fresh(f"compiled.module.call.{attr.name}"),
-                )
-                self._gc_release(args_tuple)
-                if expr.kwargs or kwargs_expr is not None:
-                    self._gc_release(kwargs_obj)
-                self._gc_release(callable_obj)
-                self._emit_post_call_err_check(expr.span)
-                return result
+                return self._emit_compiled_module_object_call(module_name, attr, expr)
             fn = self._declare_extern_user_function(
                 module_name,
                 attr.name,
@@ -3778,6 +3739,8 @@ class NativeModuleAliasMixin:
             ast_func_def = self._extern_info_to_funcdef(attr.name, info)
             if ast_func_def is None:
                 return None
+            if self._ordinary_call_needs_runtime_binding(expr, ast_func_def):
+                return self._emit_runtime_bound_user_call(expr, attr.name, fn)
             if self._call_would_use_callee_defaults(
                 expr.args,
                 expr.kwargs,
@@ -3869,13 +3832,25 @@ class NativeModuleAliasMixin:
             if inst is not None:
                 return inst
         init_fd = self._native_class_method_def(class_info, "__init__")
-        resolved_args = expr.args
+        if (not class_info.valueclass
+                and self._ordinary_call_needs_runtime_binding(expr, init_fd, True)):
+            return self._emit_compiled_module_object_call(module_name, attr, expr)
+        if (init_fd is not None
+                and self.class_lowering.has_definition_defaults(class_info, "__init__")
+                and self._call_would_use_callee_defaults(expr.args, expr.kwargs, init_fd.args[1:])):
+            # Defaults belong to the defining class's published signature.
+            # In particular, field factories run once per omitted argument;
+            # shared default objects must never be re-evaluated in the caller.
+            return self._emit_compiled_module_object_call(module_name, attr, expr)
+        if (expr.kwargs or self._has_starred_unpack(expr.args)
+                or self._split_starstar_kwargs_unpack(expr.args) is not None):
+            # Preserve the Python call shape and source evaluation order.
+            # Flattening keywords here both loses keyword-only provenance
+            # and evaluates expressions in formal order. The published
+            # native class binder owns binding exactly once, including
+            # variadic operands and duplicate/positional-only diagnostics.
+            return self._emit_compiled_module_object_call(module_name, attr, expr)
         if init_fd is None:
-            if expr.kwargs:
-                raise NotImplementedError(
-                    f"class {attr.name!r} with kwargs needs __init__ "
-                    "to resolve parameter names"
-                )
             inst = self._emit_no_init_field_instance(
                 class_info.name,
                 expr.args,
@@ -3883,22 +3858,9 @@ class NativeModuleAliasMixin:
             )
             if inst is not None:
                 return inst
-            return self._emit_native_class_instantiate(
-                class_info.name,
-                expr.args,
-            )
-        elif expr.kwargs:
-            resolved_args = tuple(
-                self._resolve_call_kwargs(
-                    expr.args,
-                    expr.kwargs,
-                    init_fd.args,
-                    skip_self=True,
-                )
-            )
         return self._emit_native_class_instantiate(
             class_info.name,
-            resolved_args,
+            expr.args,
         )
 
     def _maybe_emit_native_builtin_compiled_call(

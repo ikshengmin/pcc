@@ -27,9 +27,10 @@ from .precise_stackmap import (
     ARCH_X86_64,
     ARCH_AARCH64,
     PreciseStackMapError,
-    decode_stack_map,
+    _FUNCTION as _STACK_MAP_FUNCTION,
     function_address_offsets,
     function_id,
+    validate_stack_map_payload,
 )
 
 
@@ -274,7 +275,7 @@ def _validate_object(obj: ElfObject) -> None:
             )
         try:
             address_offsets = function_address_offsets(section.data)
-            decoded_stackmap = decode_stack_map(
+            validate_stack_map_payload(
                 section.data,
                 expected_arch=ARCH_AARCH64 if obj.machine == EM_AARCH64 else ARCH_X86_64,
                 final_image=False,
@@ -300,14 +301,19 @@ def _validate_object(obj: ElfObject) -> None:
                 raise ElfError(
                     "relocatable stack-map function address must be zero"
                 )
-        for function, address_offset in zip(
-            decoded_stackmap.functions, address_offsets
-        ):
+        for address_offset in address_offsets:
             relocation = relocation_by_offset[address_offset]
             symbol = obj.symbols[relocation.symbol_index]
             if symbol.section_index in (SHN_UNDEF, SHN_ABS):
                 raise ElfError("stack-map function target must be section-defined")
-            if function.function_id != function_id(symbol.name):
+            # The validated function header immediately precedes its address
+            # relocation. Read only that header: decoding the entire map here
+            # allocates one object per safepoint and referenced location even
+            # though the identity check consumes none of those objects.
+            stackmap_function_id = _STACK_MAP_FUNCTION.unpack_from(
+                section.data, address_offset - 8
+            )[0]
+            if stackmap_function_id != function_id(symbol.name):
                 raise ElfError(
                     "stack-map function id does not match its relocation symbol"
                 )
@@ -1110,7 +1116,7 @@ def link_static_executable(
             ]
         )
         try:
-            decode_stack_map(
+            validate_stack_map_payload(
                 payload,
                 expected_arch=ARCH_AARCH64 if machine == EM_AARCH64 else ARCH_X86_64,
                 final_image=True,

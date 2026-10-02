@@ -33,6 +33,17 @@ class Type:
 
 
 @dataclass(frozen=True)
+class RawPointerType(Type):
+    """Compiler-unmanaged pointer view, never an automatic GC owner/root.
+
+    Runtime-port C ABIs may use this view for a manually managed PyObject
+    address; it does not assert that the underlying allocation is foreign.
+    """
+
+    pass
+
+
+@dataclass(frozen=True)
 class IntType(Type):  # name = "int"
     width: int = 64  # tagged default; 32 for explicit i32, etc.
     signed: bool = True
@@ -235,6 +246,10 @@ class Call(Expr):
     # parser retains this order, while splitting args/kwargs without this
     # metadata loses cases such as ``f(**m(), x=g())``.
     operand_order: tuple[tuple[str, int], ...] = ()
+    # A set display is represented by a synthetic set(ListExpr(...)) call.
+    # Keep that syntax provenance: unlike an explicit sequence constructor,
+    # it does not resolve a user binding named set or evaluate a list first.
+    is_set_literal: bool = False
 
 
 @dataclass(frozen=True)
@@ -297,6 +312,22 @@ class Assign(Stmt):
     targets: tuple[Expr, ...]  # Name/Attr/Subscript
     value: Expr
     annotation: Optional[Type] = None
+    # A declaration-only annotation carries an inert value placeholder.
+    # Explicit ``= None`` is a real initializer and must remain distinct.
+    has_value: bool = True
+
+
+def assignment_storage_annotation(annotation: Optional[Type], value: Expr,
+                                  has_value: bool) -> Optional[Type]:
+    """Keep annotation metadata separate from a nullable scalar value lane.
+
+    Ordinary Python annotations do not prevent explicit None initialization.
+    Raw machine scalar names are deliberately excluded from this widening.
+    """
+    if (has_value and isinstance(value, NoneLit) and annotation is not None
+            and annotation.name in ("int", "float", "bool", "complex")):
+        return DynType(name="dyn")
+    return annotation
 
 
 @dataclass(frozen=True)
@@ -431,6 +462,11 @@ class FuncDef(Stmt):
     decorators: tuple[Expr, ...] = ()
     is_method: bool = False
     is_async: bool = False
+    # Inference replaces a missing return annotation with DynType; retain
+    # whether that type came from an explicit source contract.
+    has_return_annotation: bool = False
+    # Set by the defining module's verified native pointer-lane directive.
+    manual_pointer_abi: bool = False
 
 
 @dataclass(frozen=True)

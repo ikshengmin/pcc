@@ -6,7 +6,7 @@ import os
 from pcc.ir.compat import ir
 from pcc.driver.python_target import PYTHON_TARGET_VERSION_INFO
 
-from pcc.frontends.python.py_ast import Assign, Attr, BoolExpr, BoolLit, BoolType, Break, Compare, DynType, If, IfExpr, IntLit, Name, NoneLit, NoneType, StrLit, Try, TupleExpr, While
+from pcc.frontends.python.py_ast import RawPointerType, Assign, Attr, BoolExpr, BoolLit, BoolType, Break, Compare, DynType, If, IfExpr, IntLit, Name, NoneLit, NoneType, StrLit, Try, TupleExpr, While
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.method_call_lowering import _method_pointer_provenance
 
@@ -310,6 +310,12 @@ class ControlFlowLoweringMixin:
     def _emit_if_expr(self, expr: IfExpr) -> ir.Value:
         """Lower ``then_e if cond else else_e`` into a diamond CFG plus phi."""
         static_cond = self._static_bool_condition(expr.cond)
+        raw_manual_join = (
+            (getattr(self, "_runtime_port_module", False) or getattr(self, "_freestanding_module", False))
+            and isinstance(expr.ty, RawPointerType)
+            and isinstance(expr.then_e.ty, (RawPointerType, DynType))
+            and isinstance(expr.else_e.ty, (RawPointerType, DynType))
+        )
         raw_freestanding_join = (
             getattr(self, "_freestanding_module", False)
             and isinstance(expr.ty, DynType)
@@ -317,7 +323,10 @@ class ControlFlowLoweringMixin:
         if static_cond is not None:
             selected = expr.then_e if static_cond else expr.else_e
             selected_val = self._emit_expr(selected)
-            coerced = selected_val if raw_freestanding_join and isinstance(selected_val.type, ir.IntType) else self._coerce(selected_val, selected.ty, expr.ty)
+            if raw_manual_join and isinstance(selected_val.type, ir.PointerType):
+                coerced = selected_val
+            else:
+                coerced = selected_val if raw_freestanding_join and isinstance(selected_val.type, ir.IntType) else self._coerce(selected_val, selected.ty, expr.ty, selected)
             if selected_val in getattr(self, "_cpy_values", ()):
                 if self._cpy_value_is_owned(selected_val):
                     return self._mark_owned_cpy_value(coerced)
@@ -350,14 +359,16 @@ class ControlFlowLoweringMixin:
 
         self.builder.position_at_end(then_bb)
         then_val = self._emit_expr(expr.then_e)
-        if not (raw_freestanding_join and isinstance(then_val.type, ir.IntType)):
-            then_val = self._coerce(then_val, expr.then_e.ty, result_ty)
+        if not ((raw_freestanding_join and isinstance(then_val.type, ir.IntType))
+                or (raw_manual_join and isinstance(then_val.type, ir.PointerType))):
+            then_val = self._coerce(then_val, expr.then_e.ty, result_ty, expr.then_e)
         then_exit = self.builder._block
 
         self.builder.position_at_end(else_bb)
         else_val = self._emit_expr(expr.else_e)
-        if not (raw_freestanding_join and isinstance(else_val.type, ir.IntType)):
-            else_val = self._coerce(else_val, expr.else_e.ty, result_ty)
+        if not ((raw_freestanding_join and isinstance(else_val.type, ir.IntType))
+                or (raw_manual_join and isinstance(else_val.type, ir.PointerType))):
+            else_val = self._coerce(else_val, expr.else_e.ty, result_ty, expr.else_e)
         else_exit = self.builder._block
 
         phi_ty = self._storage_ir_type(result_ty)

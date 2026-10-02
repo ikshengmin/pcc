@@ -466,18 +466,17 @@ def _visit_instance_slots(o, visitor, context) -> i64:
             context,
         )
         index = index + 1
-    if (
-        load_i32(cls, abi_constant("object.header.flags_offset"))
-        & abi_constant("object.flag.gc_tracked")
-    ) == 0:
-        _visit_slot(
-            o,
-            abi_constant("object.instance.fields_offset")
-            + count * abi_constant("object.pointer.size"),
-            1,
-            visitor,
-            context,
-        )
+    # Every native instance/valuebox reserves and zeroes n_fields + 1 slots.
+    # __slots__ restricts public attribute visibility, not this physical
+    # owner used for builtin-base backing and exception arguments.
+    _visit_slot(
+        o,
+        abi_constant("object.instance.fields_offset")
+        + count * abi_constant("object.pointer.size"),
+        1,
+        visitor,
+        context,
+    )
     return 1
 
 
@@ -648,12 +647,7 @@ def pcc_gc_visit_object_slots_slice(
         )
         if n_fields < 0:
             n_fields = 0
-        total = 1 + n_fields
-        if (
-            load_i32(cls, abi_constant("object.header.flags_offset"))
-            & abi_constant("object.flag.gc_tracked")
-        ) == 0:
-            total = total + 1
+        total = 2 + n_fields
         family = 22
     else:
         return 0

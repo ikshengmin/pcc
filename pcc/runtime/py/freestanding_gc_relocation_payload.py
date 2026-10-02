@@ -1398,6 +1398,7 @@ def pcc_gc_relocate_copy_payload_prepared_locked(
 
     if (
         tag == abi_constant("object.type.instance")
+        or tag == abi_constant("object.type.valuebox")
         or tag >= abi_constant("object.type.user_class_start")
     ):
         cls = pcc_gc_load_ptr(
@@ -1417,12 +1418,9 @@ def pcc_gc_relocate_copy_payload_prepared_locked(
         )
         if n_fields < 0:
             n_fields: i64 = 0
-        n_slots: i64 = n_fields
-        class_flags: i64 = load_i32(
-            cls, abi_constant("object.header.flags_offset")
-        )
-        if (class_flags & abi_constant("object.flag.gc_tracked")) == 0:
-            n_slots = n_slots + 1
+        # py_instance_new (also used by py_valuebox_new) always reserves the
+        # hidden owning slot, regardless of public __slots__ visibility.
+        n_slots: i64 = n_fields + 1
         if n_slots < 0:
             return _relocate_copy_payload_fail(ctx)
         if size < (

@@ -66,20 +66,27 @@ def emit_indexed_module_file(
     module = decode_indexed_module_file(sidecar_path)
     _debug_phase("decode-complete")
     if is_aarch64_linux_triple(module.triple) or is_x86_64_linux_triple(module.triple) or is_x86_64_windows_triple(module.triple):
+        stack_map_plans = []
+        packed_stack_maps = artifact_kind == "PCO" and is_x86_64_linux_triple(module.triple)
         if is_aarch64_linux_triple(module.triple):
             assembly = emit_aarch64_darwin_indexed_module(module, optimize=optimize)
         else:
             from .self_backend_x86_64_linux import _emit_x86_64_module
-            assembly = _emit_x86_64_module("", module=module, windows=is_x86_64_windows_triple(module.triple))
+            assembly = _emit_x86_64_module(
+                "", module=module, windows=is_x86_64_windows_triple(module.triple),
+                stack_map_plans_out=stack_map_plans if packed_stack_maps else None,
+            )
         if artifact_kind == "ASM":
             payload = assembly.encode("utf-8")
         elif is_x86_64_windows_triple(module.triple):
             from .coff_x86_64 import assemble_object
             payload = assemble_object(assembly)
         else:
-            from .owned_elf_link import assemble
-            from .elf_x86_64 import emit_relocatable
-            payload = emit_relocatable(assemble(assembly, module.triple))
+            from .target_objects import encode_assembly_object
+            payload = encode_assembly_object(
+                assembly, module.triple,
+                stack_map_plans=stack_map_plans if packed_stack_maps else None,
+            )
         temporary = output_path + ".tmp"
         try:
             with open(temporary, "wb") as stream:

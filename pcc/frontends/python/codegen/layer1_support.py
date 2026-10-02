@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace as _replace
 
-from pcc.frontends.python.py_ast import Arg, Assign, Attr, AugAssign, BinOp, BoolExpr, BoolLit, BoolType, Break, ByteArrayType, BytesType, Call, ClassDef, ClassType, Compare, ComplexType, Continue, Delete, DictExpr, DictType, DynType, ExceptHandler, Expr, ExprStmt, FloatLit, FloatType, For, FuncDef, FuncType, Global, If, IfExpr, Import, ImportFrom, IntLit, IntType, Lambda, ListExpr, ListType, SetType, MemoryViewType, Module, Name, Nonlocal, NoneLit, NoneType, Pass, Raise, Return, Slice, SourceSpan, Stmt, StrLit, StrType, Subscript, Try, TupleExpr, TupleType, Type, UnaryOp, ValueArrayType, ValueClassType, While, With
+from pcc.frontends.python.py_ast import RawPointerType, Arg, Assign, Attr, AugAssign, BinOp, BoolExpr, BoolLit, BoolType, Break, ByteArrayType, BytesType, Call, ClassDef, ClassType, Compare, ComplexType, Continue, Delete, DictExpr, DictType, DynType, ExceptHandler, Expr, ExprStmt, FloatLit, FloatType, For, FuncDef, FuncType, Global, If, IfExpr, Import, ImportFrom, IntLit, IntType, Lambda, ListExpr, ListType, SetType, MemoryViewType, Module, Name, Nonlocal, NoneLit, NoneType, Pass, Raise, Return, Slice, SourceSpan, Stmt, StrLit, StrType, Subscript, Try, TupleExpr, TupleType, Type, UnaryOp, ValueArrayType, ValueClassType, While, With
 
 _Import = Import
 _ImportFrom = ImportFrom
@@ -158,6 +158,7 @@ def _dict_str_dyn_global_export():
 def _build_py_ast_static_class_fields():
     return {
         "Type": ("name",),
+        "RawPointerType": ("name",),
         "IntType": ("name", "width", "signed"),
         "FloatType": ("name", "width"),
         "ComplexType": ("name",),
@@ -206,7 +207,7 @@ def _build_py_ast_static_class_fields():
         "UnaryOp": ("span", "ty", "op", "operand"),
         "Compare": ("span", "ty", "op", "lhs", "rhs"),
         "BoolExpr": ("span", "ty", "op", "left", "right"),
-        "Call": ("span", "ty", "func", "args", "kwargs", "operand_order"),
+        "Call": ("span", "ty", "func", "args", "kwargs", "operand_order", "is_set_literal"),
         "Attr": ("span", "ty", "obj", "name"),
         "Subscript": ("span", "ty", "obj", "idx"),
         "Slice": ("span", "ty", "lo", "hi", "step"),
@@ -215,7 +216,7 @@ def _build_py_ast_static_class_fields():
         "TupleExpr": ("span", "ty", "elems"),
         "IfExpr": ("span", "ty", "cond", "then_e", "else_e"),
         "Lambda": ("span", "ty", "params", "body"),
-        "Assign": ("span", "targets", "value", "annotation"),
+        "Assign": ("span", "targets", "value", "annotation", "has_value"),
         "AugAssign": ("span", "target", "op", "value"),
         "ExprStmt": ("span", "expr"),
         "If": ("span", "cond", "body", "else_body"),
@@ -244,6 +245,8 @@ def _build_py_ast_static_class_fields():
             "decorators",
             "is_method",
             "is_async",
+            "has_return_annotation",
+            "manual_pointer_abi",
         ),
         "ClassDef": ("span", "name", "bases", "keywords", "body", "decorators"),
         "Stmt": ("span",),
@@ -259,6 +262,11 @@ def _populate_static_native_exports_0(out):
         name: _class_export(name, fields)
         for name, fields in _PY_AST_STATIC_CLASS_FIELDS.items()
     }
+    out["pcc.frontends.python.py_ast"]["assignment_storage_annotation"] = _function_export(
+        ("dyn",), (("dyn",), ("dyn",), ("bool",)),
+        (_export_arg("annotation", ("dyn",)), _export_arg("value", ("dyn",)),
+         _export_arg("has_value", ("bool",))),
+    )
     out["pcc.frontends.python.export_meta"] = {
         "encode_type": _function_export(
             ("dyn",),
@@ -729,7 +737,7 @@ def _populate_static_native_exports_8(out):
                 #    if isinstance(c, type) and dataclasses.is_dataclass(c)
                 #    and len(n) > 1 and n[0] == '_' and n[1].isupper()]"
                 ("_Assert", ("test", "msg", "line")),
-                ("_Assign", ("target", "value", "annotation", "line")),
+                ("_Assign", ("target", "value", "annotation", "line", "has_value")),
                 ("_Attr", ("obj", "name", "line")),
                 ("_AugAssign", ("target", "op", "value", "line")),
                 ("_Await", ("value", "line")),
@@ -837,6 +845,19 @@ def _populate_static_native_exports_3(out):
     # path); the functions get a permissive dyn signature.
     out["pcc.frontends.python.codegen.class_gen"] = {
         "ClassLowering": _class_export("ClassLowering"),
+    }
+    out["pcc.frontends.python.pipeline_closed_world"] = {
+        "qualified_class_base_name": _function_export(
+            ("str",), (("dyn",), ("dyn",), ("dyn",), ("str",), ("str",)),
+            (_export_arg("base", ("dyn",)), _export_arg("body", ("dyn",)),
+             _export_arg("before", ("dyn",)), _export_arg("mod_name", ("str",)),
+             _export_arg("src_path", ("str",))),
+        ),
+        "resolve_class_base_export": _function_export(
+            ("dyn",), (("dyn",), ("str",), ("str",)),
+            (_export_arg("native_exports", ("dyn",)), _export_arg("owner", ("str",)),
+             _export_arg("name", ("str",))),
+        ),
     }
     out["pcc.frontends.python.codegen.layer1_mixins"] = {
         "L1CodeGenMixinStack": _class_export("L1CodeGenMixinStack"),
@@ -1690,10 +1711,10 @@ _PCC_NATIVE_STDLIB_SEMANTIC_PROVIDERS = {
                         _export_arg("output", has_default=True),
                         _export_arg("stderr", has_default=True),
                     ),
-                    "box_int_abi": False,
+                    "box_int_abi": True,
                 },
             ),
-            "box_int_abi": False,
+            "box_int_abi": True,
         },
     },
 }
@@ -1997,7 +2018,7 @@ def _dataclass_field_names(obj):
         if isinstance(obj, BoolExpr):
             return ("span", "ty", "op", "left", "right")
         if isinstance(obj, Call):
-            return ("span", "ty", "func", "args", "kwargs")
+            return ("span", "ty", "func", "args", "kwargs", "operand_order", "is_set_literal")
         if isinstance(obj, Attr):
             return ("span", "ty", "obj", "name")
         if isinstance(obj, Subscript):
@@ -2016,7 +2037,7 @@ def _dataclass_field_names(obj):
             return ("span", "ty", "params", "body")
     if isinstance(obj, Stmt):
         if isinstance(obj, Assign):
-            return ("span", "targets", "value", "annotation")
+            return ("span", "targets", "value", "annotation", "has_value")
         if isinstance(obj, AugAssign):
             return ("span", "target", "op", "value")
         if isinstance(obj, ExprStmt):
@@ -2057,6 +2078,8 @@ def _dataclass_field_names(obj):
                 "decorators",
                 "is_method",
                 "is_async",
+                "has_return_annotation",
+                "manual_pointer_abi",
             )
         if isinstance(obj, ClassDef):
             return (
@@ -2084,6 +2107,8 @@ def _as_native_float(value) -> float:
 
 
 def _type_kind_key(ty: Type) -> str:
+    if isinstance(ty, RawPointerType):
+        return "RawPointerType"
     if isinstance(ty, IntType):
         return "IntType"
     if isinstance(ty, FloatType):

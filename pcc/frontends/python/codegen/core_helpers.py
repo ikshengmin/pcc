@@ -197,7 +197,12 @@ class CoreHelperMixin:
         for block in fn.blocks:
             terminator = block._instrs[-1]
             if _instruction_opname_text(terminator) in ("ret", "ret void", "ret_void"):
-                builder.position_before(terminator)
+                anchor = terminator
+                for owner, return_block, handoff in self._return_handoff_sites:
+                    if owner is fn and return_block is block:
+                        anchor = handoff
+                        break
+                builder.position_before(anchor)
                 builder.call(self.runtime["py_recursion_leave"], [entered])
 
     def _alloca_in_entry(
@@ -206,7 +211,7 @@ class CoreHelperMixin:
         name: str,
         *,
         init_null: bool = False,
-    ) -> ir.AllocaInstr:
+    ) -> ir.Value:
         """Emit an alloca into the function's entry block.
 
         Uses ``self.builder`` with position save/restore rather than a

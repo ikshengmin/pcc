@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pcc.frontends.python.py_ast import BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, DynType, FloatType, FuncType, IntType, ListType, MemoryViewType, NoneType, SetType, StrType, TupleType, Type, ValueClassType
+from pcc.frontends.python.py_ast import RawPointerType, BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, DynType, FloatType, FuncType, IntType, ListType, MemoryViewType, NoneType, SetType, StrType, TupleType, Type, ValueClassType
 
 
 def _is_value_class_type(ty) -> bool:
@@ -39,6 +39,8 @@ def _encode_type(ty, memo):
 
 
 def _encode_type_uncached(ty, memo):
+    if isinstance(ty, RawPointerType):
+        return ("raw_pointer",)
     if isinstance(ty, IntType):
         return ("int", ty.width, ty.signed)
     if isinstance(ty, FloatType):
@@ -123,6 +125,8 @@ def decode_type(desc):
 
 def _decode_type_uncached(desc):
     tag = desc[0]
+    if tag == "raw_pointer":
+        return RawPointerType(name="pcc.extern.c_rawptr")
     if tag == "int":
         width = desc[1] if len(desc) > 1 else 64
         signed = desc[2] if len(desc) > 2 else True

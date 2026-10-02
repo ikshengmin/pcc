@@ -382,7 +382,7 @@ def test_factories_compile_as_callable_signature_defaults(tmp_path, monkeypatch,
     source = tmp_path / (name + ".py")
     output = tmp_path / (name + ".ll")
     source.write_text(program)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple="arm64-apple-darwin")
     text = output.read_text()
     initializer = _body(text, "_pcc_py_module_init_" + name)
     assert "func.sig.factory" in initializer

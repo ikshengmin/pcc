@@ -431,16 +431,46 @@ class BuiltinTypeAttrLoweringMixin:
         str_expr: Expr,
         helper: str,
         label: str,
+        as_bytearray: bool = False,
     ) -> ir.Value:
-        """Encode a str expression to a bytes object via the given runtime
-        encode helper. The helper reads the raw ``PY_TYPE_STR`` layout, so the
-        argument must be materialized as a pcc str object."""
+        """Retain roots and counted address leases across both codec calls."""
         src = self._emit_expr_as_pcc_object(str_expr)
-        return self.builder.call(
-            self.runtime[helper],
-            [src],
-            name=self._fresh(label),
+        source_root = self._extern_enter_root(
+            src, self._owned_release_needed(src, str_expr), label + ".source"
         )
+        roots = [source_root]
+        previous = self._current_try_err_block()
+        previous_cpy = getattr(self, "_cpy_operand_cleanup_block", None)
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        leases = []
+        try:
+            leases = self._encode_acquire_root_leases(roots, target, str_expr.span)
+            result = self.builder.call(
+                self.runtime[helper], [self._extern_load_root(source_root)],
+                name=self._fresh(label),
+            )
+            self._emit_post_call_err_check(str_expr.span)
+            if as_bytearray:
+                encoded_root = self._encode_capture_result_root(result, roots, label + ".encoded")
+                roots.append(encoded_root)
+                leases = self._encode_acquire_root_leases(
+                    roots, target, str_expr.span, tuple(leases), 1,
+                )
+                result = self.builder.call(
+                    self.runtime["py_bytearray_from_obj"], [self._extern_load_root(encoded_root)],
+                    name=self._fresh(label + ".bytearray"),
+                )
+                self._emit_post_call_err_check(str_expr.span)
+            result_root = self._encode_capture_result_root(result, roots, label + ".result")
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = previous_cpy
+        release_failed = self._extern_release_foreign_leases(tuple(leases))
+        self._extern_check_lease_cleanup(release_failed, tuple(roots) + (result_root,))
+        self._extern_release_roots(tuple(roots))
+        result = self._extern_take_root(result_root)
+        self._note_owned_object_value(result)
+        return result
 
     def _emit_bytes_family_builtin(
         self,
@@ -500,13 +530,8 @@ class BuiltinTypeAttrLoweringMixin:
             # bytearray(str, encoding) two-arg form).
             helper = self._bytes_encoding_helper_for_arg(expr.args[1])
             if helper is not None:
-                encoded = self._emit_str_encode_to_bytes(
-                    expr.args[0], helper, "bytearray.encode.bytes"
-                )
-                return self.builder.call(
-                    self.runtime["py_bytearray_from_obj"],
-                    [encoded],
-                    name=self._fresh("bytearray.encode"),
+                return self._emit_str_encode_to_bytes(
+                    expr.args[0], helper, "bytearray.encode.bytes", True
                 )
         if name == "bytearray" and not expr.args:
             # bytearray() -> empty bytearray, built from an empty bytes object

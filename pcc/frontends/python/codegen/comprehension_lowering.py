@@ -13,6 +13,7 @@ from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.for_loop_lowering import _for_prepare_owned_object_target, _for_store_owned_target
 from pcc.frontends.python.codegen.hoist_boxing import COMPREHENSION_CELL_PREFIX
 from pcc.frontends.python.codegen.layer1_support import _dataclass_field_names, _dataclass_field_value
+from pcc.frontends.python.codegen.local_bound_lowering import mark_bound_target
 
 
 _I1 = ir.IntType(1)
@@ -307,6 +308,7 @@ class ComprehensionLoweringMixin:
         saved_exact_flags: dict[str, object] = {}
         saved_owned_flags = {}
         saved_owned_flag_allocas = {}
+        saved_bound_flags = {}
         ownership_sets = (
             "_owned_local_names", "_owned_local_has_value",
             "_gc_rooted_local_names", "_borrowed_gc_rooted_local_names",
@@ -326,6 +328,15 @@ class ComprehensionLoweringMixin:
             saved_env_entries[nm] = self.env.get(nm, _MISSING)
             saved_owned_flags[nm] = self._owned_local_flag_slots.get(nm, _MISSING)
             saved_owned_flag_allocas[nm] = getattr(self, "_owned_local_flag_allocas", {}).get(nm, _MISSING)
+            # Lexical boundness belongs to the binding, just like its value
+            # slot. A later assignment in the enclosing function can give
+            # this name a false .bound flag before the comprehension runs.
+            # Its target must neither consult nor update that outer flag.
+            bound_name = ".bound." + nm
+            saved_bound_flags[nm] = self._owned_local_flag_slots.pop(bound_name, _MISSING)
+            if saved_bound_flags[nm] is not _MISSING:
+                bound_flag = self._ensure_owned_local_flag(bound_name)
+                self.builder.store(ir.Constant(_I1, 0), bound_flag)
             if cpy_flags is not None:
                 saved_cpy_flags[nm] = cpy_flags.get(nm, _MISSING)
             else:
@@ -368,14 +379,30 @@ class ComprehensionLoweringMixin:
         else:
             raise NotImplementedError(f"comprehension kind {kind!r} not supported")
 
-        self._gc_pin(container)
+        output_slot = self._slot_call_result_sink(expr)
+        output_lease = None
+        if output_slot is not None:
+            self._publish_slot_call_owned(output_slot, container, label="comprehension result")
+            output_lease = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(output_slot)],
+                name=self._fresh("comp.result.lease"),
+            )
+            self._slot_call_check_status(output_lease, "comprehension result lease", expr.span)
+            container = self.builder.load(output_slot, name=self._fresh("comp.result.current"))
+        else:
+            self._gc_pin(container)
         outer_error = self._current_try_err_block()
         outer_cpy_error = getattr(self, "_cpy_operand_cleanup_block", None)
         error_target = outer_error if outer_error is not None else self._ensure_fn_err_exit()
         scope_error = self.current_function.append_basic_block(self._fresh("comp.scope.error"))
-        self._try_err_block = self._make_cpy_operand_cleanup_block(
-            (), (), scope_error, "comp.result.error", ((container, True),),
-        )
+        if output_slot is not None:
+            self._try_err_block = self._slot_call_cleanup_block(
+                (), scope_error, ((output_slot, output_lease),),
+            )
+        else:
+            self._try_err_block = self._make_cpy_operand_cleanup_block(
+                (), (), scope_error, "comp.result.error", ((container, True),),
+            )
         self._cpy_operand_cleanup_block = self._try_err_block
         try:
             self._emit_comprehension_level(
@@ -428,6 +455,11 @@ class ComprehensionLoweringMixin:
                     self.env.pop(nm, None)
                 else:
                     self.env[nm] = prior
+                prior_bound_flag = saved_bound_flags[nm]
+                if prior_bound_flag is _MISSING:
+                    self._owned_local_flag_slots.pop(".bound." + nm, None)
+                else:
+                    self._owned_local_flag_slots[".bound." + nm] = prior_bound_flag
                 prior_owned_flag = saved_owned_flags[nm]
                 if prior_owned_flag is _MISSING:
                     self._owned_local_flag_slots.pop(nm, None)
@@ -459,7 +491,14 @@ class ComprehensionLoweringMixin:
                         exact_flags.pop(nm, None)
                     else:
                         exact_flags[nm] = prior_exact
-        self._gc_unpin(container)
+        if output_slot is not None:
+            released = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(output_slot), output_lease],
+                name=self._fresh("comp.result.lease.release"),
+            )
+            self._slot_call_check_status(released, "comprehension result lease release", expr.span)
+        else:
+            self._gc_unpin(container)
         self._note_owned_object_value(container)
         return container
 
@@ -587,7 +626,11 @@ class ComprehensionLoweringMixin:
         key_expr,
         val_expr,
     ) -> None:
-        _target, _iter_e, ifs_tuple, _is_async = generators[idx]
+        target, _iter_e, ifs_tuple, _is_async = generators[idx]
+        # All loop paths enter here after storing the current item. Mark it
+        # before tuple unpacking, filters, or nested generator expressions
+        # read the target; container ownership flags are a separate concern.
+        mark_bound_target(self, target)
         if_exprs: tuple = ()
         if isinstance(ifs_tuple, TupleExpr):
             if_exprs = ifs_tuple.elems

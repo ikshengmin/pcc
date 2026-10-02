@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pcc.frontends.python.py_ast import Call, DictExpr, DictType, DynType, Expr, FuncDef, IntLit, IntType, ListType, Name, NoneLit, NoneType, SourceSpan, StrLit, StrType, Subscript, TupleExpr, TupleType
+from pcc.frontends.python.py_ast import Call, DictExpr, DictType, DynType, Expr, FuncDef, IntLit, IntType, ListType, Name, NoneLit, NoneType, RawPointerType, SourceSpan, StrLit, StrType, Subscript, TupleExpr, TupleType, ValueArrayType
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
@@ -25,6 +25,41 @@ def _call_kwargs_merge(span, operands):
 
 
 class CallResolutionLoweringMixin:
+    def _ordinary_call_needs_runtime_binding(self, expr, fd, skip_self=False):
+        """Classify before emitting anything or rearranging the original Call.
+
+        A direct ordinary-Python ABI call is admitted only when every runtime
+        formal is supplied by one exact positional operand. All other shapes
+        belong to the published callable's signature binder, including calls
+        that will raise TypeError. An annotation is never an arity proof.
+        Explicit low-level/value boundaries retain their separate ABI.
+        """
+        if (self._freestanding_module or self._runtime_port_module
+                or self._module_has_c_abi_export or fd is None
+                or fd.manual_pointer_abi
+                or self._func_c_abi_export_symbol(fd) is not None):
+            return False
+        types = [fd.return_ty]
+        for formal in fd.args:
+            types.append(formal.annotation)
+        for ty in types:
+            if (isinstance(ty, (RawPointerType, ValueArrayType))
+                    or isinstance(ty, IntType) and ty.name != "int"
+                    or ty is not None and self._is_valueclass_payload_type(ty)):
+                return False
+        if expr.kwargs or self._has_starred_unpack(expr.args):
+            return True
+        if self._split_starstar_kwargs_unpack(expr.args) is not None:
+            return True
+        count = 0
+        for index, formal in enumerate(fd.args):
+            if skip_self and index == 0 or formal.name == "":
+                continue
+            if formal.kind not in ("pos", "pos_only"):
+                return True
+            count += 1
+        return len(expr.args) != count
+
     def _call_resolution_span_or_none(self, node):
         try:
             return node.span
@@ -532,6 +567,10 @@ class CallResolutionLoweringMixin:
                     f"formals=({formal_names})"
                 )
             if formals[idx].kind == "pos_only":
+                if var_kw_idx >= 0:
+                    extra_kwargs.append((kw_name, kw_expr))
+                    kw_i += 1
+                    continue
                 formal_names = ",".join(f.name for f in formals)
                 raise L1CodegenError(
                     f"unexpected keyword argument {kw_name!r}; "

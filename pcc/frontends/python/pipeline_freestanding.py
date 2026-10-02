@@ -31,50 +31,94 @@ def source_declares_runtime_port_module(source: str) -> bool:
     return _source_declares_module_directive(source, "__pcc_runtime_port__")
 
 
-def _blank_triple_quoted_lines(source: str) -> str:
-    """Replace the interior of triple-quoted strings with empty lines.
+def _source_without_literals_or_comments(source: str) -> str:
+    """Mask strings/comments without changing indentation or line numbers.
 
-    The module-scope line scanner is a bootstrap-safe indentation tracker; a
-    docstring line that begins with ``class `` or ``def `` would otherwise
-    open a phantom local scope and hide every later module-scope directive.
-    Line numbers are preserved so diagnostics keep pointing at the source.
+    Directive names are also ordinary string data in the compiler itself.
+    Looking for a substring before lexical masking rejects those modules.
+    Keep this scan independent of the parser: it selects the parser's mode
+    and must also execute in the native bootstrap compiler.
     """
     out: list[str] = []
-    fence: str | None = None
-    for raw_line in source.splitlines():
-        if fence is None:
-            code = raw_line.split("#", 1)[0] if '"""' not in raw_line and "\'\'\'" not in raw_line else raw_line
-            first = min(
-                (i for i in (code.find('"""'), code.find("\'\'\'")) if i >= 0),
-                default=-1,
-            )
-            if first < 0:
-                out.append(raw_line)
-                continue
-            quote = code[first:first + 3]
-            rest = code[first + 3:]
-            if quote in rest:
-                # opens and closes on one line: keep the line as-is
-                out.append(raw_line)
-                continue
-            fence = quote
-            out.append(raw_line[:first])
+    quote = ""
+    triple = False
+    escaped = False
+    comment = False
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if comment:
+            if char == "\n":
+                comment = False
+                out.append(char)
+            else:
+                out.append(" ")
+            index += 1
             continue
-        if fence in raw_line:
-            fence = None
-            out.append("")
+        if quote:
+            if escaped:
+                escaped = False
+                out.append("\n" if char == "\n" else " ")
+                index += 1
+                continue
+            if char == "\\":
+                escaped = True
+                out.append(" ")
+                index += 1
+                continue
+            if char == quote:
+                if not triple:
+                    quote = ""
+                elif source[index:index + 3] == quote * 3:
+                    out.append("   ")
+                    index += 3
+                    quote = ""
+                    triple = False
+                    continue
+            out.append("\n" if char == "\n" else " ")
+            index += 1
             continue
-        out.append("")
-    return "\n".join(out) + ("\n" if source.endswith("\n") else "")
+        if char == "#":
+            comment = True
+            out.append(" ")
+        elif char == "'" or char == '"':
+            quote = char
+            triple = source[index:index + 3] == char * 3
+            if triple:
+                out.append("   ")
+                index += 3
+                continue
+            out.append(" ")
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _contains_directive_name(line: str, marker: str) -> bool:
+    """Match a complete name, not a substring of another identifier."""
+    offset = 0
+    while True:
+        start = line.find(marker, offset)
+        if start < 0:
+            return False
+        end = start + len(marker)
+        before = line[start - 1] if start else ""
+        after = line[end] if end < len(line) else ""
+        if not (before.isalnum() or before == "_") and not (
+            after.isalnum() or after == "_"
+        ):
+            return True
+        offset = end
 
 
 def _source_declares_module_directive(source: str, marker: str) -> bool:
     declaration = marker + " = True"
     found = False
     for raw_line, at_module_scope in _source_module_scope_lines(
-        _blank_triple_quoted_lines(source)
+        _source_without_literals_or_comments(source)
     ):
-        if marker not in raw_line:
+        if not _contains_directive_name(raw_line, marker):
             continue
         stripped = raw_line.split("#", 1)[0].strip()
         if not at_module_scope:
@@ -183,6 +227,7 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "kevent_call": ("kevent", "__error"),
         "thread_safepoint": ("pcc_thread_safepoint",),
         "gc_backend_current": ("pcc_gc_backend",),
+        "call_c_abi": ("__pcc_verified_indirect_call__",),
         "call_ptr1": ("__pcc_verified_indirect_call__",),
         "call_ptr0": ("__pcc_verified_indirect_call__",),
         "call_void_i32": ("__pcc_verified_indirect_call__",),

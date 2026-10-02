@@ -117,12 +117,22 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
     from pcc.backend.ar_writer import write_archive, _defined_symbols
     from pcc.ir.optimization.driver import optimize_ir
     from pcc.tools.runtime_archive_provenance import (
-        write_pcc_python_receipt, assemble_runtime_archive_manifest,
+        write_pcc_python_receipt, assemble_runtime_archive_manifest, codegen_checksum,
     )
     from pcc.backend.self_backend_targets import resolve_self_backend_target
     resolve_self_backend_target(target)
     if target_os_name(target) not in ("darwin", "linux", "win32"):
         raise ValueError("owned platform runtime builder target is unsupported: " + target)
+    # Production objects cannot be consumed with an unknown compiler identity.
+    # Validate the complete source closure before creating outputs or locking:
+    # a partial source copy must fail here, not after building the archive.
+    compiler_identity = codegen_checksum()
+    if (
+        not isinstance(compiler_identity, str)
+        or len(compiler_identity) != 64
+        or any(character not in "0123456789abcdef" for character in compiler_identity)
+    ):
+        raise ValueError("runtime build compiler identity is unavailable; provide the complete compiler source closure")
     config = runtime_build_config()
     threads = config["threads"]
     passes = runtime_ir_passes(runtime_dir)

@@ -1,0 +1,129 @@
+"""Module-qualified constructors keep Python operand shape until binding."""
+import re
+
+import pytest
+
+from pcc.backend.owned_object_emit import emit_owned_object
+from pcc.frontends.python.codegen.layer1 import L1CodeGen
+from pcc.frontends.python.pipeline_context import build_closed_world_context
+from pcc.frontends.python.type_infer import infer_module
+
+PROVIDER = '''class Required:
+    def __init__(self, a, /, b, *, c):
+        self.a = a
+        self.b = b
+        self.c = c
+class AllKinds:
+    def __init__(self, a, /, b=2, *items, c=3, **extras):
+        self.a = a
+        self.b = b
+        self.items = items
+        self.c = c
+        self.extras = extras
+class Ordered:
+    def __init__(self, first, second, third):
+        self.first = first
+'''
+
+
+def _compile(tmp_path, monkeypatch, body, provider_source=PROVIDER):
+    monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
+    monkeypatch.setenv('PCC_DIRECT_INDEXED_KERNEL_EMIT', '0')
+    monkeypatch.setenv('PCC_DIRECT_INDEXED_KERNEL_CAPTURE', '0')
+    provider = tmp_path / 'binding_provider.py'
+    entry = tmp_path / 'entry.py'
+    provider.write_text(provider_source)
+    entry.write_text('import binding_provider as provider\n' + body)
+    modules, exports, _ = build_closed_world_context(
+        [str(provider), str(entry)], ['binding_provider', 'entry'])
+    outputs = []
+    for module in modules:
+        typed = infer_module(module, external_exports={
+            key: value for key, value in exports.items() if key != module.name})
+        codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode='on')
+        codegen._strict_no_libpython = True
+        codegen._prefer_native_callable_values = True
+        codegen._native_module_exports = exports
+        emitted = str(codegen.generate(typed))
+        (tmp_path / (module.name + '.ll')).write_text(emitted)
+        assert emit_owned_object(emitted, 'x86_64-unknown-linux-gnu')[:4] == b'\x7fELF'
+        assert not re.search(r'\bcall [^\n]*@py_cpy_', emitted)
+        outputs.append(emitted)
+    return outputs[-1]
+
+
+def _body(text, name='probe'):
+    match = re.search(r'^define [^\n]*@user_entry_' + name + r'\([^\n]*\).*?^}', text, re.M | re.S)
+    assert match is not None, name
+    return match.group(0)
+
+
+@pytest.mark.parametrize('expression', [
+    'provider.Required(1, 2, c=3)',
+    'provider.Required(1, c=3, b=2)',
+    'provider.AllKinds(1, 2, 4, 5, c=3, extra=6)',
+    'provider.AllKinds(1, a=7)',  # positional-only name belongs in **extras
+    'provider.AllKinds(1)',
+    'provider.AllKinds(*(1, 2, 4), **{"c": 3, "extra": 6})',
+    'provider.AllKinds(1, **{"c": 3}, extra=6, **{"last": 7})',
+    'provider.Required(1, 2, b=3, c=4)',  # runtime duplicate binding
+    'provider.Required(a=1, b=2, c=3)',  # runtime positional-only diagnostic
+    'provider.Required(1, c=3)',  # runtime missing argument
+    'provider.Required(1, 2, **{"c": 3}, **{"c": 4})',
+    'provider.Required(1, 2, c=3, **{"c": 4})',
+])
+def test_imported_constructor_uses_one_published_binder(tmp_path, monkeypatch, expression):
+    body = _body(_compile(tmp_path, monkeypatch, 'def probe():\n    return ' + expression + '\n'))
+    if expression == 'provider.AllKinds(1)':
+        assert len(re.findall(r'\bcall [^\n]*@user_binding_provider_AllKinds___init__\(', body)) == 1
+        assert not re.search(r'\bcall [^\n]*@py_obj_call\(', body)
+        return
+    assert len(re.findall(r'\bcall [^\n]*@py_obj_call\(', body)) == 1
+    assert not re.search(r'\bcall [^\n]*@user_binding_provider_[^\n]*__init__\(', body)
+    assert 'compiled.call.callable' in body
+    assert 'compiled.call.args' in body
+    assert 'compiled.call.kwargs' in body
+    assert 'compiled.call.result' in body
+    assert '@pcc_gc_take_pinned_slot(' in body
+
+
+@pytest.mark.parametrize('expression,order', [
+    ('provider.Ordered(first=step_first(), third=step_third(), second=step_second())',
+     ['first', 'third', 'second']),
+    ('provider.Ordered(step_first(), third=step_third(), second=step_second())',
+     ['first', 'third', 'second']),
+    ('provider.AllKinds(step_first(), **mapping_one(), extra=step_second(), **mapping_two())',
+     ['first', 'mapping_one', 'second', 'mapping_two']),
+])
+def test_imported_constructor_evaluates_operands_once_in_source_order(tmp_path, monkeypatch, expression, order):
+    source = '''def step_first():
+    print("first")
+    return 1
+def step_second():
+    print("second")
+    return 2
+def step_third():
+    print("third")
+    return 3
+def mapping_one():
+    print("mapping_one")
+    return {"c": 3}
+def mapping_two():
+    print("mapping_two")
+    return {"last": 4}
+def probe():
+    return ''' + expression + '\n'
+    body = _body(_compile(tmp_path, monkeypatch, source))
+    calls = re.findall(r'\bcall [^\n]*@user_entry_(step_first|step_second|step_third|mapping_one|mapping_two)\(', body)
+    assert [call.removeprefix('step_') for call in calls] == order
+
+
+def test_native_binding_fixture_verifies_owned_ir(tmp_path, monkeypatch):
+    import ast
+    from pathlib import Path
+    source = Path(__file__).with_name('test_imported_constructor_binding_native.py').read_text()
+    constants = {node.targets[0].id: ast.literal_eval(node.value)
+                 for node in ast.parse(source).body if isinstance(node, ast.Assign)
+                 and isinstance(node.targets[0], ast.Name)
+                 and node.targets[0].id in ('PROVIDER_SOURCE', 'ENTRY_SOURCE')}
+    _compile(tmp_path, monkeypatch, constants['ENTRY_SOURCE'], constants['PROVIDER_SOURCE'])

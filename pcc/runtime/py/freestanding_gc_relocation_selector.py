@@ -28,6 +28,9 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+
+
 # GC-P1-BACKEND4-FRESH-ALLOC-FILTER-DISAGREEMENT diagnosability counters.
 # Mirrors py_gc_backend.c (which uses atomics); the selector runs under the
 # graph lock on this arm, so plain load/store increments are ordered.
@@ -189,7 +192,7 @@ def _backend4_zpage_candidate_score(node, allow_large_pages: i64) -> i64:
     if load_i64(page, 88) > 0:
         return -1
     flags: i64 = load_i32(obj, 12)
-    if (flags & (64 | 2048 | 8192 | 524288)) != 0:
+    if (flags & (2048 | 8192 | 524288)) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
         return -1
     if (flags & 16384) != 0:
         # FRESH_ALLOC: the add refuses half-initialized objects
@@ -350,7 +353,7 @@ def _backend4_add_candidate_node(node, allow_large_pages: i64, plan) -> i64:
     if ptr_is_null(relocation_node) != 0:
         return 0
     flags: i64 = load_i32(obj, 12)
-    if (flags & (64 | 2048 | 8192 | 16384 | 524288)) != 0:
+    if (flags & (2048 | 8192 | 16384 | 524288)) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
         # Mirror the ported pcc_gc_backend4_relocation_set_add exactly:
         # this inline add previously omitted PINNED (64) and FRESH_ALLOC
         # (16384), so the selector path could admit a pinned or

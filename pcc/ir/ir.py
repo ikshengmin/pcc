@@ -3299,11 +3299,10 @@ class IRBuilder:
         arch = triple.split("-", 1)[0] if triple else "x86_64"
         if arch in ("unknown", "amd64"):
             arch = "x86_64"
-        v = self._next(name, IntType(64))
         args = [nr, a1, a2, a3, a4, a5, a6]
-        arg_parts = []
         for arg in args:
-            arg_parts.append("i64 " + _value_ref(arg))
+            if not isinstance(arg.type, IntType) or arg.type.width != 64:
+                raise ValueError("syscall6 argument must be i64")
         opcode = "syscall"
         constraints = "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"
         if arch in ("aarch64", "arm64"):
@@ -3311,12 +3310,24 @@ class IRBuilder:
             constraints = "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory},~{cc}"
         elif arch != "x86_64":
             raise NotImplementedError("unsupported raw syscall ABI: " + arch)
-        self._emit(
-            str(v)
-            + ' = call i64 asm sideeffect "' + opcode + '", "' + constraints + '"('
-            + _join_text(arg_parts, ", ")
-            + ")"
-        )
+        v = self._next(name, IntType(64))
+        direct_builder = self._direct_builder_plane()
+        if self._direct_indexed_no_text and direct_builder is not None:
+            rec = self._emit_direct("syscall6")
+        else:
+            arg_parts = []
+            for arg in args:
+                arg_parts.append("i64 " + _value_ref(arg))
+            rec = self._emit(
+                str(v)
+                + ' = call i64 asm sideeffect "' + opcode + '", "' + constraints + '"('
+                + _join_text(arg_parts, ", ")
+                + ")"
+            )
+        if direct_builder is not None:
+            rec._direct_record_id = DirectIndexedFunctionBuilder.publish_syscall6(
+                direct_builder, v, args,
+            )
         return v
 
     def landingpad(

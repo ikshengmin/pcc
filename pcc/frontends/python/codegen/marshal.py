@@ -33,7 +33,7 @@ from typing import Mapping
 from pcc.ir.compat import ir
 from pcc.ir.support._float_bits import _float64_to_bits
 
-from pcc.frontends.python.py_ast import BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, FloatType, IntType, ListType, MemoryViewType, NoneType, SetType, StrType, TupleType, Type
+from pcc.frontends.python.py_ast import RawPointerType, BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, FloatType, IntType, ListType, MemoryViewType, NoneType, SetType, StrType, TupleType, Type
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 # -- Canonical IR types ------------------------------------------------------
@@ -264,6 +264,8 @@ def marshal_to_object(
     Any other type raises :class:`NotImplementedError`; the L3 layer
     picks those up.
     """
+    if isinstance(ty, RawPointerType):
+        raise NotImplementedError("raw pointer cannot cross a Python object boundary; use ptr_to_int explicitly")
     ty_name = _type_name(ty)
     value_ty = _ir_type_or_none(value)
     if isinstance(ty, IntType) or ty_name == "int":
@@ -513,6 +515,8 @@ def marshal_from_object(
     * ``str`` / ``list`` / ``dict`` / ``tuple`` / ``None`` → pass through
       (they already live as ``PyObject*`` natively).
     """
+    if isinstance(target_ty, RawPointerType):
+        raise NotImplementedError("Python object cannot implicitly become a raw pointer")
     target_name = _type_name(target_ty)
     if isinstance(target_ty, IntType) or target_name == "int":
         if isinstance(pyobj.type, ir.IntType):

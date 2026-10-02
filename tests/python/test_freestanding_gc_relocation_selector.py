@@ -41,6 +41,7 @@ OWNED_GLOBALS = {
     "pcc_gc_backend4_relocation_add_refusals_g",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_is_address_pinned",
     "free",
     "malloc",
     "pcc_current_thread_id",

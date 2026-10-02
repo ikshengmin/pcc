@@ -12,14 +12,20 @@ import sys
 from typing import Optional
 
 from pcc.frontends.python.codegen.host_contract import L1_CODEGEN_HOST_ATTRS
+from pcc.frontends.python.codegen.typed_int_bounded_proof import compute_bounded_int_abi_function_names
 from pcc.frontends.python.codegen.layer1_support import _default_native_module_exports
 from pcc.frontends.python.codegen.vthread_effect_analysis import annotate_closed_world_vthread_effect_summaries, annotate_closed_world_vthread_effects, build_closed_world_vthread_effect_summary, closed_world_vthread_effect_export_surface, read_closed_world_vthread_effect_summary, write_closed_world_vthread_effect_summary
 from pcc.frontends.python.export_meta import encode_type
+from pcc.frontends.python.raw_pointer_types import raw_pointer_annotation_names, verified_c_abi_export_symbol
+from pcc.frontends.python.pipeline_freestanding import source_declares_freestanding_module, source_declares_runtime_port_module
 from pcc.frontends.python.pipeline_ast_wire import _PY_AST_BASE_NAME_OVERRIDES, _PY_AST_FIELD_NAME_OVERRIDES, _py_ast_field_type_override
 from pcc.frontends.python.pipeline_closed_world import _closed_world_dyn_module_global_export, _closed_world_function_object_exports, _closed_world_is_identity_decorator, _flatten_closed_world_class_export_fields, _closed_world_module_block_assign_targets, _closed_world_shallow_lift_module, _mark_closed_world_function_object_exports, _merge_closed_world_reexports, _repair_closed_world_default_global_owners
 from pcc.frontends.python.pipeline_exports import instance_field_assignment_statements, _class_is_dataclass, _class_is_valueclass, _closed_world_is_node, _export_annotation_or_none, export_default_factory_name as _export_default_factory_name, _export_call_sig, _expand_local_valueclass_export_refs, _export_func_uses_unboxed_typed_int_abi, _export_literal_value_or_none, _export_method_symbol, _export_param_types, _export_return_ty_or_none, _export_return_type, _export_returns_none, _export_static_all_names, _export_static_literal_type, _normalise_export_annotation_text
 from pcc.frontends.python.pipeline_exports import export_dataclass_factory_default
+from pcc.frontends.python.pipeline_exports import _export_func_has_python_int_signature
 from pcc.frontends.python.pipeline_import_policy import dataclasses_field_binding_names
+from pcc.frontends.python.pipeline_closed_world import qualified_class_base_name, resolve_class_base_export, _closed_world_boxed_int_functions
+from pcc.frontends.python.pipeline_exports import annotation_module_bindings, _qualify_export_annotation_refs
 from pcc.frontends.python.pipeline_libpython import ast_field_value as _py_ast_field_value
 from pcc.frontends.python.pipeline_profile import profile_begin as _profile_begin, profile_counter as _profile_counter, profile_end as _profile_end
 
@@ -30,6 +36,7 @@ def build_closed_world_context(
     profile: Optional[dict] = None,
     lift_indices=None,
     merge_exports: bool = True,
+    allow_local_int_abi_proofs: bool | None = None,
 ):
     """Build the class/export context for closed-world Python compiles.
 
@@ -43,6 +50,7 @@ def build_closed_world_context(
     _profile_counter(profile, "build_closed_world_context_entered", len(src_paths))
     import_t = _profile_begin(profile)
     from pcc.frontends.python.py_ast import Assign as _Assign
+    from pcc.frontends.python.py_ast import assignment_storage_annotation
     from pcc.frontends.python.py_ast import Attr as _Attr
     from pcc.frontends.python.py_ast import BinOp as _BinOp
     from pcc.frontends.python.py_ast import BoolLit as _BoolLit
@@ -164,6 +172,8 @@ def build_closed_world_context(
         top_level_func_names = set()
         top_level_class_names = set()
         ast_body = _py_ast_field_value(ast_mod, "body", ())
+        raw_pointer_names = raw_pointer_annotation_names(ast_mod)
+        manual_pointer_abi = source_declares_freestanding_module(source) or source_declares_runtime_port_module(source)
         typing_metadata_bindings = {}
         typing_module_aliases = set()
         typing_metadata_exports = (
@@ -323,10 +333,26 @@ def build_closed_world_context(
                     if module_uses_raw_int_scaffold:
                         break
         module_box_int_abi = not module_uses_raw_int_scaffold
+        local_int_proofs_closed = (
+            len(module_names) == 1
+            if allow_local_int_abi_proofs is None
+            else allow_local_int_abi_proofs
+        )
+        bounded_int_functions = (
+            compute_bounded_int_abi_function_names(ast_mod)
+            if local_int_proofs_closed else []
+        )
+        freestanding_int_abi = manual_pointer_abi
         for stmt in ast_body:
             if _closed_world_is_node(stmt, _FuncDef):
-                function_box_int_abi = module_box_int_abi
-                if module_box_int_abi and _export_func_uses_unboxed_typed_int_abi(stmt):
+                function_box_int_abi = module_box_int_abi or _export_func_has_python_int_signature(stmt)
+                if (
+                    freestanding_int_abi
+                    or bool(verified_c_abi_export_symbol(ast_mod, stmt))
+                    or _export_func_uses_unboxed_typed_int_abi(
+                        stmt, _py_ast_field_value(stmt, "name", "") in bounded_int_functions
+                    )
+                ):
                     function_box_int_abi = False
                 docstring = None
                 stmt_body = _py_ast_field_value(stmt, "body", ())
@@ -347,17 +373,21 @@ def build_closed_world_context(
                     "kind": "function",
                     "owning_module": mod_name,
                     "export_name": stmt_name,
-                    "return_ty": _export_return_type(_export_return_ty_or_none(stmt)),
+                    "return_ty": _export_return_type(_export_return_ty_or_none(stmt), raw_pointer_names),
                     "returns_none": _export_returns_none(
                         _export_return_ty_or_none(stmt)
                     ),
-                    "param_types": _export_param_types(stmt_args),
+                    "param_types": _export_param_types(stmt_args, raw_pointer_names),
                     "call_sig": _export_call_sig(
                         stmt_args,
                         mod_name,
                         top_level_func_names,
+                        raw_pointer_names,
                     ),
                     "is_async": bool(_py_ast_field_value(stmt, "is_async", False)),
+                    "has_return_annotation": bool(_py_ast_field_value(stmt, "has_return_annotation", False)),
+                    "manual_pointer_abi": manual_pointer_abi,
+                    "manual_pointer_abi_symbol": verified_c_abi_export_symbol(ast_mod, stmt) if manual_pointer_abi else "",
                     "box_int_abi": function_box_int_abi,
                     "docstring": docstring,
                 }
@@ -372,6 +402,8 @@ def build_closed_world_context(
                 continue
 
             if _closed_world_is_node(stmt, _Assign):
+                if not _py_ast_field_value(stmt, "has_value", True):
+                    continue
                 stmt_targets = _py_ast_field_value(stmt, "targets", ())
                 if len(stmt_targets) != 1 or not _closed_world_is_node(
                     stmt_targets[0], _Name
@@ -585,7 +617,9 @@ def build_closed_world_context(
                 for declared_target in _py_ast_field_value(declared_stmt, "targets", ()):
                     if _closed_world_is_node(declared_target, _Name):
                         declared_name = _py_ast_field_value(declared_target, "ident", "")
-                        declared_field_annotations[declared_name] = declared_ann
+                        declared_field_annotations[declared_name] = assignment_storage_annotation(
+                            declared_ann, declared_stmt.value, declared_stmt.has_value,
+                        ) if not class_is_valueclass else declared_ann
             for base_expr in stmt_bases:
                 if not _closed_world_is_node(base_expr, _Name):
                     continue
@@ -601,7 +635,15 @@ def build_closed_world_context(
             methods = []
             for body_stmt in stmt_body:
                 if _closed_world_is_node(body_stmt, _Assign):
-                    body_value = _py_ast_field_value(body_stmt, "value", None)
+                    body_value = (
+                        _py_ast_field_value(body_stmt, "value", None)
+                        if _py_ast_field_value(body_stmt, "has_value", True)
+                        else None
+                    )
+                    if class_is_dataclass and body_value is not None:
+                        body_value = export_dataclass_factory_default(
+                            body_value, dataclasses_field_binding_names(ast_mod),
+                        )
                     for target in _py_ast_field_value(body_stmt, "targets", ()):
                         if (
                             _closed_world_is_node(target, _Name)
@@ -644,6 +686,11 @@ def build_closed_world_context(
                                 # unannotated constants as class attributes in
                                 # the exported constructor/schema too.
                                 continue
+                            if not class_is_valueclass:
+                                body_ann = assignment_storage_annotation(
+                                    body_ann, body_value if body_value is not None else body_stmt.value,
+                                    body_stmt.has_value,
+                                )
                             if target_ident not in field_names:
                                 field_names.append(target_ident)
                             declared_field_def = {
@@ -792,21 +839,33 @@ def build_closed_world_context(
                         ),
                         "kind": kind,
                         "return_ty": _export_return_type(
-                            _export_return_ty_or_none(body_stmt)
+                            _export_return_ty_or_none(body_stmt), raw_pointer_names
                         ),
                         "returns_none": _export_returns_none(
                             _export_return_ty_or_none(body_stmt)
                         ),
-                        "param_types": _export_param_types(body_stmt_args),
+                        "param_types": _export_param_types(body_stmt_args, raw_pointer_names),
                         "call_sig": _export_call_sig(
                             body_stmt_args,
                             mod_name,
                             top_level_func_names,
+                            raw_pointer_names,
                         ),
                         "is_async": bool(
                             _py_ast_field_value(body_stmt, "is_async", False)
                         ),
-                        "box_int_abi": module_box_int_abi,
+                        "has_return_annotation": bool(_py_ast_field_value(body_stmt, "has_return_annotation", False)),
+                        "manual_pointer_abi": manual_pointer_abi,
+                        "manual_pointer_abi_symbol": verified_c_abi_export_symbol(ast_mod, body_stmt) if manual_pointer_abi else "",
+                        "box_int_abi": (
+                            module_box_int_abi
+                            if class_is_valueclass
+                            else (
+                                (module_box_int_abi or _export_func_has_python_int_signature(body_stmt))
+                                and not freestanding_int_abi
+                                and not verified_c_abi_export_symbol(ast_mod, body_stmt)
+                            )
+                        ),
                     }
                 )
 
@@ -844,6 +903,21 @@ def build_closed_world_context(
                             "has_default": field["has_default"],
                         }
                     )
+                    field_default = field["default"]
+                    default_function = _py_ast_field_value(field_default, "func", None)
+                    is_factory_default = (
+                        _py_ast_field_value(default_function, "ident", "") == "__pcc_dataclass_factory_default__"
+                        and _py_ast_field_value(_py_ast_field_value(field_default, "span", None), "file", "") == "<pcc-dataclass-factory>"
+                    )
+                    if field_default is not None and not _closed_world_is_node(
+                        field_default, (_IntLit, _FloatLit, _StrLit, _BoolLit, _NoneLit),
+                    ) and not is_factory_default:
+                        # Imported calls use the published constructor's
+                        # captured signature, not a re-evaluated default AST.
+                        init_sig[-1]["default_native_global"] = {
+                            "owning_module": mod_name, "name": stmt_name,
+                            "attrs": (field["name"],),
+                        }
                     init_factory = _export_default_factory_name(field["default"])
                     if init_factory is not None:
                         init_sig[-1]["default_factory"] = init_factory
@@ -864,7 +938,7 @@ def build_closed_world_context(
                         "return_ty": ("none",),
                         "param_types": tuple(init_param_types),
                         "call_sig": tuple(init_sig),
-                        "box_int_abi": module_box_int_abi,
+                        "box_int_abi": module_box_int_abi if class_is_valueclass else not freestanding_int_abi,
                     }
                 )
 
@@ -925,6 +999,10 @@ def build_closed_world_context(
                 base_ident = _py_ast_field_value(base, "ident", "")
                 if _closed_world_is_node(base, _Name) and base_ident != "object":
                     base_names.append(base_ident)
+                elif _closed_world_is_node(base, _Attr):
+                    qualified_base = qualified_class_base_name(base, ast_body, stmt, mod_name, src)
+                    if qualified_base:
+                        base_names.append(qualified_base)
             if mod_name == "pcc.frontends.python.py_ast":
                 override_bases = _PY_AST_BASE_NAME_OVERRIDES.get(str(stmt_name))
                 if override_bases is not None and tuple(base_names) != tuple(
@@ -949,6 +1027,13 @@ def build_closed_world_context(
                 "valueclass": class_is_valueclass,
                 "box_int_abi": module_box_int_abi,
             }
+        # Only verified module imports can qualify an annotation prefix.
+        # Do this before sharing export dictionaries with re-exporters: their
+        # identically spelled aliases belong to a different lexical owner.
+        annotation_modules = annotation_module_bindings(ast_mod)
+        if annotation_modules:
+            for exported in exports.values():
+                _qualify_export_annotation_refs(exported, annotation_modules)
         _expand_local_valueclass_export_refs(mod_name, exports)
         native_exports[mod_name] = exports
         _profile_end(profile, "build_closed_world_context_module", module_t, mod_name)
@@ -961,6 +1046,20 @@ def build_closed_world_context(
             src_paths,
             native_exports,
         )
+        # Qualified aliases and re-exports use the same owning-module identity
+        # as class lowering, before inherited layouts traverse the graph.
+        for owner_module, owner_exports in native_exports.items():
+            for class_info in owner_exports.values():
+                if not isinstance(class_info, dict) or class_info.get("kind") != "class":
+                    continue
+                canonical_bases = []
+                for base_name in class_info.get("base_names", ()):
+                    resolved_base = resolve_class_base_export(native_exports, owner_module, base_name)
+                    if "." in base_name and resolved_base is not None:
+                        base_module, base_info = resolved_base
+                        base_name = base_info.get("owning_module", base_module) + "." + base_info["class_name"]
+                    canonical_bases.append(base_name)
+                class_info["base_names"] = tuple(canonical_bases)
         _flatten_closed_world_class_export_fields(native_exports)
         _repair_closed_world_default_global_owners(native_exports)
         _merge_l1_mixin_stack_methods(native_exports)
@@ -1228,6 +1327,9 @@ def compile_contextual_per_module_fallback_counts(
             codegen._native_module_exports = codegen_exports
             codegen._native_function_object_exports = (
                 _closed_world_function_object_exports(native_exports, mod_name)
+            )
+            codegen._native_boxed_int_functions = _closed_world_boxed_int_functions(
+                native_exports, mod_name,
             )
             ir_text = str(codegen.generate(typed_mod))
             out[mod_name] = count_py_cpy_fallback_calls(ir_text)

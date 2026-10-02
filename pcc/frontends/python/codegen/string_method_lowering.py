@@ -114,6 +114,137 @@ def _str_find_range_bounds(host, expr: Call):
 
 
 class StringMethodLoweringMixin:
+    def _encode_acquire_root_leases(self, roots, target, span, leases=(), start=0):
+        # Roots follow relocation during argument evaluation. Counted leases
+        # additionally stabilize each raw ABI address even if a callback or
+        # overlapping alias clears the object's legacy Boolean pin flag.
+        acquired_leases = list(leases)
+        for root in roots[start:]:
+            acquired = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_acquire"],
+                [self._as_gc_ptr(root[0])], name=self._fresh("encode.lease.acquire"),
+            )
+            failed = self.builder.icmp_signed("<", acquired, ir.Constant(_I64, 0))
+            error = self.current_function.append_basic_block(self._fresh("encode.lease.error"))
+            ready = self.current_function.append_basic_block(self._fresh("encode.lease.ready"))
+            self.builder.cbranch(failed, error, ready)
+            self.builder.position_at_end(error)
+            cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(acquired_leases))
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            overflow = self.current_function.append_basic_block(self._fresh("encode.lease.overflow"))
+            invalid = self.current_function.append_basic_block(self._fresh("encode.lease.invalid"))
+            self.builder.cbranch(
+                self.builder.icmp_signed("==", acquired, ir.Constant(_I64, -2)), overflow, invalid,
+            )
+            self.builder.position_at_end(overflow)
+            self._emit_builtin_exception_and_branch(
+                "OverflowError", "string encoding address lease overflow", span,
+            )
+            self.builder.position_at_end(invalid)
+            self._emit_builtin_exception_and_branch(
+                "RuntimeError", "string encoding requires a stable managed owner", span,
+            )
+            self.builder.position_at_end(ready)
+            acquired_leases.append((root, acquired))
+        cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(acquired_leases))
+        self._try_err_block = cleanup
+        self._cpy_operand_cleanup_block = cleanup
+        return acquired_leases
+
+    def _encode_capture_result_root(self, result, roots, label):
+        result_root = self._extern_enter_root(result, True, label)
+        # Preserve the earliest caller pin lease if a runtime result aliases an
+        # operand; never let our temporary acquisitions become the prior state.
+        prior = result_root[2]
+        for root in reversed(roots):
+            alias = self.builder.icmp_unsigned(
+                "==", self._extern_load_root(result_root), self._extern_load_root(root)
+            )
+            prior = self.builder.select(alias, root[2], prior)
+        return (result_root[0], True, prior)
+
+    def _emit_str_encode_call(self, expr: Call, recv: ir.Value):
+        # Source-order evaluation and conversion are separate. Reloadable roots
+        # retain borrowed values and preserve pre-existing pin leases when an
+        # argument runs user code, mutates the receiver binding, or aliases an
+        # earlier argument. The shared root helper owns exactly one transfer.
+        receiver = self._extern_enter_root(
+            recv, self._owned_release_needed(recv, expr.func.obj), "encode.receiver"
+        )
+        roots = [receiver]
+        encoding_root = None
+        errors_root = None
+        operands = []
+        for index, operand in enumerate(expr.args):
+            operands.append(("encoding" if index == 0 else "errors", operand))
+        operands.extend(expr.kwargs)
+        binding_error = ""
+        if len(expr.args) > 2:
+            binding_error = "encode() takes at most 2 positional arguments"
+        previous = self._current_try_err_block()
+        previous_cpy = getattr(self, "_cpy_operand_cleanup_block", None)
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        leases = []
+        try:
+            for key, operand in operands:
+                cleanup = self._extern_cleanup_block(tuple(roots), target)
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                value = self._emit_expr_with_cpy_operand_cleanup(
+                    operand, (), as_pcc_object=True,
+                )
+                root = self._extern_enter_root(
+                    value, self._owned_release_needed(value, operand), "encode.argument"
+                )
+                roots.append(root)
+                if key == "encoding":
+                    if encoding_root is not None:
+                        binding_error = "encode() got multiple values for argument 'encoding'"
+                    encoding_root = root
+                elif key == "errors":
+                    if errors_root is not None:
+                        binding_error = "encode() got multiple values for argument 'errors'"
+                    errors_root = root
+                else:
+                    binding_error = "encode() got an unexpected keyword argument '" + key + "'"
+            self._try_err_block = self._extern_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if binding_error:
+                message = self._pooled_cstr_ptr(binding_error, ".encode.binding_error")
+                exc = self.builder.call(
+                    self.runtime["py_exc_new"], [ir.Constant(_I64, 3), message],
+                    name=self._fresh("encode.binding.exc"),
+                )
+                self.builder.call(self.runtime["py_raise"], [exc])
+                self._gc_release(exc)
+                self._emit_post_call_err_check(expr.span)
+                self._extern_release_roots(tuple(roots))
+                return self._emit_none_literal()
+            leases = self._encode_acquire_root_leases(roots, target, expr.span)
+            encoding = ir.Constant(_CSTR, None)
+            errors = ir.Constant(_CSTR, None)
+            if encoding_root is not None:
+                encoding = self._extern_load_root(encoding_root)
+            if errors_root is not None:
+                errors = self._extern_load_root(errors_root)
+            result = self.builder.call(
+                self.runtime["py_str_encode_with_encoding"],
+                [self._extern_load_root(receiver), encoding, errors],
+                name=self._fresh("str.encode"),
+            )
+            self._emit_post_call_err_check(expr.span)
+            result_root = self._encode_capture_result_root(result, roots, "encode.result")
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = previous_cpy
+        release_failed = self._extern_release_foreign_leases(tuple(leases))
+        self._extern_check_lease_cleanup(release_failed, tuple(roots) + (result_root,))
+        self._extern_release_roots(tuple(roots))
+        result = self._extern_take_root(result_root)
+        self._note_owned_object_value(result)
+        return result
+
     def _emit_bytes_decode_call(self, recv, receiver_expr, operands, span):
         if not self._owned_release_needed(recv, receiver_expr):
             recv = self._gc_retain(recv, name=self._fresh("decode.receiver.retain"))
@@ -270,6 +401,8 @@ class StringMethodLoweringMixin:
         return None
 
     def _emit_str_method_with_receiver(self, expr: Call, recv: ir.Value, dynamic: bool):
+        if expr.func.name == "encode":
+            return self._emit_str_encode_call(expr, recv)
         receiver_expr = expr.func.obj
         owned = self._owned_release_needed(recv, receiver_expr)
         # Borrowed locals need an independent owner when a later argument can
@@ -339,6 +472,11 @@ class StringMethodLoweringMixin:
         assert isinstance(attr, Attr)
         if attr.name not in _STR_METHOD_NATIVE:
             return None
+        if attr.name == "encode" and (
+            self._has_starred_unpack(expr.args)
+            or any(key == "**" for key, _value in expr.kwargs)
+        ):
+            return None
         if isinstance(attr.obj.ty, (BytesType, ByteArrayType)):
             # A statically bytes/bytearray receiver must NOT be forced onto the
             # StrType fast path: py_str_upper on a bytearray reads the raw bytes
@@ -346,11 +484,11 @@ class StringMethodLoweringMixin:
             # so the precise bytes branch (py_bytes_*) in
             # method_call_expression_lowering handles it.
             return None
-        # The only kwarg we recognise on a str method today is
-        # ``splitlines(keepends=…)``. Everything else is routed via
-        # the caller's fallback.
+        # Encode owns encoding/errors binding, including invalid keywords.
+        # Other string helpers keep their established keyword contracts.
         if expr.kwargs and not (
-            attr.name == "splitlines" and self._kwargs_are_only_keepends(expr.kwargs)
+            (attr.name == "splitlines" and self._kwargs_are_only_keepends(expr.kwargs))
+            or attr.name == "encode"
         ):
             return None
         # Re-use the StrType fast path by recovering the StrType
@@ -490,53 +628,6 @@ class StringMethodLoweringMixin:
                 i64v,
                 ir.Constant(_I64, 0),
                 name=self._fresh(f"dyn.str.{name}.i1"),
-            )
-        if (
-            name == "encode"
-            and len(expr.args) == 1
-            and isinstance(expr.args[0], StrLit)
-            and expr.args[0].value in ("ascii", "ASCII", "us-ascii")
-        ):
-            encoded = self.builder.call(
-                self.runtime["py_str_ascii_encode"],
-                [recv],
-                name=self._fresh("dyn.str.encode.ascii"),
-            )
-            # The encoder raises when a code point is out of range; emit the
-            # post-call error check so a surrounding try/except sees it
-            # (mirrors index/rindex above). Without it the NULL return became
-            # empty bytes and the failure was silent.
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return encoded
-        if (
-            name == "encode"
-            and len(expr.args) == 1
-            and isinstance(expr.args[0], StrLit)
-            and expr.args[0].value in ("latin-1", "latin1")
-        ):
-            encoded = self.builder.call(
-                self.runtime["py_str_latin1_encode"],
-                [recv],
-                name=self._fresh("dyn.str.encode.latin1"),
-            )
-            # The encoder raises when a code point is out of range; emit the
-            # post-call error check so a surrounding try/except sees it
-            # (mirrors index/rindex above). Without it the NULL return became
-            # empty bytes and the failure was silent.
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return encoded
-        if name == "encode" and (
-            len(expr.args) == 0
-            or (
-                len(expr.args) == 1
-                and isinstance(expr.args[0], StrLit)
-                and expr.args[0].value in ("utf-8", "utf8", "UTF-8", "UTF8")
-            )
-        ):
-            return self.builder.call(
-                self.runtime["py_str_utf8_encode"],
-                [recv],
-                name=self._fresh("dyn.str.encode.utf8"),
             )
         if name == "splitlines" and len(expr.args) <= 1:
             keepends = self._extract_splitlines_keepends(expr)
@@ -935,9 +1026,14 @@ class StringMethodLoweringMixin:
         """Dispatch selected ``str`` methods via the pcc str runtime."""
         attr = expr.func
         assert isinstance(attr, Attr)
+        if attr.name == "encode" and (
+            self._has_starred_unpack(expr.args)
+            or any(key == "**" for key, _value in expr.kwargs)
+        ):
+            return None
         if expr.kwargs and not (
             (attr.name == "splitlines" and self._kwargs_are_only_keepends(expr.kwargs))
-            or attr.name == "format"
+            or attr.name in ("format", "encode")
         ):
             return None
         name = attr.name
@@ -1072,51 +1168,6 @@ class StringMethodLoweringMixin:
                 i64v,
                 ir.Constant(_I64, 0),
                 name=self._fresh(f"str.{name}.i1"),
-            )
-        if (
-            name == "encode"
-            and len(expr.args) == 1
-            and isinstance(expr.args[0], StrLit)
-            and expr.args[0].value in ("ascii", "ASCII", "us-ascii")
-        ):
-            encoded = self.builder.call(
-                self.runtime["py_str_ascii_encode"],
-                [recv],
-                name=self._fresh("str.encode.ascii"),
-            )
-            # The encoder raises when a code point is out of range; emit the
-            # post-call error check so a surrounding try/except sees it
-            # (mirrors index/rindex above). Without it the NULL return became
-            # empty bytes and the failure was silent.
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return encoded
-        if (
-            name == "encode"
-            and len(expr.args) == 1
-            and isinstance(expr.args[0], StrLit)
-            and expr.args[0].value in ("latin-1", "latin1")
-        ):
-            encoded = self.builder.call(
-                self.runtime["py_str_latin1_encode"],
-                [recv],
-                name=self._fresh("str.encode.latin1"),
-            )
-            # See the dyn gate above: the encoder raises out of range, and
-            # without this check the NULL return became empty bytes.
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return encoded
-        if name == "encode" and (
-            len(expr.args) == 0
-            or (
-                len(expr.args) == 1
-                and isinstance(expr.args[0], StrLit)
-                and expr.args[0].value in ("utf-8", "utf8", "UTF-8", "UTF8")
-            )
-        ):
-            return self.builder.call(
-                self.runtime["py_str_utf8_encode"],
-                [recv],
-                name=self._fresh("str.encode.utf8"),
             )
         if name == "splitlines" and len(expr.args) <= 1:
             keepends = self._extract_splitlines_keepends(expr)

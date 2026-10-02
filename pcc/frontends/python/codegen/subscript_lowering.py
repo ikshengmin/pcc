@@ -218,6 +218,32 @@ class SubscriptLoweringMixin:
         )
 
     def _emit_index_expr_as_i64(self, expr: Expr) -> ir.Value:
+        # This helper's callers are exact list/tuple get/setitem. Their index
+        # narrowing requires IndexError, without rewriting an OverflowError
+        # raised by __index__ itself. Keep machine/scalar and CPython paths
+        # below; native managed operands must originate in an existing caller
+        # root or a producer that publishes directly into its registered sink.
+        cpython = self._expr_looks_cpython(expr)
+        if isinstance(expr, Call) and self._callable_expr_returns_cpython(expr.func):
+            cpython = True
+        if not isinstance(expr.ty, (IntType, BoolType)) and not cpython:
+            root = self._emit_slot_call_operand(expr, "index.receiver")
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((root,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                index = self.builder.call(
+                    self.runtime["py_obj_index_i64_slots"], [self._as_gc_ptr(root)],
+                    name=self._fresh("index"),
+                )
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots((root,))
+                return index
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         value = self._emit_expr(expr)
         if value in getattr(self, "_cpy_values", ()):
             self._guard_cpy_value_not_null(value)

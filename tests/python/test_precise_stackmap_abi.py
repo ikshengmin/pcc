@@ -1092,8 +1092,8 @@ done:
     assert "_module_top:" in assembly
 
 
-def _elf_stackmap_object() -> elf_x86_64.ElfObject:
-    value = _map(ARCH_X86_64, "_start")
+def _elf_stackmap_object(arch: int = ARCH_X86_64) -> elf_x86_64.ElfObject:
+    value = _map(arch, "_start")
     payload = encode_stack_map(value)
     address_offset = function_address_offsets(payload)[0]
     return elf_x86_64.ElfObject(
@@ -1114,7 +1114,7 @@ def _elf_stackmap_object() -> elf_x86_64.ElfObject:
                 relocations=(elf_x86_64.ElfRelocation(
                     address_offset,
                     1,
-                    elf_x86_64.R_X86_64_64,
+                    257 if arch == ARCH_AARCH64 else elf_x86_64.R_X86_64_64,
                 ),),
             ),
         ),
@@ -1129,6 +1129,7 @@ def _elf_stackmap_object() -> elf_x86_64.ElfObject:
                 elf_x86_64.STT_FUNC,
             ),
         ),
+        machine=elf_x86_64.EM_AARCH64 if arch == ARCH_AARCH64 else elf_x86_64.EM_X86_64,
     )
 
 
@@ -1155,6 +1156,180 @@ def test_owned_elf_stackmap_rejects_missing_function_relocation():
             obj,
             sections=(obj.sections[0], replace(stackmap, relocations=())),
         ))
+
+
+@pytest.mark.parametrize("arch", [ARCH_AARCH64, ARCH_X86_64])
+def test_owned_elf_stackmap_validation_never_materializes_maps(arch, monkeypatch):
+    """Required red: every old ELF boundary constructs decoded dataclasses."""
+    obj = _elf_stackmap_object(arch)
+
+    def reject_materialization(*args, **kwargs):
+        pytest.fail("ELF validation must not materialize a decoded stack map")
+
+    for name in (
+        "StackMapLocation", "SafepointRecord", "FunctionStackMap", "PreciseStackMap",
+    ):
+        monkeypatch.setattr(wire_stackmaps, name, reject_materialization)
+    # Reconstruct to cover ElfObject.__post_init__, then the independently
+    # validating serializer, parser, and final-image publication boundaries.
+    obj = replace(obj)
+    encoded = elf_x86_64.emit_relocatable(obj)
+    parsed = elf_x86_64.parse_relocatable(encoded)
+    assert parsed == obj
+    image = elf_x86_64.link_static_executable([parsed], entry="_start")
+    assert elf_x86_64.parse_static_executable(image)["entry"] != 0
+
+
+def _elf_stackmap_payload_cases(payload: bytes):
+    """Single-fault corpus plus accepted edge cases for the old/new boundary."""
+    record = HEADER_SIZE + FUNCTION_SIZE
+    _count, _functions, table, _locations = wire_stackmaps._scan_stack_map_payload(payload)
+    cases = [("valid", payload, True)]
+
+    def changed(name, offset, format_, value, accepted=False):
+        mutated = bytearray(payload)
+        struct.pack_into(format_, mutated, offset, value)
+        cases.append((name, bytes(mutated), accepted))
+
+    changed("magic", 0, "<B", 0)
+    changed("version", 8, "<H", 1)
+    changed("unknown_arch", 10, "<B", 255)
+    changed("wrong_arch", 10, "<B", ARCH_X86_64 if payload[10] == ARCH_AARCH64 else ARCH_AARCH64)
+    changed("pointer_width", 11, "<B", 4)
+    changed("function_count", 12, "<I", 2)
+    changed("location_table_count", 16, "<I", 0xFFFFFFFF)
+    # The existing wire ABI deliberately ignores this header field and
+    # accepts uint32 function flags. The fast validator must agree exactly.
+    changed("reserved_header", 20, "<I", 1, True)
+    changed("function_flags", HEADER_SIZE + 28, "<I", 0xFFFFFFFF, True)
+    changed("function_id_zero", HEADER_SIZE, "<Q", 0)
+    changed("function_id_mismatch", HEADER_SIZE, "<Q", 1 << 63)
+    changed("nonzero_relocatable_address", HEADER_SIZE + 8, "<Q", 1)
+    changed("code_size_zero", HEADER_SIZE + 16, "<I", 0)
+    changed("frame_unaligned", HEADER_SIZE + 20, "<I", 1)
+    changed("frame_too_small", HEADER_SIZE + 20, "<I", 0)
+    changed("safepoint_id_zero", record, "<Q", 0)
+    changed("high_safepoint_id", record, "<Q", (1 << 64) - 1, True)
+    changed("duplicate_safepoint_id", record + RECORD_SIZE, "<Q", struct.unpack_from("<Q", payload, record)[0])
+    changed("pc_outside_function", record + 8, "<I", 48)
+    changed("pc_unordered", record + RECORD_SIZE + 8, "<I", 4)
+    changed("reserved_count", record + 22, "<H", 1)
+    changed("reserved_short", record + 26, "<H", 1)
+    changed("safepoint_kind", record + 24, "<B", 255)
+    changed("record_flags", record + 25, "<B", 128)
+    changed("exception_flag_mismatch", record + 12, "<I", 8)
+    changed("exception_outside_function", record + RECORD_SIZE + 12, "<I", 48)
+    changed("continuation_missing", record + 2 * RECORD_SIZE + 16, "<I", 0)
+    changed("suspended_flag_missing", record + 2 * RECORD_SIZE + 25, "<B", 0)
+    changed("location_index", record + 28, "<I", 0xFFFFFFFF)
+    changed("location_count", record + 20, "<H", 0xFFFF)
+    changed("location_kind", table, "<B", 255)
+    changed("location_flags", table + 1, "<B", 128)
+    changed("raw_pointer", table + 1, "<B", 0)
+    changed("location_size", table + 2, "<H", 4)
+    changed("location_register", table + 4, "<H", 0xFFFF)
+    changed("location_base", table + 6, "<h", -2)
+    changed("positive_location_offset", table + 8, "<i", 8)
+    changed("location_offset_int32_min", table + 8, "<i", -(1 << 31))
+    changed("location_offset_unaligned", table + 8, "<i", -7)
+    changed("location_extent", table + 12, "<I", 4)
+    for name, end in (
+        ("short_header", 1),
+        ("short_function", HEADER_SIZE + 1),
+        ("short_record", record + RECORD_SIZE - 1),
+        ("short_locations", len(payload) - 1),
+    ):
+        cases.append((name, payload[:end], False))
+    cases.append(("trailing_bytes", payload + b"x", False))
+    return cases
+
+
+@pytest.mark.parametrize("arch", [ARCH_AARCH64, ARCH_X86_64])
+def test_owned_elf_stackmap_wire_validation_matches_decoded_boundary(arch, monkeypatch):
+    obj = _elf_stackmap_object(arch)
+    stackmap = obj.sections[1]
+
+    def outcome(payload, validator):
+        with monkeypatch.context() as context:
+            context.setattr(elf_x86_64, "validate_stack_map_payload", validator)
+            try:
+                replacement = replace(stackmap, data=payload)
+                candidate = replace(obj, sections=(obj.sections[0], replacement))
+                encoded = elf_x86_64.emit_relocatable(candidate)
+                parsed = elf_x86_64.parse_relocatable(encoded)
+                image = elf_x86_64.link_static_executable([parsed], entry="_start")
+            except elf_x86_64.ElfError as error:
+                return ("error", str(error))
+            return ("accepted", encoded, image)
+
+    for name, payload, accepted in _elf_stackmap_payload_cases(stackmap.data):
+        reference = outcome(payload, decode_stack_map)
+        actual = outcome(payload, validate_stack_map_payload)
+        assert actual == reference, name
+        assert (actual[0] == "accepted") == accepted, (name, actual)
+
+
+@pytest.mark.parametrize("arch", [ARCH_AARCH64, ARCH_X86_64])
+def test_owned_elf_stackmap_wire_validation_keeps_relocation_contract(arch, monkeypatch):
+    obj = _elf_stackmap_object(arch)
+    section = obj.sections[1]
+    relocation = section.relocations[0]
+    mutations = (
+        ("missing", replace(section, relocations=()), obj.symbols),
+        ("duplicate", replace(section, relocations=(relocation, relocation)), obj.symbols),
+        ("extra", replace(section, relocations=(relocation, replace(relocation, offset=0))), obj.symbols),
+        ("wrong_offset", replace(section, relocations=(replace(relocation, offset=0),)), obj.symbols),
+        ("addend", replace(section, relocations=(replace(relocation, addend=1),)), obj.symbols),
+        ("wrong_type", replace(section, relocations=(replace(relocation, type=261 if arch == ARCH_AARCH64 else elf_x86_64.R_X86_64_PC32),)), obj.symbols),
+        ("absolute_target", section, (obj.symbols[0], replace(obj.symbols[1], section_index=elf_x86_64.SHN_ABS))),
+        ("undefined_target", section, (obj.symbols[0], replace(obj.symbols[1], section_index=elf_x86_64.SHN_UNDEF))),
+        ("symbol_identity", section, (obj.symbols[0], replace(obj.symbols[1], name="different"))),
+    )
+    for name, changed, symbols in mutations:
+        errors = []
+        for validator in (decode_stack_map, validate_stack_map_payload):
+            with monkeypatch.context() as context:
+                context.setattr(elf_x86_64, "validate_stack_map_payload", validator)
+                with pytest.raises(elf_x86_64.ElfError) as caught:
+                    replace(obj, sections=(obj.sections[0], changed), symbols=symbols)
+                errors.append(str(caught.value))
+        assert errors[0] == errors[1], name
+
+
+@pytest.mark.parametrize("arch", [ARCH_AARCH64, ARCH_X86_64])
+def test_owned_elf_stackmap_function_identity_is_unsigned(arch, monkeypatch):
+    obj = _elf_stackmap_object(arch)
+    section = obj.sections[1]
+    payload = bytearray(section.data)
+    high_id = (1 << 64) - 1
+    struct.pack_into("<Q", payload, HEADER_SIZE, high_id)
+    monkeypatch.setattr(elf_x86_64, "function_id", lambda _name: high_id)
+    changed = replace(obj, sections=(obj.sections[0], replace(section, data=bytes(payload))))
+    assert elf_x86_64.parse_relocatable(elf_x86_64.emit_relocatable(changed)) == changed
+
+
+@pytest.mark.parametrize("arch", [ARCH_AARCH64, ARCH_X86_64])
+def test_owned_elf_final_stackmap_wire_validation_matches_decode(arch, monkeypatch):
+    obj = _elf_stackmap_object(arch)
+    stackmap = obj.sections[1]
+    for name, payload, _accepted in _elf_stackmap_payload_cases(stackmap.data):
+        # Bypass only the earlier object boundary so corrupt input must reach
+        # final-image publication. This is a test-only injected bad object.
+        candidate = replace(obj)
+        object.__setattr__(candidate, "sections", (
+            obj.sections[0], replace(stackmap, data=payload),
+        ))
+        outcomes = []
+        for validator in (decode_stack_map, validate_stack_map_payload):
+            with monkeypatch.context() as context:
+                context.setattr(elf_x86_64, "validate_stack_map_payload", validator)
+                try:
+                    image = elf_x86_64.link_static_executable([candidate], entry="_start")
+                except elf_x86_64.ElfError as error:
+                    outcomes.append(("error", str(error)))
+                else:
+                    outcomes.append(("accepted", image))
+        assert outcomes[0] == outcomes[1], name
 
 
 def test_stable_id_prefix_streaming_matches_one_shot():

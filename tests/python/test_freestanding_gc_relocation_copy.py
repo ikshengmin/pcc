@@ -30,6 +30,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_relocate_copy",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_is_address_pinned",
     "free",
     "memmove",
     "pcc_gc_alloc",

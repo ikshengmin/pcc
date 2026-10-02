@@ -354,6 +354,45 @@ void      pcc_gc_safepoint(void);
 int64_t   pcc_gc_collect(int32_t reason);
 void      pcc_gc_pin(PyObject *o);
 void      pcc_gc_unpin(PyObject *o);
+/* Foreign-address leases require an already traced, owning slot containing a
+ * compiler-proven initialized managed value. Acquire locks before reloading;
+ * tokens: 0 intrinsic no-op, 1 counted node, 2 proven nonmoving/mode guard.
+ * Negative acquire: -1 invalid provenance/transition, -2 counter overflow.
+ * Release exactly once with its token, after all raw-pointer uses, before
+ * dropping the root. Token 0 is always a no-op. Return 0 on success, -1 bad
+ * token/slot, -3 underflow/invariant failure. Neither API touches a pending
+ * Python exception. The collector predicate requires graph lock or STW. */
+int64_t   pcc_gc_foreign_lease_acquire(PyObject **slot);
+int64_t   pcc_gc_foreign_lease_release(PyObject **slot, int64_t acquired);
+/* Slot-to-slot runtime-entry handoff. Destination is an already registered
+ * owning root. Source is an owning root, or (copy_lease only) a traced owning
+ * heap slot whose container/payload already has a caller-owned address lease.
+ * Both slot addresses remain valid; destination must be empty and distinct.
+ * The simple copy entries require no caller-owned outer graph transaction;
+ * use prepare_locked/finish below when lookup already holds that lock.
+ * copy_lease reloads source under the graph lock, retains into destination,
+ * and returns an ordinary foreign-lease token (0/1/2) owned by destination.
+ * Release that token through destination before dropping its root.
+ * move transfers one owner and any existing lease to destination, clears
+ * source, and returns 0. It changes no reference or lease count.
+ * Negative results leave owners unchanged: -1 invalid slots, -2 overflow,
+ * -3 lease rollback invariant failure, -4 nonempty destination/store failure.
+ * Neither entry consumes nor replaces a pending Python exception. */
+int64_t   pcc_gc_root_copy_lease(PyObject **destination, PyObject **source);
+int64_t   pcc_gc_root_move(PyObject **destination, PyObject **source);
+/* As copy_lease, but source is an authoritative registered BORROWED root or
+ * traced borrowed heap metadata with a caller-leased container/payload.
+ * Healing it must not retain or release a source-slot reference. Its actual
+ * owner remains live for the call. Destination gains one owner and lease. */
+int64_t   pcc_gc_root_copy_borrowed_lease(PyObject **destination, PyObject **source);
+/* Split form for atomic lookup/selection callers already holding graph lock.
+ * Runtime configuration is complete; plan256 is writable 256-byte storage.
+ * Prepare initializes it and never runs deferred refcount/log work. Always
+ * finish it after the OUTERMOST unlock, on success and failure alike. */
+int64_t   pcc_gc_root_copy_lease_prepare_locked(PyObject **destination,
+    PyObject **source, int64_t source_borrowed, void *plan256);
+void      pcc_gc_root_copy_lease_finish(void *plan256);
+int64_t   pcc_gc_object_is_address_pinned(PyObject *obj);
 /* Transfer one owned reference from a stable pointer slot to the return value.
  * The caller has acquired one pin and saved the pre-acquisition pin bit in
  * prior_pin (0 or PY_FLAG_GC_PINNED), and has completed all parking operations.
@@ -573,7 +612,9 @@ int64_t   pcc_os_heap_capacity_bytes(void);
 PyObject *py_enumerate_list(PyObject *iterable, int64_t start);
 /* int.to_bytes / int.from_bytes (unsigned; CPython-matching errors). */
 PyObject *py_int_to_bytes(PyObject *v, int64_t length, PyObject *byteorder);
+PyObject *py_int_to_bytes_args(PyObject *v, PyObject *length, PyObject *byteorder, PyObject *signed_value);
 PyObject *py_int_from_bytes(PyObject *bytes_obj, PyObject *byteorder);
+PyObject *py_int_from_bytes_signed(PyObject *bytes_obj, PyObject *byteorder, int64_t is_signed);
 void      pcc_gc_telemetry_reset(void);
 int64_t   pcc_gc_step(int64_t budget);
 int64_t   pcc_gc_backend4_verify_no_old_addresses(void);
@@ -870,6 +911,7 @@ PyObject *py_builtin_callable(PyObject *o);
 PyObject *py_int_from_cstr(const char *s, int base);
 PyObject *py_int_from_cstr_or_raise(const char *s, int base);  /* ValueError on invalid */
 PyObject *py_obj_as_int_object(PyObject *o, int base);  /* int(o[,base]) -> object */
+PyObject *py_obj_as_int_object_args(PyObject *o, PyObject *base); /* NULL base means omitted */
 
 /* ---- Float ------------------------------------------------------------- */
 PyObject *py_float_from_f64(double v);
@@ -970,6 +1012,7 @@ int64_t   py_str_ord_at_i64(PyObject *s, int64_t i); /* codepoint at index, -1 i
 int64_t   py_str_byte_at_i64(PyObject *s, int64_t i); /* raw UTF-8 byte, -1 invalid */
 PyObject *py_str_latin1_encode(PyObject *s);
 PyObject *py_str_utf8_encode(PyObject *s);
+PyObject *py_str_encode_with_encoding(PyObject *s, PyObject *encoding, PyObject *errors);
 PyObject *py_str_byte_slice_i64(PyObject *s, int64_t lo, int64_t hi);
 PyObject *py_str_concat(PyObject *a, PyObject *b);
 PyObject *py_str_repeat(PyObject *s, PyObject *n);
@@ -1099,6 +1142,10 @@ PyObject *py_set_new(void);
 PyObject *py_set_from_iterable(PyObject *src);
 void      py_set_add(PyObject *s, PyObject *item);
 void      py_set_update(PyObject *dst, PyObject *src);
+/* Inputs and empty output are authoritative caller-owned, traced slots. */
+int64_t   py_set_call_method_slots(PyObject **receiver_slot, int64_t method,
+                                  PyObject **args_slot, PyObject **kwargs_slot,
+                                  PyObject **result_slot);
 PyObject *py_set_intersection(PyObject *a, PyObject *b);
 PyObject *py_set_difference(PyObject *a, PyObject *b);
 PyObject *py_set_symmetric_difference(PyObject *a, PyObject *b);
@@ -1124,6 +1171,12 @@ int64_t   py_set_len(PyObject *s);
 
 /* ---- Generic object ops ----------------------------------------------- */
 PyObject *py_obj_call(PyObject *callable, PyObject *args_tuple, PyObject *kwargs_dict);
+/* Internal compatibility kernel after slot-based special lookup. Caller
+ * holds input address leases through the call and immediately publishes the
+ * owned result into an already registered empty slot. These raw signatures
+ * are not independently concurrent-safe public entry or return boundaries. */
+PyObject *py_obj_call_default(PyObject *callable, PyObject *args_tuple, PyObject *kwargs_dict);
+PyObject *py_obj_call_default_sync(PyObject *callable, PyObject *args_tuple, PyObject *kwargs_dict);
 /* Ordinary callbacks execute compiler-lifted callees to completion. Explicit
  * continuation callers defer one semantic callee; transparent adapters forward
  * that request only to their actual target, not to unrelated body callbacks. */
@@ -1231,6 +1284,13 @@ int64_t   py_obj_ge(PyObject *a, PyObject *b);
 int64_t   py_obj_hash(PyObject *o);
 int64_t   py_obj_index_i64(PyObject *o);
 int64_t   py_index_i64_checked(PyObject *o);
+/* Authoritative registered owning caller roots, never addresses of raw copies.
+ * index_slots publishes one NEW integer in a distinct empty output; 0/-1 status.
+ * checked_slots returns the scalar with TLS exception on failure/overflow. */
+int64_t   py_obj_index_slots(PyObject **receiver_slot, PyObject **result_slot);
+/* Container narrowing raises IndexError; __index__ callback errors survive. */
+int64_t   py_obj_index_i64_slots(PyObject **receiver_slot);
+int64_t   py_index_i64_checked_slots(PyObject **receiver_slot);
 int64_t   py_slice_index_i64(PyObject *o, int64_t default_value);
 PyObject *py_obj_repr(PyObject *o);
 PyObject *py_obj_ascii(PyObject *o);
@@ -1323,6 +1383,35 @@ PyObject *py_func_call_kwargs(
 PyObject *py_functools_partial(PyObject *fn, PyObject *bound_args);
 PyObject *py_functools_partial_kw(PyObject *fn, PyObject *bound_args, PyObject *bound_kwargs);
 PyObject *py_instance_bind_method(PyObject *method, PyObject *self, const char *name);
+/* Owned override result; NULL/no error means use default type construction. */
+PyObject *py_class_metaclass_call(PyObject *cls, PyObject *args, PyObject *kwargs);
+/* Authoritative slot call entry: every non-NULL source/output slot is an
+ * already registered owning root and output starts empty. Status 0 is
+ * success/absence; negative is failure. handled is 0 only for absent special
+ * lookup and 1 for selection or error, independent of an old TLS exception.
+ * Success transfers one owned reference into result_slot before cleanup.
+ * NULL argument slot pointers denote empty positional/keyword arguments. */
+int64_t py_obj_special_call_slots(PyObject **receiver_slot, const char *name,
+    PyObject **args_slot, PyObject **kwargs_slot, PyObject **result_slot,
+    int64_t *handled);
+int64_t py_obj_call_slots(PyObject **callable_slot, PyObject **args_slot,
+    PyObject **kwargs_slot, PyObject **result_slot);
+int64_t py_obj_call_slots_sync(PyObject **callable_slot, PyObject **args_slot,
+    PyObject **kwargs_slot, PyObject **result_slot);
+/* Foreign-base initializers consume authoritative owning root addresses.
+ * from_class_slot records super(From, receiver), including implicit super.
+ * Return 0 on success, negative on failure; initialization returns None. */
+int64_t py_builtin_super_validate_slots(PyObject **receiver_slot,
+                                       PyObject **from_class_slot);
+int64_t py_dict_subclass_init_slots(PyObject **receiver_slot,
+    PyObject **from_class_slot, PyObject **args_slot, PyObject **kwargs_slot);
+int64_t py_exception_subclass_init_slots(PyObject **receiver_slot,
+    PyObject **from_class_slot, PyObject **args_slot, PyObject **kwargs_slot);
+int64_t py_dict_set_slots(PyObject **dict_slot, PyObject **key_slot,
+    PyObject **value_slot);
+int64_t py_dict_update_slots(PyObject **dict_slot, PyObject **source_slot);
+int64_t py_dict_setdefault_slots(PyObject **dict_slot, PyObject **key_slot,
+    PyObject **default_slot, PyObject **result_slot);
 PyObject *py_property_new(PyObject *fget, PyObject *fset, PyObject *fdel);
 PyObject *py_classmethod_new(PyObject *func);
 PyObject *py_staticmethod_new(PyObject *func);
@@ -1617,6 +1706,11 @@ PyObject *py_time_time_ns(void);
 PyObject *py_func_display_name(PyObject *fn);
 /* f(**a, **b) keyword merge with CPython's duplicate-key TypeError. */
 PyObject *py_call_merge_kwargs_unique(PyObject *base_kwargs, PyObject *star_kwargs);
+/* Ordinary calls supply the live callable for qualified duplicate-key errors.
+ * Inputs are borrowed; result is NEW or NULL with an exception. Non-string
+ * keys survive merging and are validated only after call operands finish. */
+PyObject *py_call_merge_kwargs_for_call(PyObject *base_kwargs, PyObject *star_kwargs,
+                                      PyObject *callable_obj);
 /* print(..., file=<object>): writes through file.write; -1 on error. */
 int64_t   py_print_to_file(PyObject *file, PyObject *args_tuple, PyObject *sep,
                            PyObject *end, PyObject *flush);
@@ -1819,6 +1913,15 @@ PyObject *py_exc_new(int64_t type_tag, const char *msg);
  * borrowed; the exception stores its own reference. */
 PyObject *py_exc_new_with_value(int64_t type_tag, PyObject *value);
 
+/* Owned UnicodeEncodeError, with original args and independent attributes. */
+PyObject *py_unicode_encode_error_new(PyObject *args);
+PyObject *py_unicode_encode_error_normalize(PyObject *value);
+void py_unicode_encode_error(PyObject *object, const char *encoding,
+                             int64_t start, int64_t end, const char *reason);
+PyObject *py_unicode_error_get_field(PyObject *error, int64_t index);
+int64_t py_unicode_error_set_field(PyObject *error, int64_t index, PyObject *value);
+PyObject *py_unicode_error_format(PyObject *error, int64_t repr_mode);
+
 /* Allocate a user-defined exception using a pre-existing class object.
  * `cls` must be a PyClassObject*; `msg` may be NULL. Returns a new
  * owned reference. */
@@ -1835,10 +1938,11 @@ void py_exc_set_cause(PyObject *exc, PyObject *cause);
 /* Implicit context chain — used by codegen when `raise Y` fires inside
  * an active `except` clause. `exc.__context__ = context`. */
 void py_exc_set_context(PyObject *exc, PyObject *context);
+void py_exc_set_implicit_context_slots(void *exception_slot, void *context_slot);
 
-/* Borrowed reference to the message PyStrObject stashed on an
- * exception by py_exc_new. Used by py_obj_str to implement ``str(e)``
- * on exception instances. Returns NULL if exc has no message. */
+/* Borrowed primary constructor argument (args[0]), which need not be str.
+ * Returns NULL for no arguments and never exposes private structured payloads.
+ * Use py_obj_str(exc), a NEW reference, for exception display text. */
 PyObject *py_exc_get_message(PyObject *exc);
 PyObject *py_exc_get_cause(PyObject *exc);
 PyObject *py_exc_get_context(PyObject *exc);
@@ -1848,6 +1952,8 @@ int64_t   py_exc_traceback_len(PyObject *exc);
  * may be an exception instance (we auto-project to the class) or a
  * PyClassObject*. Returns 1 on match, 0 otherwise. */
 int64_t py_exc_matches(PyObject *exc, PyObject *type);
+/* Strict except-clause validation; sets TypeError and returns -1 on error. */
+int64_t py_exc_match_handler(PyObject *exc, PyObject *type);
 
 /* Append a PyFrameRecord to the exception's traceback. `func_name`,
  * `filename`, and optional `source_line` are borrowed — the caller must
@@ -2076,6 +2182,13 @@ int32_t py_mem_ptr_eq(const void *a, const void *b);
  * pcc-Python port (py_exc_tls.py) can both reach it via extern. */
 void   *py_tls_exc_get(void);
 void    py_tls_exc_set(void *exc);
+void    py_tls_exc_swap_slot(void *slot);
+void    py_raise_rooted(void *borrowed_slots, void *owned_slot);
+/* No-park handled-state links; exception slots use the normal GC root ABI. */
+void py_handled_context_push(void *record, void *exception_slot);
+int64_t py_handled_context_pop(void *record);
+void *py_handled_exception_slot(void);
+void *py_handled_context_swap(void *context);
 
 /* Function-call accessors for the three immortal singletons. These are
  * retained for the C runtime path; pcc-Python ports use pcc.unsafe

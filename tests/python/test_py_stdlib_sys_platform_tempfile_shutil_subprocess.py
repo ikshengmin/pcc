@@ -102,7 +102,7 @@ def test_subprocess_runtime_wrapper_symbols_are_wired():
     assert "CompletedProcess" in src
 
 
-def test_subprocess_called_process_error_export_matches_raw_int_scaffold_abi():
+def test_subprocess_called_process_error_export_matches_object_int_scaffold_abi():
     from pcc.frontends.python.pipeline import build_closed_world_context
     from pcc.frontends.python.codegen.layer1_support import (
         _default_native_module_exports,
@@ -116,7 +116,7 @@ def test_subprocess_called_process_error_export_matches_raw_int_scaffold_abi():
     provider_export = exports["subprocess"]["CalledProcessError"]
     methods = provider_export["methods"]
     init_export = next(method for method in methods if method["name"] == "__init__")
-    assert init_export["box_int_abi"] is False
+    assert init_export["box_int_abi"] is True
 
     static_exports = _default_native_module_exports("pcc.driver.cli_bootstrap")
     static_export = static_exports["subprocess"]["CalledProcessError"]

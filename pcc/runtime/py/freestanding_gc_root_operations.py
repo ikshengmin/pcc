@@ -8,7 +8,11 @@ from pcc.unsafe import (
     atomic_load_i32,
     atomic_rmw_i32,
     atomic_store_i32,
+    define_thread_local_ptr_null,
+    define_global_i64,
     global_addr,
+    global_load_ptr,
+    global_store_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -17,6 +21,7 @@ from pcc.unsafe import (
     ptr_eq,
     ptr_is_null,
     store_i32,
+    store_i64,
     store_ptr,
 )
 
@@ -28,6 +33,15 @@ pcc_gc_forwarding_index_find = extern("pcc_gc_forwarding_index_find", (c_ptr,), 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
+pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
+pcc_gc_managed_pointer_index_contains = extern("pcc_gc_managed_pointer_index_contains", (c_ptr,), c_int64)
+
+# Includes counted nodes and validated no-node mode guards. Access only under
+# the graph lock; backend transitions refuse while a foreign pointer is live.
+define_global_i64("pcc_gc_foreign_lease_active", 0)
 
 
 @c_abi_export("pcc_gc_gray_count_load_acquire")
@@ -135,6 +149,107 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
     return resolved
 
 
+# Foreign-address leases are separate from legacy Boolean pin/unpin. The slot
+# is already traced and owns its object. Lock acquisition can park, so reload
+# only AFTER it succeeds. Return codes never alter Python exception state.
+@c_abi_export("pcc_gc_foreign_lease_acquire")
+def pcc_gc_foreign_lease_acquire(slot) -> i64:
+    if ptr_is_null(slot) != 0:
+        return -1
+    pcc_gc_config_ensure()
+    pcc_py_gc_minor_graph_lock()
+    if load_i64(global_addr("pcc_gc_foreign_lease_active"), 0) < 0:
+        pcc_py_gc_minor_graph_unlock()
+        return -1
+    obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
+    status: i64 = -1
+    node = null()
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        status = 0
+    else:
+        # ABI precondition: a compiler-proven initialized managed object.
+        # Literal/immortal objects need no allocator entry and never move.
+        flags: i64 = load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
+        node = pcc_gc_object_index_find(obj)
+        if (flags & 524288) == 0 and ptr_is_null(node) == 0:
+            # Tracked immortals still participate in relocation. Only
+            # untracked intrinsic immortals qualify for a no-op token.
+            if load_i64(node, 32) == 0:
+                count: i64 = load_i64(node, 80)
+                if count >= 0 and count < 9223372036854775807:
+                    status = 1
+                else:
+                    status = -2
+        elif ((flags & 1) != 0 and (flags & (2048 | 524288)) == 0
+              and pcc_gc_granule_is_object_start(obj) != 1
+              and pcc_gc_managed_pointer_index_contains(obj) == 0):
+            # Only an unregistered static immortal is intrinsically stable.
+            # Heap immortals still need a mode guard: a backend transition
+            # may register/move an allocator-backed nonleaf object later.
+            status = 0
+        elif (flags & 524288) == 0 and (pcc_gc_granule_is_object_start(obj) == 1
+                  or pcc_gc_managed_pointer_index_contains(obj) != 0):
+            backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+            tag: i64 = load_i32(obj, 8)
+            # GC0/1/2 never move. GC3/4 no-node malloc graph leaves are
+            # intentionally refcount-only; nursery/zpage owners are not.
+            if backend >= 0 and backend <= 2:
+                status = 2
+            elif (backend == 3 or backend == 4) and (flags & (4096 | 65536)) == 0:
+                if tag == 0 or tag == 1 or tag == 2 or tag == 3 or tag == 4 or tag == 16 or tag == 17 or tag == 18 or tag == 32:
+                    status = 2
+    if status > 0:
+        active: i64 = load_i64(global_addr("pcc_gc_foreign_lease_active"), 0)
+        if active < 0 or active == 9223372036854775807:
+            status = -2
+        else:
+            if status == 1:
+                store_i64(node, 80, load_i64(node, 80) + 1)
+            store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, active + 1)
+    pcc_py_gc_minor_graph_unlock()
+    return status
+
+
+@c_abi_export("pcc_gc_foreign_lease_release")
+def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
+    # A no-op token must never decrement a counted node registered later.
+    if acquired == 0:
+        return 0
+    if ptr_is_null(slot) != 0 or (acquired != 1 and acquired != 2):
+        return -1
+    pcc_py_gc_minor_graph_lock()
+    status: i64 = -3
+    active: i64 = load_i64(global_addr("pcc_gc_foreign_lease_active"), 0)
+    if active > 0:
+        if acquired == 2:
+            store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, active - 1)
+            status = 0
+        else:
+            obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
+            node = pcc_gc_object_index_find(obj)
+            if ptr_is_null(node) == 0 and load_i64(node, 32) == 0:
+                count: i64 = load_i64(node, 80)
+                if count > 0:
+                    store_i64(node, 80, count - 1)
+                    store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, active - 1)
+                    status = 0
+    pcc_py_gc_minor_graph_unlock()
+    return status
+
+
+@c_abi_export("pcc_gc_object_is_address_pinned")
+def pcc_gc_object_is_address_pinned(obj) -> i64:
+    # Collector callers hold the graph lock (or own stopped-world traversal).
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED) != 0:
+        return 1
+    node = pcc_gc_object_index_find(obj)
+    if ptr_is_null(node) == 0:
+        return 1 if load_i64(node, 80) != 0 else 0
+    return 0
+
+
 # Pin acquisition/release must not park before touching their raw object arg.
 # Keep this existing header/metric protocol in the strict primitive owner.
 @c_abi_export("pcc_gc_pin")
@@ -182,3 +297,47 @@ def pcc_gc_take_pinned_slot(slot, prior_pin: i64):
             flags: i64 = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET)
             store_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, flags | PY_FLAG_GC_PINNED)
     return value
+
+
+# These links refer only to live native activation records. Managed exception
+# values stay in the caller's ordinary collector-visible root/frame slots.
+# Freestanding entrypoints never park or acquire managed owners.
+define_thread_local_ptr_null("pcc_tls_handled_exception_context")
+
+
+@c_abi_export("py_handled_context_push")
+def py_handled_context_push(record: c_ptr, exception_slot: c_ptr) -> None:
+    store_ptr(record, 0, global_load_ptr("pcc_tls_handled_exception_context"))
+    store_ptr(record, 8, exception_slot)
+    global_store_ptr("pcc_tls_handled_exception_context", record)
+
+
+@c_abi_export("py_handled_context_pop")
+def py_handled_context_pop(record: c_ptr) -> i64:
+    current = global_load_ptr("pcc_tls_handled_exception_context")
+    if ptr_eq(current, record) == 0:
+        # Shared exceptional cleanup may revisit an already retired scope.
+        return 0
+    global_store_ptr("pcc_tls_handled_exception_context", load_ptr(record, 0))
+    store_ptr(record, 0, null())
+    store_ptr(record, 8, null())
+    return 1
+
+
+@c_abi_export("py_handled_exception_slot")
+def py_handled_exception_slot() -> c_ptr:
+    current = global_load_ptr("pcc_tls_handled_exception_context")
+    while ptr_is_null(current) == 0:
+        slot = load_ptr(current, 8)
+        if ptr_is_null(slot) == 0:
+            if ptr_is_null(load_ptr(slot, 0)) == 0:
+                return slot
+        current = load_ptr(current, 0)
+    return null()
+
+
+@c_abi_export("py_handled_context_swap")
+def py_handled_context_swap(context: c_ptr) -> c_ptr:
+    previous = global_load_ptr("pcc_tls_handled_exception_context")
+    global_store_ptr("pcc_tls_handled_exception_context", context)
+    return previous

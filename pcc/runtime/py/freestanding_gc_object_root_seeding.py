@@ -16,6 +16,9 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+
+
 pcc_gc_gray_count_store_release = extern(
     "pcc_gc_gray_count_store_release", (c_int64,), c_void
 )
@@ -61,7 +64,7 @@ def pcc_gc_gray_current_roots() -> None:
             node = nxt
             continue
         flags: i64 = load_i32(obj, 12)
-        if (flags & 64) != 0:
+        if pcc_gc_object_is_address_pinned(obj) != 0:
             pcc_gc_mark_root_gray_if_known(obj)
         node = nxt
 

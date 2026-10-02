@@ -17,6 +17,8 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+
 
 pcc_gc_backend0_is_unreachable = extern(
     "pcc_gc_backend0_is_unreachable", (c_ptr,), c_int64
@@ -38,7 +40,7 @@ def pcc_gc_tracing_is_sweep_candidate(obj) -> i64:
     if pcc_gc_object_is_known_no_lock(obj) == 0:
         return 0
     flags: i64 = load_i32(obj, 12)
-    return 1 if (flags & 1024) != 0 else 0
+    return 1 if (flags & 1024) != 0 and pcc_gc_object_is_address_pinned(obj) == 0 else 0
 
 
 @c_abi_export("pcc_gc_backend0_clear_slot")
@@ -139,6 +141,8 @@ def pcc_gc_tracing_clear_referents(obj) -> None:
 @c_abi_export("pcc_gc_tracing_clear_unreachable")
 def pcc_gc_tracing_clear_unreachable(obj) -> None:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return
+    if pcc_gc_object_is_address_pinned(obj) != 0:
         return
     py_weakref_invalidate(obj)
     pcc_gc_tracing_clear_referents(obj)

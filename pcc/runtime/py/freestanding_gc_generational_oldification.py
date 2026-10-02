@@ -23,6 +23,9 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+
+
 py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_cpy_handle_move_owned_ref = extern(
     "pcc_cpy_handle_move_owned_ref", (c_ptr, c_ptr), c_void
@@ -130,7 +133,7 @@ def pcc_gc_generational_oldify_copy(from_obj: c_ptr) -> c_ptr:
         target = load_ptr(existing, 8)
         if ptr_is_null(target) == 0:
             return target
-    if (flags & 128) == 0 or (flags & 64) != 0:
+    if (flags & 128) == 0 or pcc_gc_object_is_address_pinned(from_obj) != 0:
         return null()
 
     tag: i64 = load_i32(from_obj, 8)

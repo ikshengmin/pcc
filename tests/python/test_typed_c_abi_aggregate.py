@@ -168,12 +168,31 @@ entry:
 
     asm_text = emit_x86_64_linux_asm(ir_text)
 
-    assert "movsd QWORD PTR [rbp -" in asm_text
-    assert ", xmm0" in asm_text
-    assert ", xmm1" in asm_text
-    assert "movsd xmm0, QWORD PTR [r10]" in asm_text
-    assert "movsd xmm1, QWORD PTR [r10 + 8]" in asm_text
+    # The owned emitter transfers exact FP bits via a scratch GPR. Check both
+    # lanes and their offsets, not the obsolete direct-movsd spill spelling.
+    incoming = (
+        "  movq r11, xmm0\n"
+        "  mov QWORD PTR [r10], r11\n"
+        "  movq r11, xmm1\n"
+        "  mov QWORD PTR [r10 + 8], r11"
+    )
+    outgoing = (
+        "  mov rax, QWORD PTR [r10]\n"
+        "  movq xmm0, rax\n"
+        "  mov rax, QWORD PTR [r10 + 8]\n"
+        "  movq xmm1, rax"
+    )
+    # Two function entries plus the forwarding call's return, and two returns
+    # plus the forwarding call's arguments must each transfer both SSE lanes.
+    assert asm_text.count(incoming) == 3
+    assert asm_text.count(outgoing) == 3
     assert "call pcc_pair_identity" in asm_text
+    from pcc.backend.elf_x86_64 import parse_relocatable
+    from pcc.backend.owned_object_emit import emit_owned_object
+
+    obj = parse_relocatable(emit_owned_object(ir_text, "x86_64-unknown-linux-gnu"))
+    defined = {symbol.name for symbol in obj.symbols if symbol.section_index != 0}
+    assert {"pcc_pair_identity", "pcc_pair_forward"} <= defined
 
 
 def test_pcc_python_complex_aggregate_exports_match_c_behavior(

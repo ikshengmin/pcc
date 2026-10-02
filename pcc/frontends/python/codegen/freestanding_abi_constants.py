@@ -21,9 +21,9 @@ ABI_CONSTANTS: dict[str, int] = {
     'object.class.size': 120,
     'object.class.type_tag_alloc_offset': 92,
     'object.class_method.func_offset': 8,
-    'object.class_method.name_offset': 0,
     'object.class_method.name_hash_offset': 16,
     'object.class_method.name_length_offset': 20,
+    'object.class_method.name_offset': 0,
     'object.class_method.size': 24,
     'object.classmethod.func_offset': 16,
     'object.classmethod.size': 24,
@@ -75,6 +75,7 @@ ABI_CONSTANTS: dict[str, int] = {
     'object.type.bool': 1,
     'object.type.bytearray': 18,
     'object.type.bytes': 17,
+    'object.type.cext_tag_base': 65536,
     'object.type.class': 10,
     'object.type.classmethod': 102,
     'object.type.complex': 16,
@@ -170,7 +171,7 @@ ABI_CONSTANTS: dict[str, int] = {
     'stdio.file.buffer_position_offset': 56,
     'stdio.file.fd_offset': 8,
     'stdio.file.flags_offset': 16,
-    'stdio.file.magic': ((0x504341B1 << 32) | 0xF59E3531),
+    'stdio.file.magic': 5783538579059651889,
     'stdio.file.magic_offset': 0,
     'stdio.file.size': 64,
     'stdio.flag.append': 32,
@@ -189,6 +190,7 @@ ABI_CONSTANTS: dict[str, int] = {
 PY_TYPE_BOOL = 1
 PY_TYPE_BYTEARRAY = 18
 PY_TYPE_BYTES = 17
+PY_TYPE_CEXT_TAG_BASE = 65536
 PY_TYPE_CLASS = 10
 PY_TYPE_CLASSMETHOD = 102
 PY_TYPE_COMPLEX = 16

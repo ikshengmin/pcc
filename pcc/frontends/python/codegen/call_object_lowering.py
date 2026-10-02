@@ -6,17 +6,858 @@ from typing import Optional
 from pcc.ir.compat import ir
 from pcc.runtime.py.py_abi_constants import PY_TYPE_TUPLE
 
-from pcc.frontends.python.py_ast import DictExpr, DictType, DynType, Expr, Name, SourceSpan, StrLit, StrType, TupleExpr, TupleType, Type
+from pcc.frontends.python.py_ast import Attr, BinOp, BoolLit, Call, DictExpr, DictType, DynType, Expr, FloatLit, IntLit, IntType, ListExpr, Name, NoneLit, NoneType, RawPointerType, SourceSpan, StrLit, StrType, TupleExpr, TupleType, Type, UnaryOp
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 
+_I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
 _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
 
 class CallObjectLoweringMixin:
+    def _slot_call_published_module_ref(self, expr):
+        """Locate an already-published callable without evaluating operands."""
+        if isinstance(expr, Attr):
+            export = self._native_module_expr_export_info(expr.obj, expr.name)
+            if export is not None and export[1].get("kind") in ("function", "class"):
+                return export[0], expr.name
+            return None
+        if not isinstance(expr, Name):
+            return None
+        name = expr.ident
+        if name in self.env or name in self._module_globals:
+            return None
+        fn = self.functions.get(name)
+        if fn is None:
+            return None
+        if name in self._cross_module_func_defs:
+            # Compare the authoritative provider symbol, not an ambiguous
+            # bare exported name. This also handles aliased and star imports.
+            for module_name, exports in (self._native_module_exports or {}).items():
+                for exported_name, info in exports.items():
+                    if info.get("kind") != "function":
+                        continue
+                    owner = info.get("owning_module", module_name)
+                    target = info.get("export_name", exported_name)
+                    symbol = "user_" + self._module_symbol_suffix(owner) + "_" + target
+                    if fn.name == symbol:
+                        return owner, target
+            raise L1CodegenError("imported callable has no authoritative published owner: " + name)
+        if name in getattr(self, "_hoisted_capture_params", {}):
+            return None
+        fd = self._find_user_funcdef(name)
+        for statement in self.ast_module.body:
+            if statement is fd:
+                return self.ast_module.name or "__main__", name
+        return None
+
+    def _emit_slot_call_module_value(self, module_name, attr_name, span, label):
+        """Publish the lookup's new owner before null checks or cleanup."""
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            module_ptr = self._pooled_cstr_ptr(module_name, ".call.module")
+            value = self.builder.call(
+                self.runtime["py_module_attr_get"],
+                [module_ptr, self._attr_name_ptr(attr_name)],
+                name=self._fresh(label + ".lookup"),
+            )
+            self._publish_slot_call_owned(output, value, label="published callable")
+            current = self.builder.load(output, name=self._fresh(label + ".current"))
+            self._emit_attribute_error_if_null(current, attr_name, span)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _new_slot_call_root(self, label: str):
+        """Register an empty owning operand slot before evaluating its value.
+
+        Function roots use the physical-slot registry and ordinary ownership
+        flags, including its retroactive error/early-return patching. Module
+        expressions have lexical LIFO roots; their caller must install a
+        ``_slot_call_cleanup_block`` before emitting any fallible operation.
+        Neither route registers a borrowed raw value as a new owner.
+        """
+        if getattr(self, "_freestanding_module", False):
+            raise L1CodegenError("slot-call roots require the managed runtime")
+        name = self._fresh(label + ".operand")
+        slot = self._alloca_in_entry(_CSTR, name=name, init_null=True)
+        flag = None
+        lifo = self.current_func_def is None
+        if lifo:
+            self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), slot)
+        else:
+            self.env[name] = (slot, _CSTR, DynType(name="dyn"))
+            self._owned_local_names.add(name)
+            self._owned_local_has_value.add(name)
+            self._ensure_owned_local_gc_root(name, slot, _CSTR)
+            flag = self._ensure_owned_local_flag(name, slot)
+            # Empty counts as owned too: an output-slot runtime call can
+            # publish an owner before reporting failure to its caller.
+            self.builder.store(ir.Constant(_I1, 1), flag)
+        if not hasattr(self, "_slot_call_root_records"):
+            self._slot_call_root_records = []
+        self._slot_call_root_records.append((slot, flag, lifo))
+        return slot
+
+    def _slot_call_root_record(self, slot):
+        for record in getattr(self, "_slot_call_root_records", ()):
+            if record[0] is slot:
+                return record
+        raise L1CodegenError("slot-call root was not registered by this emitter")
+
+    def _slot_call_result_sink(self, expr):
+        for candidate, slot, _published in reversed(getattr(self, "_slot_call_result_sinks", ())):
+            if candidate is expr:
+                return slot
+        return None
+
+    def _slot_call_note_published(self, slot) -> None:
+        sinks = getattr(self, "_slot_call_result_sinks", ())
+        for index, entry in enumerate(sinks):
+            if entry[1] is slot:
+                sinks[index] = (entry[0], entry[1], True)
+
+    def _release_slot_call_roots(self, roots) -> None:
+        for slot in reversed(roots):
+            _slot, flag, lifo = self._slot_call_root_record(slot)
+            if flag is not None:
+                self.builder.store(ir.Constant(_I1, 0), flag)
+            # Slot clearing precedes terminal decref/finalizers. No raw
+            # managed pointer survives this release or another root's release.
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
+            )
+            if lifo:
+                self._emit_gc_frame_leave_lifo_for_slot(slot)
+
+    def _slot_call_cleanup_block(self, roots, target, leases=()):
+        if not roots and not leases:
+            return target
+        cleanup = self.current_function.append_basic_block(self._fresh("call.slot.cleanup"))
+        saved = self.builder._block
+        self.builder.position_at_end(cleanup)
+        for slot, token in reversed(leases):
+            # Cleanup must preserve the exception which selected this edge.
+            self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_release"],
+                [self._as_gc_ptr(slot), token],
+            )
+        self._release_slot_call_roots(roots)
+        self.builder.branch(target)
+        self.builder.position_at_end(saved)
+        return cleanup
+
+    def _slot_call_check_status(self, status, operation: str, span=None) -> None:
+        failed = self.builder.icmp_signed("<", status, ir.Constant(_I64, 0))
+        error = self.current_function.append_basic_block(self._fresh("call.slot.error"))
+        ready = self.current_function.append_basic_block(self._fresh("call.slot.ready"))
+        self.builder.cbranch(failed, error, ready)
+        self.builder.position_at_end(error)
+        pending = self.builder.call(self.runtime["py_err_occurred"], [])
+        has_error = self.builder.icmp_signed("!=", pending, ir.Constant(_I64, 0))
+        report = self.current_function.append_basic_block(self._fresh("call.slot.report"))
+        target = self._current_try_err_block()
+        if target is None:
+            target = self._ensure_fn_err_exit()
+        self.builder.cbranch(has_error, target, report)
+        self.builder.position_at_end(report)
+        self._emit_builtin_exception_and_branch(
+            "RuntimeError", "slot-call " + operation + " failed", span,
+        )
+        self.builder.position_at_end(ready)
+
+    def _slot_call_copy_source(self, destination, source, borrowed=False, span=None) -> None:
+        helper = "pcc_gc_root_copy_borrowed_lease" if borrowed else "pcc_gc_root_copy_lease"
+        token = self.builder.call(
+            self.runtime[helper], [self._as_gc_ptr(destination), self._as_gc_ptr(source)],
+            name=self._fresh("call.slot.copy.lease"),
+        )
+        self._slot_call_check_status(token, "operand copy", span)
+        # The binder needs an independently owned authoritative slot, not a
+        # raw address between operand evaluations. Retire the transfer lease
+        # now; the binder will acquire its own counted address lease.
+        released = self.builder.call(
+            self.runtime["pcc_gc_foreign_lease_release"],
+            [self._as_gc_ptr(destination), token],
+            name=self._fresh("call.slot.copy.release"),
+        )
+        self._slot_call_check_status(released, "operand lease release", span)
+
+    def _slot_call_name_source(self, expr):
+        """Return an existing native object slot, never a newly rooted load."""
+        check_local_bound(self, expr)
+        entry = self.env.get(expr.ident)
+        if entry is not None:
+            slot, ir_ty, declared_ty = entry
+            if getattr(self, "_cpy_env_flags", {}).get(expr.ident, False):
+                raise L1CodegenError(
+                    "slot-call CPython name requires an output-slot bridge: " + expr.ident
+                )
+            if isinstance(declared_ty, RawPointerType):
+                raise L1CodegenError("raw pointer cannot be a slot-call operand: " + expr.ident)
+            if not self._ir_type_matches(ir_ty, _CSTR):
+                return None
+            # Globals may also be installed in env inside a global statement.
+            global_entry = self._module_globals.get(expr.ident)
+            if global_entry is not None and global_entry[0] is slot:
+                if self._module_global_needs_bound_check(expr.ident):
+                    self._emit_module_global_bound_check(expr.ident, expr)
+                if getattr(self, "_cpy_module_flags", {}).get(expr.ident, False):
+                    raise L1CodegenError("slot-call CPython global requires an output-slot bridge: " + expr.ident)
+                return slot, False
+            registry = getattr(self, "_fn_gc_root_slot_registry", {}).get(self.current_function.name, ())
+            if not any(item[1] is slot for item in registry):
+                raise L1CodegenError("slot-call name has no authoritative registered root: " + expr.ident)
+            # Rebinding/loop promotion can replace a parameter's slot while
+            # its lexical borrowed-name marker remains. Ownership belongs to
+            # this physical slot; its matching owned flag outranks that marker.
+            borrowed = (
+                expr.ident in getattr(self, "_borrowed_gc_rooted_local_names", ())
+                and self._owned_local_flag_for(expr.ident, slot) is None
+            )
+            return slot, borrowed
+        if expr.ident == "__class__" and self.current_class is not None:
+            return self.current_class.global_var, False
+        entry = self._module_globals.get(expr.ident)
+        if entry is not None:
+            slot, declared_ty = entry
+            if getattr(self, "_cpy_module_flags", {}).get(expr.ident, False):
+                raise L1CodegenError("slot-call CPython global requires an output-slot bridge: " + expr.ident)
+            if isinstance(declared_ty, RawPointerType):
+                raise L1CodegenError("raw pointer cannot be a slot-call operand: " + expr.ident)
+            if self._module_global_needs_bound_check(expr.ident):
+                self._emit_module_global_bound_check(expr.ident, expr)
+            if self._module_global_needs_teardown(slot, declared_ty):
+                return slot, False
+            return None
+        classes = getattr(getattr(self, "class_lowering", None), "classes", {})
+        if expr.ident in classes:
+            return classes[expr.ident].global_var, False
+        return None
+
+    def _publish_slot_call_owned(self, slot, value, *, label="owned result") -> None:
+        """Immediately transfer a fresh result into an already empty root.
+
+        An earlier SSA result returned after cleanup is not fresh. Reject it
+        rather than registering a possibly stale pointer after a safepoint.
+        Output-slot producers should instead write directly or root_move.
+        """
+        self._slot_call_root_record(slot)
+        if not isinstance(value.type, ir.PointerType):
+            raise L1CodegenError("slot-call publication requires an object: " + label)
+        record = getattr(value, "_instr", value)
+        instructions = self.builder._block._instrs
+        immediate = bool(instructions) and instructions[-1] is record
+        if instructions and not immediate:
+            last = instructions[-1]
+            # Most owned-builder calls/loads do not set Value._instr. Match
+            # the actual destination, never merely the last opcode: a later
+            # cleanup call must not make an older raw result look fresh.
+            if last.text:
+                immediate = last.text.startswith(str(value) + " = ")
+            else:
+                direct = getattr(self.current_function, "_direct_indexed_builder", None)
+                value_id = getattr(value, "_direct_value_id", -1)
+                record_id = getattr(last, "_direct_record_id", -1)
+                if direct is not None and value_id >= 0 and record_id >= 0:
+                    immediate = direct.record_metadata.get4_unchecked(record_id).third == value_id
+        immortal = isinstance(value, (ir.Constant, ir.GlobalVariable)) or self._value_is_never_gc_object(value)
+        if not immediate and not immortal:
+            raise L1CodegenError(
+                "slot-call " + label + " lacks an immediate owned-result handoff; "
+                "its producer must publish into the output slot before parking cleanup"
+            )
+        if value.type != _CSTR:
+            value = self.builder.bitcast(value, _CSTR, name=self._fresh("call.slot.value"))
+        # No runtime call, pin, registration, header probe or lock acquisition
+        # may be inserted between a producer's return and this first store.
+        self.builder.store(value, slot)
+        self._slot_call_note_published(slot)
+        token = self.builder.call(
+            self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
+            name=self._fresh("call.slot.publish.lease"),
+        )
+        self._slot_call_check_status(token, "owned-result lease")
+        current = self.builder.load(slot, name=self._fresh("call.slot.published"))
+        self.builder.call(
+            self.runtime["pcc_gc_note_slot_write_barrier"],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(slot), current],
+        )
+        released = self.builder.call(
+            self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(slot), token],
+            name=self._fresh("call.slot.publish.release"),
+        )
+        self._slot_call_check_status(released, "owned-result lease release")
+
+    def _emit_slot_call_operand(self, expr: Expr, label: str):
+        """Evaluate one operand into an independent owning authoritative root."""
+        if self._expr_returns_unsafe_raw_pointer(expr):
+            raise L1CodegenError("raw pointer cannot be a slot-call operand: " + type(expr).__name__)
+        if getattr(self, "_generator_ctx_stack", ()) and self._generator_expr_may_suspend(expr):
+            raise L1CodegenError("suspending slot-call operand requires a persistent generator-frame output slot")
+        published = self._slot_call_published_module_ref(expr)
+        if published is not None:
+            return self._emit_slot_call_module_value(published[0], published[1], expr.span, label)
+        if isinstance(expr, (UnaryOp, BinOp)):
+            if self._slot_call_literal_integer_kind(expr):
+                return self._emit_slot_call_literal_integer(expr, label)
+            machine_integer = isinstance(expr.ty, IntType) and expr.ty.name != "int"
+            if (not machine_integer and (isinstance(expr.ty, IntType)
+                    or isinstance(expr, UnaryOp) and expr.op in ("+", "-", "~"))):
+                raise L1CodegenError(
+                    "slot-call arithmetic requires a proven literal-derived integer tree; "
+                    "annotations and callback results are not value-kind proof"
+                )
+            # An explicit machine lane retains its pre-existing lowering and
+            # ownership boundary; it never enters the exact-int producer.
+        if isinstance(expr, (TupleExpr, ListExpr)):
+            return self._emit_slot_call_sequence(expr.elems, label, isinstance(expr, TupleExpr))
+        if isinstance(expr, DictExpr):
+            return self._emit_slot_call_dict(expr.pairs, expr.span, label)
+        if isinstance(expr, Attr):
+            return self._emit_slot_call_attribute(expr, label)
+        if isinstance(expr, Call) and expr.is_set_literal:
+            return self._emit_slot_call_set(expr, label)
+        if (isinstance(expr, Call) and isinstance(expr.func, Name)
+                and expr.func.ident == "set" and len(expr.args) <= 1 and not expr.kwargs
+                and "set" not in self.env and "set" not in self._module_globals
+                and "set" not in self.functions
+                and "set" not in getattr(getattr(self, "class_lowering", None), "classes", {})
+                and not self._has_starred_unpack(expr.args)):
+            return self._emit_slot_call_set(expr, label)
+        slot = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((slot,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            source = self._slot_call_name_source(expr) if isinstance(expr, Name) else None
+            if source is not None:
+                self._slot_call_copy_source(slot, source[0], source[1], expr.span)
+            else:
+                scalar = isinstance(expr, (BoolLit, FloatLit, IntLit, NoneLit))
+                if isinstance(expr, Name):
+                    entry = self.env.get(expr.ident)
+                    if entry is not None:
+                        scalar = not isinstance(entry[1], ir.PointerType)
+                    else:
+                        entry = self._module_globals.get(expr.ident)
+                        if entry is not None:
+                            scalar = not isinstance(entry[0].value_type, ir.PointerType)
+                if not hasattr(self, "_slot_call_result_sinks"):
+                    self._slot_call_result_sinks = []
+                self._slot_call_result_sinks.append((expr, slot, False))
+                try:
+                    value = self._emit_call_arg_object(expr)
+                finally:
+                    _candidate, _output, published = self._slot_call_result_sinks.pop()
+                if published:
+                    return slot
+                owned = self._owned_release_needed(value, expr)
+                if not owned and not scalar and not self._value_is_never_gc_object(value):
+                    raise L1CodegenError(
+                        "slot-call operand has no authoritative source or owned result: "
+                        + type(expr).__name__
+                    )
+                self._publish_slot_call_owned(slot, value, label=type(expr).__name__)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return slot
+
+    def _slot_call_literal_integer_kind(self, expr):
+        """Return 1 for a proven int tree, 2 for a bool literal, else 0.
+
+        IntType describes an annotation or representation, not an exact
+        runtime class. Only literal provenance admits the primitive kernels.
+        Do not evaluate the tree on the compiler host: shifts and powers can
+        describe arbitrarily large values. Bool-only bitwise trees and powers
+        without a literal nonnegative exponent remain explicit boundaries.
+        """
+        if isinstance(expr.ty, IntType) and expr.ty.name != "int":
+            return 0
+        if isinstance(expr, BoolLit):
+            return 2
+        if isinstance(expr, IntLit):
+            return 1
+        if isinstance(expr, UnaryOp) and expr.op in ("+", "-", "~"):
+            operand_kind = self._slot_call_literal_integer_kind(expr.operand)
+            if expr.op == "~" and operand_kind == 2:
+                # Python 3.15 warns for ~bool. This bounded producer has no
+                # warning dispatch, so do not silently normalize that case.
+                return 0
+            return 1 if operand_kind else 0
+        if not isinstance(expr, BinOp):
+            return 0
+        if expr.op not in ("+", "-", "*", "//", "%", "**", "&", "|", "^", "<<", ">>"):
+            return 0
+        left = self._slot_call_literal_integer_kind(expr.lhs)
+        right = self._slot_call_literal_integer_kind(expr.rhs)
+        if not left or not right:
+            return 0
+        if expr.op in ("&", "|", "^") and left == 2 and right == 2:
+            # Python returns bool here; py_int_* returns int. Reject the
+            # complete containing tree instead of trusting inferred IntType.
+            return 0
+        if expr.op == "**":
+            if not isinstance(expr.rhs, (IntLit, BoolLit)) or expr.rhs.value < 0:
+                # A negative exponent can produce a float even though the
+                # frontend inferred IntType. Never feed it to an int kernel.
+                return 0
+        return 1
+
+    def _emit_slot_call_literal_integer(self, expr, label):
+        """Publish each exact integer owner before checks or operand release."""
+        if not self._slot_call_literal_integer_kind(expr):
+            raise L1CodegenError("slot-call integer producer requires literal provenance")
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if isinstance(expr, (IntLit, BoolLit)):
+                if isinstance(expr, BoolLit):
+                    # Some primitive kernels inspect integer layout or
+                    # return the operand for an identity operation. Only
+                    # arithmetic leaves are normalized; bare bool operands
+                    # retain their ordinary singleton publication path.
+                    value = self._emit_int_literal_object(1 if expr.value else 0)
+                else:
+                    value = self._emit_int_literal_object(expr.value)
+                self._publish_slot_call_owned(output, value, label="integer literal")
+            else:
+                first_expr = expr.operand if isinstance(expr, UnaryOp) else expr.lhs
+                first = self._emit_slot_call_literal_integer(first_expr, label + ".left")
+                roots.append(first)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                identity = (isinstance(expr, UnaryOp) and expr.op == "+"
+                            and self._slot_call_literal_integer_kind(first_expr) == 1)
+                if identity:
+                    self._slot_call_copy_source(output, first, span=expr.span)
+                else:
+                    arguments = [first]
+                    if isinstance(expr, UnaryOp):
+                        runtime_name = "py_int_neg"
+                        if expr.op in ("+", "~"):
+                            # +bool produces int; ~int uses a rooted -1,
+                            # avoiding the legacy generic unary helper's
+                            # result-across-decref interval.
+                            second_expr = IntLit(span=expr.span, ty=IntType(name="int"),
+                                                 value=0 if expr.op == "+" else -1)
+                            runtime_name = "py_int_add" if expr.op == "+" else "py_int_xor"
+                        else:
+                            second_expr = None
+                    else:
+                        second_expr = expr.rhs
+                        runtime_name = {
+                            "+": "py_int_add", "-": "py_int_sub", "*": "py_int_mul",
+                            "//": "py_int_floordiv", "%": "py_int_mod", "**": "py_int_pow",
+                            "&": "py_int_and", "|": "py_int_or", "^": "py_int_xor",
+                            "<<": "py_int_shl", ">>": "py_int_shr",
+                        }[expr.op]
+                    if second_expr is not None:
+                        second = self._emit_slot_call_literal_integer(second_expr, label + ".right")
+                        roots.append(second)
+                        arguments.append(second)
+                        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                        self._cpy_operand_cleanup_block = self._try_err_block
+                    if isinstance(expr, BinOp) and expr.op in ("<<", ">>"):
+                        zero_expr = IntLit(span=expr.span, ty=IntType(name="int"), value=0)
+                        zero = self._emit_slot_call_literal_integer(zero_expr, label + ".zero")
+                        roots.append(zero)
+                        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                        self._cpy_operand_cleanup_block = self._try_err_block
+                        sign = self._slot_call_runtime_call("py_int_cmp", (second, zero), span=expr.span)
+                        sign = self.builder.sext(sign, _I64, name=self._fresh("call.slot.shift.sign"))
+                        self._emit_negative_shift_count_check(sign)
+                    self._slot_call_runtime_call(
+                        runtime_name, tuple(arguments), result_slot=output, span=expr.span,
+                    )
+            # Runtime calls have already published and checked pending errors.
+            # Inspect only a fresh root load here, never their earlier SSA.
+            current = self.builder.load(output, name=self._fresh("call.slot.integer.result"))
+            if isinstance(expr, BinOp) and expr.op in ("//", "%"):
+                self._emit_zero_division_if_null(current, "division by zero")
+            else:
+                self._guard_cpy_value_not_null(current)
+            self._release_slot_call_roots(tuple(roots[1:]))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _take_slot_call_root(self, slot):
+        """Finish every parking operation before returning the root's owner."""
+        _slot, flag, lifo = self._slot_call_root_record(slot)
+        self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
+        current = self.builder.call(
+            self.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(slot)],
+            name=self._fresh("call.slot.take.current"),
+        )
+        prior = self._extern_prior_pin(current)
+        self._gc_pin(current)
+        self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
+        if lifo:
+            self._emit_gc_frame_leave_lifo_for_slot(slot)
+        if flag is not None:
+            self.builder.store(ir.Constant(_I1, 0), flag)
+        value = self.builder.call(
+            self.runtime["pcc_gc_take_pinned_slot"], [self._as_gc_ptr(slot), prior],
+            name=self._fresh("call.slot.take"),
+        )
+        self._note_owned_object_value(value)
+        return value
+
+    def _slot_call_runtime_call(
+        self, runtime_name, roots, *, result_slot=None, suffix_args=(), argument_order=(), span=None,
+    ):
+        """Expose raw operands only while independent counted leases live.
+
+        Every input is an existing owning root. Results go directly to an
+        empty output root before any lease release, error check, or cleanup.
+        The scalar token/status values are the only SSA values crossing waits.
+        """
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        leases = []
+        result = None
+        try:
+            for slot in roots:
+                self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+                self._cpy_operand_cleanup_block = self._try_err_block
+                token = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
+                    name=self._fresh("call.slot.argument.lease"),
+                )
+                self._slot_call_check_status(token, "argument lease", span)
+                leases.append((slot, token))
+            self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+            self._cpy_operand_cleanup_block = self._try_err_block
+            values = [self.builder.load(slot, name=self._fresh("call.slot.argument")) for slot in roots]
+            arguments = values + list(suffix_args)
+            if argument_order:
+                arguments = [arguments[index] for index in argument_order]
+            result = self.builder.call(
+                self.runtime[runtime_name], arguments,
+                name=self._fresh("call.slot.runtime") if result_slot is not None else "",
+            )
+            if result_slot is not None:
+                self._publish_slot_call_owned(result_slot, result, label=runtime_name)
+            while leases:
+                slot, token = leases.pop()
+                released = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_release"],
+                    [self._as_gc_ptr(slot), token],
+                    name=self._fresh("call.slot.argument.release"),
+                )
+                self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_check_status(released, "argument lease release", span)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        self._emit_post_call_err_check(span)
+        return None if result_slot is not None else result
+
+    def _emit_slot_call_sequence(self, elems, label, tuple_result):
+        """Build a list/tuple directly in roots, expanding each splat in place."""
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            if tuple_result:
+                sequence = self._new_slot_call_root(label + ".list")
+                roots.append(sequence)
+            else:
+                sequence = output
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            value = self.builder.call(
+                self.runtime["py_list_new"], [ir.Constant(_I64, 0)],
+                name=self._fresh("call.slot.list"),
+            )
+            self._publish_slot_call_owned(sequence, value, label="argument list")
+            for elem in elems:
+                splat = (isinstance(elem, Call) and isinstance(elem.func, Name)
+                         and elem.func.ident in ("*", "__starred__") and len(elem.args) == 1)
+                source = elem.args[0] if splat else elem
+                item = self._emit_slot_call_operand(source, label + ".item")
+                roots.append(item)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_list_extend" if splat else "py_list_append",
+                    (sequence, item), span=source.span,
+                )
+                self._release_slot_call_roots((item,))
+                roots.pop()
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            if tuple_result:
+                self._slot_call_runtime_call("py_tuple_from_list", (sequence,), result_slot=output)
+                self._release_slot_call_roots((sequence,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _emit_slot_call_args_tuple(self, args, label="call.args"):
+        return self._emit_slot_call_sequence(args, label, True)
+
+    def _emit_slot_call_set(self, expr, label):
+        """Root the set constructor/literal before element callbacks run."""
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if expr.args and not expr.is_set_literal:
+                source = self._emit_slot_call_operand(expr.args[0], label + ".iterable")
+                roots.append(source)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_set_from_iterable", (source,), result_slot=output, span=expr.span,
+                )
+                self._release_slot_call_roots((source,))
+            else:
+                value = self.builder.call(self.runtime["py_set_new"], [], name=self._fresh("call.slot.set"))
+                self._publish_slot_call_owned(output, value, label="set literal")
+                # Only syntax-marked set displays insert as they evaluate
+                # elements. Explicit set(list/tuple) must first finish the
+                # whole sequence, even if the first member's hash will raise.
+                elems = expr.args[0].elems if expr.args else ()
+                for elem in elems:
+                    splat = (isinstance(elem, Call) and isinstance(elem.func, Name)
+                             and elem.func.ident in ("*", "__starred__") and len(elem.args) == 1)
+                    source_expr = elem.args[0] if splat else elem
+                    item = self._emit_slot_call_operand(source_expr, label + ".item")
+                    roots.append(item)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_runtime_call(
+                        "py_set_update" if splat else "py_set_add", (output, item), span=expr.span,
+                    )
+                    self._release_slot_call_roots((item,))
+                    roots.pop()
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _slot_call_split_operands(self, expr):
+        unpack = self._split_starstar_kwargs_unpack(expr.args)
+        if unpack is None:
+            return expr.args, expr.kwargs
+        arguments, _merged = unpack
+        keywords = []
+        if expr.operand_order:
+            for kind, index in expr.operand_order:
+                if kind == "kw":
+                    keywords.append(expr.kwargs[index])
+                else:
+                    argument = expr.args[index]
+                    if (isinstance(argument, Call) and isinstance(argument.func, Name)
+                            and argument.func.ident == "**"):
+                        keywords.append(("**", argument.args[0]))
+        else:
+            if expr.kwargs:
+                raise L1CodegenError("slot-call unpack is missing keyword operand-order metadata")
+            for argument in expr.args:
+                if (isinstance(argument, Call) and isinstance(argument.func, Name)
+                        and argument.func.ident == "**"):
+                    keywords.append(("**", argument.args[0]))
+        return arguments, tuple(keywords)
+
+    def _emit_slot_call_object(self, expr, label="object.call", module_name=None, attr_name=None):
+        """Native callable dispatch with authoritative inputs and output."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root(label + ".result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if module_name is None:
+                callable_root = self._emit_slot_call_operand(expr.func, label + ".callable")
+            else:
+                callable_root = self._emit_slot_call_module_value(
+                    module_name, attr_name, expr.span, label + ".callable",
+                )
+            roots.append(callable_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            positional, keywords = self._slot_call_split_operands(expr)
+            args = self._emit_slot_call_args_tuple(positional, label + ".args")
+            roots.append(args)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            kwargs = self._emit_slot_call_kwargs_object(
+                keywords, None, expr.span, label + ".kwargs", callable_root,
+            )
+            roots.append(kwargs)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(
+                self.runtime["py_obj_call_slots"],
+                [self._as_gc_ptr(callable_root), self._as_gc_ptr(args),
+                 self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                name=self._fresh(label + ".invoke"),
+            )
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, "object call", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh(label + ".output"))
+        return self._take_slot_call_root(output)
+
+    def _emit_slot_call_dict(self, pairs, span, label):
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            value = self.builder.call(self.runtime["py_dict_new"], [], name=self._fresh("call.slot.dict"))
+            self._publish_slot_call_owned(output, value, label="keyword dict")
+            for key_expr, value_expr in pairs:
+                if isinstance(key_expr, Name) and key_expr.ident == "**":
+                    raise L1CodegenError("slot-call dict literal mapping expansion requires a mapping-only slot producer")
+                key = self._emit_slot_call_operand(key_expr, label + ".key")
+                roots.append(key)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                item = self._emit_slot_call_operand(value_expr, label + ".value")
+                roots.append(item)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call("py_dict_set", (output, key, item), span=span)
+                self._release_slot_call_roots((key, item))
+                roots = [output]
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _emit_slot_call_attribute(self, expr, label):
+        if self._is_valueclass_payload_type(expr.obj.ty):
+            raise L1CodegenError("slot-call valueclass attribute requires a payload-slot producer")
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(expr.obj, label + ".receiver")
+            self._try_err_block = self._slot_call_cleanup_block((output, receiver), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_obj_getattr", (receiver,), result_slot=output,
+                suffix_args=(self._attr_name_ptr(expr.name),), span=expr.span,
+            )
+            self._release_slot_call_roots((receiver,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _emit_slot_call_kwargs_object(self, kwargs, kwargs_expr, span, label="call.kwargs", callable_root=None):
+        self._reject_kwargs_merge_with_explicit_keywords(kwargs_expr, kwargs)
+        if not kwargs and kwargs_expr is None:
+            return self._emit_slot_call_operand(NoneLit(span=span, ty=NoneType(name="None")), label)
+        operands = []
+        pairs = []
+        for name, expr in kwargs:
+            if name == "**":
+                if pairs:
+                    operands.append(("explicit", tuple(pairs)))
+                    pairs = []
+                operands.append(("mapping", expr))
+            else:
+                pairs.append((StrLit(span=expr.span, ty=StrType(name="str"), value=name), expr))
+        if pairs:
+            operands.append(("explicit", tuple(pairs)))
+        if kwargs_expr is not None:
+            if self._is_kwargs_merge(kwargs_expr):
+                for expr in kwargs_expr.args:
+                    operands.append(("mapping", expr))
+            else:
+                operands.append(("mapping", kwargs_expr))
+        output = self._emit_slot_call_dict((), span, label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            for kind, operand in operands:
+                self._try_err_block = self._slot_call_cleanup_block((output,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                source = (self._emit_slot_call_dict(operand, span, label + ".explicit")
+                          if kind == "explicit" else self._emit_slot_call_operand(operand, label + ".mapping"))
+                merged = self._new_slot_call_root(label + ".merged")
+                self._try_err_block = self._slot_call_cleanup_block((output, source, merged), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if callable_root is None:
+                    self._slot_call_runtime_call(
+                        "py_call_merge_kwargs_unique", (output, source), result_slot=merged, span=span,
+                    )
+                else:
+                    self._slot_call_runtime_call(
+                        "py_call_merge_kwargs_for_call", (output, source, callable_root),
+                        result_slot=merged, span=span,
+                    )
+                # Preserve LIFO module-root order: move the completed merge
+                # back into the oldest root before retiring either temporary.
+                self.builder.call(self.runtime["pcc_gc_store_root"],
+                                  [self._as_gc_ptr(output), ir.Constant(_CSTR, None)])
+                moved = self.builder.call(self.runtime["pcc_gc_root_move"],
+                                          [self._as_gc_ptr(output), self._as_gc_ptr(merged)])
+                self._slot_call_check_status(moved, "keyword merge move", span)
+                self._release_slot_call_roots((source, merged))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
     def _emit_call_arg_object(self, arg: Expr) -> ir.Value:
         valueclass_payload = self._maybe_emit_valueclass_constructor_payload(
             arg.ty,
@@ -112,116 +953,80 @@ class CallObjectLoweringMixin:
         kwargs_expr: Optional[Expr],
         span: SourceSpan,
     ) -> ir.Value:
-        # Call keywords: every merge rejects a repeated key and a non-mapping
-        # ``**`` operand with CPython's TypeError (py_call_merge_kwargs_unique).
+        # Keep explicit-keyword runs together: Python evaluates a run's
+        # values before merging it with a preceding **mapping. Every merge
+        # rejects duplicate/non-string keys and preserves source order.
         self._reject_kwargs_merge_with_explicit_keywords(kwargs_expr, kwargs)
         if kwargs_expr is None and not kwargs:
             none_gv = declare_runtime_global(self.module, "py_None")
             return self.builder.load(none_gv, name=self._fresh("none"))
-        if kwargs_expr is not None and not kwargs:
-            star = self._emit_as_object(kwargs_expr)
-            cloned = self.builder.call(
-                self.runtime["py_call_merge_kwargs_unique"],
-                [ir.Constant(_CSTR, None), star],
-                name=self._fresh("call.kwargs.clone"),
-            )
-            self._emit_post_call_err_check(span)
-            return cloned
-
-        current: Optional[ir.Value] = None
-        pairs: list[tuple[Expr, Expr]] = []
+        operands = []
+        pairs = []
         for kw_name, kw_expr in kwargs:
             if kw_name == "**":
-                if current is None:
-                    base = self._emit_dynamic_call_kwargs_dict_literal(
-                        tuple(pairs),
-                        span,
-                    )
-                elif pairs:
-                    explicit = self._emit_dynamic_call_kwargs_dict_literal(
-                        tuple(pairs),
-                        span,
-                    )
-                    merged_explicit = self.builder.call(
-                        self.runtime["py_call_merge_kwargs_unique"],
-                        [current, explicit],
-                        name=self._fresh("call.kwargs.merge.explicit"),
-                    )
-                    self._emit_post_call_err_check(span)
-                    self._gc_release(current)
-                    self._gc_release(explicit)
-                    base = merged_explicit
-                else:
-                    base = current
-                pairs = []
-                star = self._emit_as_object(kw_expr)
-                current = self.builder.call(
-                    self.runtime["py_call_merge_kwargs_unique"],
-                    [base, star],
-                    name=self._fresh("call.kwargs.merge"),
-                )
-                self._emit_post_call_err_check(span)
-                self._gc_release(base)
-                continue
-            pairs.append(
-                (
-                    StrLit(
-                        span=kw_expr.span,
-                        ty=StrType(name="str"),
-                        value=kw_name,
-                    ),
-                    kw_expr,
-                )
-            )
-        if kwargs_expr is not None:
-            if current is None:
-                base = self._emit_dynamic_call_kwargs_dict_literal(
-                    tuple(pairs),
-                    span,
-                )
-            elif pairs:
-                explicit = self._emit_dynamic_call_kwargs_dict_literal(
-                    tuple(pairs),
-                    span,
-                )
-                merged_explicit = self.builder.call(
-                    self.runtime["py_call_merge_kwargs_unique"],
-                    [current, explicit],
-                    name=self._fresh("call.kwargs.merge.explicit"),
-                )
-                self._emit_post_call_err_check(span)
-                self._gc_release(current)
-                self._gc_release(explicit)
-                base = merged_explicit
+                if pairs:
+                    operands.append(("explicit", tuple(pairs)))
+                    pairs = []
+                operands.append(("mapping", kw_expr))
             else:
-                base = current
-            pairs = []
-            star = self._emit_as_object(kwargs_expr)
-            merged = self.builder.call(
-                self.runtime["py_call_merge_kwargs_unique"],
-                [base, star],
-                name=self._fresh("call.kwargs.merge"),
-            )
-            self._emit_post_call_err_check(span)
-            self._gc_release(base)
-            return merged
-        if current is not None:
-            if pairs:
-                explicit = self._emit_dynamic_call_kwargs_dict_literal(
-                    tuple(pairs),
-                    span,
+                pairs.append((
+                    StrLit(span=kw_expr.span, ty=StrType(name="str"), value=kw_name),
+                    kw_expr,
+                ))
+        if pairs:
+            operands.append(("explicit", tuple(pairs)))
+        if kwargs_expr is not None:
+            if self._is_kwargs_merge(kwargs_expr):
+                for mapping_expr in kwargs_expr.args:
+                    operands.append(("mapping", mapping_expr))
+            else:
+                operands.append(("mapping", kwargs_expr))
+
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy_error = self._cpy_operand_cleanup_block
+        roots = []
+        accumulator = None
+        try:
+            for kind, operand in operands:
+                self._try_err_block = self._extern_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if kind == "explicit":
+                    value = self._emit_dynamic_call_kwargs_dict_literal(operand, span)
+                    owned = True
+                else:
+                    value = self._emit_as_object(operand)
+                    owned = self._owned_release_needed(value, operand)
+                source_root = self._extern_enter_root(value, owned, "call.kwargs.source")
+                roots.append(source_root)
+                self._try_err_block = self._extern_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if accumulator is None and kind == "explicit":
+                    accumulator = source_root
+                    continue
+                base = (
+                    ir.Constant(_CSTR, None) if accumulator is None
+                    else self._extern_load_root(accumulator)
                 )
                 merged = self.builder.call(
                     self.runtime["py_call_merge_kwargs_unique"],
-                    [current, explicit],
-                    name=self._fresh("call.kwargs.merge.explicit"),
+                    [base, self._extern_load_root(source_root)],
+                    name=self._fresh("call.kwargs.merge.unique"),
                 )
                 self._emit_post_call_err_check(span)
-                self._gc_release(current)
-                self._gc_release(explicit)
-                return merged
-            return current
-        return self._emit_dynamic_call_kwargs_dict_literal(tuple(pairs), span)
+                merged_root = self._extern_enter_root(merged, True, "call.kwargs.merged")
+                # Merging produces a distinct dict. Protect it while retiring
+                # both the previous accumulator and the temporary mapping;
+                # either release can invoke a finalizer and collect.
+                self._extern_release_roots(tuple(roots))
+                roots = [merged_root]
+                accumulator = merged_root
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy_error
+        result = self._extern_take_root(accumulator)
+        self._note_owned_object_value(result)
+        return result
 
     def _emit_dynamic_call_kwargs_dict_literal(
         self,

@@ -596,6 +596,7 @@ _repair_closed_world_default_global_owners = _pipeline_closed_world._repair_clos
 _mark_closed_world_function_object_exports = _pipeline_closed_world._mark_closed_world_function_object_exports
 _apply_closed_world_function_object_uses = _pipeline_closed_world._apply_closed_world_function_object_uses
 _closed_world_function_object_exports = _pipeline_closed_world._closed_world_function_object_exports
+_closed_world_boxed_int_functions = _pipeline_closed_world._closed_world_boxed_int_functions
 _write_reexport_edges_wire = _pipeline_closed_world._write_reexport_edges_wire
 _read_reexport_edges_wire = _pipeline_closed_world._read_reexport_edges_wire
 _closed_world_shallow_func_body = _pipeline_closed_world._closed_world_shallow_func_body
@@ -3655,6 +3656,9 @@ def compile_python_multi(
                 codegen._native_module_exports = codegen_exports
                 codegen._native_function_object_exports = (
                     _closed_world_function_object_exports(native_exports, mod_name)
+                )
+                codegen._native_boxed_int_functions = _closed_world_boxed_int_functions(
+                    native_exports, mod_name,
                 )
             except Exception as exc:
                 raise PyPipelineError(

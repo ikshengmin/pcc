@@ -31,6 +31,9 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+
 pcc_gc_index_slot_size = extern("pcc_gc_index_slot_size", (), c_int64)
 
 
@@ -412,7 +415,7 @@ def pcc_gc_forwarding_install_plan_prepare(
         or ptr_eq(from_obj, to_obj) != 0
         or pcc_gc_object_is_known_no_lock(from_obj) == 0
         or pcc_gc_object_is_known_no_lock(to_obj) == 0
-        or (load_i32(from_obj, 12) & 64) != 0
+        or pcc_gc_object_is_address_pinned(from_obj) != 0
         or ptr_is_null(pcc_gc_forwarding_find(from_obj)) == 0
         or ptr_is_null(_forwarding_target_find(to_obj)) == 0
     ):
@@ -486,7 +489,7 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
     ):
         return -1
     flags: i64 = load_i32(from_obj, 12)
-    if (flags & 64) != 0:
+    if pcc_gc_object_is_address_pinned(from_obj) != 0:
         rejects: i64 = load_i32(global_addr("pcc_gc_relocation_pin_rejects"), 0)
         store_i32(global_addr("pcc_gc_relocation_pin_rejects"), 0, rejects + 1)
         return -2
@@ -619,7 +622,7 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
     if pcc_gc_object_is_known_no_lock(to_obj) == 0:
         return -1
     flags: i64 = load_i32(from_obj, 12)
-    if (flags & 64) != 0:
+    if pcc_gc_object_is_address_pinned(from_obj) != 0:
         rejects: i64 = load_i32(global_addr("pcc_gc_relocation_pin_rejects"), 0)
         store_i32(global_addr("pcc_gc_relocation_pin_rejects"), 0, rejects + 1)
         return -2

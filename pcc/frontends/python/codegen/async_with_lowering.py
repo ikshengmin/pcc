@@ -411,26 +411,22 @@ class AsyncWithLoweringMixin:
             # Return/break/continue must run this same exit, just like an
             # enclosing finally. An exception from __exit__ belongs outside
             # this manager rather than re-entering its own exception path.
-            saved_err_block = getattr(self, "_try_err_block", None)
-            self._try_err_block = prev_err_block
-            try:
-                context_value = self._emit_name(context_target)
-                none_gv = declare_runtime_global(self.module, "py_None")
-                none = self.builder.load(none_gv, name=self._fresh("with.none"))
-                if cleanup_runtime is None:
-                    self.builder.call(
-                        self.runtime["py_context_exit"],
-                        [context_value, none, none, none],
-                        name=self._fresh("with.exit"),
-                    )
-                else:
-                    self.builder.call(self.runtime[cleanup_runtime], [context_value])
-                clear_context()
-                self._emit_post_call_err_check()
-            finally:
-                self._try_err_block = saved_err_block
+            context_value = self._emit_name(context_target)
+            none_gv = declare_runtime_global(self.module, "py_None")
+            none = self.builder.load(none_gv, name=self._fresh("with.none"))
+            if cleanup_runtime is None:
+                self.builder.call(
+                    self.runtime["py_context_exit"],
+                    [context_value, none, none, none],
+                    name=self._fresh("with.exit"),
+                )
+            else:
+                self.builder.call(self.runtime[cleanup_runtime], [context_value])
+            clear_context()
+            self._emit_post_call_err_check()
+        exit_entry = ("pcc.finally.call", exit_normal, prev_err_block, len(self._return_cleanup_roots))
         outer_finallys = list(self._finally_stack)
-        self._finally_stack = outer_finallys + [exit_normal]
+        self._finally_stack = outer_finallys + [exit_entry]
         self._try_err_block = err_bb
         try:
             self._emit_stmts(stmt.body)
@@ -439,7 +435,7 @@ class AsyncWithLoweringMixin:
             self._finally_stack = outer_finallys
 
         if not self._builder_block_is_terminated():
-            exit_normal()
+            self._emit_finally_entry(exit_entry)
             self.builder.branch(after_bb)
 
         self.builder.position_at_end(err_bb)

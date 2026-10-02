@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 
@@ -541,16 +542,35 @@ def _json_str(text: str) -> str:
 
 
 def _make_bootstrap_run_tempdir(prefix: str) -> str:
-    base = os.environ.get("TMPDIR") or "/tmp"
+    base = os.environ.get("TMPDIR")
+    if not base and sys.platform.startswith("win"):
+        base = os.environ.get("TEMP") or os.environ.get("TMP") or "."
+    if not base:
+        base = "/tmp"
     pid = os.getpid()
-    path = os.path.join(base, prefix + str(pid))
-    _bootstrap_subprocess_run(["rm", "-rf", path], check=True)
-    _bootstrap_subprocess_run(["mkdir", "-p", path], check=True)
-    return path
+    # Exclusive creation preserves concurrent/nested requests and never removes
+    # a pre-existing path (including a symlink) just to acquire scratch space.
+    # os.makedirs lowers to the owned platform filesystem implementation.
+    attempt = 0
+    while attempt < 100:
+        path = os.path.join(base, prefix + str(pid) + "-" + str(attempt))
+        try:
+            os.makedirs(path, mode=0o700)
+            return path
+        except OSError:
+            if not os.path.exists(path) and not os.path.islink(path):
+                raise
+        attempt += 1
+    raise OSError("could not create exclusive pcc scratch directory")
 
 
 def _remove_bootstrap_run_tempdir(path: str) -> None:
-    _bootstrap_subprocess_run(["rm", "-rf", path], check=True)
+    if os.path.islink(path):
+        os.unlink(path)
+    elif os.path.exists(path):
+        # shutil.rmtree is a compiler intrinsic backed by py_shutil_rmtree,
+        # not an import or subprocess of the host shutil implementation.
+        shutil.rmtree(path)
 
 
 def _python_program_command(
@@ -4345,528 +4365,32 @@ def _native_build_exec_json(
     enforce_generated_c: bool,
     build_mode: str = "owned",
 ) -> str:
-    pkg_name = (name or "").strip() or "package"
-    root = _native_package_path(pkg_name, explicit_path)
-    actions = "["
-    diagnostics = []
-    object_outputs = []
-    vendor_bindings = "[]"
-    linkage = "null"
-    generated_c_provenance = "[]"
-    ok = True
-    effective_include_dirs = _copy_seq(include_dirs)
+    import json
+    from pcc.package.build_exec import execute_build_actions
 
-    def add_action(kind: str, source, output, command, status: str, returncode) -> None:
-        nonlocal actions, ok
-        if actions != "[":
-            actions += ", "
-        actions += "{"
-        actions += '"command": ' + _json_str_list(command)
-        actions += ', "kind": ' + _json_str(kind)
-        actions += ', "output": ' + _json_str_or_null(output)
-        actions += ', "returncode": ' + (
-            "null" if returncode is None else str(returncode)
-        )
-        actions += ', "source": ' + _json_str_or_null(source)
-        actions += ', "status": ' + _json_str(status)
-        actions += "}"
-        if status == "blocked" or status == "failed" or status == "timeout":
-            ok = False
-
-    if root is None or not os.path.isdir(root):
-        diagnostics.append("PCC-PKG-BUILD-PATH-MISSING")
-        ok = False
-    else:
-        if execute:
-            try:
-                _bootstrap_subprocess_run(
-                    ["mkdir", "-p", root + "/build/pcc-package"], check=True
-                )
-            except Exception:
-                diagnostics.append("PCC-PKG-BUILD-DIR-FAILED")
-                ok = False
-
-        pyx_files = _native_collect_suffix_files(root, [".pyx"], True)
-        c_files = _native_collect_suffix_files(root, [".c"], True)
-        fortran_files = _native_collect_suffix_files(
-            root,
-            [".f", ".for", ".f77", ".f90", ".f95", ".f03", ".f08"],
-            True,
-        )
-
-        if (
-            abi_mode == "pcc-native"
-            and len(c_files) > 0
-            and not from_compile_commands
-            and not from_meson_introspection
-        ):
-            pcc_includes = _native_materialize_pcc_capi_include(root, execute)
-            if pcc_includes[0] is None or pcc_includes[1] is None:
-                diagnostics.append("PCC-PKG-CAPI-INCLUDE-MISSING")
-                ok = False
-            else:
-                if not _native_list_contains(effective_include_dirs, pcc_includes[0]):
-                    effective_include_dirs.append(pcc_includes[0])
-                if not _native_list_contains(effective_include_dirs, pcc_includes[1]):
-                    effective_include_dirs.append(pcc_includes[1])
-
-        if (
-            len(pyx_files) > 0
-            and not regenerate_cython
-            and execute
-            and not from_compile_commands
-            and not from_meson_introspection
-        ):
-            diagnostics.append("PCC-PKG-CYTHON-REGENERATION-REQUIRED")
-        if regenerate_cython:
-            cython = _native_find_tool_path(["cython", "cython3"], search_paths)
-            i = 0
-            while i < len(pyx_files):
-                source = pyx_files[i]
-                output = source[:-4] + ".c"
-                command = [cython or "cython", source, "-o", output]
-                if execute and cython is None:
-                    add_action(
-                        "cython_regenerate", source, output, command, "blocked", None
-                    )
-                    diagnostics.append("PCC-PKG-MISSING-CYTHON")
-                elif execute:
-                    try:
-                        _bootstrap_subprocess_run(command, check=True)
-                        add_action(
-                            "cython_regenerate",
-                            source,
-                            output,
-                            command,
-                            "passed",
-                            0,
-                        )
-                    except Exception:
-                        add_action(
-                            "cython_regenerate", source, output, command, "failed", 127
-                        )
-                else:
-                    add_action(
-                        "cython_regenerate", source, output, command, "planned", None
-                    )
-                i += 1
-
-        generated_c_provenance = _native_generated_c_provenance_json(
-            root,
-            diagnostics,
-            enforce_generated_c,
-        )
-
-        if run_f2py:
-            f2py = _native_find_tool_path(["f2py", "f2py3"], search_paths)
-            i = 0
-            while i < len(fortran_files):
-                source = fortran_files[i]
-                command = [f2py or "f2py", "-c", source]
-                if execute and f2py is None:
-                    add_action("f2py_build", source, None, command, "blocked", None)
-                    diagnostics.append("PCC-PKG-MISSING-F2PY")
-                elif execute:
-                    try:
-                        _bootstrap_subprocess_run(command, check=True)
-                        add_action(
-                            "f2py_build",
-                            source,
-                            None,
-                            command,
-                            "passed",
-                            0,
-                        )
-                    except Exception:
-                        add_action("f2py_build", source, None, command, "failed", 127)
-                else:
-                    add_action("f2py_build", source, None, command, "planned", None)
-                i += 1
-
-        cc = _native_find_tool_path(["cc", "clang", "gcc"], search_paths)
-        fortran = _native_find_tool_path(
-            ["gfortran", "flang", "ifx", "ifort"], search_paths
-        )
-        if from_compile_commands:
-            rows = _native_compile_command_rows(root)
-            i = 0
-            while i < len(rows):
-                command = rows[i][1]
-                if len(command) > 0 and _native_find_from(command[0], "/", 0) < 0:
-                    found_tool = _native_find_tool_path([command[0]], search_paths)
-                    if found_tool is not None:
-                        command[0] = found_tool
-                output = rows[i][2]
-                if output is not None:
-                    object_outputs.append(output)
-                if execute:
-                    try:
-                        _bootstrap_subprocess_run(command, check=True)
-                        add_action(
-                            "compile_command", None, output, command, "passed", 0
-                        )
-                    except Exception:
-                        add_action(
-                            "compile_command", None, output, command, "failed", 127
-                        )
-                else:
-                    add_action(
-                        "compile_command", None, output, command, "planned", None
-                    )
-                i += 1
-        elif from_meson_introspection:
-            rows = _native_meson_command_rows(root)
-            if len(rows) == 0 and configure_meson:
-                meson = _native_find_tool_path(["meson"], search_paths)
-                setup_dir = root + "/build/pcc-package/meson-build"
-                command = [meson or "meson", "setup", setup_dir, root]
-                if execute and meson is None:
-                    add_action("meson_setup", None, setup_dir, command, "blocked", None)
-                    if not _native_list_contains(diagnostics, "PCC-PKG-MISSING-MESON"):
-                        diagnostics.append("PCC-PKG-MISSING-MESON")
-                elif execute:
-                    try:
-                        _bootstrap_subprocess_run(command, check=True)
-                        add_action("meson_setup", None, setup_dir, command, "passed", 0)
-                        rows = _native_meson_command_rows(root)
-                    except Exception:
-                        add_action(
-                            "meson_setup", None, setup_dir, command, "failed", 127
-                        )
-                else:
-                    add_action("meson_setup", None, setup_dir, command, "planned", None)
-            if len(rows) == 0:
-                if not configure_meson or execute:
-                    diagnostics.append("PCC-PKG-MESON-INTROSPECTION-MISSING")
-                    ok = False
-            generated_targets = []
-            if execute and len(rows) > 0:
-                generated_targets = _native_ninja_custom_targets(root, search_paths)
-            if len(generated_targets) > 0:
-                ninja = _native_find_tool_path(["ninja"], search_paths) or "ninja"
-                build_dir = _native_meson_build_dir(root)
-                command = [ninja, "-C", build_dir]
-                g = 0
-                while g < len(generated_targets):
-                    command.append(generated_targets[g])
-                    g += 1
-                try:
-                    _bootstrap_subprocess_run(command, check=True)
-                    add_action(
-                        "meson_generated_targets", None, None, command, "passed", 0
-                    )
-                except Exception:
-                    add_action(
-                        "meson_generated_targets", None, None, command, "failed", 127
-                    )
-            i = 0
-            while i < len(rows):
-                source = rows[i][0]
-                language = rows[i][1]
-                output = rows[i][2]
-                object_outputs.append(output)
-                if language == "fortran":
-                    command = [fortran or "gfortran", "-c", source, "-o", output]
-                    kind = "meson_compile_fortran"
-                    tool_missing = fortran is None
-                    missing_diag = "PCC-PKG-MISSING-FORTRAN"
-                elif language == "cxx":
-                    command = [cc or "cc", "-c", source, "-o", output]
-                    kind = "meson_compile_cxx"
-                    tool_missing = cc is None
-                    missing_diag = "PCC-PKG-MISSING-C-COMPILER"
-                else:
-                    command = [cc or "cc", "-c", source, "-o", output]
-                    kind = "meson_compile_c"
-                    tool_missing = cc is None
-                    missing_diag = "PCC-PKG-MISSING-C-COMPILER"
-                if execute and tool_missing:
-                    add_action(kind, source, output, command, "blocked", None)
-                    if not _native_list_contains(diagnostics, missing_diag):
-                        diagnostics.append(missing_diag)
-                elif execute:
-                    try:
-                        _bootstrap_subprocess_run(command, check=True)
-                        add_action(kind, source, output, command, "passed", 0)
-                    except Exception:
-                        add_action(kind, source, output, command, "failed", 127)
-                else:
-                    add_action(kind, source, output, command, "planned", None)
-                i += 1
-        else:
-            i = 0
-            while i < len(c_files):
-                source = c_files[i]
-                base = os.path.basename(source).split(".")[0]
-                output = root + "/build/pcc-package/" + base + ".o"
-                object_outputs.append(output)
-                command = [cc or "cc", "-c"]
-                if link_output is not None:
-                    command.append("-fPIC")
-                j = 0
-                while j < len(effective_include_dirs):
-                    command.append("-I" + effective_include_dirs[j])
-                    j += 1
-                command.append(source)
-                command.append("-o")
-                command.append(output)
-                if execute and cc is None:
-                    add_action("c_compile", source, output, command, "blocked", None)
-                    diagnostics.append("PCC-PKG-MISSING-C-COMPILER")
-                elif execute:
-                    try:
-                        _bootstrap_subprocess_run(command, check=True)
-                        add_action(
-                            "c_compile",
-                            source,
-                            output,
-                            command,
-                            "passed",
-                            0,
-                        )
-                    except Exception:
-                        add_action("c_compile", source, output, command, "failed", 127)
-                else:
-                    add_action("c_compile", source, output, command, "planned", None)
-                i += 1
-
-            i = 0
-            while i < len(fortran_files):
-                source = fortran_files[i]
-                base = os.path.basename(source).split(".")[0]
-                output = root + "/build/pcc-package/" + base + ".o"
-                object_outputs.append(output)
-                command = [fortran or "gfortran", "-c", source, "-o", output]
-                if execute and fortran is None:
-                    add_action(
-                        "fortran_compile", source, output, command, "blocked", None
-                    )
-                    diagnostics.append("PCC-PKG-MISSING-FORTRAN")
-                elif execute:
-                    try:
-                        _bootstrap_subprocess_run(command, check=True)
-                        add_action(
-                            "fortran_compile",
-                            source,
-                            output,
-                            command,
-                            "passed",
-                            0,
-                        )
-                    except Exception:
-                        add_action(
-                            "fortran_compile", source, output, command, "failed", 127
-                        )
-                else:
-                    add_action(
-                        "fortran_compile", source, output, command, "planned", None
-                    )
-                i += 1
-
-        vendor_bindings = _native_vendor_bindings_json(
-            libraries, library_dirs, diagnostics
-        )
-        linkage = "null"
-        if link_output is not None:
-            if link_output.startswith("/"):
-                link_path = link_output
-            else:
-                link_path = root + "/" + link_output
-            command = [cc or "cc", "-shared"]
-            if sys.platform == "darwin":
-                command.append("-undefined")
-                command.append("dynamic_lookup")
-            i = 0
-            while i < len(object_outputs):
-                command.append(object_outputs[i])
-                i += 1
-            command.append("-o")
-            command.append(link_path)
-            i = 0
-            while i < len(library_dirs):
-                command.append("-L" + library_dirs[i])
-                i += 1
-            i = 0
-            while i < len(libraries):
-                binding = _native_find_library_binding_values(
-                    libraries[i], library_dirs
-                )
-                if binding[0]:
-                    command.append("-l" + binding[1])
-                i += 1
-            if execute and cc is None:
-                add_action("native_link", None, link_path, command, "blocked", None)
-            elif execute and not ok:
-                add_action("native_link", None, link_path, command, "blocked", None)
-            elif execute:
-                try:
-                    _bootstrap_subprocess_run(command, check=True)
-                    add_action("native_link", None, link_path, command, "passed", 0)
-                except Exception:
-                    add_action("native_link", None, link_path, command, "failed", 127)
-            else:
-                add_action("native_link", None, link_path, command, "planned", None)
-            artifacts = []
-            if os.path.exists(link_path):
-                artifacts.append(link_path)
-            linkage = _native_linkage_json(artifacts, [], [" ".join(command)], abi_mode)
-            if _native_find_from(linkage, '"ok": false', 0) >= 0:
-                ok = False
-                if not _native_list_contains(diagnostics, "PCC-PKG-003"):
-                    diagnostics.append("PCC-PKG-003")
-    if (
-        _native_list_contains(diagnostics, "PCC-PKG-GENERATED-C-MISSING")
-        or _native_list_contains(diagnostics, "PCC-PKG-GENERATED-C-STALE")
-        or _native_list_contains(diagnostics, "PCC-PKG-MISSING-LIBRARY")
-    ):
-        ok = False
-    if not ok and not _native_list_contains(diagnostics, "PCC-PKG-BUILD-ACTION-FAILED"):
-        diagnostics.append("PCC-PKG-BUILD-ACTION-FAILED")
-    actions += "]"
-    out = "{"
-    out += '"actions": ' + actions
-    out += ', "build_backend": "pcc-native"'
-    out += ', "build_mode_requested": ' + _json_str(build_mode)
-    out += ', "build_ownership": "owned"'
-    out += ', "build_plan": ' + _native_build_plan_json(pkg_name, root)
-    out += ', "diagnostics": ' + _json_str_list(diagnostics)
-    out += ', "execute": ' + ("true" if execute else "false")
-    # Host contract (build_exec.py): the report echoes the CALLER's include
-    # dirs; internally materialized pcc-capi include dirs stay internal to the
-    # compile commands (they are visible there), so host and pcc1 reports stay
-    # byte-comparable.
-    out += ', "include_dirs": ' + _json_str_list(_copy_seq(include_dirs))
-    out += ', "from_compile_commands": ' + (
-        "true" if from_compile_commands else "false"
+    report = execute_build_actions(
+        name, explicit_path, search_paths=search_paths, include_dirs=include_dirs,
+        library_dirs=library_dirs, execute=execute,
+        regenerate_cython=regenerate_cython, run_f2py=run_f2py,
+        link_output=link_output, libraries=libraries, abi_mode=abi_mode,
+        from_compile_commands=from_compile_commands,
+        from_meson_introspection=from_meson_introspection,
+        configure_meson=configure_meson, enforce_generated_c=enforce_generated_c,
+        build_mode=build_mode,
+        owned_compiler=_native_bootstrap_executable(),
     )
-    out += ', "from_meson_introspection": ' + (
-        "true" if from_meson_introspection else "false"
-    )
-    out += ', "configure_meson": ' + ("true" if configure_meson else "false")
-    out += ', "generated_c_provenance": ' + generated_c_provenance
-    out += ', "host_assisted": false'
-    out += ', "host_free_build_claim": ' + ("true" if ok else "false")
-    out += ', "host_python": null'
-    out += ', "linkage": ' + linkage
-    out += ', "name": ' + _json_str(pkg_name)
-    out += ', "ok": ' + ("true" if ok else "false")
-    out += ', "path": ' + _json_str_or_null(root)
-    out += ', "vendor_bindings": ' + vendor_bindings
-    out += "}"
-    return out
+    return json.dumps(report, sort_keys=True)
 
 
 def _run_native_package_build_exec_from_pcc1(module_args) -> int:
-    name = "package"
-    path = None
-    search_paths = []
-    include_dirs = []
-    library_dirs = []
-    libraries = []
-    link_output = None
-    abi_mode = "pcc-native"
-    execute = False
-    regenerate_cython = False
-    run_f2py = False
-    from_compile_commands = False
-    from_meson_introspection = False
-    configure_meson = False
-    enforce_generated_c = False
-    i = 0
-    while i < len(module_args):
-        arg = module_args[i]
-        if arg == "--json":
-            pass
-        elif arg == "--path":
-            if i + 1 >= len(module_args):
-                _write_text("Error: --path requires a value", err=True)
-                return 2
-            path = module_args[i + 1]
-            i += 1
-        elif arg == "--search-path":
-            if i + 1 >= len(module_args):
-                _write_text("Error: --search-path requires a value", err=True)
-                return 2
-            search_paths.append(module_args[i + 1])
-            i += 1
-        elif arg.startswith("--search-path="):
-            search_paths.append(arg.split("=", 1)[1])
-        elif arg == "--include-dir":
-            if i + 1 >= len(module_args):
-                _write_text("Error: --include-dir requires a value", err=True)
-                return 2
-            include_dirs.append(module_args[i + 1])
-            i += 1
-        elif arg.startswith("--include-dir="):
-            include_dirs.append(arg.split("=", 1)[1])
-        elif arg == "--library-dir":
-            if i + 1 >= len(module_args):
-                _write_text("Error: --library-dir requires a value", err=True)
-                return 2
-            library_dirs.append(module_args[i + 1])
-            i += 1
-        elif arg.startswith("--library-dir="):
-            library_dirs.append(arg.split("=", 1)[1])
-        elif arg == "--library":
-            if i + 1 >= len(module_args):
-                _write_text("Error: --library requires a value", err=True)
-                return 2
-            libraries.append(module_args[i + 1])
-            i += 1
-        elif arg.startswith("--library="):
-            libraries.append(arg.split("=", 1)[1])
-        elif arg == "--link-output":
-            if i + 1 >= len(module_args):
-                _write_text("Error: --link-output requires a value", err=True)
-                return 2
-            link_output = module_args[i + 1]
-            i += 1
-        elif arg.startswith("--link-output="):
-            link_output = arg.split("=", 1)[1]
-        elif arg == "--abi":
-            if i + 1 >= len(module_args):
-                _write_text("Error: --abi requires a value", err=True)
-                return 2
-            abi_mode = module_args[i + 1]
-            i += 1
-        elif arg.startswith("--abi="):
-            abi_mode = arg.split("=", 1)[1]
-        elif arg == "--execute":
-            execute = True
-        elif arg == "--regenerate-cython":
-            regenerate_cython = True
-        elif arg == "--run-f2py":
-            run_f2py = True
-        elif arg == "--from-compile-commands":
-            from_compile_commands = True
-        elif arg == "--from-meson-introspection":
-            from_meson_introspection = True
-        elif arg == "--configure-meson":
-            configure_meson = True
-        elif arg == "--enforce-generated-c":
-            enforce_generated_c = True
-        elif not arg.startswith("-"):
-            name = arg
-        i += 1
-    report = _native_build_exec_json(
-        name,
-        path,
-        search_paths,
-        include_dirs,
-        library_dirs,
-        execute,
-        regenerate_cython,
-        run_f2py,
-        link_output,
-        libraries,
-        abi_mode,
-        from_compile_commands,
-        from_meson_introspection,
-        configure_meson,
-        enforce_generated_c,
-    )
-    _write_text(report)
-    return 2 if _native_find_from(report, '"ok": false', 0) >= 0 else 0
+    # One parser owns both entrypoints, including jobs, deadlines, target
+    # selection, report files and unknown-option diagnostics.
+    from pcc.package.build_exec import main
+
+    try:
+        return main(module_args, owned_compiler=_native_bootstrap_executable())
+    except SystemExit as exc:
+        return int(exc.code)
 
 
 def _run_native_package_ext_abi_from_pcc1(module_args) -> int:
@@ -9475,6 +8999,8 @@ def _native_owned_meson_build_json(name: str, source: str) -> str:
             source,
             "--execute",
             "--eager-meson-extensions",
+            "--owned-compiler",
+            compiler,
             "--jobs",
             str(jobs),
             "--timeout",
@@ -10429,13 +9955,10 @@ def _run_c_cli(argv) -> int:
     """
     from pcc.driver.cli_core import cli_main
 
-    backend = os.environ.get("PCC_BACKEND", "") or DEFAULT_PUBLIC_BACKEND
-    core_argv = ["--backend", backend]
-    i = 0
-    while i < len(argv):
-        core_argv.append(argv[i])
-        i += 1
-    return cli_main(core_argv)
+    # The core compiler already resolves the shared backend default and
+    # PCC_BACKEND. Preserve the original first argument: prepending compiler
+    # flags hides tool commands such as ``sync`` from its command dispatcher.
+    return cli_main(argv)
 
 
 def _requires_full_compile_cli(argv) -> bool:
@@ -11606,9 +11129,7 @@ def _bootstrap_cli_main_impl(
                 return 1
         if cache_path is not None:
             try:
-                _bootstrap_subprocess_run(
-                    ["mkdir", "-p", os.path.dirname(cache_path)], check=True
-                )
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
             except Exception:
                 cache_path = None
         if cache_path is not None:
@@ -11634,9 +11155,7 @@ def _bootstrap_cli_main_impl(
             if formatted_error is not None:
                 return 1
             try:
-                _bootstrap_subprocess_run(
-                    ["mv", "-f", exe_path, cache_path], check=True
-                )
+                os.replace(exe_path, cache_path)
             except Exception:
                 cache_path = exe_path
             try:

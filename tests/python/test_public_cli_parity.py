@@ -52,7 +52,28 @@ def test_c_request_enters_full_frontend_in_process(monkeypatch):
                         lambda *a, **k: pytest.fail("host C delegation"))
     monkeypatch.setattr(core, "cli_main", lambda args: calls.append(args) or 19)
     assert launcher.main(["--separate-tus", "project"]) == 19
-    assert calls == [["--backend", "self", "--separate-tus", "project"]]
+    assert calls == [["--separate-tus", "project"]]
+
+
+def test_sync_help_reaches_tool_dispatch_from_public_module():
+    result = subprocess.run(
+        [sys.executable, "-m", "pcc", "sync", "--help"],
+        cwd=ROOT, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage: pcc sync" in result.stdout
+    assert "--lock" in result.stdout
+    assert "Pcc - an owned C and Python compiler" not in result.stdout
+
+
+def test_core_dispatch_preserves_tool_arguments_and_exit_status(monkeypatch):
+    import pcc.driver.cli_bootstrap as bootstrap
+    import pcc.package.uv_lock_sync as sync
+
+    calls = []
+    monkeypatch.setattr(sync, "main", lambda args: calls.append(args) or 23)
+    assert bootstrap.bootstrap_cli_main(["sync", "--lock", "project.lock"]) == 23
+    assert calls == [["--lock", "project.lock"]]
 
 
 def test_python_output_and_program_arguments_do_not_select_c(monkeypatch, tmp_path):

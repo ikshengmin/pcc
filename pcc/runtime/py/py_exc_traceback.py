@@ -7,9 +7,10 @@ but uses pcc.unsafe.write instead of variadic fprintf.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PYCLASSOBJECT_NAME_OFFSET, PY_TYPE_EXC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_STR, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import PYCLASSOBJECT_NAME_OFFSET, PY_FLAG_EXC_SUPPRESS_CONTEXT, PY_TYPE_EXC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_STR, PY_TYPE_USER_CLASS_START
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_load_i32,
     atomic_rmw_i32,
     cstr,
     define_global_ptr_null,
@@ -170,7 +171,7 @@ def _exc_display_text(e):
     CPython's ``str(exc)`` does instead of being dropped from the heading.
     """
     msg = pcc_gc_load_ptr(e, ptr_add(e, 24))
-    if ptr_is_null(msg) != 0 or ptr_eq(msg, global_load_ptr("py_None")) != 0:
+    if ptr_is_null(msg) != 0:
         return null()
     text = py_obj_str(e)
     if ptr_is_null(text) != 0:
@@ -321,6 +322,7 @@ def py_exc_print_unhandled(exc) -> None:
 
     cause = pcc_gc_load_ptr(exc, ptr_add(exc, 32))
     context = pcc_gc_load_ptr(exc, ptr_add(exc, 40))
+    suppressed: int = atomic_load_i32(exc, 12, "relaxed") & PY_FLAG_EXC_SUPPRESS_CONTEXT
     if _is_exception(cause) != 0:
         py_exc_print_unhandled(cause)
         write(
@@ -331,7 +333,7 @@ def py_exc_print_unhandled(exc) -> None:
             ),
             71,
         )
-    elif _is_exception(context) != 0:
+    elif suppressed == 0 and _is_exception(context) != 0:
         py_exc_print_unhandled(context)
         write(
             2,
@@ -531,6 +533,7 @@ def _tb_format_into(b, exc, depth: int) -> None:
     if depth < 8:
         cause = pcc_gc_load_ptr(exc, ptr_add(exc, 32))
         context = pcc_gc_load_ptr(exc, ptr_add(exc, 40))
+        suppressed: int = atomic_load_i32(exc, 12, "relaxed") & PY_FLAG_EXC_SUPPRESS_CONTEXT
         if _is_exception(cause) != 0:
             _tb_format_into(b, cause, depth + 1)
             _tb_append(
@@ -540,7 +543,7 @@ def _tb_format_into(b, exc, depth: int) -> None:
                     "following exception:\n\n"
                 ),
             )
-        elif _is_exception(context) != 0:
+        elif suppressed == 0 and _is_exception(context) != 0:
             _tb_format_into(b, context, depth + 1)
             _tb_append(
                 b,

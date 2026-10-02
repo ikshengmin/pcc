@@ -38,6 +38,7 @@ def _py_ast_field_names(obj):
 
 
 _PY_AST_BASE_NAME_OVERRIDES = {
+    "RawPointerType": ("Type",),
     "IntType": ("Type",),
     "FloatType": ("Type",),
     "ComplexType": ("Type",),
@@ -109,6 +110,7 @@ _PY_AST_FIELD_TYPE_OVERRIDES = {
         "end_col": "int",
     },
     "Type": {"name": "str"},
+    "RawPointerType": {"name": "str"},
     "IntType": {"name": "str", "width": "int", "signed": "bool"},
     "FloatType": {"name": "str", "width": "int"},
     "ComplexType": {"name": "str"},
@@ -191,6 +193,7 @@ _PY_AST_FIELD_TYPE_OVERRIDES = {
         "args": "tuple[Expr, ...]",
         "kwargs": "tuple[tuple[str, Expr], ...]",
         "operand_order": "tuple[tuple[str, int], ...]",
+        "is_set_literal": "bool",
     },
     "Attr": {"span": "SourceSpan", "ty": "Type", "obj": "Expr", "name": "str"},
     "Subscript": {
@@ -232,6 +235,7 @@ _PY_AST_FIELD_TYPE_OVERRIDES = {
         "targets": "tuple[Expr, ...]",
         "value": "Expr",
         "annotation": "Type",
+        "has_value": "bool",
     },
     "AugAssign": {
         "span": "SourceSpan",
@@ -310,6 +314,8 @@ _PY_AST_FIELD_TYPE_OVERRIDES = {
         "decorators": "tuple[Expr, ...]",
         "is_method": "bool",
         "is_async": "bool",
+        "has_return_annotation": "bool",
+        "manual_pointer_abi": "bool",
     },
     "ClassDef": {
         "span": "SourceSpan",
@@ -359,6 +365,8 @@ def _py_ast_field_type_override(class_name: str, field_name: str):
             ("decorators", "tuple[Expr, ...]"),
             ("is_method", "bool"),
             ("is_async", "bool"),
+            ("has_return_annotation", "bool"),
+            ("manual_pointer_abi", "bool"),
         )
     elif class_name == "ClassDef":
         pairs = (
@@ -375,6 +383,7 @@ def _py_ast_field_type_override(class_name: str, field_name: str):
             ("targets", "tuple[Expr, ...]"),
             ("value", "Expr"),
             ("annotation", "Type"),
+            ("has_value", "bool"),
         )
     elif class_name == "For":
         pairs = (
@@ -404,6 +413,7 @@ def _py_ast_field_type_override(class_name: str, field_name: str):
             ("args", "tuple[Expr, ...]"),
             ("kwargs", "tuple[tuple[str, Expr], ...]"),
             ("operand_order", "tuple[tuple[str, int], ...]"),
+            ("is_set_literal", "bool"),
         )
     elif class_name == "Attr":
         pairs = (
@@ -550,6 +560,8 @@ def _py_ast_node_from_wire(kind: str, fields):
         )
     if kind == "Type":
         return _pa.Type(_py_ast_wire_field(fields, "name", ""))
+    if kind == "RawPointerType":
+        return _pa.RawPointerType(_py_ast_wire_field(fields, "name", "pcc.extern.c_rawptr"))
     if kind == "IntType":
         return _pa.IntType(
             _py_ast_wire_field(fields, "name", "int"),
@@ -717,6 +729,7 @@ def _py_ast_node_from_wire(kind: str, fields):
             _py_ast_wire_field(fields, "args", ()),
             _py_ast_wire_field(fields, "kwargs", ()),
             _py_ast_wire_field(fields, "operand_order", ()),
+            _py_ast_wire_bool_field(fields, "is_set_literal", False),
         )
     if kind == "Attr":
         return _pa.Attr(
@@ -779,6 +792,9 @@ def _py_ast_node_from_wire(kind: str, fields):
             _py_ast_wire_field(fields, "targets", ()),
             _py_ast_wire_field(fields, "value"),
             _py_ast_wire_field(fields, "annotation"),
+            # Older wire nodes represented every Assign as a value store.
+            # Do not guess declaration-only syntax from a NoneLit value.
+            _py_ast_wire_field(fields, "has_value", True),
         )
     if kind == "AugAssign":
         return _pa.AugAssign(
@@ -899,6 +915,8 @@ def _py_ast_node_from_wire(kind: str, fields):
             _py_ast_wire_field(fields, "decorators", ()),
             _py_ast_wire_field(fields, "is_method", False),
             _py_ast_wire_field(fields, "is_async", False),
+            _py_ast_wire_field(fields, "has_return_annotation", False),
+            _py_ast_wire_field(fields, "manual_pointer_abi", False),
         )
     if kind == "ClassDef":
         return _pa.ClassDef(

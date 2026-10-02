@@ -25,7 +25,7 @@ next: perturb >>= 5; j = (j*5 + perturb + 1) & mask).
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_SET
+from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_SET
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.unsafe import (
     cstr,
@@ -115,6 +115,17 @@ py_list_new          = extern("py_list_new",          (c_int64,),               
 py_list_append       = extern("py_list_append",       (c_ptr, c_ptr),               c_void)
 py_list_get          = extern("py_list_get",          (c_ptr, c_int64),             c_ptr)
 py_list_len          = extern("py_list_len",          (c_ptr,),                     c_int64)
+py_dict_len = extern("py_dict_len", (c_ptr,), c_int64)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_lease_prepare_locked = extern(
+    "pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64)
+pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
+pcc_gc_resolve_root_slot_unlocked = extern(
+    "pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 
 
 # INITIAL_CAPACITY is intentionally NOT a module-level constant —
@@ -248,6 +259,8 @@ def _set_remove_rooted_slot(
     entries,
     capacity: int,
     slot: int,
+    expected_slot,
+    expected_hash: int,
 ) -> int:
     s = _set_read_reload_root(set_slot, set_handle)
     plan = stack_alloc(128)
@@ -263,9 +276,18 @@ def _set_remove_rooted_slot(
             and slot < capacity
         ):
             slot_off: int = slot * 16
-            key = _entry_key(s, entries, slot_off)
+            key = load_ptr(entries, slot_off + 8)
             dummy = global_load_ptr("py_set_dummy")
-            if ptr_is_null(key) == 0 and ptr_eq(key, dummy) == 0:
+            matches: int = 1
+            if ptr_is_null(expected_slot) == 0:
+                # A successful lookup is not a reservation. Another mutator
+                # can remove that entry and reuse its tombstone before this
+                # lock is acquired, without changing table/capacity. The
+                # expected owning root is counted-leased through this commit.
+                matches = ptr_eq(key, load_ptr(expected_slot, 0))
+                if load_i64(entries, slot_off) != expected_hash:
+                    matches = 0
+            if matches != 0 and ptr_is_null(key) == 0 and ptr_eq(key, dummy) == 0:
                 # The tombstone is a sentinel, not a reference.  Storing it
                 # through the ordinary commit path increfed it, and the incref
                 # begins with the provenance probe, so every discard paid
@@ -312,7 +334,7 @@ def _set_add_rooted_slot(
             and slot < capacity
         ):
             slot_off: int = slot * 16
-            old = _entry_key(s, entries, slot_off)
+            old = load_ptr(entries, slot_off + 8)
             dummy = global_load_ptr("py_set_dummy")
             if ptr_is_null(old) != 0 or ptr_eq(old, dummy) != 0:
                 was_tombstone: int = ptr_eq(old, dummy)
@@ -416,6 +438,8 @@ def _set_lookup_rooted(s, item, mode: int, hash_val: int, hash_known: int) -> in
                                 entries,
                                 capacity,
                                 j,
+                                null(),
+                                0,
                             )
                         done = 1
                     elif not (
@@ -465,6 +489,8 @@ def _set_lookup_rooted(s, item, mode: int, hash_val: int, hash_known: int) -> in
                                         entries,
                                         capacity,
                                         j,
+                                        null(),
+                                        0,
                                     )
                                 done = 1
             if done == 0 and restart == 0:
@@ -1238,3 +1264,522 @@ def py_set_len(s) -> int:
     if ptr_is_null(s) != 0:
         return 0
     return load_i64(s, 16)
+
+
+# Slot-based algebra-call binder. These IDs are shared with set_lowering.py:
+# union/intersection/difference/update/intersection_update/difference_update/
+# symmetric_difference/symmetric_difference_update = 0..7.
+# Every internal slot is registered EMPTY, then receives an owning reference.
+# Tokens are counted address leases, never legacy Boolean pin flags.
+def _set_call_error(kind: int, message) -> None:
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(kind, message))
+
+
+def _set_call_load(slots, index: int):
+    return pcc_gc_load_ptr(null(), ptr_add(slots, index * 8))
+
+
+def _set_call_lease(slots, tokens, index: int) -> int:
+    token: int = pcc_gc_foreign_lease_acquire(ptr_add(slots, index * 8))
+    store_i64(tokens, index * 8, token)
+    if token < 0:
+        _set_call_error(15 if token == -2 else 7, cstr("cannot lease set call operand"))
+        return 0
+    return 1
+
+
+def _set_call_copy(slots, tokens, index: int, source_slot) -> int:
+    token: int = pcc_gc_root_copy_lease(ptr_add(slots, index * 8), source_slot)
+    store_i64(tokens, index * 8, token)
+    if token < 0:
+        _set_call_error(15 if token == -2 else 7, cstr("cannot retain set call operand"))
+        return 0
+    return 1
+
+
+def _set_call_copy_prepare(slots, tokens, index: int, source_slot, plan) -> int:
+    # Selection from a mutable payload and retention are one graph transaction.
+    # Finish (including diagnostics/finalizers) must happen after outer unlock.
+    token: int = pcc_gc_root_copy_lease_prepare_locked(
+        ptr_add(slots, index * 8), source_slot, 0, plan)
+    store_i64(tokens, index * 8, token)
+    return token
+
+
+def _set_call_copy_finish(plan, token: int) -> int:
+    pcc_gc_root_copy_lease_finish(plan)
+    if token < 0:
+        _set_call_error(15 if token == -2 else 7, cstr("cannot retain set call operand"))
+        return 0
+    return 1
+
+
+def _set_call_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * 8)
+    token: int = load_i64(tokens, index * 8)
+    if token >= 0:
+        status: int = pcc_gc_foreign_lease_release(slot, token)
+        if status < 0:
+            _set_call_error(7, cstr("set call address lease cleanup failed"))
+    store_i64(tokens, index * 8, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _set_call_new(slots, tokens, index: int) -> int:
+    # No helper, safepoint or callback between the owned return and its store.
+    store_ptr(slots, index * 8, py_set_new())
+    if ptr_is_null(load_ptr(slots, index * 8)) != 0:
+        _set_call_error(19, cstr("cannot allocate set call result"))
+        return 0
+    return _set_call_lease(slots, tokens, index)
+
+
+def _set_call_move(slots, tokens, destination: int, source: int) -> int:
+    status: int = pcc_gc_root_move(ptr_add(slots, destination * 8),
+                                  ptr_add(slots, source * 8))
+    if status < 0:
+        _set_call_error(7, cstr("cannot transfer set call result"))
+        return 0
+    store_i64(tokens, destination * 8, load_i64(tokens, source * 8))
+    store_i64(tokens, source * 8, -1)
+    return 1
+
+
+def _set_call_insert_prepare(slots, target: int, entries, capacity: int,
+                             position: int, hash_value: int, plan) -> int:
+    # Lookup still owns the graph lock. Releasing it before insertion would
+    # let a concurrent equal key occupy an earlier newly created tombstone,
+    # even while this selected slot remains empty in the same table.
+    s = _set_call_load(slots, target)
+    pcc_gc_store_ptr_plan_init(plan, s, pcc_gc_backend())
+    if ptr_eq(load_ptr(s, 40), entries) == 0 or load_i64(s, 24) != capacity:
+        return 0
+    key_slot = ptr_add(entries, position * 16 + 8)
+    old = load_ptr(key_slot, 0)
+    dummy = global_load_ptr("py_set_dummy")
+    was_empty: int = ptr_is_null(old)
+    if was_empty == 0 and ptr_eq(old, dummy) == 0:
+        return 0
+    committed: int = pcc_gc_store_ptr_plan_commit_sentinel_aware_locked(
+        plan, s, key_slot, _set_call_load(slots, 7), dummy)
+    if committed != 0:
+        store_i64(entries, position * 16, hash_value)
+        store_i64(s, 16, load_i64(s, 16) + 1)
+        if was_empty != 0:
+            store_i64(s, 32, load_i64(s, 32) + 1)
+    return committed
+
+
+def _set_call_insert_finish(slots, target: int, plan, committed: int) -> None:
+    # Deferred diagnostics/refcounts and growth happen after outermost unlock.
+    # The caller's counted target lease survives both operations.
+    pcc_gc_store_ptr_plan_finish(plan)
+    if committed != 0:
+        _maybe_grow(_set_call_load(slots, target))
+    else:
+        _set_call_error(7, cstr("cannot commit set call insertion"))
+
+
+def _set_call_lookup(slots, tokens, target: int, hash_value: int, mode: int) -> int:
+    # The target and item (slot 7) already have counted leases. Candidate
+    # equality may mutate/rehash the target; revalidate before any commit.
+    # No raw table/key pointer survives an unlocked callback unprotected.
+    candidate_plan = stack_alloc(256)
+    insertion_plan = stack_alloc(128)
+    while py_err_occurred() == 0:
+        pcc_py_gc_minor_graph_lock()
+        s = _set_call_load(slots, target)
+        item = _set_call_load(slots, 7)
+        entries = load_ptr(s, 40)
+        capacity: int = load_i64(s, 24)
+        mask: int = capacity - 1
+        perturb: int = hash_value
+        position: int = hash_value & mask
+        tombstone: int = -1
+        probes: int = 0
+        restart: int = 0
+        dummy = global_load_ptr("py_set_dummy")
+        while probes < capacity + 16:
+            # Peeking for sentinels/hash does not heal an owning entry through
+            # the borrowed load barrier. Retain/lease below resolves ownership.
+            key = load_ptr(entries, position * 16 + 8)
+            if ptr_is_null(key) != 0:
+                if tombstone >= 0:
+                    position = tombstone
+                if mode == 2:
+                    committed: int = _set_call_insert_prepare(slots, target, entries,
+                        capacity, position, hash_value, insertion_plan)
+                    pcc_py_gc_minor_graph_unlock()
+                    _set_call_insert_finish(slots, target, insertion_plan, committed)
+                    if committed == 0:
+                        restart = 1
+                        break
+                else:
+                    pcc_py_gc_minor_graph_unlock()
+                return 0
+            if ptr_eq(key, dummy) != 0:
+                if tombstone < 0:
+                    tombstone = position
+            elif load_i64(entries, position * 16) == hash_value:
+                equal: int = ptr_eq(key, item)
+                if not (is_tagged_int(key) != 0 and is_tagged_int(item) != 0):
+                    token: int = _set_call_copy_prepare(slots, tokens, 9,
+                        ptr_add(entries, position * 16 + 8), candidate_plan)
+                    pcc_py_gc_minor_graph_unlock()
+                    copied: int = _set_call_copy_finish(candidate_plan, token)
+                    if copied == 0:
+                        return 0
+                    equal = ptr_eq(_set_call_load(slots, 9), _set_call_load(slots, 7))
+                    if equal == 0:
+                        equal = py_obj_eq(_set_call_load(slots, 9), _set_call_load(slots, 7))
+                    pcc_py_gc_minor_graph_lock()
+                    s = _set_call_load(slots, target)
+                    stable: int = 0
+                    if ptr_eq(load_ptr(s, 40), entries) != 0 and load_i64(s, 24) == capacity:
+                        if (load_i64(entries, position * 16) == hash_value
+                            and ptr_eq(load_ptr(entries, position * 16 + 8), _set_call_load(slots, 9)) != 0):
+                            stable = 1
+                    pcc_py_gc_minor_graph_unlock()
+                    if stable != 0 and equal != 0 and py_err_occurred() == 0:
+                        if mode == 1:
+                            stable = _set_remove_rooted_slot(ptr_add(slots, target * 8),
+                                null(), entries, capacity, position, ptr_add(slots, 72), hash_value)
+                        _set_call_drop(slots, tokens, 9)
+                        if stable != 0:
+                            return 1
+                        restart = 1
+                        break
+                    _set_call_drop(slots, tokens, 9)
+                    if py_err_occurred() != 0:
+                        return 0
+                    # Candidate teardown itself may run a finalizer. Restart
+                    # even on inequality; remember its proven slot only while
+                    # another graph lease revalidates the same table entry.
+                    pcc_py_gc_minor_graph_lock()
+                    s = _set_call_load(slots, target)
+                    if stable == 0 or ptr_eq(load_ptr(s, 40), entries) == 0 or load_i64(s, 24) != capacity:
+                        pcc_py_gc_minor_graph_unlock()
+                        restart = 1
+                        break
+                elif equal != 0:
+                    pcc_py_gc_minor_graph_unlock()
+                    if mode == 1:
+                        if _set_remove_rooted_slot(ptr_add(slots, target * 8), null(),
+                            entries, capacity, position, ptr_add(slots, 56), hash_value) == 0:
+                            restart = 1
+                            break
+                    return 1
+            perturb = _perturb_shift5(perturb)
+            position = (position * 5 + perturb + 1) & mask
+            probes = probes + 1
+        if restart == 0:
+            if tombstone >= 0 and mode == 2:
+                committed = _set_call_insert_prepare(slots, target, entries,
+                    capacity, tombstone, hash_value, insertion_plan)
+                pcc_py_gc_minor_graph_unlock()
+                _set_call_insert_finish(slots, target, insertion_plan, committed)
+                if committed != 0:
+                    return 0
+            else:
+                pcc_py_gc_minor_graph_unlock()
+                _set_call_error(7, cstr("set call lookup exhausted its table"))
+                return 0
+    return 0
+
+
+def _set_call_replace(slots, target: int, source: int) -> int:
+    # Atomic visible replacement, including finalizer reentrancy. Keep the
+    # target payload allocation; use existing slot plans to defer all old-key
+    # decrefs until the entire new table/size is visible. This preserves GC4
+    # remembered-slot identity without swapping two owners' payload spans.
+    target_set = _set_call_load(slots, target)
+    source_set = _set_call_load(slots, source)
+    if ptr_eq(target_set, source_set) != 0:
+        return 1
+    needed: int = load_i64(source_set, 24)
+    if load_i64(target_set, 24) < needed:
+        if _rehash(target_set, needed) != 0:
+            _set_call_error(19, cstr("cannot grow set call replacement"))
+            return 0
+    capacity: int = load_i64(target_set, 24)
+    if capacity > 72057594037927935:
+        _set_call_error(19, cstr("set call replacement is too large"))
+        return 0
+    replacement = _alloc_entries(capacity)
+    plans = malloc(capacity * 128)
+    if ptr_is_null(replacement) != 0 or ptr_is_null(plans) != 0:
+        free(replacement)
+        free(plans)
+        _set_call_error(19, cstr("cannot allocate set call replacement"))
+        return 0
+    index: int = 0
+    while index < capacity:
+        pcc_gc_store_ptr_plan_init(ptr_add(plans, index * 128), target_set, pcc_gc_backend())
+        index = index + 1
+    pcc_py_gc_minor_graph_lock()
+    target_set = _set_call_load(slots, target)
+    source_set = _set_call_load(slots, source)
+    ok: int = 1
+    if load_i64(target_set, 24) != capacity or load_i64(source_set, 16) >= capacity:
+        ok = 0
+    dummy = global_load_ptr("py_set_dummy")
+    index = 0
+    source_capacity: int = load_i64(source_set, 24)
+    source_entries = load_ptr(source_set, 40)
+    while index < source_capacity and ok != 0:
+        key_slot = ptr_add(source_entries, index * 16 + 8)
+        key = load_ptr(key_slot, 0)
+        if ptr_is_null(key) == 0 and ptr_eq(key, dummy) == 0:
+            # Source owns the key. Transfer forwarding references before
+            # staging a borrowed copy inside this same graph transaction.
+            key = pcc_gc_resolve_root_slot_unlocked(key_slot, 0)
+            hash_value: int = load_i64(source_entries, index * 16)
+            position: int = _rehash_find_empty_slot(replacement, capacity, hash_value)
+            if position < 0:
+                ok = 0
+            else:
+                store_ptr(replacement, position * 16 + 8, key)
+                store_i64(replacement, position * 16, hash_value)
+        index = index + 1
+    entries = load_ptr(target_set, 40)
+    index = 0
+    if ok != 0:
+        while index < capacity:
+            key = load_ptr(replacement, index * 16 + 8)
+            committed: int = pcc_gc_store_ptr_plan_commit_sentinel_aware_locked(
+                ptr_add(plans, index * 128), target_set,
+                ptr_add(entries, index * 16 + 8), key, dummy)
+            if committed == 0:
+                ok = 0
+            store_i64(entries, index * 16, load_i64(replacement, index * 16))
+            index = index + 1
+        store_i64(target_set, 16, load_i64(source_set, 16))
+        store_i64(target_set, 32, load_i64(source_set, 16))
+    pcc_py_gc_minor_graph_unlock()
+    index = 0
+    while index < capacity:
+        pcc_gc_store_ptr_plan_finish(ptr_add(plans, index * 128))
+        index = index + 1
+    free(plans)
+    free(replacement)
+    if ok == 0:
+        _set_call_error(7, cstr("set changed during replacement"))
+    return ok
+
+
+def _set_call_apply(slots, tokens, target: int, source: int, mode: int, match: int = 3) -> int:
+    # Modes: add, discard, intersection into target (against match), xor.
+    # Exact sets carry cached hashes. Other iterables invoke __hash__ once
+    # for each delivered item, and preserve errors/partial mutation.
+    is_set: int = 1 if _ptr_is_set(_set_call_load(slots, source)) else 0
+    if is_set != 0 and ptr_eq(_set_call_load(slots, target), _set_call_load(slots, source)) != 0:
+        if mode == 0:
+            return 1
+        if mode == 1 or mode == 3:
+            if _set_call_new(slots, tokens, 5) == 0:
+                return 0
+            ok: int = _set_call_replace(slots, target, 5)
+            _set_call_drop(slots, tokens, 5)
+            return ok
+    if is_set == 0:
+        store_ptr(slots, 48, py_obj_iter(_set_call_load(slots, source)))
+        if ptr_is_null(load_ptr(slots, 48)) != 0:
+            _set_call_error(3, cstr("object is not iterable"))
+            return 0
+        if _set_call_lease(slots, tokens, 6) == 0:
+            return 0
+    item_plan = stack_alloc(256)
+    index: int = 0
+    while py_err_occurred() == 0:
+        hash_value: int = 0
+        matched: int = 0
+        if is_set != 0:
+            pcc_py_gc_minor_graph_lock()
+            other = _set_call_load(slots, source)
+            capacity: int = load_i64(other, 24)
+            entries = load_ptr(other, 40)
+            selected: int = 0
+            token: int = -1
+            while index < capacity:
+                position: int = index
+                index = index + 1
+                key = load_ptr(entries, position * 16 + 8)
+                if ptr_is_null(key) == 0 and ptr_eq(key, global_load_ptr("py_set_dummy")) == 0:
+                    hash_value = load_i64(entries, position * 16)
+                    selected = 1
+                    token = _set_call_copy_prepare(slots, tokens, 7,
+                        ptr_add(entries, position * 16 + 8), item_plan)
+                    break
+            pcc_py_gc_minor_graph_unlock()
+            if selected == 0:
+                break
+            if _set_call_copy_finish(item_plan, token) == 0:
+                break
+        else:
+            store_ptr(slots, 56, py_obj_next(_set_call_load(slots, 6)))
+            if ptr_is_null(load_ptr(slots, 56)) != 0:
+                if py_err_occurred() != 0:
+                    if py_exc_matches(py_current_exception(), py_exc_builtin_class(8)) != 0:
+                        py_clear_exception()
+                else:
+                    _set_call_error(7, cstr("set iterator returned NULL without an exception"))
+                break
+            if _set_call_lease(slots, tokens, 7) == 0:
+                break
+            hash_value = py_obj_hash(_set_call_load(slots, 7))
+        if py_err_occurred() == 0:
+            if mode == 0:
+                _set_call_lookup(slots, tokens, target, hash_value, 2)
+            elif mode == 1:
+                _set_call_lookup(slots, tokens, target, hash_value, 1)
+            elif mode == 2:
+                found: int = _set_call_lookup(slots, tokens, match, hash_value, 0)
+                if found != 0 and py_err_occurred() == 0:
+                    _set_call_lookup(slots, tokens, target, hash_value, 2)
+                    matched = 1
+            else:
+                found = _set_call_lookup(slots, tokens, target, hash_value, 1)
+                if found == 0 and py_err_occurred() == 0:
+                    _set_call_lookup(slots, tokens, target, hash_value, 2)
+        _set_call_drop(slots, tokens, 7)
+        if mode == 2 and matched != 0 and py_err_occurred() == 0:
+            if load_i64(_set_call_load(slots, target), 16) == load_i64(_set_call_load(slots, match), 16):
+                break
+    _set_call_drop(slots, tokens, 7)
+    _set_call_drop(slots, tokens, 6)
+    return 1 if py_err_occurred() == 0 else 0
+
+
+def _set_call_algebra(slots, tokens, method: int) -> int:
+    kwargs = _set_call_load(slots, 2)
+    if ptr_is_null(kwargs) == 0 and ptr_eq(kwargs, global_load_ptr("py_None")) == 0:
+        if py_dict_len(kwargs) != 0:
+            _set_call_error(3, cstr("set methods take no keyword arguments"))
+            return 0
+    args = _set_call_load(slots, 1)
+    count: int = load_i64(args, PYTUPLEOBJECT_LEN_OFFSET)
+    if method < 0 or method > 7:
+        _set_call_error(7, cstr("unknown set algebra method"))
+        return 0
+    if method >= 6 and count != 1:
+        _set_call_error(3, cstr("set symmetric difference takes exactly one argument"))
+        return 0
+    if not _ptr_is_set(_set_call_load(slots, 0)):
+        _set_call_error(3, cstr("set method requires a set receiver"))
+        return 0
+    if method == 3 or method == 5 or method == 7:
+        if _set_call_copy(slots, tokens, 3, slots) == 0:
+            return 0
+    else:
+        if _set_call_new(slots, tokens, 3) == 0:
+            return 0
+        if _set_call_replace(slots, 3, 0) == 0:
+            return 0
+    index: int = 0
+    while index < count and py_err_occurred() == 0:
+        # The argument tuple is leased and immutable, so its element slot is
+        # stable while root_copy_lease acquires its own graph transaction.
+        args = _set_call_load(slots, 1)
+        copied: int = _set_call_copy(slots, tokens, 4,
+                                    ptr_add(args, PYTUPLEOBJECT_ITEMS_OFFSET + index * 8))
+        if copied == 0:
+            return 0
+        if method == 0 or method == 3:
+            _set_call_apply(slots, tokens, 3, 4, 0)
+        elif method == 1 or method == 4:
+            if _set_call_new(slots, tokens, 5) == 0:
+                return 0
+            if (_ptr_is_set(_set_call_load(slots, 4))
+                    and load_i64(_set_call_load(slots, 4), 16) > load_i64(_set_call_load(slots, 3), 16)):
+                _set_call_apply(slots, tokens, 5, 3, 2, 4)
+            else:
+                _set_call_apply(slots, tokens, 5, 4, 2)
+            if py_err_occurred() == 0:
+                _set_call_drop(slots, tokens, 3)
+                _set_call_move(slots, tokens, 3, 5)
+        elif method == 2 or method == 5:
+            _set_call_apply(slots, tokens, 3, 4, 1)
+        else:
+            # Repeated iterable items are deduplicated BEFORE toggling; an
+            # iterator/hash failure here must leave the receiver unchanged.
+            if _set_call_new(slots, tokens, 8) == 0:
+                return 0
+            if _ptr_is_set(_set_call_load(slots, 4)):
+                _set_call_replace(slots, 8, 4)
+            else:
+                _set_call_apply(slots, tokens, 8, 4, 0)
+            if py_err_occurred() == 0:
+                if ptr_eq(_set_call_load(slots, 3), _set_call_load(slots, 4)) != 0:
+                    _set_call_apply(slots, tokens, 3, 4, 3)
+                else:
+                    _set_call_apply(slots, tokens, 3, 8, 3)
+            _set_call_drop(slots, tokens, 8)
+        _set_call_drop(slots, tokens, 4)
+        index = index + 1
+    if py_err_occurred() != 0:
+        return 0
+    if method == 4:
+        if _set_call_replace(slots, 0, 3) == 0:
+            return 0
+    return 1
+
+
+@c_abi_export("py_set_call_method_slots")
+def py_set_call_method_slots(receiver_slot, method: int, args_slot, kwargs_slot, result_slot) -> int:
+    """Bind a set algebra call from authoritative caller slots.
+
+    Caller owns/roots all inputs and an EMPTY output for the entire call.
+    The result reference is transferred into that output before cleanup.
+    Returns 0 on success, -1 on failure (and leaves output empty on failure).
+    """
+    slots = stack_alloc(80)
+    handles = stack_alloc(80)
+    tokens = stack_alloc(80)
+    memset(slots, 0, 80)
+    memset(handles, 0, 80)
+    index: int = 0
+    while index < 10:
+        store_i64(tokens, index * 8, -1)
+        index = index + 1
+    index = 0
+    ok: int = 1
+    while index < 10:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, index * 8))
+        store_ptr(handles, index * 8, handle)
+        if ptr_is_null(handle) != 0:
+            _set_call_error(19, cstr("cannot register set call roots"))
+            ok = 0
+            break
+        index = index + 1
+    if ok != 0:
+        ok = _set_call_copy(slots, tokens, 0, receiver_slot)
+    if ok != 0:
+        ok = _set_call_copy(slots, tokens, 1, args_slot)
+    if ok != 0:
+        ok = _set_call_copy(slots, tokens, 2, kwargs_slot)
+    if ok != 0:
+        ok = _set_call_algebra(slots, tokens, method)
+    if ok != 0 and py_err_occurred() == 0:
+        if method == 0 or method == 1 or method == 2 or method == 6:
+            token: int = load_i64(tokens, 24)
+            if pcc_gc_root_move(result_slot, ptr_add(slots, 24)) < 0:
+                _set_call_error(7, cstr("cannot publish set call result"))
+            else:
+                store_i64(tokens, 24, -1)
+                if pcc_gc_foreign_lease_release(result_slot, token) < 0:
+                    _set_call_error(7, cstr("set result address lease cleanup failed"))
+        else:
+            # The immortal None object needs no lease/refcount increment.
+            store_ptr(result_slot, 0, global_load_ptr("py_None"))
+    index = 9
+    while index >= 0:
+        _set_call_drop(slots, tokens, index)
+        handle = load_ptr(handles, index * 8)
+        if ptr_is_null(handle) == 0:
+            pcc_gc_scheduler_root_unregister_handle(handle)
+        index = index - 1
+    if py_err_occurred() != 0:
+        pcc_gc_store_root(result_slot, null())
+        return -1
+    return 0

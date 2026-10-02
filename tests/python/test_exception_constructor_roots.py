@@ -223,7 +223,7 @@ def test_exception_value_and_class_constructors_preserve_aliases_and_borrows(pha
     assert not memory.frames and memory.pin_metric == 0
     memory = _Memory(phase)
     result = memory.namespace["py_exc_new_with_class"](memory.cls, None)
-    assert result.fields[16] is memory.cls and result.fields[24] is memory.none
+    assert result.fields[16] is memory.cls and result.fields[24] is None
     assert result.alive and result.references == 1
     assert not memory.frames and memory.pin_metric == 0
 
@@ -244,11 +244,11 @@ def test_constructor_final_handoff_restores_existing_pin_after_relocation():
 def test_default_class_and_none_value_remain_normal_constructor_paths():
     memory = _Memory("lookup")
     result = memory.namespace["py_exc_alloc"](None, None)
-    assert result.fields[16] is memory.cls and result.fields[24] is memory.none
+    assert result.fields[16] is memory.cls and result.fields[24] is None
     assert result.references == 1 and not memory.frames and memory.pin_metric == 0
     memory = _Memory("lookup")
     result = memory.namespace["py_exc_new_with_value"](8, None)
-    assert result.fields[16] is memory.cls and result.fields[24] is memory.none
+    assert result.fields[16] is memory.cls and result.fields[24] is None
     assert result.references == 1 and not memory.frames and memory.pin_metric == 0
 
 
@@ -280,3 +280,18 @@ def test_exception_constructor_roots_reach_owned_emitter(tmp_path, monkeypatch, 
     payload = emit_owned_object(text, triple)
     assert len(payload) > 64
     (tmp_path / "py_exc_objects.o").write_bytes(payload)
+
+
+@pytest.mark.parametrize("phase", ["allocation", "publish", "frame_leave", "load_root"])
+def test_exception_explicit_none_is_a_real_argument_and_owned_alias(phase):
+    memory = _Memory(phase)
+    result = memory.namespace["py_exc_new_with_value"](2, memory.none)
+    assert result.alive and result.references == 1
+    assert result.fields[16] is memory.cls
+    assert result.fields[24] is memory.none and memory.none.alive
+    assert not memory.frames and memory.pin_metric == 0
+    memory = _Memory(phase)
+    result = memory.namespace["py_exc_new_with_value"](4, None)
+    assert result.alive and result.references == 1
+    assert result.fields[16] is memory.cls and result.fields[24] is None
+    assert not memory.frames and memory.pin_metric == 0

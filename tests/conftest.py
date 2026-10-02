@@ -54,6 +54,7 @@ from tests.runtime_build_cache import (  # noqa: E402
     cached_pcc_python_runtime,
     cached_threaded_pcc_python_runtime,
 )
+from tests.native_provisioning import require_native_provisioning_allowed  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -84,6 +85,7 @@ def pcc_runtime_archive(tmp_path_factory):
         )
         return archive
 
+    require_native_provisioning_allowed()
     if _gate_sys.platform.startswith("linux") or _gate_sys.platform == "win32":
         from pcc.frontends.python.owned_runtime_build import ensure_target_runtime
         from pcc.frontends.python.pipeline_targets import host_target_triple
@@ -106,6 +108,7 @@ def threaded_pcc_runtime_archive() -> Path:
         archive = Path(explicit).resolve(strict=True)
         assert archive.name == "libpy_runtime_pcc_py.a"
         return archive
+    require_native_provisioning_allowed()
     return cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
 
 

@@ -12,6 +12,7 @@ import os
 from pcc.frontends.python import pipeline_ast_wire as _pipeline_ast_wire
 from pcc.frontends.python import pipeline_ir_text as _pipeline_ir_text
 from pcc.frontends.python.export_meta import encode_type
+from pcc.frontends.python.raw_pointer_types import resolve_raw_pointer_annotation
 from pcc.frontends.python.pipeline_modes import PyPipelineError
 
 
@@ -21,7 +22,7 @@ _NATIVE_EXPORT_WIRE_SCHEMA = "pcc.frontends.python.native_exports.v1"
 _NATIVE_EXPORT_INDEXED_SCHEMA = "pcc.frontends.python.native_exports.indexed.v1"
 
 
-def _export_param_types(args):
+def _export_param_types(args, raw_pointer_names=()):
     """Return normalized runtime param types for cross-module exports.
 
     Multi-file extern declarations only need the lowered runtime
@@ -33,12 +34,13 @@ def _export_param_types(args):
         name = _py_ast_field_value(a, "name", "")
         if not isinstance(name, str) or name == "":
             continue
-        ann = _export_annotation_or_none(a)
+        ann = resolve_raw_pointer_annotation(_export_annotation_or_none(a), raw_pointer_names)
         param_tys.append(encode_type(ann) if ann is not None else ("dyn",))
     return param_tys
 
 
-def _export_return_type(ret_ty):
+def _export_return_type(ret_ty, raw_pointer_names=()):
+    ret_ty = resolve_raw_pointer_annotation(ret_ty, raw_pointer_names)
     if ret_ty is None:
         return ("dyn",)
     return encode_type(ret_ty)
@@ -153,6 +155,8 @@ def instance_field_assignment_statements(body):
     while pending:
         stmt = pending.pop()
         if _closed_world_is_node(stmt, (Assign, AugAssign)):
+            if _closed_world_is_node(stmt, Assign) and not _py_ast_field_value(stmt, "has_value", True):
+                continue
             result.append(stmt)
             continue
         if _closed_world_is_node(stmt, (If, While, For)):
@@ -182,7 +186,25 @@ def _export_default_is_native_typed_int_shape(expr) -> bool:
     return False
 
 
-def _export_func_uses_unboxed_typed_int_abi(fd) -> bool:
+def _export_func_has_python_int_signature(fd) -> bool:
+    """Recognize the same ordinary-int boundary as the codegen ABI owner."""
+    from pcc.frontends.python.py_ast import IntType as _IntType
+
+    if _py_ast_field_value(fd, "name", "") == "__init__":
+        return True
+    annotations = [_export_return_ty_or_none(fd)]
+    for arg in _py_ast_field_value(fd, "args", ()):
+        annotations.append(_export_annotation_or_none(arg))
+    for annotation in annotations:
+        if (
+            _closed_world_is_node(annotation, _IntType)
+            and _py_ast_field_value(annotation, "name", "") == "int"
+        ):
+            return True
+    return False
+
+
+def _export_func_uses_unboxed_typed_int_abi(fd, bounded_proof: bool = False) -> bool:
     """Small export-table mirror of the typed-int ABI signature gate.
 
     This intentionally stays local to ``pipeline.py``: importing
@@ -192,6 +214,7 @@ def _export_func_uses_unboxed_typed_int_abi(fd) -> bool:
     from pcc.frontends.python.py_ast import BoolType as _BoolType
     from pcc.frontends.python.py_ast import FloatType as _FloatType
     from pcc.frontends.python.py_ast import IntType as _IntType
+    from pcc.frontends.python.py_ast import ListType as _ListType
 
     mode = _export_typed_int_unboxed_abi_mode()
     if mode == "off":
@@ -202,7 +225,7 @@ def _export_func_uses_unboxed_typed_int_abi(fd) -> bool:
         or len(_py_ast_field_value(fd, "decorators", ())) != 0
     ):
         return False
-    if mode == "unsafe-i64":
+    if mode == "unsafe-i64" or bounded_proof:
         if not _closed_world_is_node(
             _export_return_ty_or_none(fd),
             (_IntType, _FloatType),
@@ -221,9 +244,15 @@ def _export_func_uses_unboxed_typed_int_abi(fd) -> bool:
             "kw_only",
         ):
             return False
-        if mode == "unsafe-i64":
-            if not _closed_world_is_node(
-                _export_annotation_or_none(arg),
+        if mode == "unsafe-i64" or bounded_proof:
+            annotation = _export_annotation_or_none(arg)
+            bounded_int_list = (
+                bounded_proof
+                and _closed_world_is_node(annotation, _ListType)
+                and _closed_world_is_node(_py_ast_field_value(annotation, "elem", None), _IntType)
+            )
+            if not bounded_int_list and not _closed_world_is_node(
+                annotation,
                 (_IntType, _BoolType, _FloatType),
             ):
                 return False
@@ -633,7 +662,7 @@ _DEFAULT_FACTORY_BUILTINS = ("list", "dict", "set", "tuple")
 
 
 def export_dataclass_factory_default(default, field_bindings=("field",)):
-    """Explicit synthetic default used only while expanding dataclass fields."""
+    """Normalize field metadata without confusing absence with explicit None."""
     from pcc.frontends.python.py_ast import Attr, Call, DynType, Name, SourceSpan
     if not _closed_world_is_node(default, Call):
         return default
@@ -652,7 +681,9 @@ def export_dataclass_factory_default(default, field_bindings=("field",)):
             span = _py_ast_field_value(default, "span", None)
             marker_span = SourceSpan("<pcc-dataclass-factory>", span.line, span.col, span.end_line, span.end_col)
             return Call(marker_span, DynType("dyn"), Name(marker_span, DynType("dyn"), "__pcc_dataclass_factory_default__"), (factory,), ())
-    return default
+        if key == "default":
+            return factory
+    return None
 
 
 def export_default_factory_name(default):
@@ -674,6 +705,14 @@ def export_default_factory_name(default):
         return None
     func = _py_ast_field_value(default, "func", None)
     if func is None:
+        return None
+    if (_py_ast_field_value(func, "ident", "") == "__pcc_dataclass_factory_default__"
+            and _py_ast_field_value(_py_ast_field_value(default, "span", None), "file", "") == "<pcc-dataclass-factory>"):
+        arguments = _py_ast_field_value(default, "args", ())
+        if len(arguments) == 1:
+            name = _py_ast_field_value(arguments[0], "ident", "")
+            if name in _DEFAULT_FACTORY_BUILTINS:
+                return name
         return None
     if str(_py_ast_field_value(func, "ident", "")) != "field":
         return None
@@ -708,6 +747,94 @@ def _class_is_valueclass(cd) -> bool:
         if name in ("valueclass", "pcc.valueclass"):
             return True
     return False
+
+
+def annotation_module_bindings(module):
+    """Source-verified namespace paths, independent of export worker shards.
+
+    An import proves a lexical path, not that a class exists at that path.
+    Class lookup must still consult the exact external export. Rebindings and
+    ambiguous star imports invalidate earlier namespace aliases.
+    """
+    from pcc.frontends.python.py_ast import Assign, ClassDef, FuncDef, Import, ImportFrom
+    from pcc.frontends.python.pipeline_closed_world import (
+        _closed_world_module_block_assign_targets, _resolve_ast_import_from_module,
+    )
+
+    bindings = {}
+    for statement in module.body:
+        if _closed_world_is_node(statement, Import):
+            for imported, alias in statement.names:
+                local = alias or imported.split(".", 1)[0]
+                bindings[local] = imported if alias else local
+        elif _closed_world_is_node(statement, ImportFrom):
+            owner = _resolve_ast_import_from_module(statement.span.file, module.name, statement)
+            for imported, alias in statement.names:
+                if imported == "*":
+                    bindings.clear()
+                    continue
+                imported_module = owner + "." + imported
+                # Match the existing owned-IR scaffold import replacement in
+                # inference/lowering. The facade is deliberately omitted from
+                # the native closure; all four names select this provider.
+                if owner == "pcc.ir.compat" and imported in ("ir", "ir_py", "ir_c", "ir_passes"):
+                    imported_module = "pcc.ir.ir"
+                bindings[alias or imported] = imported_module
+        elif _closed_world_is_node(statement, (ClassDef, FuncDef)):
+            bindings.pop(statement.name, None)
+        elif not (_closed_world_is_node(statement, Assign) and not statement.has_value):
+            for local in _closed_world_module_block_assign_targets(statement):
+                bindings.pop(local, None)
+    return bindings
+
+
+def _qualify_export_type_descriptor(desc, module_bindings):
+    """Resolve source module aliases before descriptors leave their owner."""
+    if not isinstance(desc, tuple) or not desc:
+        return desc
+    tag = desc[0]
+    if tag in ("class", "valueclass") and len(desc) >= 5:
+        owner = desc[2]
+        root, separator, suffix = owner.partition(".")
+        imported = module_bindings.get(root)
+        if imported is not None:
+            owner = imported + (separator + suffix if separator else "")
+        fields = tuple((name, _qualify_export_type_descriptor(ty, module_bindings))
+                       for name, ty in desc[3])
+        bases = tuple(_qualify_export_type_descriptor(ty, module_bindings) for ty in desc[4])
+        tail = desc[5:]
+        if tag == "valueclass" and tail:
+            properties = tuple((name, _qualify_export_type_descriptor(ty, module_bindings))
+                               for name, ty in tail[0])
+            tail = (properties,) + tail[1:]
+        return (tag, desc[1], owner, fields, bases) + tail
+    if tag in ("list", "set", "frozenset") and len(desc) >= 2:
+        return (tag, _qualify_export_type_descriptor(desc[1], module_bindings))
+    if tag == "dict" and len(desc) >= 3:
+        return (tag, _qualify_export_type_descriptor(desc[1], module_bindings),
+                _qualify_export_type_descriptor(desc[2], module_bindings))
+    if tag in ("tuple", "func") and len(desc) >= 2:
+        items = tuple(_qualify_export_type_descriptor(ty, module_bindings) for ty in desc[1])
+        if tag == "func" and len(desc) >= 3:
+            return (tag, items, _qualify_export_type_descriptor(desc[2], module_bindings))
+        return (tag, items)
+    return desc
+
+
+def _qualify_export_annotation_refs(info, module_bindings) -> None:
+    """Normalize annotation fields only; defaults and runtime values are data."""
+    for key in ("return_ty", "value_ty", "annotation"):
+        if key in info:
+            info[key] = _qualify_export_type_descriptor(info[key], module_bindings)
+    if "param_types" in info:
+        info["param_types"] = tuple(_qualify_export_type_descriptor(ty, module_bindings)
+                                    for ty in info["param_types"])
+    if "field_types" in info:
+        info["field_types"] = tuple((name, _qualify_export_type_descriptor(ty, module_bindings))
+                                    for name, ty in info["field_types"])
+    for key in ("methods", "call_sig"):
+        for child in info.get(key, ()):
+            _qualify_export_annotation_refs(child, module_bindings)
 
 
 def _expand_local_valueclass_type_descriptor(
@@ -937,11 +1064,11 @@ def _export_default_native_global_ref(expr, owning_module, top_level_func_names)
     return ref
 
 
-def _export_call_sig(args, owning_module=None, top_level_func_names=()):
+def _export_call_sig(args, owning_module=None, top_level_func_names=(), raw_pointer_names=()):
     sig = []
     top_level_func_names = set(top_level_func_names or ())
     for a in args:
-        ann = _export_annotation_or_none(a)
+        ann = resolve_raw_pointer_annotation(_export_annotation_or_none(a), raw_pointer_names)
         default = _py_ast_field_value(a, "default", None)
         item = {
             "name": _py_ast_field_value(a, "name", ""),
@@ -1207,7 +1334,7 @@ def _native_export_arg_to_wire(arg):
             out[key] = default_wire
         else:
             out[key] = _native_export_to_wire(value)
-    if not default_safe:
+    if not default_safe and not arg.get("default_native_global") and not arg.get("default_native_func"):
         out["has_default"] = False
     return out
 

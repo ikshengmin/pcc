@@ -502,6 +502,7 @@ typedef struct {
 typedef struct PccCpyCallbackErrorContext {
     uint64_t scope_id;
     PyObject *pcc_exception;
+    void *pcc_exception_root;
     CPyObject *cpy_exception;
     struct PccCpyCallbackErrorContext *next;
 } PccCpyCallbackErrorContext;
@@ -964,8 +965,20 @@ static int py_cpy_finish_callback_error_scope(uint64_t scope_id) {
             continue;
         }
         *link = context->next;
-        if (context == matched) py_raise(context->pcc_exception);
-        py_decref(context->pcc_exception);
+        if (context == matched) {
+            int64_t lease = pcc_gc_foreign_lease_acquire(&context->pcc_exception);
+            if (lease < 0) {
+                fprintf(stderr, "pcc runtime error: callback exception lease failed\n");
+                abort();
+            }
+            py_raise(pcc_gc_load_ptr(NULL, &context->pcc_exception));
+            if (pcc_gc_foreign_lease_release(&context->pcc_exception, lease) < 0) {
+                fprintf(stderr, "pcc runtime error: callback exception lease cleanup failed\n");
+                abort();
+            }
+        }
+        pcc_gc_store_root(&context->pcc_exception, NULL);
+        pcc_gc_scheduler_root_unregister_handle(context->pcc_exception_root);
         Py_DecRef(context->cpy_exception);
         free(context);
     }
@@ -1069,21 +1082,53 @@ static CPyObject *py_cpy_gil_resume_after_callback(
         fprintf(stderr, "pcc runtime error: callback CPython GIL imbalance\n");
         abort();
     }
-    PyObject *pcc_exc = NULL;
-    const char *pcc_message = NULL;
+    static const int32_t callback_error_roots_map = 2;
+    PyObject *error_roots[2] = {NULL, NULL};
+    int roots_active = 0;
+    char *pcc_message = NULL;
     if (py_err_occurred()) {
-        pcc_exc = py_current_exception();
-        if (pcc_exc != NULL) {
-            py_incref(pcc_exc);
-            PyObject *message = py_exc_get_message(pcc_exc);
-            if (
-                message != NULL
-                && !PY_IS_TAGGED_INT(message)
-                && py_type_of(message) == PY_TYPE_STR
-            ) {
-                pcc_message = py_str_utf8(message);
+        /* Register empty owned roots first, then capture the authoritative
+         * TLS exception under the graph lease. No borrowed raw exception is
+         * carried through root registration or user __str__ callbacks. */
+        pcc_gc_frame_enter(&callback_error_roots_map, error_roots);
+        roots_active = 1;
+        pcc_py_gc_minor_graph_lock();
+        pcc_gc_store_root(&error_roots[0], py_current_exception());
+        pcc_py_gc_minor_graph_unlock();
+        py_clear_exception();
+        if (pcc_gc_load_ptr(NULL, &error_roots[0]) != NULL) {
+            int64_t lease = pcc_gc_foreign_lease_acquire(&error_roots[0]);
+            if (lease >= 0) {
+                /* args[0] is not display text for structured exceptions. */
+                error_roots[1] = py_obj_str(pcc_gc_load_ptr(NULL, &error_roots[0]));
+                if (pcc_gc_foreign_lease_release(&error_roots[0], lease) < 0) {
+                    fprintf(stderr, "pcc runtime error: callback display lease cleanup failed\n");
+                    abort();
+                }
+            }
+            if (pcc_gc_load_ptr(NULL, &error_roots[1]) != NULL) {
+                int64_t text_lease = pcc_gc_foreign_lease_acquire(&error_roots[1]);
+                if (text_lease >= 0) {
+                    PyObject *text = pcc_gc_load_ptr(NULL, &error_roots[1]);
+                    if (!PY_IS_TAGGED_INT(text) && py_type_of(text) == PY_TYPE_STR) {
+                        int64_t length = py_str_byte_len(text);
+                        if (length >= 0 && (uint64_t)length < SIZE_MAX) {
+                            pcc_message = malloc((size_t)length + 1);
+                            if (pcc_message != NULL) {
+                                memcpy(pcc_message, py_str_utf8(text), (size_t)length);
+                                pcc_message[length] = '\0';
+                            }
+                        }
+                    }
+                    if (pcc_gc_foreign_lease_release(&error_roots[1], text_lease) < 0) {
+                        fprintf(stderr, "pcc runtime error: callback text lease cleanup failed\n");
+                        abort();
+                    }
+                }
             }
         }
+        /* A failed display conversion is secondary to the original callback
+         * failure, which remains in error_roots[0]. */
         py_clear_exception();
     }
 
@@ -1091,14 +1136,13 @@ static CPyObject *py_cpy_gil_resume_after_callback(
     g_cpy_gil_depth = suspension.saved_depth;
     g_cpy_current_scope_id = suspension.scope_id;
     py_cpy_restore_pending_error();
-    if (pcc_exc != NULL) {
+    if (roots_active && pcc_gc_load_ptr(NULL, &error_roots[0]) != NULL) {
         const char *message = pcc_message != NULL
             ? pcc_message
             : "pcc callback raised an exception";
         if (suspension.saved_depth == 0) {
             if (PyErr_Occurred() != NULL) PyErr_Clear();
             PyErr_SetString(PyExc_RuntimeError, message);
-            py_decref(pcc_exc);
         } else {
             CPyObject *synthetic = py_cpy_set_normalized_runtime_error(message);
             PccCpyCallbackErrorContext *context = malloc(sizeof(*context));
@@ -1107,7 +1151,18 @@ static CPyObject *py_cpy_gil_resume_after_callback(
                 abort();
             }
             context->scope_id = suspension.scope_id;
-            context->pcc_exception = pcc_exc;
+            context->pcc_exception = NULL;
+            context->pcc_exception_root = pcc_gc_scheduler_root_register_handle(
+                &context->pcc_exception
+            );
+            if (context->pcc_exception_root == NULL) {
+                fprintf(stderr, "pcc runtime error: callback exception root failed\n");
+                abort();
+            }
+            pcc_py_gc_minor_graph_lock();
+            pcc_gc_store_root(&context->pcc_exception,
+                             pcc_gc_load_ptr(NULL, &error_roots[0]));
+            pcc_py_gc_minor_graph_unlock();
             context->cpy_exception = synthetic;
             context->next = g_cpy_callback_errors;
             g_cpy_callback_errors = context;
@@ -1126,6 +1181,13 @@ static CPyObject *py_cpy_gil_resume_after_callback(
             "pcc callback returned NULL without a CPython exception"
         );
     }
+    free(pcc_message);
+    if (roots_active) {
+        pcc_gc_store_root(&error_roots[1], NULL);
+        pcc_gc_store_root(&error_roots[0], NULL);
+        pcc_gc_frame_leave(error_roots);
+    }
+
     return result;
 }
 

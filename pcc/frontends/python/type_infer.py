@@ -37,7 +37,8 @@ from typing import Optional
 
 from pcc.frontends.python.codegen.host_contract import L1_CODEGEN_HOST_ATTRS, L1_CODEGEN_HOST_METHODS, PROBE_POLICY_CONTEXTUAL_MIXIN, per_module_probe_policy
 from pcc.frontends.python.export_meta import decode_type, encode_type, encode_type_memo
-from pcc.frontends.python.py_ast import Arg, Assign, AugAssign, Attr, BinOp, BoolExpr, BoolLit, BoolType, Break, ByteArrayType, BytesLit, BytesType, Call, ClassDef, ClassType, ComplexLit, ComplexType, Compare, Continue, Delete, DictExpr, DictType, DynType, ExceptHandler, Expr, ExprStmt, FloatLit, FloatType, For, FuncDef, FuncType, Global, If, IfExpr, Import, ImportFrom, IntLit, IntType, Lambda, ListExpr, ListType, MemoryViewType, Module, Name, NoneLit, NoneType, SetType, Nonlocal, Pass, Raise, Return, Slice, SourceSpan, Stmt, StrLit, StrType, Subscript, TupleExpr, TupleType, Try, Type, UnaryOp, ValueArrayType, ValueClassType, While, With
+from pcc.frontends.python.py_ast import RawPointerType, Arg, Assign, AugAssign, Attr, BinOp, BoolExpr, BoolLit, BoolType, Break, ByteArrayType, BytesLit, BytesType, Call, ClassDef, ClassType, ComplexLit, ComplexType, Compare, Continue, Delete, DictExpr, DictType, DynType, ExceptHandler, Expr, ExprStmt, FloatLit, FloatType, For, FuncDef, FuncType, Global, If, IfExpr, Import, ImportFrom, IntLit, IntType, Lambda, ListExpr, ListType, MemoryViewType, Module, Name, NoneLit, NoneType, SetType, Nonlocal, Pass, Raise, Return, Slice, SourceSpan, Stmt, StrLit, StrType, Subscript, TupleExpr, TupleType, Try, Type, UnaryOp, ValueArrayType, ValueClassType, While, With
+from pcc.frontends.python.raw_pointer_types import raw_pointer_annotation_names, resolve_raw_pointer_annotation
 from pcc.frontends.python.types import PyFrontendError, common_type, is_numeric, parse_annotation, type_eq
 
 TYPE_INT: IntType = IntType(name="int", width=64, signed=True)
@@ -340,6 +341,7 @@ def _contextualize_raw_int_operands(
 _CLASS_LOWERING_HOST_METHODS = (
     "_find_method_def",
     "_load_bases_array",
+    "_normalize_native_class_bases",
     "declare_class",
     "declare_extern_class",
     "emit_class_attr_load",
@@ -617,6 +619,9 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "f64_div": TYPE_FLOAT,
     "f64_signbit": TYPE_INT,
     "f64_bits": TYPE_INT,
+    "call_c_abi": TYPE_NONE,
+    "c_abi_sizeof": TYPE_INT,
+    "c_abi_alignof": TYPE_INT,
     "f64_pair_make": TYPE_COMPLEX,
     "f64_pair_first": TYPE_FLOAT,
     "f64_pair_second": TYPE_FLOAT,
@@ -846,6 +851,7 @@ class _InferCtx:
     pcc_guarded_i64_dot_aliases: set[str]
     pcc_guarded_loop_counter_aliases: set[str]
     class_types: dict[str, ClassType]
+    annotation_module_bindings: dict[str, str]
     _l1_codegen_host_type: Optional[ClassType]
     _preload_dependency_modules: list[str]
     _record_preload_dependencies: bool
@@ -932,6 +938,7 @@ class _InferCtx:
         # type of calling the declared symbol.
         self.extern_fn_type_aliases: set[str] = set()
         self.extern_ctype_aliases: dict[str, str] = {}
+        self.raw_pointer_annotation_names = raw_pointer_annotation_names(module)
         # ``from weakref import ref/proxy as ...`` names are identity
         # observers just like ``weakref.ref``/``weakref.proxy``. Track
         # only imports resolved to the real weakref module so ordinary
@@ -950,6 +957,8 @@ class _InferCtx:
         # Set/restored per-FuncDef in ``_infer_funcdef``.
         self.setdefault_none_widen_names: set = set()
         self.class_types: dict[str, ClassType] = {}
+        from pcc.frontends.python.pipeline_exports import annotation_module_bindings
+        self.annotation_module_bindings = annotation_module_bindings(module)
         self._l1_codegen_host_type: Optional[ClassType] = None
         self._preload_dependency_modules = []
         self._record_preload_dependencies = False
@@ -1068,6 +1077,9 @@ class _InferCtx:
         recurse through container annotations.
         """
         if isinstance(ty, ClassType):
+            pointer_ty = resolve_raw_pointer_annotation(ty, self.raw_pointer_annotation_names)
+            if isinstance(pointer_ty, RawPointerType):
+                return pointer_ty
             ty_module = _class_type_module(ty)
             ty_fields = _class_type_fields(ty)
             ty_bases = _class_type_bases(ty)
@@ -1095,11 +1107,18 @@ class _InferCtx:
                     return TYPE_FROZENSET
             if ty_module:
                 found = self.class_types.get(f"{ty_module}.{ty.name}")
+                if found is not None and (
+                    _class_type_module(found) == ty_module
+                    or ty_module.split(".", 1)[0] in self.annotation_module_bindings
+                ):
+                    return found
+            else:
+                # A qualified annotation identifies its owner. A missing
+                # module alias cannot be repaired by an unrelated local or
+                # uniquely preloaded class with the same leaf name.
+                found = self.class_types.get(ty.name)
                 if found is not None:
                     return found
-            found = self.class_types.get(ty.name)
-            if found is not None:
-                return found
             if not ty_module and not ty_fields and not ty_bases:
                 alias = self.type_aliases.get(ty.name)
                 if alias is not None and ty.name not in self._alias_resolving:
@@ -1361,6 +1380,17 @@ def _infer_expr(ctx: _InferCtx, scope: _Scope, expr: Expr) -> Expr:
 
     # Calls --------------------------------------------------------------
     if isinstance(expr, Call):
+        if expr.is_set_literal:
+            # The parser's container syntax is independent of a user binding
+            # named ``set``. Do not resolve or invoke the synthetic callee.
+            new_args = tuple(_infer_expr(ctx, scope, arg) for arg in expr.args)
+            elem_ty = TYPE_DYN
+            if len(new_args) == 1:
+                elem_ty = _element_type_of(ctx.resolve_type_refs(new_args[0].ty))
+            return replace(
+                expr, func=_with_ty(expr.func, TYPE_DYN), args=new_args,
+                ty=SetType(name="set", elem=elem_ty),
+            )
         if _is_walrus_sentinel_call(expr):
             # The lift encodes both ``x := rhs`` and chained assignment with
             # a Dyn-typed sentinel.  Infer the RHS first (Python evaluation
@@ -2042,10 +2072,17 @@ def _infer_expr(ctx: _InferCtx, scope: _Scope, expr: Expr) -> Expr:
         # treat ``alias.ClassName(args)`` as a constructor and type the
         # result as a ClassType instance. Without this, stdlib-walked
         # modules (``import pathlib``) bottom out at DynType.
-        if isinstance(expr.obj, Name):
-            obj_ident = _name_ident(expr.obj)
+        parts = [expr.name]
+        head = expr.obj
+        while isinstance(head, Attr):
+            parts.append(head.name)
+            head = head.obj
+        if isinstance(head, Name):
+            obj_ident = _name_ident(head)
             if obj_ident is not None:
-                qualified = f"{obj_ident}.{expr.name}"
+                parts.append(obj_ident)
+                parts.reverse()
+                qualified = ".".join(parts)
                 qty = ctx.class_types.get(qualified)
                 if isinstance(qty, ClassType):
                     return replace(expr, obj=obj, ty=qty)
@@ -2176,6 +2213,13 @@ def _infer_expr(ctx: _InferCtx, scope: _Scope, expr: Expr) -> Expr:
             expr.span,
         )
         ty = common_type(then_e.ty, else_e.ty)
+        if ctx.pointer_lane:
+            # An explicit unmanaged arm selects the manual pointer view.
+            # Known managed values and ordinary Python joins stay strict.
+            if isinstance(then_e.ty, RawPointerType) and isinstance(else_e.ty, DynType):
+                ty = then_e.ty
+            elif isinstance(else_e.ty, RawPointerType) and isinstance(then_e.ty, DynType):
+                ty = else_e.ty
         return replace(expr, cond=cond, then_e=then_e, else_e=else_e, ty=ty)
 
     # Lambda — Phase 1 leaves the body untyped; return a dyn FuncType.
@@ -3020,10 +3064,8 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
     if isinstance(stmt, ClassDef):
         # Phase 1 does not type the body of classes; leave the class
         # node alone but still walk the body so nested funcs get typed.
-        # Class-level ``x: T`` (no value — NoneLit placeholder from the
-        # AnnAssign lift) is an instance-field declaration, not a real
-        # assignment, so don't run the usual compatibility check that
-        # would otherwise reject ``None`` against the annotation.
+        # Annotation declarations retain type metadata without binding a
+        # class-body name. Initializer presence is a separate syntax fact.
         method_arg_overrides: dict[str, dict[int, Type]] = {}
         final_body: tuple[Stmt, ...] = ()
         forwardable = _class_forwardable_params(stmt.body)
@@ -3033,11 +3075,18 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
             for s in stmt.body:
                 if (
                     isinstance(s, Assign)
-                    and _annotation_or_none(s) is not None
-                    and isinstance(s.value, NoneLit)
+                    and not s.has_value
                     and len(s.targets) == 1
                     and isinstance(s.targets[0], Name)
                 ):
+                    new_body.append(_infer_assign(ctx, class_scope, s))
+                    continue
+                if (isinstance(s, Assign) and s.has_value
+                        and _annotation_or_none(s) is not None
+                        and isinstance(s.value, NoneLit)):
+                    # Class annotations do not enforce a runtime type. Keep
+                    # explicit None initializers as real class assignments,
+                    # including annotations naming scalar types.
                     new_body.append(s)
                     continue
                 if isinstance(s, FuncDef):
@@ -3116,22 +3165,7 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
             # silently returning the property descriptor instead of
             # invoking the getter. See investigation
             # pcc-py-type-infer-property-return-type.md.
-            module_exports = ctx.external_exports.get(mod_name)
-            if not module_exports:
-                continue
-            local_name = as_name or mod_name.split(".", 1)[0]
-            memo: dict[tuple[str, str], ClassType] = {}
-            for info in module_exports.values():
-                if not isinstance(info, dict) or info.get("kind") != "class":
-                    continue
-                cls_ty = _class_type_from_export(
-                    ctx,
-                    mod_name,
-                    info,
-                    module_exports,
-                    memo,
-                )
-                ctx.class_types[f"{local_name}.{cls_ty.name}"] = cls_ty
+            _bind_external_module_exports(ctx, mod_name, as_name or mod_name)
         return stmt
 
     # For ImportFrom against a registered native sibling module we
@@ -3694,8 +3728,22 @@ def _lookup_class_property(cls_ty: ClassType, prop_name: str) -> Optional[Type]:
 
 
 def _class_bases_from_def(ctx: _InferCtx, stmt: ClassDef) -> tuple[ClassType, ...]:
+    from pcc.frontends.python.pipeline_closed_world import qualified_class_base_name, resolve_class_base_export
+
     bases: list[ClassType] = []
     for base_expr in stmt.bases:
+        if isinstance(base_expr, Attr):
+            # Prepopulation runs before ordinary import-statement inference.
+            # Resolve the source's qualified binding against the export table
+            # now, retaining its owning module even when leaf names collide.
+            base_name = qualified_class_base_name(
+                base_expr, ctx.module.body, stmt, _ctx_module_name(ctx), stmt.span.file,
+            )
+            resolved = resolve_class_base_export(ctx.external_exports, _ctx_module_name(ctx), base_name)
+            if resolved is not None:
+                owner, exported = resolved
+                bases.append(_class_type_from_export(ctx, owner, exported, ctx.external_exports[owner], {}))
+            continue
         if not isinstance(base_expr, Name):
             continue
         base_ident = _name_ident(base_expr)
@@ -4149,12 +4197,16 @@ def _class_fields_from_def(
     ctx: _InferCtx, stmt: ClassDef
 ) -> tuple[tuple[str, Type], ...]:
     from pcc.frontends.python.pipeline_exports import instance_field_assignment_statements
+    from pcc.frontends.python.pipeline_exports import _class_is_dataclass, export_dataclass_factory_default
+    from pcc.frontends.python.pipeline_import_policy import dataclasses_field_binding_names
+    from pcc.frontends.python.py_ast import assignment_storage_annotation
     import os
     import sys
 
     trace_fields = os.environ.get("PCC_DEBUG_FIELD_INFER", "") == "1"
 
     fields: list[tuple[str, Type]] = []
+    nullable_scalar_fields: set[str] = set()
     for body_stmt in stmt.body:
         if trace_fields:
             print("FIELD body", stmt.name, type(body_stmt).__name__, getattr(body_stmt, "name", ""), file=sys.stderr)
@@ -4163,6 +4215,18 @@ def _class_fields_from_def(
             if body_annotation is None:
                 continue
             field_ty = ctx.resolve_annotation(body_annotation)
+            if not _class_has_valueclass_decorator(stmt):
+                default = body_stmt.value
+                if _class_is_dataclass(stmt) and body_stmt.has_value:
+                    default = export_dataclass_factory_default(default, dataclasses_field_binding_names(ctx.module))
+                storage_ty = assignment_storage_annotation(
+                    field_ty, default if default is not None else body_stmt.value, body_stmt.has_value,
+                )
+                if storage_ty is not field_ty:
+                    for target in body_stmt.targets:
+                        if isinstance(target, Name):
+                            nullable_scalar_fields.add(target.ident)
+                field_ty = storage_ty
             for target in body_stmt.targets:
                 if isinstance(target, Name):
                     target_ident = _name_ident(target)
@@ -4269,6 +4333,8 @@ def _class_fields_from_def(
                         field_ty = DynType(name="dyn")
                     if trace_fields:
                         print("FIELD append", target.name, type(field_ty).__name__, widen_from_none, file=sys.stderr)
+                    if target.name in nullable_scalar_fields:
+                        field_ty = TYPE_DYN
                     _append_field(fields, target.name, field_ty)
     return tuple(fields)
 
@@ -4280,6 +4346,8 @@ def _class_type_from_export(
     module_exports: dict,
     memo: dict[tuple[str, str], ClassType],
 ) -> ClassType:
+    from pcc.frontends.python.pipeline_closed_world import resolve_class_base_export
+
     class_name = info["class_name"]
     owning_module = info.get("owning_module", module_name)
     if not owning_module:
@@ -4314,14 +4382,15 @@ def _class_type_from_export(
         base_names = tuple(info.get("base_names", ()))
     bases: list[ClassType] = []
     for base_name in base_names:
-        base_info = owner_exports.get(base_name)
-        if isinstance(base_info, dict) and base_info.get("kind") == "class":
+        resolved_base = resolve_class_base_export(ctx.external_exports, owning_module, base_name)
+        if resolved_base is not None:
+            base_module, base_info = resolved_base
             bases.append(
                 _class_type_from_export(
                     ctx,
-                    owning_module,
+                    base_module,
                     base_info,
-                    owner_exports,
+                    ctx.external_exports[base_module],
                     memo,
                 )
             )
@@ -4370,7 +4439,10 @@ def _class_type_from_export(
         valueclass=is_valueclass,
     )
     memo[key] = cls_ty
-    ctx.register_class_type(class_name, cls_ty)
+    # Resolving a qualified export does not execute an unqualified import.
+    # Explicit from-imports and unique-class preloads bind their own aliases;
+    # the recursive resolver must not overwrite a same-named local class.
+    ctx.class_types[owning_module + "." + class_name] = cls_ty
     return cls_ty
 
 
@@ -4569,6 +4641,7 @@ def _py_ast_static_fields_for_export(
             ("targets", _py_ast_tuple_of(expr)),
             ("value", expr),
             ("annotation", ty),
+            ("has_value", TYPE_BOOL),
         )
     if class_name == "AugAssign":
         return (
@@ -4652,6 +4725,8 @@ def _py_ast_static_fields_for_export(
             ("func", expr),
             ("args", _py_ast_tuple_of(expr)),
             ("kwargs", _py_ast_tuple_of(_make_tuple_type("tuple", (TYPE_STR, expr)))),
+            ("operand_order", _py_ast_tuple_of(_make_tuple_type("tuple", (TYPE_STR, TYPE_INT)))),
+            ("is_set_literal", TYPE_BOOL),
         )
     if class_name == "Attr":
         return (("span", span), ("ty", ty), ("obj", expr), ("name", TYPE_STR))
@@ -4860,11 +4935,18 @@ def _resolve_export_type_refs(
     memo: dict[tuple[str, str], ClassType],
     ty: Type,
 ) -> Type:
-    ty = ctx.resolve_type_refs(ty)
     if isinstance(ty, ClassType):
         ty_module = _class_type_module(ty)
         ty_fields = _class_type_fields(ty)
         ty_bases = _class_type_bases(ty)
+        if ty_module and not ty_fields and not ty_bases:
+            qualified_exports = ctx.external_exports.get(ty_module)
+            if qualified_exports is not None:
+                ref_info = qualified_exports.get(ty.name)
+                if isinstance(ref_info, dict) and ref_info.get("kind") == "class":
+                    return _class_type_from_export(
+                        ctx, ty_module, ref_info, qualified_exports, memo,
+                    )
         if (
             (not ty_module or ty_module == module_name)
             and not ty_fields
@@ -4879,7 +4961,15 @@ def _resolve_export_type_refs(
                     module_exports,
                     memo,
                 )
-        return ty
+        # An imported signature belongs to its defining module. Resolve its
+        # lexical class binding before looking at the consumer's type table.
+        if ty_module:
+            found = ctx.class_types.get(ty_module + "." + ty.name)
+            if found is not None and _class_type_module(found) == ty_module:
+                return found
+            # A provider's unresolved prefix is never a consumer import alias.
+            return ty
+        return ctx.resolve_type_refs(ty)
     if isinstance(ty, ListType):
         elem = _resolve_export_type_refs(
             ctx, module_name, module_exports, memo, ty.elem
@@ -4919,15 +5009,32 @@ def _resolve_export_type_refs(
     return ty
 
 
+def _bind_external_module_exports(
+    ctx: _InferCtx,
+    module_name: str,
+    local_name: str,
+) -> None:
+    """Bind qualified class spellings without introducing bare leaf names."""
+    module_exports = ctx.external_exports.get(module_name)
+    if module_exports is None:
+        return
+    memo: dict[tuple[str, str], ClassType] = {}
+    for export_name, info in module_exports.items():
+        if not isinstance(info, dict) or info.get("kind") != "class":
+            continue
+        cls_ty = _class_type_from_export(ctx, module_name, info, module_exports, memo)
+        # Re-exports can rename a class; the visible key and canonical
+        # class_name serve different purposes and must both be preserved.
+        ctx.class_types[local_name + "." + export_name] = cls_ty
+
+
 def _bind_external_import_exports(
     ctx: _InferCtx,
     scope: _Scope,
     resolved_module: str,
     names: tuple[tuple[str, Optional[str]], ...],
 ) -> None:
-    module_exports = ctx.external_exports.get(resolved_module)
-    if module_exports is None:
-        return
+    module_exports = ctx.external_exports.get(resolved_module, {})
 
     memo: dict[tuple[str, str], ClassType] = {}
     for info in module_exports.values():
@@ -4944,13 +5051,20 @@ def _bind_external_import_exports(
         local_name = as_name or attr_name
         info = module_exports.get(attr_name)
         if info is None:
+            # ``from package import child as alias`` also works when only
+            # the child module, rather than its package, is in the closure.
+            _bind_external_module_exports(
+                ctx, resolved_module + "." + attr_name, local_name,
+            )
             continue
         if info["kind"] == "function":
+            owning_module = info.get("owning_module", resolved_module) or resolved_module
+            owner_exports = ctx.external_exports.get(owning_module, module_exports)
             param_tys = tuple(
                 _resolve_export_type_refs(
                     ctx,
-                    resolved_module,
-                    module_exports,
+                    owning_module,
+                    owner_exports,
                     memo,
                     _annotation_to_type(decode_type(t)),
                 )
@@ -4968,8 +5082,8 @@ def _bind_external_import_exports(
             else:
                 ret_ty = _resolve_export_type_refs(
                     ctx,
-                    resolved_module,
-                    module_exports,
+                    owning_module,
+                    owner_exports,
                     memo,
                     _annotation_to_type(decode_type(info["return_ty"])),
                 )
@@ -5289,8 +5403,27 @@ def _preload_index_plan(external_exports):
 
 
 def _infer_assign(ctx: _InferCtx, scope: _Scope, stmt: Assign) -> Assign:
+    from pcc.frontends.python.py_ast import assignment_storage_annotation
+    if not stmt.has_value:
+        # A bare annotation neither reads a name nor overwrites its current
+        # binding/type. Attribute/subscript receivers still execute, however.
+        targets = []
+        declaration_ty = ctx.resolve_annotation(stmt.annotation)
+        for target in stmt.targets:
+            if isinstance(target, Name):
+                current = scope.lookup_local(target.ident)
+                if _is_raw_int_type(declaration_ty):
+                    # Explicit machine lanes remain type declarations even
+                    # before their first value store. Boundness is separate.
+                    current = declaration_ty
+                    scope.update(target.ident, declaration_ty)
+                targets.append(_with_ty(target, current or TYPE_DYN))
+            else:
+                targets.append(_infer_expr(ctx, scope, target))
+        return replace(stmt, targets=tuple(targets))
     value = _infer_expr(ctx, scope, stmt.value)
     ann_ty = ctx.resolve_annotation(stmt.annotation)
+    storage_ann = assignment_storage_annotation(ann_ty, stmt.value, stmt.has_value)
     existing_raw_ty: Optional[IntType] = None
     if stmt.annotation is None:
         for target in stmt.targets:
@@ -5323,6 +5456,7 @@ def _infer_assign(ctx: _InferCtx, scope: _Scope, stmt: Assign) -> Assign:
         and isinstance(stmt.value.func, Name)
         and _name_ident(stmt.value.func) in ctx.extern_factory_aliases
     )
+    preserve_value_storage = False
     if extern_marker_annotation:
         # ``x: extern = extern(...)`` and ``x: ExternFn = extern(...)`` both
         # use the annotation as a declaration marker, not as the runtime
@@ -5332,6 +5466,8 @@ def _infer_assign(ctx: _InferCtx, scope: _Scope, stmt: Assign) -> Assign:
         bind_ty = value.ty
     elif existing_raw_ty is not None:
         bind_ty = existing_raw_ty
+    elif storage_ann is not ann_ty:
+        bind_ty = storage_ann
     elif stmt.annotation is None or isinstance(ann_ty, DynType):
         # An absent annotation is a syntax-level fact and must not depend on
         # runtime class identity.  In a self-hosted fixed-layout compiler the
@@ -5344,6 +5480,21 @@ def _infer_assign(ctx: _InferCtx, scope: _Scope, stmt: Assign) -> Assign:
     else:
         _check_assign_compatible(ann_ty, value.ty, stmt.span)
         bind_ty = ann_ty
+        if (
+            scope is not ctx.globals
+            and all(isinstance(target, Name) for target in stmt.targets)
+            and isinstance(ann_ty, ClassType)
+            and _class_type_is_unresolved_shell(ann_ty)
+            and isinstance(value.ty, ClassType)
+            and not _class_type_is_unresolved_shell(value.ty)
+        ):
+            # An opaque local annotation is not a class definition or an
+            # object projection. After the ordinary compatibility check,
+            # retain the RHS's known identity/layout rather than replacing
+            # an imported value payload with an empty annotation shell.
+            # Qualified/resolved annotations never take this path.
+            bind_ty = value.ty
+            preserve_value_storage = True
 
     if (
         isinstance(ann_ty, DynType)
@@ -5403,7 +5554,9 @@ def _infer_assign(ctx: _InferCtx, scope: _Scope, stmt: Assign) -> Assign:
     # Preserve the resolved annotation as a ``Type`` in the node so the
     # codegen layer doesn't have to re-parse it.
     new_annotation = (
-        value.ty
+        bind_ty
+        if preserve_value_storage
+        else value.ty
         if extern_marker_annotation
         else ann_ty if not isinstance(ann_ty, DynType) else stmt.annotation
     )
@@ -6432,6 +6585,8 @@ def _infer_funcdef(
         decorators=fn.decorators,
         is_method=fn.is_method,
         is_async=fn.is_async,
+        has_return_annotation=fn.has_return_annotation,
+        manual_pointer_abi=ctx.pointer_lane,
     )
 
 
@@ -6885,6 +7040,9 @@ def _prepopulate_module_scope(ctx: _InferCtx, module: Module) -> None:
 
     if ctx.external_exports:
         for stmt in module.body:
+            if isinstance(stmt, Import):
+                for module_name, alias in stmt.names:
+                    _bind_external_module_exports(ctx, module_name, alias or module_name)
             if isinstance(stmt, ImportFrom):
                 resolved = _resolve_relative_module(
                     _import_from_module_or_empty(stmt),

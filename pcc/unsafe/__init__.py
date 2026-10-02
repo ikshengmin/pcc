@@ -189,6 +189,44 @@ def f64_bits(value: float) -> int:
     _trap("f64_bits")
 
 
+def c_abi_sizeof(type_name: str) -> int:
+    """Target C storage size of a literal typed-ABI scalar/struct (not void).
+
+    This is an integer expression, not an AST size literal for stack_alloc.
+    Check a literal reservation against this size, or use a dynamic allocator.
+    """
+    _trap("c_abi_sizeof")
+
+
+def c_abi_alignof(type_name: str) -> int:
+    """Target C natural alignment of a literal typed-ABI scalar/struct."""
+    _trap("c_abi_alignof")
+
+
+def call_c_abi(fn: Any, restype: str, argtypes: tuple[str, ...], values: tuple, result: Any) -> None:
+    """Call an address using a literal, non-variadic C ABI signature.
+
+    Types use the ``c_abi_typed_export`` grammar. ``values`` is a tuple
+    literal; structural arguments are recursively nested tuple literals.
+    Integer leaves are explicit machine lanes (narrow widths truncate),
+    floating leaves convert to the declared width, and ``ptr`` is a raw
+    address. No Python tuple is allocated for these syntax-only operands.
+
+    ``result`` is None for void, otherwise writable caller-owned storage
+    with the declared type's target C size and alignment. Scalars and
+    aggregates are written in that layout, including pointer results. This
+    function always returns None. The caller owns storage, pointer validity,
+    exact callee-signature agreement, and the lifetime/pinning of pointees
+    behind raw or interior addresses across any callback or safepoint.
+    Managed values used directly as operands are retained through the call;
+    raw result storage is not a managed-object root or ownership transfer.
+    A stack_alloc reservation must be a literal and include any padding:
+    use c_abi_sizeof/c_abi_alignof to check it, and ptr_add with ptr_to_int
+    to align the start when the allocation's alignment is not guaranteed.
+    """
+    _trap("call_c_abi")
+
+
 def f64_pair_make(first: float, second: float) -> complex:
     """Build the compiler-owned ``{f64,f64}`` machine aggregate."""
     _trap("f64_pair_make")
@@ -1134,6 +1172,9 @@ __all__ = [
     "f64_div",
     "f64_signbit",
     "f64_bits",
+    "call_c_abi",
+    "c_abi_sizeof",
+    "c_abi_alignof",
     "f64_pair_make",
     "f64_pair_first",
     "f64_pair_second",

@@ -8,11 +8,25 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import Attr, Call, ClassType, DictType, DynType, Expr, ListExpr, ListType, Name, SetType, StrType, TupleExpr, TupleType
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_SET
+from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
 _I1 = ir.IntType(1)
 _I64 = ir.IntType(64)
 _CSTR = ir.IntType(8).as_pointer()
+
+# Shared with py_set_call_method_slots. All these methods bind positional
+# iterables at runtime, including the zero-argument and expanded-call forms.
+_SET_ALGEBRA_METHODS = {
+    "union": 0,
+    "intersection": 1,
+    "difference": 2,
+    "update": 3,
+    "intersection_update": 4,
+    "difference_update": 5,
+    "symmetric_difference": 6,
+    "symmetric_difference_update": 7,
+}
 
 _DYN_SET_METHOD_NATIVE = frozenset(
     {
@@ -37,6 +51,125 @@ _DYN_SET_METHOD_NATIVE = frozenset(
 
 
 class SetLoweringMixin:
+    def _set_call_operands(self, expr: Call):
+        """Separate positional splats from the ordered keyword merge stream."""
+        positional = []
+        mappings = []
+        for index, argument in enumerate(expr.args):
+            if (isinstance(argument, Call) and isinstance(argument.func, Name)
+                    and argument.func.ident == "**" and len(argument.args) == 1):
+                mappings.append(index)
+            else:
+                positional.append(argument)
+        if not mappings:
+            return tuple(positional), expr.kwargs
+        keywords = []
+        if expr.operand_order:
+            for kind, index in expr.operand_order:
+                if kind == "kw":
+                    keywords.append(expr.kwargs[index])
+                elif index in mappings:
+                    keywords.append(("**", expr.args[index].args[0]))
+        else:
+            if expr.kwargs:
+                raise L1CodegenError("set unpack is missing keyword operand-order metadata")
+            for index in mappings:
+                keywords.append(("**", expr.args[index].args[0]))
+        return tuple(positional), tuple(keywords)
+
+    def _emit_set_algebra_call(self, expr: Call, dynamic: bool = False):
+        """Evaluate once, bind expanded arguments, and preserve slot ownership."""
+        attr = expr.func
+        assert isinstance(attr, Attr)
+        if self._expr_looks_cpython(attr.obj):
+            return self._emit_cpy_method_call_src(
+                self._emit_expr(attr.obj), attr.name, expr.args,
+                kwargs=expr.kwargs, operand_order=expr.operand_order,
+            )
+        positional, keywords = self._set_call_operands(expr)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        # The output is the oldest root, so argument teardown also respects
+        # module-scope LIFO frames. Runtime publishes into this empty slot.
+        result_root = self._new_slot_call_root("set.call.result")
+        roots = [result_root]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver_root = self._emit_slot_call_operand(attr.obj, "set.call.receiver")
+            roots.append(receiver_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            is_set = None
+            method_root = None
+            if dynamic:
+                method_root = self._new_slot_call_root("set.call.generic.method")
+                roots.append(method_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                tag = self._slot_call_runtime_call(
+                    "py_obj_type_tag", (receiver_root,), span=expr.span,
+                )
+                is_set = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_SET))
+                lookup = self.current_function.append_basic_block(self._fresh("set.call.generic.lookup"))
+                ready = self.current_function.append_basic_block(self._fresh("set.call.lookup.ready"))
+                self.builder.cbranch(is_set, ready, lookup)
+                self.builder.position_at_end(lookup)
+                # Python resolves the method before evaluating any argument.
+                # A class merely sharing a set method's name stays generic.
+                self._slot_call_runtime_call(
+                    "py_obj_getattr", (receiver_root,), result_slot=method_root,
+                    suffix_args=(self._attr_name_ptr(attr.name),), span=expr.span,
+                )
+                method = self.builder.load(method_root, name=self._fresh("set.call.generic.method.present"))
+                self._emit_attribute_error_if_null(method, attr.name, attr.span)
+                self.builder.branch(ready)
+                self.builder.position_at_end(ready)
+            args_root = self._emit_slot_call_args_tuple(positional, "set.call.args")
+            roots.append(args_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            kwargs_root = self._emit_slot_call_kwargs_object(
+                keywords, None, expr.span, "set.call.kwargs",
+            )
+            roots.append(kwargs_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            done = None
+            if dynamic:
+                native = self.current_function.append_basic_block(self._fresh("set.call.native"))
+                generic = self.current_function.append_basic_block(self._fresh("set.call.generic"))
+                done = self.current_function.append_basic_block(self._fresh("set.call.done"))
+                self.builder.cbranch(is_set, native, generic)
+                self.builder.position_at_end(generic)
+                status = self.builder.call(self.runtime["py_obj_call_slots"], [
+                    self._as_gc_ptr(method_root), self._as_gc_ptr(args_root),
+                    self._as_gc_ptr(kwargs_root), self._as_gc_ptr(result_root),
+                ], name=self._fresh("set.call.generic.status"))
+                self._emit_post_call_err_check(expr.span)
+                self._slot_call_check_status(status, "generic method call", expr.span)
+                self.builder.branch(done)
+                self.builder.position_at_end(native)
+            status = self.builder.call(self.runtime["py_set_call_method_slots"], [
+                self._as_gc_ptr(receiver_root),
+                ir.Constant(_I64, _SET_ALGEBRA_METHODS[attr.name]),
+                self._as_gc_ptr(args_root), self._as_gc_ptr(kwargs_root),
+                self._as_gc_ptr(result_root),
+            ], name=self._fresh("set.call.status"))
+            self._emit_post_call_err_check(expr.span)
+            self._slot_call_check_status(status, "set method call", expr.span)
+            if done is not None:
+                self.builder.branch(done)
+                self.builder.position_at_end(done)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        self._release_slot_call_roots(tuple(roots[1:]))
+        result = self._take_slot_call_root(result_root)
+        self._note_owned_dynamic_call_value(result)
+        return result
+
     def _emit_require_native_set_operands(
         self,
         lhs: ir.Value,
@@ -286,6 +419,8 @@ class SetLoweringMixin:
         assert isinstance(attr, Attr)
         if attr.name not in _DYN_SET_METHOD_NATIVE:
             return None
+        if attr.name in _SET_ALGEBRA_METHODS:
+            return self._emit_set_algebra_call(expr, dynamic=True)
         # Name alone does not make the receiver a set: a user class with an
         # ``add``/``update``/``pop`` method reaching py_set_* silently did
         # nothing.  Test the runtime tag and send anything else to generic
@@ -311,22 +446,24 @@ class SetLoweringMixin:
         """
         attr = expr.func
         assert isinstance(attr, Attr)
+        if attr.name in _SET_ALGEBRA_METHODS:
+            # Algebra never treats a * / ** parser marker as one iterable.
+            # The dynamic owner routes here before evaluating its receiver.
+            if recv is not None:
+                raise L1CodegenError("set algebra requires an authoritative receiver slot")
+            return self._emit_set_algebra_call(expr)
         if expr.kwargs:
             return None
         name = attr.name
         if name not in (
-            "add", "remove", "discard", "update", "issubset", "issuperset",
-            "isdisjoint", "union", "intersection", "difference",
-            "symmetric_difference", "intersection_update", "difference_update",
-            "symmetric_difference_update", "copy", "pop", "clear",
+            "add", "remove", "discard", "issubset", "issuperset",
+            "isdisjoint", "copy", "pop", "clear",
         ):
             return None
         if name in ("copy", "pop", "clear"):
             if expr.args:
                 return None
         elif len(expr.args) != 1:
-            # The 1-arg form covers the common case; multi-arg union/
-            # intersection/etc. fall back to the generic path.
             return None
         if recv is None:
             recv = self._emit_expr(attr.obj)
@@ -337,30 +474,6 @@ class SetLoweringMixin:
                 expr.args,
                 kwargs=expr.kwargs,
             )
-        if name == "update":
-            self._spread_into_set(recv, expr.args[0])
-            return self._emit_none_literal()
-        if name in (
-            "intersection_update",
-            "difference_update",
-            "symmetric_difference_update",
-        ):
-            # In-place mutators: the runtime helper rewrites the receiver's
-            # contents in place (preserving receiver identity so aliases see
-            # the change) using the corresponding
-            # py_set_intersection/difference/symmetric_difference result.
-            # They return None, matching CPython.
-            fn_name = {
-                "intersection_update": "py_set_intersection_update",
-                "difference_update": "py_set_difference_update",
-                "symmetric_difference_update": "py_set_symmetric_difference_update",
-            }[name]
-            self.builder.call(
-                self.runtime[fn_name],
-                [recv, self._emit_as_object(expr.args[0])],
-            )
-            self._emit_post_call_err_check(expr.span)
-            return self._emit_none_literal()
         if name in ("issubset", "issuperset"):
             fn_name = (
                 "py_set_issubset" if name == "issubset" else "py_set_issuperset"
@@ -386,32 +499,12 @@ class SetLoweringMixin:
                 ir.Constant(_I64, 0),
                 name=self._fresh(f"set.{name}.i1"),
             )
-        if name in ("intersection", "difference", "symmetric_difference"):
-            # Each returns a NEW set; the runtime helpers already do so.
-            fn_name = {
-                "intersection": "py_set_intersection",
-                "difference": "py_set_difference",
-                "symmetric_difference": "py_set_symmetric_difference",
-            }[name]
-            return self.builder.call(
-                self.runtime[fn_name],
-                [recv, self._emit_as_object(expr.args[0])],
-                name=self._fresh(f"set.{name}"),
-            )
-        if name in ("union", "copy"):
-            # ``a.union(b)`` / ``a.copy()`` build a NEW set: seed it from recv
-            # (and, for union, the argument) via py_set_update.
+        if name == "copy":
             new_set = self.builder.call(
                 self.runtime["py_set_new"], [], name=self._fresh(f"set.{name}.new"),
             )
             self.builder.call(self.runtime["py_set_update"], [new_set, recv])
             self._emit_post_call_err_check(expr.span)
-            if name == "union":
-                self.builder.call(
-                    self.runtime["py_set_update"],
-                    [new_set, self._emit_as_object(expr.args[0])],
-                )
-                self._emit_post_call_err_check(expr.span)
             return new_set
         if name == "clear":
             self.builder.call(self.runtime["py_set_clear"], [recv])
@@ -498,11 +591,12 @@ class SetLoweringMixin:
         """``set()`` / ``set([a, b])`` / ``set((a, b, c))`` / ``set(iterable)``.
 
         - no args → empty ``py_set_new``.
-        - literal list/tuple → allocate + add each element.
-        - non-literal arg → the runtime iterator protocol, including mapping
-          keys and generators, with the same behavior for every type hint.
+        - syntax-marked set display → allocate + add each element.
+        - explicit argument, including a literal list/tuple → evaluate the
+          complete argument before the constructor starts hashing members.
+          Then use the runtime iterator protocol for every type hint.
         """
-        if expr.args and not isinstance(expr.args[0], (ListExpr, TupleExpr)):
+        if expr.args and not expr.is_set_literal:
             arg = expr.args[0]
             src = self._emit_as_object(arg)
             owned = self._owned_release_needed(src, arg)

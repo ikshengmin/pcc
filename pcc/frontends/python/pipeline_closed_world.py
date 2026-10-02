@@ -39,6 +39,51 @@ def _resolve_ast_import_from_module(src_path: str, mod_name: str, stmt) -> str:
     return _join_dotted_parts(base)
 
 
+def qualified_class_base_name(base, body, before, mod_name: str, src_path: str) -> str:
+    """Resolve an imported Attr base to the module.Class identity spelling."""
+    from pcc.frontends.python.py_ast import Attr, Import, ImportFrom, Name
+
+    parts = []
+    head = base
+    while _closed_world_is_node(head, Attr):
+        parts.append(_py_ast_field_value(head, "name", ""))
+        head = _py_ast_field_value(head, "obj", None)
+    if not parts or not _closed_world_is_node(head, Name):
+        return ""
+    root = _py_ast_field_value(head, "ident", "")
+    owner = ""
+    for statement in body:
+        if statement is before:
+            break
+        if _closed_world_is_node(statement, Import):
+            for imported, alias in _py_ast_field_value(statement, "names", ()):
+                local = alias or imported.split(".", 1)[0]
+                if local == root:
+                    owner = imported if alias else local
+        elif _closed_world_is_node(statement, ImportFrom):
+            imported_module = _resolve_ast_import_from_module(src_path, mod_name, statement)
+            for imported, alias in _py_ast_field_value(statement, "names", ()):
+                if (alias or imported) == root:
+                    owner = imported_module + "." + imported
+    if not owner:
+        return ""
+    parts.reverse()
+    return owner + "." + ".".join(parts)
+
+
+def resolve_class_base_export(native_exports, owner: str, name: str):
+    """Look up a local/re-exported or canonical qualified class identity."""
+    exported = native_exports.get(owner, {}).get(name)
+    if isinstance(exported, dict) and exported.get("kind") == "class":
+        return owner, exported
+    module, separator, leaf = name.rpartition(".")
+    if separator:
+        exported = native_exports.get(module, {}).get(leaf)
+        if isinstance(exported, dict) and exported.get("kind") == "class":
+            return module, exported
+    return None
+
+
 def _closed_world_star_export_items(src_exports):
     all_info = src_exports.get("__all__")
     all_names = None
@@ -151,7 +196,7 @@ def _flatten_closed_world_class_export_fields(native_exports) -> None:
         if _identity_list_contains(resolved, info):
             return
         if _identity_list_contains(visiting, info):
-            return
+            raise PyPipelineError("cyclic native class base graph: " + info.get("owning_module", "") + "." + info.get("class_name", ""))
         visiting.append(info)
 
         names = []
@@ -183,9 +228,10 @@ def _flatten_closed_world_class_export_fields(native_exports) -> None:
         visible_exports = native_exports.get(owning_module, {})
         dynamic_field_layout = bool(info.get("dynamic_field_layout", False))
         for base_name in info.get("base_names", ()):
-            base_info = visible_exports.get(base_name)
-            if not isinstance(base_info, dict) or base_info.get("kind") != "class":
+            resolved_base = resolve_class_base_export(native_exports, owning_module, base_name)
+            if resolved_base is None:
                 continue
+            _base_module, base_info = resolved_base
             resolve(base_info)
             if base_info.get("dynamic_field_layout", False):
                 dynamic_field_layout = True
@@ -637,6 +683,24 @@ def _closed_world_function_object_exports(native_exports, module_name: str):
     return out
 
 
+def _closed_world_boxed_int_functions(native_exports, module_name: str):
+    """Carry published object-int ABI decisions back to the defining worker.
+
+    A provider's local literal callers cannot constrain callers in another
+    module. This projection is read from the shared export wire, never rebuilt
+    by rerunning a module-local range proof in the provider's worker.
+    """
+    out = {}
+    for export_name, info in native_exports.get(module_name, {}).items():
+        if not isinstance(info, dict) or info.get("kind") != "function":
+            continue
+        if info.get("owning_module", module_name) != module_name:
+            continue
+        if bool(info.get("box_int_abi", False)):
+            out[export_name] = True
+    return out
+
+
 def _write_reexport_edges_wire(path: str, edges, module_dependencies=()) -> None:
     payload = {
         "schema": "pcc.frontends.python.reexport_edges.v1",
@@ -699,6 +763,7 @@ def _closed_world_shallow_func(lifter, raw_func, body):
         tuple(deco_list),
         False,
         bool(raw_func.is_async),
+        returns is not None,
     )
 
 

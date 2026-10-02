@@ -53,7 +53,7 @@ _With = With
 _DYN = DynType(name="dyn")
 
 from pcc.frontends.python.codegen.hoist_analysis import _PY_BUILTINS_NS, _dataclass_field_names, _dataclass_field_value, _import_names_from_stmt, _is_import_from_stmt, _is_import_stmt, append_name_once, body_augassigns_free_name, body_reads_self, body_returns_name, body_uses_name_as_value, clone_funcdef, copy_name_map, copy_names, extend_names_once, filter_capture_names, filter_self_capture_names, hoist_stat_inc, is_discard_capture_name, module_may_need_hoist_fast, name_in, update_name_map, write_hoist_profile
-from pcc.frontends.python.codegen.hoist_boxing import box_outer_body, collect_scope_bindings, function_boxed_names, function_local_bindings, late_bound_lambda_captures, scope_declared_names
+from pcc.frontends.python.codegen.hoist_boxing import CELL_CAPTURE, box_outer_body, collect_scope_bindings, function_boxed_names, function_local_bindings, late_bound_lambda_captures, scope_declared_names, stable_capture_parameters
 from pcc.frontends.python.codegen.hoist_free_names import compute_free_names as analyze_free_names
 from pcc.frontends.python.codegen.hoist_predicates import body_has_yield, body_needs_nested_rewrite, hoist_stmt_kind
 
@@ -468,22 +468,32 @@ class _HoistLoweringPass:
                                 )
             return tuple(boxed)
 
-        def collect_first_class_closure_captures(body, outer_scope_names):
+        def collect_first_class_closure_captures(body, outer_scope_names, stable_params):
             boxed = []
 
             def walk_block(stmts, lexical_names, call_scope_body):
                 for stmt in stmts:
+                    if isinstance(stmt, _ClassDef):
+                        # A local class can outlive this activation. Its
+                        # methods retain the same lexical cells as sibling
+                        # functions, even when no sibling forces boxing.
+                        for member in stmt.body:
+                            if isinstance(member, _FuncDef):
+                                extend_names_once(boxed, analyze_names(
+                                    member, (), outer_scope_names=lexical_names))
+                        continue
                     if isinstance(stmt, _FuncDef):
-                        if _hoist_definition_needs_binding(call_scope_body, stmt):
-                            # The cell planner must see the same enclosing
-                            # locals as later closure conversion. Otherwise a
-                            # same-named module global hides an imported/local
-                            # binding here, and the later pass captures its
-                            # current value instead of its shared lexical cell.
-                            extend_names_once(
-                                boxed,
-                                analyze_names(stmt, (), outer_scope_names=lexical_names),
-                            )
+                        captures = analyze_names(stmt, (), outer_scope_names=lexical_names)
+                        first_class = _hoist_definition_needs_binding(call_scope_body, stmt)
+                        # Direct calls must pass an empty cell without reading
+                        # its payload: the child may catch NameError itself or
+                        # never execute the free-variable read. Only entry-
+                        # bound parameters with no possible unbinding have a
+                        # sufficient proof to retain direct by-value capture.
+                        extend_names_once(boxed, tuple(
+                            name for name in captures
+                            if first_class or not name_in(stable_params, name)
+                        ))
                         child_names = _hoist_lexical_scope_names(
                             stmt, stmt.body, lexical_names,
                         )
@@ -518,12 +528,13 @@ class _HoistLoweringPass:
             walk_block(body, outer_scope_names, body)
             return tuple(boxed)
 
-        def boxed_capture_names(body, outer_scope_names):
+        def boxed_capture_names(body, outer_scope_names, param_names):
             boxed = []
             extend_names_once(boxed, collect_all_mutable_captures(body))
             extend_names_once(
                 boxed,
-                collect_first_class_closure_captures(body, outer_scope_names),
+                collect_first_class_closure_captures(
+                    body, outer_scope_names, stable_capture_parameters(body, param_names)),
             )
             extend_names_once(boxed, late_bound_lambda_captures(body))
             return tuple(boxed)
@@ -1229,15 +1240,12 @@ class _HoistLoweringPass:
                                     if isinstance(x, Name) and name_in(
                                         cap_names, x.ident
                                     ):
-                                        return Attr(
-                                            span=x.span,
-                                            ty=_DYN,
-                                            obj=Name(
-                                                span=x.span,
-                                                ty=_DYN,
-                                                ident=recv_name,
-                                            ),
-                                            name=f"__pcc_cap_{x.ident}",
+                                        return Call(
+                                            span=x.span, ty=_DYN,
+                                            func=Name(span=x.span, ty=_DYN, ident=CELL_CAPTURE),
+                                            args=(Name(span=x.span, ty=_DYN, ident=recv_name),
+                                                  StrLit(span=x.span, ty=StrType(name="str"),
+                                                         value=x.ident)),
                                         )
                                     fields = tuple(_dataclass_field_names(x))
                                     if fields:
@@ -1377,7 +1385,8 @@ class _HoistLoweringPass:
                         final_name,
                         tuple(a.name for a in st.args if a.name != ""),
                         function_boxed_names(
-                            st, boxed_capture_names(st.body, function_local_bindings(st))
+                            st, boxed_capture_names(st.body, function_local_bindings(st),
+                                                    tuple(a.name for a in st.args if a.name))
                         ),
                         closure_boxed_params,
                         boxed_function_defs,
@@ -1952,7 +1961,8 @@ class _HoistLoweringPass:
                         stmt.name,
                         tuple(scope_names),
                         function_boxed_names(
-                            stmt, boxed_capture_names(stmt.body, function_local_bindings(stmt))
+                            stmt, boxed_capture_names(stmt.body, function_local_bindings(stmt),
+                                                      tuple(a.name for a in stmt.args if a.name))
                         ),
                         closure_boxed_params,
                         boxed_function_defs,
@@ -2002,7 +2012,8 @@ class _HoistLoweringPass:
                                 method_owner_name,
                                 tuple(scope_names),
                                 function_boxed_names(
-                                    m, boxed_capture_names(m.body, function_local_bindings(m))
+                                    m, boxed_capture_names(m.body, function_local_bindings(m),
+                                                          tuple(a.name for a in m.args if a.name))
                                 ),
                                 closure_boxed_params,
                                 boxed_function_defs,

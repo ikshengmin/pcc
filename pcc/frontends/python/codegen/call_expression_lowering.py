@@ -6,7 +6,8 @@ import sys
 import os
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Arg, Attr, BoolLit, BoolType, Call, ClassType, DictExpr, DictType, DynType, Expr, FloatLit, FloatType, IntLit, IntType, ListExpr, ListType, Name, NoneLit, NoneType, Slice, StrLit, StrType, Subscript, TupleExpr, TupleType, ValueArrayType
+from pcc.frontends.python.py_ast import RawPointerType, Arg, Attr, BoolLit, BoolType, Call, ClassType, DictExpr, DictType, DynType, Expr, FloatLit, FloatType, IntLit, IntType, ListExpr, ListType, Name, NoneLit, NoneType, Slice, StrLit, StrType, Subscript, TupleExpr, TupleType, ValueArrayType
+from pcc.frontends.python.codegen.hoist_boxing import cell_capture_key
 from pcc.frontends.python.codegen.bootstrap_trace import bootstrap_trace_enabled
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.method_call_lowering import _method_pointer_provenance
@@ -767,62 +768,15 @@ class CallExpressionLoweringMixin:
         return False
 
     def _call_needs_runtime_keyword_binding(self, expr: Call, ast_func_def) -> bool:
-        """True for ``f(**m)`` when ``f`` has named parameters.
-
-        Which of them ``m`` supplies, which fall back to defaults, what is
-        left for ``**rest`` and which keys collide are runtime facts; the
-        static resolution subscripted ``m[name]`` for every unfilled
-        parameter (KeyError for a defaulted one) and handed ``**rest`` the
-        keys already bound.  The function object's own binding is exact.
-        """
-        has_mapping = False
-        for arg in expr.args:
-            if (
-                isinstance(arg, Call)
-                and isinstance(arg.func, Name)
-                and arg.func.ident == "**"
-            ):
-                has_mapping = True
-        for kw_name, _kw_expr in expr.kwargs:
-            if kw_name == "**":
-                has_mapping = True
-        if not has_mapping:
-            return False
-        for formal in ast_func_def.args:
-            if formal.name != "" and formal.kind not in ("*args", "**kwargs"):
-                return True
-        return False
+        """Compatibility entry for the shared, side-effect-free classifier."""
+        return self._ordinary_call_needs_runtime_binding(expr, ast_func_def)
 
     def _emit_runtime_bound_user_call(self, expr: Call, name: str, fn) -> ir.Value:
-        """Call a known user function through its function object, so the
-        runtime binds ``**`` keywords; the result takes the direct call's
-        return representation."""
-        span = self._expr_span_or_none(expr)
-        fn_expr = Name(span=span, ty=DynType(name="dyn"), ident=name)
-        fn_val = self._emit_expr_with_native_callable_values(fn_expr)
-        fn_val_is_owned = self._value_is_owned_object(fn_val)
-        kwdict_unpack = self._split_starstar_kwargs_unpack(expr.args)
-        arg_exprs = expr.args
-        kwargs_expr = None
-        if kwdict_unpack is not None:
-            arg_exprs, kwargs_expr = kwdict_unpack
-        args_tuple = self._emit_dynamic_call_args_tuple(arg_exprs)
-        kwargs_obj = self._emit_dynamic_call_kwargs_object(
-            expr.kwargs,
-            kwargs_expr,
-            span,
-        )
-        result = self.builder.call(
-            self.runtime["py_obj_call"],
-            [fn_val, args_tuple, kwargs_obj],
-            name=self._fresh(f"{name}.kw.call"),
-        )
-        self._gc_release(args_tuple)
-        if fn_val_is_owned:
-            self._gc_release(fn_val)
-        if expr.kwargs or kwargs_expr is not None:
-            self._gc_release(kwargs_obj)
-        self._emit_post_call_err_check(span)
+        """Bind once from the original Call, retaining the direct return ABI."""
+        # An enclosing object consumer owns its output slot and deliberately
+        # wants the boxed callable ABI, even when the native body is scalar.
+        if self._slot_call_result_sink(expr) is not None:
+            return self._emit_slot_call_object(expr, name + ".bound")
         ret_ty = fn.function_type.return_type
         scalar_ty = None
         if isinstance(ret_ty, ir.DoubleType):
@@ -832,19 +786,44 @@ class CallExpressionLoweringMixin:
         elif isinstance(ret_ty, ir.IntType):
             scalar_ty = IntType(name="int")
         if scalar_ty is None:
+            result = self._emit_slot_call_object(expr, name + ".bound")
             self._note_owned_dynamic_call_value(result)
             return result
-        value = marshal.marshal_from_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            result,
-            scalar_ty,
-        )
-        self._gc_release(result)
-        return value
+        output = self._new_slot_call_root(name + ".bound.scalar")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        if not hasattr(self, "_slot_call_result_sinks"):
+            self._slot_call_result_sinks = []
+        self._slot_call_result_sinks.append((expr, output, False))
+        try:
+            self._emit_slot_call_object(expr, name + ".bound")
+            if isinstance(scalar_ty, FloatType):
+                value = self._slot_call_runtime_call("py_float_to_f64", (output,), span=expr.span)
+            elif isinstance(scalar_ty, BoolType):
+                truth = self._slot_call_runtime_call("py_obj_truthy", (output,), span=expr.span)
+                value = self.builder.trunc(truth, _I1, name=self._fresh(name + ".bound.bool"))
+            else:
+                overflow = self._alloca_in_entry(_I64, name=self._fresh(name + ".bound.overflow"))
+                value = self._slot_call_runtime_call(
+                    "py_int_to_i64_lane", (output,), suffix_args=(overflow,), span=expr.span,
+                )
+            self._release_slot_call_roots((output,))
+            return value
+        finally:
+            self._slot_call_result_sinks.pop()
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_call(self, expr: Call) -> ir.Value:
+        if expr.is_set_literal:
+            # The synthetic callee is syntax, never a lookup of a user name.
+            result = self._maybe_emit_set_builtin(expr)
+            if result is not None:
+                return result
+            raise L1CodegenError("invalid set literal representation")
         if bootstrap_trace_enabled(self.module.name):
             import os
             import sys
@@ -1267,54 +1246,14 @@ class CallExpressionLoweringMixin:
         # Dataclass expansion carries its factory semantics explicitly. A
         # remaining ordinary field(...) call resolves the owned provider and
         # produces its FieldSpec object, including in a function default.
-        # ``cls(args)`` inside a @classmethod body — treat as a
-        # normal instantiation of the owning class. pcc doesn't
-        # support calling arbitrary ``cls`` pointers yet, so we
-        # resolve to the enclosing class statically. Note: gated on
-        # ``current_method_kind == "classmethod"`` so that a local
-        # re-bind ``cls = SomeClass if cond else OtherClass`` inside
-        # an instance method doesn't masquerade as the classmethod
-        # receiver.
-        if (
+        # A classmethod's receiver is a runtime class, possibly a subclass
+        # of the lexical owner. Defer construction to its callable binder.
+        classmethod_constructor = (
             name == "cls"
             and "cls" in self.env
             and self.current_class is not None
             and self.current_method_kind == "classmethod"
-        ):
-            args = expr.args
-            if expr.kwargs:
-                # Walk the class's MRO looking for an ``__init__`` —
-                # dataclass inheritance means SSAConstant may inherit
-                # SSAValue's synthesized init. ``_resolve_method_mro``
-                # already handles that walk.
-                mro_info = self._resolve_method_mro(
-                    self.current_class.name,
-                    "__init__",
-                )
-                init_fd = None
-                if mro_info is not None:
-                    init_fd = self.class_lowering._find_method_def(
-                        mro_info.name,
-                        "__init__",
-                    )
-                if init_fd is not None:
-                    args = tuple(
-                        self._resolve_call_kwargs(
-                            expr.args,
-                            expr.kwargs,
-                            init_fd.args,
-                            skip_self=True,
-                        )
-                    )
-                else:
-                    args = expr.args  # fallthrough to original
-            # Classmethod construction borrows its arguments just like a
-            # named class call. Materialize and retire temporary owners on
-            # both normal and exceptional exits through the shared path.
-            return self._emit_class_init_call(
-                self.current_class.name,
-                args,
-            )
+        )
         if name in ("min", "max") and not expr.kwargs and len(expr.args) == 2:
             return self._emit_min_max_builtin(expr, name)
         if name in ("min", "max") and not expr.kwargs and len(expr.args) >= 3:
@@ -2033,29 +1972,44 @@ class CallExpressionLoweringMixin:
             return self._emit_extern_call(extern_decls[name], expr.args)
 
         # User class instantiation: ``MyClass(args)``.
-        class_name = self._resolve_class_alias(name)
+        class_name = (
+            self.current_class.name if classmethod_constructor
+            else self._resolve_class_alias(name)
+        )
         if (
             hasattr(self, "class_lowering")
             and class_name in self.class_lowering.classes
         ):
             class_info = self.class_lowering.classes.get(class_name)
-            if class_info is not None:
+            binding_owner = self._resolve_method_mro(class_name, "__init__")
+            binding_fd = self._native_class_method_def(binding_owner, "__init__")
+            ordinary_constructor_binding = (
+                not getattr(class_info, "valueclass", False)
+                and not (self._freestanding_module or self._runtime_port_module
+                         or self._module_has_c_abi_export)
+                and (self._ordinary_call_needs_runtime_binding(expr, binding_fd, True)
+                     or binding_fd is None and bool(expr.args or expr.kwargs))
+            )
+            constructor_kw_unpack = self._split_starstar_kwargs_unpack(expr.args)
+            constructor_unpacks = (
+                classmethod_constructor
+                or ordinary_constructor_binding
+                or self._slot_call_result_sink(expr) is not None
+                or getattr(class_info, "metaclass_name", None) is not None
+                or self._has_starred_unpack(expr.args)
+                or constructor_kw_unpack is not None
+                or any(key == "**" for key, _value in expr.kwargs)
+            )
+            constructor_meta_info = None
+            if class_info is not None and not classmethod_constructor:
                 metaclass_name = getattr(class_info, "metaclass_name", None)
                 if metaclass_name is not None:
                     meta_info = self.class_lowering.classes.get(metaclass_name)
                     if meta_info is not None and "__call__" in meta_info.methods:
-                        cls_ptr = self.class_lowering._load_class_object(
-                            class_info,
-                            ".meta.call.cls",
-                        )
-                        return self._emit_direct_method_call(
-                            meta_info.methods["__call__"],
-                            cls_ptr,
-                            meta_info,
-                            "__call__",
-                            expr.args,
-                            kwargs=expr.kwargs,
-                        )
+                        constructor_meta_info = meta_info
+                    # Even an ordinary call needs runtime special-method
+                    # binding: __call__ may be inherited or a static/class/
+                    # custom descriptor rather than a plain instance method.
 
             def attach_hoisted_class_captures(inst: ir.Value) -> ir.Value:
                 class_caps = getattr(
@@ -2063,34 +2017,145 @@ class CallExpressionLoweringMixin:
                     "_hoisted_class_capture_params",
                     {},
                 ).get(class_name, ())
-                for fv in class_caps:
-                    cap_expr = Name(
-                        span=self._expr_span_or_none(expr),
-                        ty=DynType(name="dyn"),
-                        ident=fv,
+                if not class_caps:
+                    return inst
+                # The new instance is still an SSA result. Root it while
+                # loading captures and growing its private backing dictionary;
+                # both the normal and exceptional edges transfer one owner.
+                keeper = self._extern_enter_root(inst, True, "class.captures.instance")
+                previous = self._current_try_err_block()
+                target = previous if previous is not None else self._ensure_fn_err_exit()
+                cleanup = self._extern_cleanup_block((keeper,), target)
+                saved_error = self._push_try_err_block(cleanup)
+                try:
+                    for fv in class_caps:
+                        cap_expr = Name(
+                            span=self._expr_span_or_none(expr),
+                            ty=DynType(name="dyn"),
+                            ident=fv,
+                        )
+                        raw_v = self._emit_name(cap_expr)
+                        v_obj = marshal.marshal_to_object(
+                            self.builder,
+                            self.module,
+                            self.runtime,
+                            raw_v,
+                            cap_expr.ty,
+                        )
+                        current = self._extern_load_root(keeper)
+                        self.builder.call(
+                            self.runtime["py_instance_setattr"],
+                            [current, self._attr_name_ptr(cell_capture_key(fv)), v_obj],
+                        )
+                        self._emit_post_call_err_check(self._expr_span_or_none(expr))
+                finally:
+                    self._restore_try_err_block(saved_error)
+                captured = self._extern_take_root(keeper)
+                self._note_owned_object_value(captured)
+                return captured
+
+            if constructor_unpacks:
+                # A splat's length and a mapping's keys are runtime facts.
+                # Feeding their AST markers into field/direct-init shortcuts
+                # evaluates Name("*") instead of binding constructor args.
+                # Use the same owned tuple/keyword ABI as callable objects;
+                # the class's published initializer owns defaults and errors.
+                span = self._expr_span_or_none(expr)
+                previous = self._current_try_err_block()
+                target = previous if previous is not None else self._ensure_fn_err_exit()
+                saved_cpy_error = self._cpy_operand_cleanup_block
+                output_sink = self._slot_call_result_sink(expr)
+                result_root = output_sink
+                roots = []
+                if result_root is None:
+                    result_root = self._new_slot_call_root("ctor.unpack.result")
+                    roots.append(result_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                try:
+                    callable_expr = func_expr if classmethod_constructor else Name(
+                        span=span, ty=DynType(name="dyn"), ident=class_name,
                     )
-                    raw_v = self._emit_name(cap_expr)
-                    v_obj = marshal.marshal_to_object(
-                        self.builder,
-                        self.module,
-                        self.runtime,
-                        raw_v,
-                        cap_expr.ty,
-                    )
-                    self.builder.call(
-                        self.runtime["py_obj_setattr"],
-                        [
-                            inst,
-                            self._attr_name_ptr(
-                                self.class_lowering.mangle_private_attr_name(
-                                    class_info,
-                                    f"__pcc_cap_{fv}",
+                    callable_root = self._emit_slot_call_operand(callable_expr, "ctor.unpack.class")
+                    roots.append(callable_root)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    arg_exprs = expr.args
+                    call_kwargs = expr.kwargs
+                    if constructor_kw_unpack is not None:
+                        arg_exprs, _merged_kwargs = constructor_kw_unpack
+                        # The parser's ** markers share the positional array,
+                        # but must interleave with explicit keyword operands.
+                        # Reconstitute one ordered keyword stream before any
+                        # operand is evaluated; never reorder or guess keys.
+                        ordered_keywords = []
+                        if expr.operand_order:
+                            for kind, index in expr.operand_order:
+                                if kind == "kw":
+                                    ordered_keywords.append(expr.kwargs[index])
+                                else:
+                                    argument = expr.args[index]
+                                    if (isinstance(argument, Call)
+                                            and isinstance(argument.func, Name)
+                                            and argument.func.ident == "**"):
+                                        ordered_keywords.append(("**", argument.args[0]))
+                        else:
+                            if expr.kwargs:
+                                raise L1CodegenError(
+                                    "constructor unpack is missing keyword operand-order metadata"
                                 )
-                            ),
-                            v_obj,
-                        ],
+                            for argument in expr.args:
+                                if (isinstance(argument, Call)
+                                        and isinstance(argument.func, Name)
+                                        and argument.func.ident == "**"):
+                                    ordered_keywords.append(("**", argument.args[0]))
+                        call_kwargs = tuple(ordered_keywords)
+                    args_root = self._emit_slot_call_args_tuple(arg_exprs, "ctor.unpack.args")
+                    roots.append(args_root)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    kwargs_root = self._emit_slot_call_kwargs_object(
+                        call_kwargs, None, span, "ctor.unpack.kwargs", callable_root,
                     )
-                return inst
+                    roots.append(kwargs_root)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    status = self.builder.call(
+                        self.runtime["py_obj_call_slots"],
+                        [self._as_gc_ptr(callable_root), self._as_gc_ptr(args_root),
+                         self._as_gc_ptr(kwargs_root), self._as_gc_ptr(result_root)],
+                        name=self._fresh("ctor.unpack.call"),
+                    )
+                    self._slot_call_note_published(result_root)
+                    self._slot_call_check_status(status, "constructor call", span)
+                    self._emit_post_call_err_check(span)
+                    if constructor_meta_info is None:
+                        class_caps = getattr(self, "_hoisted_class_capture_params", {}).get(class_name, ())
+                        for fv in class_caps:
+                            cap_expr = Name(span=span, ty=DynType(name="dyn"), ident=fv)
+                            cap_root = self._emit_slot_call_operand(cap_expr, "class.captures.instance")
+                            roots.append(cap_root)
+                            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                            self._cpy_operand_cleanup_block = self._try_err_block
+                            self._slot_call_runtime_call(
+                                "py_instance_setattr", (result_root, cap_root),
+                                suffix_args=(self._attr_name_ptr(cell_capture_key(fv)),),
+                                argument_order=(0, 2, 1), span=span,
+                            )
+                            self._release_slot_call_roots((cap_root,))
+                            roots.pop()
+                            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                            self._cpy_operand_cleanup_block = self._try_err_block
+                    retained_roots = tuple(roots[1:]) if output_sink is None else tuple(roots)
+                    self._release_slot_call_roots(retained_roots)
+                finally:
+                    self._try_err_block = previous
+                    self._cpy_operand_cleanup_block = saved_cpy_error
+                if output_sink is not None:
+                    return self.builder.load(result_root, name=self._fresh("ctor.unpack.output"))
+                result = self._take_slot_call_root(result_root)
+                self._note_owned_dynamic_call_value(result)
+                return result
 
             resolved_args = expr.args
             definition_kwargs = ()
@@ -2296,6 +2361,11 @@ class CallExpressionLoweringMixin:
             or name in getattr(self, "_module_globals", {})
             or semantic_cross_module
         ):
+            if (not semantic_cross_module
+                    and not getattr(self, "_cpy_env_flags", {}).get(name, False)
+                    and not getattr(self, "_cpy_module_flags", {}).get(name, False)
+                    and not self._name_binds_cpy_returning_callable(name)):
+                return self._emit_slot_call_object(expr, name + ".obj.call")
             if semantic_cross_module:
                 semantic_gv = self._native_extension_modules().get(name)
                 if semantic_gv is None:
@@ -2525,11 +2595,7 @@ class CallExpressionLoweringMixin:
             self._emit_post_call_err_check(self._expr_span_or_none(expr))
             return result
         ast_func_def = self._find_user_funcdef(name)
-        if self._call_needs_runtime_keyword_binding(expr, ast_func_def) or (
-            not (self._freestanding_module or self._runtime_port_module)
-            and any(arg.has_default for arg in ast_func_def.args)
-            and self._call_would_use_callee_defaults(expr.args, expr.kwargs, ast_func_def.args)
-        ):
+        if self._ordinary_call_needs_runtime_binding(expr, ast_func_def):
             return self._emit_runtime_bound_user_call(expr, name, fn)
         if ast_func_def.is_async:
             return self._emit_async_user_function_call(
@@ -2647,10 +2713,24 @@ class CallExpressionLoweringMixin:
             target_ty = arg_def.annotation or DynType(name="dyn")
             param_ir_ty = self._function_arg_ir_type_or_none(fn, i, ir_arg)
             if param_ir_ty is None:
+                if name in self._cross_module_func_defs:
+                    raise L1CodegenError(
+                        "missing authoritative imported parameter ABI for " + name
+                    )
                 param_ir_ty = self._abi_ir_type(
                     target_ty,
-                    box_int_abi=self._should_box_python_ints(),
+                    box_int_abi=self._funcdef_uses_boxed_int_abi(
+                        ast_func_def,
+                        c_abi_sym=self._func_c_abi_export_symbol(ast_func_def),
+                    ),
                 )
+            if (fn.name in self._manual_pointer_abi_functions
+                    and isinstance(ast_arg.ty, RawPointerType)
+                    and isinstance(target_ty, DynType)
+                    and isinstance(param_ir_ty, ir.PointerType)):
+                # The resolved callee's defining module owns this manual
+                # pointer ABI. This is a call view, never managed storage.
+                target_ty = ast_arg.ty
             v = self._emit_arg_for_abi_param_with_cleanup(
                 ast_arg,
                 target_ty,
@@ -2660,6 +2740,7 @@ class CallExpressionLoweringMixin:
             if (
                 not getattr(self, "_freestanding_module", False)
                 and not getattr(self, "_module_has_c_abi_export", False)
+                and not isinstance(target_ty, RawPointerType)
                 and isinstance(v.type, ir.PointerType)
                 and v not in getattr(self, "_cpy_values", ())
             ):
@@ -2678,6 +2759,17 @@ class CallExpressionLoweringMixin:
             runtime_formals,
             resolved_args,
         )
+        synchronous_park_result = (
+            not returns_cpython
+            and id(ast_func_def) in getattr(self, "_vthread_may_park_func_ids", set())
+            and not funcdef_has_source_yield(ast_func_def)
+        )
+        output_sink = self._slot_call_result_sink(expr)
+        if output_sink is not None and (
+            isinstance(ast_func_def.return_ty, RawPointerType)
+            or fn.name in self._manual_pointer_abi_functions
+        ):
+            raise L1CodegenError("raw-pointer ABI call cannot publish into a managed operand root: " + name)
         result = self._call_user(
             fn,
             args_ir,
@@ -2685,6 +2777,8 @@ class CallExpressionLoweringMixin:
             span=self._expr_span_or_none(expr),
             root_result=self._is_object(ast_func_def.return_ty) and not returns_cpython,
             pinned_arg_temps=tuple(pinned_arg_temps),
+            result_slot=(None if returns_cpython or synchronous_park_result
+                         else output_sink),
         )
         for arg_value, owned in pinned_arg_temps:
             self._gc_unpin(arg_value)
@@ -2693,12 +2787,7 @@ class CallExpressionLoweringMixin:
                     arg_value,
                     self._release_context_label("direct_call_arg"),
                 )
-        if (
-            not returns_cpython
-            and id(ast_func_def)
-            in getattr(self, "_vthread_may_park_func_ids", set())
-            and not funcdef_has_source_yield(ast_func_def)
-        ):
+        if synchronous_park_result:
             # A parking callee this caller could not delegate to (it is not
             # resumable): run the child here rather than hand user code the
             # callee's generator as the call's value.

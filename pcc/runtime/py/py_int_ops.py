@@ -3,16 +3,18 @@
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_double, c_int32, c_int64, c_ptr, c_void
-from pcc.runtime.py.py_abi_constants import PYFLOATOBJECT_VALUE_OFFSET, PYINTOBJECT_DIGITS_OFFSET, PYINTOBJECT_NDIGITS_OFFSET, PYINTOBJECT_SIGN_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_FLOAT, PY_TYPE_INT
+from pcc.runtime.py.py_abi_constants import PYFLOATOBJECT_VALUE_OFFSET, PYINTOBJECT_DIGITS_OFFSET, PYINTOBJECT_NDIGITS_OFFSET, PYINTOBJECT_SIGN_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_BOOL, PY_TYPE_FLOAT, PY_TYPE_INT
 from pcc.unsafe import (
     cstr,
     free,
+    global_load_ptr,
     is_tagged_int,
     logical_shift_left_i64,
     load_i32,
     load_ptr,
     malloc,
     null,
+    ptr_eq,
     ptr_is_null,
     store_f64,
     store_i32,
@@ -44,6 +46,7 @@ py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
+py_err_occurred = extern("py_err_occurred", (), c_int64)
 pow_c = extern("pow", (c_double, c_double), c_double)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 
@@ -327,19 +330,90 @@ def py_int_xor(a, b):
     return _binary_bigint(a, b, 5)
 
 
-@c_abi_export("py_int_shl")
-def py_int_shl(a, b):
-    if not _int_fits_i64(b):
-        return null()
-    n: int = _int_i64_value(b)
+def _int_shift_count(b) -> int:
+    # Decode the sign before projecting the count. An out-of-i64 positive
+    # count is represented by a saturation sentinel, not truncated: no int
+    # with the signed-i32 limb count can survive that many right shifts or
+    # admit that many left shifts. Negative counts always raise, even for 0.
+    n: int = 0
+    if is_tagged_int(b):
+        n = untag_int(b)
+    elif not ptr_is_null(b) and load_i32(b, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BOOL:
+        if ptr_eq(b, global_load_ptr("py_True")):
+            n = 1
+    elif not ptr_is_null(b) and load_i32(b, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_INT:
+        if load_i32(b, PYINTOBJECT_SIGN_OFFSET) < 0:
+            n = -1
+        elif _heap_int_fits_i64(b):
+            n = _heap_int_i64_value(b)
+        else:
+            n = 9223372036854775807
+    else:
+        py_raise_owned(py_exc_new(3, cstr("shift count must be an integer")))
+        return -1
     if n < 0:
         py_raise_owned(py_exc_new(2, cstr("negative shift count")))
+        return -1
+    return n
+
+
+def _int_shift_sign(a) -> int:
+    if is_tagged_int(a):
+        value: int = untag_int(a)
+        if value < 0:
+            return -1
+        if value > 0:
+            return 1
+        return 0
+    if load_i32(a, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BOOL:
+        if ptr_eq(a, global_load_ptr("py_True")):
+            return 1
+        return 0
+    return load_i32(a, PYINTOBJECT_SIGN_OFFSET)
+
+
+def _int_shift_allocation_failed():
+    # Keep a specific error raised by the arithmetic or allocation path intact.
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(19, cstr("")))
+    return null()
+
+
+@c_abi_export("py_int_shl")
+def py_int_shl(a, b):
+    n: int = _int_shift_count(b)
+    if n < 0:
         return null()
     if n == 0:
         if is_tagged_int(a):
             return a
+        if load_i32(a, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BOOL:
+            return py_int_from_i64(_int_shift_sign(a))
         py_incref(a)
         return a
+    if _int_shift_sign(a) == 0:
+        return py_int_from_i64(0)
+    if n == 9223372036854775807:
+        py_raise_owned(py_exc_new(15, cstr("too many digits in integer")))
+        return null()
+    if n > 68719476672:
+        # Distinguish Python's enormous-size overflow from this runtime's
+        # smaller allocation capacity. CPython 3.15 on 64-bit targets uses
+        # 30-bit reference digits, with MAX_LONG_DIGITS=(INT64_MAX-1)//30;
+        # long_lshift1 reserves oldsize + n//30 + (n%30 != 0).
+        # Our signed-i32 count of 32-bit limbs is only a storage limit.
+        bits: int = py_int_bit_length(a)
+        if bits == 0:
+            # The only nonzero integer operand lacking an int header is True.
+            bits = 1
+        oldsize: int = (bits + 29) // 30
+        shift_digits: int = n // 30
+        if n % 30 != 0:
+            shift_digits = shift_digits + 1
+        if shift_digits > 307445734561825860 - oldsize:
+            py_raise_owned(py_exc_new(15, cstr("too many digits in integer")))
+            return null()
+        return _int_shift_allocation_failed()
     if is_tagged_int(a) and n < 63:
         # This is the proven machine projection inside the bigint primitive:
         # n < 63 and the following bound check proves av * factor fits i64.
@@ -352,25 +426,32 @@ def py_int_shl(a, b):
             return py_int_from_i64(av * factor)
     ba = py_bigint_from_any(a)
     if ptr_is_null(ba):
-        return null()
+        return _int_shift_allocation_failed()
     br = py_bigint_shl(ba, n)
     free(ba)
-    return _wrap_bigint(br)
+    result = _wrap_bigint(br)
+    if ptr_is_null(result):
+        return _int_shift_allocation_failed()
+    return result
 
 
 @c_abi_export("py_int_shr")
 def py_int_shr(a, b):
-    if not _int_fits_i64(b):
-        return null()
-    n: int = _int_i64_value(b)
+    n: int = _int_shift_count(b)
     if n < 0:
-        py_raise_owned(py_exc_new(2, cstr("negative shift count")))
         return null()
     if n == 0:
         if is_tagged_int(a):
             return a
+        if load_i32(a, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BOOL:
+            return py_int_from_i64(_int_shift_sign(a))
         py_incref(a)
         return a
+    # Every representable integer has at most INT32_MAX * 32 magnitude bits.
+    if n >= 68719476704:
+        if _int_shift_sign(a) < 0:
+            return py_int_from_i64(-1)
+        return py_int_from_i64(0)
     if is_tagged_int(a):
         av: int = untag_int(a)
         if n >= 63:
@@ -380,10 +461,13 @@ def py_int_shr(a, b):
         return py_int_from_i64(av >> n)
     ba = py_bigint_from_any(a)
     if ptr_is_null(ba):
-        return null()
+        return _int_shift_allocation_failed()
     br = py_bigint_shr(ba, n)
     free(ba)
-    return _wrap_bigint(br)
+    result = _wrap_bigint(br)
+    if ptr_is_null(result):
+        return _int_shift_allocation_failed()
+    return result
 
 
 @c_abi_export("py_int_pow_mod")

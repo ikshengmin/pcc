@@ -12,8 +12,8 @@ from pcc.extern import extern, c_int, c_int64, c_str, c_ptr, c_rawptr
 _getenv = extern("getenv", (c_str,), c_rawptr)
 _setenv = extern("setenv", (c_str, c_str, c_int), c_int)
 _getcwd = extern("getcwd", (c_str, c_int64), c_rawptr)
-_access = extern("access", (c_str, c_int), c_int)
-_getpid = extern("getpid", (), c_int)
+_access = extern("pcc_platform_access", (c_str, c_int64), c_int64)
+_getpid = extern("pcc_platform_getpid", (), c_int64)
 
 
 # POSIX file-access constants.
@@ -27,11 +27,8 @@ linesep: str = "\n"
 
 
 def getpid() -> int:
-    # ``_getpid`` lowers to a direct ``bl _getpid`` extern call (pure C
-    # ABI). There is no Python-level failure path the ``try/except``
-    # could catch — the previous host-CPython fallback was stale code
-    # from before extern codegen landed, and would pull libpython back
-    # into the self-host closure via the ``import os`` walker hit.
+    # The portable owned platform ABI selects the target process primitive.
+    # Keep this live on every call, including after a fork.
     return _getpid()
 
 
@@ -49,9 +46,8 @@ def getenv(key: str, default: str = "") -> str:
 def exists(path: str) -> bool:
     """True if ``path`` exists on disk, via ``access(path, F_OK)``.
 
-    ``_access`` lowers to ``bl _access`` (pure C ABI). Callers that want
-    a Python-style ``OSError`` on syscall failure should rely on errno
-    inspection — the extern returns ``-1`` on error, never raises.
+    The owned platform ABI follows symlinks and returns failure as a status,
+    so a missing or inaccessible path is False rather than an exception.
     """
     return _access(path, F_OK) == 0
 
@@ -67,10 +63,14 @@ def fspath(path):
     """Return the filesystem representation of a path-like object."""
     if isinstance(path, (str, bytes)):
         return path
+    # Special methods belong to the type, not an instance's attribute dict.
+    # Catch only the missing-method lookup: AttributeError raised *inside*
+    # __fspath__ is the provider's error and must reach the caller unchanged.
     try:
-        result = path.__fspath__()
+        path_repr = type(path).__fspath__
     except AttributeError:
         raise TypeError("expected str, bytes or os.PathLike object")
+    result = path_repr(path)
     if not isinstance(result, (str, bytes)):
         raise TypeError("__fspath__() must return str or bytes")
     return result

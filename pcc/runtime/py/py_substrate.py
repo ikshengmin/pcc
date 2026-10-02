@@ -63,6 +63,10 @@ pcc_gc_note_slot_write_barrier = extern(
     "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
 )
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_pointer_register = extern(
     "pcc_gc_pointer_register", (c_ptr,), c_int64
@@ -404,6 +408,30 @@ def py_tls_exc_set(exc) -> None:
     # destructor: normal exception teardown leaves no address into dead TLS.
     global_store_ptr("py_tls_current_exc_storage", null())
     if ptr_is_null(handle) == 0:
+        pcc_gc_scheduler_root_unregister_handle(handle)
+        global_store_ptr("py_tls_current_exc_root_handle", null())
+
+
+@c_abi_export("py_tls_exc_swap_slot")
+def py_tls_exc_swap_slot(slot) -> None:
+    """Exchange two owned roots without exposing a displaced raw reference."""
+    handle = global_load_ptr("py_tls_current_exc_root_handle")
+    if ptr_is_null(pcc_gc_load_ptr(null(), slot)) == 0 and ptr_is_null(handle):
+        handle = pcc_gc_scheduler_root_register_handle(global_addr("py_tls_current_exc_storage"))
+        if ptr_is_null(handle):
+            pcc_platform_abort()
+            return
+        global_store_ptr("py_tls_current_exc_root_handle", handle)
+    pcc_py_gc_minor_graph_lock()
+    incoming = pcc_gc_load_ptr(null(), slot)
+    previous = pcc_gc_load_ptr(null(), global_addr("py_tls_current_exc_storage"))
+    pcc_gc_note_slot_write_barrier(null(), global_addr("py_tls_current_exc_storage"), incoming)
+    pcc_gc_note_slot_write_barrier(null(), slot, previous)
+    global_store_ptr("py_tls_current_exc_storage", incoming)
+    store_ptr(slot, 0, previous)
+    empty: int = ptr_is_null(incoming)
+    pcc_py_gc_minor_graph_unlock()
+    if empty != 0 and ptr_is_null(handle) == 0:
         pcc_gc_scheduler_root_unregister_handle(handle)
         global_store_ptr("py_tls_current_exc_root_handle", null())
 

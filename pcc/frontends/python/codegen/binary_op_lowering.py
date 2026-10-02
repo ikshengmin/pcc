@@ -51,6 +51,7 @@ class BinaryOpLoweringMixin:
         if (
             self._int_exprs_are_boxed()
             and isinstance(result_ty, IntType)
+            and not _raw_int_name(result_ty)
             and isinstance(lhs_ty, numeric)
             and isinstance(rhs_ty, numeric)
         ):
@@ -727,6 +728,7 @@ class BinaryOpLoweringMixin:
         if (
             self._int_exprs_are_boxed()
             and isinstance(result_ty, IntType)
+            and not _raw_int_name(result_ty)
             and isinstance(lhs_ty, (IntType, BoolType))
             and isinstance(rhs_ty, (IntType, BoolType))
         ):
@@ -1030,11 +1032,9 @@ class BinaryOpLoweringMixin:
         }.get(op)
         if fn_name is None:
             raise NotImplementedError(f"Layer 1 int binop {op!r} not supported")
-        if op == "<<" or op == ">>":
-            self._emit_negative_shift_count_check(
-                self._to_int64(rhs, rhs_ty),
-                pinned_release_on_error=pinned_pcc_on_error,
-            )
+        # Boxed shift kernels classify the full count, including huge negative
+        # counts and positive saturation. Projecting it to i64 here would raise
+        # before valid operations such as 0 << (1 << 100) can reach the kernel.
         lhs_obj = marshal.marshal_to_object(
             self.builder,
             self.module,

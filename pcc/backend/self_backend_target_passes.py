@@ -30,7 +30,7 @@ from .self_backend_ir import (
     text_key_names_equal,
 )
 from .self_backend_kernel import TYPE_KIND_INT, get_indexed_function_kernel
-from .self_backend_value_arena import CompilerInt4
+from .self_backend_value_arena import CompilerInt2, CompilerInt4
 
 
 PCC_SELF_TARGET_PASSES_ENV = "PCC_SELF_TARGET_PASSES"

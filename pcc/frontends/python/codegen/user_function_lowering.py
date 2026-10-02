@@ -9,7 +9,7 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python import low_ir as pcc_low_ir
-from pcc.frontends.python.py_ast import Arg, Assign, Attr, BinOp, BoolLit, BoolType, BytesLit, Call, Compare, DynType, Expr, ExprStmt, FloatLit, FloatType, FuncDef, If, IfExpr, IntLit, IntType, ListType, Name, NoneLit, NoneType, Return, StrLit, StrType, Type, UnaryOp, ValueArrayType, While
+from pcc.frontends.python.py_ast import RawPointerType, Arg, Assign, Attr, BinOp, BoolLit, BoolType, BytesLit, Call, Compare, DynType, Expr, ExprStmt, FloatLit, FloatType, FuncDef, If, IfExpr, IntLit, IntType, ListType, Name, NoneLit, NoneType, Return, StrLit, StrType, Type, UnaryOp, ValueArrayType, While
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.generator_lowering import emit_function_auto_park_role
@@ -1326,6 +1326,7 @@ class UserFunctionLoweringMixin:
                 self,
                 fd,
                 self._current_global_names,
+                box_int_abi,
             )
             forced_exact_int_name_set = set(forced_exact_int_names)
             planned_object_name_set = set(
@@ -1494,7 +1495,14 @@ class UserFunctionLoweringMixin:
                     )
                     if class_object_hint is not None:
                         self.env_class_object_hint[ast_arg.name] = class_object_hint
-                if auto_root_borrowed_params and self._is_object(bind_ty):
+                if auto_root_borrowed_params and (
+                    self._is_object(bind_ty)
+                    or (
+                        isinstance(bind_ty, IntType)
+                        and bind_ty.name == "int"
+                        and isinstance(ir_ty, ir.PointerType)
+                    )
+                ):
                     self._ensure_borrowed_local_gc_root(ast_arg.name, slot, ir_ty)
                 if auto_root_borrowed_params and self._is_valueclass_payload_type(
                     bind_ty
@@ -1915,15 +1923,24 @@ class UserFunctionLoweringMixin:
         self._current_entry_block = entry
         self._try_err_block = None
 
+        raw_boundary = isinstance(return_ty, RawPointerType)
+        if not raw_boundary:
+            for ast_arg in original_args:
+                if isinstance(ast_arg.annotation, RawPointerType):
+                    raw_boundary = True
+                    break
         array_boundary = isinstance(return_ty, ValueArrayType)
         if not array_boundary:
             for ast_arg in original_args:
                 if isinstance(ast_arg.annotation, ValueArrayType):
                     array_boundary = True
                     break
-        if array_boundary:
+        if array_boundary or raw_boundary:
+            boundary_message = "pcc.array is unavailable through a dynamic function boundary"
+            if raw_boundary:
+                boundary_message = "raw pointer ABI is unavailable through a dynamic function boundary"
             msg = self._pooled_cstr_ptr(
-                "pcc.array is unavailable through a dynamic function boundary",
+                boundary_message,
                 ".value.array.dynamic.msg",
             )
             exc = self.builder.call(
@@ -2973,6 +2990,13 @@ class UserFunctionLoweringMixin:
             param_ir_ty = self._function_arg_ir_type_or_none(fn, index, ir_arg)
             if param_ir_ty is None:
                 param_ir_ty = self._abi_ir_type(target_ty, box_int_abi=False)
+            if (fn.name in self._manual_pointer_abi_functions
+                    and isinstance(ast_arg.ty, RawPointerType)
+                    and isinstance(target_ty, DynType)
+                    and isinstance(param_ir_ty, ir.PointerType)):
+                # The resolved callee's defining module owns this manual
+                # pointer ABI. This is a call view, never managed storage.
+                target_ty = ast_arg.ty
             v = self._emit_arg_for_abi_param_with_cleanup(
                 ast_arg,
                 target_ty,
@@ -2982,6 +3006,7 @@ class UserFunctionLoweringMixin:
             if (
                 not getattr(self, "_freestanding_module", False)
                 and not getattr(self, "_module_has_c_abi_export", False)
+                and not isinstance(target_ty, RawPointerType)
                 and isinstance(v.type, ir.PointerType)
                 and v not in getattr(self, "_cpy_values", ())
             ):

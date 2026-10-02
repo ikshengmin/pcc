@@ -114,6 +114,10 @@ int64_t pcc_platform_socket_peer_text(
 #define PY_FLAG_FUNC_TRANSPARENT_CALL 0x1000000
 #define PY_FLAG_GEN_SOURCE 0x2000000
 #define PY_FLAG_FUNC_CONTINUATION_FACTORY 0x4000000
+/* BaseException.__suppress_context__, independent of collector state. */
+#define PY_FLAG_EXC_SUPPRESS_CONTEXT 0x8000000
+/* message owns a private Unicode error record, never an ordinary argument. */
+#define PY_FLAG_EXC_UNICODE_PAYLOAD 0x10000000
 
 #define PY_FLAG_GC_COLOR_MASK \
     (PY_FLAG_GC_WHITE | PY_FLAG_GC_GRAY | PY_FLAG_GC_BLACK)
@@ -1264,7 +1268,11 @@ typedef struct PyFrameRecord {
  *               sets it to py_exc_builtin_class(PY_EXC_EXCEPTION) if
  *               the caller leaves it unset), but in steady state is
  *               always non-NULL. Owns its ref.
- *   message   : args[0] — a PyStrObject* or py_None. Owns its ref.
+ *   message   : args[0], any PyObject* including py_None; NULL means no
+ *               argument. With PY_FLAG_EXC_UNICODE_PAYLOAD it instead owns
+ *               a private tuple (args, encoding, object, start, end, reason),
+ *               whose ordinary tuple slots share the same GC trace contract.
+ *               Owns its ref.
  *   cause     : `raise X from Y` target. NULL = no explicit cause.
  *               Owns its ref.
  *   context   : implicit context captured when a new exception replaces

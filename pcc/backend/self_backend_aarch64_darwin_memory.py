@@ -8,6 +8,7 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_branch_line,
     emitted_compare_register_line,
     emitted_cset_line,
+    emitted_fixed_instruction_line,
     emitted_memory_instruction_line,
     emitted_move_register_line,
 )
@@ -240,12 +241,12 @@ def emit_memory_instruction_by_id(
     if kind_id == _PARSED_INSTRUCTION_KIND_IDS["syscall6"]:
         from .self_backend_target_match import is_aarch64_linux_triple
         if not is_aarch64_linux_triple(module_symbols.target_triple):
-            raise BackendUnavailable("raw AArch64 syscalls require Linux")
+            raise BackendUnavailable("raw AArch64 syscall6 requires Linux")
         dest, values = data
         lines = []
         for value, index in zip(values, (8, 0, 1, 2, 3, 4, 5)):
             lines.extend(materialize_value(func, value, TypeDesc("int", 64), index, module_symbols))
-        lines.append("  svc #0")
+        lines.append(emitted_fixed_instruction_line("svc #0"))
         if parsed_function_has_value_slot(func, dest):
             lines.extend(store_value_regs_to_value_slot(func, dest, 0))
         return lines

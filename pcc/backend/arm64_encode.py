@@ -1285,6 +1285,8 @@ def append_emitted_instruction_record(
         fixed_word = 0xD65F03C0
     elif line == "  nop":
         fixed_word = encode_emitted_nop_parts()
+    elif line == "  svc #0":
+        fixed_word = 0xD4000001
     elif line == "  paciasp":
         fixed_word = 0xD503233F
     elif line == "  autiasp":

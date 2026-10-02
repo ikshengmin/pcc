@@ -186,6 +186,7 @@ class _Assign:
     value: object
     annotation: "object | None"
     line: int
+    has_value: bool = True
 
 
 @dataclass
@@ -937,8 +938,10 @@ class Parser:
             # Annotation. Consume ``: type`` and optional ``= value``.
             self._advance()
             ann_node = self._parse_type_expr()
+            has_value = False
             if self._accept(TK_OP, "="):
                 value = self._parse_list_item()
+                has_value = True
             else:
                 value = _None(line=t.line)
             self._expect(TK_NEWLINE)
@@ -947,6 +950,7 @@ class Parser:
                 value=value,
                 annotation=ann_node,
                 line=t.line,
+                has_value=has_value,
             )
         if t.kind == TK_OP and t.text == "=":
             self._advance()

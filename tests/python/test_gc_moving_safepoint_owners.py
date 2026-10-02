@@ -317,6 +317,7 @@ def test_native_moving_generator_iterator_and_finalizer_owners(tmp_path, pcc_run
         run = subprocess.run([str(binary)], capture_output=True, text=True,
                              timeout=30, env=environment)
         assert run.returncode == 0, (backend, run.stdout, run.stderr)
+        assert run.stderr == "", (backend, run.stdout, run.stderr)
         marker, copied = run.stdout.strip().split()
         assert marker == "moving-owners-ok"
         if backend == 4:

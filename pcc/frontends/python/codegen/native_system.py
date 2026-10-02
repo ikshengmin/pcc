@@ -130,6 +130,37 @@ class NativeSystemLoweringMixin:
                 "native subprocess check=True requires " "CalledProcessError.__init__"
             )
 
+        # The runtime status is a machine i64, whereas the semantic provider
+        # may use an ordinary Python-int (object) parameter. The declared
+        # operand ABI, not scaffold mode or stale export metadata, is final.
+        status_type = class_info.init_fn.args[1].type
+        if status_type != rc.type and not isinstance(status_type, ir.PointerType):
+            raise NotImplementedError(
+                "native subprocess returncode requires an i64 or object ABI"
+            )
+        argument_roots = [self._extern_enter_root(
+            argv_obj, False, "subprocess.CalledProcessError.argv"
+        )]
+        previous_err = self._current_try_err_block()
+        error_target = previous_err
+        if error_target is None:
+            error_target = self._ensure_fn_err_exit()
+        self._try_err_block = self._extern_cleanup_block(
+            tuple(argument_roots), error_target
+        )
+        if isinstance(status_type, ir.PointerType):
+            rc = self.builder.call(
+                self.runtime["py_int_from_i64"], [rc],
+                name=self._fresh("subprocess.CalledProcessError.returncode"),
+            )
+            self._emit_post_call_err_check(span, release_on_error=(rc,))
+            argument_roots.append(self._extern_enter_root(
+                rc, True, "subprocess.CalledProcessError.returncode"
+            ))
+            self._try_err_block = self._extern_cleanup_block(
+                tuple(argument_roots), error_target
+            )
+
         cls_obj = self.builder.load(
             class_info.global_var,
             name=self._fresh("subprocess.CalledProcessError.class"),
@@ -140,16 +171,24 @@ class NativeSystemLoweringMixin:
             name=self._fresh("subprocess.CalledProcessError"),
         )
         self._gc_pin(exc)
+        self._emit_post_call_err_check(
+            span, pinned_release_on_error=((exc, True),)
+        )
         none_obj = self._emit_none_literal()
+        if isinstance(status_type, ir.PointerType):
+            rc = self._extern_load_root(argument_roots[1])
+        argv_obj = self._extern_load_root(argument_roots[0])
         self.builder.call(
             class_info.init_fn,
             [exc, rc, argv_obj, none_obj, none_obj],
         )
-        self._gc_unpin(exc)
         self._emit_post_call_err_check(
             span,
-            release_on_error=(exc,),
+            pinned_release_on_error=((exc, True),),
         )
+        self._extern_release_roots(argument_roots)
+        self._gc_unpin(exc)
+        self._try_err_block = previous_err
         return exc
 
     def _emit_native_subprocess_call(self, expr: Call) -> Optional[ir.Value]:

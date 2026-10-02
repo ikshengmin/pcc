@@ -2878,10 +2878,15 @@ def _emit_function(
     return lines
 
 
-def _emit_x86_64_module(ir_text: str, *, windows: bool = False, module=None) -> str:
+def _emit_x86_64_module(
+    ir_text: str, *, windows: bool = False, module=None,
+    stack_map_plans_out=None,
+) -> str:
     global _WINDOWS_ABI, _X86_EMISSION_ACTIVE
     if _X86_EMISSION_ACTIVE:
         raise BackendUnavailable("x86 emission is already active")
+    if windows and stack_map_plans_out is not None:
+        raise BackendUnavailable("packed x86 stack maps require the Linux ELF target")
     _X86_EMISSION_ACTIVE = True
     _WINDOWS_ABI = windows
     try:
@@ -2895,7 +2900,9 @@ def _emit_x86_64_module(ir_text: str, *, windows: bool = False, module=None) -> 
         if not valid:
             raise BackendUnavailable("x86 emitter target mismatch: " + prepared.triple)
         prepared = run_self_target_memory_pass_pipeline(prepared, "self-x86_64-linux-v0")
-        return _emit_prepared_x86_64_module(prepared, ir_text)
+        return _emit_prepared_x86_64_module(
+            prepared, ir_text, stack_map_plans_out=stack_map_plans_out,
+        )
     finally:
         _WINDOWS_ABI = False
         _X86_EMISSION_ACTIVE = False
@@ -2905,7 +2912,9 @@ def emit_x86_64_linux_asm(ir_text: str) -> str:
     return _emit_x86_64_module(ir_text)
 
 
-def _emit_prepared_x86_64_module(prepared, ir_text: str) -> str:
+def _emit_prepared_x86_64_module(
+    prepared, ir_text: str, *, stack_map_plans_out=None,
+) -> str:
     global _MODULE_SYMBOLS, _VARARG_FUNCTIONS, _TLS_GLOBALS
     triple = prepared.triple
     validate_x86_tls_globals(prepared.globals_)
@@ -2942,12 +2951,17 @@ def _emit_prepared_x86_64_module(prepared, ir_text: str) -> str:
     for func in functions:
         lines.extend(_emit_function(func, stack_map_plans[func.name]))
     if functions:
-        lines.extend(render_x86_64_stack_map_section(
-            lines,
-            tuple(stack_map_plans[func.name] for func in functions),
-            function_symbol=_asm_symbol,
-            block_label=_block_label,
-        ))
+        plans = tuple(stack_map_plans[func.name] for func in functions)
+        if stack_map_plans_out is None:
+            lines.extend(render_x86_64_stack_map_section(
+                lines, plans, function_symbol=_asm_symbol, block_label=_block_label,
+            ))
+        else:
+            # Preserve section order/alignment while deferring metadata bytes
+            # to the owned assembler's final variable-length label offsets.
+            # Plans retain scalar/root metadata only, never the function IR.
+            stack_map_plans_out.extend(plans)
+            lines.extend(('.section .pcc_stackmaps,"a",@progbits', '.p2align 3'))
         for func in functions:
             get_indexed_function_kernel(func).close_native_tables()
     lines.append('.section .note.GNU-stack,"",@progbits')

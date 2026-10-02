@@ -19,7 +19,7 @@ come from the generated C-header-derived py_abi_constants module.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
-from pcc.runtime.py.py_abi_constants import DICTENTRY_HASH_OFFSET, DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYDICTOBJECT_CAPACITY_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_INDICES_OFFSET, PYDICTOBJECT_ITEM_COUNT_OFFSET, PYDICTOBJECT_SIZE, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_DICT, PY_TYPE_STR
+from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE, DICTENTRY_HASH_OFFSET, DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYDICTOBJECT_CAPACITY_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_INDICES_OFFSET, PYDICTOBJECT_ITEM_COUNT_OFFSET, PYDICTOBJECT_SIZE, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_DICT, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_LIST
 from pcc.unsafe import (
     cstr,
     free,
@@ -361,7 +361,6 @@ def _dict_insert_rooted_slot(
     value = _dict_read_reload_root(value_slot, value_handle)
     committed: int = 0
     if _ptr_is_dict(d):
-        packed: int = load_i64(indices, slot * 8)
         if (
             ptr_eq(load_ptr(d, PYDICTOBJECT_INDICES_OFFSET), indices) != 0
             and ptr_eq(load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET), entries) != 0
@@ -371,7 +370,7 @@ def _dict_insert_rooted_slot(
             and slot < capacity
             and entries_used >= 0
             and entries_used < capacity
-            and (packed == -1 or packed == -2)
+            and (load_i64(indices, slot * 8) == -1 or load_i64(indices, slot * 8) == -2)
         ):
             ei: int = entries_used
             entry_off: int = ei * DICTENTRY_SIZE
@@ -896,12 +895,12 @@ def _rehash(d, new_capacity: int) -> int:
         old_index: int = 0
         while old_index < old_entries_used:
             old_off: int = old_index * DICTENTRY_SIZE
-            key = _entry_key(d, old_entries, old_off)
+            key = pcc_gc_resolve_root_slot_unlocked(ptr_add(old_entries, old_off + DICTENTRY_KEY_OFFSET), 0)
             if ptr_is_null(key) == 0:
                 hash_value: int = load_i64(
                     old_entries, old_off + DICTENTRY_HASH_OFFSET
                 )
-                value = _entry_value(d, old_entries, old_off)
+                value = pcc_gc_resolve_root_slot_unlocked(ptr_add(old_entries, old_off + DICTENTRY_VALUE_OFFSET), 0)
                 target_slot: int = _rehash_find_empty_slot(
                     new_indices, new_capacity, hash_value
                 )
@@ -1560,154 +1559,14 @@ def py_dict_items(d):
     return out
 
 
-def _dict_update_hold(slots, handles, index: int, value, backend: int) -> int:
-    slot = ptr_add(slots, index * 8)
-    handle = _dict_read_prepare_root(slot, value, backend)
-    store_ptr(handles, index * 8, handle)
-    if _dict_read_root_failed(value, backend, handle) != 0:
-        py_raise_owned(py_exc_new(19, cstr("dict.update: cannot root temporary")))
-        return 0
-    return 1
-
-
-def _dict_update_load(slots, handles, index: int):
-    return _dict_read_reload_root(
-        ptr_add(slots, index * 8), load_ptr(handles, index * 8)
-    )
-
-
-def _dict_update_drop(slots, handles, index: int) -> None:
-    value = _dict_update_load(slots, handles, index)
-    _dict_read_finish_root(load_ptr(handles, index * 8))
-    store_ptr(handles, index * 8, null())
-    store_ptr(slots, index * 8, null())
-    # Destination and source are borrowed. Every later slot owns its result.
-    if index >= 2:
-        py_decref(value)
-
-
-def _dict_update_protocol(dst, src) -> None:
-    # Slots: destination, source, iterator, item/method, pair/arguments,
-    # key/keys-result, value. Keep every live owner across user callbacks.
-    slots = stack_alloc(56)
-    handles = stack_alloc(56)
-    memset(slots, 0, 56)
-    memset(handles, 0, 56)
-    backend: int = pcc_gc_backend()
-    ok: int = _dict_update_hold(slots, handles, 0, dst, backend)
-    if ok != 0:
-        ok = _dict_update_hold(slots, handles, 1, src, backend)
-    mapping: int = 0
-    if ok != 0:
-        method = py_obj_getattr(_dict_update_load(slots, handles, 1), cstr("keys"))
-        if ptr_is_null(method) != 0:
-            if py_err_occurred() != 0:
-                if py_exc_matches(py_current_exception(), py_exc_builtin_class(6)) != 0:
-                    py_clear_exception()
-                else:
-                    ok = 0
-        else:
-            mapping = 1
-            ok = _dict_update_hold(slots, handles, 3, method, backend)
-    if ok != 0 and mapping != 0:
-        args = py_tuple_new(0)
-        ok = _dict_update_hold(slots, handles, 4, args, backend)
-        if ptr_is_null(args) != 0:
-            ok = 0
-        if ok != 0:
-            keys = py_obj_call(_dict_update_load(slots, handles, 3),
-                               _dict_update_load(slots, handles, 4), null())
-            ok = _dict_update_hold(slots, handles, 5, keys, backend)
-            if ptr_is_null(keys) != 0:
-                ok = 0
-    if ok != 0:
-        source = _dict_update_load(slots, handles, 1)
-        if mapping != 0:
-            source = _dict_update_load(slots, handles, 5)
-        iterator = py_obj_iter(source)
-        ok = _dict_update_hold(slots, handles, 2, iterator, backend)
-        if ptr_is_null(iterator) != 0:
-            ok = 0
-    _dict_update_drop(slots, handles, 5)
-    _dict_update_drop(slots, handles, 4)
-    _dict_update_drop(slots, handles, 3)
-    while ok != 0:
-        item = py_obj_next(_dict_update_load(slots, handles, 2))
-        if ptr_is_null(item) != 0:
-            if py_err_occurred() != 0:
-                if py_exc_matches(py_current_exception(), py_exc_builtin_class(8)) != 0:
-                    py_clear_exception()
-            else:
-                py_runtime_error_if_unset(cstr("py_obj_next"),
-                                          cstr("dict.update iterator returned NULL"))
-            ok = 0
-        else:
-            ok = _dict_update_hold(slots, handles, 3, item, backend)
-            if ok != 0 and mapping == 0:
-                pair = py_list_new(2)
-                ok = _dict_update_hold(slots, handles, 4, pair, backend)
-                if ptr_is_null(pair) != 0:
-                    ok = 0
-                if ok != 0:
-                    py_list_extend(_dict_update_load(slots, handles, 4),
-                                   _dict_update_load(slots, handles, 3))
-                    if py_err_occurred() != 0:
-                        ok = 0
-                    elif py_list_len(_dict_update_load(slots, handles, 4)) != 2:
-                        py_raise_owned(py_exc_new(2, cstr(
-                            "dictionary update sequence element must have length 2")))
-                        ok = 0
-            if ok != 0:
-                key = _dict_update_load(slots, handles, 3)
-                if mapping != 0:
-                    py_incref(key)
-                else:
-                    key = py_list_get(_dict_update_load(slots, handles, 4), 0)
-                ok = _dict_update_hold(slots, handles, 5, key, backend)
-            if ok != 0:
-                value = null()
-                if mapping != 0:
-                    value = py_obj_getitem(_dict_update_load(slots, handles, 1),
-                                           _dict_update_load(slots, handles, 5))
-                else:
-                    value = py_list_get(_dict_update_load(slots, handles, 4), 1)
-                ok = _dict_update_hold(slots, handles, 6, value, backend)
-                if ptr_is_null(value) != 0:
-                    ok = 0
-            if ok != 0:
-                py_dict_set(_dict_update_load(slots, handles, 0),
-                            _dict_update_load(slots, handles, 5),
-                            _dict_update_load(slots, handles, 6))
-                if py_err_occurred() != 0:
-                    ok = 0
-            index: int = 6
-            while index >= 3:
-                _dict_update_drop(slots, handles, index)
-                index = index - 1
-    index: int = 6
-    while index >= 0:
-        _dict_update_drop(slots, handles, index)
-        index = index - 1
-
-
 @c_abi_export("py_dict_update")
 def py_dict_update(dst, src) -> None:
-    # Snapshot the source before invoking destination hash/equality callbacks.
-    # py_dict_set runs user code, which may relocate either dict or mutate the
-    # source, so caching the source table across those calls would leave later
-    # iterations reading a stale owner/table.  Mirrors py_set_update.  The
-    # snapshot holds key and value alternately.
-    if not _ptr_is_dict(dst):
-        return
-    if not _ptr_is_dict(src):
-        _dict_update_protocol(dst, src)
-        return
+    # Legacy raw entry, retaining its existing borrowed-root admission. Slot
+    # callers never use this adapter; raw callers must keep their operands
+    # stable through admission. Both routes share the update implementation.
     backend: int = pcc_gc_backend()
-    dst_slot = stack_alloc(8)
-    src_slot = stack_alloc(8)
-    snap_slot = stack_alloc(8)
-    key_slot = stack_alloc(8)
-    value_slot = stack_alloc(8)
+    dst_slot = stack_alloc(C_POINTER_SIZE)
+    src_slot = stack_alloc(C_POINTER_SIZE)
     dst_handle = _dict_read_prepare_root(dst_slot, dst, backend)
     if _dict_read_root_failed(dst, backend, dst_handle) != 0:
         return
@@ -1715,98 +1574,537 @@ def py_dict_update(dst, src) -> None:
     if _dict_read_root_failed(src, backend, src_handle) != 0:
         _dict_read_finish_root(dst_handle)
         return
-
-    src = _dict_read_reload_root(src_slot, src_handle)
-    size_hint: int = load_i64(src, PYDICTOBJECT_ITEM_COUNT_OFFSET) * 2
-    if size_hint <= 0:
-        size_hint = 4
-    snapshot = py_list_new(size_hint)
-    if ptr_is_null(snapshot) != 0:
-        _dict_read_finish_root(src_handle)
-        _dict_read_finish_root(dst_handle)
-        return
-    snap_handle = _dict_read_prepare_root(snap_slot, snapshot, backend)
-    if _dict_read_root_failed(snapshot, backend, snap_handle) != 0:
-        py_decref(snapshot)
-        _dict_read_finish_root(src_handle)
-        _dict_read_finish_root(dst_handle)
-        return
-
-    src = _dict_read_reload_root(src_slot, src_handle)
-    source_used: int = load_i64(src, PYDICTOBJECT_ENTRIES_USED_OFFSET)
-    i: int = 0
-    stop: int = 0
-    while i < source_used and stop == 0:
-        src = _dict_read_reload_root(src_slot, src_handle)
-        if not _ptr_is_dict(src):
-            stop = 1
-        elif i >= load_i64(src, PYDICTOBJECT_ENTRIES_USED_OFFSET):
-            stop = 1
-        else:
-            entries = load_ptr(src, PYDICTOBJECT_ENTRIES_OFFSET)
-            off: int = i * DICTENTRY_SIZE
-            k = _entry_key(src, entries, off)
-            if ptr_is_null(k) == 0:
-                v = _entry_value(src, entries, off)
-                snapshot = _dict_read_reload_root(snap_slot, snap_handle)
-                py_list_append(snapshot, k)
-                if py_err_occurred() != 0:
-                    stop = 1
-                else:
-                    snapshot = _dict_read_reload_root(snap_slot, snap_handle)
-                    py_list_append(snapshot, v)
-                    if py_err_occurred() != 0:
-                        stop = 1
-        i = i + 1
-
-    snapshot = _dict_read_reload_root(snap_slot, snap_handle)
-    snap_len: int = py_list_len(snapshot)
-    j: int = 0
-    done: int = 0
-    while j + 1 < snap_len and done == 0:
-        if py_err_occurred() != 0:
-            done = 1
-        else:
-            snapshot = _dict_read_reload_root(snap_slot, snap_handle)
-            key = py_list_get(snapshot, j)
-            snapshot = _dict_read_reload_root(snap_slot, snap_handle)
-            value = py_list_get(snapshot, j + 1)
-            if ptr_is_null(key) != 0 or ptr_is_null(value) != 0:
-                done = 1
-            else:
-                key_handle = _dict_read_prepare_root(key_slot, key, backend)
-                if _dict_read_root_failed(key, backend, key_handle) != 0:
-                    # Mirrors the C path: an unregistered key must not cross a
-                    # user hash/equality callback, and the pre-move pointer
-                    # must not be decref'd afterwards.
-                    py_decref(key)
-                    py_decref(value)
-                    done = 1
-                value_handle = _dict_read_prepare_root(
-                    value_slot, value, backend
-                )
-                if done == 0 and _dict_read_root_failed(
-                    value, backend, value_handle
-                ) != 0:
-                    _dict_read_finish_root(key_handle)
-                    py_decref(key)
-                    py_decref(value)
-                    done = 1
-                dst = _dict_read_reload_root(dst_slot, dst_handle)
-                key = _dict_read_reload_root(key_slot, key_handle)
-                value = _dict_read_reload_root(value_slot, value_handle)
-                if done == 0:
-                    py_dict_set(dst, key, value)
-                    key = _dict_read_reload_root(key_slot, key_handle)
-                    value = _dict_read_reload_root(value_slot, value_handle)
-                    _dict_read_finish_root(value_handle)
-                    _dict_read_finish_root(key_handle)
-                    py_decref(key)
-                    py_decref(value)
-        j = j + 2
-
-    snapshot = _dict_read_reload_root(snap_slot, snap_handle)
-    _dict_read_finish_root(snap_handle)
-    py_decref(snapshot)
+    _dict_slot_update_bound(dst_slot, src_slot, 1)
     _dict_read_finish_root(src_handle)
     _dict_read_finish_root(dst_handle)
+
+
+# Authoritative slot entries. Raw APIs below remain compatibility boundaries;
+# callers which already own roots must use these entries instead of publishing
+# another raw copy in a callee. Scratch owners are registered while empty.
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_lease_prepare_locked = extern("pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64)
+pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_obj_call_slots = extern("py_obj_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+
+def _dict_slot_open(slots, tokens, handles) -> int:
+    memset(slots, 0, 16 * C_POINTER_SIZE)
+    memset(tokens, 0, 16 * C_POINTER_SIZE)
+    memset(handles, 0, 16 * C_POINTER_SIZE)
+    count: int = 0
+    while count < 16:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            return count
+        store_ptr(handles, count * C_POINTER_SIZE, handle)
+        count = count + 1
+    return count
+
+
+def _dict_slot_error(message) -> int:
+    py_runtime_error_if_unset(cstr("dictionary slot operation"), message)
+    return -1
+
+
+def _dict_slot_copy(slots, tokens, index: int, source) -> int:
+    if ptr_is_null(source) != 0:
+        return _dict_slot_error(cstr("dictionary operation requires an authoritative source slot"))
+    token: int = pcc_gc_root_copy_lease(ptr_add(slots, index * C_POINTER_SIZE), source)
+    if token < 0:
+        return _dict_slot_error(cstr("dictionary source root transfer failed"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    return 0
+
+
+def _dict_slot_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(slot, 0)) != 0:
+        return _dict_slot_error(cstr("dictionary callback returned NULL without an exception"))
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        return _dict_slot_error(cstr("dictionary result lease failed"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    if py_err_occurred() != 0:
+        return -1
+    return 0
+
+
+def _dict_slot_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(tokens, index * C_POINTER_SIZE, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _dict_slot_close(slots, tokens, handles, count: int, suspended: int) -> None:
+    if suspended != 0:
+        py_tls_exc_swap_slot(ptr_add(slots, 15 * C_POINTER_SIZE))
+    index: int = 14
+    while index > 0:
+        _dict_slot_drop(slots, tokens, index)
+        index = index - 1
+    if suspended != 0:
+        py_clear_exception()
+        if ptr_is_null(load_ptr(slots, 15 * C_POINTER_SIZE)) == 0:
+            pcc_gc_store_root(slots, null())
+            py_clear_exception()
+            py_tls_exc_swap_slot(ptr_add(slots, 15 * C_POINTER_SIZE))
+        else:
+            py_tls_exc_swap_slot(slots)
+    index = 0
+    while index < count:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
+        index = index + 1
+
+
+def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_existing: int) -> int:
+    # 1 destination, 2 key, 3 value, 4 collision candidate. All four own
+    # independently counted address leases whenever nonempty.
+    if not _ptr_is_dict(load_ptr(slots, C_POINTER_SIZE)):
+        py_raise_owned(py_exc_new(3, cstr("dictionary destination must be a dict")))
+        return -1
+    if ptr_is_null(load_ptr(slots, 2 * C_POINTER_SIZE)) != 0:
+        return _dict_slot_error(cstr("dictionary key is NULL"))
+    if known_hash == 0:
+        hash_value = py_obj_hash(load_ptr(slots, 2 * C_POINTER_SIZE))
+    if py_err_occurred() != 0:
+        return -1
+    plan = stack_alloc(256)
+    write_plan = stack_alloc(256)
+    while True:
+        pcc_py_gc_minor_graph_lock()
+        owner = load_ptr(slots, C_POINTER_SIZE)
+        capacity: int = load_i64(owner, PYDICTOBJECT_CAPACITY_OFFSET)
+        entries = load_ptr(owner, PYDICTOBJECT_ENTRIES_OFFSET)
+        indices = load_ptr(owner, PYDICTOBJECT_INDICES_OFFSET)
+        used: int = load_i64(owner, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+        pcc_py_gc_minor_graph_unlock()
+        if capacity <= 0:
+            return _dict_slot_error(cstr("dictionary has no hash table"))
+        mask: int = capacity - 1
+        perturb: int = hash_value
+        bucket: int = hash_value & mask
+        tombstone: int = -1
+        restart: int = 0
+        probes: int = 0
+        while probes < capacity + 16 and restart == 0:
+            prepared: int = 0
+            token: int = 0
+            entry: int = -3
+            pcc_py_gc_minor_graph_lock()
+            owner = load_ptr(slots, C_POINTER_SIZE)
+            if (ptr_eq(load_ptr(owner, PYDICTOBJECT_ENTRIES_OFFSET), entries) == 0
+                or ptr_eq(load_ptr(owner, PYDICTOBJECT_INDICES_OFFSET), indices) == 0
+                or load_i64(owner, PYDICTOBJECT_CAPACITY_OFFSET) != capacity
+                or load_i64(owner, PYDICTOBJECT_ENTRIES_USED_OFFSET) != used):
+                restart = 1
+            else:
+                entry = load_i64(indices, bucket * 8)
+                if entry >= 0 and entry < used:
+                    offset: int = entry * DICTENTRY_SIZE
+                    if load_i64(entries, offset + DICTENTRY_HASH_OFFSET) == hash_value:
+                        token = pcc_gc_root_copy_lease_prepare_locked(
+                            ptr_add(slots, 4 * C_POINTER_SIZE),
+                            ptr_add(entries, offset + DICTENTRY_KEY_OFFSET), 0, plan)
+                        prepared = 1
+                        if token >= 0:
+                            store_i64(tokens, 4 * C_POINTER_SIZE, token)
+            pcc_py_gc_minor_graph_unlock()
+            if prepared != 0:
+                pcc_gc_root_copy_lease_finish(plan)
+                if token < 0:
+                    return _dict_slot_error(cstr("dictionary candidate root transfer failed"))
+            if restart != 0:
+                break
+            if entry == -1:
+                if used >= capacity:
+                    if _maybe_grow(load_ptr(slots, C_POINTER_SIZE)) != 0:
+                        py_raise_owned(py_exc_new(19, cstr("dictionary entry storage allocation failed")))
+                        return -1
+                    restart = 1
+                    break
+                target: int = bucket if tombstone < 0 else tombstone
+                inserted: int = _dict_insert_rooted_slot(
+                    ptr_add(slots, C_POINTER_SIZE), null(),
+                    ptr_add(slots, 2 * C_POINTER_SIZE), null(),
+                    ptr_add(slots, 3 * C_POINTER_SIZE), null(),
+                    indices, entries, capacity, used, target, hash_value)
+                if inserted != 0:
+                    if py_err_occurred() != 0:
+                        return -1
+                    if keep_existing != 0:
+                        return _dict_slot_copy(slots, tokens, 5, ptr_add(slots, 3 * C_POINTER_SIZE))
+                    return 0
+                restart = 1
+            elif entry == -2:
+                if tombstone < 0:
+                    tombstone = bucket
+            elif prepared != 0:
+                equal: int = py_obj_eq(load_ptr(slots, 4 * C_POINTER_SIZE), load_ptr(slots, 2 * C_POINTER_SIZE))
+                if py_err_occurred() != 0:
+                    return -1
+                pcc_gc_store_ptr_plan_init(write_plan, load_ptr(slots, C_POINTER_SIZE), pcc_gc_backend())
+                copied: int = 0
+                committed: int = 0
+                pcc_py_gc_minor_graph_lock()
+                owner = load_ptr(slots, C_POINTER_SIZE)
+                if (ptr_eq(load_ptr(owner, PYDICTOBJECT_ENTRIES_OFFSET), entries) == 0
+                    or ptr_eq(load_ptr(owner, PYDICTOBJECT_INDICES_OFFSET), indices) == 0
+                    or load_i64(owner, PYDICTOBJECT_CAPACITY_OFFSET) != capacity
+                    or load_i64(indices, bucket * 8) != entry):
+                    restart = 1
+                elif ptr_eq(pcc_gc_resolve_root_slot_unlocked(
+                    ptr_add(entries, entry * DICTENTRY_SIZE + DICTENTRY_KEY_OFFSET), 0),
+                    load_ptr(slots, 4 * C_POINTER_SIZE)) == 0:
+                    restart = 1
+                elif equal != 0:
+                    if keep_existing != 0:
+                        result_token: int = pcc_gc_root_copy_lease_prepare_locked(
+                            ptr_add(slots, 5 * C_POINTER_SIZE),
+                            ptr_add(entries, entry * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET), 0, write_plan)
+                        copied = 1
+                        if result_token >= 0:
+                            store_i64(tokens, 5 * C_POINTER_SIZE, result_token)
+                            committed = 1
+                    else:
+                        committed = pcc_gc_store_ptr_plan_commit_locked(write_plan, owner,
+                            ptr_add(entries, entry * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET),
+                            load_ptr(slots, 3 * C_POINTER_SIZE))
+                    if committed == 0:
+                        restart = 1
+                pcc_py_gc_minor_graph_unlock()
+                if copied != 0:
+                    pcc_gc_root_copy_lease_finish(write_plan)
+                else:
+                    pcc_gc_store_ptr_plan_finish(write_plan)
+                _dict_slot_drop(slots, tokens, 4)
+                if copied != 0 and committed == 0:
+                    return _dict_slot_error(cstr("dictionary existing value transfer failed"))
+                if committed != 0:
+                    return -1 if py_err_occurred() != 0 else 0
+            perturb = _perturb_shift5(perturb)
+            bucket = (bucket * 5 + perturb + 1) & mask
+            probes = probes + 1
+        if restart == 0:
+            if used >= capacity:
+                if _maybe_grow(load_ptr(slots, C_POINTER_SIZE)) != 0:
+                    py_raise_owned(py_exc_new(19, cstr("dictionary entry storage allocation failed")))
+                    return -1
+            else:
+                return _dict_slot_error(cstr("dictionary probe found no insertion slot"))
+    return -1
+
+
+def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_value: int, keep_existing: int, result_slot) -> int:
+    slots = stack_alloc(16 * C_POINTER_SIZE)
+    tokens = stack_alloc(16 * C_POINTER_SIZE)
+    handles = stack_alloc(16 * C_POINTER_SIZE)
+    count: int = _dict_slot_open(slots, tokens, handles)
+    suspended: int = 0
+    status: int = -1
+    if count == 16:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _dict_slot_copy(slots, tokens, 1, dict_slot)
+        if status == 0:
+            status = _dict_slot_copy(slots, tokens, 2, key_slot)
+        if status == 0:
+            status = _dict_slot_copy(slots, tokens, 3, value_slot)
+        if status == 0:
+            status = _dict_slot_set_core(slots, tokens, known_hash, hash_value, keep_existing)
+        if status == 0 and keep_existing != 0:
+            status = pcc_gc_root_move(result_slot, ptr_add(slots, 5 * C_POINTER_SIZE))
+            if status == 0:
+                token: int = load_i64(tokens, 5 * C_POINTER_SIZE)
+                store_i64(tokens, 5 * C_POINTER_SIZE, 0)
+                if pcc_gc_foreign_lease_release(result_slot, token) != 0:
+                    pcc_platform_abort()
+                    status = -1
+    if status != 0:
+        _dict_slot_error(cstr("dictionary set failed without an exception"))
+    _dict_slot_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+@c_abi_export("py_dict_set_slots")
+def py_dict_set_slots(dict_slot, key_slot, value_slot) -> int:
+    return _dict_slot_set_bound(dict_slot, key_slot, value_slot, 0, 0, 0, null())
+
+
+def _dict_slot_next(slots, tokens, iterator_index: int, output_index: int) -> int:
+    # 1 item, 0 exhausted, -1 failed. NULL without StopIteration is failure.
+    store_ptr(slots, output_index * C_POINTER_SIZE,
+              py_obj_next(load_ptr(slots, iterator_index * C_POINTER_SIZE)))
+    if ptr_is_null(load_ptr(slots, output_index * C_POINTER_SIZE)) == 0:
+        return 1 if _dict_slot_adopt(slots, tokens, output_index) == 0 else -1
+    if py_err_occurred() != 0:
+        if py_exc_matches(py_current_exception(), py_exc_builtin_class(8)) != 0:
+            py_clear_exception()
+            return 0
+        return -1
+    return _dict_slot_error(cstr("dictionary iterator returned NULL without StopIteration"))
+
+
+def _dict_slot_pair(slots, tokens) -> int:
+    # Keep every yielded object until conversion completes, including third
+    # and later values. Early decref can run a finalizer while the iterator
+    # is still producing values and change its behavior or exception.
+    store_ptr(slots, 13 * C_POINTER_SIZE, py_list_new(0))
+    if _dict_slot_adopt(slots, tokens, 13) != 0:
+        return -1
+    store_ptr(slots, 11 * C_POINTER_SIZE, py_obj_iter(load_ptr(slots, 8 * C_POINTER_SIZE)))
+    if _dict_slot_adopt(slots, tokens, 11) != 0:
+        return -1
+    while True:
+        state: int = _dict_slot_next(slots, tokens, 11, 12)
+        if state < 0:
+            return -1
+        if state == 0:
+            break
+        py_list_append(load_ptr(slots, 13 * C_POINTER_SIZE), load_ptr(slots, 12 * C_POINTER_SIZE))
+        if py_err_occurred() != 0:
+            return -1
+        _dict_slot_drop(slots, tokens, 12)
+    _dict_slot_drop(slots, tokens, 11)
+    if py_list_len(load_ptr(slots, 13 * C_POINTER_SIZE)) != 2:
+        py_raise_owned(py_exc_new(2, cstr("dictionary update sequence element must have length 2")))
+        return -1
+    items = load_ptr(load_ptr(slots, 13 * C_POINTER_SIZE), PYLISTOBJECT_ITEMS_OFFSET)
+    if _dict_slot_copy(slots, tokens, 5, items) != 0:
+        return -1
+    items = load_ptr(load_ptr(slots, 13 * C_POINTER_SIZE), PYLISTOBJECT_ITEMS_OFFSET)
+    if _dict_slot_copy(slots, tokens, 6, ptr_add(items, C_POINTER_SIZE)) != 0:
+        return -1
+    _dict_slot_drop(slots, tokens, 13)
+    return 0
+
+
+def _dict_slot_update_protocol(slots, tokens) -> int:
+    # Ordinary keys attribute lookup intentionally honors properties,
+    # instance attributes and __getattr__; it is not special-method lookup.
+    store_ptr(slots, 3 * C_POINTER_SIZE,
+              py_obj_getattr(load_ptr(slots, 2 * C_POINTER_SIZE), cstr("keys")))
+    mapping: int = 0
+    if ptr_is_null(load_ptr(slots, 3 * C_POINTER_SIZE)) != 0:
+        if py_err_occurred() != 0:
+            if py_exc_matches(py_current_exception(), py_exc_builtin_class(6)) == 0:
+                return -1
+            py_clear_exception()
+    else:
+        mapping = 1
+        if _dict_slot_adopt(slots, tokens, 3) != 0:
+            return -1
+        # dict.__init__/update first tests for keys, then PyMapping_Keys
+        # performs a fresh ordinary lookup. A descriptor can change or fail
+        # between these two observable accesses.
+        _dict_slot_drop(slots, tokens, 3)
+        store_ptr(slots, 3 * C_POINTER_SIZE,
+                  py_obj_getattr(load_ptr(slots, 2 * C_POINTER_SIZE), cstr("keys")))
+        if _dict_slot_adopt(slots, tokens, 3) != 0:
+            return -1
+        store_ptr(slots, 4 * C_POINTER_SIZE, py_tuple_new(0))
+        if _dict_slot_adopt(slots, tokens, 4) != 0:
+            return -1
+        if py_obj_call_slots(ptr_add(slots, 3 * C_POINTER_SIZE),
+                             ptr_add(slots, 4 * C_POINTER_SIZE), null(),
+                             ptr_add(slots, 10 * C_POINTER_SIZE)) != 0:
+            return -1
+        if _dict_slot_adopt(slots, tokens, 10) != 0:
+            return -1
+    source_index: int = 10 if mapping != 0 else 2
+    if mapping != 0 and (is_tagged_int(load_ptr(slots, 10 * C_POINTER_SIZE)) != 0
+            or load_i32(load_ptr(slots, 10 * C_POINTER_SIZE), PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_LIST):
+        # PyMapping_Keys materializes non-list method results before the
+        # first __getitem__ or destination mutation. Keep its error boundary.
+        store_ptr(slots, 9 * C_POINTER_SIZE, py_list_new(0))
+        if _dict_slot_adopt(slots, tokens, 9) != 0:
+            return -1
+        store_ptr(slots, 7 * C_POINTER_SIZE, py_obj_iter(load_ptr(slots, 10 * C_POINTER_SIZE)))
+        if _dict_slot_adopt(slots, tokens, 7) != 0:
+            return -1
+        while True:
+            next_state: int = _dict_slot_next(slots, tokens, 7, 8)
+            if next_state < 0:
+                return -1
+            if next_state == 0:
+                break
+            py_list_append(load_ptr(slots, 9 * C_POINTER_SIZE), load_ptr(slots, 8 * C_POINTER_SIZE))
+            if py_err_occurred() != 0:
+                return -1
+            _dict_slot_drop(slots, tokens, 8)
+        _dict_slot_drop(slots, tokens, 7)
+        source_index = 9
+    store_ptr(slots, 7 * C_POINTER_SIZE,
+              py_obj_iter(load_ptr(slots, source_index * C_POINTER_SIZE)))
+    if _dict_slot_adopt(slots, tokens, 7) != 0:
+        return -1
+    _dict_slot_drop(slots, tokens, 10)
+    _dict_slot_drop(slots, tokens, 9)
+    _dict_slot_drop(slots, tokens, 4)
+    _dict_slot_drop(slots, tokens, 3)
+    while True:
+        state: int = _dict_slot_next(slots, tokens, 7, 8)
+        if state <= 0:
+            return state
+        if mapping != 0:
+            if _dict_slot_copy(slots, tokens, 5, ptr_add(slots, 8 * C_POINTER_SIZE)) != 0:
+                return -1
+            store_ptr(slots, 6 * C_POINTER_SIZE,
+                      py_obj_getitem(load_ptr(slots, 2 * C_POINTER_SIZE),
+                                     load_ptr(slots, 5 * C_POINTER_SIZE)))
+            if _dict_slot_adopt(slots, tokens, 6) != 0:
+                return -1
+        elif _dict_slot_pair(slots, tokens) != 0:
+            return -1
+        if py_dict_set_slots(ptr_add(slots, C_POINTER_SIZE),
+                             ptr_add(slots, 5 * C_POINTER_SIZE),
+                             ptr_add(slots, 6 * C_POINTER_SIZE)) != 0:
+            return -1
+        _dict_slot_drop(slots, tokens, 8)
+        _dict_slot_drop(slots, tokens, 6)
+        _dict_slot_drop(slots, tokens, 5)
+    return 0
+
+
+def _dict_slot_update_exact(slots, tokens) -> int:
+    # Snapshot owning entries and their cached hashes before any destination
+    # equality callbacks. This also handles updating a dictionary from itself.
+    if ptr_eq(load_ptr(slots, C_POINTER_SIZE), load_ptr(slots, 2 * C_POINTER_SIZE)) != 0:
+        return 0
+    pcc_py_gc_minor_graph_lock()
+    count: int = load_i64(load_ptr(slots, 2 * C_POINTER_SIZE), PYDICTOBJECT_ITEM_COUNT_OFFSET)
+    pcc_py_gc_minor_graph_unlock()
+    if count == 0:
+        return 0
+    hashes = malloc(count * 8)
+    if ptr_is_null(hashes) != 0:
+        py_raise_owned(py_exc_new(19, cstr("dictionary update snapshot allocation failed")))
+        return -1
+    store_ptr(slots, 9 * C_POINTER_SIZE, py_tuple_new(count * 2))
+    status: int = _dict_slot_adopt(slots, tokens, 9)
+    index: int = 0
+    output: int = 0
+    key_plan = stack_alloc(256)
+    value_plan = stack_alloc(256)
+    while status == 0 and output < count:
+        prepared: int = 0
+        key_token: int = 0
+        value_token: int = 0
+        pcc_py_gc_minor_graph_lock()
+        source = load_ptr(slots, 2 * C_POINTER_SIZE)
+        used: int = load_i64(source, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+        if index >= used:
+            status = -1
+        else:
+            entries = load_ptr(source, PYDICTOBJECT_ENTRIES_OFFSET)
+            offset: int = index * DICTENTRY_SIZE
+            if ptr_is_null(load_ptr(entries, offset + DICTENTRY_KEY_OFFSET)) == 0:
+                key_token = pcc_gc_root_copy_lease_prepare_locked(
+                    ptr_add(slots, 5 * C_POINTER_SIZE),
+                    ptr_add(entries, offset + DICTENTRY_KEY_OFFSET), 0, key_plan)
+                value_token = pcc_gc_root_copy_lease_prepare_locked(
+                    ptr_add(slots, 6 * C_POINTER_SIZE),
+                    ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET), 0, value_plan)
+                prepared = 1
+                if key_token >= 0:
+                    store_i64(tokens, 5 * C_POINTER_SIZE, key_token)
+                if value_token >= 0:
+                    store_i64(tokens, 6 * C_POINTER_SIZE, value_token)
+                store_i64(hashes, output * 8, load_i64(entries, offset + DICTENTRY_HASH_OFFSET))
+        pcc_py_gc_minor_graph_unlock()
+        if prepared != 0:
+            pcc_gc_root_copy_lease_finish(key_plan)
+            pcc_gc_root_copy_lease_finish(value_plan)
+            if key_token < 0 or value_token < 0:
+                status = -1
+            else:
+                py_tuple_set_item(load_ptr(slots, 9 * C_POINTER_SIZE), output * 2,
+                                  load_ptr(slots, 5 * C_POINTER_SIZE))
+                py_tuple_set_item(load_ptr(slots, 9 * C_POINTER_SIZE), output * 2 + 1,
+                                  load_ptr(slots, 6 * C_POINTER_SIZE))
+                if py_err_occurred() != 0:
+                    status = -1
+                output = output + 1
+            _dict_slot_drop(slots, tokens, 6)
+            _dict_slot_drop(slots, tokens, 5)
+        index = index + 1
+    index = 0
+    while status == 0 and index < output:
+        snapshot = load_ptr(slots, 9 * C_POINTER_SIZE)
+        status = _dict_slot_copy(slots, tokens, 5,
+            ptr_add(snapshot, PYTUPLEOBJECT_ITEMS_OFFSET + index * 2 * C_POINTER_SIZE))
+        if status == 0:
+            snapshot = load_ptr(slots, 9 * C_POINTER_SIZE)
+            status = _dict_slot_copy(slots, tokens, 6,
+                ptr_add(snapshot, PYTUPLEOBJECT_ITEMS_OFFSET + (index * 2 + 1) * C_POINTER_SIZE))
+        if status == 0:
+            status = _dict_slot_set_bound(ptr_add(slots, C_POINTER_SIZE),
+                ptr_add(slots, 5 * C_POINTER_SIZE), ptr_add(slots, 6 * C_POINTER_SIZE),
+                1, load_i64(hashes, index * 8), 0, null())
+        _dict_slot_drop(slots, tokens, 6)
+        _dict_slot_drop(slots, tokens, 5)
+        index = index + 1
+    free(hashes)
+    if status != 0:
+        return _dict_slot_error(cstr("dictionary changed during snapshot or snapshot transfer failed"))
+    return 0
+
+
+def _dict_slot_update_bound(dict_slot, source_slot, borrowed: int) -> int:
+    slots = stack_alloc(16 * C_POINTER_SIZE)
+    tokens = stack_alloc(16 * C_POINTER_SIZE)
+    handles = stack_alloc(16 * C_POINTER_SIZE)
+    count: int = _dict_slot_open(slots, tokens, handles)
+    suspended: int = 0
+    status: int = -1
+    if count == 16:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        if borrowed != 0:
+            first: int = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, C_POINTER_SIZE), dict_slot)
+            second: int = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, 2 * C_POINTER_SIZE), source_slot)
+            if first >= 0:
+                store_i64(tokens, C_POINTER_SIZE, first)
+            if second >= 0:
+                store_i64(tokens, 2 * C_POINTER_SIZE, second)
+            status = 0 if first >= 0 and second >= 0 else -1
+        else:
+            status = _dict_slot_copy(slots, tokens, 1, dict_slot)
+            if status == 0:
+                status = _dict_slot_copy(slots, tokens, 2, source_slot)
+        if status == 0:
+            if not _ptr_is_dict(load_ptr(slots, C_POINTER_SIZE)):
+                py_raise_owned(py_exc_new(3, cstr("dictionary update destination must be a dict")))
+                status = -1
+            elif _ptr_is_dict(load_ptr(slots, 2 * C_POINTER_SIZE)):
+                status = _dict_slot_update_exact(slots, tokens)
+            else:
+                status = _dict_slot_update_protocol(slots, tokens)
+    if status != 0:
+        _dict_slot_error(cstr("dictionary update failed without an exception"))
+    _dict_slot_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+@c_abi_export("py_dict_update_slots")
+def py_dict_update_slots(dict_slot, source_slot) -> int:
+    return _dict_slot_update_bound(dict_slot, source_slot, 0)
+
+
+@c_abi_export("py_dict_setdefault_slots")
+def py_dict_setdefault_slots(dict_slot, key_slot, default_slot, result_slot) -> int:
+    return _dict_slot_set_bound(dict_slot, key_slot, default_slot, 0, 0, 1, result_slot)

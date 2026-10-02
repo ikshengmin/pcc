@@ -18,6 +18,9 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+
+
 pcc_py_gc_minor_graph_lock = extern(
     "pcc_py_gc_minor_graph_lock", (), c_void
 )
@@ -107,6 +110,8 @@ def pcc_gc_tracing_has_sweep_candidate() -> i64:
 @c_abi_export("pcc_gc_tracing_finalize_unreachable")
 def pcc_gc_tracing_finalize_unreachable(obj) -> None:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return
+    if pcc_gc_object_is_address_pinned(obj) != 0:
         return
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     flags: i64 = load_i32(obj, 12)
@@ -223,7 +228,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         if pcc_gc_object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
             flags: i64 = load_i32(obj, 12)
-            if (flags & 1024) != 0 and (flags & (64 | 16384)) == 0:
+            if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0:
                 tag: i64 = load_i32(obj, 8)
                 if pcc_capi_is_cext_type_tag(tag) == 0:
                     py_user_del_dispatch(obj)
@@ -241,7 +246,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             continue
         obj = load_ptr(node, 0)
         flags = load_i32(obj, 12)
-        if (flags & 1024) != 0 and (flags & (64 | 16384)) == 0:
+        if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0:
             pcc_gc_tracing_clear_unreachable(obj)
             cleared = cleared + 1
         node = nxt
@@ -257,7 +262,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         obj = load_ptr(node, 0)
         flags = load_i32(obj, 12)
         if (flags & 1024) != 0:
-            if (flags & (64 | 16384)) != 0:
+            if (flags & 16384) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
                 store_i32(obj, 12, flags & ~1024)
             elif reclaimed < cleared:
                 pcc_gc_tracing_finalize_unreachable(obj)

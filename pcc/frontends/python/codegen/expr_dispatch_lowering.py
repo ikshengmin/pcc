@@ -6,6 +6,7 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import Attr, BinOp, BoolExpr, BoolLit, BoolType, BytesLit, Call, ClassType, Compare, ComplexLit, DictExpr, DynType, Expr, FloatLit, FloatType, IfExpr, IntType, IntLit, Lambda, ListExpr, Name, NoneLit, Slice, StrLit, Subscript, TupleExpr, UnaryOp
 from pcc.frontends.python.codegen.layer1_support import _as_native_float
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+from pcc.frontends.python.codegen.closure_cell_lowering import emit_closure_cell_expr
 
 
 _I1 = ir.IntType(1)
@@ -333,7 +334,8 @@ class ExprDispatchLoweringMixin:
 
     def _emit_expr_impl(self, expr: Expr) -> ir.Value:
         if isinstance(expr, IntLit):
-            if self._int_exprs_are_boxed():
+            if (self._int_exprs_are_boxed()
+                    and not (isinstance(expr.ty, IntType) and expr.ty.name in ("pcc.i64", "pcc.u64"))):
                 return self._emit_int_literal_object(int(expr.value))
             return ir.Constant(_I64, int(expr.value))
         if isinstance(expr, FloatLit):
@@ -654,6 +656,17 @@ class ExprDispatchLoweringMixin:
         if _expr_is_bool(expr, expr_kind):
             return self._emit_boolexpr(expr)
         if _expr_is_call(expr, expr_kind):
+            cell_value = emit_closure_cell_expr(self, expr)
+            if cell_value is not None:
+                return cell_value
+            if self._generator_ctx_stack:
+                sentinel = self._yield_sentinel_call(expr)
+                if sentinel is not None and sentinel[0] == "yield":
+                    # Yield is an expression in every Python expression
+                    # position, including an except-clause class selector.
+                    sent = self._emit_generator_yield_expr(sentinel[1])
+                    self._note_owned_object_value(sent)
+                    return sent
             native_default_func = _expr_native_default_func_ref(expr)
             if native_default_func is not None:
                 return self._emit_native_default_func_ref(

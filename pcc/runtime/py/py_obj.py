@@ -217,6 +217,11 @@ pcc_debug_note_alloc_size = extern(
 )
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_resolve_root_slot_unlocked = extern(
+    "pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr
+)
 
 
 def _gc_backend_fast() -> int:
@@ -843,6 +848,158 @@ def pcc_gc_store_root_take(slot, value) -> None:
     stored = pcc_gc_load_ptr(null(), slot)
     if is_tagged_int(stored) == 0 and ptr_is_null(stored) == 0:
         py_decref(stored)
+
+
+@c_abi_export("pcc_gc_root_copy_lease")
+def pcc_gc_root_copy_lease(destination, source) -> int:
+    """Retain an authoritative root into an empty root and lease its address.
+
+    Destination is an already registered owning root. Source is an owning
+    root, or a traced owning heap slot whose container/payload the caller has
+    already leased. Both addresses remain valid throughout this operation;
+    source is not a raw value copied into an unregistered local. On success
+    the destination owns one extra reference
+    and the returned lease token, which must be released through destination.
+    NULL/tagged values return the ordinary no-op token. No Python exception is
+    changed. A negative result leaves both owners unchanged.
+    Caller holds no outer graph transaction; use the split form for lookup.
+    """
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    plan = stack_alloc(128)
+    _gc_backend_fast()
+    pcc_py_gc_minor_graph_lock()
+    # Configuration may change while acquiring the graph lock, before our
+    # first address lease exists. Use the backend of this transaction.
+    backend: int = _gc_backend_fast()
+    pcc_gc_store_root_plan_init(plan, backend)
+    if ptr_is_null(load_ptr(destination, 0)) == 0:
+        pcc_py_gc_minor_graph_unlock()
+        return -4
+    # Acquire reloads/resolves source after any contended outer-lock wait.
+    # Its nested unlock cannot park while this transaction owns the lock.
+    token: int = pcc_gc_foreign_lease_acquire(source)
+    if token >= 0:
+        value = load_ptr(source, 0)
+        if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
+            released: int = pcc_gc_foreign_lease_release(source, token)
+            token = -4 if released == 0 else -3
+    pcc_py_gc_minor_graph_unlock()
+    # Deferred diagnostics/refcount work runs only after the destination and
+    # counted lease have been published, never while a borrowed raw copy is
+    # the sole description of an operand.
+    pcc_gc_store_root_plan_finish(plan)
+    return token
+
+
+@c_abi_export("pcc_gc_root_move")
+def pcc_gc_root_move(destination, source) -> int:
+    """Move one owner between distinct registered roots, without a raw return.
+
+    Destination must be empty. A lease already owned by source, if any, moves
+    with the value and must subsequently be released through destination.
+    Neither references nor lease counts change. Failure leaves owners intact.
+    """
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    _gc_backend_fast()
+    pcc_py_gc_minor_graph_lock()
+    if ptr_is_null(load_ptr(destination, 0)) == 0:
+        pcc_py_gc_minor_graph_unlock()
+        return -4
+    value = pcc_gc_resolve_root_slot_unlocked(source, 0)
+    pcc_gc_note_slot_write_barrier(null(), destination, value)
+    store_ptr(destination, 0, value)
+    store_ptr(source, 0, null())
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+@c_abi_export("pcc_gc_root_copy_borrowed_lease")
+def pcc_gc_root_copy_borrowed_lease(destination, source) -> int:
+    """Owning destination from an authoritative borrowed slot.
+
+    A parameter's borrowed root must not use the owning-slot resolver: healing
+    that source does not acquire/release a reference. Destination still gains
+    one owner and an independently counted lease before outer graph unlock.
+    Source is a registered borrowed root, or traced borrowed heap metadata
+    whose containing object/payload already has a caller-owned address lease.
+    The actual source owner must remain live for the invocation.
+    Caller holds no outer graph transaction; use the split form for lookup.
+    """
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    plan = stack_alloc(128)
+    rollback = stack_alloc(128)
+    _gc_backend_fast()
+    pcc_py_gc_minor_graph_lock()
+    backend: int = _gc_backend_fast()
+    pcc_gc_store_root_plan_init(plan, backend)
+    pcc_gc_store_root_plan_init(rollback, backend)
+    if ptr_is_null(load_ptr(destination, 0)) == 0:
+        pcc_py_gc_minor_graph_unlock()
+        return -4
+    value = pcc_gc_load_borrowed_ptr(null(), source)
+    token: int = -4
+    if pcc_gc_store_root_plan_commit_locked(plan, destination, value) != 0:
+        token = pcc_gc_foreign_lease_acquire(destination)
+        if token < 0:
+            # No raw temporary reaches the deferred release. The rollback
+            # prepare clears destination under the same graph transaction.
+            pcc_gc_store_root_plan_commit_locked(rollback, destination, null())
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_root_plan_finish(plan)
+    pcc_gc_store_root_plan_finish(rollback)
+    return token
+
+
+@c_abi_export("pcc_gc_root_copy_lease_prepare_locked")
+def pcc_gc_root_copy_lease_prepare_locked(destination, source, source_borrowed: int, plan) -> int:
+    """Publish a copied owner/lease inside an existing graph transaction.
+
+    Runtime configuration is complete and the caller owns the graph lock.
+    plan has 256 writable bytes and must be finished after outermost unlock,
+    including failures. Slot preconditions match the ordinary copy helpers.
+    """
+    backend: int = _gc_backend_fast()
+    pcc_gc_store_root_plan_init(plan, backend)
+    rollback = ptr_add(plan, 128)
+    pcc_gc_store_root_plan_init(rollback, backend)
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    if ptr_is_null(load_ptr(destination, 0)) == 0:
+        return -4
+    if source_borrowed == 0:
+        token: int = pcc_gc_foreign_lease_acquire(source)
+        if token < 0:
+            return token
+        value = load_ptr(source, 0)
+        if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
+            if pcc_gc_foreign_lease_release(source, token) != 0:
+                return -3
+            return -4
+        return token
+    value = pcc_gc_load_borrowed_ptr(null(), source)
+    if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
+        return -4
+    token = pcc_gc_foreign_lease_acquire(destination)
+    if token < 0:
+        pcc_gc_store_root_plan_commit_locked(rollback, destination, null())
+    return token
+
+
+@c_abi_export("pcc_gc_root_copy_lease_finish")
+def pcc_gc_root_copy_lease_finish(plan) -> None:
+    pcc_gc_store_root_plan_finish(plan)
+    pcc_gc_store_root_plan_finish(ptr_add(plan, 128))
 
 
 @c_abi_export("pcc_gc_try_store_ptr_take")

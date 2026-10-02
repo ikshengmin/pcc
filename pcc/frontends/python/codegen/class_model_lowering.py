@@ -8,6 +8,7 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Attr, Call, ClassType, DynType, Expr, FuncDef, ImportFrom, ListExpr, Name, Return, StrLit, TupleExpr, TupleType
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.pipeline_closed_world import resolve_class_base_export
 
 _I8 = ir.IntType(8)
 _CSTR = _I8.as_pointer()
@@ -69,6 +70,9 @@ class ClassModelLoweringMixin:
         class_name: str,
         module_name: str,
     ):
+        if not module_name and "." in class_name:
+            resolved = resolve_class_base_export(native_table, "", class_name)
+            return () if resolved is None else (resolved,)
         if module_name:
             exports = native_table.get(module_name)
             if exports is None:
@@ -224,7 +228,9 @@ class ClassModelLoweringMixin:
         if local_info is not None:
             # Verify module ownership if available.
             owning = getattr(local_info, "owning_module", None)
-            if owning is None or ty.module is None or owning == ty.module:
+            if owning is None:
+                owning = self.ast_module.name or ""
+            if not ty.module or owning == ty.module:
                 return ty.name
 
         # Check by qualified name to handle shadowed classes.
@@ -255,12 +261,13 @@ class ClassModelLoweringMixin:
                 "",
             ):
                 base_owner = base_info.get("owning_module", base_module)
+                base_class_name = base_info.get("class_name", base_name)
                 base_ty = ClassType(
-                    name=base_name, module=base_module, fields=(), bases=()
+                    name=base_class_name, module=base_module, fields=(), bases=()
                 )
                 if base_owner != base_module:
                     base_ty = ClassType(
-                        name=base_name, module=base_owner, fields=(), bases=()
+                        name=base_class_name, module=base_owner, fields=(), bases=()
                     )
                 self._ensure_class_type_registered(base_ty)
                 break
@@ -272,16 +279,8 @@ class ClassModelLoweringMixin:
             local_name=ty.name,
             field_types=info.get("field_types", ()),
         )
-        local_info = class_info
-        if local_info is not None:
-            from pcc.frontends.python.py_ast import Name as _BaseName
-            from pcc.frontends.python.py_ast import SourceSpan as _Span
-
-            _stub_span = _Span(file="<extern>", line=0, col=0, end_line=0, end_col=0)
-            local_info.bases_ast = tuple(
-                _BaseName(span=_stub_span, ty=DynType(name="dyn"), ident=bn)
-                for bn in info.get("base_names", ())
-            )
+        # declare_extern_class resolves every base to its registered owning
+        # identity. Do not replace that graph with ambiguous leaf aliases.
         self._class_type_export_cache[cache_key] = class_info.name
         return class_info.name
 

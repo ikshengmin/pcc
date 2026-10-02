@@ -162,7 +162,11 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
     # ``provenance_valid`` swallows the NotImplementedError and answers False,
     # and every compile then failed with "runtime archive has invalid
     # provenance" -- including the stage1 function smoke.
-    {"platform", "subprocess", "contextvars", "contextlib", "functools",
+    # ``os``: intrinsic lowering owns filesystem operations, but ``PathLike``
+    # and ``fspath`` are semantic objects in its compiled provider. Excluding
+    # it routes those attributes through CPython and stubs callers in strict
+    # no-libpython mode, including compiler error reporting.
+    {"os", "platform", "subprocess", "contextvars", "contextlib", "functools",
      "json", "math"}
 )
 
@@ -171,7 +175,7 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
 # also classified as compiler-owned builtin dispatch but still exposes
 # semantic objects that require its compiled provider.
 REQUIRED_COMPILED_STDLIB_PROVIDERS = frozenset(
-    {"platform", "subprocess", "contextvars", "contextlib", "functools",
+    {"os", "platform", "subprocess", "contextvars", "contextlib", "functools",
      "json", "math"}
 )
 

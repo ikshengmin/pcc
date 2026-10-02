@@ -236,7 +236,7 @@ _FIELD_NAMES_BY_KIND = {
     "UnaryOp": ("span", "ty", "op", "operand"),
     "Compare": ("span", "ty", "op", "lhs", "rhs"),
     "BoolExpr": ("span", "ty", "op", "left", "right"),
-    "Call": ("span", "ty", "func", "args", "kwargs", "operand_order"),
+    "Call": ("span", "ty", "func", "args", "kwargs", "operand_order", "is_set_literal"),
     "Attr": ("span", "ty", "obj", "name"),
     "Subscript": ("span", "ty", "obj", "idx"),
     "Slice": ("span", "ty", "lo", "hi", "step"),
@@ -245,7 +245,7 @@ _FIELD_NAMES_BY_KIND = {
     "TupleExpr": ("span", "ty", "elems"),
     "IfExpr": ("span", "ty", "cond", "then_e", "else_e"),
     "Lambda": ("span", "ty", "params", "body"),
-    "Assign": ("span", "targets", "value", "annotation"),
+    "Assign": ("span", "targets", "value", "annotation", "has_value"),
     "AugAssign": ("span", "target", "op", "value"),
     "ExprStmt": ("span", "expr"),
     "If": ("span", "cond", "body", "else_body"),
@@ -348,7 +348,7 @@ def _dataclass_field_names(obj):
     if kind == "BoolExpr":
         return ("span", "ty", "op", "left", "right")
     if kind == "Call":
-        return ("span", "ty", "func", "args", "kwargs")
+        return ("span", "ty", "func", "args", "kwargs", "operand_order", "is_set_literal")
     if kind == "Attr":
         return ("span", "ty", "obj", "name")
     if kind == "Subscript":
@@ -366,7 +366,7 @@ def _dataclass_field_names(obj):
     if kind == "Lambda":
         return ("span", "ty", "params", "body")
     if kind == "Assign":
-        return ("span", "targets", "value", "annotation")
+        return ("span", "targets", "value", "annotation", "has_value")
     if kind == "AugAssign":
         return ("span", "target", "op", "value")
     if kind == "ExprStmt":
@@ -468,7 +468,7 @@ def _dataclass_field_names(obj):
         if isinstance(obj, BoolExpr):
             return ("span", "ty", "op", "left", "right")
         if isinstance(obj, Call):
-            return ("span", "ty", "func", "args", "kwargs")
+            return ("span", "ty", "func", "args", "kwargs", "operand_order", "is_set_literal")
         if isinstance(obj, Attr):
             return ("span", "ty", "obj", "name")
         if isinstance(obj, Subscript):
@@ -487,7 +487,7 @@ def _dataclass_field_names(obj):
             return ("span", "ty", "params", "body")
     if isinstance(obj, Stmt):
         if isinstance(obj, Assign):
-            return ("span", "targets", "value", "annotation")
+            return ("span", "targets", "value", "annotation", "has_value")
         if isinstance(obj, AugAssign):
             return ("span", "target", "op", "value")
         if isinstance(obj, ExprStmt):
@@ -603,6 +603,8 @@ def clone_funcdef(fd, name, args, return_ty, body):
         decorators=fd.decorators,
         is_method=fd.is_method,
         is_async=fd.is_async,
+        has_return_annotation=fd.has_return_annotation,
+        manual_pointer_abi=fd.manual_pointer_abi,
     )
 
 

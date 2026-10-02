@@ -54,6 +54,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_id",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_is_address_pinned",
     "pcc_gc_index_slot_size",
     "calloc",
     "free",
@@ -246,7 +247,7 @@ def test_forwarding_identity_preserves_locking_and_safe_lookup_order() -> None:
     assert 'store_i32(global_addr("pcc_gc_next_object_id"), 0' in preallocated
     assert 'load_i64(global_addr("pcc_gc_next_object_id"), 0)' not in preallocated
     assert 'store_i64(global_addr("pcc_gc_next_object_id"), 0' not in preallocated
-    assert preallocated.index("if (flags & 64) != 0:") < preallocated.index(
+    assert preallocated.index("if pcc_gc_object_is_address_pinned(from_obj) != 0:") < preallocated.index(
         'load_i32(global_addr("pcc_gc_relocation_pin_rejects"), 0)'
     )
     assert preallocated.index(

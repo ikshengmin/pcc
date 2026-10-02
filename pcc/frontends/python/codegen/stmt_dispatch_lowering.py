@@ -136,18 +136,25 @@ class StmtDispatchLoweringMixin:
         """Emit the finally blocks entered inside the current loop (top-down to
         ``base``) on a ``break``/``continue`` exit. Mirrors the return path's
         ``_emit_pending_finally_blocks`` but bounded to the loop scope."""
-        stack = getattr(self, "_finally_stack", None)
-        if not stack or getattr(self, "_emitting_finally", False):
+        stack = self._finally_stack
+        if not stack:
+            self._emit_cancel_pending_return_roots(loop_exit=True)
             return
-        prev = self._emitting_finally
-        self._emitting_finally = True
-        idx = len(stack) - 1
-        while idx >= base:
-            if self._builder_block_is_terminated():
-                break
-            self._emit_finally_entry(stack[idx])
-            idx -= 1
-        self._emitting_finally = prev
+        previous = self._emitting_finally
+        try:
+            index = len(stack) - 1
+            while index >= base:
+                if self._builder_block_is_terminated():
+                    break
+                self._finally_stack = stack[:index]
+                self._emitting_finally = False
+                self._emit_finally_entry(stack[index])
+                index -= 1
+        finally:
+            self._finally_stack = stack
+            self._emitting_finally = previous
+        if not self._builder_block_is_terminated():
+            self._emit_cancel_pending_return_roots(loop_exit=True)
 
     def _emit_stmts_impl(self, stmts: tuple[Stmt, ...]) -> None:
         debug_codegen = bool(os.environ.get("PCC_DEBUG_CODEGEN_PHASES"))

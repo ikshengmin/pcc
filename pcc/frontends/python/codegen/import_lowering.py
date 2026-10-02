@@ -88,7 +88,7 @@ def _dataclass_field_names(obj):
         if isinstance(obj, BoolExpr):
             return ("span", "ty", "op", "left", "right")
         if isinstance(obj, Call):
-            return ("span", "ty", "func", "args", "kwargs")
+            return ("span", "ty", "func", "args", "kwargs", "operand_order", "is_set_literal")
         if isinstance(obj, Attr):
             return ("span", "ty", "obj", "name")
         if isinstance(obj, Subscript):
@@ -107,7 +107,7 @@ def _dataclass_field_names(obj):
             return ("span", "ty", "params", "body")
     if isinstance(obj, Stmt):
         if isinstance(obj, Assign):
-            return ("span", "targets", "value", "annotation")
+            return ("span", "targets", "value", "annotation", "has_value")
         if isinstance(obj, AugAssign):
             return ("span", "target", "op", "value")
         if isinstance(obj, ExprStmt):

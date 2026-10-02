@@ -8,7 +8,7 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Arg, BoolType, ByteArrayType, BytesType, ClassDef, ClassType, ComplexType, DictType, DynType, FloatType, FuncDef, FuncType, IntType, Import, ImportFrom, ListType, MemoryViewType, NoneType, StrType, TupleType, Type, ValueArrayType
+from pcc.frontends.python.py_ast import RawPointerType, Arg, BoolType, ByteArrayType, BytesType, ClassDef, ClassType, ComplexType, DictType, DynType, FloatType, FuncDef, FuncType, IntType, Import, ImportFrom, ListType, MemoryViewType, NoneType, StrType, TupleType, Type, ValueArrayType
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.layer1_support import _import_from_module_or_empty, _stmt_kind_name
 
@@ -118,7 +118,7 @@ class TypeAbiLoweringMixin:
         return bool(self._box_int_locals)
 
     def _storage_ir_type(self, ty: Type) -> ir.Type:
-        if isinstance(ty, IntType) and self._int_exprs_are_boxed():
+        if isinstance(ty, IntType) and ty.name == "int" and self._int_exprs_are_boxed():
             return _CSTR
         return self._map_type(ty)
 
@@ -149,7 +149,7 @@ class TypeAbiLoweringMixin:
         return ty
 
     def _abi_ir_type(self, ty: Type, *, box_int_abi: bool) -> ir.Type:
-        if box_int_abi and isinstance(ty, IntType):
+        if box_int_abi and isinstance(ty, IntType) and ty.name == "int":
             return _CSTR
         return self._map_type(ty)
 
@@ -162,30 +162,28 @@ class TypeAbiLoweringMixin:
         *,
         c_abi_sym: str | None,
     ) -> bool:
-        if c_abi_sym is not None:
+        if (
+            c_abi_sym is not None
+            or self._freestanding_module
+            or self._runtime_port_module
+        ):
             return False
+        if not fd.is_method and self._native_boxed_int_functions.get(fd.name, False):
+            return True
         if not self._should_box_python_ints():
-            # ADMISSION DEMOTION (INT-P0-PROJ, slice 1).
-            #
-            # `_should_box_python_ints()` is False for every `pcc.*` module, so
-            # `int` there silently means a raw machine integer.  The project
-            # contract says the opposite: `int` is arbitrary-precision, the i64
-            # lane is legitimate only as a PROVEN-in-range optimization, and a
-            # value-lane overflow must promote rather than wrap.  A module name
-            # is an assumption, not a proof.
-            #
-            # A constructor parameter carries a declared field's value, and a
-            # field annotated `int` has no range proof at all -- a machine
-            # integer there would have to be spelled `pcc.i64`.  So `__init__`
-            # keeps the object projection even in a raw-int-scaffold module.
-            # Everything else stays in the i64 lane, so this does not disturb
-            # the hot paths.
-            #
-            # This is what made pcc1 lower every source literal above 2**63-1
-            # to 0: the parser builds `pa.IntLit(span, ty, int(e.text, 0))`, and
-            # the bignum died on the `value: int` parameter -- the field itself
-            # already stores a pointer.
-            return fd.name == "__init__"
+            # Module names and unsafe imports are not integer range proofs.
+            # Preserve the ordinary Python integer ABI on constructors and
+            # every signature carrying an unbounded Python int. Explicit
+            # machine types and no-int scaffold signatures keep their lanes.
+            python_int_signature = fd.name == "__init__"
+            if isinstance(fd.return_ty, IntType) and fd.return_ty.name == "int":
+                python_int_signature = True
+            for arg in fd.args:
+                annotation = arg.annotation
+                if isinstance(annotation, IntType) and annotation.name == "int":
+                    python_int_signature = True
+            if not python_int_signature:
+                return False
         return not self._funcdef_uses_unboxed_typed_int_abi(fd)
 
     def _map_type(self, ty: Type) -> ir.Type:
@@ -195,6 +193,8 @@ class TypeAbiLoweringMixin:
         (str / list / dict / tuple / None) lower to ``PyObject*`` (an
         opaque pointer).
         """
+        if isinstance(ty, RawPointerType):
+            return _CSTR
         if isinstance(ty, IntType):
             # We always lower to i64 in L1 regardless of the declared
             # width; the type-infer layer is expected to have
@@ -680,9 +680,11 @@ class TypeAbiLoweringMixin:
         )
 
     def _is_scalar(self, ty: Type) -> bool:
-        return isinstance(ty, (IntType, FloatType, BoolType))
+        return isinstance(ty, (IntType, FloatType, BoolType, RawPointerType))
 
     def _is_object(self, ty: Type) -> bool:
+        if isinstance(ty, RawPointerType):
+            return False
         if isinstance(ty, ValueArrayType):
             if self._value_array_payload_ir_type(ty) is not None:
                 return False
@@ -737,7 +739,7 @@ class TypeAbiLoweringMixin:
                         f"{arg.name!r} of function {owner_name!r}"
                     )
                 return _CSTR, DynType(name="dyn")
-            if box_int_params and isinstance(annotation, IntType):
+            if box_int_params and isinstance(annotation, IntType) and annotation.name == "int":
                 return _CSTR, annotation
             return self._map_type(annotation), annotation
         if arg.kind == "*args":

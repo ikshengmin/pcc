@@ -11,6 +11,7 @@ from pcc.frontends.python.py_ast import Assign, AugAssign, BinOp, BoolExpr, Bool
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.vthread_effect_analysis import vthread_delegate_frame_name
+from pcc.frontends.python.py_ast import assignment_storage_annotation
 
 
 _I1 = ir.IntType(1)
@@ -68,7 +69,8 @@ def _collect_local_binding_types(stmts, out) -> None:
         if isinstance(stmt, Assign):
             for target in stmt.targets:
                 target_ty = (
-                    stmt.annotation if stmt.annotation is not None else target.ty
+                    assignment_storage_annotation(stmt.annotation, stmt.value, stmt.has_value)
+                    if stmt.has_value and stmt.annotation is not None else target.ty
                 )
                 _collect_local_binding_types_from_target(target, target_ty, out)
             if _exact_int_is_walrus_call(stmt.value):
@@ -131,7 +133,7 @@ def _collect_local_binding_types(stmts, out) -> None:
             continue
 
 
-def _collect_exact_int_assignment_candidates(stmts, out) -> None:
+def _collect_exact_int_assignment_candidates(stmts, out, box_iteration_ints: bool = True) -> None:
     """Collect simple int-local writes without entering nested functions.
 
     The result stays in source order so entry-slot allocation is deterministic
@@ -148,7 +150,8 @@ def _collect_exact_int_assignment_candidates(stmts, out) -> None:
                 _collect_exact_int_assignment_target(
                     target,
                     value_expr,
-                    stmt.annotation,
+                    assignment_storage_annotation(stmt.annotation, stmt.value, stmt.has_value)
+                    if stmt.has_value else None,
                     out,
                 )
             if _exact_int_is_walrus_call(stmt.value):
@@ -165,18 +168,37 @@ def _collect_exact_int_assignment_candidates(stmts, out) -> None:
                 # on every control-flow edge rather than trying to prove a
                 # range from the RHS alone.
                 out.append((stmt.target.ident, stmt.value, True))
+        elif isinstance(stmt, For) and box_iteration_ints:
+            # Sequence elements already have the Python object projection.
+            # A loop's inferred ``int`` target is no range proof: preserve
+            # arbitrary precision before indexed iteration or normalized
+            # tuple unpacking can attempt an i64 conversion.
+            if isinstance(stmt.target, TupleExpr) or isinstance(
+                stmt.iter.ty, (TupleType, ListType)
+            ):
+                pending = [stmt.target]
+                while pending:
+                    target = pending.pop()
+                    if isinstance(target, TupleExpr):
+                        pending.extend(reversed(target.elems))
+                    elif (
+                        isinstance(target, Name)
+                        and isinstance(target.ty, IntType)
+                        and target.ty.name == "int"
+                    ):
+                        out.append((target.ident, stmt.iter, True))
 
         if isinstance(stmt, (If, While, For)):
-            _collect_exact_int_assignment_candidates(stmt.body, out)
-            _collect_exact_int_assignment_candidates(stmt.else_body, out)
+            _collect_exact_int_assignment_candidates(stmt.body, out, box_iteration_ints)
+            _collect_exact_int_assignment_candidates(stmt.else_body, out, box_iteration_ints)
         elif isinstance(stmt, Try):
-            _collect_exact_int_assignment_candidates(stmt.body, out)
+            _collect_exact_int_assignment_candidates(stmt.body, out, box_iteration_ints)
             for handler in stmt.handlers:
-                _collect_exact_int_assignment_candidates(handler.body, out)
-            _collect_exact_int_assignment_candidates(stmt.else_body, out)
-            _collect_exact_int_assignment_candidates(stmt.finally_body, out)
+                _collect_exact_int_assignment_candidates(handler.body, out, box_iteration_ints)
+            _collect_exact_int_assignment_candidates(stmt.else_body, out, box_iteration_ints)
+            _collect_exact_int_assignment_candidates(stmt.finally_body, out, box_iteration_ints)
         elif isinstance(stmt, With):
-            _collect_exact_int_assignment_candidates(stmt.body, out)
+            _collect_exact_int_assignment_candidates(stmt.body, out, box_iteration_ints)
         elif isinstance(stmt, FuncDef):
             # A nested function owns a distinct local/representation analysis.
             continue
@@ -287,7 +309,7 @@ def mixed_scalar_object_local_names(host, fd: FuncDef, global_names) -> tuple[st
     return tuple(out)
 
 
-def forced_exact_int_local_names(host, fd: FuncDef, global_names) -> tuple[str, ...]:
+def forced_exact_int_local_names(host, fd: FuncDef, global_names, box_int_abi: bool) -> tuple[str, ...]:
     """Return locals that need one exact-object representation on every edge.
 
     Seeds are writes whose RHS already requires the exact-int object boundary.
@@ -302,11 +324,14 @@ def forced_exact_int_local_names(host, fd: FuncDef, global_names) -> tuple[str, 
         # range/overflow-sensitive Python semantics belong above this layer.
         return ()
     candidates = []
-    _collect_exact_int_assignment_candidates(fd.body, candidates)
+    _collect_exact_int_assignment_candidates(
+        fd.body, candidates,
+        fd.name not in host._bounded_int_abi_function_names,
+    )
     boxed_int_parameters = set()
-    if host._should_box_python_ints():
+    if box_int_abi:
         for arg in fd.args:
-            if arg.name != "" and isinstance(arg.annotation, IntType):
+            if arg.name != "" and isinstance(arg.annotation, IntType) and arg.annotation.name == "int":
                 boxed_int_parameters.add(arg.name)
     binding_types = []
     for arg in fd.args:
@@ -467,6 +492,11 @@ class ExactIntLoweringMixin:
         if not isinstance(expr.ty, IntType):
             return None
         if isinstance(expr, Attr):
+            if self._is_valueclass_payload_type(expr.obj.ty):
+                # Payload fields belong to their explicit machine lane.
+                # Decline before evaluating a possibly effectful receiver;
+                # the scalar fallback must evaluate it exactly once.
+                return None
             # An `int`-typed attribute read must not go through i64: the
             # ordinary attr lowering marshals the field object to the declared
             # type, and `py_int_to_i64` yields 0 above 2**63-1 -- so a bignum
@@ -491,11 +521,14 @@ class ExactIntLoweringMixin:
                                 class_info, expr.name
                             )
                 if field_index is not None:
-                    return self.builder.call(
+                    got = self.builder.call(
                         self.runtime["py_instance_get_field"],
                         [container, ir.Constant(_I32, field_index)],
                         name=self._fresh("exact.int.field.obj"),
                     )
+                    self._emit_attribute_error_if_null(got, expr.name, expr.span)
+                    self._note_owned_dynamic_call_value(got)
+                    return got
                 name_gv, _ = self._cstr_literal(expr.name)
                 got = self.builder.call(
                     self.runtime["py_obj_getattr"],
@@ -775,18 +808,9 @@ class ExactIntLoweringMixin:
             operand_cleanup = lhs_cleanup
             if rhs_pinned:
                 operand_cleanup = operand_cleanup + ((rhs, rhs_owned),)
-            if expr.op == "<<" or expr.op == ">>":
-                rhs_i64 = marshal.marshal_from_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    rhs,
-                    IntType(name="int"),
-                )
-                self._emit_negative_shift_count_check(
-                    rhs_i64,
-                    pinned_release_on_error=operand_cleanup,
-                )
+            # Shift kernels validate the exact count. A preliminary i64
+            # projection would reject valid huge right/zero-left shifts and
+            # misclassify huge negative counts before the runtime sees them.
             if inline_capable:
                 inline = self._emit_inline_tagged_int_binop_or_call(
                     expr.op,
@@ -916,6 +940,11 @@ class ExactIntLoweringMixin:
             "pcc.u64",
         ):
             return False
+        if isinstance(expr, Attr):
+            # An ordinary object's int field has no machine-width range
+            # proof. Preserve its object projection when planning a local;
+            # valueclass payload fields keep their explicit fixed-width lane.
+            return not self._is_valueclass_payload_type(expr.obj.ty)
         if (
             isinstance(expr, Call)
             and self._native_builtin_value_kind_for_expr(expr.func)

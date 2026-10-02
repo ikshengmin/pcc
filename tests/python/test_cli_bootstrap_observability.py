@@ -400,7 +400,7 @@ def test_bootstrap_cli_c_dispatch_uses_full_cli_in_process(monkeypatch):
     status = cli.bootstrap_cli_main(["hello.c", "--cpp-arg=-DTEST=1"])
 
     assert status == 0
-    assert calls == [["--backend", "self", "hello.c", "--cpp-arg=-DTEST=1"]]
+    assert calls == [["hello.c", "--cpp-arg=-DTEST=1"]]
 
 
 def test_bootstrap_cli_capi_symbol_tables_match_representative_symbols():

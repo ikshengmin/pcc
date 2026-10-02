@@ -10,7 +10,8 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.codegen.self_module_contracts import IR_SCAFFOLD_CONTRACT, module_has_contract
-from pcc.frontends.python.py_ast import Attr, BoolLit, BoolType, Call, Expr, FloatLit, FloatType, ImportFrom, IntLit, IntType, ListExpr, Name, NoneLit, TupleExpr
+from pcc.frontends.python.py_ast import Arg, Attr, BoolLit, BoolType, Call, Expr, FloatLit, FloatType, ImportFrom, IntLit, IntType, ListExpr, Name, NoneLit, NoneType, StrLit, StrType, TupleExpr
+from pcc.frontends.python.codegen.method_call_lowering import _method_emit_ast_args, _method_pinned_arg_cleanup, _method_release_arg_provenance
 
 
 def _literal_fits_i64(value) -> bool:
@@ -24,6 +25,48 @@ _I64 = ir.IntType(64)
 _DOUBLE = ir.DoubleType()
 _VOID = ir.VoidType()
 _CSTR = ir.IntType(8).as_pointer()
+
+
+def _scaffold_emit_declared_call(host, symbol, ret_ty, arg_exprs, integer_positions=()):
+    """Use the real Python helper's operand ABI, preserving exact integers.
+
+    The fallback declaration describes ordinary Python helper parameters.
+    A predeclared closed-world signature is authoritative, including an
+    explicitly machine-typed operand. Share method-call argument ownership
+    and error cleanup rather than narrowing an object int and reboxing it.
+    """
+    fn = host.module.globals.get(symbol)
+    if not isinstance(fn, ir.Function):
+        exports = (host._native_module_exports or {}).get("pcc.ir.ir", {})
+        exported_name = symbol[len("user_pcc_ir_ir_"):]
+        info = exports.get(exported_name)
+        if info is None and exported_name.startswith("IRBuilder_"):
+            method_name = exported_name[len("IRBuilder_"):]
+            class_info = exports.get("IRBuilder", {})
+            for method in class_info.get("methods", ()):
+                if method.get("name") == method_name:
+                    info = method
+                    break
+        if isinstance(info, dict) and "param_types" in info:
+            fn = host._declare_extern_user_function("pcc.ir.ir", exported_name, info)
+        else:
+            fn = host._declare_external_function(symbol, ret_ty, [_CSTR] * len(arg_exprs))
+    actual_return_type = fn.function_type.return_type
+    declared = []
+    for index, expr in enumerate(arg_exprs):
+        integer = index in integer_positions or isinstance(expr.ty, IntType)
+        declared.append(Arg(name="arg" + str(index), annotation=IntType(name="int") if integer else None, default=None, kind="pos"))
+    args, _types, provenance = _method_emit_ast_args(
+        host, fn, "IR scaffold " + symbol, tuple(arg_exprs), declared,
+        param_offset=0,
+    )
+    result = host._call_user(
+        fn, list(args), "" if isinstance(actual_return_type, ir.VoidType) else host._fresh("scaffold.call"),
+        root_result=isinstance(actual_return_type, ir.PointerType),
+        pinned_arg_temps=_method_pinned_arg_cleanup(provenance),
+    )
+    _method_release_arg_provenance(host, provenance)
+    return ir.Constant(_CSTR, None) if isinstance(actual_return_type, ir.VoidType) else result
 
 
 def _scaffold_node_kind_name(node) -> str:
@@ -183,6 +226,8 @@ _IR_MODULE_SYMBOLS = frozenset(
         "DoubleType",
         "FloatType",
         "HalfType",
+        "X86FP80Type",
+        "FP128Type",
         "ArrayType",
         "FunctionType",
         "Constant",
@@ -369,6 +414,8 @@ _IR_SCAFFOLD_SIMPLE_SYMBOLS: dict = {
     "DoubleType": (0, False),
     "FloatType": (0, False),
     "HalfType": (0, False),
+    "X86FP80Type": (0, False),
+    "FP128Type": (0, False),
     "ArrayType": (2, False),  # ir.ArrayType(elem_ty, count)
     # Values
     "Constant": (2, False),  # ir.Constant(ty, value)
@@ -473,6 +520,8 @@ _IR_SCAFFOLD_SYMBOL_IMPL: frozenset = frozenset(
         "DoubleType",
         "FloatType",
         "HalfType",
+        "X86FP80Type",
+        "FP128Type",
         "ArrayType",
         "Constant",
         "GlobalVariable",
@@ -1158,21 +1207,12 @@ class IrScaffoldLoweringMixin:
                 f"builder.call4_i32 expects (fn, a0, a1, a2, raw_i32); "
                 f"got {len(expr.args)}"
             )
-        receiver = self._scaffold_to_handle(expr.func.obj)
-        fn_handle = self._scaffold_to_handle(expr.args[0])
-        arg0 = self._scaffold_to_handle(expr.args[1])
-        arg1 = self._scaffold_to_handle(expr.args[2])
-        arg2 = self._scaffold_to_handle(expr.args[3])
-        raw_i32 = self._emit_expr_as_i64(expr.args[4])
-        fn = self._declare_external_function(
+        return _scaffold_emit_declared_call(
+            self,
             f"{self._IR_BUILDER_SYMBOL_PREFIX}call4_i32",
             _CSTR,
-            [_CSTR, _CSTR, _CSTR, _CSTR, _CSTR, _I64],
-        )
-        return self.builder.call(
-            fn,
-            [receiver, fn_handle, arg0, arg1, arg2, raw_i32],
-            name=self._fresh("scaffold.call4_i32"),
+            (expr.func.obj,) + expr.args,
+            (5,),
         )
 
     def _emit_scaffold_alloca(self, expr: Call) -> ir.Value:
@@ -1368,8 +1408,6 @@ class IrScaffoldLoweringMixin:
             raise ScaffoldUnsupportedError(
                 "SwitchInstr.add_case scaffold expects " "(int_value, target_block)"
             )
-        receiver = self._scaffold_to_handle(expr.func.obj)
-        target = self._scaffold_to_handle(expr.args[1])
         int_value_expr = expr.args[0]
         if (
             _is_scaffold_call(int_value_expr)
@@ -1378,15 +1416,16 @@ class IrScaffoldLoweringMixin:
             and len(int_value_expr.args) == 2
             and isinstance(int_value_expr.args[1].ty, (IntType, BoolType))
         ):
-            int_value = self._emit_expr_as_i64(int_value_expr.args[1])
-            fn = self._declare_external_function(
+            return _scaffold_emit_declared_call(
+                self,
                 f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}"
                 "scaffold_SwitchInstr_add_case_i64",
                 _VOID,
-                [_CSTR, _I64, _CSTR],
+                (expr.func.obj, int_value_expr.args[1], expr.args[1]),
+                (1,),
             )
-            self.builder.call(fn, [receiver, int_value, target])
-            return ir.Constant(_CSTR, None)
+        receiver = self._scaffold_to_handle(expr.func.obj)
+        target = self._scaffold_to_handle(expr.args[1])
         int_value = self._scaffold_to_handle(int_value_expr)
         fn = self._declare_external_function(
             f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}SwitchInstr_add_case",
@@ -1584,20 +1623,11 @@ class IrScaffoldLoweringMixin:
     _IR_BUILDER_SYMBOL_PREFIX = "user_pcc_ir_ir_IRBuilder_"
     _IR_TOPLEVEL_SYMBOL_PREFIX = "user_pcc_ir_ir_"
 
-    # Required-arg positions (0-based, receiver excluded) that are
-    # native i64 in the real pcc-compiled callee (`align: int`). The
-    # all-ptr handle convention would box these into a tagged pointer
-    # while the cross-module declaration says i64 — ill-typed IR that
-    # clang rejects (the self backend tolerated it, which hid this).
-    _IR_SCAFFOLD_METHOD_I64_PARAMS = {
+    # Semantic Python-int operands, not physical i64 slots. Actual operand
+    # types come from the declared callee, including explicit machine ABIs.
+    _IR_SCAFFOLD_METHOD_PY_INT_PARAMS = {
         "load_atomic": (2,),
         "store_atomic": (3,),
-    }
-
-    # Required-arg positions whose compiled Python callee accepts an object
-    # that may be a Python ``int``.  Raw-int compiler modules otherwise turn
-    # lane zero into a NULL opaque handle via ``inttoptr``.
-    _IR_SCAFFOLD_METHOD_PY_INT_PARAMS = {
         "extract_value": (1,),
     }
 
@@ -1656,73 +1686,27 @@ class IrScaffoldLoweringMixin:
                 f"{list(optional_params)} kwargs; got {key!r}"
             )
 
-        receiver = self._scaffold_to_handle(expr.func.obj)
-        i64_params = self._IR_SCAFFOLD_METHOD_I64_PARAMS.get(method, ())
         python_int_params = self._IR_SCAFFOLD_METHOD_PY_INT_PARAMS.get(method, ())
-        lowered_args = []
-        param_tys = [_CSTR]
-        for idx, a in enumerate(required_args):
-            if idx in i64_params:
-                lowered_args.append(self._emit_expr_as_i64(a))
-                param_tys.append(_I64)
-            elif idx in python_int_params and (
-                isinstance(a, IntLit)
-                or isinstance(getattr(a, "ty", None), IntType)
-                or getattr(getattr(a, "ty", None), "name", "") == "int"
-            ):
-                raw_int = self._emit_expr_as_i64(a)
-                lowered_args.append(
-                    self.builder.call(
-                        self.runtime["py_int_from_i64"],
-                        [raw_int],
-                        name=self._fresh("scaffold.int.box"),
-                    )
-                )
-                param_tys.append(_CSTR)
-            else:
-                lowered_args.append(self._scaffold_to_handle(a))
-                param_tys.append(_CSTR)
+        argument_exprs = [expr.func.obj] + list(required_args)
+        integer_positions = tuple(index + 1 for index in python_int_params)
         for param in optional_params:
             val = optional_values.get(param)
             if val is None:
                 if param == "name":
-                    lowered_args.append(self._emit_literal_str(""))
-                    param_tys.append(_CSTR)
+                    argument_exprs.append(StrLit(expr.span, StrType(name="str"), ""))
                     continue
                 if param in ("align", "syncscope", "typ"):
-                    lowered_args.append(self._emit_none_literal())
-                    param_tys.append(_CSTR)
+                    argument_exprs.append(NoneLit(expr.span, NoneType(name="None")))
                     continue
                 raise ScaffoldUnsupportedError(
                     f"builder.{method} has no scaffold default for " f"{param!r}"
                 )
-            if isinstance(val, IntLit) or isinstance(getattr(val, "ty", None), IntType):
-                # ``align=1`` is a Python int to the native IRBuilder.  The
-                # bit-preserving handle ``inttoptr 1`` reads there as the
-                # tagged int 0, so pcc1 dropped every ``, align 1`` the host
-                # compiler emits for unaligned loads and stores.
-                lowered_args.append(
-                    self.builder.call(
-                        self.runtime["py_int_from_i64"],
-                        [self._emit_expr_as_i64(val)],
-                        name=self._fresh("scaffold.int.box"),
-                    )
-                )
-                param_tys.append(_CSTR)
-                continue
-            lowered_args.append(self._scaffold_to_handle(val))
-            param_tys.append(_CSTR)
+            argument_exprs.append(val)
 
         ret_ty = _VOID if return_kind == "void" else _CSTR
         extern_name = self._IR_BUILDER_SYMBOL_PREFIX + method
-        fn = self._declare_external_function(extern_name, ret_ty, param_tys)
-        if return_kind == "void":
-            self.builder.call(fn, [receiver] + lowered_args)
-            return ir.Constant(_CSTR, None)
-        return self.builder.call(
-            fn,
-            [receiver] + lowered_args,
-            name=self._fresh(f"scaffold.{method}"),
+        return _scaffold_emit_declared_call(
+            self, extern_name, ret_ty, argument_exprs, integer_positions,
         )
 
     def _emit_ir_scaffold_symbol(
@@ -1774,16 +1758,12 @@ class IrScaffoldLoweringMixin:
     def _emit_scaffold_int_type(self, expr: Call) -> ir.Value:
         if expr.kwargs or len(expr.args) != 1:
             raise ScaffoldUnsupportedError("ir.IntType expects one width arg")
-        width = self._emit_expr_as_i64(expr.args[0])
-        fn = self._declare_external_function(
+        return _scaffold_emit_declared_call(
+            self,
             f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_IntType",
             _CSTR,
-            [_I64],
-        )
-        return self.builder.call(
-            fn,
-            [width],
-            name=self._fresh("scaffold.IntType"),
+            expr.args,
+            (0,),
         )
 
     def _emit_scaffold_pointer_type(self, expr: Call) -> ir.Value:
@@ -1808,24 +1788,27 @@ class IrScaffoldLoweringMixin:
             raise ScaffoldUnsupportedError(
                 "ir.ArrayType scaffold expects (element, count)"
             )
-        element = self._scaffold_to_handle(expr.args[0])
-        count = self._emit_expr_as_i64(expr.args[1])
-        fn = self._declare_external_function(
+        return _scaffold_emit_declared_call(
+            self,
             f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_ArrayType",
             _CSTR,
-            [_CSTR, _I64],
-        )
-        return self.builder.call(
-            fn,
-            [element, count],
-            name=self._fresh("scaffold.ArrayType"),
+            expr.args,
+            (1,),
         )
 
     def _emit_scaffold_constant(self, expr: Call) -> ir.Value:
         if expr.kwargs or len(expr.args) != 2:
             raise ScaffoldUnsupportedError("ir.Constant scaffold expects (ty, value)")
-        ty = self._scaffold_to_handle(expr.args[0])
         value_expr = expr.args[1]
+        if isinstance(value_expr, (IntLit, BoolLit)) or isinstance(value_expr.ty, (IntType, BoolType)):
+            return _scaffold_emit_declared_call(
+                self,
+                f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_i64",
+                _CSTR,
+                expr.args,
+                (1,),
+            )
+        ty = self._scaffold_to_handle(expr.args[0])
         if isinstance(value_expr, NoneLit):
             fn = self._declare_external_function(
                 f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_none",
@@ -1843,42 +1826,6 @@ class IrScaffoldLoweringMixin:
                 f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_f64",
                 _CSTR,
                 [_CSTR, _DOUBLE],
-            )
-            return self.builder.call(
-                fn,
-                [ty, value],
-                name=self._fresh("scaffold.Constant"),
-            )
-        if isinstance(value_expr, IntLit) and not _literal_fits_i64(
-            getattr(value_expr, "value")
-        ):
-            # ``getattr`` keeps the literal's exact object: a typed field read
-            # can be inferred as ``int`` (``(IntLit, BoolLit)`` narrowing
-            # yields ``bool``) and would unbox it through the i64 lane first.
-            return self._emit_scaffold_constant_exact(ty, value_expr)
-        if isinstance(value_expr, (IntLit, BoolLit)):
-            value = self._emit_expr_as_i64(value_expr)
-            fn = self._declare_external_function(
-                f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_i64",
-                _CSTR,
-                [_CSTR, _I64],
-            )
-            return self.builder.call(
-                fn,
-                [ty, value],
-                name=self._fresh("scaffold.Constant"),
-            )
-        if isinstance(value_expr.ty, (IntType, BoolType)):
-            if self._int_expr_needs_exact_object_boundary(value_expr):
-                # ``ir.Constant(_I64, int(literal.value))`` in pcc's own
-                # frontend: the value is exact and may exceed the i64 lane
-                # that scaffold_Constant_i64 takes.
-                return self._emit_scaffold_constant_exact(ty, value_expr)
-            value = self._emit_expr_as_i64(value_expr)
-            fn = self._declare_external_function(
-                f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_i64",
-                _CSTR,
-                [_CSTR, _I64],
             )
             return self.builder.call(
                 fn,
@@ -1909,16 +1856,35 @@ class IrScaffoldLoweringMixin:
                 value = self.builder.trunc(
                     raw_value, _I64, name=self._fresh("scaffold.const.i64")
                 )
-            fn = self._declare_external_function(
-                f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_i64",
-                _CSTR,
-                [_CSTR, _I64],
+            info = (self._native_module_exports or {}).get("pcc.ir.ir", {}).get("scaffold_Constant_i64")
+            if isinstance(info, dict):
+                fn = self._declare_extern_user_function("pcc.ir.ir", "scaffold_Constant_i64", info)
+            else:
+                fn = self._declare_external_function(
+                    f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_i64",
+                    _CSTR, [_CSTR, _CSTR],
+                )
+            # An imprecisely typed expression can still produce a machine
+            # integer. Adapt that already-evaluated value once; reevaluating
+            # its AST would duplicate side effects.
+            self._gc_pin(ty)
+            boxed = isinstance(fn.args[1].type, ir.PointerType)
+            cleanup = ((ty, False),)
+            if boxed:
+                value = self.builder.call(self.runtime["py_int_from_i64"], [value])
+                self._gc_pin(value)
+                cleanup = cleanup + ((value, True),)
+                self._emit_post_call_err_check(expr.span, pinned_release_on_error=cleanup)
+            result = self._call_user(
+                fn, [ty, value], self._fresh("scaffold.Constant"),
+                root_result=isinstance(fn.function_type.return_type, ir.PointerType),
+                pinned_arg_temps=cleanup,
             )
-            return self.builder.call(
-                fn,
-                [ty, value],
-                name=self._fresh("scaffold.Constant"),
-            )
+            if boxed:
+                self._gc_unpin(value)
+                self._gc_release(value)
+            self._gc_unpin(ty)
+            return result
         if isinstance(raw_value.type, ir.DoubleType):
             fn = self._declare_external_function(
                 f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_f64",

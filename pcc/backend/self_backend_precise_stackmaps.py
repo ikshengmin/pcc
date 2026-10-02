@@ -47,6 +47,7 @@ from .precise_stackmap import (
     NO_OFFSET,
     POINTER_SIZE,
     PreciseStackMap,
+    PreciseStackMapError,
     RECORD_HAS_EXCEPTION_EDGE,
     RECORD_SUSPENDED,
     SAFEPOINT_CALL,
@@ -64,6 +65,7 @@ from .precise_stackmap import (
     stable_id_prefix_limb,
     scoped_stable_id,
     validate_stack_map,
+    _check_uint,
     _FUNCTION as _STACK_MAP_FUNCTION_CODEC,
     _HEADER as _STACK_MAP_HEADER_CODEC,
     _LOCATION as _STACK_MAP_LOCATION_CODEC,
@@ -6067,6 +6069,152 @@ def _validate_symbolic_plans(
     validate_stack_map(PreciseStackMap(arch=arch, functions=tuple(functions)))
 
 
+def build_x86_64_stack_map_payload(
+    plans: tuple[FunctionStackMapPlan, ...],
+    target_offsets: dict[str, int],
+    *,
+    function_symbol,
+    block_label,
+) -> tuple[bytes, tuple[tuple[int, str], ...]]:
+    """Pack Linux metadata at the owned assembler's final code offsets.
+
+    The text renderer remains the assembly-export/differential oracle.  Object
+    emission instead retains the existing plans (which own no IR), resolves
+    their labels after variable-length instruction measurement, and publishes
+    the same bytes plus named absolute function relocations.  ElfObject owns
+    full packed semantic validation before these bytes can be published.
+    """
+
+    chunks: list[bytes] = [b""]
+    location_chunks: list[bytes] = []
+    location_indices: dict[bytes, int] = {}
+    # Retain the keyed tuple: a recycled id must never select another root set.
+    location_identities: dict[int, tuple] = {}
+    relocations: list[tuple[int, str]] = []
+    location_count = 0
+    payload_size = _STACK_MAP_HEADER_CODEC.size
+    ordered_plans = sorted(plans, key=lambda item: item.function_id)
+    _check_uint(len(ordered_plans), 32, "function count")
+    packed_scalars = CompilerIntArena()
+    native_pack = packed_scalars.uses_native_storage
+    try:
+        for plan in ordered_plans:
+            symbol = function_symbol(plan.function_name)
+            start = target_offsets.get(symbol)
+            end = target_offsets.get(plan.end_label)
+            if start is None or end is None:
+                raise BackendUnavailable(
+                    "target-final x86 stack-map range missing for " + repr(symbol)
+                )
+            code_size = end - start
+            _check_uint(plan.function_id, 64, "function id", nonzero=True)
+            _check_uint(code_size, 32, "function code size", nonzero=True)
+            _check_uint(plan.frame_size, 32, "function frame size")
+            _check_uint(len(plan.records), 32, "record count")
+            records = sorted(
+                plan.records,
+                key=lambda record: (
+                    target_offsets.get(record.label, 1 << 60),
+                    record.safepoint_id,
+                ),
+            )
+            relocations.append((payload_size + 8, symbol))
+            chunks.append(_STACK_MAP_FUNCTION_CODEC.pack(
+                plan.function_id, 0, code_size, plan.frame_size, len(records), 0,
+            ))
+            payload_size += _STACK_MAP_FUNCTION_CODEC.size
+            for record in records:
+                pc = target_offsets.get(record.label)
+                if pc is None:
+                    raise BackendUnavailable(
+                        "target-final x86 stack-map label missing: "
+                        + repr(record.label)
+                    )
+                instruction_offset = pc - start
+                exceptional_offset = NO_OFFSET
+                if record.exceptional_block:
+                    target = block_label(plan.function_name, record.exceptional_block)
+                    exceptional_pc = target_offsets.get(target)
+                    if exceptional_pc is None:
+                        raise BackendUnavailable(
+                            "target-final x86 exception label missing: " + repr(target)
+                        )
+                    exceptional_offset = exceptional_pc - start
+                # Validate before native fixed-width stores: truncation must
+                # never turn an invalid plan into a valid wire record.
+                _check_uint(record.safepoint_id, 64, "safepoint id", nonzero=True)
+                _check_uint(instruction_offset, 32, "instruction offset")
+                _check_uint(exceptional_offset, 32, "exceptional offset")
+                _check_uint(record.continuation_id, 32, "continuation id")
+                _check_uint(len(record.locations), 16, "location count")
+                _check_uint(record.kind, 8, "safepoint kind")
+                _check_uint(record.flags, 8, "record flags")
+                identity = id(record.locations)
+                cached = None
+                if identity in location_identities:
+                    cached = location_identities[identity]
+                if cached is not None and cached[0] is record.locations:
+                    location_index = cached[1]
+                else:
+                    parts: list[bytes] = []
+                    for location in record.locations:
+                        offset = location.offset
+                        if (
+                            not isinstance(offset, int)
+                            or isinstance(offset, bool)
+                            or not -(1 << 31) <= offset < (1 << 31)
+                        ):
+                            raise PreciseStackMapError("location offset is outside int32")
+                        parts.append(_STACK_MAP_LOCATION_CODEC.pack(
+                            LOCATION_STACK_INDIRECT,
+                            LOCATION_MANAGED | (LOCATION_OWNED if location.owned else 0),
+                            POINTER_SIZE, 6, NO_BASE, offset, POINTER_SIZE,
+                        ))
+                    content = b"".join(parts)
+                    if content in location_indices:
+                        location_index = location_indices[content]
+                    else:
+                        location_index = location_count
+                        location_indices[content] = location_index
+                        location_chunks.append(content)
+                        location_count += len(record.locations)
+                    location_identities[identity] = (record.locations, location_index)
+                _check_uint(location_index, 32, "location index")
+                if native_pack:
+                    # The arena stores signed i64, but the ABI permits all
+                    # uint64 IDs. Convert the checked value to its exact bits.
+                    record_id = record.safepoint_id
+                    if record_id > 0x7FFFFFFFFFFFFFFF:
+                        record_id -= 0x10000000000000000
+                    packed_scalars.append4(
+                        record_id, instruction_offset, exceptional_offset,
+                        record.continuation_id,
+                    )
+                    packed_scalars.append4(
+                        len(record.locations), 0, record.kind, record.flags,
+                    )
+                    packed_scalars.append2(0, location_index)
+                else:
+                    chunks.append(_STACK_MAP_RECORD_CODEC.pack(
+                        record.safepoint_id, instruction_offset, exceptional_offset,
+                        record.continuation_id, len(record.locations), 0,
+                        record.kind, record.flags, 0, location_index,
+                    ))
+                payload_size += _STACK_MAP_RECORD_CODEC.size
+            if native_pack and len(packed_scalars):
+                chunks.append(_pack_stack_map_record_arena(packed_scalars))
+                packed_scalars.clear()
+        _check_uint(location_count, 32, "location table count")
+        chunks[0] = _STACK_MAP_HEADER_CODEC.pack(
+            MAGIC, VERSION, ARCH_X86_64, POINTER_SIZE,
+            len(ordered_plans), location_count, 0,
+        )
+        chunks.extend(location_chunks)
+        return b"".join(chunks), tuple(relocations)
+    finally:
+        packed_scalars.close()
+
+
 def render_x86_64_stack_map_section(
     emitted_lines: list[str],
     plans: tuple[FunctionStackMapPlan, ...],
@@ -6165,6 +6313,7 @@ __all__ = [
     "build_function_stack_map_plan",
     "build_stack_map_plans",
     "build_aarch64_stack_map_section",
+    "build_x86_64_stack_map_payload",
     "render_aarch64_stack_map_section",
     "render_x86_64_stack_map_section",
 ]

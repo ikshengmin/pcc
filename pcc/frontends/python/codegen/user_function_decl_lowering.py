@@ -245,7 +245,7 @@ class UserFunctionDeclLoweringMixin:
             # ``-> None`` maps to ``ret void`` — bare ``return`` works
             # without materialising the py_None global.
             ret_ty = _VOID
-        elif box_int_abi and isinstance(fd.return_ty, IntType):
+        elif box_int_abi and isinstance(fd.return_ty, IntType) and fd.return_ty.name == "int":
             ret_ty = _CSTR
         else:
             ret_ty = self._map_type(fd.return_ty)
@@ -275,18 +275,18 @@ class UserFunctionDeclLoweringMixin:
         else:
             fn = ir.Function(self.module, fnty, name=sym)
             fn.linkage = "external"
-        # @c_abi_export modules are runtime-level code, not user
-        # application code. Suppress post-call err checks inside the
-        # exported functions and their same-module helpers: traceback
-        # and exception helpers run while TLS intentionally holds the
-        # pending exception, so checking py_err_occurred() after a
-        # pure helper call would mistake that ambient exception for a
-        # newly-raised helper failure.
-        if c_abi_sym is not None or self._module_has_c_abi_export:
+        # Runtime ports explicitly manage the pending TLS exception, including
+        # in private same-module helpers. Exporting an ordinary application
+        # function does not select that manual transport for it or its siblings:
+        # their Python calls must still branch when a callee raises.
+        if self._runtime_port_module or self._freestanding_module:
             self._c_abi_export_symbols.add(sym)
         runtime_args = [a for a in fd.args if a.name != ""]
         for ir_arg, ast_arg in zip(fn.args, runtime_args):
             ir_arg.name = ast_arg.name
         self._funcdef_functions[id(fd)] = fn
         self._native_symbol_funcdefs[fn.name] = fd
+        if (fd.manual_pointer_abi and (c_abi_sym is not None
+                or getattr(self, "_suppress_implicit_gc_roots", False))):
+            self._manual_pointer_abi_functions.add(fn.name)
         self.functions[fd.name] = fn

@@ -24,6 +24,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_prepare_object_list_mark",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_is_address_pinned",
     "pcc_gc_gray_count_store_release",
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_visit_registered_root_slots",

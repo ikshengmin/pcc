@@ -1,7 +1,7 @@
 import os
 import sys
 
-from pcc.driver.cli_contract import BACKEND_CHOICES, DEFAULT_EMIT_LL, DIAGNOSTIC_FORMAT_CHOICES, IR_SCAFFOLD_CHOICES, PYTHON_LIBPYTHON_CHOICES, cli_input_path
+from pcc.driver.cli_contract import BACKEND_CHOICES, DEFAULT_PUBLIC_BACKEND, DEFAULT_EMIT_LL, DIAGNOSTIC_FORMAT_CHOICES, IR_SCAFFOLD_CHOICES, PYTHON_LIBPYTHON_CHOICES, cli_input_path
 from pcc.package.environment import apply_locked_environment_resource_defaults, environment_info_json, environment_info_text, package_site_roots
 
 _PASS_DISABLE_ENV = "PCC_DISABLE_PASSES"
@@ -1491,6 +1491,8 @@ def _cli_main_impl(argv=None) -> int:
         verbose_raw,
         prog_args_raw,
     ) = parsed
+    if backend_raw is None:
+        backend_raw = os.environ.get("PCC_BACKEND", "") or DEFAULT_PUBLIC_BACKEND
     path = (path_raw or "") + ""
     emit_llvm = None if emit_llvm_raw is None else (emit_llvm_raw or "") + ""
     output_path = None if output_path_raw is None else (output_path_raw or "") + ""

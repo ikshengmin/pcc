@@ -60,6 +60,8 @@ py_dict_get = extern("py_dict_get", (c_ptr, c_ptr), c_ptr)
 py_dict_len = extern("py_dict_len", (c_ptr,), c_int64)
 py_call_merge_kwargs = extern("py_call_merge_kwargs", (c_ptr, c_ptr), c_ptr)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_default = extern("py_obj_call_default", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_slots = extern("py_obj_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
 py_obj_truthy = extern("py_obj_truthy", (c_ptr,), c_int64)
 py_obj_abs = extern("py_obj_abs", (c_ptr,), c_ptr)
@@ -721,6 +723,38 @@ def _sig_has_default(has_defaults, index: int) -> int:
     return out
 
 
+def _signature_keyword_types(kwargs) -> int:
+    """1 for string keys, 0 for a bad key, -1 for a failed read.
+
+    Merge accepts all hashable keys so every required operand can execute.
+    Validate at binding, even when **extras would otherwise accept every key.
+    The error path still scans in keyword order to select the first error.
+    """
+    if _kwargs_empty(kwargs) != 0:
+        return 1
+    keys = py_dict_keys(kwargs)
+    if ptr_is_null(keys):
+        return -1
+    count: int = py_list_len(keys)
+    index: int = 0
+    while index < count:
+        key = py_list_get(keys, index)
+        if ptr_is_null(key):
+            py_decref(keys)
+            return -1
+        valid: int = 0
+        if is_tagged_int(key) == 0:
+            if load_i32(key, 8) == PY_TYPE_STR:
+                valid = 1
+        py_decref(key)
+        if valid == 0:
+            py_decref(keys)
+            return 0
+        index = index + 1
+    py_decref(keys)
+    return 1
+
+
 def _signature_error(fn, sig, nargs: int, kwargs):
     """Raise the TypeError CPython gives when ``nargs`` positional arguments
     and ``kwargs`` do not bind to ``sig``, checked in CPython's order: keyword problems, too many
@@ -737,6 +771,7 @@ def _signature_error(fn, sig, nargs: int, kwargs):
     has_varkw: int = 0
     npos: int = 0
     nrequired_pos: int = 0
+    nkwonly_given: int = 0
     i: int = 0
     while i < n:
         kind: int = _sig_kind(kinds, i)
@@ -760,6 +795,13 @@ def _signature_error(fn, sig, nargs: int, kwargs):
         nkw: int = py_list_len(kw_keys)
         while k < nkw and ptr_is_null(result):
             key = py_list_get(kw_keys, k)
+            if ptr_is_null(key) or is_tagged_int(key) or load_i32(key, 8) != PY_TYPE_STR:
+                if ptr_is_null(key) == 0:
+                    py_decref(key)
+                py_decref(posonly_as_kw)
+                py_decref(kw_keys)
+                _cleanup_signature_parts(names, kinds, has_defaults, null())
+                return _func_type_error(cstr("keywords must be strings"))
             match: int = -1
             match_kind: int = -1
             j: int = 0
@@ -791,6 +833,8 @@ def _signature_error(fn, sig, nargs: int, kwargs):
                 py_decref(kw_keys)
                 _cleanup_signature_parts(names, kinds, has_defaults, null())
                 return result
+            elif match_kind == 2:
+                nkwonly_given = nkwonly_given + 1
             py_decref(key)
             k = k + 1
         if py_list_len(posonly_as_kw) > 0:
@@ -834,7 +878,17 @@ def _signature_error(fn, sig, nargs: int, kwargs):
         else:
             tail = _sig_cat(tail, _sig_lit(cstr(" positional arguments but ")))
         tail = _sig_cat(tail, _sig_int(nargs))
-        if nargs == 1:
+        if nkwonly_given != 0:
+            if nargs == 1:
+                tail = _sig_cat(tail, _sig_lit(cstr(" positional argument (and ")))
+            else:
+                tail = _sig_cat(tail, _sig_lit(cstr(" positional arguments (and ")))
+            tail = _sig_cat(tail, _sig_int(nkwonly_given))
+            if nkwonly_given == 1:
+                tail = _sig_cat(tail, _sig_lit(cstr(" keyword-only argument) were given")))
+            else:
+                tail = _sig_cat(tail, _sig_lit(cstr(" keyword-only arguments) were given")))
+        elif nargs == 1:
             tail = _sig_cat(tail, _sig_lit(cstr(" was given")))
         else:
             tail = _sig_cat(tail, _sig_lit(cstr(" were given")))
@@ -1018,6 +1072,16 @@ def _bind_signature(sig, args_tuple, kwargs, fn):
         _cleanup_signature_parts(names, kinds, has_defaults, defaults)
         return _func_type_error(cstr("native function args must be a tuple"))
 
+    nargs: int = py_tuple_len(args)
+    keyword_types: int = _signature_keyword_types(kwargs)
+    if keyword_types != 1:
+        if made_args != 0:
+            py_decref(args)
+        _cleanup_signature_parts(names, kinds, has_defaults, defaults)
+        if keyword_types < 0:
+            return null()
+        return _signature_error(fn, sig, nargs, kwargs)
+
     remaining = py_call_merge_kwargs(null(), kwargs)
     if ptr_is_null(remaining):
         if made_args != 0:
@@ -1033,7 +1097,6 @@ def _bind_signature(sig, args_tuple, kwargs, fn):
         _cleanup_signature_parts(names, kinds, has_defaults, defaults)
         return null()
 
-    nargs: int = py_tuple_len(args)
     pos_index: int = 0
     saw_varkw: int = 0
     i: int = 0
@@ -1749,11 +1812,33 @@ def py_obj_call_sync(callable_obj, args, kwargs):
     return result
 
 
+@c_abi_export("py_obj_call_default_sync")
+def py_obj_call_default_sync(callable_obj, args, kwargs):
+    # Preserve the slot dispatcher's default-only decision across the
+    # synchronous-construction boundary; do not repeat metaclass lookup.
+    previous: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, 1)
+    result = py_obj_call_default(callable_obj, args, kwargs)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, previous)
+    return result
+
+
 @c_abi_export("py_obj_call_context_is_deferred")
 def py_obj_call_context_is_deferred() -> int:
     # The actual non-PyFunc semantic callee consumes this request too. Keep
     # TLS storage in its defining object; other objects use this owned query.
     return 1 if (load_i32(global_addr("pcc_native_callable_sync_context"), 0) & 1) == 0 else 0
+
+
+@c_abi_export("py_obj_call_slots_sync")
+def py_obj_call_slots_sync(callable_slot, args_slot, kwargs_slot, result_slot) -> int:
+    # Construction consumes defer before special-method selection too.
+    # Preserve the slot contract and restore context on both scalar outcomes.
+    previous: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, 1)
+    status: int = py_obj_call_slots(callable_slot, args_slot, kwargs_slot, result_slot)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, previous)
+    return status
 
 
 @c_abi_export("py_obj_call_deferred")

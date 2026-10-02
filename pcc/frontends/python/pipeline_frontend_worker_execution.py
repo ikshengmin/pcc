@@ -6,6 +6,8 @@ import os
 import sys
 import time
 
+from pcc.frontends.python.pipeline_closed_world import _closed_world_boxed_int_functions
+
 
 def _worker_failure(message: str) -> Exception:
     """Use a bootstrap-safe exception inside the isolated worker boundary."""
@@ -141,6 +143,7 @@ def _run_export_worker(
         profile=None,
         lift_indices=None,
         merge_exports=False,
+        allow_local_int_abi_proofs=len(module_names) == 1,
     )
     if ast_dir:
         for local_index, ast_module in enumerate(parsed_modules):
@@ -482,6 +485,9 @@ def run_codegen_worker(
                         module_name,
                     )
                 )
+                codegen._native_boxed_int_functions = _closed_world_boxed_int_functions(
+                    native_exports, module_name,
+                )
             except Exception as exc:
                 raise _worker_failure(
                     "codegen_prepare["
@@ -502,6 +508,8 @@ def run_codegen_worker(
                 direct_asm = ""
                 direct_lines = []
                 direct_lines_output = False
+                direct_stack_map_plans = []
+                direct_packed_stack_maps = False
                 validate_direct = str(
                     os.environ.get("PCC_DIRECT_INDEXED_KERNEL_VALIDATE", "") or ""
                 ).strip().lower() in ("1", "true", "yes", "on")
@@ -575,7 +583,9 @@ def run_codegen_worker(
                     )
 
                     from pcc.backend.target_objects import emit_indexed_assembly, encode_assembly_object
-                    from pcc.backend.self_backend_target_match import is_aarch64_darwin_triple
+                    from pcc.backend.self_backend_target_match import (
+                        is_aarch64_darwin_triple, is_x86_64_linux_triple,
+                    )
                     from pcc.backend.self_backend_dispatch import emit_self_asm
                     if validate_direct or emit_direct:
                         if direct_passes:
@@ -659,6 +669,14 @@ def run_codegen_worker(
                             and not emit_text_control
                             and is_aarch64_darwin_triple(direct_target)
                         )
+                        direct_packed_stack_maps = bool(
+                            emit_direct
+                            and not indexed_sidecar_output
+                            and native_object_output
+                            and not validate_direct
+                            and not emit_text_control
+                            and is_x86_64_linux_triple(direct_target)
+                        )
                         if direct_lines_output:
                             direct_transport = (
                                 emit_aarch64_darwin_indexed_transport(
@@ -691,6 +709,10 @@ def run_codegen_worker(
                             direct_asm = emit_indexed_assembly(
                                 direct_module,
                                 optimize=False,
+                                stack_map_plans_out=(
+                                    direct_stack_map_plans
+                                    if direct_packed_stack_maps else None
+                                ),
                             )
                         if (
                             release_direct_frontend
@@ -748,7 +770,14 @@ def run_codegen_worker(
                                     "module_" + str(index) + ".direct.pco",
                                 )
                                 if not is_aarch64_darwin_triple(direct_target):
-                                    encoded = encode_assembly_object(direct_asm, direct_target)
+                                    encoded = encode_assembly_object(
+                                        direct_asm, direct_target,
+                                        stack_map_plans=(
+                                            direct_stack_map_plans
+                                            if direct_packed_stack_maps else None
+                                        ),
+                                    )
+                                    direct_stack_map_plans.clear()
                                     if not validate_direct:
                                         direct_asm = ""
                                 else:

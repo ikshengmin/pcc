@@ -7,6 +7,7 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BoolLit, DynType, Expr, For, FuncDef, If, Import, ImportFrom, IntLit, IntType, ListExpr, Name, Stmt, Try, Type, TupleExpr, UnaryOp, While, With
 from pcc.frontends.python.codegen.import_lowering import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.codegen.layer1_support import _import_from_module_or_empty
+from pcc.frontends.python.py_ast import assignment_storage_annotation
 
 _I8 = ir.IntType(8)
 _I1 = ir.IntType(1)
@@ -664,8 +665,16 @@ class ModuleGlobalLoweringMixin:
                 continue
             if not isinstance(t, Name):
                 continue
+            if not stmt.has_value:
+                # Reserve a lookup slot, without making an annotation into
+                # an initialized module binding or replacing an earlier one.
+                self._ensure_module_global_name(t.ident, t.ty)
+                if getattr(self, "_module_del_target_names", None) is None:
+                    self._module_del_target_names = set()
+                self._module_del_target_names.add(t.ident)
+                continue
             target_ty = (
-                stmt.annotation
+                assignment_storage_annotation(stmt.annotation, stmt.value, stmt.has_value)
                 if stmt.annotation is not None and len(stmt.targets) == 1
                 else t.ty
             )

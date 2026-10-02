@@ -13,6 +13,7 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import Attr, BoolType, Call, DictType, DynType, FloatType, IntType, Lambda, ListType, Name, NoneType, SourceSpan, StrType, TupleExpr, TupleType, Type
 from pcc.frontends.python.codegen.layer1_support import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.hoist_boxing import CELL_CAPTURE, CELL_READ, CELL_UNBOUND
 
 _I8 = ir.IntType(8)
 _I64 = ir.IntType(64)
@@ -20,6 +21,9 @@ _CSTR = _I8.as_pointer()
 
 
 _PY_BUILTINS_NS = (
+    CELL_CAPTURE,
+    CELL_READ,
+    CELL_UNBOUND,
     "ArithmeticError",
     "AssertionError",
     "AttributeError",

@@ -943,6 +943,37 @@ class DirectIndexedFunctionBuilder:
             use_count=use_count,
         )
 
+    def publish_syscall6(self, dest_ref: _ir.Value, args) -> int:
+        """Publish the intrinsic's exact syscall payload, without parsing asm.
+
+        Both Linux machine ABIs consume the same seven i64 operands. Keep the
+        existing cold syscall payload shared with the text parser, and publish
+        every SSA operand into the fused-use plane while the values are live.
+        """
+        if len(args) != 7:
+            raise BackendUnavailable("direct syscall6 expects 7 arguments")
+        for arg in args:
+            if not isinstance(arg.type, _ir.IntType) or arg.type.width != 64:
+                raise BackendUnavailable("direct syscall6 argument must be i64")
+        dest_id = self._dest_value_id(dest_ref)
+        use_start = self.record_use_ids._length
+        use_count = 0
+        values = []
+        for arg in args:
+            operand = self._operand_value_ref(arg)
+            values.append(decode_value_token(self._value_ref_text(arg)))
+            if self.fuse_uses and operand >= 0:
+                self.record_use_ids.append(operand)
+                use_count += 1
+        payload_id = self.seed.append_cold_instruction_data(
+            (self.seed.value_names[dest_id], tuple(values))
+        )
+        self.seed.publish_value_type_id(dest_id, self._type_id(dest_ref.type))
+        return self._append_metadata(
+            "syscall6", payload_id, dest_id,
+            use_start=use_start, use_count=use_count,
+        )
+
     def publish_raw_call(
         self,
         dest_ref: str | None,

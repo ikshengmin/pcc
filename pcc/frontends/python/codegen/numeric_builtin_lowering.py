@@ -7,7 +7,7 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import BoolType, ByteArrayType, BytesType, Call, ClassType, ComplexType, DictType, DynType, FloatType, IntType, Lambda, ListExpr, ListType, Name, SetType, StrType, TupleExpr, TupleType
+from pcc.frontends.python.py_ast import BoolType, ByteArrayType, BytesType, Call, ClassType, ComplexType, DictType, DynType, FloatType, IntType, Lambda, ListExpr, ListType, MemoryViewType, Name, SetType, StrType, TupleExpr, TupleType
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_FLOAT, PY_TYPE_STR
 
@@ -41,6 +41,70 @@ class NumericBuiltinLoweringMixin:
         if len(expr.args) not in (1, 2):
             return None
         arg = expr.args[0]
+        if len(expr.args) == 2 or isinstance(arg.ty, (DynType, BytesType, ByteArrayType, MemoryViewType)):
+            # Evaluate in Python order into updateable owners, then acquire
+            # counted address leases before exposing raw runtime ABI copies.
+            # Base.__index__ may allocate, relocate or clear Boolean pins.
+            roots = []
+            leases = []
+            previous = self._current_try_err_block()
+            previous_cpy = getattr(self, "_cpy_operand_cleanup_block", None)
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            try:
+                for operand in expr.args:
+                    cleanup = self._extern_cleanup_block(tuple(roots), target)
+                    self._try_err_block = cleanup
+                    self._cpy_operand_cleanup_block = cleanup
+                    value = self._emit_expr_with_cpy_operand_cleanup(
+                        operand, (), as_pcc_object=True,
+                    )
+                    roots.append(self._extern_enter_root(
+                        value, self._owned_release_needed(value, operand), "int.argument.root",
+                    ))
+                for root in roots:
+                    acquired = self.builder.call(
+                        self.runtime["pcc_gc_foreign_lease_acquire"],
+                        [self._as_gc_ptr(root[0])], name=self._fresh("int.lease.acquire"),
+                    )
+                    failed = self.builder.icmp_signed("<", acquired, ir.Constant(_I64, 0))
+                    error = self.current_function.append_basic_block(self._fresh("int.lease.error"))
+                    ready = self.current_function.append_basic_block(self._fresh("int.lease.ready"))
+                    self.builder.cbranch(failed, error, ready)
+                    self.builder.position_at_end(error)
+                    cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+                    self._try_err_block = cleanup
+                    self._cpy_operand_cleanup_block = cleanup
+                    self._emit_builtin_exception_and_branch(
+                        "RuntimeError", "integer conversion requires a stable managed owner", expr.span,
+                    )
+                    self.builder.position_at_end(ready)
+                    leases.append((root, acquired))
+                cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                obj = self._extern_load_root(roots[0])
+                base = (self._extern_load_root(roots[1])
+                        if len(roots) == 2 else ir.Constant(_CSTR, None))
+                result = self.builder.call(
+                    self.runtime["py_obj_as_int_object_args"], [obj, base],
+                    name=self._fresh("int.obj.args"),
+                )
+                self._emit_post_call_err_check(getattr(expr, "span", None))
+                result_root = self._extern_enter_root(result, True, "int.result.root")
+                prior = result_root[2]
+                for root in reversed(roots):
+                    alias = self.builder.icmp_unsigned("==", result, self._extern_load_root(root))
+                    prior = self.builder.select(alias, root[2], prior)
+                result_root = (result_root[0], True, prior)
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = previous_cpy
+            failed = self._extern_release_foreign_leases(tuple(leases))
+            self._extern_check_lease_cleanup(failed, tuple(roots) + (result_root,))
+            self._extern_release_roots(tuple(roots))
+            result = self._extern_take_root(result_root)
+            self._note_owned_object_value(result)
+            return result
         if len(expr.args) == 2:
             base_val = self._emit_expr_as_i64(expr.args[1])
             base_val = self.builder.trunc(
@@ -265,6 +329,11 @@ class NumericBuiltinLoweringMixin:
         """
         arg = expr.args[0]
         arg_ty = arg.ty
+        if len(expr.args) == 2 or isinstance(arg_ty, (DynType, BytesType, ByteArrayType, MemoryViewType)):
+            boxed = self.emit_int_builtin_as_object(expr)
+            return marshal.marshal_from_object(
+                self.builder, self.module, self.runtime, boxed, IntType(name="int"),
+            )
         base_val: ir.Value
         if len(expr.args) == 2:
             base_val = self._emit_expr_as_i64(expr.args[1])

@@ -20,6 +20,13 @@ import textwrap
 import pytest
 
 from pcc1_gate import repo_root
+from pcc.runtime.py.py_abi_constants import (
+    PYCLASSMETHOD_FUNC_OFFSET,
+    PYCLASSMETHOD_NAME_HASH_OFFSET,
+    PYCLASSMETHOD_NAME_LENGTH_OFFSET,
+    PYCLASSMETHOD_NAME_OFFSET,
+    PYCLASSMETHOD_SIZE,
+)
 
 REPO = repo_root()
 RUNTIME_DIR = REPO / "pcc" / "runtime"
@@ -76,8 +83,12 @@ EXPECTED_OFFSETS = {
     ("PyClassObject", "del_method"): 96,
     ("PyClassObject", "attrs"): 104,
     ("PyClassObject", "metaclass"): 112,
-    ("PyClassMethod", "name"): 0,
-    ("PyClassMethod", "func"): 8,
+    # py_class.py uses these shared constants for method-table traversal and
+    # insertion, including the hash/length metadata added to each record.
+    ("PyClassMethod", "name"): PYCLASSMETHOD_NAME_OFFSET,
+    ("PyClassMethod", "func"): PYCLASSMETHOD_FUNC_OFFSET,
+    ("PyClassMethod", "name_hash"): PYCLASSMETHOD_NAME_HASH_OFFSET,
+    ("PyClassMethod", "name_length"): PYCLASSMETHOD_NAME_LENGTH_OFFSET,
     ("PyInstanceObject", "cls"): 16,
     ("PyInstanceObject", "fields"): 24,
     ("PyPropertyObject", "fget"): 16,
@@ -90,7 +101,7 @@ EXPECTED_SIZES = {
     "PyObjectHeader": 16,
     "DictEntry": 24,
     "PyClassObject": 120,
-    "PyClassMethod": 16,
+    "PyClassMethod": PYCLASSMETHOD_SIZE,
     "PyInstanceObject": 24,
     "PyPropertyObject": 40,
     "PyClassMethodObject": 24,

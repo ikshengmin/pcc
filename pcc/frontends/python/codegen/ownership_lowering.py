@@ -6,7 +6,7 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BinOp, BoolLit, BoolType, BytesLit, Call, ClassType, ComplexType, DictExpr, DictType, DynType, Expr, FloatType, IfExpr, IntType, Lambda, ListExpr, ListType, Name, NoneLit, NoneType, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType, Type, UnaryOp
+from pcc.frontends.python.py_ast import RawPointerType, Attr, BinOp, BoolLit, BoolType, BytesLit, Call, ClassType, ComplexType, DictExpr, DictType, DynType, Expr, FloatType, IfExpr, IntType, Lambda, ListExpr, ListType, Name, NoneLit, NoneType, SetType, StrLit, StrType, Subscript, TupleExpr, TupleType, Type, UnaryOp
 
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
@@ -649,11 +649,16 @@ class OwnershipLoweringMixin:
         return len(matches) == 1
 
     def _expr_returns_unsafe_raw_pointer(self, expr: Expr) -> bool:
+        if isinstance(getattr(expr, "ty", None), RawPointerType):
+            return True
         if getattr(self, "_freestanding_module", False):
             # Freestanding modules cannot contain managed pointers. This is
             # the same policy used by _value_is_pcc_object, including joins
             # between raw intrinsic results and c_ptr parameters/locals.
             return True
+        if isinstance(expr, Call) and expr.is_set_literal:
+            # A set display's synthetic callee is not an unsafe alias lookup.
+            return False
         if isinstance(expr, IfExpr):
             # The result is a raw pointer only if both possible values are.
             # In particular, `cstr(a) if flag else cstr(b)` must not cross
@@ -1193,7 +1198,12 @@ class OwnershipLoweringMixin:
         if terminator is None:
             return False
         save_block = self.builder._block
-        self.builder.position_before(terminator)
+        anchor = terminator
+        for owner, return_block, handoff in self._return_handoff_sites:
+            if owner is self.current_function and return_block is block:
+                anchor = handoff
+                break
+        self.builder.position_before(anchor)
         self._emit_gc_frame_leave_for_slot(alloca)
         self.builder.position_at_end(save_block)
         return True

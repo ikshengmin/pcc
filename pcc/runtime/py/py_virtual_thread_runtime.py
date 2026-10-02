@@ -243,6 +243,7 @@ py_gen_state = extern("py_gen_state", (c_ptr,), c_int64)
 py_gen_set_done = extern("py_gen_set_done", (c_ptr,), c_void)
 py_gen_close = extern("py_gen_close", (c_ptr,), c_ptr)
 py_current_exception = extern("py_current_exception", (), c_ptr)
+py_handled_context_swap = extern("py_handled_context_swap", (c_ptr,), c_ptr)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 py_exc_get_message = extern("py_exc_get_message", (c_ptr,), c_ptr)
@@ -1961,7 +1962,19 @@ def _timer_cancel(vthread) -> int:
 
 
 def _timer_add(vthread, deadline: int) -> int:
-    _timer_cancel(vthread)
+    current = global_load_ptr("pcc_vthread_timer_head_py")
+    advances_head = ptr_is_null(current) != 0
+    if ptr_is_null(current) == 0 and deadline < load_i64(current, 8):
+        advances_head = True
+    # Interrupt before publication, while retaining the scheduler mutex.
+    # wait_finish must reacquire this mutex, so a retained eventfd/EVFILT_USER
+    # wake cannot pass the forthcoming publication. Failure leaves the old
+    # timer/task untouched; a later allocation failure is only a harmless wake.
+    if advances_head and _io_interrupt_locked() != 0:
+        return -1
+    # Reserve the replacement before touching the caller's current wait. A
+    # failed allocation must not leave a Condition waiter (or a caller that
+    # catches the error) with a newly armed timer or retire its old one.
     node = _timer_alloc()
     if ptr_is_null(node):
         return -1
@@ -1972,6 +1985,8 @@ def _timer_add(vthread, deadline: int) -> int:
     store_ptr(node, 24, handle)
     store_i64(node, 8, deadline)
     pcc_gc_store_root(node, vthread)
+    _effect(1, 2, 1, -1)
+    _timer_cancel(vthread)
     previous = null()
     current = global_load_ptr("pcc_vthread_timer_head_py")
     while ptr_is_null(current) == 0 and load_i64(current, 8) <= deadline:
@@ -1984,9 +1999,22 @@ def _timer_add(vthread, deadline: int) -> int:
         store_ptr(previous, 16, node)
     store_ptr(vthread, 56, node)
     store_i64(vthread, 120, 1)
-    _effect(1, 2, 1, -1)
-    _effect(8, 2, 0, load_i64(vthread, 32))
+    store_i64(vthread, 32, 3)
+    _effect(8, 2, 0, 3)
     return 0
+
+
+def _scheduler_wait_deadline_locked(now: int, timeout_ms: int) -> int:
+    """Bound an IO wait by the earliest ordinary sleep timer as well."""
+    deadline = -1
+    if timeout_ms >= 0:
+        deadline = now + timeout_ms
+    timer = global_load_ptr("pcc_vthread_timer_head_py")
+    if ptr_is_null(timer) == 0:
+        timer_deadline = load_i64(timer, 8)
+        if deadline < 0 or timer_deadline < deadline:
+            deadline = timer_deadline
+    return deadline
 
 
 # IO node: thread@0, fd@8, events@16, deadline@24, next@32, root@40.
@@ -2405,16 +2433,19 @@ def py_virtual_thread_sleep(vthread, delay_ms: int) -> int:
     if load_i64(vthread, 120) >= 4 or ptr_is_null(load_ptr(vthread, 104)) == 0:
         _scheduler_unlock()
         return -1
-    _io_cancel(vthread)
     if delay_ms <= 0:
+        _io_cancel(vthread)
         _timer_cancel(vthread)
         result = _make_ready(vthread)
         if result == 0:
             _effect(6, 0, 0, load_i64(vthread, 32))
         _scheduler_unlock()
         return result
-    store_i64(vthread, 32, 3)
     result = _timer_add(vthread, _now_ms() + delay_ms)
+    if result == 0:
+        # A committed timer replaces the old IO wait atomically under this
+        # lock. On preparation failure neither prior wait nor task state moves.
+        _io_cancel(vthread)
     _scheduler_unlock()
     return result
 
@@ -2712,13 +2743,19 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
     backend = load_i32(global_addr("pcc_vthread_waitset_backend_py"), 0)
     result = stack_alloc(32)
     now = _now_ms()
+    # A quiet fd and a pending sleep timer must not turn an outer stepping
+    # driver into an infinite kernel wait. Preparation and timer insertion
+    # share this lock; _timer_add wakes a prepared later wait before commit.
+    wait_deadline = _scheduler_wait_deadline_locked(now, timeout_ms)
     if backend == 0:
         node = global_load_ptr("pcc_vthread_io_head_py")
         used_timeout = 0
         while ptr_is_null(node) == 0:
             wait = 0
             if used_timeout == 0 and timeout_ms > 0:
-                wait = timeout_ms
+                wait = wait_deadline - now
+                if wait < 0:
+                    wait = 0
                 used_timeout = 1
             revents = poll_fd(load_i64(node, 8), load_i64(node, 16), wait)
             if revents < 0:
@@ -2737,11 +2774,6 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
         if load_i32(global_addr("pcc_vthread_wait_active_py"), 0) != 0:
             _scheduler_unlock()
             return 0
-        wait_deadline = now
-        if timeout_ms < 0:
-            wait_deadline = -1
-        else:
-            wait_deadline = now + timeout_ms
         batch = stack_alloc(64)
         if pcc_io_waitset_wait_prepare(
             global_addr("pcc_vthread_waitset_py"),
@@ -2999,6 +3031,10 @@ def _run_ready_step() -> int:
         if continuation_kind == PY_TYPE_GEN or ptr_is_null(resume) == 0:
             saved = global_load_ptr("pcc_current_virtual_thread_py")
             global_store_ptr("pcc_current_virtual_thread_py", ready)
+            # A scheduled task is a distinct execution context even on this
+            # carrier. Inherit no caller handled state; generated resumes
+            # reinstall only their own live handler scopes from frame roots.
+            saved_handled = py_handled_context_swap(null())
             rc = 0
             if continuation_kind == PY_TYPE_GEN:
                 # Match the owned reference previously returned by slot zero.
@@ -3008,6 +3044,7 @@ def _run_ready_step() -> int:
                 rc = call_i64_ptr2(resume, ready, continuation)
             else:
                 call_void_ptr0(resume)
+            py_handled_context_swap(saved_handled)
             global_store_ptr("pcc_current_virtual_thread_py", saved)
             failure = py_current_exception()
             if ptr_is_null(failure) == 0:

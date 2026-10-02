@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from pcc.frontends.python.py_ast import Attr, BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, DynType, Expr, FloatType, FuncType, IntLit, IntType, ListType, ListExpr, MemoryViewType, Name, NoneLit, NoneType, SetType, SourceSpan, StrLit, StrType, Subscript, TupleExpr, TupleType, Type, ValueArrayType
+from pcc.frontends.python.py_ast import RawPointerType, Attr, BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, DynType, Expr, FloatType, FuncType, IntLit, IntType, ListType, ListExpr, MemoryViewType, Name, NoneLit, NoneType, SetType, SourceSpan, StrLit, StrType, Subscript, TupleExpr, TupleType, Type, ValueArrayType
 
 # ---------------------------------------------------------------------------
 # Module-level singleton type constants.
@@ -357,6 +357,8 @@ def type_eq(a: Type, b: Type) -> bool:
     """
     if a is b:
         return True
+    if isinstance(a, RawPointerType) or isinstance(b, RawPointerType):
+        return isinstance(a, RawPointerType) and isinstance(b, RawPointerType)
     primitive_name = (
         a.name == "int"
         or a.name == "float"

@@ -69,6 +69,8 @@ from pcc.frontends.python.codegen.class_override_index import build_export_metho
 from pcc.frontends.python.codegen.ownership_lowering import prepare_rebound_object_parameters
 from pcc.frontends.python.py_ast import Arg, Assign, Attr, AugAssign, BinOp, BoolExpr, BoolLit, BoolType, ByteArrayType, BytesType, Call, ClassDef, ClassType, ComplexType, Compare, Delete, DictType, DictExpr, DynType, Expr, ExprStmt, FloatLit, FloatType, For, FuncDef, FuncType, If, IfExpr, IntLit, IntType, ListExpr, ListType, MemoryViewType, Module as AstModule, Name, NoneLit, NoneType, SetType, Pass, Return, SourceSpan, StrLit, StrType, Subscript, Try, TupleExpr, TupleType, Type, UnaryOp, While, With
 from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
+from pcc.frontends.python.py_ast import assignment_storage_annotation
+from pcc.frontends.python.pipeline_closed_world import resolve_class_base_export
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.exact_int_lowering import allocate_forced_exact_int_locals, bind_forced_exact_int_parameter, forced_exact_int_local_names, mixed_scalar_object_local_names
 from pcc.frontends.python.codegen.builtin_exceptions import builtin_exc_tag_or_missing
@@ -661,7 +663,7 @@ def _classgen_annotation_is_object_param(parent, annotation: Optional[Type]) -> 
     if _is_ast_node(annotation, (StrType, TupleType, NoneType, DynType, ClassType)):
         return True
     if _is_ast_node(annotation, IntType) or name == "int":
-        return parent._should_box_python_ints()
+        return name == "int"
     return False
 
 
@@ -1418,6 +1420,7 @@ def _classgen_recover_attr_value(
                 [self_val, _classgen_i32_index_constant(idx)],
                 name="classgen.arg." + attr_name,
             )
+            parent._emit_attribute_error_if_null(raw, attr_name, expr.span)
             return _classgen_maybe_unbox_recovered_arg(
                 parent,
                 raw,
@@ -2017,6 +2020,52 @@ class ClassLowering:
         self._uniq += 1
         return hint + "." + str(self._uniq)
 
+    def _normalize_native_class_bases(self, cd: ClassDef) -> ClassDef:
+        """Bind qualified owned bases to their collision-safe class identities.
+
+        Field inheritance, method lookup and runtime MRO construction all use
+        the same Name-based class registry. Resolve admitted module exports
+        before those consumers run instead of silently discarding Attr bases.
+        """
+        bases = []
+        changed = False
+        for base in cd.bases:
+            export = None
+            if _is_ast_node(base, Attr):
+                export = self.parent._native_module_expr_export_info(base.obj, base.name)
+                if export is None and _is_ast_node(base.obj, Name):
+                    export = self.parent._native_builtin_compiled_export_info(base.obj.ident, base.name)
+            if export is not None:
+                module_name, exported = export
+                if exported.get("kind") == "class":
+                    owner = exported.get("owning_module", module_name)
+                    class_name = exported.get("class_name", base.name)
+                    base_info = self.declare_extern_class(
+                        owning_module=owner,
+                        class_name=class_name,
+                        field_names=exported.get("field_names", ()),
+                        methods=exported.get("methods", ()),
+                        local_name=owner + "." + class_name,
+                        field_types=exported.get("field_types", ()),
+                    )
+                    base = Name(base.span, base.ty, base_info.name)
+                    changed = True
+                else:
+                    raise ClassLoweringError("native class base is not a class: " + module_name + "." + base.name)
+            elif _is_ast_node(base, Attr):
+                from pcc.frontends.python.pipeline_closed_world import qualified_class_base_name
+                qualified = qualified_class_base_name(
+                    base, self.parent.ast_module.body, cd,
+                    self.parent.ast_module.name or "", cd.span.file,
+                )
+                owner, separator, _leaf = qualified.rpartition(".")
+                if separator and owner in (self.parent._native_module_exports or {}):
+                    raise ClassLoweringError("native class base is unavailable: " + qualified)
+            bases.append(base)
+        if not changed:
+            return cd
+        return ClassDef(cd.span, cd.name, tuple(bases), cd.keywords, cd.body, cd.decorators)
+
     def declare_class(self, cd: ClassDef) -> ClassInfo:
         """First-pass: register the class and declare all its methods.
 
@@ -2034,6 +2083,7 @@ class ClassLowering:
         if valueclass:
             dataclass_options["frozen"] = True
         original_cd = cd
+        cd = self._normalize_native_class_bases(cd)
         runtime_decorators: list[Expr] = []
         for dec in original_cd.decorators:
             dname = _simple_decorator_name(dec)
@@ -2683,11 +2733,18 @@ class ClassLowering:
                 _is_ast_node(stmt, Assign)
                 and len(stmt.targets) == 1
                 and _is_ast_node(stmt.targets[0], Name)
-                and (ann is not None or _is_ast_node(stmt.value, NoneLit))
+                and ann is not None
             )
             if is_dataclass_field:
                 name = stmt.targets[0].ident
-                default = _classgen_dataclass_factory_default(self.parent, stmt.value)
+                default = (
+                    _classgen_dataclass_factory_default(self.parent, stmt.value)
+                    if stmt.has_value else None
+                )
+                if not _class_has_valueclass_decorator(cd):
+                    ann = assignment_storage_annotation(
+                        ann, default if default is not None else stmt.value, stmt.has_value,
+                    )
                 if (
                     _is_ast_node(default, Call)
                     and _is_ast_node(default.func, Name)
@@ -2702,18 +2759,14 @@ class ClassLowering:
                     )
                     remaining_body.append(ExprStmt(default.span, capture))
                     default = Call(default.span, default.ty, default.func, (Name(default.span, DynType("dyn"), capture_name),), ())
-                # pcc's parser lowers a bare ``x: int`` annotation to
-                # ``Assign(targets=(Name,), value=NoneLit, annotation=ann)``.
-                # It also lowers ``x: int = None`` the same way, so
-                # the two cases are indistinguishable at AST level.
-                # Pre-2026-04-22 pcc treated all NoneLit-valued
-                # annotations as "no default", which made
-                # ``MemoryAccess.__init__(self, kind, id, block,
-                # pointer=None, ...)`` fail ``missing required
-                # argument 'pointer'`` for any caller that relied on
-                # the Optional default. Keep the NoneLit so the
-                # dataclass-generated ``__init__`` has the default,
-                # matching the more-permissive interpretation.
+                elif default is not None and not _class_has_valueclass_decorator(cd):
+                    # The class namespace and constructor signature share the
+                    # same definition-time object. Publish once in source
+                    # order, then capture that class-local name in __init__.
+                    remaining_body.append(Assign(stmt.span, stmt.targets, default, stmt.annotation))
+                    default = Name(default.span, ann or DynType("dyn"), name)
+                # Required fields have no initializer; explicit None remains
+                # a real default in the generated constructor signature.
                 fields.append((name, ann, default))
                 continue
             remaining_body.append(stmt)
@@ -3008,6 +3061,14 @@ class ClassLowering:
             if _is_ast_node(stmt, Pass):
                 continue
             if _is_ast_node(stmt, Assign):
+                if not stmt.has_value:
+                    if protocol_like:
+                        for target in stmt.targets:
+                            if (_is_ast_node(target, Name)
+                                    and not target.ident.startswith("_")
+                                    and target.ident not in info.protocol_members):
+                                info.protocol_members.append(target.ident)
+                    continue
                 alias_source = None
                 property_fget_alias = False
                 alias_targets: list[Name] = []
@@ -3366,6 +3427,8 @@ class ClassLowering:
             decorators=fd.decorators,
             is_method=fd.is_method,
             is_async=fd.is_async,
+            has_return_annotation=fd.has_return_annotation,
+            manual_pointer_abi=fd.manual_pointer_abi,
         )
 
     def _declare_method(self, cd: ClassDef, fd: FuncDef, info: ClassInfo) -> None:
@@ -3459,7 +3522,13 @@ class ClassLowering:
         if kind != "property_setter" and kind != "property_deleter":
             info.method_kinds[fd.name] = kind
 
-        box_int_abi = self.parent._should_box_python_ints()
+        box_int_abi = (
+            self.parent._should_box_python_ints()
+            if info.valueclass
+            else self.parent._funcdef_uses_boxed_int_abi(
+                fd, c_abi_sym=self.parent._func_c_abi_export_symbol(fd)
+            )
+        )
         if kind == "static":
             # No receiver prepended. All params are declared-only.
             decl_args = fd.args
@@ -3515,7 +3584,7 @@ class ClassLowering:
             or _is_ast_node(fd.return_ty, NoneType)
         ):
             ret_ty = _VOID
-        elif box_int_abi and _is_ast_node(fd.return_ty, IntType):
+        elif box_int_abi and _is_ast_node(fd.return_ty, IntType) and fd.return_ty.name == "int":
             ret_ty = _PTR
         else:
             ret_ty = self.parent._map_type(fd.return_ty)
@@ -3735,6 +3804,23 @@ class ClassLowering:
                         for base_name in raw_base_names:
                             if base_name == "object":
                                 continue
+                            resolved_base = resolve_class_base_export(native_table, owning_module, base_name)
+                            if resolved_base is not None:
+                                base_module, base_export = resolved_base
+                                base_owner = base_export.get("owning_module", base_module)
+                                base_class_name = base_export["class_name"]
+                                canonical = base_owner + "." + base_class_name
+                                if canonical == qualified:
+                                    raise ClassLoweringError("cyclic native class base: " + canonical)
+                                base_info = self.declare_extern_class(
+                                    owning_module=base_owner,
+                                    class_name=base_class_name,
+                                    field_names=base_export.get("field_names", ()),
+                                    methods=base_export.get("methods", ()),
+                                    local_name=canonical,
+                                    field_types=base_export.get("field_types", ()),
+                                )
+                                base_name = base_info.name
                             base_nodes.append(
                                 Name(
                                     span=stub_span,
@@ -4085,10 +4171,18 @@ class ClassLowering:
             parent._current_global_names = parent._collect_explicit_global_names(
                 fd.body
             )
+            box_int_abi = (
+                parent._should_box_python_ints()
+                if info.valueclass
+                else parent._funcdef_uses_boxed_int_abi(
+                    fd, c_abi_sym=parent._func_c_abi_export_symbol(fd)
+                )
+            )
             forced_exact_int_names = forced_exact_int_local_names(
                 parent,
                 fd,
                 parent._current_global_names,
+                box_int_abi,
             )
             parent.env = {}
             parent.env_class_hint = {}
@@ -4096,7 +4190,6 @@ class ClassLowering:
             parent.env_list_elem_class_hint = {}
             parent._ir_builder_env_flags = {}
             parent.loop_stack = []
-            box_int_abi = parent._should_box_python_ints()
             parent._box_int_locals = box_int_abi
             parent._owned_local_names = set()
             parent._owned_local_has_value = set()
@@ -4202,7 +4295,14 @@ class ClassLowering:
                     slot = parent.builder.alloca(ir_ty, name=f"{ast_arg.name}.addr")
                     parent.builder.store(ir_arg, slot)
                     parent.env[ast_arg.name] = (slot, ir_ty, bind_ty)
-                    if auto_root_borrowed_params and parent._is_object(bind_ty):
+                    if auto_root_borrowed_params and (
+                        parent._is_object(bind_ty)
+                        or (
+                            isinstance(bind_ty, IntType)
+                            and bind_ty.name == "int"
+                            and isinstance(ir_ty, ir.PointerType)
+                        )
+                    ):
                         parent._ensure_borrowed_local_gc_root(
                             ast_arg.name,
                             slot,
@@ -4302,7 +4402,14 @@ class ClassLowering:
                     slot = parent.builder.alloca(ir_ty, name=f"{ast_arg.name}.addr")
                     parent.builder.store(ir_arg, slot)
                     parent.env[ast_arg.name] = (slot, ir_ty, bind_ty)
-                    if auto_root_borrowed_params and parent._is_object(bind_ty):
+                    if auto_root_borrowed_params and (
+                        parent._is_object(bind_ty)
+                        or (
+                            isinstance(bind_ty, IntType)
+                            and bind_ty.name == "int"
+                            and isinstance(ir_ty, ir.PointerType)
+                        )
+                    ):
                         parent._ensure_borrowed_local_gc_root(
                             ast_arg.name,
                             slot,
@@ -4725,9 +4832,11 @@ class ClassLowering:
             )
         prepared_attr_objects: dict[str, ir.Value] = {}
         prepared_method_objects: dict[str, ir.Value] = {}
+        annotation_targets_prepared = False
         prepared = self._maybe_emit_metaclass_prepared_namespace_constructor(cd, info, prepared_method_objects)
         if prepared is not None:
             cls_ptr, prepared_attr_objects = prepared
+            annotation_targets_prepared = True
         else:
             generic_prepared = (
                 self._maybe_emit_metaclass_generic_prepared_namespace_constructor(
@@ -4738,6 +4847,7 @@ class ClassLowering:
             )
             if generic_prepared is not None:
                 cls_ptr, prepared_attr_objects = generic_prepared
+                annotation_targets_prepared = True
             else:
                 cls_ptr = self._maybe_emit_metaclass_dynamic_constructor(cd, info)
             if cls_ptr is None:
@@ -4817,6 +4927,9 @@ class ClassLowering:
         events = []
         event_index = 0
         for statement_index, statement in enumerate(cd.body):
+            if _is_ast_node(statement, Assign) and not statement.has_value:
+                events.append((statement.span.line, statement_index, "annotation", "", statement))
+                event_index += 1
             capture = _classgen_factory_capture_statement(statement)
             if capture is not None:
                 capture_name = capture.args[0].value
@@ -4847,6 +4960,10 @@ class ClassLowering:
         events.sort(key=lambda event: (event[0], event[1]))
         try:
             for _line, _index, event_kind, attr_name, value_expr in events:
+                if event_kind == "annotation":
+                    if not annotation_targets_prepared:
+                        self.parent._emit_assign(value_expr)
+                    continue
                 if event_kind == "factory":
                     if prepared_method_objects:
                         continue
@@ -5933,6 +6050,9 @@ class ClassLowering:
                 factory_captures.append(self._emit_dataclass_factory_capture(capture))
                 continue
             if _is_ast_node(stmt, Assign) and len(stmt.targets) == 1:
+                if not stmt.has_value:
+                    self.parent._emit_assign(stmt)
+                    continue
                 target = stmt.targets[0]
                 if _is_ast_node(target, Name):
                     if (
@@ -6695,6 +6815,7 @@ class ClassLowering:
                 [self_val, ir.Constant(_I32, idx)],
                 name=self._fresh(f"self.{attr_name}"),
             )
+            self.parent._emit_attribute_error_if_null(result, attr_name, None)
             # The runtime getter returns a new reference even when the field
             # has a dynamic type. Record the emitted owner's provenance.
             self.parent._note_owned_object_value(result)

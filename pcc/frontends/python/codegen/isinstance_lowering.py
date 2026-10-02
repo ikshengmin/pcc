@@ -10,6 +10,7 @@ from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, By
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.frontends.python.codegen.hoist_boxing import CELL_READ
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 _I1 = ir.IntType(1)
@@ -386,6 +387,17 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
             and not e.kwargs
         )
 
+    def is_closure_cell_read(e: Expr) -> bool:
+        # Hoisting rewrites a captured Name to this compiler-only operation.
+        # It is still a classinfo value read, not an arbitrary source call.
+        # Normal expression lowering validates the marker's arguments and
+        # preserves owning-local versus free-variable boundness errors.
+        return (
+            isinstance(e, Call)
+            and isinstance(e.func, Name)
+            and e.func.ident == CELL_READ
+        )
+
     def emit_dynamic_classinfo_isinstance(
         obj_val: ir.Value,
         classinfo_expr: Expr,
@@ -409,12 +421,31 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
             )
         else:
             cls_val = host._emit_expr(classinfo_expr)
-        raw = host.builder.call(
-            host.runtime["py_obj_isinstance"],
-            [current_operand(), cls_val],
-            name=host._fresh("obj.isinstance"),
+        # Cell reads, attributes and subscripts can return a new owner. Keep
+        # the classinfo in an authoritative root until the borrowing predicate
+        # and its error check finish, then retire that owner on either edge.
+        # The root helper preserves any pre-existing pin when obj is cls.
+        cls_owned = (
+            host._value_is_owned_object(cls_val)
+            or host._owned_release_needed(cls_val, classinfo_expr)
+            or host._pcc_pointer_source_is_owned(classinfo_expr)
         )
-        host._emit_post_call_err_check(getattr(classinfo_expr, "span", None))
+        cls_root = host._extern_enter_root(
+            cls_val, cls_owned, "isinstance.classinfo",
+        )
+        previous_error = host._current_try_err_block()
+        target = previous_error if previous_error is not None else host._ensure_fn_err_exit()
+        host._try_err_block = host._extern_cleanup_block((cls_root,), target)
+        try:
+            raw = host.builder.call(
+                host.runtime["py_obj_isinstance"],
+                [current_operand(), host._extern_load_root(cls_root)],
+                name=host._fresh("obj.isinstance"),
+            )
+            host._emit_post_call_err_check(getattr(classinfo_expr, "span", None))
+        finally:
+            host._try_err_block = previous_error
+            host._extern_release_roots((cls_root,))
         return host.builder.icmp_signed(
             "!=",
             raw,
@@ -434,7 +465,7 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
         for e in class_arg.elems:
             name, ir_symbol, declared_classinfo = class_name_from_expr(e)
             if name is None:
-                if not is_dynamic_type_call(e) and not isinstance(e, Attr):
+                if not is_dynamic_type_call(e) and not is_closure_cell_read(e) and not isinstance(e, Attr):
                     raise NotImplementedError(
                         "isinstance tuple form requires bare class names "
                         "module.name chains, type(None), or type(expr); got "
@@ -587,7 +618,7 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
 
     cls_ident, ir_symbol, declared_classinfo = class_name_from_expr(class_arg)
     if cls_ident is None:
-        if is_dynamic_type_call(class_arg) or isinstance(class_arg, (Subscript, Attr)):
+        if is_dynamic_type_call(class_arg) or is_closure_cell_read(class_arg) or isinstance(class_arg, (Subscript, Attr)):
             obj_val = current_operand()
             return emit_dynamic_classinfo_isinstance(obj_val, class_arg)
         span = getattr(class_arg, "span", None)

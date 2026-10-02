@@ -15,7 +15,7 @@ Tagged ints use the generated ``PY_TYPE_INT`` semantic tag.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PYCLASSOBJECT_NAME_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET
+from pcc.runtime.py.py_abi_constants import PY_FLAG_EXC_UNICODE_PAYLOAD, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PYCLASSOBJECT_NAME_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_double, c_int32, c_int64, c_void
 from pcc.unsafe import (
@@ -84,6 +84,7 @@ py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
+py_unicode_error_format = extern("py_unicode_error_format", (c_ptr, c_int64), c_ptr)
 py_exc_repr = extern("py_exc_repr", (c_ptr,), c_ptr)
 py_complex_repr = extern("py_complex_repr", (c_ptr,), c_ptr)
 py_instance_getattr = extern("py_instance_getattr", (c_ptr, c_ptr), c_ptr)
@@ -3483,18 +3484,23 @@ def py_obj_str(o):
     if tag == PY_TYPE_INT:  # PY_TYPE_INT
         return py_int_to_str_obj(o)
     if tag == PY_TYPE_EXC:  # PY_TYPE_EXC
+        if (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
+            return py_unicode_error_format(o, 0)
         msg = py_exc_get_message(o)
         if not ptr_is_null(msg):
             # KeyError.__str__ is repr(key), not the bare key (CPython):
             # str(KeyError('x')) == "'x'".
-            if py_exc_matches(o, py_exc_builtin_class(4)) != 0:  # PY_EXC_KEYERROR
+            key_error: int = py_exc_matches(o, py_exc_builtin_class(4))  # PY_EXC_KEYERROR
+            o = pcc_gc_note_relocation_read(o)
+            msg = py_exc_get_message(o)
+            if key_error != 0:
                 return py_obj_repr(msg)
             if _type_of(msg) != PY_TYPE_STR:
                 # ``str(ValueError(3))`` is ``'3'``: the argument's str.
                 return py_obj_str(msg)
             py_incref(msg)
             return msg
-        return null()
+        return py_str_new(cstr(""), 0)
     built = _format_builtin_str(o, tag)
     if not ptr_is_null(built):
         return built

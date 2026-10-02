@@ -180,6 +180,7 @@ class _Lifter:
             decorators=decorators,
             is_method=False,   # set by enclosing ClassDef in a later pass
             is_async=is_async,
+            has_return_annotation=node.returns is not None,
         )
 
     def _stmt_ClassDef(self, node: _py_ast.ClassDef) -> pa.ClassDef:
@@ -238,8 +239,8 @@ class _Lifter:
         """``x: T = v`` — treat as Assign with annotation populated.
 
         An AnnAssign without a value (``x: T``) still emits an Assign with
-        a ``NoneLit`` value as a placeholder, matching the contract that
-        Assign always carries a value.
+        an inert ``NoneLit`` placeholder and ``has_value=False``. Explicit
+        ``= None`` retains ``has_value=True``.
         """
         annotation = self._lift_annotation(node.annotation)
         target = self.lift_expr(node.target)
@@ -253,6 +254,7 @@ class _Lifter:
             targets=(target,),
             value=value,
             annotation=annotation,
+            has_value=node.value is not None,
         )
 
     def _stmt_For(self, node: _py_ast.For) -> pa.For:
@@ -695,8 +697,8 @@ class _Lifter:
     def _expr_Set(self, node: _py_ast.Set) -> pa.Call:
         """Set literal — lifted via ``set([...])`` for now.
 
-        The frozen contract lacks a dedicated SetExpr. Using a ``set(list)``
-        Call keeps semantics precise without violating the contract.
+        The syntax marker distinguishes this from an explicit ``set(list)``
+        constructor and prevents resolving a user binding named ``set``.
         """
         span = self._span(node)
         elems = tuple(self.lift_expr(e) for e in node.elts)
@@ -708,6 +710,7 @@ class _Lifter:
             func=set_name,
             args=(list_expr,),
             kwargs=(),
+            is_set_literal=True,
         )
 
     def _expr_Dict(self, node: _py_ast.Dict) -> pa.DictExpr:
@@ -1050,7 +1053,10 @@ class _Lifter:
             # protocol/classes (a common shape in NumPy's typing modules).
             if ident == "TypeAlias":
                 return pa.DynType(name="TypeAlias")
-            return _PRIMITIVE_TYPES.get(ident, pa.DynType(name="dyn"))
+            return _PRIMITIVE_TYPES.get(ident, pa.ClassType(ident, "", (), ()))
+        if isinstance(node, _py_ast.Attribute):
+            from pcc.frontends.python.types import parse_annotation
+            return parse_annotation(self.lift_expr(node))
         if isinstance(node, _py_ast.Constant) and node.value is None:
             return pa.NoneType(name="None")
         # list[T], dict[K, V], tuple[...], etc.

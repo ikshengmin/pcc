@@ -625,7 +625,7 @@ def _dataclass_field_names(obj):
     if obj is None:
         return ()
     if isinstance(obj, Call):
-        return ("span", "ty", "func", "args", "kwargs")
+        return ("span", "ty", "func", "args", "kwargs", "operand_order", "is_set_literal")
     if isinstance(obj, Name):
         return ("span", "ty", "ident")
     if isinstance(obj, TupleExpr):
@@ -636,7 +636,7 @@ def _dataclass_field_names(obj):
         # continuation slots in both the host and self-hosted compiler.
         return _ast_field_names(obj)
     if isinstance(obj, Assign):
-        return ("span", "targets", "value", "annotation")
+        return ("span", "targets", "value", "annotation", "has_value")
     if isinstance(obj, AugAssign):
         return ("span", "target", "op", "value")
     if isinstance(obj, ExprStmt):
@@ -841,6 +841,38 @@ class GeneratorLoweringMixin:
         span = call.span
         return f"__pcc_print_args_{span.line}_{span.col}"
 
+    def _generator_tuple_build_name(self, expr: TupleExpr) -> str:
+        span = expr.span
+        return f"__pcc_tuple_build_{span.line}_{span.col}"
+
+    def _generator_expr_may_suspend(self, expr: Expr) -> bool:
+        work = [expr]
+        while work:
+            node = work.pop()
+            if node is None:
+                continue
+            if isinstance(node, tuple):
+                work.extend(node)
+                continue
+            if isinstance(node, (FuncDef, ClassDef)):
+                continue
+            if self._yield_sentinel_call(node) is not None:
+                return True
+            if isinstance(node, Call):
+                if self._vthread_suspension_call(node):
+                    return True
+                if isinstance(node.func, Name) and node.func.ident in self._vthread_may_park_func_names:
+                    return True
+                if isinstance(node.func, Attr) and self._vthread_may_park_method_keys:
+                    # Method effects may need enclosing-class information that
+                    # is not available during frame planning. A conservative
+                    # managed temporary preserves the ordinary call semantics.
+                    return True
+            for field in _dataclass_field_names(node):
+                if field not in ("span", "ty"):
+                    work.append(_dataclass_field_value(node, field, None))
+        return False
+
     def _generator_finally_exception_name(self, stmt: Try) -> str:
         span = stmt.span
         return f"__pcc_finally_exception_{span.line}_{span.col}"
@@ -904,6 +936,11 @@ class GeneratorLoweringMixin:
                 continue
             if isinstance(node, (FuncDef, ClassDef)):
                 continue
+            if isinstance(node, TupleExpr) and self._generator_expr_may_suspend(node):
+                hidden = self._generator_tuple_build_name(node)
+                for tuple_name in (hidden, hidden + "_item"):
+                    if tuple_name not in names:
+                        names.append(tuple_name)
             if isinstance(node, Call) and isinstance(node.func, Name) and node.func.ident == "__await__":
                 for kind in ("asyncio.await.child", "asyncio.await.send", "asyncio.await.error"):
                     hidden = vthread_delegate_frame_name(node, kind)
@@ -1794,7 +1831,12 @@ class GeneratorLoweringMixin:
         )
         self._gc_release(value)
 
-        self._emit_pending_finally_blocks()
+        saved_return_roots = self._return_cleanup_roots
+        self._return_cleanup_roots = list(saved_return_roots) + [(self.current_function, value_slot, len(self.loop_stack))]
+        try:
+            self._emit_pending_finally_blocks()
+        finally:
+            self._return_cleanup_roots = saved_return_roots
         if self._builder_block_is_terminated():
             return
         # A finally block may park and resume through a separate entry edge.
@@ -1831,6 +1873,7 @@ class GeneratorLoweringMixin:
         if worker_timing:
             sys.stderr.write("pcc frontend generator yield save-frame done\n")
             sys.stderr.write("pcc frontend generator yield cleanup start\n")
+        self._emit_suspend_handled_exception_scopes()
         self._emit_owned_local_cleanup()
         if worker_timing:
             sys.stderr.write("pcc frontend generator yield cleanup done\n")
@@ -1845,6 +1888,8 @@ class GeneratorLoweringMixin:
             sys.stderr.write("pcc frontend generator yield add-case done\n")
         self.builder.ret(value)
         self.builder.position_at_end(cont_bb)
+        self._emit_resume_handled_exception_scopes()
+        self._emit_chain_pending_handled_exception()
         pending = self.builder.call(
             self.runtime["py_err_occurred"],
             [],
