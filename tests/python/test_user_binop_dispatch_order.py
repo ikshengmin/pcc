@@ -227,12 +227,12 @@ ORDER_SOURCE = r'''
 
 def test_binop_dispatch_follows_cpython_reflected_order(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     for backend in range(5):
         backend_source = SOURCE.replace("DISPATCH_BACKEND", str(backend))
         for runtime_name, archive in (
-            ("pcc_py", pcc_py_runtime_archive),
+            ("pcc_py", pcc_runtime_archive),
         ):
             result = _compile_and_run(
                 tmp_path,
@@ -249,12 +249,12 @@ def test_binop_dispatch_follows_cpython_reflected_order(
 
 def test_ordering_compares_ask_user_dunders_in_cpython_order(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     for backend in range(5):
         backend_source = ORDER_SOURCE.replace("DISPATCH_BACKEND", str(backend))
         for runtime_name, archive in (
-            ("pcc_py", pcc_py_runtime_archive),
+            ("pcc_py", pcc_runtime_archive),
         ):
             result = _compile_and_run(
                 tmp_path,

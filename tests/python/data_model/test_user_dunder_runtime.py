@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 
-def test_user_dunder_str_hash_iter_next_native(tmp_path, pcc_py_runtime_archive):
+def test_user_dunder_str_hash_iter_next_native(tmp_path, pcc_runtime_archive):
     src = tmp_path / "dunder_probe.c"
     exe = tmp_path / "dunder_probe"
     src.write_text(
@@ -83,11 +83,11 @@ def test_user_dunder_str_hash_iter_next_native(tmp_path, pcc_py_runtime_archive)
         [
             os.environ.get("CC", "cc"),
             "-I",
-            str(pcc_py_runtime_archive.parent / "include"),
+            str(pcc_runtime_archive.parent / "include"),
             "-I",
-            str(pcc_py_runtime_archive.parent / "src"),
+            str(pcc_runtime_archive.parent / "src"),
             str(src),
-            str(pcc_py_runtime_archive),
+            str(pcc_runtime_archive),
             "-lm",
             "-o",
             str(exe),
@@ -99,8 +99,8 @@ def test_user_dunder_str_hash_iter_next_native(tmp_path, pcc_py_runtime_archive)
 
 
 def test_user_dunder_sources_are_wired():
-    dunder_py = Path("pcc/py_runtime/py/py_dunder.py").read_text(encoding="utf-8")
-    iter_py = Path("pcc/py_runtime/py/py_iter.py").read_text(encoding="utf-8")
+    dunder_py = Path("pcc/runtime/py/py_dunder.py").read_text(encoding="utf-8")
+    iter_py = Path("pcc/runtime/py/py_iter.py").read_text(encoding="utf-8")
 
     assert '@c_abi_export("py_user_hash_dispatch")' in dunder_py
     assert "py_user_iter_dispatch" in iter_py
@@ -108,7 +108,7 @@ def test_user_dunder_sources_are_wired():
 
 
 def test_iterator_runtime_guards_silent_null_before_state_cleanup():
-    iter_py = Path("pcc/py_runtime/py/py_iter.py").read_text(encoding="utf-8")
+    iter_py = Path("pcc/runtime/py/py_iter.py").read_text(encoding="utf-8")
 
     messages = (
         "iter(callable, sentinel) received NULL operand",

@@ -71,7 +71,7 @@ class NativeObjectError(Exception):
 MAGIC = b"PCCNOBJ\x01"
 _NONE_INDEX = 0xFFFFFFFF
 _MAX_COUNT = 8_000_000  # merged pcc compiler closure exceeds 1M relocations
-_FINAL_LINK_ORDER_LIMIT = 8_388_608  # 23-bit index in private sorted rows
+_FINAL_LINK_RELOCATION_COUNT_MAX = 0xFFFFFFFF  # Mach-O section nreloc is u32
 _MAX_NAME_BYTES = 1_048_576
 
 _HEADER = struct.Struct("<8sII")
@@ -91,12 +91,23 @@ _FINAL_LINK_RELOCATION_SCALAR_COUNT = 6
 
 
 def _validate_final_link_relocation_count(count: int) -> None:
-    """The private final-link order packs each index into 23 bits.
+    """Validate the private merged rows against the section's u32 count.
 
-    Individual public objects retain the stricter _MAX_COUNT contract.
+    Individual public objects retain the stricter _MAX_COUNT contract. A
+    transient order key uses up to 31 address bits and 32 index bits, which
+    together remain within the nonnegative signed-i64 arena range.
     """
-    if count < 0 or count > _FINAL_LINK_ORDER_LIMIT:
-        raise NativeObjectError("relocation ordering index exceeds 23 bits")
+    if count < 0 or count > _FINAL_LINK_RELOCATION_COUNT_MAX:
+        raise NativeObjectError("final-link relocation count is outside u32 nreloc range")
+
+
+def _final_link_order_index_base(count: int) -> int:
+    """One power-of-two radix for every encoded/decoded index in a batch."""
+    _validate_final_link_relocation_count(count)
+    base = 1
+    while base < count:
+        base *= 2
+    return base
 
 
 _py_bytes_new: "extern" = extern("py_bytes_new", (c_ptr, c_int64), c_obj)
@@ -1482,30 +1493,34 @@ class OwnedMergedSourceView:
         )
 
     def _iter_section_relocation_indices(self, rows: bytes, ordered: bool):
+        if len(rows) % _FINAL_LINK_RELOCATION.size:
+            raise NativeObjectError("final-link relocation rows are truncated")
         count = len(rows) // _FINAL_LINK_RELOCATION.size
         _validate_final_link_relocation_count(count)
-        order_capacity = 0
-        if ordered:
-            order_capacity = count
-        order = CompilerIntArena(order_capacity)
-        try:
-            if ordered:
-                for index in range(count):
-                    start = index * _FINAL_LINK_RELOCATION.size
-                    if _NATIVE_PAYLOAD_READS:
-                        offset = load_i32(
-                            rows, abi_constant("object.bytes.data_offset") + start
-                        ) & 0xFFFFFFFF
-                    else:
-                        offset = _U32.unpack_from(rows, start)[0]
-                    if offset < 0 or offset > 0x7FFFFFFF:
-                        raise NativeObjectError(
-                            "relocation offset exceeds signed r_address range"
-                        )
-                    order.append((0x7FFFFFFF - offset) * _FINAL_LINK_ORDER_LIMIT + index)
-                order.sort_nonnegative_radix()
+        if not ordered:
             for index in range(count):
-                yield order.get_unchecked(index) & 0x7FFFFF if ordered else index
+                yield index
+            return
+        index_base = _final_link_order_index_base(count)
+        index_mask = index_base - 1
+        order = CompilerIntArena(count)
+        try:
+            for index in range(count):
+                start = index * _FINAL_LINK_RELOCATION.size
+                if _NATIVE_PAYLOAD_READS:
+                    offset = load_i32(
+                        rows, abi_constant("object.bytes.data_offset") + start
+                    ) & 0xFFFFFFFF
+                else:
+                    offset = _U32.unpack_from(rows, start)[0]
+                if offset < 0 or offset > 0x7FFFFFFF:
+                    raise NativeObjectError(
+                        "relocation offset exceeds signed r_address range"
+                    )
+                order.append((0x7FFFFFFF - offset) * index_base + index)
+            order.sort_nonnegative_radix()
+            for index in range(count):
+                yield order.get_unchecked(index) & index_mask
         finally:
             order.close()
 

@@ -9,9 +9,9 @@ this_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(os.path.dirname(this_dir))
 sys.path.insert(0, parent_dir)
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.parse.c_parser import CParser
-from pcc.codegen.c_codegen import LLVMCodeGenerator, postprocess_ir_text
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.frontends.c.parse.c_parser import CParser
+from pcc.frontends.c.codegen.c_codegen import CCodeGenerator, postprocess_ir_text
 import unittest
 
 
@@ -42,7 +42,7 @@ def test_stdio_globals_link_and_run():
         """
     processed = CEvaluator._system_cpp(source, base_dir=parent_dir)
     ast = CParser().parse(processed)
-    cg = LLVMCodeGenerator()
+    cg = CCodeGenerator()
     cg.generate_code(ast)
 
     with tempfile.TemporaryDirectory(prefix="pcc_stdio_") as tmpdir:

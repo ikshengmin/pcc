@@ -6,8 +6,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend.codegen.runtime_abi import (
+from pcc.frontends.python import pipeline
+from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_I64_GLOBALS,
     FREESTANDING_GC_RUNTIME_GLOBALS,
     RUNTIME_SIGNATURES,
@@ -15,7 +15,7 @@ from pcc.py_frontend.codegen.runtime_abi import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 TELEMETRY_SOURCE = RUNTIME_DIR / "py" / "py_gc_telemetry.py"
 # The retired C runtime's pcc_gc_telemetry(), frozen as the reference mapping.
 C_ORACLE_SOURCE = REPO_ROOT / "tests" / "data" / "gc_telemetry_counter_oracle.c"
@@ -266,10 +266,10 @@ def test_freestanding_gc_telemetry_object_has_typed_cross_object_closure(
 
 
 def test_production_archive_owns_and_runs_freestanding_gc_telemetry(
-    tmp_path: Path, pcc_py_runtime_archive: Path
+    tmp_path: Path, pcc_runtime_archive: Path
 ):
     members_result = subprocess.run(
-        ["ar", "-t", str(pcc_py_runtime_archive)],
+        ["ar", "-t", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -278,7 +278,7 @@ def test_production_archive_owns_and_runs_freestanding_gc_telemetry(
     assert "py_gc_telemetry.o" in members_result.stdout.splitlines()
 
     symbols_result = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_py_runtime_archive)],
+        ["nm", "-A", "-g", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -326,7 +326,7 @@ def test_production_archive_owns_and_runs_freestanding_gc_telemetry(
             "-std=c11",
             f"-I{RUNTIME_DIR / 'include'}",
             str(harness),
-            str(pcc_py_runtime_archive),
+            str(pcc_runtime_archive),
             "-o",
             str(executable),
         ],

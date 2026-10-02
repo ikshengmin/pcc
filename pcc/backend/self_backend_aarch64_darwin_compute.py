@@ -989,7 +989,7 @@ def _emit_insertvalue(
 def emit_compute_instruction_by_id(
     func: ParsedFunction,
     kind_id: int,
-    data: tuple,
+    data: int | tuple,
     module_symbols: PreparedModuleSymbols,
     *,
     indexed_kernel: IndexedFunctionKernel | None = None,

@@ -15,7 +15,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from pcc.package_schema import capability_profile
+from pcc.package.schema import capability_profile
 
 _LIBPYTHON_PATTERNS = (
     re.compile(r"(?:^|[\s/:=,-])libpython\d+(?:\.\d+)*", re.IGNORECASE),

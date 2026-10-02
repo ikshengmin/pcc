@@ -196,14 +196,14 @@ def test_rebound_owned_local_slots_have_balanced_frame_roots(tmp_path) -> None:
 
 
 def _typed_module(source: str, name: str):
-    from pcc.parse.py_lift import parse_and_lift
-    from pcc.py_frontend import type_infer
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python import type_infer
 
     return type_infer.infer_module(parse_and_lift(source, f"<{name}>", name))
 
 
 def test_module_override_resets_gc_root_slot_registries() -> None:
-    from pcc.py_frontend.codegen import layer1
+    from pcc.frontends.python.codegen import layer1
 
     first = _typed_module(
         """

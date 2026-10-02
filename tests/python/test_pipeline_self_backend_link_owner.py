@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend import pipeline_self_backend_link as self_link
-from pcc.py_frontend import pipeline_self_link as link_contract
+from pcc.frontends.python import pipeline
+from pcc.frontends.python import pipeline_self_backend_link as self_link
+from pcc.frontends.python import pipeline_self_link as link_contract
 
 
 @pytest.mark.parametrize("manifest_input", [False, True])
@@ -74,7 +74,7 @@ def test_explicit_repo_root_owns_self_link_driver_resolution(monkeypatch, tmp_pa
     frozen.mkdir()
     (frozen / "AGENTS.md").write_text("# frozen\n", encoding="utf-8")
     monkeypatch.setenv("PCC_REPO_ROOT", str(frozen))
-    monkeypatch.setattr(pipeline, "__file__", "/live/repo/pcc/py_frontend/pipeline.py")
+    monkeypatch.setattr(pipeline, "__file__", "/live/repo/pcc/frontends/python/pipeline.py")
     assert pipeline._repo_root_for_link() == str(frozen)
 
 

@@ -1,9 +1,9 @@
-from pcc.ast import c_ast
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.parse.c_parser import CParser
-from pcc.passes import PassContext
-from pcc.passes.ssa_branch_prune import SSABranchPrunePass
-from pcc.project import TranslationUnit
+from pcc.frontends.c.ast import c_ast
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.frontends.c.parse.c_parser import CParser
+from pcc.frontends.c.passes import PassContext
+from pcc.frontends.c.passes.ssa_branch_prune import SSABranchPrunePass
+from pcc.driver.project import TranslationUnit
 
 
 _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)

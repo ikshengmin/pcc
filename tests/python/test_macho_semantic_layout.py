@@ -173,8 +173,8 @@ def test_reachable_atom_cannot_be_dropped_even_when_marked_eliminable():
 
 
 def test_frontend_policy_materializes_exact_atoms_and_keeps_unknown_runtime():
-    from pcc.py_frontend import pipeline_ir_split, pipeline_ir_text
-    from pcc.py_frontend.pipeline_semantic_layout import (
+    from pcc.frontends.python import pipeline_ir_split, pipeline_ir_text
+    from pcc.frontends.python.pipeline_semantic_layout import (
         build_frontend_semantic_layout_policy,
     )
 
@@ -295,8 +295,8 @@ def test_frontend_policy_rejects_missing_merged_function_and_schema_drift():
 def test_frontend_policy_internal_namespace_includes_module_global_symbols():
     from pcc.backend.self_backend_module_symbols import prepare_module_symbols
     from pcc.backend.self_backend_parse import parse_self_backend_module
-    from pcc.py_frontend import pipeline_ir_split, pipeline_ir_text
-    from pcc.py_frontend.pipeline_semantic_layout import (
+    from pcc.frontends.python import pipeline_ir_split, pipeline_ir_text
+    from pcc.frontends.python.pipeline_semantic_layout import (
         build_frontend_semantic_layout_policy,
     )
 

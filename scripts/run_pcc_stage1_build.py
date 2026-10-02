@@ -86,7 +86,7 @@ def _resolve_frontend_jobs(raw: str, memory_budget_bytes: int) -> int:
     if text != "auto":
         return int(text)
     sys.path.insert(0, str(REPO_ROOT))
-    from pcc.py_frontend import pipeline_frontend_workers as workers
+    from pcc.frontends.python import pipeline_frontend_workers as workers
 
     return workers.budget_jobs(
         os.cpu_count() or 1,

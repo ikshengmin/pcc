@@ -64,7 +64,7 @@ def test_graph_lock_recursive_depth_maps_to_one_no_park_lease(
 
 def test_store_ptr_uses_owner_aware_prepare_commit_finish_transaction():
     internal_header = (
-        REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_internal.h"
+        REPO_ROOT / "pcc" / "runtime" / "src" / "py_internal.h"
     ).read_text(encoding="utf-8")
     expected_cross_signatures = {
         "pcc_gc_store_ptr_plan_init": (
@@ -98,7 +98,7 @@ def test_store_ptr_uses_owner_aware_prepare_commit_finish_transaction():
         '@c_abi_export("pcc_gc_store_ptr_plan_init")', 1
     )[1].split("def _pcc_gc_store_plan_commit_locked", 1)[0]
     assert py_plan_init.index("pcc_gc_store_root_plan_init(plan, backend)") < (
-        py_plan_init.index("pcc_runtime_log_event_code(")
+        py_plan_init.index("pcc_diagnostics_runtime_log_event_code(")
     )
     py_commit_impl = py_src.split(
         "def _pcc_gc_store_plan_commit_locked(", 1
@@ -118,7 +118,7 @@ def test_backend4_container_constructors_use_fresh_then_publish_contract():
         "pcc_gc_publish_initialized"
     ] == expected_signature
     assert "pcc_gc_publish_initialized(PyObject *obj)" in (
-        REPO_ROOT / "pcc" / "py_runtime" / "src" / "py_internal.h"
+        REPO_ROOT / "pcc" / "runtime" / "src" / "py_internal.h"
     ).read_text(encoding="utf-8")
 
     py_obj = PY_OBJ_PORT.read_text(encoding="utf-8")

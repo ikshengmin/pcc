@@ -1,7 +1,7 @@
 """Facade and behavior contract for textual pipeline import discovery."""
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend import pipeline_import_scan
+from pcc.frontends.python import pipeline
+from pcc.frontends.python import pipeline_import_scan
 
 
 def test_pipeline_reexports_import_scanners_by_identity():

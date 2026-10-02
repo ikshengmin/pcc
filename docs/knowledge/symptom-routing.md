@@ -7,7 +7,7 @@ Search for the error text or symbol after locating its current code path.
 Read the matching experiment and later corrections, expanding as needed.
 Titles, snippets and status are historical locators, not current diagnosis.
 
-589 investigations.
+590 investigations.
 
 - [`2**52` does not round-trip through pcc1's float formatting or parsing](../investigations/pcc1-float-repr-strtod-17-digit-defect.md) — **Root cause identified, minimised to a two-line probe, bisected per stage, and**
   - `stage2 -> stage3` · `verify: cmp pcc2 pcc3` · `0x...004` · `0x...000` · `1000.0` · `123456789012345.0`
@@ -403,6 +403,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `PCC_GC_BACKEND=0..4` · `gc.collect()` · `9.526s` · `11.037s` · `/usr/lib/libSystem.B.dylib` · `compile_rc=0`
 - [Investigation: cycle GC clears referents before resurrection finalizers](../investigations/gc-transitive-resurrection-clear-order.md) — **resolved**
   - `__del__` · `, objects reachable from` · `self.cargo` · `test_resurrection_is_transitive` · `AttributeError: cargo` · `test_resurrection_does_not_block_other_cleanup`
+- [Investigation: dataclass factory defaults corrupt section data](../investigations/dataclass-factory-default-capture-corrupts-section-data.md) — **Active — 2026-10-01. Source12 fixes independent container factories and the**
+  - `compact-unwind local function relocation resolves outside __TEXT,__text` · `field(default_factory=F)` · `build/remediation-20261001/frozen-current-v10-identity.json` · `PCC_PYTHON_IR_PASSES=off` · `PCC_GC_REFCOUNT_PROVENANCE_PROBE=2` · `runtime-v10/libpy_runtime_pcc_py.a`
 - [Investigation: deep dotted package attribute access `a.b.c.X` raises AttributeError (no-libpython)](../investigations/python-deep-dotted-package-attr-no-libpython.md) — **resolved 2026-05-31 — fix landed in `_native_module_expr_export_info`**
   - `a.b.c.X` · `_native_module_expr_export_info` · `tests/python/test_native_package_deep_dotted_attr.py` · `import a.b.c; a.b.c.X` · `AttributeError: b` · `--backend self --python-libpython=off`
 - [Investigation: default GC should collect closure capture cycles](../investigations/gc-default-closure-cycle-capture.md) — **resolved**

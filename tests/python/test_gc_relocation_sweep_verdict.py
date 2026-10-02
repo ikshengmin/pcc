@@ -260,7 +260,7 @@ def test_source_sweep_verdict_clears_only_after_forwarding_commit() -> None:
     repo = Path(__file__).absolute().parents[2]
 
     py_source = (
-        repo / "pcc/py_runtime/py/freestanding_gc_relocation_copy.py"
+        repo / "pcc/runtime/py/freestanding_gc_relocation_copy.py"
     ).read_text(encoding="utf-8")
     py_body = py_source.split(
         "def pcc_gc_backend4_relocate_copy_preallocated_unlocked(", 1

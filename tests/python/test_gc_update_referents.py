@@ -20,7 +20,7 @@ from pathlib import Path
 from tests.runtime_build_cache import cached_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 STRICT_OBJECT_SLOTS = RUNTIME_DIR / "py" / "freestanding_gc_object_slots.py"
 STRICT_BACKEND0_SLOTS = (
     RUNTIME_DIR / "py" / "freestanding_gc_backend0_slots.py"
@@ -140,7 +140,7 @@ def test_pyclass_layout_matches_pcc_python_mirror(tmp_path):
     # was deliberately removed, and the test kept requiring it.  Reading the
     # generated constants checks the same invariant (port offsets equal C
     # offsets) against the artifact that is actually authoritative.
-    from pcc.py_runtime.py import py_abi_constants as abi
+    from pcc.runtime.py import py_abi_constants as abi
 
     mirror_layout = {
         "class.size": abi.PYCLASSOBJECT_SIZE,
@@ -855,7 +855,7 @@ def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
     # The header offset moved from a literal 12 to PYOBJECTHEADER_FLAGS_OFFSET;
     # slice on the assignment target, which survives both spellings, and pin the
     # constant's value separately so the offset itself is still checked.
-    from pcc.py_runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET
+    from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET
 
     assert PYOBJECTHEADER_FLAGS_OFFSET == 12
     py_del_body = dunder_py[
@@ -1127,7 +1127,7 @@ def test_unreachable_file_uses_file_deallocator_in_c_and_python_mirror():
     # The dispatch moved from literal tags to abi_constant("object.type.*").
     # Slice on the named form and pin the tag's numeric value separately, so a
     # renamed-but-correct spelling passes while a wrong tag still fails.
-    from pcc.py_runtime.py.py_abi_constants import PY_TYPE_FILE
+    from pcc.runtime.py.py_abi_constants import PY_TYPE_FILE
 
     assert PY_TYPE_FILE == 13
     file_case = py_body.split(

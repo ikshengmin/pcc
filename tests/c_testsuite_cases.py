@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.project import TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.driver.project import TranslationUnit
 from tests.worker_process import run_worker_process
 
 DEFAULT_TIMEOUT = 10

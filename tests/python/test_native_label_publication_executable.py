@@ -72,7 +72,7 @@ run(int(sys.argv[1]))
 
 
 def test_native_label_publication_preserves_offsets_and_errors(tmp_path):
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     archive_name = os.environ.get("PCC_RUNTIME_ARCHIVE")
     if not archive_name:

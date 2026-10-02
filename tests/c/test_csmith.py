@@ -23,10 +23,10 @@ from pathlib import Path
 
 import pytest
 
-from pcc.dependency_verdict import probe_executable_dependency
+from pcc.diagnostics.dependency_verdict import probe_executable_dependency
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.project import TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.driver.project import TranslationUnit
 from tests.worker_process import run_worker_process
 
 # ---------------------------------------------------------------------------

@@ -475,6 +475,7 @@ def _build_definitions(
                 )
             elif (
                 kind_id == PARSED_INSTRUCTION_KIND_LOAD
+                or (kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC and payload_id >= 0)
                 or kind_id == PARSED_INSTRUCTION_KIND_BINOP
                 or kind_id == PARSED_INSTRUCTION_KIND_ICMP
                 or kind_id == PARSED_INSTRUCTION_KIND_CAST
@@ -485,6 +486,7 @@ def _build_definitions(
                 )
                 if (
                     kind_id == PARSED_INSTRUCTION_KIND_LOAD
+                    or kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC
                     or kind_id == PARSED_INSTRUCTION_KIND_SELECT
                 ):
                     result_type_id = record.first
@@ -654,7 +656,7 @@ def _verify_instruction_types_parts(
             _fail("operand-type", func, f"{context} address type is not a pointer")
         _require_local_type(func, definitions, ptr, ptr_type, context=context)
     elif kind == "store_atomic":
-        value_type, value, ptr_type, ptr, _ordering = data
+        value_type, value, ptr_type, ptr, _ordering = data[:5]
         if not ptr_type.is_ptr:
             _fail("operand-type", func, f"{context} address type is not a pointer")
         _require_local_type(func, definitions, value, value_type, context=context)
@@ -926,10 +928,10 @@ def _verify_fixed_instruction_types_indexed(
     kind_id: int,
     record_id: int,
 ) -> None:
-    if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
-        kind_name = "load"
-    elif kind_id == PARSED_INSTRUCTION_KIND_STORE:
-        kind_name = "store"
+    if kind_id in (PARSED_INSTRUCTION_KIND_LOAD, PARSED_INSTRUCTION_KIND_LOAD_ATOMIC):
+        kind_name = "load_atomic" if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC else "load"
+    elif kind_id in (PARSED_INSTRUCTION_KIND_STORE, PARSED_INSTRUCTION_KIND_STORE_ATOMIC):
+        kind_name = "store_atomic" if kind_id == PARSED_INSTRUCTION_KIND_STORE_ATOMIC else "store"
     elif kind_id == PARSED_INSTRUCTION_KIND_BINOP:
         kind_name = "binop"
     elif kind_id == PARSED_INSTRUCTION_KIND_ICMP:
@@ -940,8 +942,18 @@ def _verify_fixed_instruction_types_indexed(
         kind_name = "select"
     context = f"{block_name!r}/{kind_name}"
     raw: CompilerInt4 = kernel.instruction_record(record_id)
+    if kind_id in (PARSED_INSTRUCTION_KIND_LOAD_ATOMIC, PARSED_INSTRUCTION_KIND_STORE_ATOMIC):
+        if record_id < 0 or (record_id + 2) * 4 > len(kernel.instruction_record_scalars):
+            _fail("atomic-metadata", func, f"{context} atomic memory metadata is missing")
+        atomic: CompilerInt4 = kernel.instruction_record(record_id + 1)
+        if atomic.first < 0 or atomic.first >= len(kernel.call_texts):
+            _fail("atomic-metadata", func, f"{context} atomic ordering is invalid")
+        ordering = kernel.call_texts[atomic.first]
+        allowed = ("unordered", "monotonic", "acquire", "seq_cst") if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC else ("unordered", "monotonic", "release", "seq_cst")
+        if ordering not in allowed or atomic.second < 0 or atomic.second & (atomic.second - 1):
+            _fail("atomic-metadata", func, f"{context} atomic ordering/alignment is invalid")
 
-    if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
+    if kind_id in (PARSED_INSTRUCTION_KIND_LOAD, PARSED_INSTRUCTION_KIND_LOAD_ATOMIC):
         ptr_type_id = raw.second
         ptr_type: CompilerInt4 = kernel.type_header(ptr_type_id)
         if ptr_type.first != TYPE_KIND_PTR:
@@ -956,7 +968,7 @@ def _verify_fixed_instruction_types_indexed(
         )
         return
 
-    if kind_id == PARSED_INSTRUCTION_KIND_STORE:
+    if kind_id in (PARSED_INSTRUCTION_KIND_STORE, PARSED_INSTRUCTION_KIND_STORE_ATOMIC):
         value_type_id = raw.first
         ptr_type_id = raw.third
         ptr_type: CompilerInt4 = kernel.type_header(ptr_type_id)
@@ -1089,7 +1101,9 @@ def _verify_ordinary_uses(
                 )
             elif (
                 kind_id == PARSED_INSTRUCTION_KIND_LOAD
+                or (kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC and payload_id >= 0)
                 or kind_id == PARSED_INSTRUCTION_KIND_STORE
+                or (kind_id == PARSED_INSTRUCTION_KIND_STORE_ATOMIC and payload_id >= 0)
                 or kind_id == PARSED_INSTRUCTION_KIND_BINOP
                 or kind_id == PARSED_INSTRUCTION_KIND_ICMP
                 or kind_id == PARSED_INSTRUCTION_KIND_CAST

@@ -76,10 +76,10 @@ def test_obj_compare_boxed_float_no_libpython(tmp_path):
 
 
 def test_runtime_object_comparison_has_one_behavior_owner():
-    from pcc.py_frontend.codegen.compare_membership_lowering import (
+    from pcc.frontends.python.codegen.compare_membership_lowering import (
         CompareMembershipLoweringMixin,
     )
-    from pcc.py_frontend.codegen.host_contract import L1_CODEGEN_HOST_METHODS
+    from pcc.frontends.python.codegen.host_contract import L1_CODEGEN_HOST_METHODS
 
     owner_source = textwrap.dedent(
         inspect.getsource(CompareMembershipLoweringMixin._emit_runtime_object_compare)

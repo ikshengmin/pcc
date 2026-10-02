@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend.codegen.runtime_abi import (
+from pcc.frontends.python import pipeline
+from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_RUNTIME_GLOBALS,
     RUNTIME_SIGNATURES,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 ROOT_OPS_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_root_operations.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 PIN_CALLER_SOURCE = RUNTIME_DIR / "py" / "py_obj.py"
@@ -301,10 +301,10 @@ def _link_harness(tmp_path: Path, name: str, source_text: str, archive: Path) ->
 
 
 def test_archive_owns_root_operations_and_executes_semantics(
-    tmp_path: Path, pcc_py_runtime_archive: Path
+    tmp_path: Path, pcc_runtime_archive: Path
 ):
     symbols_result = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_py_runtime_archive)],
+        ["nm", "-A", "-g", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -325,7 +325,7 @@ def test_archive_owns_root_operations_and_executes_semantics(
         tmp_path,
         "root_operations_pcc_python",
         _root_operations_harness_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
     )
     result = subprocess.run(
         [str(executable)], capture_output=True, text=True, timeout=30
@@ -335,13 +335,13 @@ def test_archive_owns_root_operations_and_executes_semantics(
 
 
 def test_gray_counter_survives_threaded_increment_decrement(
-    tmp_path: Path, pcc_py_runtime_archive: Path
+    tmp_path: Path, pcc_runtime_archive: Path
 ):
     executable = _link_harness(
         tmp_path,
         "root_operations_counter_threads",
         _counter_thread_harness_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
     )
     result = subprocess.run(
         [str(executable)], capture_output=True, text=True, timeout=30
@@ -352,13 +352,13 @@ def test_gray_counter_survives_threaded_increment_decrement(
 
 def test_strict_gc3_known_object_gate_executes_deallocating_rejection(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     executable = _link_harness(
         tmp_path,
         "root_operations_gc3_deallocating",
         _gc3_deallocating_known_harness_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
     )
     result = subprocess.run(
         [str(executable)], capture_output=True, text=True, timeout=30

@@ -3,7 +3,7 @@
 Before this, a statically typed ``b"".join(chunks)`` compiled but raised
 ``AttributeError: join`` at runtime inside a pcc1 worker (the self-backend
 assembler's chunks-plus-join replacement for quadratic ``bytearray +=``
-first hit it; pcc/py_stdlib zlib/lzma/bz2/hashlib use the same idiom).
+first hit it; pcc/stdlib zlib/lzma/bz2/hashlib use the same idiom).
 
 Added ``py_bytes_join`` in BOTH tiers (cc ``src/py_bytes.c`` + pcc-Python port
 ``py/py_obj_stubs.py``), the header/ABI entries, and a typed frontend branch
@@ -50,7 +50,7 @@ PROGRAM = textwrap.dedent("""
 
 
 def _compile(tmp_path, monkeypatch, runtime_cc):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "bj.py"
     exe = tmp_path / "bj.out"

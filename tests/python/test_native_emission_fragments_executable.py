@@ -89,7 +89,7 @@ def test_host_built_native_fragments_execute_reload_helpers(tmp_path):
         store_reg_to_slot_parts,
     )
     from pcc.backend.self_backend_ir import TypeDesc
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     archive_name = os.environ.get("PCC_RUNTIME_ARCHIVE")
     if not archive_name:

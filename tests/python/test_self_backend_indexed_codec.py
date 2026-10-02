@@ -17,7 +17,7 @@ from pcc.backend.self_backend_indexed_emit import emit_indexed_module_file
 from pcc.backend.self_backend_kernel import get_indexed_function_kernel
 from pcc.backend.arm64_asm_driver import assemble_file
 from pcc.backend.native_object import encode_native_object_from_sections
-from pcc.llvm_capi import ir
+from pcc.ir import ir
 
 
 def _arena_values(kernel, field: str):
@@ -362,7 +362,7 @@ def test_indexed_restore_handles_a_zero_value_function(tmp_path, monkeypatch):
 
 @pytest.mark.integration
 def test_restored_value_arenas_survive_native_collection_and_roundtrip(
-    tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive,
+    tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive,
 ):
     import os
     import subprocess
@@ -420,7 +420,7 @@ main()
     binary = tmp_path / "restore_native"
     monkeypatch.chdir(snapshot)
     python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
-                            runtime_archive=str(pcc_py_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         restored = tmp_path / ("restored-" + str(backend) + ".pidx")
         ran = subprocess.run([str(binary), str(sidecar), str(restored)],

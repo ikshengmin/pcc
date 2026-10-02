@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
+from pcc.frontends.python import pipeline
 
 
 def _compile_probe(tmp_path: Path) -> str:
@@ -121,7 +121,7 @@ def _compile_platform_guarded_loader_probe(tmp_path: Path) -> str:
 def test_dynamic_loader_platform_guard_links_without_non_target_imports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pcc.py_frontend.codegen.unsafe_lowering import UnsafeIntrinsicMixin
+    from pcc.frontends.python.codegen.unsafe_lowering import UnsafeIntrinsicMixin
 
     monkeypatch.setattr(
         UnsafeIntrinsicMixin,

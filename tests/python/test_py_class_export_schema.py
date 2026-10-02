@@ -48,7 +48,7 @@ def _direct_self_init_field_index(
 
 
 def test_class_method_registration_uses_stable_function_ref(tmp_path, monkeypatch):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     src = tmp_path / "method_ref.py"
@@ -94,7 +94,7 @@ def test_class_method_registration_uses_stable_function_ref(tmp_path, monkeypatc
 
 
 def test_pcc_cross_module_class_schema_matches_local_layout(tmp_path):
-    from pcc.py_frontend.pipeline import (
+    from pcc.frontends.python.pipeline import (
         _collect_relative_module_closure,
         _filter_ir_scaffold_closure,
         compile_python_multi,
@@ -122,7 +122,7 @@ def test_pcc_cross_module_class_schema_matches_local_layout(tmp_path):
     text = out.read_text(encoding="utf-8")
     body = re.search(
         r"define\s+(?:external\s+)?void\s+"
-        r"@user_pcc_py_frontend_codegen_class_gen_ClassLowering__emit_method_body"
+        r"@user_pcc_frontends_python_codegen_class_gen_ClassLowering__emit_method_body"
         r"\([^)]*\)[^{]*\{(?P<body>.*?)\n\}",
         text,
         re.DOTALL,

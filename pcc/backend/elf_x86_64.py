@@ -716,6 +716,10 @@ def read_archive_payloads(data: bytes) -> list[tuple[str, bytes]]:
             name = gnu_names[name_offset:name_end].decode("utf-8", "surrogateescape")
         else:
             name = raw_name.rstrip(b"/").decode("utf-8", "surrogateescape")
+        # BSD extended names encode the symbol index name in the payload;
+        # filtering only the header spelling treats ranlib data as an object.
+        if name.startswith("__.SYMDEF"):
+            continue
         pending.append((name, payload))
 
     return pending

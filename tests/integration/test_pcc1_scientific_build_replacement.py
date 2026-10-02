@@ -253,8 +253,8 @@ def _assert_no_package_name_mechanism_branch() -> None:
     """Keep the mechanism generic without rejecting package-owned source."""
     roots = (
         ROOT / "pcc" / "package",
-        ROOT / "pcc" / "py_frontend",
-        ROOT / "pcc" / "py_runtime" / "py",
+        ROOT / "pcc" / "frontends" / "python",
+        ROOT / "pcc" / "runtime" / "py",
     )
     forbidden: list[str] = []
     for root in roots:
@@ -582,7 +582,7 @@ def _write_report(path: Path, report: dict[str, object]) -> None:
 
 def test_current_pcc1_replaces_cpython_for_frozen_scientific_build_corpus(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     assert NUMPY_SOURCE.is_dir(), f"missing pinned NumPy source: {NUMPY_SOURCE}"
     assert _tree_sha256(NUMPY_SOURCE) == NUMPY_TREE_SHA256
@@ -608,7 +608,7 @@ def test_current_pcc1_replaces_cpython_for_frozen_scientific_build_corpus(
     cache = package_root / "cache"
     install_env, forbidden_log = _hostless_env(
         package_root,
-        runtime_archive=pcc_py_runtime_archive,
+        runtime_archive=pcc_runtime_archive,
     )
     numpy_manifest = _install_owned(
         pcc1,
@@ -653,7 +653,7 @@ def test_current_pcc1_replaces_cpython_for_frozen_scientific_build_corpus(
     compile_root.mkdir()
     compile_env, compile_forbidden_log = _hostless_env(
         compile_root,
-        runtime_archive=pcc_py_runtime_archive,
+        runtime_archive=pcc_runtime_archive,
         package_site=site,
     )
     executable = compile_root / "level2-app"
@@ -686,7 +686,7 @@ def test_current_pcc1_replaces_cpython_for_frozen_scientific_build_corpus(
         run_root.mkdir()
         run_env, run_forbidden_log = _hostless_env(
             run_root,
-            runtime_archive=pcc_py_runtime_archive,
+            runtime_archive=pcc_runtime_archive,
         )
         run_env["PCC_GC_BACKEND"] = str(backend)
         ran, measurement = _run_measured(

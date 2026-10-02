@@ -182,7 +182,7 @@ def _compile_host(
     *,
     emit_llvm_only: bool = False,
 ) -> Path:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     source = tmp_path / f"{name}.py"
     output = tmp_path / (f"{name}.ll" if emit_llvm_only else name)
@@ -198,9 +198,9 @@ def _compile_host(
 
 
 def test_closed_world_analysis_propagates_may_park_to_all_direct_callers() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.native_modules import _is_virtual_thread_export
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.native_modules import _is_virtual_thread_export
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         classify_vthread_park_boundaries,
         compute_vthread_may_park_functions,
     )
@@ -276,8 +276,8 @@ def local_import_caller() -> None:
 
 
 def test_dynamic_callback_adapter_is_an_explicit_may_park_effect_root() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         compute_vthread_may_park_functions,
     )
 
@@ -289,8 +289,8 @@ def test_dynamic_callback_adapter_is_an_explicit_may_park_effect_root() -> None:
 
 
 def test_dynamic_callback_from_import_is_a_native_effect_alias() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         compute_vthread_may_park_functions,
     )
 
@@ -307,8 +307,8 @@ def dispatch(callback, value):
 
 
 def test_nonparking_from_import_aliases_resolve_without_becoming_effect_roots() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         compute_vthread_may_park_functions,
         vthread_proven_value_alias,
     )
@@ -370,7 +370,7 @@ def test_dynamic_callback_ir_uses_distinct_may_park_generator_marker(
 
 
 def test_generator_close_reloads_gc4_roots_across_cleanup_safepoints() -> None:
-    py_source = (REPO / "pcc" / "py_runtime" / "py" / "py_gen.py").read_text(
+    py_source = (REPO / "pcc" / "runtime" / "py" / "py_gen.py").read_text(
         encoding="utf-8"
     )
 
@@ -399,8 +399,8 @@ def test_dynamic_callback_delegates_parking_but_preserves_plain_generator(
 
 
 def test_closed_world_metadata_propagates_across_compiled_sibling_imports() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         annotate_closed_world_vthread_effects,
         compute_vthread_may_park_functions,
     )
@@ -444,8 +444,8 @@ def test_closed_world_metadata_propagates_across_compiled_sibling_imports() -> N
 def test_summary_metadata_matches_eager_across_compiled_siblings(
     tmp_path: Path,
 ) -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         annotate_closed_world_vthread_effect_summaries,
         annotate_closed_world_vthread_effects,
         build_closed_world_vthread_effect_summary,
@@ -503,8 +503,8 @@ def test_summary_metadata_matches_eager_across_compiled_siblings(
 
 
 def test_summary_duplicate_definition_uses_last_binding(tmp_path: Path) -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         annotate_closed_world_vthread_effect_summaries,
         annotate_closed_world_vthread_effects,
         build_closed_world_vthread_effect_summary,
@@ -555,8 +555,8 @@ def caller() -> int:
 
 
 def test_closed_world_metadata_publishes_compiled_sibling_method_effect() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         annotate_closed_world_vthread_effects,
     )
 
@@ -598,8 +598,8 @@ def test_closed_world_metadata_publishes_compiled_sibling_method_effect() -> Non
 
 
 def test_eager_closed_world_effect_is_deterministic_across_fresh_asts() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         annotate_closed_world_vthread_effects,
     )
 
@@ -643,7 +643,7 @@ def test_eager_closed_world_effect_is_deterministic_across_fresh_asts() -> None:
 def test_closed_world_effects_follow_package_reexported_function_and_class(
     tmp_path: Path,
 ) -> None:
-    from pcc.py_frontend.pipeline_context import build_closed_world_context
+    from pcc.frontends.python.pipeline_context import build_closed_world_context
 
     package = tmp_path / "park_api"
     package.mkdir()
@@ -684,8 +684,8 @@ def test_closed_world_effects_follow_package_reexported_function_and_class(
 
 
 def test_user_method_parking_boundary_is_rejected_not_guessed_resumable() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         classify_vthread_park_boundaries,
         compute_vthread_may_park_functions,
     )
@@ -715,8 +715,8 @@ def dynamic_entry(worker) -> None:
 
 
 def test_concrete_local_method_chain_joins_closed_world_may_park_fixed_point() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         classify_vthread_park_boundaries,
         compute_vthread_may_park_functions,
         compute_vthread_may_park_methods,
@@ -740,8 +740,8 @@ def test_concrete_local_method_chain_joins_closed_world_may_park_fixed_point() -
 def test_joint_callable_analysis_scans_threading_hints_once_per_function(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen import vthread_effect_analysis as analysis
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen import vthread_effect_analysis as analysis
 
     methods = [
         "    def setup(self) -> None:\n"
@@ -783,8 +783,8 @@ def test_joint_callable_analysis_scans_threading_hints_once_per_function(
 def test_callable_compute_and_classify_are_deterministic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen import vthread_effect_analysis as analysis
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen import vthread_effect_analysis as analysis
 
     module = parse(
         '''import pcc.virtual_thread as vt
@@ -848,8 +848,8 @@ class Worker:
 def test_suspension_call_proof_reuses_one_lexical_binding_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen import vthread_effect_analysis as analysis
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen import vthread_effect_analysis as analysis
 
     module = parse(
         '''import pcc.virtual_thread as vt
@@ -882,10 +882,10 @@ def worker() -> None:
 
 
 def test_effect_scope_walk_does_not_descend_into_semantic_type_metadata() -> None:
-    from pcc.parse.py_lift import parse_and_lift
-    from pcc.py_frontend.py_ast import Type
-    from pcc.py_frontend.type_infer import infer_module
-    from pcc.py_frontend.codegen import vthread_effect_analysis as analysis
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.py_ast import Type
+    from pcc.frontends.python.type_infer import infer_module
+    from pcc.frontends.python.codegen import vthread_effect_analysis as analysis
 
     module = infer_module(
         parse_and_lift(
@@ -904,9 +904,9 @@ def test_effect_scope_walk_does_not_descend_into_semantic_type_metadata() -> Non
 
 
 def test_dynamic_receiver_inside_may_park_method_is_rejected_fail_closed() -> None:
-    from pcc.parse.py_lift import parse_and_lift
-    from pcc.py_frontend.type_infer import infer_module
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.type_infer import infer_module
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         classify_vthread_park_boundaries,
         compute_vthread_may_park_functions,
         compute_vthread_may_park_methods,
@@ -950,8 +950,8 @@ def handler(worker: Worker, dynamic_worker) -> None:
 
 
 def test_implicit_dunder_may_park_dispatch_is_rejected_fail_closed() -> None:
-    from pcc.py_frontend.parser import parse
-    from pcc.py_frontend.codegen.vthread_effect_analysis import (
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen.vthread_effect_analysis import (
         classify_vthread_park_boundaries,
         compute_vthread_may_park_functions,
         compute_vthread_may_park_methods,
@@ -1086,7 +1086,7 @@ def test_cross_module_may_park_uses_generator_abi_and_resumes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     leaf = tmp_path / "park_effect_leaf.py"
     main = tmp_path / "park_effect_main.py"
@@ -1115,7 +1115,7 @@ def test_cross_module_may_park_method_uses_generator_abi_and_resumes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     leaf = tmp_path / "park_method_leaf.py"
     main = tmp_path / "park_method_main.py"
@@ -1149,7 +1149,7 @@ def test_parallel_cross_shard_two_init_reexports_preserve_function_and_method_ab
     # The effect fixed point owns AST transport; correctness cannot depend on
     # the historical performance opt-in being set by the caller.
     monkeypatch.delenv("PCC_PY_FRONTEND_AST_WIRE", raising=False)
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     package = tmp_path / "park_api"
     inner = package / "inner"
@@ -1236,7 +1236,7 @@ def test_parallel_cross_shard_two_init_reexports_preserve_function_and_method_ab
         entry_module="entry",
         ir_scaffold_mode="on",
         libpython_mode="off",
-        backend="llvm",
+        backend="self",
     )
     ran = subprocess.run(
         [str(executable)],
@@ -1251,7 +1251,7 @@ def test_parallel_cross_shard_two_init_reexports_preserve_function_and_method_ab
 @pytest.mark.integration
 def test_current_pcc1_self_no_libpython_transitive_park_resume(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     """The compiler under test is current pcc1, never host ``uv run pcc``."""
     pcc1 = find_current_pcc1(REPO)
@@ -1263,7 +1263,7 @@ def test_current_pcc1_self_no_libpython_transitive_park_resume(
     source.write_text(TRANSITIVE_SOURCE, encoding="utf-8")
     env = dict(os.environ)
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_ARCHIVE"] = str(pcc_py_runtime_archive)
+    env["PCC_RUNTIME_ARCHIVE"] = str(pcc_runtime_archive)
     built = subprocess.run(
         [
             str(pcc1),
@@ -1298,7 +1298,7 @@ def test_current_pcc1_self_no_libpython_transitive_park_resume(
 @pytest.mark.parametrize("gc_backend", ("0", "1", "2", "3", "4"))
 def test_current_pcc1_self_no_libpython_method_park_resume(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
     gc_backend: str,
 ) -> None:
     pcc1 = find_current_pcc1(REPO)
@@ -1310,7 +1310,7 @@ def test_current_pcc1_self_no_libpython_method_park_resume(
     source.write_text(METHOD_SOURCE, encoding="utf-8")
     env = dict(os.environ)
     env.pop("LC_ALL", None)
-    env["PCC_RUNTIME_ARCHIVE"] = str(pcc_py_runtime_archive)
+    env["PCC_RUNTIME_ARCHIVE"] = str(pcc_runtime_archive)
     env["PCC_GC_BACKEND"] = gc_backend
     built = subprocess.run(
         [

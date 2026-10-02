@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
+from pcc.frontends.python import pipeline
+from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 STRICT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_forwarding_retirement.py"
 STRICT_PAYLOAD_SOURCE = (
     RUNTIME_DIR / "py" / "freestanding_gc_relocation_payload.py"
@@ -25,7 +25,7 @@ STRICT_DISPATCHER_SOURCE = (
 STRICT_IDENTITY_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_forwarding_identity.py"
 STRICT_OBJECT_NODES_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_object_nodes.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
-RUNTIME_ABI_SOURCE = REPO_ROOT / "pcc" / "py_frontend" / "codegen" / "runtime_abi.py"
+RUNTIME_ABI_SOURCE = REPO_ROOT / "pcc" / "frontends" / "python" / "codegen" / "runtime_abi.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
@@ -656,10 +656,10 @@ def test_source_death_defers_live_target_decref_after_graph_unlock() -> None:
 
 
 def test_production_archive_has_one_forwarding_retirement_owner(
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     symbols_result = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_py_runtime_archive)],
+        ["nm", "-A", "-g", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -971,9 +971,9 @@ def _link_source_death_target_finish_probe(
 
 def test_target_death_payload_finish_handles_owned_self_reference(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
-    archive = pcc_py_runtime_archive
+    archive = pcc_runtime_archive
     executable = _link_target_death_payload_probe(
         tmp_path, "target_death_payload_pcc_python", archive
     )
@@ -991,9 +991,9 @@ def test_target_death_payload_finish_handles_owned_self_reference(
 
 def test_source_death_finish_handles_last_owned_target_after_detach(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
-    archive = pcc_py_runtime_archive
+    archive = pcc_runtime_archive
     executable = _link_source_death_target_finish_probe(
         tmp_path, "source_death_target_pcc_python", archive
     )
@@ -1011,10 +1011,10 @@ def test_source_death_finish_handles_last_owned_target_after_detach(
 
 def test_forwarding_retirement_across_three_remap_epochs(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     implementation = _link_forwarding_retirement_probe(
-        tmp_path, "forwarding_retirement_pcc_python", pcc_py_runtime_archive
+        tmp_path, "forwarding_retirement_pcc_python", pcc_runtime_archive
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30

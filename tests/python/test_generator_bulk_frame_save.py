@@ -6,7 +6,7 @@ import subprocess
 
 
 def test_rejected_bulk_save_stays_out_of_application_codegen(tmp_path, monkeypatch):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     monkeypatch.setenv("PCC_MOVE_GENERATOR_FRAME_OWNERS", "0")
 
@@ -35,8 +35,8 @@ print(next(iterator))
     assert calls == [0, 0], "the rejected experiment must not alter application codegen"
 
 
-def test_bulk_save_keeps_aliases_and_falls_back_without_mutation(tmp_path, pcc_py_runtime_archive):
-    archive = pcc_py_runtime_archive
+def test_bulk_save_keeps_aliases_and_falls_back_without_mutation(tmp_path, pcc_runtime_archive):
+    archive = pcc_runtime_archive
     root = Path(__file__).resolve().parents[2]
     source = tmp_path / "bulk_save.c"
     source.write_text('''#include "py_runtime.h"
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
 }
 ''')
     executable = tmp_path / "bulk_save"
-    built = subprocess.run(["clang", "-I" + str(root / "pcc/py_runtime/include"),
+    built = subprocess.run(["clang", "-I" + str(root / "pcc/runtime/include"),
         str(source), str(archive), "-pthread", "-o", str(executable)],
         capture_output=True, text=True, timeout=30)
     assert built.returncode == 0, built.stdout + built.stderr

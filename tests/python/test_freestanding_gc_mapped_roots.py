@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend.codegen.runtime_abi import (
+from pcc.frontends.python import pipeline
+from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_RUNTIME_GLOBALS,
     RUNTIME_SIGNATURES,
 )
-from pcc.py_frontend.codegen.freestanding_abi_constants import ABI_CONSTANTS
+from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
 from pcc.backend import precise_stackmap
 from pcc.backend.precise_stackmap import (
     ARCH_AARCH64,
@@ -33,7 +33,7 @@ from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 MAPPED_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_mapped_roots.py"
 ROOT_OPS_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_root_operations.py"
 PROMOTION_SOURCE = (
@@ -498,10 +498,10 @@ def _run_ok(implementation: Path, env: dict[str, str]) -> str:
 
 def test_archive_owns_mapped_visitor_gc0_to_gc4(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     symbols_result = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_py_runtime_archive)],
+        ["nm", "-A", "-g", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -524,7 +524,7 @@ def test_archive_owns_mapped_visitor_gc0_to_gc4(
         tmp_path,
         "mapped_pcc_python",
         _mapped_harness_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
     )
     for backend in range(5):
         output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
@@ -533,13 +533,13 @@ def test_archive_owns_mapped_visitor_gc0_to_gc4(
 
 def test_backend4_precise_stackmap_consumer_rewrites_exact_frame_location(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     implementation = _link_harness(
         tmp_path,
         "precise_stackmap_pcc_python",
         _precise_stackmap_harness_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
     )
     result = subprocess.run(
         [str(implementation)],
@@ -554,7 +554,7 @@ def test_backend4_precise_stackmap_consumer_rewrites_exact_frame_location(
         tmp_path,
         "mapped_relocation_pcc_python",
         _relocation_harness_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
     )
     assert _run_ok(relocation_implementation, dict(os.environ)) == "relocate:1,1,1,1\n"
 
@@ -562,7 +562,7 @@ def test_backend4_precise_stackmap_consumer_rewrites_exact_frame_location(
         tmp_path,
         "mapped_registered_scan_pcc_python",
         _registered_scan_harness_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
     )
     registered_result = subprocess.run(
         [str(registered_scan)], capture_output=True, text=True, timeout=30

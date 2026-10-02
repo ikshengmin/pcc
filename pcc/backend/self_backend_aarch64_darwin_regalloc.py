@@ -68,6 +68,7 @@ from .self_backend_ir import (
     PARSED_INSTRUCTION_KIND_GEP,
     PARSED_INSTRUCTION_KIND_ICMP,
     PARSED_INSTRUCTION_KIND_LOAD,
+    PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
     PARSED_INSTRUCTION_KIND_RET,
     PARSED_INSTRUCTION_KIND_RET_VOID,
     PARSED_INSTRUCTION_KIND_SELECT,
@@ -88,7 +89,7 @@ from .self_backend_target_passes import (
     AArch64MaddFusion,
     aarch64_madd_fusion_for_product,
 )
-from .self_backend_value_arena import CompilerInt3, CompilerInt4
+from .self_backend_value_arena import CompilerInt2, CompilerInt3, CompilerInt4
 
 
 _REGISTER_POOL = (1, 2, 3, 4, 5, 6, 7, 8)
@@ -1181,7 +1182,8 @@ def _is_frameless_leaf(func: ParsedFunction, kernel) -> bool:
         header: CompilerInt4 = kernel.terminator_header(block_id)
         if header.first not in _FRAMELESS_TERMINATOR_KIND_IDS:
             return False
-        if kernel.inline_error_edge_span(block_id).second:
+        error_edge_span: CompilerInt2 = kernel.inline_error_edge_span(block_id)
+        if error_edge_span.second:
             return False
         phi_fact = kernel.block_phi_fact(block_id)
         phi_index = 0
@@ -1424,6 +1426,10 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 is_call_result = True
             if is_call_result:
                 pass
+            elif kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
+                # Atomic loads remain outside this allocator's existing
+                # candidate set. Their fixed record needs no diagnostic row.
+                value_type_id = -1
             elif (
                 kind_id == PARSED_INSTRUCTION_KIND_LOAD
                 or kind_id == PARSED_INSTRUCTION_KIND_BINOP

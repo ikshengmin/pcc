@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def test_cross_module_valueclass_method_keeps_direct_aggregate_abi(tmp_path) -> None:
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     provider = tmp_path / "provider.py"
     consumer = tmp_path / "consumer.py"
@@ -100,7 +100,7 @@ def pick(source: Source) -> int:
 def test_imported_valueclass_return_annotation_keeps_aggregate_abi(
     tmp_path,
 ) -> None:
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     records = tmp_path / "records.py"
     provider = tmp_path / "provider.py"
@@ -170,7 +170,7 @@ def pick(source: Source) -> int:
 
 
 def test_imported_valueclass_parameter_keeps_aggregate_abi(tmp_path) -> None:
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     records = tmp_path / "records.py"
     consumer = tmp_path / "consumer.py"
@@ -252,7 +252,7 @@ def use_span() -> int:
 def test_relative_imported_valueclass_return_keeps_aggregate_abi(
     tmp_path,
 ) -> None:
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     package = tmp_path / "pkg"
     package.mkdir()
@@ -326,7 +326,7 @@ def pick(source: Source) -> int:
 def test_valueclass_attribute_keeps_projection_in_class_constructor_argument(
     tmp_path,
 ) -> None:
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     package = tmp_path / "pkg"
     package.mkdir()

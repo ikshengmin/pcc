@@ -7,17 +7,11 @@ import pytest
 
 from pcc.backend.self_backend_dispatch import emit_self_asm
 from pcc.backend.self_backend_targets import classify_self_backend_target_triple
-from pcc.llvm_capi import binding as llvm
+from pcc.frontends.python.pipeline_targets import host_target_triple
 from tests.c_testsuite_cases import PccCompileResult, _host_cc, subprocess_env
 from tests.self_backend_c_testsuite_common import assert_result_triplet_matches
 
 pytestmark = pytest.mark.xdist_group(name="llvm_self_vector_parity")
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _init_llvm() -> None:
-    llvm.initialize_native_target()
-    llvm.initialize_native_asmprinter()
 
 
 INT_VECTOR_IR = """
@@ -66,7 +60,7 @@ entry:
 
 
 def _host_triple() -> str:
-    return llvm.Target.from_default_triple().triple
+    return host_target_triple()
 
 
 def _ensure_target_triple(ir_text: str, triple: str) -> str:

@@ -33,7 +33,7 @@ def test_receipt_pcc1_executes_current_native_text_buffer(tmp_path, monkeypatch)
         "pcc/backend/self_backend_precise_stackmaps.py",
         "pcc/backend/self_backend_target_passes.py",
         "pcc/backend/self_backend_indexed_emit.py",
-        "pcc/py_frontend/pipeline_frontend_worker_execution.py",
+        "pcc/frontends/python/pipeline_frontend_worker_execution.py",
     ):
         assert source_manifest["files"][relative] == hashlib.sha256(
             (repo / relative).read_bytes()

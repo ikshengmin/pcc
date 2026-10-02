@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from pcc.py_frontend.codegen import layer1_support
-from pcc.py_frontend.codegen.self_module_contracts import (
+from pcc.frontends.python.codegen import layer1_support
+from pcc.frontends.python.codegen.self_module_contracts import (
     IR_SCAFFOLD_CONTRACT,
     L1_CODEGEN_HOST_ATTR_CONTRACT,
     PY_AST_FIELD_ORDER_CONTRACT,
@@ -17,15 +17,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_self_module_capabilities_are_declared_as_registry_data():
     assert module_has_contract(
-        "pcc.py_frontend.codegen.runtime_abi",
+        "pcc.frontends.python.codegen.runtime_abi",
         IR_SCAFFOLD_CONTRACT,
     )
     assert module_has_contract(
-        "pcc.py_frontend.codegen.layer1",
+        "pcc.frontends.python.codegen.layer1",
         L1_CODEGEN_HOST_ATTR_CONTRACT,
     )
     assert module_has_contract(
-        "pcc.py_frontend.py_ast",
+        "pcc.frontends.python.py_ast",
         PY_AST_FIELD_ORDER_CONTRACT,
     )
     assert not module_has_contract("third_party.module", IR_SCAFFOLD_CONTRACT)
@@ -33,9 +33,9 @@ def test_self_module_capabilities_are_declared_as_registry_data():
 
 def test_extern_class_symbol_resolves_through_the_same_contract_registry():
     assert module_for_class_symbol_contract(
-        ".class.pcc_py_frontend_py_ast.IntType",
+        ".class.pcc_frontends_python_py_ast.IntType",
         PY_AST_FIELD_ORDER_CONTRACT,
-    ) == "pcc.py_frontend.py_ast"
+    ) == "pcc.frontends.python.py_ast"
     assert module_for_class_symbol_contract(
         ".class.unrelated_IntType",
         PY_AST_FIELD_ORDER_CONTRACT,
@@ -43,17 +43,17 @@ def test_extern_class_symbol_resolves_through_the_same_contract_registry():
 
 
 def test_codegen_sites_request_capabilities_instead_of_naming_owners():
-    class_gen = (ROOT / "pcc/py_frontend/codegen/class_gen.py").read_text()
+    class_gen = (ROOT / "pcc/frontends/python/codegen/class_gen.py").read_text()
     scaffold = (
-        ROOT / "pcc/py_frontend/codegen/ir_scaffold_lowering.py"
+        ROOT / "pcc/frontends/python/codegen/ir_scaffold_lowering.py"
     ).read_text()
     assert "module_has_contract(" in class_gen
     assert "module_for_class_symbol_contract(" in class_gen
-    assert '== "pcc.py_frontend.py_ast"' not in class_gen
+    assert '== "pcc.frontends.python.py_ast"' not in class_gen
     assert "module_has_contract(" in scaffold
     assert " in IR_SCAFFOLD_FORCED_MODULES" not in scaffold
 
-    codegen_root = ROOT / "pcc/py_frontend/codegen"
+    codegen_root = ROOT / "pcc/frontends/python/codegen"
     direct_source_guards = []
     for path in codegen_root.glob("*.py"):
         if 'module.name == "pcc.' in path.read_text():
@@ -67,7 +67,7 @@ def test_default_native_exports_use_the_single_module_registry():
             layer1_support._PCC_FRONTEND_STATIC_NATIVE_EXPORTS
         )
     assert layer1_support._default_native_module_exports("unknown.module") is None
-    source = (ROOT / "pcc/py_frontend/codegen/layer1_support.py").read_text()
+    source = (ROOT / "pcc/frontends/python/codegen/layer1_support.py").read_text()
     function_source = source.split("def _default_native_module_exports", 1)[1]
     function_source = function_source.split("\ndef ", 1)[0]
     assert 'module_name == "pcc.' not in function_source

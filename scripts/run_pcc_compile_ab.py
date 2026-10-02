@@ -128,12 +128,12 @@ STAGE_RESULT_COMPARISON_CONTRACT = {
     "hardware_counters_allowed_for_stage_verdict": False,
 }
 SOURCE_MANIFEST_SCHEMA = "pcc.bootstrap-source-manifest.v1"
-PRIMARY_SOURCE = "pcc/llvm_capi/ir.py"
+PRIMARY_SOURCE = "pcc/ir/ir.py"
 BUILD_SOURCE_SUPPORT = (
     "AGENTS.md",
     "pyproject.toml",
-    "scripts/bootstrap.sh",
-    "scripts/run_pcc_native_deferred.sh",
+    "scripts/bootstrap.py",
+    "scripts/run_pcc_native_deferred.py",
     "scripts/run_pcc_deferred_link.py",
     "scripts/pcc_link_macho.py",
     "scripts/pcc_link_elf.py",
@@ -709,7 +709,7 @@ def _runtime_source_path(
     if not isinstance(logical, str) or not logical:
         raise CompileABError("runtime manifest member has no source")
     pure = PurePosixPath(logical)
-    prefix = PurePosixPath("pcc/py_runtime")
+    prefix = PurePosixPath("pcc/runtime")
     try:
         relative = pure.relative_to(prefix)
     except ValueError as exc:
@@ -922,7 +922,7 @@ def _prepare_runtime_bundle(
             source_root = (
                 REPO_ROOT if runtime_source_root is None else runtime_source_root
             )
-            source = source_root / "pcc" / "py_runtime" / relative
+            source = source_root / "pcc" / "runtime" / relative
             target = bundle_dir / relative
             _copy_frozen(source, target, "runtime source")
             if sha256_path(target) != expected:
@@ -1675,7 +1675,7 @@ def _validate_single_variable(
     allowed = sorted(allowed_changed_sources)
     if allowed != [PRIMARY_SOURCE]:
         raise CompileABError(
-            "this optimization-slice harness only admits pcc/llvm_capi/ir.py; "
+            "this optimization-slice harness only admits pcc/ir/ir.py; "
             "host-helper changes require a different experiment"
         )
     if changed != allowed:

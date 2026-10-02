@@ -1,9 +1,9 @@
 """Local project names and archive versions must not collide at the first dash."""
 
-from pcc import cli_bootstrap
+from pcc.driver import cli_bootstrap
 import pytest
 
-from pcc.package_schema import literal_project_metadata_fields
+from pcc.package.schema import literal_project_metadata_fields
 from pcc.package.metadata import inspect_artifact
 from pcc.package import acquire, install, metadata
 

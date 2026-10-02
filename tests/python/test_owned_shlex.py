@@ -2,7 +2,7 @@ import shlex
 
 import pytest
 
-from pcc.py_stdlib import shlex as owned
+from pcc.stdlib import shlex as owned
 
 
 @pytest.mark.parametrize("text", [

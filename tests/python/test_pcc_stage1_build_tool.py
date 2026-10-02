@@ -213,13 +213,13 @@ def test_stage1_function_smoke_rejects_every_failure(tmp_path: Path, ab_args) ->
 
 @pytest.mark.integration
 def test_stage1_function_smoke_passes_on_native_pcc1(
-    tmp_path: Path, native_pcc1_compiler, pcc_py_runtime_archive,
+    tmp_path: Path, native_pcc1_compiler, pcc_runtime_archive,
 ) -> None:
     tool = _load_tool()
     env = dict(os.environ)
     env.pop("LC_ALL", None)
     env.update(
-        PCC_RUNTIME_ARCHIVE=str(pcc_py_runtime_archive),
+        PCC_RUNTIME_ARCHIVE=str(pcc_runtime_archive),
         PCC_RUNTIME_CC="/usr/bin/false",
         PCC_HOST_PYTHON="/usr/bin/false",
         PCC_HOST_PCC="/usr/bin/false",

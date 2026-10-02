@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
+from pcc.frontends.python import pipeline
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 PORT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_external_resource.py"
 
 PUBLIC_SYMBOLS = {
@@ -433,7 +433,7 @@ def test_freestanding_external_resource_under_gc0_to_gc4(
 def test_linux_external_resource_ir_has_no_dynamic_loader_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pcc.py_frontend.codegen.unsafe_lowering import UnsafeIntrinsicMixin
+    from pcc.frontends.python.codegen.unsafe_lowering import UnsafeIntrinsicMixin
 
     monkeypatch.setattr(
         UnsafeIntrinsicMixin,
@@ -451,7 +451,7 @@ def test_linux_external_resource_ir_has_no_dynamic_loader_boundary(
 def test_linux_external_resource_object_has_no_dynamic_loader_undefined(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, emitter: str
 ) -> None:
-    from pcc.py_frontend.codegen.unsafe_lowering import UnsafeIntrinsicMixin
+    from pcc.frontends.python.codegen.unsafe_lowering import UnsafeIntrinsicMixin
 
     monkeypatch.setattr(
         UnsafeIntrinsicMixin,
@@ -550,10 +550,10 @@ def test_production_archive_plan_uses_python_external_resource_owner():
 
 
 def test_built_production_archive_attributes_external_resource_to_python(
-    tmp_path: Path, pcc_py_runtime_archive: Path
+    tmp_path: Path, pcc_runtime_archive: Path
 ):
     members = subprocess.run(
-        ["ar", "-t", str(pcc_py_runtime_archive)],
+        ["ar", "-t", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -564,7 +564,7 @@ def test_built_production_archive_attributes_external_resource_to_python(
     assert "pcc_gc_external_resource.o" not in member_names
 
     symbols = subprocess.run(
-        ["nm", "-A", str(pcc_py_runtime_archive)],
+        ["nm", "-A", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -586,7 +586,7 @@ def test_built_production_archive_attributes_external_resource_to_python(
     result = _build_and_run(
         tmp_path,
         "external_resource_production_archive",
-        [str(pcc_py_runtime_archive)],
+        [str(pcc_runtime_archive)],
         driver,
         without_host_stdio=True,
         expected_metal_release_error=_port_metal_release_error(),

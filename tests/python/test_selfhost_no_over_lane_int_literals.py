@@ -40,7 +40,7 @@ _LANE_MAX = (1 << 62) - 1
 # deliberately not applied.  The compiler defect itself no longer
 # reproduces: a pcc1-built probe prints 2**63, 2**64-1, their negatives,
 # and a 128-bit literal correctly under both backends.
-_CLOSURE_DIRS = ("pcc/py_frontend", "pcc/backend")
+_CLOSURE_DIRS = ("pcc/frontends/python", "pcc/backend")
 
 
 def _over_lane_literals(path: Path) -> list[tuple[int, int]]:

@@ -9,8 +9,8 @@ import xml.etree.ElementTree as host_etree
 
 import pytest
 
-from pcc.py_stdlib import unicodedata as port_unicodedata
-from pcc.py_stdlib.xml.etree import ElementTree as port_etree
+from pcc.stdlib import unicodedata as port_unicodedata
+from pcc.stdlib.xml.etree import ElementTree as port_etree
 
 
 @pytest.mark.parametrize(
@@ -93,16 +93,16 @@ def test_unowned_xml_surfaces_fail_closed():
 @pytest.mark.parametrize(
     "module_name,suffix",
     [
-        ("unicodedata", "/pcc/py_stdlib/unicodedata.py"),
-        ("xml", "/pcc/py_stdlib/xml/__init__.py"),
-        ("xml.etree", "/pcc/py_stdlib/xml/etree/__init__.py"),
-        ("xml.etree.ElementTree", "/pcc/py_stdlib/xml/etree/ElementTree.py"),
+        ("unicodedata", "/pcc/stdlib/unicodedata.py"),
+        ("xml", "/pcc/stdlib/xml/__init__.py"),
+        ("xml.etree", "/pcc/stdlib/xml/etree/__init__.py"),
+        ("xml.etree.ElementTree", "/pcc/stdlib/xml/etree/ElementTree.py"),
     ],
 )
 def test_xml_unicode_family_is_selected_by_recursive_stdlib_registry(
     module_name, suffix
 ):
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
 
     source = pipeline._locate_native_stdlib_module_source(module_name)
     assert source is not None

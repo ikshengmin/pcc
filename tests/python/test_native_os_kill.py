@@ -8,7 +8,7 @@ import textwrap
 
 import pytest
 
-from pcc.py_frontend.pipeline import compile_python, count_py_cpy_fallback_calls
+from pcc.frontends.python.pipeline import compile_python, count_py_cpy_fallback_calls
 
 
 def test_os_kill_uses_owned_integer_protocol(tmp_path):
@@ -31,9 +31,9 @@ def test_os_kill_uses_owned_integer_protocol(tmp_path):
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX pid_t and signal-zero contract")
 def test_os_kill_native_zero_signal_and_checked_arguments(
-    tmp_path, monkeypatch, pcc_py_runtime_archive,
+    tmp_path, monkeypatch, pcc_runtime_archive,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_py_runtime_archive))
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
     monkeypatch.setenv("PCC_RUNTIME_CC", "pcc")
     source = tmp_path / "signal_native.py"
     output = tmp_path / "signal_native"
@@ -89,7 +89,7 @@ def test_os_kill_native_zero_signal_and_checked_arguments(
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signal-zero contract")
 def test_os_kill_roots_direct_temporaries_and_releases_error_operands(
-    tmp_path, pcc_py_runtime_archive,
+    tmp_path, pcc_runtime_archive,
 ):
     source = tmp_path / "signal_operand_lifetime.py"
     output = tmp_path / "signal_operand_lifetime"
@@ -164,7 +164,7 @@ def test_os_kill_roots_direct_temporaries_and_releases_error_operands(
     ''').lstrip(), encoding="utf-8")
     compile_python(
         str(source), str(output), backend="self", libpython_mode="off",
-        ir_scaffold_mode="on", runtime_archive=str(pcc_py_runtime_archive),
+        ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     expected = (
         "True\n"

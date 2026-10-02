@@ -88,7 +88,7 @@ def path_toolchain():
     assert requested, "set explicit PCC_THREADED_RUNTIME_ARCHIVE; no cached build"
     archive = Path(requested).resolve(strict=True)
     source_root = Path(os.environ.get("PCC_PATH_OWNERSHIP_SOURCE_ROOT", str(_ROOT))).resolve(strict=True)
-    runtime_root = source_root / "pcc/py_runtime"
+    runtime_root = source_root / "pcc/runtime"
     manifest = verify_runtime_archive_manifest(archive, runtime_root=runtime_root)
     members = {row["member"]: row for row in manifest["members"]}
     assert "freestanding_thread_kernel_pthread.o" in members, "requires real threaded runtime"
@@ -101,7 +101,7 @@ def path_toolchain():
         str(path): _sha256(path) for path in (
             compiler, archive, Path(str(archive) + ".provenance.json"),
             Path(str(archive) + ".capi_syms"),
-            source_root / "pcc/py_frontend/codegen/native_os.py",
+            source_root / "pcc/frontends/python/codegen/native_os.py",
             runtime_root / "include/py_runtime.h",
             runtime_root / "py/freestanding_gc_root_operations.py",
             runtime_root / "py/py_obj.py", runtime_root / "py/py_os_path.py",
@@ -118,7 +118,7 @@ def _environment(toolchain, directory, gc_backend):
                    if not key.startswith(("PCC_", "DYLD_", "PYTHON")) and key != "LC_ALL"}
     environment.update(
         PCC_SOURCE_ROOT=str(source_root), PCC_REPO_ROOT=str(source_root),
-        PCC_RUNTIME_DIR=str(source_root / "pcc/py_runtime"),
+        PCC_RUNTIME_DIR=str(source_root / "pcc/runtime"),
         PCC_RUNTIME_ARCHIVE=str(archive), PCC_WITH_THREADS="1", PCC_RUNTIME_HIGH="py",
         PCC_SELF_LINK="pcc", PCC_SELF_OBJ="pcc", PCC_IR_TO_OBJ_EMITTER="pcc",
         PCC_PYTHON_IR_PASSES="off", PCC_GC_BACKEND=str(gc_backend),
@@ -192,7 +192,7 @@ def _program(toolchain, directory, fixture_name, gc_backend, *, normalized=False
     inputs = dict(identities, **{str(source): _sha256(source)})
     command = [str(compiler), "--backend", "self"]
     if source.suffix == ".c":
-        command.extend(["--freestanding-libc", "--cpp-arg=-I" + str(source_root / "pcc/py_runtime/include")])
+        command.extend(["--freestanding-libc", "--cpp-arg=-I" + str(source_root / "pcc/runtime/include")])
     else:
         command.extend(["--python-libpython", "off", "--ir-scaffold", "on"])
     command.extend([str(source), "-o", str(executable)])

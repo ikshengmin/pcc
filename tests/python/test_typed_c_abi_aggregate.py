@@ -7,7 +7,7 @@ from pathlib import Path
 from pcc1_gate import find_current_pcc1, skip_or_fail_no_current_pcc1
 from pcc.backend.self_backend import emit_aarch64_darwin_asm
 from pcc.backend.self_backend_x86_64_linux import emit_x86_64_linux_asm
-from pcc.py_frontend import pipeline
+from pcc.frontends.python import pipeline
 
 
 REPO = Path(__file__).absolute().parents[2]
@@ -178,7 +178,7 @@ entry:
 
 def test_pcc_python_complex_aggregate_exports_match_c_behavior(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     harness = tmp_path / "complex_aggregate_harness.c"
     executable = tmp_path / "complex_aggregate_harness"
@@ -225,7 +225,7 @@ int main(void) {
             os.environ.get("CC", "cc"),
             "-std=c11",
             str(harness),
-            str(pcc_py_runtime_archive),
+            str(pcc_runtime_archive),
             "-lm",
             "-o",
             str(executable),

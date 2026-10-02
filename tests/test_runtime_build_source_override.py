@@ -13,11 +13,11 @@ from tests.test_runtime_archive_consumers import _write_valid_runtime_archive
 
 
 _SOURCE_FILES = {
-    "pcc/py_runtime/Makefile": "all:\n",
-    "pcc/py_runtime/src/py_tuple.c": "tuple-c\n",
-    "pcc/py_runtime/py/py_tuple.py": "tuple-python\n",
-    "pcc/py_runtime/include/py_runtime.h": "header\n",
-    "pcc/py_frontend/lowering.py": "compiler\n",
+    "pcc/runtime/Makefile": "all:\n",
+    "pcc/runtime/src/py_tuple.c": "tuple-c\n",
+    "pcc/runtime/py/py_tuple.py": "tuple-python\n",
+    "pcc/runtime/include/py_runtime.h": "header\n",
+    "pcc/frontends/python/lowering.py": "compiler\n",
     "pcc/backend/emit.py": "backend\n",
 }
 
@@ -29,7 +29,7 @@ def runtime_sources(tmp_path, monkeypatch):
         path = repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-    runtime = repo / "pcc" / "py_runtime"
+    runtime = repo / "pcc" / "runtime"
     external = tmp_path / ".frozen-source" / "py_runtime"
     shutil.copytree(runtime, external)
     pcc_bin = repo / ".venv" / "bin" / "pcc"
@@ -68,7 +68,7 @@ def test_runtime_override_hashes_selected_tuple_and_current_compiler(runtime_sou
     (sources.external / "py" / "py_tuple.py").write_text("tuple control\n")
     tuple_changed = cache._pcc_runtime_source_key(sources.pcc_bin, runtime_source=sources.external)
     assert tuple_changed != original
-    (sources.repo / "pcc" / "py_frontend" / "lowering.py").write_text("compiler changed\n")
+    (sources.repo / "pcc" / "frontends" / "python" / "lowering.py").write_text("compiler changed\n")
     assert cache._pcc_runtime_source_key(sources.pcc_bin, runtime_source=sources.external) != tuple_changed
 
 

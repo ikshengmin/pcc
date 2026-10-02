@@ -10,7 +10,7 @@ import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_MAKEFILE = REPO_ROOT / "pcc" / "py_runtime" / "Makefile"
+RUNTIME_MAKEFILE = REPO_ROOT / "pcc" / "runtime" / "Makefile"
 
 
 def _write_executable(path: Path, source: str) -> None:

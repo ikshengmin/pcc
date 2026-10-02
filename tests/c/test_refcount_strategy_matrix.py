@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pcc.refcount_strategy_matrix import all_strategies, by_kind, make_env, validate_matrix
+from pcc.diagnostics.refcount_strategy_matrix import all_strategies, by_kind, make_env, validate_matrix
 
 
 def test_refcount_strategy_matrix_covers_four_kinds():

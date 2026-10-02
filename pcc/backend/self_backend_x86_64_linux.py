@@ -1671,7 +1671,7 @@ def _emit_memory_instruction(func: ParsedFunction, kind: str, data: tuple) -> li
         return lines
 
     if kind == "load_atomic":
-        dest, value_type, ptr_type, ptr_name, _ordering = data
+        dest, value_type, ptr_type, ptr_name, _ordering = data[:5]
         _atomic_width_check(func, kind, value_type)
         if dest not in func.value_slots:
             return []
@@ -1688,7 +1688,7 @@ def _emit_memory_instruction(func: ParsedFunction, kind: str, data: tuple) -> li
         return lines
 
     if kind == "store_atomic":
-        value_type, value, ptr_type, ptr_name, ordering = data
+        value_type, value, ptr_type, ptr_name, ordering = data[:5]
         _atomic_width_check(func, kind, value_type, widths=(8, 32, 64))
         val_reg = _reg_name(value_type, 10)
         lines = _materialize_value(func, value, value_type, val_reg)

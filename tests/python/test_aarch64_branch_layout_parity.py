@@ -20,7 +20,7 @@ from pcc.backend.self_backend_aarch64_darwin import (
     emit_aarch64_darwin_indexed_module,
     emit_aarch64_darwin_indexed_transport,
 )
-from pcc.llvm_capi import ir
+from pcc.ir import ir
 
 
 def _function(module, name, arg_count):

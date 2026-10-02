@@ -19,7 +19,7 @@ from pcc1_gate import (
 
 from pcc.package.install import install_package
 from pcc.package.metadata import current_platform_tag
-from pcc.py_frontend.pipeline import (
+from pcc.frontends.python.pipeline import (
     PyPipelineError,
     _collect_relative_module_closure,
     compile_python,

@@ -18,7 +18,7 @@ from pcc.package.build_exec import (
     execute_build_actions,
 )
 from pcc.package.metadata import current_platform_tag
-from pcc.package_schema import pcc_native_extension_suffix
+from pcc.package.schema import pcc_native_extension_suffix
 
 REPO = repo_root()
 
@@ -634,15 +634,15 @@ def test_execute_build_actions_links_with_vendor_binding(tmp_path, monkeypatch):
 
 
 def test_execute_build_actions_builds_reusable_numpy_capi_provider_with_include_dirs(
-    tmp_path, pcc_py_runtime_archive,
+    tmp_path, pcc_runtime_archive,
 ):
     if shutil.which("cc") is None:
         pytest.fail("C compiler is required for native provider build smoke")
     provider_dir = Path("utils/pcc_numpy_capi_provider").resolve()
     provider_source = provider_dir / "pccnpapi.c"
     fake_include = Path("utils/fake_libc_include").resolve()
-    runtime_include = Path("pcc/py_runtime/include").resolve()
-    runtime_lib = Path(pcc_py_runtime_archive).parent
+    runtime_include = Path("pcc/runtime/include").resolve()
+    runtime_lib = Path(pcc_runtime_archive).parent
     if not provider_source.exists():
         pytest.fail("reusable NumPy C-API provider source is not present")
     project = tmp_path / "pccnpapi-src"
@@ -1056,7 +1056,7 @@ def test_pcc1_build_exec_does_not_need_host_python(tmp_path):
 
 
 def test_pcc1_build_exec_builds_reusable_numpy_capi_provider_without_host_python(
-    tmp_path, pcc_py_runtime_archive,
+    tmp_path, pcc_runtime_archive,
 ):
     pcc1 = _find_current_pcc1()
     if pcc1 is None:
@@ -1069,8 +1069,8 @@ def test_pcc1_build_exec_builds_reusable_numpy_capi_provider_without_host_python
     provider_dir = Path("utils/pcc_numpy_capi_provider").resolve()
     provider_source = provider_dir / "pccnpapi.c"
     fake_include = Path("utils/fake_libc_include").resolve()
-    runtime_include = Path("pcc/py_runtime/include").resolve()
-    runtime_lib = Path(pcc_py_runtime_archive).parent
+    runtime_include = Path("pcc/runtime/include").resolve()
+    runtime_lib = Path(pcc_runtime_archive).parent
     if not provider_source.exists():
         pytest.fail("reusable NumPy C-API provider source is not present")
     project = tmp_path / "pccnpapi-src"

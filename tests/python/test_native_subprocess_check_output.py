@@ -19,7 +19,7 @@ def _compile_to_ll(
     mode: str,
     recursive_stdlib: bool = False,
 ) -> str:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = _BUILD / f"{name}.py"
     out = _BUILD / f"{name}.ll"
@@ -193,7 +193,7 @@ def test_run_capture_output_bool_expression_dispatches_native():
 
 
 def test_native_check_output_runtime(tmp_path):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"
@@ -226,7 +226,7 @@ def test_native_check_output_runtime(tmp_path):
 
 
 def test_native_run_runtime(tmp_path):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"

@@ -66,7 +66,7 @@ def test_atomics_lower_to_x86_64_tso_shapes():
 def test_atomicrmw_op_outside_the_set_fails_closed():
     from pcc.backend import BackendUnavailable
     from pcc.backend.self_backend_dispatch import emit_self_asm
-    from pcc.llvm_capi import ir
+    from pcc.ir import ir
 
     gen = _load_ir_gen()
     mod = ir.Module(name="atomics_bad_op")
@@ -87,7 +87,7 @@ def test_atomicrmw_op_outside_the_set_fails_closed():
 def test_atomic_width_outside_i32_i64_fails_closed():
     from pcc.backend import BackendUnavailable
     from pcc.backend.self_backend_dispatch import emit_self_asm
-    from pcc.llvm_capi import ir
+    from pcc.ir import ir
 
     gen = _load_ir_gen()
     mod = ir.Module(name="atomics_bad_width")

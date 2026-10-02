@@ -74,7 +74,7 @@ def emit_function_blocks(
             int,
             int,
             int,
-            tuple,
+            int | tuple,
             bool,
         ],
         list[str],

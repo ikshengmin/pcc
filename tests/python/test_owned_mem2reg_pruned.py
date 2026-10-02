@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from pcc.native_ir.mem2reg import mem2reg_text
+from pcc.ir.optimization.mem2reg import mem2reg_text
 
 
 _OVERWRITTEN = """define i64 @pick(i1 %condition) {

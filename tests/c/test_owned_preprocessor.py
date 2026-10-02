@@ -2,8 +2,8 @@
 
 import pytest
 
-from pcc.preprocessor import preprocess
-from pcc.evaluater.c_evaluator import CEvaluator, TranslationUnit
+from pcc.frontends.c.preprocessor import preprocess
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator, TranslationUnit
 
 
 def test_header_search_macro_include_and_repeated_unguarded_include(tmp_path):
@@ -111,7 +111,7 @@ builtins.__import__ = checked_import
 def forbidden(*args, **kwargs):
     raise AssertionError("external tool attempted: " + repr(args))
 subprocess.Popen = forbidden
-from pcc.evaluater.c_evaluator import CEvaluator, TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator, TranslationUnit
 ev = CEvaluator(backend="self")
 ev._system_cc = forbidden
 source = '#include <stdio.h>\\n#include <stdint.h>\\nint add(int32_t a,int32_t b){return a+b;}\\nint main(void){printf("%d\\\\n",add(20,VALUE));return 0;}\\n'
@@ -129,8 +129,8 @@ ev._link_executable_owned(ev._self_backend_asm_text(prepared), sys.argv[1])
 
 def test_c_output_option_publishes_without_running_or_delegating(tmp_path, monkeypatch):
     import subprocess
-    from pcc import project
-    from pcc.cli_core import cli_main
+    from pcc.driver import project
+    from pcc.driver.cli_core import cli_main
 
     source = tmp_path / "program.c"
     source.write_text('#include <stdio.h>\nint add(int a,int b){return a+b;}\nint main(void){printf("%d\\n",add(20,22));return 0;}\n')

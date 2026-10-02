@@ -4,8 +4,8 @@ from functools import lru_cache
 
 import pytest
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.project import TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.driver.project import TranslationUnit
 from tests.c_testsuite_cases import (
     PccCompileResult,
     _default_timeout,

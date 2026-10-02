@@ -75,7 +75,7 @@ def test_python_codegen_ir_contains_loop_and_entry_thread_safepoints(
     tmp_path,
     monkeypatch,
 ):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
     src = tmp_path / "loop_safepoints.py"
@@ -122,10 +122,10 @@ def test_python_codegen_ir_contains_loop_and_entry_thread_safepoints(
 def test_python_codegen_compiled_hot_loop_parks_via_generated_acquire_poll(
     tmp_path,
     monkeypatch,
-    threaded_pcc_py_runtime_archive: Path,
+    threaded_pcc_runtime_archive: Path,
 ):
     """A generated infinite loop must be the worker's only STW entry path."""
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
     monkeypatch.delenv("PCC_SELF_LINK", raising=False)
@@ -228,7 +228,7 @@ def test_python_codegen_compiled_hot_loop_parks_via_generated_acquire_poll(
         ir_scaffold_mode="on",
         libpython_mode="off",
         backend="self",
-        runtime_archive=str(threaded_pcc_py_runtime_archive),
+        runtime_archive=str(threaded_pcc_runtime_archive),
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20
@@ -242,7 +242,7 @@ def test_python_codegen_zero_thread_env_disables_implicit_safepoints(
     monkeypatch,
 ):
     """A conventional ``PCC_WITH_THREADS=0`` must mean disabled."""
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     monkeypatch.setenv("PCC_WITH_THREADS", "0")
     src = tmp_path / "no_implicit_safepoints.py"
@@ -1260,7 +1260,7 @@ def test_colored_generation_aging_has_bounded_c_and_strict_graph_tenures():
         "pcc_thread_safepoint(",
         "pcc_py_gc_minor_graph_lock(",
         "pcc_stop_the_world(",
-        "pcc_runtime_log",
+        "pcc_diagnostics_runtime_log",
         "malloc(",
         "free(",
         "py_decref(",
@@ -1290,7 +1290,7 @@ def test_colored_generation_aging_has_bounded_c_and_strict_graph_tenures():
     )
 
     pipeline_src = (
-        REPO_ROOT / "pcc" / "py_frontend" / "pipeline.py"
+        REPO_ROOT / "pcc" / "frontends" / "python" / "pipeline.py"
     ).read_text(encoding="utf-8")
     freestanding_config = pipeline_src.split("if freestanding_module:", 1)[
         1
@@ -1347,8 +1347,7 @@ def test_generational_owner_referent_promotion_uses_bounded_logical_slot_worklis
     assert "store_i64(node, 56, next_cursor)" in strict_drain
     strict_nodes = (
         REPO_ROOT
-        / "pcc"
-        / "py_runtime"
+        / "pcc" / "runtime"
         / "py"
         / "freestanding_gc_object_nodes.py"
     ).read_text(encoding="utf-8")

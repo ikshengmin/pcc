@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend import pipeline_self_backend_config as config
+from pcc.frontends.python import pipeline
+from pcc.frontends.python import pipeline_self_backend_config as config
 
 
 def test_pipeline_self_backend_config_facade_has_one_owner():

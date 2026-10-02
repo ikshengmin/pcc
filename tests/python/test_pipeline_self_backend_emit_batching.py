@@ -3,8 +3,8 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-from pcc.py_frontend.pipeline_self_backend_emit import emit_objects_many_in_process
-from pcc.py_frontend.pipeline_self_backend_emit import run_emit_worker_pool
+from pcc.frontends.python.pipeline_self_backend_emit import emit_objects_many_in_process
+from pcc.frontends.python.pipeline_self_backend_emit import run_emit_worker_pool
 
 
 MANIFEST_VERSION = "pcc.self_backend.emit_batch.v1"

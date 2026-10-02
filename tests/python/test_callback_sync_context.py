@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 import subprocess
 import pytest
-from pcc.py_frontend.pipeline import compile_python
+from pcc.frontends.python.pipeline import compile_python
 
 PROGRAMS = {
     'ordinary': ('''import gc
@@ -376,7 +376,7 @@ def _archive():
         pytest.fail('PCC_CALLBACK_RUNTIME_ARCHIVE must name a matching threaded archive')
     archive = Path(value).resolve(strict=True)
     from pcc.tools.runtime_archive_provenance import verify_runtime_archive_manifest
-    manifest = verify_runtime_archive_manifest(archive, runtime_root=Path(__file__).resolve().parents[2] / 'pcc/py_runtime')
+    manifest = verify_runtime_archive_manifest(archive, runtime_root=Path(__file__).resolve().parents[2] / 'pcc/runtime')
     members = {row['member'] for row in manifest['members']}
     assert 'freestanding_thread_kernel_pthread.o' in members
     assert 'freestanding_thread_kernel.o' not in members

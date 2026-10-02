@@ -10,8 +10,8 @@ this_dir = os.path.dirname(os.path.abspath(__file__))
 # rely on tests/conftest.py's global Path.resolve/dirname shim.
 parent_dir = os.path.dirname(os.path.dirname(this_dir))
 sys.path.insert(0, parent_dir)
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.preprocessor import preprocess
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.frontends.c.preprocessor import preprocess
 import unittest
 
 

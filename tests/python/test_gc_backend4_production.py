@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_runtime.py.py_abi_constants import (
+from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PYCLASSMETHOD_FUNC_OFFSET,
     PYCLASSMETHOD_SIZE,
@@ -20,7 +20,7 @@ from tests.runtime_build_cache import (
 )
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 STRICT_OBJECT_SLOTS = RUNTIME_DIR / "py" / "freestanding_gc_object_slots.py"
 STRICT_COMMON_MARK_CYCLE = (
     RUNTIME_DIR / "py" / "freestanding_gc_common_mark_cycle.py"
@@ -1114,12 +1114,12 @@ def test_backend4_c_runtime_quarantines_deallocating_objects_from_selection_and_
 
 def test_backend4_strict_runtime_quarantines_deallocating_objects_from_selection_and_copy(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     result = _compile_and_run_archive(
         tmp_path,
         _deallocating_relocation_quarantine_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
         "backend4_strict_deallocating_quarantine",
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1337,9 +1337,9 @@ def test_backend4_deallocating_index_node_is_not_active(tmp_path: Path) -> None:
     ) < py_prepare.index(
         "store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags | 524288)"
     )
-    assert "pcc_runtime_log_event_code" not in py_prepare
+    assert "pcc_diagnostics_runtime_log_event_code" not in py_prepare
     assert "flags | 524288" not in py_finish
-    assert py_finish.index("pcc_runtime_log_event_code") < py_finish.index(
+    assert py_finish.index("pcc_diagnostics_runtime_log_event_code") < py_finish.index(
         "py_weakref_invalidate(o)"
     )
 
@@ -1646,12 +1646,12 @@ def test_c_reseed_retains_multiple_authoritative_evacuation_pages(
 
 def test_strict_reseed_retains_multiple_authoritative_evacuation_pages(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     result = _compile_and_run_archive(
         tmp_path,
         _reseed_authoritative_evacuation_pages_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
         "backend4_strict_reseed_authoritative_pages",
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1722,12 +1722,12 @@ def test_c_reseed_counts_more_than_one_page_batch(tmp_path: Path) -> None:
 
 def test_strict_reseed_counts_more_than_one_page_batch(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     result = _compile_and_run_archive(
         tmp_path,
         _many_page_reseed_source(),
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
         "backend4_strict_many_page_reseed",
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -9567,7 +9567,7 @@ def test_backend4_class_creation_payload_span_registration_is_mirrored_source():
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(encoding="utf-8")
     py_class = (RUNTIME_DIR / "py" / "py_class.py").read_text(encoding="utf-8")
     py_gc = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
-    abi = (REPO_ROOT / "pcc" / "py_frontend" / "codegen" / "runtime_abi.py").read_text(
+    abi = (REPO_ROOT / "pcc" / "frontends" / "python" / "codegen" / "runtime_abi.py").read_text(
         encoding="utf-8"
     )
 
@@ -11170,7 +11170,7 @@ def test_backend4_public_telemetry_symbols_are_wired():
     py_gc_state = (RUNTIME_DIR / "py" / "freestanding_gc_state.py").read_text(
         encoding="utf-8"
     )
-    abi = (REPO_ROOT / "pcc" / "py_frontend" / "codegen" / "runtime_abi.py").read_text(
+    abi = (REPO_ROOT / "pcc" / "frontends" / "python" / "codegen" / "runtime_abi.py").read_text(
         encoding="utf-8"
     )
 

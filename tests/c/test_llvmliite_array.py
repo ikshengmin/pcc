@@ -1,5 +1,5 @@
-from llvmlite.ir import ArrayType, Constant
-from llvmlite.ir import IntType
+from pcc.ir.ir import ArrayType, Constant
+from pcc.ir.ir import IntType
 
 
 def test_array_repr():

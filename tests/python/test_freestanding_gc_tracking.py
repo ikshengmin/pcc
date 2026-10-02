@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
+from pcc.frontends.python import pipeline
+from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 TRACKING_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_tracking.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_obj_gc.py"
 COLLECTOR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_backend0_collector.py"
@@ -297,10 +297,10 @@ TRACKING_EXPECTED = (
 
 def test_production_archive_uniquely_owns_tracking_gc0_to_gc4(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     members_result = subprocess.run(
-        ["ar", "-t", str(pcc_py_runtime_archive)],
+        ["ar", "-t", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -309,7 +309,7 @@ def test_production_archive_uniquely_owns_tracking_gc0_to_gc4(
     assert "freestanding_gc_tracking.o" in members_result.stdout.splitlines()
 
     symbols_result = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_py_runtime_archive)],
+        ["nm", "-A", "-g", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -331,7 +331,7 @@ def test_production_archive_uniquely_owns_tracking_gc0_to_gc4(
     )
 
     implementation = _link_harness(
-        tmp_path, "gc_tracking_pcc_python", pcc_py_runtime_archive
+        tmp_path, "gc_tracking_pcc_python", pcc_runtime_archive
     )
     for backend in range(5):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
@@ -348,12 +348,12 @@ def test_production_archive_uniquely_owns_tracking_gc0_to_gc4(
 
 def test_production_archive_tracking_lock_survives_real_pthread_contention(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     implementation = _link_harness(
         tmp_path,
         "gc_tracking_threads_pcc_python",
-        pcc_py_runtime_archive,
+        pcc_runtime_archive,
         concurrent=True,
     )
     env = {**os.environ, "PCC_GC_BACKEND": "0"}

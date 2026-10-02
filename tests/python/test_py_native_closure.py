@@ -4,7 +4,7 @@ import subprocess
 import sys
 import textwrap
 
-from pcc.py_frontend.pipeline import compile_python
+from pcc.frontends.python.pipeline import compile_python
 
 
 def test_returned_typed_nested_def_uses_native_closure(tmp_path):

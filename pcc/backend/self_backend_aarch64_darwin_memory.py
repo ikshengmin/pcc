@@ -226,7 +226,7 @@ def _indexed_scalar_slot_access(
 def emit_memory_instruction_by_id(
     func: ParsedFunction,
     kind_id: int,
-    data: tuple,
+    data: int | tuple,
     module_symbols: PreparedModuleSymbols,
     *,
     indexed_kernel: IndexedFunctionKernel | None = None,
@@ -445,11 +445,25 @@ def emit_memory_instruction_by_id(
         return lines
 
     if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
-        dest, value_type, _ptr_type, ptr_name, ordering = data
+        if indexed_kernel is not None and isinstance(data, int):
+            record: CompilerInt4 = indexed_kernel.instruction_record(data)
+            atomic: CompilerInt4 = indexed_kernel.instruction_record(data + 1)
+            value_type = indexed_kernel.type_desc(record.first)
+            ordering = indexed_kernel.call_texts[atomic.first]
+            dest = indexed_kernel.value_name(indexed_dest_id)
+            ptr_name = indexed_kernel.value_name(record.third) if record.third >= 0 else indexed_kernel.call_texts[-record.third - 1]
+        else:
+            dest, value_type, _ptr_type, ptr_name, ordering = data[:5]
         if not (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
             return []
         _atomic_width_check(func, "load_atomic", value_type)
-        lines = materialize_pointer(func, ptr_name, 9, module_symbols)
+        if indexed_kernel is not None and isinstance(data, int):
+            lines = materialize_scalar_value_indexed(
+                func, indexed_kernel, ptr_name, record.second, 9, module_symbols,
+                value_id=record.third,
+            )
+        else:
+            lines = materialize_pointer(func, ptr_name, 9, module_symbols)
         load_op = "ldar" if ordering in ("acquire", "seq_cst") else "ldr"
         lines.append(
             emitted_memory_instruction_line(
@@ -462,15 +476,33 @@ def emit_memory_instruction_by_id(
         return lines
 
     if kind_id == PARSED_INSTRUCTION_KIND_STORE_ATOMIC:
-        value_type, value, _ptr_type, ptr_name, ordering = data
+        if indexed_kernel is not None and isinstance(data, int):
+            record: CompilerInt4 = indexed_kernel.instruction_record(data)
+            atomic: CompilerInt4 = indexed_kernel.instruction_record(data + 1)
+            value_type = indexed_kernel.type_desc(record.first)
+            ordering = indexed_kernel.call_texts[atomic.first]
+            ptr_name = indexed_kernel.value_name(record.fourth) if record.fourth >= 0 else indexed_kernel.call_texts[-record.fourth - 1]
+            value = indexed_kernel.value_name(record.second) if record.second >= 0 else indexed_kernel.call_texts[-record.second - 1]
+        else:
+            value_type, value, _ptr_type, ptr_name, ordering = data[:5]
         _atomic_width_check(
             func,
             "store_atomic",
             value_type,
             allowed=("i8", "i32", "i64"),
         )
-        lines = materialize_pointer(func, ptr_name, 9, module_symbols)
-        lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
+        if indexed_kernel is not None and isinstance(data, int):
+            lines = materialize_scalar_value_indexed(
+                func, indexed_kernel, ptr_name, record.third, 9, module_symbols,
+                value_id=record.fourth,
+            )
+            lines.extend(materialize_scalar_value_indexed(
+                func, indexed_kernel, value, record.first, 10, module_symbols,
+                value_id=record.second,
+            ))
+        else:
+            lines = materialize_pointer(func, ptr_name, 9, module_symbols)
+            lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
         store_op = "stlr" if ordering in ("release", "seq_cst") else "str"
         if value_type.describe() == "i8":
             store_op += "b"

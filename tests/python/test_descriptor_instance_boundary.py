@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
-RUNTIME = REPO / "pcc" / "py_runtime"
+RUNTIME = REPO / "pcc" / "runtime"
 
 
 def test_reserved_descriptor_tags_never_enter_instance_layout_dispatch():
@@ -49,7 +49,7 @@ def test_reserved_descriptor_tags_never_enter_instance_layout_dispatch():
 
 
 def test_descriptor_dealloc_is_a_signature_exact_freestanding_boundary():
-    from pcc.py_frontend.pipeline_freestanding import (
+    from pcc.frontends.python.pipeline_freestanding import (
         freestanding_allowed_external_symbols,
     )
 
@@ -169,6 +169,6 @@ def _assert_descriptor_harness(tmp_path: Path, archive: Path, label: str) -> Non
 
 def test_descriptor_dealloc_releases_owned_slots_in_pcc_python_runtime(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
-    _assert_descriptor_harness(tmp_path, pcc_py_runtime_archive, "pcc_python")
+    _assert_descriptor_harness(tmp_path, pcc_runtime_archive, "pcc_python")

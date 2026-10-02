@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _compile_and_run(tmp_path: Path, source: str, *, backend: str = "0") -> list[str]:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "probe.py"
     exe = tmp_path / "probe.out"

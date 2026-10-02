@@ -13,7 +13,7 @@ on:
       - "tests/python/test_pcc_native_extension_loader.py"
       - "tests/integration/test_uv_pcc_project_environment.py"
       - "scripts/ci_native_wheel_gate.py"
-      - "scripts/bootstrap.sh"
+      - "scripts/bootstrap.py"
       - "scripts/bootstrap_platform.py"
       - "scripts/platform_process_watchdog.py"
       - ".github/workflows/pcc1-package-parity.yml"
@@ -27,7 +27,7 @@ on:
       - "tests/python/test_pcc_native_extension_loader.py"
       - "tests/integration/test_uv_pcc_project_environment.py"
       - "scripts/ci_native_wheel_gate.py"
-      - "scripts/bootstrap.sh"
+      - "scripts/bootstrap.py"
       - "scripts/bootstrap_platform.py"
       - "scripts/platform_process_watchdog.py"
       - ".github/workflows/pcc1-package-parity.yml"
@@ -116,7 +116,14 @@ jobs:
       PCC_BOOTSTRAP_RUNTIME_CC: "pcc"
       PCC_BOOTSTRAP_RUNTIME_HIGH: "py"
       PCC_BOOTSTRAP_PYTHON_LIBPYTHON: "off"
-      PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES: "6442450944"
+      # macos-14 runners have 7 GB of RAM. The Darwin preflight requires
+      # reclaimable memory >= tree cap + host reserve, and the reserve defaults
+      # to 8 GiB for development machines, so it can never pass here. Stage1
+      # with two frontend workers peaks near 2.1 GB.
+      PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES: "4294967296"
+      PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"
+      # Three M1 cores: a local 12-core Stage1 already takes ~520 s.
+      PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"
     steps:
       - uses: actions/checkout@v4
 
@@ -138,7 +145,7 @@ jobs:
 
       - name: Build current pcc1
         run: |
-          env -u LC_ALL bash scripts/bootstrap.sh \
+          env -u LC_ALL uv run python scripts/bootstrap.py \
             --backend self \
             --stage 1 \
             --out-dir "$PCC_BOOTSTRAP_OUT_DIR"

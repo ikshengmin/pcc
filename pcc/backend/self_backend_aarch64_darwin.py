@@ -339,7 +339,9 @@ _INDEXED_FIXED_PAYLOAD_KIND_IDS = (
     PARSED_INSTRUCTION_KIND_CALL,
     PARSED_INSTRUCTION_KIND_ALLOCA,
     PARSED_INSTRUCTION_KIND_LOAD,
+    PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
     PARSED_INSTRUCTION_KIND_STORE,
+    PARSED_INSTRUCTION_KIND_STORE_ATOMIC,
     PARSED_INSTRUCTION_KIND_CAST,
     PARSED_INSTRUCTION_KIND_ICMP,
     PARSED_INSTRUCTION_KIND_BINOP,
@@ -2225,7 +2227,7 @@ def _emit_indexed_instruction_core(
     instruction_index: int,
     instruction_id: int,
     kind_id: int,
-    data: tuple,
+    data: int | tuple,
     is_volatile: bool,
 ) -> list[str]:
     instruction_fact: CompilerInt4 = indexed_kernel.instruction_fact_by_id(
@@ -2293,7 +2295,7 @@ def _emit_indexed_instruction_parts(
     instruction_index: int,
     instruction_id: int,
     kind_id: int,
-    data: tuple,
+    data: int | tuple,
     is_volatile: bool,
 ) -> list[str]:
     return _emit_indexed_instruction_core(
@@ -2316,7 +2318,7 @@ def _emit_dense_indexed_instruction_parts(
     instruction_index: int,
     instruction_id: int,
     kind_id: int,
-    data: tuple,
+    data: int | tuple,
     is_volatile: bool,
 ) -> list[str]:
     return _emit_indexed_instruction_core(
@@ -2638,7 +2640,7 @@ def _emit_dense_indexed_function_blocks(
                 instruction_id
             )
             kind_id = metadata.first
-            if kind_id in _INDEXED_FIXED_PAYLOAD_KIND_IDS:
+            if kind_id in _INDEXED_FIXED_PAYLOAD_KIND_IDS and metadata.second >= 0:
                 instruction_data = metadata.second
             else:
                 instruction_data = kernel.instruction_data(

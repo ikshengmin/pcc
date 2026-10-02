@@ -45,7 +45,10 @@ _MAGIC = b"PCCIDXMOD1\n"
 _MAX_HEADER_BYTES = 512 * 1024 * 1024
 
 # (wire name, final-kernel field, reconstructed-seed field).  The order is
-# part of v1 and is the raw payload order after the JSON header.
+# part of v1 and is the raw payload order after the JSON header. Atomic memory
+# payload IDs address two adjacent instruction_record_scalars rows: operands,
+# then (ordering text ID, explicit alignment or 0, 0, 0). Legacy cold atomic
+# payloads keep their five-field diagnostic form; new projections append align.
 _ARENA_FIELDS = (
     ("call_records", "call_scalars", "records"),
     ("call_args", "call_arg_scalars", "args"),

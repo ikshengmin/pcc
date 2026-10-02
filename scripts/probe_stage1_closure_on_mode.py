@@ -10,7 +10,7 @@ names the missing method/symbol — that's the Phase-3+ migration TODO).
 Usage:
     env -u LC_ALL uv run python scripts/probe_stage1_closure_on_mode.py
     env -u LC_ALL uv run python scripts/probe_stage1_closure_on_mode.py \
-        --module pcc.py_frontend.type_infer --mode off --emit-ir-dir build/probe
+        --module pcc.frontends.python.type_infer --mode off --emit-ir-dir build/probe
 
 Without options, retain the all-module OFF/ON comparison and diagnostic exit
 status. Filtered/artifact runs return 1 if any requested probe fails. An output
@@ -35,9 +35,9 @@ def _tightened_closure(entry: str):
 
 
 def _compile_standalone(source: str, src: str, mod: str, mode: str) -> str:
-    from pcc.py_frontend import type_infer as _type_infer
-    from pcc.py_frontend.codegen import layer1 as _layer1
-    from pcc.parse.py_lift import parse_and_lift
+    from pcc.frontends.python import type_infer as _type_infer
+    from pcc.frontends.python.codegen import layer1 as _layer1
+    from pcc.frontends.python.py_lift import parse_and_lift
 
     ast_mod = parse_and_lift(source, src, mod)
     typed = _type_infer.infer_module(ast_mod)

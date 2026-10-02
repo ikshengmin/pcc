@@ -28,7 +28,7 @@ import textwrap
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
-RUNTIME = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME = REPO_ROOT / "pcc" / "runtime"
 PY_OBJ_PORT = (RUNTIME / "py" / "py_obj.py").read_text(encoding="utf-8")
 HEADER = (RUNTIME / "include" / "py_runtime.h").read_text(encoding="utf-8")
 
@@ -96,7 +96,7 @@ def _program() -> str:
 
 
 def test_a_high_tag_instance_survives_argument_tuple_round_trips(tmp_path) -> None:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "many_classes.py"
     exe = tmp_path / "many_classes.out"

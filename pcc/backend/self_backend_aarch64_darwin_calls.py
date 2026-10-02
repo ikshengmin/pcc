@@ -2060,8 +2060,10 @@ def emit_call_instruction_indexed(
                 first_register_index = fpr_index
                 fpr_index += register_count
         elif register_class == 1:
-            if is_aarch64_linux_triple(module_symbols.target_triple) and not arg_is_indirect and kernel.type_span(arg_type_id).fourth >= 16:
-                gpr_index = _align_to(gpr_index, 2)
+            if is_aarch64_linux_triple(module_symbols.target_triple) and not arg_is_indirect:
+                argument_span: CompilerInt4 = kernel.type_span(arg_type_id)
+                if argument_span.fourth >= 16:
+                    gpr_index = _align_to(gpr_index, 2)
             if gpr_index + register_count > 8:
                 register_count = 0
                 if is_aarch64_linux_triple(module_symbols.target_triple):

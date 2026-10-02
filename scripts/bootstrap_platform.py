@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
@@ -15,6 +17,8 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -91,18 +95,34 @@ def source_identity(allow_dirty=False):
     return {"commit": head, **_source_snapshot(), "clean_commit": not bool(dirty)}
 
 
+def build_configuration(target):
+    from pcc.frontends.python.owned_runtime_build import runtime_build_config, runtime_ir_passes
+    from pcc.frontends.python.compile_cache import _CODEGEN_ENV_NAMES
+
+    return {"target": target, "runtime": runtime_build_config(),
+            "runtime_ir_passes": runtime_ir_passes(str(ROOT / "pcc" / "runtime")),
+            "backend": "self", "object_emitter": "pcc", "python_ir_passes": "off",
+            "codegen_environment": {name: os.environ.get(name, "") for name in _CODEGEN_ENV_NAMES}}
+
+
+def shared_stage1_jobs(cpu_budget, rss_limit):
+    from pcc.frontends.python.pipeline_frontend_workers import (
+        budget_jobs, HOST_SOURCE_WORKER_PEAK_BYTES, HOST_SOURCE_WORKER_AUTO_CAP,
+    )
+
+    return budget_jobs(min(cpu_budget, os.cpu_count() or 1), rss_limit,
+                       HOST_SOURCE_WORKER_PEAK_BYTES, HOST_SOURCE_WORKER_AUTO_CAP)
+
+
 def normalized_image(data):
     if data.startswith(b"\x7fELF"):
         return data  # Owned static ELF has no variable signature/build-id.
     if not data.startswith(b"MZ") or len(data) < 64:
         raise RuntimeError("bootstrap output is not a native ELF/PE image")
-    output = bytearray(data)
-    pe = struct.unpack_from("<I", output, 60)[0]
-    if pe + 24 + 240 > len(output) or output[pe:pe + 4] != b"PE\0\0":
+    pe = struct.unpack_from("<I", data, 60)[0]
+    if pe + 24 + 240 > len(data) or data[pe:pe + 4] != b"PE\0\0":
         raise RuntimeError("malformed PE bootstrap artifact")
-    output[pe + 8:pe + 12] = b"\0" * 4  # COFF timestamp
-    output[pe + 24 + 64:pe + 24 + 68] = b"\0" * 4  # PE checksum
-    return bytes(output)
+    return data
 
 
 def dependency_receipt(path):
@@ -149,17 +169,18 @@ def dependency_receipt(path):
             "proof_scope": "PE import table; does not identify statically linked source ownership"}
 
 
-def _stage_environment(gc_backend):
+def _stage_environment(gc_backend, jobs=1, rss_limit=17179869184):
     """Qualification always completes compilation in the supervised process."""
     environment = os.environ.copy()
     environment.pop("LC_ALL", None)
     environment.update({
         "PCC_GC_BACKEND": str(gc_backend), "PCC_SELF_LINK": "pcc", "PCC_SELF_OBJ": "pcc",
         "PCC_IR_TO_OBJ_EMITTER": "pcc", "PCC_RUNTIME_CC": "pcc", "PCC_RUNTIME_HIGH": "py",
-        "PCC_RUNTIME_DIR": str(ROOT / "pcc" / "py_runtime"),
+        "PCC_RUNTIME_DIR": str(ROOT / "pcc" / "runtime"),
         "PCC_PY_FRONTEND_IR_CACHE": "0", "PCC_SELF_BACKEND_OBJECT_CACHE": "0",
-        "PCC_PYTHON_IR_PASSES": "off", "PCC_PY_FRONTEND_JOBS": "1",
-        "PCC_SELF_BACKEND_JOBS": "1", "PCC_DEFER_FRONTEND_CODEGEN": "0",
+        "PCC_PYTHON_IR_PASSES": "off", "PCC_PY_FRONTEND_JOBS": str(jobs),
+        "PCC_SELF_BACKEND_JOBS": str(jobs), "PCC_DEFER_FRONTEND_CODEGEN": "0",
+        "PCC_WORKER_TREE_BUDGET_BYTES": str(rss_limit),
         "PCC_DEFER_FRONTEND_CODEGEN_PLAN": "", "PCC_DEFER_FRONTEND_OUTPUT": "",
         "PCC_DEFER_SELF_LINK_PLAN": "", "PCC_DIRECT_INDEXED_KERNEL_EMIT": "1",
     })
@@ -167,8 +188,19 @@ def _stage_environment(gc_backend):
 
 
 def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
-              rss_limit=17179869184, allow_dirty=False):
-    from pcc.py_frontend.pipeline_targets import host_target_triple
+              rss_limit=17179869184, allow_dirty=False, shared=None, jobs=1, lock_held=False, cancel=None):
+    if not lock_held:
+        with performance_lock():
+            return run_chain(gc_backend, out_dir, stage_limit=stage_limit, timeout=timeout,
+                             rss_limit=rss_limit, allow_dirty=allow_dirty, shared=shared,
+                             jobs=jobs, lock_held=True, cancel=cancel)
+    def guarded(command, **options):
+        if cancel is not None:
+            if cancel.is_set():
+                raise RuntimeError("qualification cancelled after a peer failure")
+            options["cancel"] = cancel
+        return run(command, **options)
+    from pcc.frontends.python.pipeline_targets import host_target_triple
     from pcc.backend.self_backend_targets import resolve_self_backend_target
     target = host_target_triple()
     identity = resolve_self_backend_target(target).identity
@@ -181,7 +213,8 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
     for name in ("receipt.json", "failure.json", "progress.json"):
         (out_dir / name).unlink(missing_ok=True)
     source = source_identity(allow_dirty)
-    environment = _stage_environment(gc_backend)
+    configuration = build_configuration(target)
+    environment = _stage_environment(gc_backend, jobs, rss_limit)
     suffix = ".exe" if os.name == "nt" else ""
     records = []
     compiler = [sys.executable, "-m", "pcc"]
@@ -196,19 +229,30 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
         "    try:\n        raise ValueError('probe')\n"
         "    except ValueError:\n        return items[0].value + 42\n"
         "print(gc_backend_current())\nprint(run())\n", encoding="utf-8")
-    with performance_lock():
+    with (contextlib.nullcontext() if lock_held else performance_lock()):
         try:
-            runtime = out_dir / "runtime" / "libpy_runtime_pcc_py.a"
-            runtime_env = environment.copy()
-            runtime_env.pop("PCC_RUNTIME_ARCHIVE", None)
-            # The runtime builder locally masks executable/direct emission
-            # flags for each library-IR request, restoring them afterward.
-            run([sys.executable, "-m", "pcc.py_frontend.owned_runtime_build", "--target", target,
-                 "--output", str(runtime)], cwd=ROOT, env=runtime_env,
-                log_path=out_dir / "runtime-build.log", timeout=timeout,
-                rss_limit=rss_limit)
-            runtime_identity = {"path": str(runtime), "sha256": _digest(runtime),
-                                "provenance_sha256": _digest(str(runtime) + ".provenance.json")}
+            if shared is None:
+                runtime = out_dir / "runtime" / "libpy_runtime_pcc_py.a"
+                runtime_env = environment.copy()
+                runtime_env.pop("PCC_RUNTIME_ARCHIVE", None)
+                # The runtime builder locally masks executable/direct emission
+                # flags for each library-IR request, restoring them afterward.
+                guarded([sys.executable, "-m", "pcc.frontends.python.owned_runtime_build", "--target", target,
+                     "--output", str(runtime)], cwd=ROOT, env=runtime_env,
+                    log_path=out_dir / "runtime-build.log", timeout=timeout,
+                    rss_limit=rss_limit)
+                runtime_identity = {"path": str(runtime), "sha256": _digest(runtime),
+                                    "provenance_sha256": _digest(str(runtime) + ".provenance.json")}
+            else:
+                if shared["source"] != source or shared["target"] != target or shared.get("configuration") != configuration:
+                    raise RuntimeError("shared Stage1 source or target identity differs")
+                runtime_identity = dict(shared["runtime"])
+                runtime = Path(runtime_identity["path"])
+                if _digest(runtime) != runtime_identity["sha256"] or _digest(str(runtime) + ".provenance.json") != runtime_identity["provenance_sha256"]:
+                    raise RuntimeError("shared runtime identity changed")
+                compiler = [shared["compiler_path"]]
+                if _digest(compiler[0]) != shared["stages"][0]["sha256"]:
+                    raise RuntimeError("shared Stage1 identity changed")
             environment["PCC_RUNTIME_ARCHIVE"] = str(runtime)
             for stage in range(1, stage_limit + 1):
                 if source_identity(allow_dirty) != source:
@@ -223,8 +267,20 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                 command = compiler + ["--backend", "self", "--python-libpython", "off",
                                       "--ir-scaffold=on", str(ROOT / "pcc" / "__main__.py"), "-o", str(output)]
                 print(f"GC{gc_backend} stage{stage}: {' '.join(command)}", flush=True)
-                record = run(command, cwd=ROOT, env=stage_env, log_path=out_dir / f"stage{stage}.log",
-                             timeout=timeout, rss_limit=rss_limit, native=stage > 1)
+                if shared is not None and stage == 1:
+                    output = Path(shared["compiler_path"])
+                    record = dict(shared["stages"][0])
+                    record["reused"] = True
+                    record["shared_path"] = str(output)
+                    record["shared_build_seconds"] = record["seconds"]
+                    record["seconds"] = 0
+                    record["peak_tree_rss"] = 0
+                else:
+                    output.unlink(missing_ok=True)
+                    record = guarded(command, cwd=ROOT, env=stage_env, log_path=out_dir / f"stage{stage}.log",
+                                 timeout=timeout, rss_limit=rss_limit, native=stage > 1)
+                    if not output.is_file() or output.stat().st_size == 0:
+                        raise RuntimeError("stage exited successfully without producing a compiler")
                 if source_identity(allow_dirty) != source:
                     raise RuntimeError("source changed during stage " + str(stage))
                 record.update({"stage": stage, "sha256": _digest(output),
@@ -234,14 +290,17 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                     raise RuntimeError("input compiler changed during stage " + str(stage))
                 compiler = [str(output)]
                 executable = out_dir / (f"canary{stage}" + suffix)
+                executable.unlink(missing_ok=True)
                 smoke_env = environment.copy()
                 smoke_env["PCC_HOST_PYTHON"] = str(out_dir / "forbidden-host-python")
-                canary_compile = run(
+                canary_compile = guarded(
                     compiler + [str(canary), "-o", str(executable), "--backend", "self", "--python-libpython", "off"],
                     cwd=ROOT, env=smoke_env, log_path=out_dir / f"canary{stage}-compile.log",
                     timeout=timeout, rss_limit=rss_limit, native=True)
+                if not executable.is_file() or executable.stat().st_size == 0:
+                    raise RuntimeError("canary compile exited successfully without producing an executable")
                 log = out_dir / f"canary{stage}-run.log"
-                canary_run = run([str(executable)], cwd=out_dir, env=smoke_env, log_path=log,
+                canary_run = guarded([str(executable)], cwd=out_dir, env=smoke_env, log_path=log,
                                  timeout=60, rss_limit=rss_limit, native=True)
                 expected = f"{gc_backend}\n{2 ** 80 + 42}\n"
                 if log.read_text(encoding="utf-8").replace("\r\n", "\n") != expected:
@@ -267,9 +326,11 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                 third = normalized_image((out_dir / ("pcc3" + suffix)).read_bytes())
                 fixed = second == third
                 if not fixed:
-                    raise RuntimeError("pcc2/pcc3 normalized images differ; classify drift before qualification")
+                    raise RuntimeError("pcc2/pcc3 bytes differ; classify drift before qualification")
             receipt = {"schema": "pcc.platform-bootstrap.v1", "target": target, "gc": str(gc_backend),
-                       "source": source, "runtime": runtime_identity,
+                       "source": source, "runtime": runtime_identity, "configuration": configuration,
+                       "compiler_path": str(out_dir / ("pcc1" + suffix)) if shared is None else shared["compiler_path"],
+                       "worker_jobs": jobs, "tree_rss_limit": rss_limit,
                        "stages": records, "fixed_point": fixed,
                        "qualification_scope": "source-stable self-host fixed point and native GC/object/integer/exception canary",
                        "execution_owner_evidence": {
@@ -287,6 +348,102 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
             raise
 
 
+@contextlib.contextmanager
+def _same_run_admission(common, run_id, timeout):
+    """Queue integration peers before they request the global build lock."""
+    if run_id is None:
+        yield
+        return
+    from scripts.file_lock import exclusive_file_lock
+
+    key = hashlib.sha256(str(run_id).encode("utf-8")).hexdigest()
+    lock = Path(common) / (".integration-run-" + key + ".lock")
+    deadline = time.monotonic() + timeout
+    with contextlib.ExitStack() as stack:
+        while True:
+            try:
+                stack.enter_context(exclusive_file_lock(lock, blocking=False))
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("timed out waiting for a peer in this integration run") from exc
+                time.sleep(0.1)
+        yield
+
+
+def run_from_shared(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
+                    rss_limit=17179869184, allow_dirty=False, run_id=None):
+    """Reuse a verified common input for separately selected integration gates."""
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+
+    out_dir = Path(out_dir).resolve()
+    common = out_dir.parent / "shared"
+    # Independently scheduled xdist peers can wait for this run's admitted
+    # chain. A different run still meets the nonblocking global build lock.
+    with _same_run_admission(common, run_id, timeout * 12 + 300), performance_lock():
+        shared = None
+        try:
+            candidate = json.loads((common / "receipt.json").read_text(encoding="utf-8"))
+            if candidate["source"] == source_identity(allow_dirty) and candidate.get("configuration") == build_configuration(host_target_triple()):
+                if _digest(candidate["compiler_path"]) == candidate["stages"][0]["sha256"]:
+                    shared = candidate
+        except (OSError, ValueError, KeyError, IndexError):
+            pass
+        if shared is None:
+            shared = run_chain("0", common, stage_limit=1, timeout=timeout, rss_limit=rss_limit,
+                               allow_dirty=allow_dirty, jobs=shared_stage1_jobs(4, rss_limit), lock_held=True)
+        return run_chain(gc_backend, out_dir, stage_limit=stage_limit, timeout=timeout,
+                         rss_limit=rss_limit, allow_dirty=allow_dirty, shared=shared,
+                         jobs=2, lock_held=True)
+
+
+def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400,
+               rss_limit=17179869184, allow_dirty=False, cpu_budget=4, lock_held=False):
+    """One immutable runtime/Stage1, then resource-bounded native chains."""
+    out_dir = Path(out_dir).resolve()
+    slots = min(len(backends), 2, max(1, cpu_budget // 2), max(1, rss_limit // (4 * 1024 ** 3)))
+    jobs = max(1, min(2, cpu_budget // max(1, slots)))
+    chain_rss = rss_limit // max(1, slots)
+    with (contextlib.nullcontext() if lock_held else performance_lock()):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "matrix-receipt.json").unlink(missing_ok=True)
+        shared = run_chain("0", out_dir / "shared", stage_limit=1, timeout=timeout,
+                           rss_limit=rss_limit, allow_dirty=allow_dirty,
+                           jobs=shared_stage1_jobs(cpu_budget, rss_limit), lock_held=True)
+        cancelled = threading.Event()
+        def execute(backend):
+            if cancelled.is_set():
+                raise RuntimeError("qualification cancelled after a peer failure")
+            return run_chain(backend, out_dir / ("gc" + backend), stage_limit=stage_limit,
+                             timeout=timeout, rss_limit=chain_rss, allow_dirty=allow_dirty,
+                             shared=shared, jobs=jobs, lock_held=True, cancel=cancelled)
+        pool = ThreadPoolExecutor(max_workers=slots)
+        futures = {pool.submit(execute, backend): backend for backend in backends}
+        results = {}
+        try:
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+        except BaseException:
+            cancelled.set()
+            for future in futures:
+                future.cancel()
+            raise
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
+        receipts = [results[backend] for backend in backends]
+        if source_identity(allow_dirty) != shared["source"]:
+            raise RuntimeError("source changed during five-GC matrix")
+        receipt = {"schema": "pcc.platform-bootstrap-matrix.v1", "source": shared["source"],
+                   "shared": shared, "gc_backends": list(backends), "chains": receipts,
+                   "parallel_chains": slots, "jobs_per_chain": jobs,
+                   "aggregate_cpu_budget": cpu_budget, "aggregate_rss_limit": rss_limit,
+                   "qualified": all(item["qualified"] for item in receipts)}
+        (out_dir / "matrix-receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+        return receipt
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--gc", default="all", choices=("all", "0", "1", "2", "3", "4"))
@@ -294,14 +451,25 @@ def main(argv=None):
     parser.add_argument("--stage", type=int, default=3, choices=(1, 2, 3))
     parser.add_argument("--timeout", type=int, default=2400)
     parser.add_argument("--rss-limit", type=int, default=17179869184)
+    parser.add_argument("--cpu-budget", type=int, default=4)
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--inside-matrix", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--lock-held", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if args.timeout <= 0 or args.rss_limit <= 0:
-        parser.error("timeout and RSS limit must be positive")
+    if args.timeout <= 0 or args.rss_limit <= 0 or args.cpu_budget <= 0:
+        parser.error("timeout, CPU budget and RSS limit must be positive")
     backends = ("0", "1", "2", "3", "4") if args.gc == "all" else (args.gc,)
-    for backend in backends:
-        run_chain(backend, Path(args.out_dir) / ("gc" + backend), stage_limit=args.stage,
-                  timeout=args.timeout, rss_limit=args.rss_limit, allow_dirty=args.allow_dirty)
+    if not args.inside_matrix:
+        with performance_lock():
+            out_dir = Path(args.out_dir).resolve()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            child_args = list(sys.argv[1:] if argv is None else argv)
+            command = [sys.executable, str(Path(__file__).resolve()), *child_args, "--inside-matrix", "--lock-held"]
+            rounds = (len(backends) + 1) // 2
+            return run(command, cwd=ROOT, env=os.environ.copy(), log_path=out_dir / "matrix.log",
+                       timeout=args.timeout * (2 + 2 * rounds) + 300, rss_limit=args.rss_limit)
+    return run_matrix(backends, args.out_dir, stage_limit=args.stage, timeout=args.timeout,
+                      rss_limit=args.rss_limit, allow_dirty=args.allow_dirty, cpu_budget=args.cpu_budget, lock_held=args.lock_held)
 
 
 if __name__ == "__main__":

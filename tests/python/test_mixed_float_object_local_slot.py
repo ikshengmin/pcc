@@ -8,10 +8,10 @@ a silently wrong double -- and a later attribute read passed that double to
 verifier saw the operand type:
 
     self IR verifier [operand-type] in
-    'user_pcc_codegen_c_codegen_LLVMCodeGenerator__eval_const_expr':
+    'user_pcc_frontends_c_codegen_c_codegen_CCodeGenerator__eval_const_expr':
     'call.cont.145681'/call expects void* for 'lhs.145688.3290', got double
 
-``pcc/codegen/c_codegen.py::_eval_const_expr`` is that function: it writes
+``pcc/frontends/c/codegen/c_codegen.py::_eval_const_expr`` is that function: it writes
 ``lhs = float(...)`` on the floating branch and ``lhs = integer_promotion(...)``
 (a ``ConstIntValue``) on the integer one, then reads ``lhs.width``.
 
@@ -70,7 +70,7 @@ main()
 
 def test_mixed_float_object_local_runs_and_matches_cpython(tmp_path):
     """backend="self" so the self IR verifier runs over the emitted function."""
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "mixed_local.py"
     exe = tmp_path / "mixed_local.out"
@@ -87,7 +87,7 @@ def test_mixed_float_object_local_runs_and_matches_cpython(tmp_path):
 
 
 def test_the_mixed_local_never_unboxes_an_instance_as_a_float(tmp_path):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "mixed_local.py"
     out = tmp_path / "mixed_local.ll"
@@ -149,7 +149,7 @@ main()
     ),
 )
 def test_mixed_bool_object_local_matches_cpython(tmp_path):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "bool_mixed.py"
     exe = tmp_path / "bool_mixed.out"
@@ -192,7 +192,7 @@ main()
     ],
 )
 def test_other_mixed_scalar_object_locals_match_cpython(tmp_path, source, expected):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "shape.py"
     exe = tmp_path / "shape.out"

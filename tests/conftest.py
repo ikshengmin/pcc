@@ -8,10 +8,6 @@ means what it says and no longer depends on a process-wide monkeypatch.
 
 from __future__ import annotations
 
-try:
-    import fcntl as _gate_fcntl
-except ImportError:
-    _gate_fcntl = None
 import importlib.util
 import shutil
 import subprocess
@@ -61,7 +57,7 @@ from tests.runtime_build_cache import (  # noqa: E402
 
 
 @pytest.fixture(scope="session")
-def pcc_py_runtime_archive(tmp_path_factory):
+def pcc_runtime_archive(tmp_path_factory):
     """Return the immutable pcc-Python archive required by pcc1 tests.
 
     Consumers pass this path through ``PCC_RUNTIME_ARCHIVE``.  The fixture
@@ -76,7 +72,7 @@ def pcc_py_runtime_archive(tmp_path_factory):
         manifest = Path(str(archive) + ".provenance.json")
         records = verify_runtime_archive_manifest(
             archive,
-            runtime_root=Path(__file__).resolve().parents[1] / "pcc" / "py_runtime",
+            runtime_root=Path(__file__).resolve().parents[1] / "pcc" / "runtime",
             manifest_path=manifest,
         )
         assert records["policy"] == PRODUCTION_POLICY
@@ -89,16 +85,16 @@ def pcc_py_runtime_archive(tmp_path_factory):
         return archive
 
     if _gate_sys.platform.startswith("linux") or _gate_sys.platform == "win32":
-        from pcc.py_frontend.owned_runtime_build import ensure_target_runtime
-        from pcc.py_frontend.pipeline_targets import host_target_triple
-        runtime_dir = str(Path(__file__).resolve().parents[1] / "pcc" / "py_runtime")
+        from pcc.frontends.python.owned_runtime_build import ensure_target_runtime
+        from pcc.frontends.python.pipeline_targets import host_target_triple
+        runtime_dir = str(Path(__file__).resolve().parents[1] / "pcc" / "runtime")
         return Path(ensure_target_runtime(runtime_dir, host_target_triple()))
     del tmp_path_factory
     return cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
 
 
 @pytest.fixture(scope="session")
-def threaded_pcc_py_runtime_archive() -> Path:
+def threaded_pcc_runtime_archive() -> Path:
     """Return the ``PCC_WITH_THREADS=1`` pcc-Python archive.
 
     ``PCC_THREADED_RUNTIME_ARCHIVE`` names a prebuilt one; otherwise one
@@ -213,56 +209,80 @@ def _provision_pcc1() -> None:
     skip", the session rebuilds pcc1 (content-hash cached: ~16s warm, minutes
     after a pcc/ source change). Build failure is printed loudly and the
     consumer tests then fail on their own asserts — never silently skipped.
-    Set PCC_NO_AUTO_PCC1=1 to opt out (CI that stages its own binaries).
+
+    Auto-provisioning is not Darwin-only, but it resolves the host's owned
+    self-backend target first: on a host the self backend cannot target the
+    gate reports the reason instead of starting a long build.
+    ``PCC_NO_AUTO_PCC1=1`` opts out (CI that stages its own binaries) and
+    ``PCC_PCC1_PROVISION_TIMEOUT`` bounds the build.
     """
     global _PCC1_PROVISIONED
     if _PCC1_PROVISIONED or os.environ.get("PCC_NO_AUTO_PCC1", "").strip():
         return
     _PCC1_PROVISIONED = True
-    if _gate_sys.platform != "darwin":
-        raise RuntimeError("provision platform pcc1 with scripts/bootstrap_platform.py and set PCC_NO_AUTO_PCC1=1")
     repo = Path(__file__).resolve().parent.parent
+    if str(repo) not in _gate_sys.path:
+        _gate_sys.path.insert(0, str(repo))
+    from scripts.file_lock import exclusive_file_lock
+
+    try:
+        from tests.python.pcc1_gate import (
+            _provision_timeout_seconds,
+            host_stage1_support,
+        )
+    except Exception as exc:  # noqa: BLE001 - report and skip auto-provisioning
+        _gate_sys.stderr.write(
+            f"[pcc_gate] cannot resolve the stage1 host support: {exc}\n"
+        )
+        return
+    supported, detail = host_stage1_support()
+    if not supported:
+        _gate_sys.stderr.write(
+            "[pcc_gate] this host has no owned self-backend stage1 target "
+            f"({detail}); set PCC_NO_AUTO_PCC1=1 and stage pcc1 out of band\n"
+        )
+        return
+
     lock_path = os.path.join(tempfile.gettempdir(), "pcc-pytest-pcc1-provision.lock")
-    with open(lock_path, "a+") as lockfile:
-        _gate_fcntl.flock(lockfile, _gate_fcntl.LOCK_EX)
-        try:
-            lockfile.seek(0)
-            stamp = lockfile.read().strip()
-            now = _gate_time.time()
-            if stamp:
-                try:
-                    if now - float(stamp) < 300:
-                        return  # another worker provisioned moments ago
-                except ValueError:
-                    pass
+    with exclusive_file_lock(lock_path) as lockfile:
+        lockfile.seek(0)
+        stamp = lockfile.read().decode("utf-8", "replace").strip()
+        now = _gate_time.time()
+        if stamp:
+            try:
+                if now - float(stamp) < 300:
+                    return  # another worker provisioned moments ago
+            except ValueError:
+                pass
+        _gate_sys.stderr.write(
+            "[pcc_gate] ensuring fresh stage1 pcc1 "
+            "(scripts/bootstrap.py --stage 1; ~16s cached, minutes cold; "
+            f"timeout {_provision_timeout_seconds():.0f}s, "
+            "PCC_PCC1_PROVISION_TIMEOUT overrides)\n"
+        )
+        env = os.environ.copy()
+        env.pop("LC_ALL", None)
+        proc = subprocess.run(
+            [_gate_sys.executable, str(repo / "scripts" / "bootstrap.py"), "--stage", "1"],
+            capture_output=True,
+            text=True,
+            timeout=_provision_timeout_seconds(),
+            cwd=str(repo),
+            env=env,
+        )
+        if proc.returncode != 0:
             _gate_sys.stderr.write(
-                "[pcc_gate] ensuring fresh stage1 pcc1 "
-                "(scripts/bootstrap.sh --stage 1; ~16s cached, minutes cold)\n"
+                "[pcc_gate] pcc1 auto-build FAILED; pcc1-consumer tests "
+                "will fail loudly:\n"
+                + proc.stdout[-2000:]
+                + proc.stderr[-2000:]
+                + "\n"
             )
-            env = os.environ.copy()
-            env.pop("LC_ALL", None)
-            proc = subprocess.run(
-                ["bash", str(repo / "scripts" / "bootstrap.sh"), "--stage", "1"],
-                capture_output=True,
-                text=True,
-                timeout=900,
-                cwd=str(repo),
-                env=env,
-            )
-            if proc.returncode != 0:
-                _gate_sys.stderr.write(
-                    "[pcc_gate] pcc1 auto-build FAILED; pcc1-consumer tests "
-                    "will fail loudly:\n"
-                    + proc.stdout[-2000:]
-                    + proc.stderr[-2000:]
-                    + "\n"
-                )
-            else:
-                lockfile.seek(0)
-                lockfile.truncate()
-                lockfile.write(str(now))
-        finally:
-            _gate_fcntl.flock(lockfile, _gate_fcntl.LOCK_UN)
+        else:
+            lockfile.seek(0)
+            lockfile.truncate()
+            lockfile.write(str(now).encode("ascii"))
+            lockfile.flush()
 
 
 def _pcc_gate_blocked_reason(item) -> str | None:

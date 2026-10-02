@@ -9,8 +9,8 @@ import textwrap
 
 import pytest
 
-from pcc.py_frontend import pipeline, preload_delta_worker, type_infer
-from pcc.py_frontend.pipeline_exports import _write_native_exports_wire
+from pcc.frontends.python import pipeline, preload_delta_worker, type_infer
+from pcc.frontends.python.pipeline_exports import _write_native_exports_wire
 
 
 def _cls(name, owner, fields):

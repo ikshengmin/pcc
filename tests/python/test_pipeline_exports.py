@@ -1,10 +1,10 @@
 """Focused contracts for closed-world export metadata extraction."""
 from __future__ import annotations
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend import pipeline_exports
-from pcc.py_frontend import type_infer
-from pcc.py_frontend.export_meta import encode_type
+from pcc.frontends.python import pipeline
+from pcc.frontends.python import pipeline_exports
+from pcc.frontends.python import type_infer
+from pcc.frontends.python.export_meta import encode_type
 
 
 def test_pipeline_export_metadata_facade_is_thin():

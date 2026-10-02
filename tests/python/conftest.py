@@ -20,7 +20,7 @@ def pcc_diagnostic_runtime_archive(request):
     """Explicit self-emission overlay for capability tests, not production gates."""
     selected = os.environ.get("PCC_DIAGNOSTIC_RUNTIME_ARCHIVE")
     if not selected:
-        return request.getfixturevalue("pcc_py_runtime_archive")
+        return request.getfixturevalue("pcc_runtime_archive")
     archive = Path(selected).resolve(strict=True)
     receipt = json.loads(Path(str(archive) + ".diagnostic.json").read_text())
     assert receipt["schema"] == "pcc.runtime-diagnostic-overlay.v1"
@@ -58,14 +58,15 @@ def python_program_compiler(request):
     compiler; the caller still executes and checks every emitted program.
     """
     if request.param == "pcc0":
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         return compile_python
 
     from tests.python.process_timeout import run_process_group_timeout
     compiler = request.getfixturevalue("native_pcc1_compiler")
 
-    def compile_program(source, output, *, backend, libpython_mode, runtime_archive):
+    def compile_program(source, output, *, backend, libpython_mode, runtime_archive,
+                        ir_scaffold_mode="on"):
         env = dict(os.environ)
         env.pop("LC_ALL", None)
         env.update(
@@ -76,7 +77,7 @@ def python_program_compiler(request):
             PCC_NO_AUTO_PCC1="1",
         )
         command = [str(compiler), "--backend", backend,
-                   "--python-libpython", libpython_mode, "--ir-scaffold", "on",
+                   "--python-libpython", libpython_mode, "--ir-scaffold", ir_scaffold_mode,
                    str(source), "-o", str(output)]
         result = run_process_group_timeout(command, env=env, timeout=300)
         Path(str(output) + ".compile.stdout").write_text(result.stdout, encoding="utf-8")

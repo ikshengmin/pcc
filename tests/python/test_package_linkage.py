@@ -114,7 +114,7 @@ def test_static_archive_debug_paths_do_not_count_as_runtime_libpython(tmp_path):
 
 
 def test_bootstrap_native_artifact_scan_uses_small_tool_output(monkeypatch, tmp_path):
-    from pcc import cli_bootstrap
+    from pcc.driver import cli_bootstrap
 
     artifact = tmp_path / "demo.so"
     artifact.write_bytes(b"ELF\0" + (b"x" * 4_000_000))
@@ -178,7 +178,7 @@ def test_linkage_report_blocks_cpython_extension_abi_in_pcc_native_mode(tmp_path
 def test_bootstrap_native_linkage_blocks_cpython_extension_abi_in_pcc_native_mode(
     tmp_path,
 ):
-    from pcc import cli_bootstrap
+    from pcc.driver import cli_bootstrap
 
     artifact = tmp_path / "_demo.cpython-314-darwin.so"
     artifact.write_text("libpcc_runtime", encoding="utf-8")
@@ -202,7 +202,7 @@ def test_bootstrap_native_linkage_blocks_cpython_extension_abi_in_pcc_native_mod
 
 
 def test_bootstrap_native_linkage_ignores_python_framework_namespace(tmp_path):
-    from pcc import cli_bootstrap
+    from pcc.driver import cli_bootstrap
 
     artifact = tmp_path / "mlx_like.so"
     artifact.write_text("python.framework.ops.EagerTensor", encoding="utf-8")
@@ -217,7 +217,7 @@ def test_bootstrap_native_linkage_ignores_python_framework_namespace(tmp_path):
 
 
 def test_bootstrap_native_linkage_still_detects_python_framework_path(tmp_path):
-    from pcc import cli_bootstrap
+    from pcc.driver import cli_bootstrap
 
     artifact = tmp_path / "framework_link.so"
     artifact.write_text(
@@ -308,7 +308,7 @@ def test_pcc1_native_libpython_scan_parity_with_host_patterns():
     artifact that links the pcc runtime) as a libpython edge, failing every
     pcc-native artifact under a pcc1-run build-exec/linkage scan.
     """
-    from pcc.cli_bootstrap import (
+    from pcc.driver.cli_bootstrap import (
         _native_libpython_edge,
         _native_text_has_libpython,
     )

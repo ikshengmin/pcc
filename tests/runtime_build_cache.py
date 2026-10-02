@@ -23,7 +23,7 @@ from typing import Callable, ParamSpec, TypeVar
 from pcc.backend.self_backend_cache_identity import (
     self_backend_emitter_source_identity,
 )
-from pcc.py_frontend.pipeline_runtime_archive import target_id, write_target_stamp
+from pcc.frontends.python.pipeline_runtime_archive import target_id, write_target_stamp
 from pcc.tools.runtime_archive_provenance import (
     ProvenanceError,
     capi_inventory_path_for_archive,
@@ -55,7 +55,7 @@ _PCC_PY_ARCHIVE_ENV_KEYS = (
 )
 
 _REPO_ROOT = Path(__file__).absolute().parents[1]
-_RUNTIME_DIR = _REPO_ROOT / "pcc" / "py_runtime"
+_RUNTIME_DIR = _REPO_ROOT / "pcc" / "runtime"
 _PCC_RUNTIME_CACHE_MARKER_SCHEMA = "pcc.runtime-build-cache.v4"
 
 
@@ -280,11 +280,11 @@ def _pcc_runtime_source_key(
     roots = (
         _RUNTIME_DIR,
         _REPO_ROOT / "pcc" / "backend",
-        _REPO_ROOT / "pcc" / "codegen",
-        _REPO_ROOT / "pcc" / "evaluater",
-        _REPO_ROOT / "pcc" / "llvm_capi",
-        _REPO_ROOT / "pcc" / "parse",
-        _REPO_ROOT / "pcc" / "py_frontend",
+        _REPO_ROOT / "pcc" / "frontends" / "c" / "codegen",
+        _REPO_ROOT / "pcc" / "frontends" / "c" / "evaluator",
+        _REPO_ROOT / "pcc" / "ir",
+        _REPO_ROOT / "pcc" / "frontends" / "c" / "parse",
+        _REPO_ROOT / "pcc" / "frontends" / "python",
         _REPO_ROOT / "pcc" / "tools",
     )
     selected_runtime = _selected_runtime_source(runtime_source)

@@ -8,11 +8,11 @@ from pathlib import Path
 import subprocess
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend import pipeline_frontend_parallel as parallel
-from pcc.py_frontend import pipeline_frontend_workers as worker_policy
-from pcc.py_frontend import pipeline_frontend_worker_execution as worker_execution
-from pcc.py_frontend import module_action_dag
+from pcc.frontends.python import pipeline
+from pcc.frontends.python import pipeline_frontend_parallel as parallel
+from pcc.frontends.python import pipeline_frontend_workers as worker_policy
+from pcc.frontends.python import pipeline_frontend_worker_execution as worker_execution
+from pcc.frontends.python import module_action_dag
 
 
 def test_direct_indexed_placeholder_uses_host_target_without_rewriting_explicit_target():
@@ -89,16 +89,16 @@ def test_action_dependencies_keep_from_import_submodules_and_ir_provider():
     pipeline_path = Path(pipeline.__file__).resolve()
     pipeline_dependencies = pipeline._python_frontend_action_dependencies(
         str(pipeline_path),
-        "pcc.py_frontend.pipeline",
+        "pcc.frontends.python.pipeline",
         (
-            "pcc.py_frontend.pipeline",
-            "pcc.py_frontend.pipeline_paths",
-            "pcc.py_frontend.type_infer",
+            "pcc.frontends.python.pipeline",
+            "pcc.driver.paths",
+            "pcc.frontends.python.type_infer",
         ),
     )
     assert pipeline_dependencies == (
-        "pcc.py_frontend.pipeline_paths",
-        "pcc.py_frontend.type_infer",
+        "pcc.driver.paths",
+        "pcc.frontends.python.type_infer",
     )
 
     method_path = pipeline_path.with_name("codegen") / (
@@ -106,22 +106,22 @@ def test_action_dependencies_keep_from_import_submodules_and_ir_provider():
     )
     method_dependencies = pipeline._python_frontend_action_dependencies(
         str(method_path),
-        "pcc.py_frontend.codegen.method_call_expression_lowering",
+        "pcc.frontends.python.codegen.method_call_expression_lowering",
         (
-            "pcc.py_frontend.codegen.method_call_expression_lowering",
-            "pcc.py_frontend.codegen.errors",
-            "pcc.py_frontend.codegen.freestanding_abi_constants",
-            "pcc.py_frontend.codegen.marshal",
-            "pcc.py_frontend.py_ast",
-            "pcc.llvm_capi.ir",
+            "pcc.frontends.python.codegen.method_call_expression_lowering",
+            "pcc.frontends.python.codegen.errors",
+            "pcc.frontends.python.codegen.freestanding_abi_constants",
+            "pcc.frontends.python.codegen.marshal",
+            "pcc.frontends.python.py_ast",
+            "pcc.ir.ir",
         ),
     )
     assert method_dependencies == (
-        "pcc.llvm_capi.ir",
-        "pcc.py_frontend.codegen.errors",
-        "pcc.py_frontend.codegen.freestanding_abi_constants",
-        "pcc.py_frontend.codegen.marshal",
-        "pcc.py_frontend.py_ast",
+        "pcc.ir.ir",
+        "pcc.frontends.python.codegen.errors",
+        "pcc.frontends.python.codegen.freestanding_abi_constants",
+        "pcc.frontends.python.codegen.marshal",
+        "pcc.frontends.python.py_ast",
     )
 
 
@@ -810,7 +810,7 @@ def test_native_codegen_checkpoint_persists_sidecars_and_singleton_manifests(
 
 
 def test_native_preload_respects_explicit_frontend_width(monkeypatch, tmp_path):
-    from pcc.py_frontend import type_infer
+    from pcc.frontends.python import type_infer
 
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "2")
     monkeypatch.setenv("PCC_PRELOAD_DELTA_JOBS", "6")

@@ -8,7 +8,7 @@ constant".
 
 import pytest
 
-from pcc.evaluater.c_evaluator import CEvaluator, TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator, TranslationUnit
 
 
 SOURCE = r"""
@@ -35,7 +35,7 @@ int main(void) {
 """
 
 
-@pytest.mark.parametrize("backend", ["llvm", "self"])
+@pytest.mark.parametrize("backend", [pytest.param(None, id="default-self"), pytest.param("self", id="explicit-self")])
 def test_integer_constant_pointer_initializers(tmp_path, backend):
     unit = TranslationUnit(
         name="main.c", path=str(tmp_path / "main.c"), source=SOURCE

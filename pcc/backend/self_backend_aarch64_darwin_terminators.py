@@ -189,8 +189,10 @@ def emit_cond_branch_terminator_indexed(
     # order, so every helper below is called in output order.  The shape is
     # chosen from whether a target has PHIs (without PHIs an edge moves
     # nothing), never by emitting an edge's moves ahead of the branch.
-    true_has_phis = kernel.block_phi_fact(true_target_id).second > 0
-    false_has_phis = kernel.block_phi_fact(false_target_id).second > 0
+    true_phi_fact: CompilerInt2 = kernel.block_phi_fact(true_target_id)
+    false_phi_fact: CompilerInt2 = kernel.block_phi_fact(false_target_id)
+    true_has_phis = true_phi_fact.second > 0
+    false_has_phis = false_phi_fact.second > 0
 
     if direct_targets and true_target_id == false_target_id:
         # Both edges enter one block with the same incoming values.

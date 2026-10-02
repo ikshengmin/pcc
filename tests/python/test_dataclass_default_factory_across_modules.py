@@ -10,7 +10,7 @@ not survived, so the field became required.  The caller was then rejected with
 The cost of that was not academic.  ``pcc/backend/self_backend_ir.py`` ends
 ``ParsedFunction`` with ``aarch64_tail_call_ids: list[int] =
 field(default_factory=list)``, and one construction site in
-``pcc/llvm_capi/direct_indexed_kernel.py`` omits it.  That single omission
+``pcc/ir/direct_indexed_kernel.py`` omits it.  That single omission
 failed the stage1 self-host build, so pcc could not produce a pcc1 at all.
 Two other construction sites had already been made to pass
 ``aarch64_tail_call_ids=[]`` explicitly, which is the shape of a workaround
@@ -27,10 +27,10 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from pcc.py_frontend.pipeline import compile_python
-from pcc.py_frontend.pipeline_exports import export_default_factory_name
-from pcc.parse.py_lift import parse_and_lift
-from pcc.py_frontend.py_ast import Assign, ClassDef
+from pcc.frontends.python.pipeline import compile_python
+from pcc.frontends.python.pipeline_exports import export_default_factory_name
+from pcc.frontends.python.py_lift import parse_and_lift
+from pcc.frontends.python.py_ast import Assign, ClassDef
 
 
 def _class_body_defaults(source: str, class_name: str) -> dict:

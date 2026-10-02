@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pcc.py_frontend import pipeline_self_backend_emit as emit
+from pcc.frontends.python import pipeline_self_backend_emit as emit
 from scripts import bootstrap_platform, pcc_link_elf
 
 
@@ -170,8 +170,8 @@ def test_native_batch_rejects_external_assembler_before_workers(tmp_path, monkey
 
 
 @pytest.mark.parametrize("relative", [
-    "pcc/backend/owned_elf_link.py", "pcc/codegen/c_codegen.py",
-    "pcc/py_runtime/py/freestanding_linux_threads.py", "pcc/py_runtime/Makefile",
+    "pcc/backend/owned_elf_link.py", "pcc/frontends/c/codegen/c_codegen.py",
+    "pcc/runtime/py/freestanding_linux_threads.py", "pcc/runtime/Makefile",
     "scripts/bootstrap_platform.py", "scripts/platform_process_watchdog.py",
     "utils/fake_libc_include/_fake_typedefs.h",
 ])

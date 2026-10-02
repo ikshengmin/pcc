@@ -23,7 +23,7 @@ def _run(source, tmp_path, compiler, runtime):
 
 @pytest.mark.parametrize("builtin", ["any", "all"])
 def test_any_all_release_temporary_and_preserve_borrowed_sources(
-    tmp_path, pcc_py_runtime_archive, python_program_compiler, monkeypatch, builtin,
+    tmp_path, pcc_runtime_archive, python_program_compiler, monkeypatch, builtin,
 ):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     source = '''import gc
@@ -53,14 +53,14 @@ def main():
 main()
 '''.replace("BUILTIN", builtin).replace("NONEMPTY", str(builtin == "any")).replace(
         "EMPTY", str(builtin == "all"))
-    for backend, output in _run(source, tmp_path, python_program_compiler, pcc_py_runtime_archive):
+    for backend, output in _run(source, tmp_path, python_program_compiler, pcc_runtime_archive):
         if backend == 0:
             assert int(output) < 16384, output
 
 
 @pytest.mark.parametrize("builtin", ["any", "all"])
 def test_any_all_release_sources_on_error_and_callback_rebinding(
-    tmp_path, pcc_py_runtime_archive, python_program_compiler, monkeypatch, builtin,
+    tmp_path, pcc_runtime_archive, python_program_compiler, monkeypatch, builtin,
 ):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     source = '''import gc
@@ -112,5 +112,5 @@ def main():
     print(caught, destroyed)
 main()
 '''.replace("BUILTIN", builtin)
-    for backend, output in _run(source, tmp_path, python_program_compiler, pcc_py_runtime_archive):
+    for backend, output in _run(source, tmp_path, python_program_compiler, pcc_runtime_archive):
         assert output == "128 160\n", (backend, output)

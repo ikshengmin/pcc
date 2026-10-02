@@ -38,10 +38,12 @@ from .self_backend_ir import (
     PARSED_INSTRUCTION_KIND_GEP,
     PARSED_INSTRUCTION_KIND_ICMP,
     PARSED_INSTRUCTION_KIND_LOAD,
+    PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
     PARSED_INSTRUCTION_KIND_RET,
     PARSED_INSTRUCTION_KIND_RET_VOID,
     PARSED_INSTRUCTION_KIND_SELECT,
     PARSED_INSTRUCTION_KIND_STORE,
+    PARSED_INSTRUCTION_KIND_STORE_ATOMIC,
     PARSED_INSTRUCTION_KIND_SWITCH,
     PARSED_INSTRUCTION_KIND_UNREACHABLE,
     PARSED_INSTRUCTION_KINDS,
@@ -78,7 +80,9 @@ INLINE_ERROR_EDGE_WIDTH = 8
 
 _PACKED_FIXED_KIND_IDS = (
     PARSED_INSTRUCTION_KIND_LOAD,
+    PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
     PARSED_INSTRUCTION_KIND_STORE,
+    PARSED_INSTRUCTION_KIND_STORE_ATOMIC,
     PARSED_INSTRUCTION_KIND_CAST,
     PARSED_INSTRUCTION_KIND_ICMP,
     PARSED_INSTRUCTION_KIND_BINOP,
@@ -96,7 +100,9 @@ _SUPPORTED_SCALAR_TERMINATOR_KIND_IDS = (
 _SUPPORTED_SCALAR_INSTRUCTION_KIND_IDS = (
     PARSED_INSTRUCTION_KIND_ALLOCA,
     PARSED_INSTRUCTION_KIND_LOAD,
+    PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
     PARSED_INSTRUCTION_KIND_STORE,
+    PARSED_INSTRUCTION_KIND_STORE_ATOMIC,
     PARSED_INSTRUCTION_KIND_CAST,
     PARSED_INSTRUCTION_KIND_ICMP,
     PARSED_INSTRUCTION_KIND_BINOP,
@@ -436,7 +442,7 @@ class IndexedFunctionSeed(IndexedCallPlane):
     def append_proven_new_value(self, name: str) -> int:
         """Append a builder-proven unique SSA value without a miss probe.
 
-        llvm_capi assigns each Value its final function-local name before the
+        The owned IR builder assigns each Value its final function-local name before the
         direct publisher calls this method.  The ordinary parser and every
         unproven string boundary continue through ``intern_value``.
         """
@@ -708,20 +714,28 @@ class IndexedFunctionSeed(IndexedCallPlane):
         raw: CompilerInt4 = self.instruction_record(record_id)
         dest_id = self.instruction_record_dest_ids.get_unchecked(record_id)
         dest = None if dest_id < 0 else self.value_names[dest_id]
-        if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
-            return (
+        if kind_id in (PARSED_INSTRUCTION_KIND_LOAD, PARSED_INSTRUCTION_KIND_LOAD_ATOMIC):
+            result = (
                 dest,
                 self.types[raw.first],
                 self.types[raw.second],
                 self._operand_text(raw.third),
             )
-        if kind_id == PARSED_INSTRUCTION_KIND_STORE:
-            return (
+            if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
+                atomic: CompilerInt4 = self.instruction_record(record_id + 1)
+                return result + (self.texts[atomic.first], atomic.second)
+            return result
+        if kind_id in (PARSED_INSTRUCTION_KIND_STORE, PARSED_INSTRUCTION_KIND_STORE_ATOMIC):
+            result = (
                 self.types[raw.first],
                 self._operand_text(raw.second),
                 self.types[raw.third],
                 self._operand_text(raw.fourth),
             )
+            if kind_id == PARSED_INSTRUCTION_KIND_STORE_ATOMIC:
+                atomic: CompilerInt4 = self.instruction_record(record_id + 1)
+                return result + (self.texts[atomic.first], atomic.second)
+            return result
         if kind_id == PARSED_INSTRUCTION_KIND_CAST:
             return (
                 self.texts[raw.first],
@@ -1584,17 +1598,18 @@ class IndexedFunctionKernel:
                         else:
                             self.instruction_overflow_use_ids.append(indexed_use_id)
                         use_count += 1
-                elif kind_id in _PACKED_FIXED_KIND_IDS:
+                elif kind_id in _PACKED_FIXED_KIND_IDS and metadata.second >= 0:
                     record: CompilerInt4 = self.instruction_record(metadata.second)
                     if (
                         kind_id == PARSED_INSTRUCTION_KIND_LOAD
+                        or kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC
                         or kind_id == PARSED_INSTRUCTION_KIND_CAST
                     ):
                         candidate_count = 1
                         candidate0 = record.third
                         candidate1 = -1
                         candidate2 = -1
-                    elif kind_id == PARSED_INSTRUCTION_KIND_STORE:
+                    elif kind_id in (PARSED_INSTRUCTION_KIND_STORE, PARSED_INSTRUCTION_KIND_STORE_ATOMIC):
                         candidate_count = 2
                         candidate0 = record.second
                         candidate1 = record.fourth
@@ -2181,6 +2196,8 @@ class IndexedFunctionKernel:
                 )
                 if metadata.first not in _SUPPORTED_SCALAR_INSTRUCTION_KIND_IDS:
                     return False
+                if metadata.first in (PARSED_INSTRUCTION_KIND_LOAD_ATOMIC, PARSED_INSTRUCTION_KIND_STORE_ATOMIC) and metadata.second < 0:
+                    return False
                 instruction_index += 1
             block_id += 1
         return True
@@ -2389,8 +2406,8 @@ class IndexedFunctionKernel:
                 )
                 dest_id = indexed_instruction.first
                 result_type_id = -1
-                if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
-                    _dest, value_type, ptr_type, ptr = data
+                if kind_id in (PARSED_INSTRUCTION_KIND_LOAD, PARSED_INSTRUCTION_KIND_LOAD_ATOMIC):
+                    _dest, value_type, ptr_type, ptr = data[:4]
                     result_type_id = self.intern_type(value_type)
                     self.instruction_record_scalars.append4(
                         result_type_id,
@@ -2398,8 +2415,8 @@ class IndexedFunctionKernel:
                         operand_ref(ptr),
                         0,
                     )
-                elif kind_id == PARSED_INSTRUCTION_KIND_STORE:
-                    value_type, value, ptr_type, ptr = data
+                elif kind_id in (PARSED_INSTRUCTION_KIND_STORE, PARSED_INSTRUCTION_KIND_STORE_ATOMIC):
+                    value_type, value, ptr_type, ptr = data[:4]
                     self.instruction_record_scalars.append4(
                         self.intern_type(value_type),
                         operand_ref(value),
@@ -2455,6 +2472,11 @@ class IndexedFunctionKernel:
                         operand_ref(false_value),
                     )
                 self.instruction_record_dest_ids.append(dest_id)
+                if kind_id in (PARSED_INSTRUCTION_KIND_LOAD_ATOMIC, PARSED_INSTRUCTION_KIND_STORE_ATOMIC):
+                    self.instruction_record_scalars.append4(
+                        intern_text(data[4]), data[5] if len(data) > 5 else 0, 0, 0,
+                    )
+                    self.instruction_record_dest_ids.append(-1)
                 if dest_id >= 0 and result_type_id >= 0:
                     self.value_type_ids[dest_id] = result_type_id
                 arena._data[instruction_index] = record_id
@@ -2480,20 +2502,28 @@ class IndexedFunctionKernel:
                 return self.value_name(operand)
             return self.call_texts[-operand - 1]
 
-        if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
-            return (
+        if kind_id in (PARSED_INSTRUCTION_KIND_LOAD, PARSED_INSTRUCTION_KIND_LOAD_ATOMIC):
+            result = (
                 dest,
                 self.type_desc(raw.first),
                 self.type_desc(raw.second),
                 operand_text(raw.third),
             )
-        if kind_id == PARSED_INSTRUCTION_KIND_STORE:
-            return (
+            if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
+                atomic: CompilerInt4 = self.instruction_record(record_id + 1)
+                return result + (self.call_texts[atomic.first], atomic.second)
+            return result
+        if kind_id in (PARSED_INSTRUCTION_KIND_STORE, PARSED_INSTRUCTION_KIND_STORE_ATOMIC):
+            result = (
                 self.type_desc(raw.first),
                 operand_text(raw.second),
                 self.type_desc(raw.third),
                 operand_text(raw.fourth),
             )
+            if kind_id == PARSED_INSTRUCTION_KIND_STORE_ATOMIC:
+                atomic: CompilerInt4 = self.instruction_record(record_id + 1)
+                return result + (self.call_texts[atomic.first], atomic.second)
+            return result
         if kind_id == PARSED_INSTRUCTION_KIND_CAST:
             return (
                 self.call_texts[raw.first],

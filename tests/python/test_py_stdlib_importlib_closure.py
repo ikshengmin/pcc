@@ -18,10 +18,10 @@ import sys
 
 import pytest
 
-from pcc.py_stdlib import importlib as port_importlib
-from pcc.py_stdlib.importlib import machinery as port_machinery
-from pcc.py_stdlib.importlib import resources as port_resources
-from pcc.py_stdlib.importlib import util as port_util
+from pcc.stdlib import importlib as port_importlib
+from pcc.stdlib.importlib import machinery as port_machinery
+from pcc.stdlib.importlib import resources as port_resources
+from pcc.stdlib.importlib import util as port_util
 
 
 @pytest.fixture
@@ -213,21 +213,21 @@ def test_module_spec_and_util_metadata_match_owned_cpython_subset(tmp_path):
     ["importlib", "importlib.resources", "importlib.machinery", "importlib.util"],
 )
 def test_importlib_family_is_selected_by_recursive_stdlib_registry(module_name):
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
 
     source = pipeline._locate_native_stdlib_module_source(module_name)
     assert source is not None
     expected = module_name.replace(".", "/")
     if module_name == "importlib":
-        assert source.endswith("/pcc/py_stdlib/importlib/__init__.py")
+        assert source.endswith("/pcc/stdlib/importlib/__init__.py")
     else:
-        assert source.endswith("/pcc/py_stdlib/" + expected + ".py")
+        assert source.endswith("/pcc/stdlib/" + expected + ".py")
     assert pipeline._classify_python_import(module_name) == "native_stdlib"
     assert "importlib" not in pipeline._NATIVE_BUILTIN_IMPORTS
 
 
 def test_recursive_provider_adds_package_parents_and_relative_siblings(tmp_path):
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
 
     resource_package = tmp_path / "resource_pkg"
     resource_package.mkdir()
@@ -261,7 +261,7 @@ def test_shallow_multi_closure_admits_required_importlib_provider_only(tmp_path)
     ``importlib`` admits the pcc-owned root provider required at runtime, while
     an unrelated optional stdlib import remains outside the explicit closure.
     """
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
 
     entry = tmp_path / "entry.py"
     entry.write_text(
@@ -280,7 +280,7 @@ def test_shallow_multi_closure_admits_required_importlib_provider_only(tmp_path)
 
 
 def test_resource_literal_in_dependency_function_is_a_finite_closure_edge(tmp_path):
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
 
     resource_package = tmp_path / "resource_pkg"
     resource_package.mkdir()
@@ -312,8 +312,7 @@ def test_resource_literal_in_dependency_function_is_a_finite_closure_edge(tmp_pa
 def test_unaliased_dotted_native_import_keeps_top_level_package_binding():
     lowering_source = (
         Path(__file__).absolute().parents[2]
-        / "pcc"
-        / "py_frontend"
+        / "pcc" / "frontends" / "python"
         / "codegen"
         / "import_lowering.py"
     ).read_text(encoding="utf-8")
@@ -325,16 +324,14 @@ def test_compiled_registry_rejects_unknown_names_instead_of_empty_modules():
     repo_root = Path(__file__).absolute().parents[2]
     runtime_mirror = (
         repo_root
-        / "pcc"
-        / "py_runtime"
+        / "pcc" / "runtime"
         / "py"
         / "py_compiled_module_runtime.py"
     ).read_text(encoding="utf-8")
     assert "if not _compiled_module_has_init(name):" in runtime_mirror
     capi_mirror = (
         repo_root
-        / "pcc"
-        / "py_runtime"
+        / "pcc" / "runtime"
         / "py"
         / "py_capi_import_runtime.py"
     ).read_text(encoding="utf-8")

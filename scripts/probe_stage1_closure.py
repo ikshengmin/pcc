@@ -24,10 +24,10 @@ def _set_env_defaults() -> None:
 def _try_per_module_lower(srcs: list[str], mods: list[str]):
     """Compile each module independently to surface codegen failures
     without aborting on the first error."""
-    from pcc.py_frontend import pipeline as _pipeline
-    from pcc.py_frontend import type_infer as _type_infer
-    from pcc.py_frontend.codegen import layer1 as _layer1
-    from pcc.parse.py_lift import parse_and_lift
+    from pcc.frontends.python import pipeline as _pipeline
+    from pcc.frontends.python import type_infer as _type_infer
+    from pcc.frontends.python.codegen import layer1 as _layer1
+    from pcc.frontends.python.py_lift import parse_and_lift
 
     results = []
     for src, mod in zip(srcs, mods):
@@ -79,7 +79,7 @@ def _try_full_multi_compile(srcs: list[str], mods: list[str]) -> tuple[bool, str
     self/no-libpython compiler and can report fallback growth even when the
     strict production closure remains exactly zero.
     """
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
     out_path = "/tmp/stage1_closure_probe.ll"
     try:
         compile_python_multi(
@@ -90,7 +90,7 @@ def _try_full_multi_compile(srcs: list[str], mods: list[str]) -> tuple[bool, str
             entry_module=mods[0],
             module_names=mods,
             libpython_mode="off",
-            backend="llvm",
+            backend="self",
         )
         if os.path.exists(out_path):
             with open(out_path, "r", encoding="utf-8") as f:
@@ -192,7 +192,7 @@ def _write_report(srcs, mods, per_mod, multi_ok, multi_err, top_fb, total_fb, ir
     report.append("## Interpretation\n")
     report.append(
         "Stage1 default behaviour today closes the import graph at "
-        "`pcc.__main__` + `pcc.cli_bootstrap` (2 files, ~25 fallbacks). "
+        "`pcc.__main__` + `pcc.driver.cli_bootstrap` (2 files, ~25 fallbacks). "
         "Those 25 fallbacks are the IR-visible cost of `cli_bootstrap` "
         "calling `compile_python(...)` via dynamic dispatch; the rest "
         "of the frontend is not in the native compile graph at all and "
@@ -229,7 +229,7 @@ def _tightened_closure(entry_src: str) -> tuple[list[str], list[str]]:
     follows relative imports from them, but does NOT keep recursing into
     same-package absolute imports beyond the entry. Yields the
     'frontend core' closure rather than the maximal 51-file one."""
-    from pcc.py_frontend.pipeline import (
+    from pcc.frontends.python.pipeline import (
         _package_import_targets,
         _module_root_from_src,
         _module_name_from_src,
@@ -267,7 +267,7 @@ def _tightened_closure(entry_src: str) -> tuple[list[str], list[str]]:
 def main() -> int:
     _set_env_defaults()
     sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
-    from pcc.py_frontend.pipeline import _collect_relative_module_closure
+    from pcc.frontends.python.pipeline import _collect_relative_module_closure
 
     entry = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "pcc", "__main__.py")

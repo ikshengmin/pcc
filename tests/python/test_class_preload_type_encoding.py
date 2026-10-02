@@ -1,7 +1,7 @@
 """Preload aliases share serialization without changing structural type IDs."""
 
-from pcc.py_frontend import type_infer
-from pcc.py_frontend.py_ast import ClassType
+from pcc.frontends.python import type_infer
+from pcc.frontends.python.py_ast import ClassType
 
 
 def test_real_preload_serializes_local_and_qualified_alias_once(monkeypatch):

@@ -3,13 +3,14 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from functools import lru_cache
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
-DOCKER_HARNESS = REPO_ROOT / "scripts" / "run_self_backend_linux_x86_64_docker.sh"
+DOCKER_HARNESS = REPO_ROOT / "scripts" / "run_self_backend_linux_x86_64_docker.py"
 CTESTSUITE_HARNESS = (
     REPO_ROOT / "scripts" / "run_self_backend_linux_x86_64_c_testsuite.py"
 )
@@ -55,7 +56,7 @@ def _run_linux_x86_64_harness(
         env = dict(os.environ)
         env["PCC_SELF_BACKEND_HOST_ARTIFACTS"] = str(host_artifacts.resolve())
     return subprocess.run(
-        [str(DOCKER_HARNESS), "bash", "-lc", shell_script],
+        [sys.executable, str(DOCKER_HARNESS), "bash", "-lc", shell_script],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
@@ -216,7 +217,7 @@ def test_linux_x86_64_freestanding_python_start_is_static_zero_libc():
     object participates in the link."""
     result = _run_linux_x86_64_harness(rf"""
 set -euo pipefail
-src=pcc/py_runtime/py/freestanding_linux_start.py
+src=pcc/runtime/py/freestanding_linux_start.py
 ll=/tmp/pcc_zero_libc.ll
 asm=/tmp/pcc_zero_libc.generated.s
 obj=/tmp/pcc_zero_libc.from_python.o
@@ -295,7 +296,7 @@ def test_linux_x86_64_full_production_python_runtime_is_static_zero_libc():
     """
     script = r"""
 set -euo pipefail
-runtime_root="$PWD/pcc/py_runtime"
+runtime_root="$PWD/pcc/runtime"
 test -n "${PCC_HOST_TEST_ARTIFACTS:-}"
 
 python_bin="$(env -u LC_ALL uv run python -c 'import sys; print(sys.executable)')"
@@ -390,7 +391,7 @@ bad_members = [
     or record["producer_kind"] != "pcc-python-library-ir-to-obj"
     or record["object_emitter"] != "llvmlite-target-machine"
     or record["uses_host_cc"] is not False
-    or not str(record["source"]).startswith("pcc/py_runtime/py/")
+    or not str(record["source"]).startswith("pcc/runtime/py/")
     or not str(record["source"]).endswith(".py")
 ]
 if bad_members:
@@ -836,8 +837,8 @@ from pcc.unsafe import (
 )
 
 
-pcc_runtime_log_event_code = extern(
-    "pcc_runtime_log_event_code",
+pcc_diagnostics_runtime_log_event_code = extern(
+    "pcc_diagnostics_runtime_log_event_code",
     (c_int32, c_int32, c_int64, c_int64, c_ptr),
     c_void,
 )
@@ -862,7 +863,7 @@ pcc_current_native_thread_token = extern(
 @c_abi_typed_export("main", "i32", ("i32", "ptr", "ptr"))
 def main(argc: int, argv: c_ptr, envp: c_ptr) -> int:
     write(1, cstr("L0\n"), 3)
-    pcc_runtime_log_event_code(1, 1, 40, 5, null())
+    pcc_diagnostics_runtime_log_event_code(1, 1, 40, 5, null())
     write(1, cstr("L1\n"), 3)
     write(1, cstr("A0\n"), 3)
     obj = pcc_gc_alloc(40, 5, 0)
@@ -1223,7 +1224,7 @@ def test_linux_x86_64_docker_syscall6_differential_clang_vs_self_backend():
     result = _run_linux_x86_64_harness(rf"""
 set -euo pipefail
 env -u LC_ALL uv run python - <<'PYEOF'
-from pcc.llvm_capi import ir
+from pcc.ir import ir
 from pcc.backend.self_backend_dispatch import emit_self_asm
 
 MSG = b"pcc syscall6 ok\n"

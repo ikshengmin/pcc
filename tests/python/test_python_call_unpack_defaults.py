@@ -9,9 +9,9 @@ import pytest
 from pcc1_gate import repo_root
 
 from pcc1_gate import find_current_pcc1, skip_or_fail_no_current_pcc1
-from pcc.py_frontend.codegen.call_arg_lowering import CallArgLoweringMixin
-from pcc.py_frontend.codegen.call_resolution_lowering import CallResolutionLoweringMixin
-from pcc.py_frontend.py_ast import (
+from pcc.frontends.python.codegen.call_arg_lowering import CallArgLoweringMixin
+from pcc.frontends.python.codegen.call_resolution_lowering import CallResolutionLoweringMixin
+from pcc.frontends.python.py_ast import (
     Arg,
     Call,
     DictExpr,

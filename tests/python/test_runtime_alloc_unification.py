@@ -11,10 +11,10 @@ def _read(rel: str) -> str:
 
 def test_hot_container_constructors_use_pcc_gc_alloc_in_pcc_python_ports():
     expectations = {
-        "pcc/py_runtime/py/py_list.py": "pcc_gc_alloc(40, 5, 0)",
-        "pcc/py_runtime/py/py_tuple.py": "pcc_gc_alloc(bytes_total, 7, 0)",
-        "pcc/py_runtime/py/py_dict.py": "pcc_gc_alloc(56, 6, 0)",
-        "pcc/py_runtime/py/py_set.py": "pcc_gc_alloc(48, 8, 0)",
+        "pcc/runtime/py/py_list.py": "pcc_gc_alloc(40, 5, 0)",
+        "pcc/runtime/py/py_tuple.py": "pcc_gc_alloc(bytes_total, 7, 0)",
+        "pcc/runtime/py/py_dict.py": "pcc_gc_alloc(56, 6, 0)",
+        "pcc/runtime/py/py_set.py": "pcc_gc_alloc(48, 8, 0)",
     }
     for rel, needle in expectations.items():
         text = _read(rel)
@@ -24,7 +24,7 @@ def test_hot_container_constructors_use_pcc_gc_alloc_in_pcc_python_ports():
 
 def test_split_string_accessors_allocate_strings_through_gc():
 
-    py_text = _read("pcc/py_runtime/py/py_str_accessors.py")
+    py_text = _read("pcc/runtime/py/py_str_accessors.py")
     assert 'extern("pcc_gc_alloc"' in py_text
     assert "pcc_gc_alloc(40 + byte_len + 1, 4, 0)" in py_text
     assert "s = malloc(40 + byte_len + 1)" not in py_text

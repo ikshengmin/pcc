@@ -22,7 +22,7 @@ _BUILD.mkdir(parents=True, exist_ok=True)
 
 
 def _compile_to_ll(source: str, name: str, *, recursive: bool) -> str:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = _BUILD / f"{name}.py"
     out = _BUILD / f"{name}.ll"
@@ -66,8 +66,8 @@ def test_recursive_import_skips_py_cpy_import():
     )
 
 
-def test_pcc_py_stdlib_constant_import_stays_native():
-    """``import string`` should use the pcc/py_stdlib port and resolve
+def test_pcc_stdlib_constant_import_stays_native():
+    """``import string`` should use the pcc/stdlib port and resolve
     exported literal constants without CPython module fallback."""
     program = textwrap.dedent("""
         import string
@@ -80,8 +80,8 @@ def test_pcc_py_stdlib_constant_import_stays_native():
     assert "abcdefghijklmnopqrstuvwxyz" in ir_text
 
 
-def test_pcc_py_stdlib_from_import_constant_stays_native():
-    """``from string import CONST`` should bind the exported pcc/py_stdlib
+def test_pcc_stdlib_from_import_constant_stays_native():
+    """``from string import CONST`` should bind the exported pcc/stdlib
     constant directly, using normal CPython spelling without a module
     fallback."""
     program = textwrap.dedent("""
@@ -100,9 +100,9 @@ def test_pcc_py_stdlib_from_import_constant_stays_native():
     assert "abcdefghijklmnopqrstuvwxyz" in ir_text
 
 
-def test_dotted_pcc_py_stdlib_import_routes_to_native_submodule():
+def test_dotted_pcc_stdlib_import_routes_to_native_submodule():
     """``import urllib.parse`` should bind the top-level CPython name
-    while routing ``urllib.parse.fn`` to the native pcc/py_stdlib
+    while routing ``urllib.parse.fn`` to the native pcc/stdlib
     submodule."""
     program = textwrap.dedent("""
         import urllib.parse
@@ -123,7 +123,7 @@ def test_dotted_pcc_py_stdlib_import_routes_to_native_submodule():
 def test_native_sibling_import_alias_value_position_stays_native():
     """A function-local ``import pkg.sub as sub; return sub`` should not
     re-materialize the native sibling module through CPython fallback."""
-    from pcc.py_frontend.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline import compile_python_multi
 
     root = _BUILD / "native_pkg_alias_value"
     pkg = root / "pkg_alias_value"
@@ -159,7 +159,7 @@ def test_native_sibling_import_alias_value_position_stays_native():
 
 
 def test_default_off_mode_auto_routes_available_native_stdlib():
-    """With libpython off by default, an available pcc/py_stdlib provider
+    """With libpython off by default, an available pcc/stdlib provider
     should be selected automatically; users should not need a private
     ``std.*`` spelling or an explicit recursive_stdlib flag."""
     program = textwrap.dedent("""

@@ -14,7 +14,7 @@ TARGETS = ("aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu",
 
 @pytest.mark.parametrize("target", TARGETS)
 def test_c_multi_unit_object_contains_one_stack_map_and_resolved_cross_unit_symbol(tmp_path, target):
-    from pcc.evaluater.c_evaluator import CEvaluator
+    from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 
     units = [
         ("first.c", f'''target triple = "{target}"

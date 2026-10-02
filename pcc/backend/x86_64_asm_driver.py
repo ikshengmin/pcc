@@ -244,7 +244,7 @@ def _parse_file(asm_text: str):
         if line.startswith(".type "):
             body = line[len(".type "):]
             pieces = [part.strip() for part in body.split(",")]
-            if len(pieces) != 2 or pieces[1] not in ("@function", "@object", "@tls_object"):
+            if len(pieces) != 2 or not pieces[0] or pieces[1] not in ("@function", "@object", "@tls_object"):
                 raise X86EncodeError(f"bad .type directive {line!r}")
             symbol_type = STT_FUNC if pieces[1] == "@function" else STT_TLS if pieces[1] == "@tls_object" else STT_OBJECT
             meta = symbols.setdefault(pieces[0], _SymbolMeta())
@@ -429,7 +429,10 @@ def assemble_file_keeping_labels(asm_text: str, keep_labels) -> ElfObject:
     """
     plans, order, symbol_meta = _parse_file(asm_text)
     labels, measured_sizes = _measure_sections(plans, order, symbol_meta)
-    missing_definitions = sorted(set(symbol_meta) - set(labels))
+    # A .type declaration is also legal for an external reference. A size
+    # describes a definition and still requires a label in this object.
+    missing_definitions = sorted(name for name, meta in symbol_meta.items()
+                                 if name not in labels and meta.size is not None)
     if missing_definitions:
         raise X86EncodeError(
             "assembly metadata names symbols without definitions: "
@@ -540,7 +543,7 @@ def assemble_file_keeping_labels(asm_text: str, keep_labels) -> ElfObject:
             symbol_type,
         )
         (global_symbols if meta.global_ else local_symbols).append(record)
-    for name in sorted(referenced - set(labels)):
+    for name in sorted((referenced | set(symbol_meta)) - set(labels)):
         meta = symbol_meta.get(name, _SymbolMeta())
         global_symbols.append(ElfSymbol(
             name, 0, 0, 0, STB_GLOBAL, meta.type,

@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
+from pcc.frontends.python import pipeline
+from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 STRICT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_zpage_lifecycle.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 DEALLOC_SOURCE = RUNTIME_DIR / "py" / "py_obj_dealloc.py"
@@ -199,10 +199,10 @@ def test_backend4_free_path_never_scans_all_zpage_lists_for_origin() -> None:
 
 
 def test_production_archive_has_one_zpage_lifecycle_owner(
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     symbols_result = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_py_runtime_archive)],
+        ["nm", "-A", "-g", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -379,10 +379,10 @@ def _link_zpage_tail_reuse_probe(
 
 def test_zpage_lifecycle_for_cache_limit_reuse_and_large_retire(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     implementation = _link_zpage_lifecycle_probe(
-        tmp_path, "zpage_lifecycle_pcc_python", pcc_py_runtime_archive
+        tmp_path, "zpage_lifecycle_pcc_python", pcc_runtime_archive
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30
@@ -401,10 +401,10 @@ def test_zpage_lifecycle_for_cache_limit_reuse_and_large_retire(
 
 def test_zpage_lifecycle_for_owner_payload_tail_reuse(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ) -> None:
     implementation = _link_zpage_tail_reuse_probe(
-        tmp_path, "zpage_tail_reuse_pcc_python", pcc_py_runtime_archive
+        tmp_path, "zpage_tail_reuse_pcc_python", pcc_runtime_archive
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30

@@ -13,9 +13,9 @@ entry:
 def test_tailcall_pass_rewrites_through_real_pipeline(monkeypatch):
     # Importing pcc installs roadmap_deepwire from pcc.__init__, which wraps the
     # real pass-pipeline entry point.  This test intentionally calls that entry
-    # point instead of pcc.tailcall_ir directly.
+    # point instead of pcc.ir.optimization.tailcall_ir directly.
     import pcc  # noqa: F401
-    from pcc.py_frontend import ir_pass_pipeline
+    from pcc.frontends.python import ir_pass_pipeline
 
     monkeypatch.delenv("PCC_DISABLE_ROADMAP_DEEPWIRE", raising=False)
     out = ir_pass_pipeline.run_python_ir_pass_pipeline(
@@ -30,7 +30,7 @@ def test_tailcall_pass_rewrites_through_real_pipeline(monkeypatch):
 
 def test_tailcall_pass_explain_reports_tailcall_decision(tmp_path, monkeypatch):
     import pcc  # noqa: F401
-    from pcc.py_frontend import ir_pass_pipeline
+    from pcc.frontends.python import ir_pass_pipeline
 
     explain_path = tmp_path / "passes.txt"
     monkeypatch.setenv("PCC_PASSES_EXPLAIN", "1")

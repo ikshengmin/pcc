@@ -9,8 +9,8 @@ path as not having.  These tests pin the owned pipeline in place.
 
 import pytest
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.py_frontend.pipeline_pass_config import PYTHON_IR_PASS_DEFAULT_TIER
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.frontends.python.pipeline_pass_config import PYTHON_IR_PASS_DEFAULT_TIER
 
 
 _UNIT_IR = """\
@@ -29,7 +29,7 @@ def _units():
 
 
 def test_self_constructor_does_not_load_llvm_layout(monkeypatch):
-    import pcc.evaluater.c_evaluator as evaluator_module
+    import pcc.frontends.c.evaluator.c_evaluator as evaluator_module
 
     def forbidden():
         pytest.fail("self backend requested an external LLVM data layout")
@@ -68,7 +68,7 @@ def test_prepare_self_backend_units_runs_the_owned_default_tier(monkeypatch):
     evaluator = CEvaluator(backend="self")
     calls = []
 
-    import pcc.py_frontend.compiled_owned_passes as owned
+    import pcc.frontends.python.compiled_owned_passes as owned
 
     original = owned.run_owned_passes
 

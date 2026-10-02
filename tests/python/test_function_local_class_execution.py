@@ -11,10 +11,10 @@ import textwrap
 def test_function_local_class_has_per_call_identity_capture_and_errors(
     tmp_path,
     monkeypatch,
-    pcc_py_runtime_archive,
+    pcc_runtime_archive,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_py_runtime_archive))
-    from pcc.py_frontend.pipeline import compile_python
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
+    from pcc.frontends.python.pipeline import compile_python
 
     source = textwrap.dedent(
         """
@@ -85,9 +85,9 @@ def test_function_local_class_has_per_call_identity_capture_and_errors(
 
 
 def test_function_local_class_binding_has_owned_gc_root_shape():
-    from pcc.parse.py_lift import parse_and_lift
-    from pcc.py_frontend.codegen.layer1 import L1CodeGen
-    from pcc.py_frontend.type_infer import infer_module
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.type_infer import infer_module
 
     source = textwrap.dedent(
         """
@@ -114,3 +114,4 @@ def test_function_local_class_binding_has_owned_gc_root_shape():
     assert "@pcc_gc_load_ptr" in body
     assert "@pcc_gc_frame_leave" in body
     assert "_Local__pcc_cap_value" in body
+    assert any("store i1 1" in line and ".bound." in line and "Local" in line for line in body.splitlines())

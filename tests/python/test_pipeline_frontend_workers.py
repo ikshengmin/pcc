@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend import pipeline_frontend_workers
+from pcc.frontends.python import pipeline
+from pcc.frontends.python import pipeline_frontend_workers
 
 
 def test_frontend_job_budget_and_overrides_match_the_facade(monkeypatch):
@@ -217,15 +217,15 @@ def test_codegen_lanes_include_large_ast_sidecars_in_memory_weight(
 
 
 def test_codegen_lane_exports_are_available_to_native_pcc1() -> None:
-    from pcc.py_frontend.codegen.layer1_support import (
+    from pcc.frontends.python.codegen.layer1_support import (
         _default_native_module_exports,
     )
 
     exports = _default_native_module_exports(
-        "pcc.py_frontend.pipeline_frontend_workers"
+        "pcc.frontends.python.pipeline_frontend_workers"
     )
     assert exports is not None
-    worker_exports = exports["pcc.py_frontend.pipeline_frontend_workers"]
+    worker_exports = exports["pcc.frontends.python.pipeline_frontend_workers"]
     assert "split_codegen_chunks_by_source_size" in worker_exports
     assert "compiled_native_auto_jobs" in worker_exports
     assert "compiled_native_export_jobs" in worker_exports
@@ -239,7 +239,7 @@ def test_codegen_lane_exports_are_available_to_native_pcc1() -> None:
 
 def test_parallel_frontend_imports_lane_policy_as_static_symbols() -> None:
     """Compiled pcc1 must not require attributes on a partial module object."""
-    from pcc.py_frontend import pipeline_frontend_parallel
+    from pcc.frontends.python import pipeline_frontend_parallel
 
     assert (
         pipeline_frontend_parallel._split_codegen_chunks_by_source_size
@@ -399,7 +399,7 @@ def test_summary_plan_uses_native_collector_projection_and_measured_driver(monke
 
 
 def test_summary_file_size_observation_does_not_read_payload(monkeypatch):
-    from pcc.py_frontend import pipeline_frontend_parallel
+    from pcc.frontends.python import pipeline_frontend_parallel
     class SeekOnly:
         def __enter__(self): return self
         def __exit__(self, *args): return False
@@ -411,7 +411,7 @@ def test_summary_file_size_observation_does_not_read_payload(monkeypatch):
 
 
 def test_summary_command_environment_uses_the_admission_snapshot(monkeypatch):
-    from pcc.py_frontend.worker_process_pool import _command_spec
+    from pcc.frontends.python.worker_process_pool import _command_spec
     workers = pipeline_frontend_workers
     monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: 128 * 1024**2)
     monkeypatch.setattr(workers, "_worker_collector", lambda: 1)
@@ -438,7 +438,7 @@ def test_preload_clamped_to_one_job_does_not_reserve_a_child(monkeypatch, tmp_pa
 
 
 def _assert_preload_without_spawn(monkeypatch, tmp_path, root_count, no_work_dir, one_job):
-    from pcc.py_frontend import type_infer
+    from pcc.frontends.python import type_infer
     roots = ["root" + str(i) for i in range(root_count)]
     expected = {name: {"owner": name} for name in roots}
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(4 * 1024**3))
@@ -460,7 +460,7 @@ def _assert_preload_without_spawn(monkeypatch, tmp_path, root_count, no_work_dir
 
 
 def test_departing_coordinator_and_empty_safe_lane_do_not_reserve_workers(monkeypatch):
-    from pcc.py_frontend import pipeline_frontend_parallel as parallel
+    from pcc.frontends.python import pipeline_frontend_parallel as parallel
     def forbidden(_jobs):
         raise AssertionError("no child co-resides with this owner")
     monkeypatch.setattr(parallel, "_compiled_native_auto_jobs", forbidden)
@@ -471,7 +471,7 @@ def test_departing_coordinator_and_empty_safe_lane_do_not_reserve_workers(monkey
 
 
 def test_direct_safe_workers_still_reserve_from_their_actual_owner(monkeypatch):
-    from pcc.py_frontend import pipeline_frontend_parallel as parallel
+    from pcc.frontends.python import pipeline_frontend_parallel as parallel
     called = []
     monkeypatch.setattr(parallel, "_compiled_native_auto_jobs", lambda jobs: called.append(jobs) or 1)
     assert parallel._codegen_safe_worker_jobs(2, True, 3, "") == 1
@@ -479,7 +479,7 @@ def test_direct_safe_workers_still_reserve_from_their_actual_owner(monkeypatch):
 
 
 def test_deferred_execution_samples_driver_after_input_preparation(monkeypatch):
-    from pcc.py_frontend import deferred_frontend_schedule as scheduler
+    from pcc.frontends.python import deferred_frontend_schedule as scheduler
     workers = pipeline_frontend_workers
     gib = 1024**3
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
@@ -501,7 +501,7 @@ def test_deferred_execution_samples_driver_after_input_preparation(monkeypatch):
 
 
 def test_empty_deferred_work_does_not_query_memory_or_spawn(monkeypatch):
-    from pcc.py_frontend import deferred_frontend_schedule as scheduler
+    from pcc.frontends.python import deferred_frontend_schedule as scheduler
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "1")
     def forbidden(*args, **kwargs):
@@ -516,7 +516,7 @@ def test_empty_deferred_work_does_not_query_memory_or_spawn(monkeypatch):
 
 @pytest.mark.parametrize("root_count", [16, 20])
 def test_large_preload_roots_fall_back_to_parent_when_child_does_not_fit(monkeypatch, tmp_path, root_count):
-    from pcc.py_frontend import type_infer
+    from pcc.frontends.python import type_infer
     workers = pipeline_frontend_workers
     roots = ["root" + str(i) for i in range(root_count)]
     expected = {name: {"owner": name} for name in roots}

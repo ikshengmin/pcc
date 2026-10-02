@@ -473,7 +473,7 @@ def _prepare_executable_image(
     # can only come from the image itself, so importing one produces a binary
     # that links and then dies at startup with a dyld "Symbol not found"
     # instead of a link error naming the gap.  That is exactly what a missing
-    # ``user_pcc_llvm_capi_ir_LiteralStructType___init__0`` did to the first
+    # ``user_pcc_ir_ir_LiteralStructType___init__0`` did to the first
     # pcc1 carrying the C frontend.
     internal_undefined = sorted(
         name for name in imports

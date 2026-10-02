@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from pcc.py_frontend.codegen.unsafe_lowering import (
+from pcc.frontends.python.codegen.unsafe_lowering import (
     UNSAFE_INTRINSICS,
     _UNSAFE_INTRINSIC_FAMILIES,
     _unsafe_intrinsic_family,
@@ -11,7 +11,7 @@ from pcc.py_frontend.codegen.unsafe_lowering import (
 
 
 REPO = Path(__file__).absolute().parents[2]
-SOURCE = REPO / "pcc" / "py_frontend" / "codegen" / "unsafe_lowering.py"
+SOURCE = REPO / "pcc" / "frontends" / "python" / "codegen" / "unsafe_lowering.py"
 
 HELPERS = (
     "_emit_unsafe_va_numeric_f64",

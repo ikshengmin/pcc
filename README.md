@@ -304,7 +304,7 @@ Python inputs default to the strict no-libpython path
 | `--python-libpython=on` | Always allow/link the CPython fallback surface. |
 | `--ir-scaffold=on` | Default. Closed-world lowering used by the strict self-host work. |
 | `--ir-scaffold=off` | Compatibility escape hatch for the older Python lowering path. |
-| `--backend {llvm,llvm_capi,self}` | Both `pcc` and `pcc1` default to `self`. The other two are external reference oracles. |
+| `--backend self` | Both `pcc` and `pcc1` default to the owned backend. LLVM backend requests are rejected. |
 
 ### Where LLVM still is
 
@@ -314,10 +314,10 @@ verified rather than asserted:
 
 | Surface | Owner today | Status |
 |---|---|---|
-| Backend selection | Owned self backend, by default for `pcc` and `pcc1` | Done; `--backend llvm` is opt-in |
-| Default IR pass tier (`mem2reg,sroa`) | Owned, `pcc/native_ir/` | Done, no llvmlite; matches LLVM's own mem2reg on the runtime archive |
-| Higher pass tiers | `pcc/ir_passes/`, 66 of 69 modules import llvmlite | Migration debt. 7 are already thin shims over `pcc/native_ir/`; 75 of 82 registered pass names have no owned kernel yet. Host-only, and the self route refuses them rather than silently switching owner |
-| Runtime archive object emission | `pcc/tools/ir_to_obj.py`, which imports llvmlite | Live dependency on the default path |
+| Backend selection | Owned self backend | Default for CLI and public APIs; external LLVM backend requests are rejected |
+| Default IR pass tier (`mem2reg,sroa`) | Owned, `pcc/ir/optimization/` | Done, no llvmlite; matches LLVM's own mem2reg on the runtime archive |
+| Higher pass tiers | `pcc/ir/optimization/` and `run_owned_passes` | Explicit owned kernels; unsupported requests fail. External LLVM algorithms are removed from the product |
+| Runtime archive object emission | Owned backend/object writers | LLVM emitter removed; Darwin structured transport publishes standard Mach-O |
 | Assembly and link | `pcc_link_macho.py` re-links, but a verbose self compile still shows `cc` invoked on the emitted `.s` | Live dependency on the default path |
 | C frontend | Historical LLVM/pycparser routes | Migration debt; see the dependency-ownership contract in `AGENTS.md` |
 
@@ -327,7 +327,7 @@ moved. Each row moves when its own owned implementation executes the boundary.
 `ir-scaffold` names a lowering path, not a level of Python completeness, and
 for an ordinary application it changes nothing at all: its three effects are
 about compiling pcc's *own* IR-builder code (treating
-`from pcc.llvm_capi.compat import ir` as a compile-time scaffold so
+`from pcc.ir.compat import ir` as a compile-time scaffold so
 `compat.py`/`binding.py` stay out of the link, the matching libpython
 decision, and native lowering of `ir.*` builder calls). `auto` resolves to
 `on`, `off` is an older diagnostic path, and no application ever needs to pass
@@ -347,7 +347,7 @@ the installed package site remain for packages outside the project.
 The public Python API is for C compilation.
 
 ```python
-from pcc.evaluater.c_evaluator import CEvaluator
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 
 ev = CEvaluator()
 print(ev.evaluate("int add(int a, int b) { return a + b; }", entry="add", args=[3, 7]))
@@ -434,7 +434,7 @@ remain gated on the new results.
 |---|---|
 | C frontend | Mature relative to the rest of the repo; validated through C tests, GCC/Clang-derived suites, and real projects (Lua, SQLite, PostgreSQL `libpq`, zlib, lz4, zstd, PCRE, OpenSSL, readline, nginx). |
 | Python frontend | Experimental. Typed code can lower to native IR; unsupported idioms fail by default and only route through the CPython bridge when `--python-libpython=auto/on` is explicit. |
-| Runtime | Active migration from C runtime sources to pcc-Python modules under `pcc/py_runtime/py/`, using `pcc.unsafe` and `pcc.extern` for low-level operations. |
+| Runtime | Active migration from C runtime sources to pcc-Python modules under `pcc/runtime/py/`, using `pcc.unsafe` and `pcc.extern` for low-level operations. |
 | Libc ownership | In progress. A host-pcc0, self-backend, no-libpython x86_64 Linux tracer is proven statically linked with no `PT_INTERP`, `DT_NEEDED`, undefined symbols, hand-written C startup, or libc object. This is not yet the full runtime/five-GC closure. Darwin intentionally retains an enumerated libSystem ABI boundary and is not a zero-libc target. |
 | Self backend | Emission for AArch64 Darwin and x86_64 Linux subsets, and the default for both `pcc` and `pcc1`; used by bootstrap/build gates. Still experimental outside those subsets. |
 | Bootstrap | macOS arm64 three-stage `pcc1 → pcc2 → pcc3` completes in both the default and strict self-backend paths; strict-path `pcc2`/`pcc3` IR is byte-identical with 0 `py_cpy_*` calls and no `libpython`. Issue 1 closed 2026-05-01. |
@@ -467,13 +467,13 @@ for the implementation behind each layer.
 
 | Layer | Main paths | Role |
 |---|---|---|
-| CLI | `pcc/cli_core.py`, `pcc/pcc.py`, `pcc/cli_bootstrap.py` | User command line, bootstrap CLI, option routing. |
-| Public API | `pcc/api.py`, `pcc/evaluater/c_evaluator.py` | Embeddable C build/evaluate/module APIs. |
-| Project collection | `pcc/project.py` | Directory scanning, make-derived source sets, dependency projects, TU setup. |
-| C frontend | `pcc/lex/`, `pcc/parse/`, `pcc/codegen/`, `pcc/evaluater/` | C preprocessing, parsing, semantic lowering, execution/emission. |
-| Python frontend | `pcc/py_frontend/`, `pcc/parse/py_*` | Python parse/lift, type inference, native lowering, CPython fallback decisions. |
-| Runtime | `pcc/py_runtime/`, `pcc/extern/`, `pcc/unsafe/` | Runtime objects, extern-C bridge, low-level intrinsics. |
-| Backends | `pcc/llvm_capi/`, `pcc/backend/` | LLVM compatibility layer and experimental self backend. |
+| CLI | `pcc/driver/cli_core.py`, `pcc/pcc.py`, `pcc/driver/cli_bootstrap.py` | User command line, bootstrap CLI, option routing. |
+| Public API | `pcc/api.py`, `pcc/frontends/c/evaluator/c_evaluator.py` | Embeddable C build/evaluate/module APIs. |
+| Project collection | `pcc/driver/project.py` | Directory scanning, make-derived source sets, dependency projects, TU setup. |
+| C frontend | `pcc/frontends/c/lex/`, `pcc/frontends/c/parse/`, `pcc/frontends/c/codegen/`, `pcc/frontends/c/evaluator/` | C preprocessing, parsing, semantic lowering, execution/emission. |
+| Python frontend | `pcc/frontends/python/`, `pcc/frontends/c/parse/py_*` | Python parse/lift, type inference, native lowering, CPython fallback decisions. |
+| Runtime | `pcc/runtime/`, `pcc/extern/`, `pcc/unsafe/` | Runtime objects, extern-C bridge, low-level intrinsics. |
+| Backends | `pcc/ir/`, `pcc/backend/` | Owned IR construction, optimization and native backend. |
 
 See [AGENTS.md](AGENTS.md) for the full repository map and maintainer workflow.
 
@@ -487,7 +487,7 @@ typedefs, function pointers, control flow, casts, arithmetic, bitwise/shift ops,
 and variadics; preprocessing with macro expansion and conditional compilation;
 merged-directory builds, separate translation units, make-derived source
 selection, dependency projects, compile caching, and host linking; LLVM IR /
-object / assembly / MCJIT / executable workflows; and explicit signedness
+owned object / assembly / executable workflows; and explicit signedness
 tracking on top of LLVM integer types (compile-time constant evaluation and
 runtime lowering as separate semantic paths).
 
@@ -514,7 +514,7 @@ IR; native `int`, `bool`, `float`, `str`, `list`, `tuple`, `dict`, `set`, class,
 exception, dunder, and selected stdlib/runtime paths in the corpus; direct C
 interop via `pcc.extern`; low-level runtime authoring via `pcc.unsafe`; explicit
 CPython fallback (`--python-libpython=auto/on`); and multi-file/bootstrap
-compilation via `scripts/pcc_multi.py` and `pcc/cli_bootstrap.py`.
+compilation via `scripts/pcc_multi.py` and `pcc/driver/cli_bootstrap.py`.
 
 The self-host path is stricter than ordinary user Python: pcc's own source must
 avoid or isolate runtime `getattr`/`setattr`, string-keyed method dispatch,
@@ -640,13 +640,12 @@ GUI does not mean zero-libc GUI**.
 CPython runs pcc -> pcc1
 pcc1 compiles pcc -> pcc2
 pcc2 compiles pcc -> pcc3
-compare pcc2 and pcc3 after Mach-O signature normalization
+compare pcc2 and pcc3 byte-for-byte (must be identical)
 ```
 
 ```bash
-scripts/bootstrap.sh                 # default (self backend on macOS arm64)
-scripts/bootstrap.sh --backend llvm
-scripts/bootstrap.sh --stage 1
+uv run python scripts/bootstrap.py             # owned self backend, every platform
+uv run python scripts/bootstrap.py --stage 1
 ```
 
 A stage1 binary also provides a native pytest subset driver:
@@ -695,8 +694,8 @@ frontend ownership leaks and the backend-#4 defects fixed in 2026-06.
 
 **Threading:** free-threaded under `PCC_WITH_THREADS=1`, using `__atomic_*`
 refcounts rather than a GIL, so multiple pthreads run pcc-compiled Python on
-separate cores. The [threading shim](pcc/py_stdlib/threading.py) is backed by
-`pthread_*`, and [`boc.py`](pcc/py_stdlib/boc.py) provides behavior-oriented
+separate cores. The [threading shim](pcc/stdlib/threading.py) is backed by
+`pthread_*`, and [`boc.py`](pcc/stdlib/boc.py) provides behavior-oriented
 concurrency (`Cown` + a `locked` context manager that acquires cowns in
 canonical order — deadlock-free by construction). A 4-pthread CPU-bound proof
 lands ~3.5× speedup on a macOS arm64 host.
@@ -722,8 +721,8 @@ million sockets, the pcc-Python runtime's equality, or arbitrary application
 suspension. Current plain-`def` may-park call sites and external gateway
 execution remain under correctness investigation.
 
-A small executable category/effect/proof checker (`pcc/category.py`,
-`pcc/runtime_effects.py`) models runtime composition and classifies ABI calls
+A small executable category/effect/proof checker (`pcc/diagnostics/contracts/category.py`,
+`pcc/diagnostics/contracts/runtime_effects.py`) models runtime composition and classifies ABI calls
 (GC barriers, frame/continuation roots, park/resume, GPU boundaries) as effect
 events. It supports scoped proof-carrying claims but is not a dependent-type
 proof system and does not prove the compiler correct. Remaining work is tracked
@@ -779,13 +778,13 @@ linked `libpython`.
 
 | Path | Role |
 |---|---|
-| `pcc/cli_core.py`, `pcc/pcc.py` | Installed `pcc` CLI + compatibility wrapper. |
-| `pcc/api.py`, `pcc/project.py` | C build/module APIs and source collection. |
-| `pcc/evaluater/c_evaluator.py`, `pcc/codegen/c_codegen.py` | C compile/evaluate/link and main C lowering. |
-| `pcc/py_frontend/` | Python type inference and native lowering. |
-| `pcc/py_runtime/` | Runtime archive sources (C) and pcc-Python ports. |
+| `pcc/driver/cli_core.py`, `pcc/pcc.py` | Installed `pcc` CLI + compatibility wrapper. |
+| `pcc/api.py`, `pcc/driver/project.py` | C build/module APIs and source collection. |
+| `pcc/frontends/c/evaluator/c_evaluator.py`, `pcc/frontends/c/codegen/c_codegen.py` | C compile/evaluate/link and main C lowering. |
+| `pcc/frontends/python/` | Python type inference and native lowering. |
+| `pcc/runtime/` | Runtime archive sources (C) and pcc-Python ports. |
 | GUI framework | Moved to https://github.com/allstoalls/pcc-gui (`import pcc_gui`, compiled by pcc1 with the application). |
-| `pcc/backend/`, `pcc/llvm_capi/` | Experimental self backend and in-repo LLVM-C path. |
+| `pcc/backend/`, `pcc/ir/` | Owned native backend and shared IR infrastructure. |
 | `pcc/kernel_ir/`, `pcc/gpu_gc/`, `pcc/dist/` | GPU kernel IR, GPU-GC seam, local-only distributed oracles. |
 | `pcc/extern/`, `pcc/unsafe/` | Python→C extern decls and low-level intrinsics. |
 | `utils/fake_libc_include/` | Fake libc headers used by the C frontend. |
@@ -800,7 +799,7 @@ General compiler:
 
 | Variable | Values | Effect |
 |---|---|---|
-| `PCC_BACKEND` | `llvm`, `llvm_capi`, `self` | Default backend when `--backend` is unset. |
+| `PCC_BACKEND` | `self` | Owned backend used when `--backend` is unset. |
 | `PCC_PYTHON_LIBPYTHON` | `auto`, `on`, `off` | Default Python fallback policy; unset means `off`. |
 | `PCC_IR_SCAFFOLD` | `off`, `on`, `auto` | Default for the closed-world Python IR scaffold; unset means `on`. |
 | `PCC_COMPILE_CACHE_DIR` / `PCC_DISABLE_COMPILE_CACHE` | path / truthy | Override or disable the TU compile cache. |
@@ -816,10 +815,9 @@ Runtime, GC, and bootstrap:
 | `PCC_RUNTIME_HIGH` | `py`, `c` | Use pcc-Python or C implementations for high-level runtime modules. |
 | `PCC_HOST_PYTHON` | command | Host Python for subprocess boundaries (e.g. self-backend emission). |
 | `PCC_WITH_LIBPYTHON` | `1` | Runtime Makefile toggle for libpython-compatible archives. |
-| `PCC_BOOTSTRAP_OUT_DIR` | path | `scripts/bootstrap.sh` output directory. |
+| `PCC_BOOTSTRAP_OUT_DIR` | path | `scripts/bootstrap.py` output directory. |
 
-LLVM/pass and diagnostic controls (`PCC_USE_LLVMLITE*`, `PCC_LIBLLVM_PATH`,
-`PCC_DISABLE_PASSES`, `PCC_LLVM_PIPELINE`, `PCC_DUMP_BAD_IR`,
+Pass and diagnostic controls (`PCC_DISABLE_PASSES`, `PCC_DUMP_BAD_IR`,
 `PCC_DEBUG_*`, `PCC_PROBE_*`, …) are documented in [AGENTS.md](AGENTS.md).
 
 ## Documentation

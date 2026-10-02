@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 _ROOT = Path(__file__).absolute().parents[2]
-_CODEGEN = _ROOT / "pcc" / "py_frontend" / "codegen"
+_CODEGEN = _ROOT / "pcc" / "frontends" / "python" / "codegen"
 
 
 def _tree(name: str) -> ast.Module:
@@ -39,14 +39,14 @@ def test_hoist_pass_is_composed_outside_layer1_mro():
     assert isinstance(calls[0].args[0], ast.Name)
     assert calls[0].args[0].id == "self"
 
-    from pcc.py_frontend.codegen.host_contract import (
+    from pcc.frontends.python.codegen.host_contract import (
         PROBE_POLICY_CONTEXTUAL_MIXIN,
         per_module_probe_policy,
     )
 
     for suffix in ("hoist_boxing", "hoist_free_names", "hoist_predicates"):
         assert (
-            per_module_probe_policy("pcc.py_frontend.codegen." + suffix)
+            per_module_probe_policy("pcc.frontends.python.codegen." + suffix)
             == PROBE_POLICY_CONTEXTUAL_MIXIN
         )
 

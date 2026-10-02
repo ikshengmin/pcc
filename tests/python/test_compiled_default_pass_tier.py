@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 import pytest
 
-from pcc.py_frontend import compiled_default_passes, pipeline
+from pcc.frontends.python import compiled_default_passes, pipeline
 
 
 _SCALAR_IR = """\

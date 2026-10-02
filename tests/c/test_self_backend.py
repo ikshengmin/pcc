@@ -163,8 +163,8 @@ from pcc.backend.self_backend_target_match import (
 from pcc.backend.self_backend_targets import (
     is_supported_self_backend_target_triple,
 )
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.project import TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.driver.project import TranslationUnit
 
 
 def parse_self_backend_module(ir_text: str):
@@ -7255,7 +7255,7 @@ def test_self_backend_layout_aware_branches_keep_semantics(tmp_path, optimize):
 def test_self_backend_evaluate_does_not_publish_llvm_native_cache(
     tmp_path, monkeypatch
 ):
-    import pcc.evaluater.c_evaluator as c_evaluator
+    import pcc.frontends.c.evaluator.c_evaluator as c_evaluator
 
     def fail_native_cache(*_args, **_kwargs):
         raise AssertionError("self backend must not enter LLVM native cache")
@@ -7277,7 +7277,7 @@ def test_self_backend_evaluate_does_not_publish_llvm_native_cache(
 def test_self_backend_system_link_uses_self_emitter_not_llvm_object_path(
     tmp_path, monkeypatch
 ):
-    import pcc.evaluater.c_evaluator as c_evaluator
+    import pcc.frontends.c.evaluator.c_evaluator as c_evaluator
 
     calls = []
     original_emit_self_asm = c_evaluator.emit_self_asm
@@ -7317,7 +7317,7 @@ def test_self_backend_system_link_uses_self_emitter_not_llvm_object_path(
 
 
 def test_self_backend_emitter_failure_does_not_fallback_to_llvm(tmp_path, monkeypatch):
-    import pcc.evaluater.c_evaluator as c_evaluator
+    import pcc.frontends.c.evaluator.c_evaluator as c_evaluator
 
     def fail_self_emitter(_ir_text):
         raise BackendUnavailable("strict self backend sentinel")
@@ -7350,7 +7350,7 @@ def test_self_backend_emitter_failure_does_not_fallback_to_llvm(tmp_path, monkey
 
 
 def test_self_backend_emit_obj_failure_does_not_fallback_to_llvm(tmp_path, monkeypatch):
-    import pcc.evaluater.c_evaluator as c_evaluator
+    import pcc.frontends.c.evaluator.c_evaluator as c_evaluator
 
     def fail_self_emitter(_ir_text):
         raise BackendUnavailable("strict self emit-obj sentinel")

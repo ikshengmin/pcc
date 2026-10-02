@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend.codegen import runtime_abi
-from pcc.py_frontend.codegen.runtime_abi import (
+from pcc.frontends.python import pipeline
+from pcc.frontends.python.codegen import runtime_abi
+from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_I32_GLOBALS,
     FREESTANDING_GC_I64_GLOBALS,
     FREESTANDING_GC_PTR_GLOBALS,
@@ -18,7 +18,7 @@ from pcc.py_frontend.codegen.runtime_abi import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 STATE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_state.py"
 SELECTOR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_relocation_selector.py"
 SUBSTRATE_SOURCE = RUNTIME_DIR / "py" / "py_substrate.py"
@@ -242,10 +242,10 @@ def test_raw_gc_state_uses_string_kinds_not_managed_llvm_type_registry():
 
 
 def test_built_production_archive_owns_and_runs_freestanding_gc_state(
-    tmp_path: Path, pcc_py_runtime_archive: Path
+    tmp_path: Path, pcc_runtime_archive: Path
 ):
     members = subprocess.run(
-        ["ar", "-t", str(pcc_py_runtime_archive)],
+        ["ar", "-t", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -254,7 +254,7 @@ def test_built_production_archive_owns_and_runs_freestanding_gc_state(
     assert "freestanding_gc_state.o" in members.stdout.splitlines()
 
     symbols = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_py_runtime_archive)],
+        ["nm", "-A", "-g", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -272,14 +272,14 @@ def test_built_production_archive_owns_and_runs_freestanding_gc_state(
     )
 
     result = _build_and_run_harness(
-        tmp_path, "gc_state_production_archive", [str(pcc_py_runtime_archive)]
+        tmp_path, "gc_state_production_archive", [str(pcc_runtime_archive)]
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == ""
 
 
 def test_current_production_archive_gc_state_drives_all_five_collectors(
-    tmp_path: Path, pcc_py_runtime_archive: Path
+    tmp_path: Path, pcc_runtime_archive: Path
 ):
     source = tmp_path / "gc_state_runtime.py"
     executable = tmp_path / "gc_state_runtime"
@@ -306,7 +306,7 @@ def test_current_production_archive_gc_state_drives_all_five_collectors(
         backend="self",
         ir_scaffold_mode="on",
         libpython_mode="off",
-        runtime_archive=str(pcc_py_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
 
     expected = "(700, 10, 10)\n(701, 11, 12)\nFalse\nTrue\n6\n"

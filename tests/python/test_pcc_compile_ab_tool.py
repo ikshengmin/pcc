@@ -45,17 +45,19 @@ def _write_build_evidence(
     canonical_build_root = tmp_path / "canonical-stage-build"
 
     def populate_source(root, primary_text):
-        (root / "pcc" / "llvm_capi").mkdir(parents=True)
+        (root / "pcc" / "ir").mkdir(parents=True)
         (root / "scripts").mkdir()
         (root / "utils" / "fake_libc_include").mkdir(parents=True)
         (root / tool.PRIMARY_SOURCE).write_text(primary_text, encoding="utf-8")
-        (root / "pcc" / "cli_core.py").write_text("common = 1\n", encoding="utf-8")
+        (root / "pcc" / "driver" / "cli_core.py").write_text("common = 1\n", encoding="utf-8")
         (root / "pcc" / "__main__.py").write_text("main = 1\n", encoding="utf-8")
         (root / "AGENTS.md").write_text("# frozen\n", encoding="utf-8")
         (root / "pyproject.toml").write_text("[project]\nname='pcc'\n", encoding="utf-8")
-        (root / "scripts" / "bootstrap.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-        (root / "scripts" / "run_pcc_native_deferred.sh").write_text(
-            "#!/bin/sh\n", encoding="utf-8"
+        (root / "scripts" / "bootstrap.py").write_text(
+            "# bootstrap\n", encoding="utf-8"
+        )
+        (root / "scripts" / "run_pcc_native_deferred.py").write_text(
+            "# native deferred wrapper\n", encoding="utf-8"
         )
         (root / "scripts" / "run_pcc_deferred_link.py").write_text(
             "# deferred link\n", encoding="utf-8"
@@ -388,7 +390,7 @@ def test_host_source_closure_contains_link_and_fake_libc_owners():
     assert {
         "AGENTS.md",
         "scripts/run_pcc_deferred_link.py",
-        "scripts/run_pcc_native_deferred.sh",
+        "scripts/run_pcc_native_deferred.py",
         "scripts/pcc_link_macho.py",
         "scripts/pcc_link_elf.py",
         "utils/fake_libc_include/Python.h",
@@ -1191,7 +1193,7 @@ def test_runtime_bundle_copies_provenance_sources_and_detects_changes(
         "_seal_runtime_bundle",
         lambda _bundle_dir, _archive, _copied: {"verified": True},
     )
-    runtime_source = tmp_path / "pcc" / "py_runtime" / "py" / "sample.py"
+    runtime_source = tmp_path / "pcc" / "runtime" / "py" / "sample.py"
     runtime_source.parent.mkdir(parents=True)
     runtime_source.write_text("VALUE = 1\n", encoding="utf-8")
     source_sha = hashlib.sha256(runtime_source.read_bytes()).hexdigest()
@@ -1204,7 +1206,7 @@ def test_runtime_bundle_copies_provenance_sources_and_detects_changes(
             {
                 "members": [
                     {
-                        "source": "pcc/py_runtime/py/sample.py",
+                        "source": "pcc/runtime/py/sample.py",
                         "source_sha256": source_sha,
                     }
                 ]
@@ -1303,11 +1305,11 @@ def test_runtime_bundle_can_verify_against_an_isolated_source_root(
         "_seal_runtime_bundle",
         lambda _bundle_dir, _archive, _copied: {"verified": True},
     )
-    runtime_source = frozen_root / "pcc" / "py_runtime" / "py" / "sample.py"
+    runtime_source = frozen_root / "pcc" / "runtime" / "py" / "sample.py"
     runtime_source.parent.mkdir(parents=True)
     runtime_source.write_text("VALUE = 1\n", encoding="utf-8")
     source_sha = hashlib.sha256(runtime_source.read_bytes()).hexdigest()
-    live_source = live_root / "pcc" / "py_runtime" / "py" / "sample.py"
+    live_source = live_root / "pcc" / "runtime" / "py" / "sample.py"
     live_source.parent.mkdir(parents=True)
     live_source.write_text("VALUE = 2\n", encoding="utf-8")
 
@@ -1320,7 +1322,7 @@ def test_runtime_bundle_can_verify_against_an_isolated_source_root(
             {
                 "members": [
                     {
-                        "source": "pcc/py_runtime/py/sample.py",
+                        "source": "pcc/runtime/py/sample.py",
                         "source_sha256": source_sha,
                     }
                 ]

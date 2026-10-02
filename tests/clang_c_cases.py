@@ -8,8 +8,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.project import TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.driver.project import TranslationUnit
 from tests.worker_process import run_worker_process
 
 

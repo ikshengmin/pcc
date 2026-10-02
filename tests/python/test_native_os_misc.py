@@ -23,7 +23,7 @@ _BUILD.mkdir(parents=True, exist_ok=True)
 
 
 def _compile_to_ll(source: str, name: str, *, mode: str) -> str:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = _BUILD / f"{name}.py"
     out = _BUILD / f"{name}.ll"
@@ -102,11 +102,11 @@ def test_urandom_dispatches_to_native(mode):
 
 
 def test_urandom_runtime_no_libpython(
-    tmp_path, monkeypatch, pcc_py_runtime_archive
+    tmp_path, monkeypatch, pcc_runtime_archive
 ):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
-    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_py_runtime_archive))
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
 
     src = tmp_path / "urandom_runtime.py"
     exe = tmp_path / "urandom_runtime.out"
@@ -135,7 +135,7 @@ def test_getcwd_result_stays_native_inside_os_path_join(mode):
         import os
 
         def f() -> str:
-            return str(os.path.join(os.getcwd(), "pcc", "py_runtime"))
+            return str(os.path.join(os.getcwd(), "pcc", "runtime"))
         """
     )
     ir = _compile_to_ll(program, f"getcwd_join_{mode}", mode=mode)

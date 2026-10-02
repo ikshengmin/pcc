@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from pcc.py_frontend import pipeline
+from pcc.frontends.python import pipeline
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 STRICT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_backend0_slots.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_obj_gc.py"
 COLLECTOR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_backend0_collector.py"
@@ -169,10 +169,10 @@ int main(void) {
 
 def test_production_archive_uniquely_owns_backend0_actions_and_collects_cycle(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     symbols_result = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_py_runtime_archive)],
+        ["nm", "-A", "-g", str(pcc_runtime_archive)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -191,7 +191,7 @@ def test_production_archive_uniquely_owns_backend0_actions_and_collects_cycle(
         assert ":py_obj_gc.o:" not in owners[0]
 
     implementation = _link_cycle_harness(
-        tmp_path, "backend0_cycle_pcc_python", pcc_py_runtime_archive
+        tmp_path, "backend0_cycle_pcc_python", pcc_runtime_archive
     )
     result = subprocess.run(
         [str(implementation)], capture_output=True, text=True, timeout=30
@@ -202,7 +202,7 @@ def test_production_archive_uniquely_owns_backend0_actions_and_collects_cycle(
 
 def test_backend0_finalizer_may_track_temporaries_without_table_lock_deadlock(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     source = tmp_path / "backend0_finalizer_reentry.py"
     source.write_text(
@@ -241,7 +241,7 @@ def test_backend0_finalizer_may_track_temporaries_without_table_lock_deadlock(
         str(executable),
         libpython_mode="off",
         ir_scaffold_mode="on",
-        runtime_archive=str(pcc_py_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     result = subprocess.run(
         [str(executable)],

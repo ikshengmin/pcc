@@ -132,12 +132,12 @@ _LOAD_RE = re.compile(
 _LOAD_ATOMIC_RE = re.compile(
     rf"^(?P<dest>%.*)\s*=\s*load\s+atomic\s+(?P<val_type>{_TYPE_TOKEN}),\s+"
     rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_VALUE_REF_TOKEN})\s+"
-    r"(?P<ordering>unordered|monotonic|acquire|seq_cst)(?:,\s+align\s+\d+)?$"
+    r"(?P<ordering>unordered|monotonic|acquire|seq_cst)(?:,\s+align\s+(?P<align>\d+))?$"
 )
 _STORE_ATOMIC_RE = re.compile(
     rf"^store\s+atomic\s+(?P<val_type>{_TYPE_TOKEN})\s+(?P<value>.+?),\s+"
     rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_VALUE_REF_TOKEN})\s+"
-    r"(?P<ordering>unordered|monotonic|release|seq_cst)(?:,\s+align\s+\d+)?$"
+    r"(?P<ordering>unordered|monotonic|release|seq_cst)(?:,\s+align\s+(?P<align>\d+))?$"
 )
 _ATOMICRMW_RE = re.compile(
     rf"^(?P<dest>%.*)\s*=\s*atomicrmw\s+(?P<op>add|sub|and|or|xchg)\s+"
@@ -975,7 +975,7 @@ def _decode_parenthesized_constant_cast(token: str) -> str | None:
                 return None
             if bits < 0 or bits >= (1 << src_type.width):
                 return None
-            # `pcc.stdlib._float_bits`, not `struct`: pcc1 runs this module
+            # `pcc.ir.support._float_bits`, not `struct`: pcc1 runs this module
             # without libpython and its owned `struct` rejects float codes.
             if src_type.width == 64:
                 # A double's bit pattern is already the token LLVM writes.
@@ -3941,13 +3941,20 @@ def _parse_call_instruction(
         sig_text = rest[: sig_close + 1]
         rest = rest[sig_close + 1 :].strip()
 
-    callee_match = re.match(rf"(?P<callee>{_VALUE_REF_TOKEN})\(", rest)
+    callee_match = re.match(rf"(?P<callee>{_VALUE_REF_TOKEN}|null)\(", rest)
     if callee_match is None:
         raise BackendUnavailable(
             f"self backend malformed call in {function_name!r}/{block_name!r}: {line}"
         )
     args_open = callee_match.end() - 1
     args_close = _find_matching_paren(rest, args_open)
+    callee_token = callee_match.group("callee")
+    if callee_token == "null":
+        # Constant propagation can leave a call through a known-null pointer
+        # on a dead path (e.g. a Darwin-only libSystem lookup elsewhere).
+        # Executing it is undefined; call the runtime trap instead of
+        # refusing valid IR.
+        callee_token = "@pcc_null_callee_trap"
     return _call_instr_from_parts(
         function_name,
         block_name,
@@ -3955,7 +3962,7 @@ def _parse_call_instruction(
         dest,
         ret_text,
         sig_text,
-        callee_match.group("callee"),
+        callee_token,
         rest[args_open + 1 : args_close],
         call_plane,
     )
@@ -3979,6 +3986,41 @@ def _parse_indexed_hot_instruction(
     """Publish the supported hot subset directly into final kernel records."""
     dest = _instruction_destination_from_line(line)
     dest_value_id = -1 if dest is None else indexed_seed.value_id(dest)
+
+    atomic_load = "= load atomic " in line
+    atomic_store = line.startswith("store atomic ")
+    if atomic_load or atomic_store:
+        match = _LOAD_ATOMIC_RE.match(line) if atomic_load else _STORE_ATOMIC_RE.match(line)
+        if match is None:
+            return False
+        alignment_text = match.group("align")
+        alignment = int(alignment_text) if alignment_text is not None else 0
+        if alignment_text is not None and (alignment <= 0 or alignment & (alignment - 1)):
+            raise BackendUnavailable("atomic memory alignment must be a positive power of two")
+        value_type_id = indexed_seed.intern_type(_parse_type(match.group("val_type")))
+        ptr_type_id = indexed_seed.intern_type(_parse_type(match.group("ptr_type")))
+        ptr_ref = indexed_seed.operand_ref(decode_value_token(match.group("ptr")))
+        record_id = len(indexed_seed.instruction_record_scalars) // 4
+        if atomic_load:
+            indexed_seed.instruction_record_scalars.append4(
+                value_type_id, ptr_type_id, ptr_ref, 0,
+            )
+            indexed_seed.publish_value_type_id(dest_value_id, value_type_id)
+        else:
+            indexed_seed.instruction_record_scalars.append4(
+                value_type_id,
+                indexed_seed.operand_ref(decode_value_token(match.group("value"))),
+                ptr_type_id, ptr_ref,
+            )
+        indexed_seed.instruction_record_dest_ids.append(dest_value_id)
+        indexed_seed.instruction_record_scalars.append4(
+            indexed_seed.intern_text(match.group("ordering")), alignment, 0, 0,
+        )
+        indexed_seed.instruction_record_dest_ids.append(-1)
+        indexed_seed.append_instruction(
+            "load_atomic" if atomic_load else "store_atomic", record_id, dest_value_id,
+        )
+        return True
 
     alloca_type = None
     if match := _ALLOCA_RE.match(line):
@@ -4336,6 +4378,7 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
                     _parse_type(match.group("ptr_type")),
                     decode_value_token(match.group("ptr")),
                     match.group("ordering"),
+                    int(match.group("align")) if match.group("align") is not None else 0,
                 ),
             )
         raise BackendUnavailable(
@@ -4351,6 +4394,7 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
                     _parse_type(match.group("ptr_type")),
                     decode_value_token(match.group("ptr")),
                     match.group("ordering"),
+                    int(match.group("align")) if match.group("align") is not None else 0,
                 ),
             )
         raise BackendUnavailable(

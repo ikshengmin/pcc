@@ -98,12 +98,27 @@ def emitted_memory_instruction_line(
     records = _DIRECT_INSTRUCTION_RECORDS
     if records is not None:
         try:
-            word = encode_emitted_load_store_parts(
-                mnemonic,
-                register,
-                base,
-                offset,
-            )
+            if mnemonic in ("ldar", "stlr", "stlrb"):
+                if offset != 0 or not register.startswith(("w", "x")):
+                    raise EncodeError("atomic scalar memory requires a bare address and integer register")
+                # Reuse the established typed register/address validation.
+                # Only Rn/Rt and the W/X size bit survive; acquire/release
+                # opcodes come from the same ISA words as the ASM encoder.
+                ordinary = encode_emitted_load_store_parts(
+                    "strb" if mnemonic == "stlrb" else "ldr",
+                    register, base, 0,
+                )
+                opcode = 0x88DFFC00 if mnemonic == "ldar" else 0x889FFC00
+                if mnemonic == "stlrb":
+                    opcode = 0x089FFC00
+                word = opcode | (ordinary & 0x40000000) | (ordinary & 0x3FF)
+            else:
+                word = encode_emitted_load_store_parts(
+                    mnemonic,
+                    register,
+                    base,
+                    offset,
+                )
         except EncodeError:
             pass
         else:

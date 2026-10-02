@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from dataclasses import replace
 
-from pcc.codegen.c_codegen import LLVMCodeGenerator
-from pcc.llvm_capi import compat, ir
-from pcc.py_frontend.codegen.layer1 import L1CodeGen
+from pcc.frontends.c.codegen.c_codegen import CCodeGenerator
+from pcc.ir import compat, ir
+from pcc.frontends.python.codegen.layer1 import L1CodeGen
 
 
 def _class_sources(root):
@@ -58,29 +58,29 @@ def test_owned_compat_bindings_are_the_real_provider():
 
 
 def test_field_owner_uses_real_mro_name_and_source_module():
-    from pcc.parse.py_lift import parse_and_lift
-    from pcc.py_frontend.type_infer import infer_module
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.type_infer import infer_module
 
     ast_module = infer_module(
-        parse_and_lift("x = 1\n", "<contract>", "pcc.py_frontend.codegen.unsafe_lowering")
+        parse_and_lift("x = 1\n", "<contract>", "pcc.frontends.python.codegen.unsafe_lowering")
     )
     codegen = L1CodeGen(ast_module, ir_scaffold_mode="on")
     codegen.current_class = SimpleNamespace(
         name="UnsafeIntrinsicMixin", owning_module=None, export_class_name=None
     )
     assert codegen._scaffold_current_class_owner() == "L1CodeGen"
-    codegen.ast_module = replace(ast_module, name="pcc.codegen.c_codegen")
+    codegen.ast_module = replace(ast_module, name="pcc.frontends.c.codegen.c_codegen")
     codegen.current_class = SimpleNamespace(
-        name="LLVMCodeGenerator", owning_module=None, export_class_name=None
+        name="CCodeGenerator", owning_module=None, export_class_name=None
     )
-    assert codegen._scaffold_current_class_owner() == "LLVMCodeGenerator"
+    assert codegen._scaffold_current_class_owner() == "CCodeGenerator"
     codegen.ast_module = replace(ast_module, name="application")
     assert codegen._scaffold_current_class_owner() == ""
 
 
 def test_l1_and_c_codegen_builder_writes_stay_within_verified_facts():
-    expected_count = {"L1CodeGen": 33, "LLVMCodeGenerator": 4}
-    for root in (L1CodeGen, LLVMCodeGenerator):
+    expected_count = {"L1CodeGen": 33, "CCodeGenerator": 4}
+    for root in (L1CodeGen, CCodeGenerator):
         writes = []
         for path, cls in _class_sources(root):
             for method in cls.body:
@@ -121,7 +121,7 @@ def test_l1_and_c_codegen_builder_writes_stay_within_verified_facts():
 
 
 def test_class_lowering_parent_is_constructed_from_l1_codegen():
-    from pcc.py_frontend.codegen.class_gen import ClassLowering
+    from pcc.frontends.python.codegen.class_gen import ClassLowering
 
     path = Path(inspect.getsourcefile(ClassLowering))
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -148,7 +148,7 @@ def test_class_lowering_parent_is_constructed_from_l1_codegen():
 
 
 def test_classgen_helper_parameters_have_only_proven_callers():
-    from pcc.py_frontend.codegen.class_gen import ClassLowering
+    from pcc.frontends.python.codegen.class_gen import ClassLowering
 
     path = Path(inspect.getsourcefile(ClassLowering))
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -276,7 +276,7 @@ def test_classgen_helper_parameters_have_only_proven_callers():
 
 
 def test_classgen_nested_builder_and_method_function_provenance():
-    from pcc.py_frontend.codegen.class_gen import ClassLowering
+    from pcc.frontends.python.codegen.class_gen import ClassLowering
 
     path = Path(inspect.getsourcefile(ClassLowering))
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -333,12 +333,12 @@ def test_classgen_nested_builder_and_method_function_provenance():
 
 
 def test_classgen_proven_ir_receivers_keep_direct_calls():
-    from pcc.parse.py_lift import parse_and_lift
-    from pcc.py_frontend.type_infer import infer_module
-    from pcc.py_frontend.codegen.class_gen import ClassLowering
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.type_infer import infer_module
+    from pcc.frontends.python.codegen.class_gen import ClassLowering
 
     source = Path(inspect.getsourcefile(ClassLowering))
-    module = infer_module(parse_and_lift(source.read_text(encoding="utf-8"), str(source), "pcc.py_frontend.codegen.class_gen"))
+    module = infer_module(parse_and_lift(source.read_text(encoding="utf-8"), str(source), "pcc.frontends.python.codegen.class_gen"))
     text = str(L1CodeGen(module, emit_cpy_main_exitcode=False, ir_scaffold_mode="off").generate(module))
 
     def body(symbol):
@@ -346,16 +346,16 @@ def test_classgen_proven_ir_receivers_keep_direct_calls():
         assert match, symbol
         return match.group(1)
 
-    method = body("user_pcc_py_frontend_codegen_class_gen_ClassLowering__emit_method_body")
-    nested = body("user_pcc_py_frontend_codegen_class_gen___nested_bind_method_arg")
-    if "@user_pcc_llvm_capi_ir_scaffold_Function_append_basic_block" not in method:
+    method = body("user_pcc_frontends_python_codegen_class_gen_ClassLowering__emit_method_body")
+    nested = body("user_pcc_frontends_python_codegen_class_gen___nested_bind_method_arg")
+    if "@user_pcc_ir_ir_scaffold_Function_append_basic_block" not in method:
         raise AssertionError("proven ir.Function receiver lost direct append_basic_block")
     if "%cpy.fn.append_basic_block" in method:
         raise AssertionError("proven ir.Function receiver entered CPython dispatch")
     for symbol in (
-        "@user_pcc_llvm_capi_ir_IRBuilder_call1",
-        "@user_pcc_llvm_capi_ir_IRBuilder_alloca",
-        "@user_pcc_llvm_capi_ir_IRBuilder_store",
+        "@user_pcc_ir_ir_IRBuilder_call1",
+        "@user_pcc_ir_ir_IRBuilder_alloca",
+        "@user_pcc_ir_ir_IRBuilder_store",
     ):
         if symbol not in nested:
             raise AssertionError("proven nested IRBuilder receiver lost " + symbol)

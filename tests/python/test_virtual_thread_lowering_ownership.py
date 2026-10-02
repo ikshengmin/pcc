@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
-LOWERING = REPO / "pcc" / "py_frontend" / "codegen" / "native_virtual_thread.py"
+LOWERING = REPO / "pcc" / "frontends" / "python" / "codegen" / "native_virtual_thread.py"
 
 
 def _source() -> str:
@@ -158,7 +158,7 @@ def test_vthread_callback_roots_callable_during_dynamic_argument_build() -> None
     reload = callback.index(
         "self._load_virtual_thread_operand_root(", args_tuple
     )
-    runtime_call = callback.index('self.runtime["py_obj_call"]')
+    runtime_call = callback.index('self.runtime["py_obj_call_deferred"]')
     release = callback.index(
         "self._release_rooted_pcc_lifetimes(", runtime_call
     )
@@ -247,7 +247,7 @@ def test_vthread_args_container_errors_unwind_before_callable_root() -> None:
 
 def test_rooted_operand_cleanup_reloads_and_unwinds_both_error_kinds() -> None:
     cleanup_source = (
-        REPO / "pcc" / "py_frontend" / "codegen" / "cpy_call_lowering.py"
+        REPO / "pcc" / "frontends" / "python" / "codegen" / "cpy_call_lowering.py"
     ).read_text(encoding="utf-8")
     release = _between(
         cleanup_source,
@@ -273,12 +273,11 @@ def test_rooted_operand_cleanup_reloads_and_unwinds_both_error_kinds() -> None:
 
 def test_vthread_root_helpers_are_in_the_pcc1_host_method_closure() -> None:
     host_contract = (
-        REPO / "pcc" / "py_frontend" / "codegen" / "host_contract.py"
+        REPO / "pcc" / "frontends" / "python" / "codegen" / "host_contract.py"
     ).read_text(encoding="utf-8")
     static_methods = (
         REPO
-        / "pcc"
-        / "py_frontend"
+        / "pcc" / "frontends" / "python"
         / "codegen"
         / "_l1_codegen_static_methods.py"
     ).read_text(encoding="utf-8")
@@ -323,7 +322,7 @@ def test_vthread_runtime_error_helper_releases_local_exception_owner() -> None:
 
 def test_vthread_owned_result_classifier_is_exact_and_raw_scaffold_equal() -> None:
     ownership = (
-        REPO / "pcc" / "py_frontend" / "codegen" / "ownership_lowering.py"
+        REPO / "pcc" / "frontends" / "python" / "codegen" / "ownership_lowering.py"
     ).read_text(encoding="utf-8")
     object_classifier = _between(
         ownership,
@@ -353,7 +352,7 @@ def test_vthread_owned_result_classifier_is_exact_and_raw_scaffold_equal() -> No
 
 
 def _compile_dynamic_call_owned_ir(tmp_path, import_source: str, call_name: str) -> str:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     source_path = tmp_path / (call_name.replace(".", "_") + "_owned.py")
     output_path = source_path.with_suffix(".ll")

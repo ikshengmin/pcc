@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from pcc.cli_core import cli_main
-from pcc.evaluater.c_evaluator import CEvaluator, FREESTANDING_C_LIBC_PY_MODULES
+from pcc.driver.cli_core import cli_main
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator, FREESTANDING_C_LIBC_PY_MODULES
 
 
 @pytest.mark.parametrize(
@@ -99,7 +99,7 @@ def test_linux_freestanding_libc_forwards_non_pie_link_args(
         link_calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("pcc.evaluater.c_evaluator.subprocess.run", fake_run)
+    monkeypatch.setattr("pcc.frontends.c.evaluator.c_evaluator.subprocess.run", fake_run)
     allowed = ["-Wl,-Map,freestanding.map", "-no-pie", "./libpie-helper.a"]
 
     result = evaluator.run_compiled_translation_units_with_system_cc(
@@ -214,7 +214,7 @@ def test_c_cli_freestanding_libc_link_map_selects_only_pcc_python_libc(
 
 
 def test_c_freestanding_libc_link_view_lists_only_pcc_python_sources():
-    runtime_py = Path(__file__).resolve().parents[2] / "pcc" / "py_runtime" / "py"
+    runtime_py = Path(__file__).resolve().parents[2] / "pcc" / "runtime" / "py"
     assert FREESTANDING_C_LIBC_PY_MODULES == (
         "freestanding_mem_str",
         "freestanding_allocator",

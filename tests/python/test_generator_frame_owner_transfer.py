@@ -10,8 +10,8 @@ import pytest
 
 
 @pytest.mark.parametrize("enabled", ["0", "1"])
-def test_frame_replacement_preserves_finalizers_during_collection(tmp_path, monkeypatch, pcc_py_runtime_archive, enabled):
-    from pcc.py_frontend.pipeline import compile_python
+def test_frame_replacement_preserves_finalizers_during_collection(tmp_path, monkeypatch, pcc_runtime_archive, enabled):
+    from pcc.frontends.python.pipeline import compile_python
 
     source = tmp_path / "frame_finalizers.py"
     source.write_text('''import gc
@@ -47,7 +47,7 @@ print(sorted(events))
     monkeypatch.setenv("PCC_MOVE_GENERATOR_FRAME_OWNERS", enabled)
     executable = tmp_path / "frame_finalizers"
     compile_python(str(source), str(executable), backend="self", libpython_mode="off",
-                   ir_scaffold_mode="on", runtime_archive=str(pcc_py_runtime_archive))
+                   ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], text=True, capture_output=True, timeout=15,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
@@ -56,7 +56,7 @@ print(sorted(events))
 
 
 def test_unaccepted_frame_moves_stay_out_of_application_codegen(tmp_path, monkeypatch):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     source = tmp_path / "owner_shape.py"
     source.write_text('''def worker(seed):
@@ -81,8 +81,8 @@ print(next(iterator))
     assert counts == [0, 0], "the unaccepted experiment must not change application codegen"
 
 
-def test_frame_restore_and_save_move_one_owner(tmp_path, pcc_py_runtime_archive):
-    archive = pcc_py_runtime_archive
+def test_frame_restore_and_save_move_one_owner(tmp_path, pcc_runtime_archive):
+    archive = pcc_runtime_archive
     root = Path(__file__).resolve().parents[2]
     source = tmp_path / "frame_roundtrip.c"
     source.write_text('''#include "py_runtime.h"
@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
 }
 ''')
     executable = tmp_path / "frame_roundtrip"
-    command = ["clang", "-I" + str(root / "pcc/py_runtime/include"), str(source),
+    command = ["clang", "-I" + str(root / "pcc/runtime/include"), str(source),
                str(archive), "-pthread", "-o", str(executable)]
     control = subprocess.run([*command, "-Dpy_list_get_for_frame=py_list_get"],
                              capture_output=True, text=True, timeout=30)
@@ -143,8 +143,8 @@ int main(int argc, char **argv) {
         assert ran.stdout.strip() == "frame-owner-roundtrip-ok"
 
 
-def test_frame_store_transfers_only_owned_sources(tmp_path, pcc_py_runtime_archive):
-    archive = pcc_py_runtime_archive
+def test_frame_store_transfers_only_owned_sources(tmp_path, pcc_runtime_archive):
+    archive = pcc_runtime_archive
     root = Path(__file__).resolve().parents[2]
     source = tmp_path / "frame_owners.c"
     source.write_text('''#include "py_runtime.h"
@@ -209,7 +209,7 @@ int main(int argc, char **argv) {
 }
 ''')
     executable = tmp_path / "frame_owners"
-    built = subprocess.run(["clang", "-I" + str(root / "pcc/py_runtime/include"),
+    built = subprocess.run(["clang", "-I" + str(root / "pcc/runtime/include"),
         str(source), str(archive), "-pthread", "-o", str(executable)],
         capture_output=True, text=True, timeout=30)
     assert built.returncode == 0, built.stdout + built.stderr

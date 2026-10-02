@@ -161,11 +161,11 @@ gtimeout 1800s env -u LC_ALL uv run pytest -x -vv -m integration tests/python/gc
 
 | Task | First-hand source / tests; additional procedure when needed |
 |---|---|
-| CLI/defaults/public API | `pcc/__main__.py`, `pcc/cli_bootstrap.py`, `pcc/cli_core.py`, `pcc/__init__.py`; inspect current dispatch |
-| Python lowering/ownership | `pcc/py_frontend/codegen/`, `pcc/py_runtime/`; [debugging playbook](docs/debugging-playbook.md) |
-| Passes/self codegen | `pcc/py_frontend/pipeline_pass_driver.py`, `pcc/native_ir/`, `pcc/backend/`; performance rules above |
-| C semantics | `pcc/codegen/c_codegen.py`, `pcc/parse/`, `tests/c/`; check signedness and constant evaluation separately |
-| GC/ABI | `pcc/py_runtime/py/`, `src/`, `include/`, `tests/python/gc/`; verify layouts/barriers in code, consult relevant upstream reference |
+| CLI/defaults/public API | `pcc/__main__.py`, `pcc/driver/cli_bootstrap.py`, `pcc/driver/cli_core.py`, `pcc/__init__.py`; inspect current dispatch |
+| Python lowering/ownership | `pcc/frontends/python/codegen/`, `pcc/runtime/`; [debugging playbook](docs/debugging-playbook.md) |
+| Passes/self codegen | `pcc/frontends/python/pipeline_pass_driver.py`, `pcc/ir/optimization/`, `pcc/backend/`; performance rules above |
+| C semantics | `pcc/frontends/c/codegen/c_codegen.py`, `pcc/frontends/c/parse/`, `tests/c/`; check signedness and constant evaluation separately |
+| GC/ABI | `pcc/runtime/py/`, `src/`, `include/`, `tests/python/gc/`; verify layouts/barriers in code, consult relevant upstream reference |
 | Bootstrap/performance | `scripts/run_pcc_*`, current receipts and tests; [tool index](docs/development-tools.md) |
 | Investigation history | Search [INDEX](docs/investigations/INDEX.md); use [investigation workflow](docs/investigation-workflow.md) when recording an experiment |
 | Domain vocabulary | [CONTEXT.md](CONTEXT.md) is a glossary only; requirements stay in [Project Intent](docs/project-intent.md) and [compiler-contract.md](docs/compiler-contract.md) |

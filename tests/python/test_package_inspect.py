@@ -229,16 +229,16 @@ def test_scientific_package_support_has_no_runtime_or_codegen_special_case():
         "pcc-" + "numpy-l5",
     )
     deleted_paths = (
-        REPO / "pcc" / "py_runtime" / "src" / ("py_" + "numpy.c"),
+        REPO / "pcc" / "runtime" / "src" / ("py_" + "numpy.c"),
         REPO / "pcc" / ("numpy_" + "compat.py"),
         REPO / "pcc" / ("numpy_" + "smoke_plan.py"),
     )
     for path in deleted_paths:
         assert not path.exists(), str(path)
     checked_roots = (
-        REPO / "pcc" / "py_frontend",
-        REPO / "pcc" / "py_runtime" / "src",
-        REPO / "pcc" / "py_runtime" / "py",
+        REPO / "pcc" / "frontends" / "python",
+        REPO / "pcc" / "runtime" / "src",
+        REPO / "pcc" / "runtime" / "py",
     )
     for root in checked_roots:
         for path in root.rglob("*"):

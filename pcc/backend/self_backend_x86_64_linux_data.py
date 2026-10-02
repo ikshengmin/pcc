@@ -102,6 +102,13 @@ def emit_scalar_initializer(
     elif init == "true":
         init = "1"
     if ty.is_ptr:
+        if init.startswith("bitcast"):
+            decoded = decode_value_token(init)
+            if decoded == init or decoded.startswith("cexpr:"):
+                raise BackendUnavailable(
+                    f"x86_64 self backend does not support pointer bitcast global initializer for {global_name!r}: {init!r}"
+                )
+            return emit_scalar_initializer(ty, decoded, global_name, module_symbols)
         if init.startswith("gep0:"):
             return [f"  .quad {asm_symbol(init.split(':', 1)[1], module_symbols)}"]
         if init.startswith("gepconst:"):
@@ -115,6 +122,8 @@ def emit_scalar_initializer(
             return [f"  .quad {asm_symbol(base, module_symbols)}{suffix}"]
         if init.startswith("@"):
             return [f"  .quad {asm_symbol(decode_global_name(init), module_symbols)}"]
+        if init.startswith("inttoptrconst:"):
+            return [f"  .quad {int(init.split(':', 1)[1])}"]
         if init.startswith("inttoptr"):
             decoded = decode_value_token(init)
             if decoded.startswith("inttoptrconst:"):
@@ -122,8 +131,6 @@ def emit_scalar_initializer(
             raise BackendUnavailable(
                 f"x86_64 self backend does not support non-constant inttoptr global initializer for {global_name!r}: {init!r}"
             )
-        if init.startswith("inttoptrconst:"):
-            return [f"  .quad {int(init.split(':', 1)[1])}"]
         return [f"  .quad {int(init)}"]
     if ty.is_int:
         if ty.width <= 8:

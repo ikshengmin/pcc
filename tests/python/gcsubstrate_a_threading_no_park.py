@@ -147,14 +147,14 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     )
 
     log_src = RUNTIME_LOG_PORT.read_text(encoding="utf-8")
-    enabled = log_src.split("def pcc_runtime_log_enabled", 1)[1].split(
+    enabled = log_src.split("def pcc_diagnostics_runtime_log_enabled", 1)[1].split(
         "def _code_enabled", 1
     )[0]
     code_enabled = log_src.split("def _code_enabled", 1)[1].split(
         "def _write_lock_acquire", 1
     )[0]
-    event = log_src.split("def pcc_runtime_log_event(", 1)[1].split(
-        '@c_abi_export("pcc_runtime_log_event_code")', 1
+    event = log_src.split("def pcc_diagnostics_runtime_log_event(", 1)[1].split(
+        '@c_abi_export("pcc_diagnostics_runtime_log_event_code")', 1
     )[0]
     assert enabled.index("pcc_current_thread_id()") < enabled.index(
         "_init_once()"
@@ -323,7 +323,7 @@ def test_thread_no_park_and_stopped_world_newcomers_use_real_pthreads(
                     sched_yield();
                 }
                 __atomic_store_n(&raw_log_attempted, 1, __ATOMIC_RELEASE);
-                pcc_runtime_log_event("gc", "raw-newcomer", 1, 2, 0);
+                pcc_diagnostics_runtime_log_event("gc", "raw-newcomer", 1, 2, 0);
                 __atomic_store_n(&raw_log_returned, 1, __ATOMIC_RELEASE);
                 pcc_thread_unregister_current();
                 return 0;
@@ -354,7 +354,7 @@ def test_thread_no_park_and_stopped_world_newcomers_use_real_pthreads(
                     sched_yield();
                 }
                 __atomic_store_n(&raw_code_attempted, 1, __ATOMIC_RELEASE);
-                pcc_runtime_log_event_code(2, 1, 5, 6, 0);
+                pcc_diagnostics_runtime_log_event_code(2, 1, 5, 6, 0);
                 __atomic_store_n(&raw_code_returned, 1, __ATOMIC_RELEASE);
                 pcc_thread_unregister_current();
                 return 0;
@@ -448,7 +448,7 @@ def test_thread_no_park_and_stopped_world_newcomers_use_real_pthreads(
                 /* The owner may perform I/O, but no no-park region may.  If
                  * the raw logger acquired its write lock before newcomer
                  * admission, this call cannot return to resume the world. */
-                pcc_runtime_log_event("gc", "stw-owner", 3, 4, 0);
+                pcc_diagnostics_runtime_log_event("gc", "stw-owner", 3, 4, 0);
 
                 /* This proves only that pcc_thread_start's user entry does
                  * not run in the owned epoch.  Its managed opaque-argument

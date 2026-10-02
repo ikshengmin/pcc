@@ -4,7 +4,7 @@ import os
 import subprocess
 import textwrap
 
-from pcc.py_frontend.pipeline import compile_python
+from pcc.frontends.python.pipeline import compile_python
 
 
 ACCOUNTING_PROBE = r'''
@@ -190,9 +190,9 @@ def _environment(backend):
 
 
 def test_native_gc12_byte_counters_cross_32_bit_boundaries(
-    tmp_path, pcc_py_runtime_archive,
+    tmp_path, pcc_runtime_archive,
 ):
-    executable = _compile(tmp_path, pcc_py_runtime_archive, ACCOUNTING_PROBE)
+    executable = _compile(tmp_path, pcc_runtime_archive, ACCOUNTING_PROBE)
     for backend in (1, 2):
         result = subprocess.run(
             [str(executable)], env=_environment(backend), capture_output=True,
@@ -207,9 +207,9 @@ def test_native_gc12_byte_counters_cross_32_bit_boundaries(
 
 
 def test_native_gc_debt_override_retains_values_above_32_bits(
-    tmp_path, pcc_py_runtime_archive,
+    tmp_path, pcc_runtime_archive,
 ):
-    executable = _compile(tmp_path, pcc_py_runtime_archive, OVERRIDE_PROBE)
+    executable = _compile(tmp_path, pcc_runtime_archive, OVERRIDE_PROBE)
     for backend in (1, 2):
         for value in (2147483648, 3221225472, 4294967360, 1099511627776):
             env = _environment(backend)

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Generate the pcc-Python port's ABI constants from the C runtime headers.
 
-The ports under ``pcc/py_runtime/py/`` read object fields through byte
+The ports under ``pcc/runtime/py/`` read object fields through byte
 offsets. Those offsets are currently hand-written literals in 140+ places, so
 a C-side layout change reaches the port only if a human notices
 (ARCH-P2-PORT-ABI-AUTOGEN). This generator makes the C headers the single
 source of truth: it compiles a probe with the host cc, reads real
 ``offsetof``/``sizeof``/enum values, and writes
-``pcc/py_runtime/py/py_abi_constants.py`` and the matching static-export
+``pcc/runtime/py/py_abi_constants.py`` and the matching static-export
 metadata consumed by single-object runtime builds.
 
 Usage:
@@ -40,9 +40,9 @@ def repo_root() -> Path:
 
 
 REPO = repo_root()
-RUNTIME = REPO / "pcc" / "py_runtime"
+RUNTIME = REPO / "pcc" / "runtime"
 OUTPUT = RUNTIME / "py" / "py_abi_constants.py"
-EXPORTS_OUTPUT = REPO / "pcc" / "py_frontend" / "codegen" / "port_abi_exports.py"
+EXPORTS_OUTPUT = REPO / "pcc" / "frontends" / "python" / "codegen" / "port_abi_exports.py"
 
 # What the ports need. Kept in step with
 # tests/python/test_runtime_layout_contract.py, which pins these same
@@ -330,7 +330,7 @@ def render_exports(abi: dict[str, dict[str, int]]) -> str:
         '"""',
         "",
         "PORT_ABI_NATIVE_EXPORTS = {",
-        '    "pcc.py_runtime.py.py_abi_constants": {',
+        '    "pcc.runtime.py.py_abi_constants": {',
     ]
     for name, value in _constant_items(abi):
         out.append(

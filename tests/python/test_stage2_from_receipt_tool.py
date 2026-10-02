@@ -158,7 +158,7 @@ def _fake_prior_stage2(tmp_path: Path) -> Path:
         rows.append(f"{index}\tmod{index}\t{source}")
     manifest = state / "manifests" / "worker_0.manifest"
     manifest.write_text(
-        "pcc.py_frontend.codegen_worker.v4\n" + "\n".join(rows) + "\n",
+        "pcc.frontends.python.codegen_worker.v4\n" + "\n".join(rows) + "\n",
         encoding="utf-8",
     )
     plan = stage2 / "pcc2.pcc-codegen-plan"

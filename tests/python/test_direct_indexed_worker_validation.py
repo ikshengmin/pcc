@@ -2,8 +2,8 @@
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend.codegen.layer1 import L1CodeGen
+from pcc.frontends.python import pipeline
+from pcc.frontends.python.codegen.layer1 import L1CodeGen
 
 
 def _validation_worker(tmp_path, monkeypatch, target, text_control, validate=True):

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.project import TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.driver.project import TranslationUnit
 from tests.gcc_torture_cases import (
     DEFAULT_TIMEOUT,
     PccCompileResult,

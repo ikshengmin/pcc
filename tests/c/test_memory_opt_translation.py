@@ -1,5 +1,5 @@
-from pcc.passes import PassContext
-from pcc.passes.memory_opt import MemoryOptIRPass
+from pcc.frontends.c.passes import PassContext
+from pcc.frontends.c.passes.memory_opt import MemoryOptIRPass
 
 
 def test_memory_opt_records_store_load_forward_and_load_load_elim():

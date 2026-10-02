@@ -1111,7 +1111,9 @@ class CompactParsedInstrArena:
             return self._call_projector.diagnostic_alloca_data(raw)
         if kind_id in (
             PARSED_INSTRUCTION_KIND_LOAD,
+            PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
             PARSED_INSTRUCTION_KIND_STORE,
+            PARSED_INSTRUCTION_KIND_STORE_ATOMIC,
             PARSED_INSTRUCTION_KIND_CAST,
             PARSED_INSTRUCTION_KIND_ICMP,
             PARSED_INSTRUCTION_KIND_BINOP,

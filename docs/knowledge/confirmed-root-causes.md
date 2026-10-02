@@ -8,7 +8,7 @@ Extraction can include hypotheses, test status and superseded conclusions.
 Check the original experiment, revision and later updates against current
 code and matching execution before adopting a cause. Read only relevant hits.
 
-1627 confirmations across 481 investigations.
+1630 confirmations across 482 investigations.
 
 ## [Investigation: direct AArch64 instruction capture order and lifetime](../investigations/aarch64-direct-instruction-capture-order.md)
 
@@ -214,6 +214,12 @@ code and matching execution before adopting a cause. Read only relevant hits.
 
 - active — gap CONFIRMED + a fix ATTEMPTED and REVERTED 2026-05-30 (it works for
 - Root cause (CONFIRMED) — `py_obj_eq` (py_obj_ops_compare.c + the pcc-Python port) handles
+
+## [Investigation: dataclass factory defaults corrupt section data](../investigations/dataclass-factory-default-capture-corrupts-section-data.md)
+
+- Test [CONFIRMED] — A two-`ret` assembly control has text size 8, symbols at 0/4, zero embedded
+- New-source correction [CONFIRMED] — Source12 identity is
+- Remaining source12 failures [CONFIRMED] — `custom.py` fails at the Child definition with
 
 ## [Investigation: function decorators silently return null under --python-libpython=off (first-class-function limitation)](../investigations/decorator-first-class-fn-silent-null-no-libpython.md)
 

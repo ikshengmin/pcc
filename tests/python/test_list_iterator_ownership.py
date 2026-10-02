@@ -8,7 +8,7 @@ import pytest
 
 @pytest.mark.parametrize("shape", ["borrowed", "temporary", "enumerate", "raising", "source_lifetime"])
 def test_list_iterator_releases_owners_on_success_and_error(
-    tmp_path, monkeypatch, pcc_py_runtime_archive, python_program_compiler, shape,
+    tmp_path, monkeypatch, pcc_runtime_archive, python_program_compiler, shape,
 ):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     bodies = {
@@ -81,7 +81,7 @@ main()
 '''.replace("BODY", bodies[shape]))
     binary = tmp_path / "list_owners"
     python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
-                            runtime_archive=str(pcc_py_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=25,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend)))

@@ -5,7 +5,7 @@ import sys
 
 
 def test_generator_with_context_lifetime_and_cleanup(
-    tmp_path, pcc_py_runtime_archive, python_program_compiler,
+    tmp_path, pcc_runtime_archive, python_program_compiler,
 ):
     source = tmp_path / 'generator_context.py'
     source.write_text('''
@@ -65,7 +65,7 @@ main()
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / 'generator_context'
     python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
-                   runtime_archive=str(pcc_py_runtime_archive))
+                   runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)))

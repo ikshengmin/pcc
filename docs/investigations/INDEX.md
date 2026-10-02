@@ -664,6 +664,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - The native fragment vertical passes host ASM/PCO differentials but its full
 - [custom-obj-eq-dict-set-key-no-libpython.md](custom-obj-eq-dict-set-key-no-libpython.md) — **user __eq__ in dict/set key lookup (no-libpython)**
   - active — gap CONFIRMED + a fix ATTEMPTED and REVERTED 2026-05-30 (it works for
+- [dataclass-factory-default-capture-corrupts-section-data.md](dataclass-factory-default-capture-corrupts-section-data.md) — **dataclass factory defaults corrupt section data**
+  - Active — 2026-10-01. Source12 fixes independent container factories and the
 - [decorator-first-class-fn-silent-null-no-libpython.md](decorator-first-class-fn-silent-null-no-libpython.md) — **function decorators silently return null under --python-libpython=off (first-class-function limitation)**
   - Under strict no-libpython (`--backend self --python-libpython=off`, DEFAULT
 - [default-backend-verdict.md](default-backend-verdict.md) — **Default backend verdict**

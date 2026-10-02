@@ -4,13 +4,13 @@ import os
 
 import pytest
 
-from pcc.py_frontend.owned_runtime_build import _compile_runtime_module, _RUNTIME_IR_OUTPUT_ENV
+from pcc.frontends.python.owned_runtime_build import _compile_runtime_module, _RUNTIME_IR_OUTPUT_ENV
 
 
 @pytest.mark.parametrize("previous", [None, "0", "1"])
 @pytest.mark.parametrize("fail", [False, True])
 def test_thread_kernel_disables_recursive_polls_and_restores_environment(monkeypatch, previous, fail):
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
     if previous is None:
         monkeypatch.delenv("PCC_WITH_THREADS", raising=False)
     else:
@@ -37,7 +37,7 @@ def test_thread_kernel_disables_recursive_polls_and_restores_environment(monkeyp
 
 
 def test_managed_runtime_modules_retain_thread_polls(monkeypatch):
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
     calls = []
     monkeypatch.setattr(pipeline, "compile_python",
@@ -50,7 +50,7 @@ def test_managed_runtime_modules_retain_thread_polls(monkeypatch):
 @pytest.mark.parametrize("configured", [False, True])
 @pytest.mark.parametrize("fail", [False, True])
 def test_runtime_ir_masks_direct_and_deferred_modes_and_restores(monkeypatch, module, configured, fail):
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
 
     for key in _RUNTIME_IR_OUTPUT_ENV:
         if configured:
@@ -106,6 +106,6 @@ def test_bootstrap_overrides_inherited_deferred_plans(monkeypatch):
     assert environment["PCC_DIRECT_INDEXED_KERNEL_EMIT"] == "1"
     assert environment["PCC_WITH_THREADS"] == "1"
     assert environment["PCC_GC_BACKEND"] == "4"
-    assert environment["PCC_RUNTIME_DIR"] == str(ROOT / "pcc" / "py_runtime")
+    assert environment["PCC_RUNTIME_DIR"] == str(ROOT / "pcc" / "runtime")
     assert os.environ["PCC_RUNTIME_DIR"] == "other-runtime-tree"
     assert {key: os.environ[key] for key in inherited} == inherited

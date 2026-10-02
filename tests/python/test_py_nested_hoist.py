@@ -13,7 +13,7 @@ _BUILD.mkdir(parents=True, exist_ok=True)
 
 
 def test_hoisted_sibling_function_call_is_not_captured(tmp_path):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"
@@ -62,7 +62,7 @@ def test_hoisted_sibling_function_call_is_not_captured(tmp_path):
 
 
 def _compile_to_ll(source: str, name: str) -> str:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = _BUILD / f"{name}.py"
     out = _BUILD / f"{name}.ll"
@@ -88,7 +88,7 @@ def _read_key_value_profile(path: Path) -> dict[str, int]:
 
 
 def test_nested_hoist_free_name_analysis_is_cached(monkeypatch, tmp_path):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     profile = tmp_path / "hoist.profile"
     monkeypatch.setenv("PCC_HOIST_PROFILE_PATH", str(profile))
@@ -139,8 +139,8 @@ def test_nested_hoist_free_name_analysis_is_cached(monkeypatch, tmp_path):
 
 
 def test_free_name_cache_rejects_reused_object_id(monkeypatch):
-    from pcc.py_frontend.codegen import hoist_free_names
-    from pcc.py_frontend.py_ast import (
+    from pcc.frontends.python.codegen import hoist_free_names
+    from pcc.frontends.python.py_ast import (
         DynType,
         ExprStmt,
         FuncDef,
@@ -183,8 +183,8 @@ def test_free_name_cache_rejects_reused_object_id(monkeypatch):
 
 
 def test_nested_hoist_caches_reject_reused_object_id(monkeypatch, tmp_path):
-    from pcc.py_frontend.codegen import hoist_free_names, hoist_lowering
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.codegen import hoist_free_names, hoist_lowering
+    from pcc.frontends.python.pipeline import compile_python
 
     monkeypatch.setattr(hoist_free_names, "id", lambda _value: 11, raising=False)
     monkeypatch.setattr(hoist_lowering, "id", lambda _value: 11, raising=False)
@@ -233,8 +233,8 @@ def test_nested_hoist_caches_reject_reused_object_id(monkeypatch, tmp_path):
 
 
 def test_empty_synthetic_comprehension_call_uses_generic_free_name_walk():
-    from pcc.py_frontend.codegen.hoist_free_names import compute_free_names
-    from pcc.py_frontend.py_ast import (
+    from pcc.frontends.python.codegen.hoist_free_names import compute_free_names
+    from pcc.frontends.python.py_ast import (
         Call,
         DynType,
         ExprStmt,
@@ -333,7 +333,7 @@ def test_value_position_nested_capture_propagates_through_sibling_cycle():
 
 
 def test_mem2reg_self_compile_emits_llvm_after_nested_capture_propagation():
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = _REPO_ROOT / "pcc" / "ir_passes" / "mem2reg.py"
     out = _BUILD / "mem2reg_nested_capture_probe.ll"

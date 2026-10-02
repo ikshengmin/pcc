@@ -4,13 +4,13 @@ import struct
 import subprocess
 import sys
 
-from pcc.py_frontend import pipeline
+from pcc.frontends.python import pipeline
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STDIO_SOURCE = REPO_ROOT / "pcc" / "py_runtime" / "py" / "freestanding_stdio.py"
+STDIO_SOURCE = REPO_ROOT / "pcc" / "runtime" / "py" / "freestanding_stdio.py"
 ALLOCATOR_SOURCE = (
-    REPO_ROOT / "pcc" / "py_runtime" / "py" / "freestanding_allocator.py"
+    REPO_ROOT / "pcc" / "runtime" / "py" / "freestanding_allocator.py"
 )
 
 
@@ -178,7 +178,7 @@ int main(int argc, char **argv) {
 
 
 def test_default_runtime_archive_selects_freestanding_stdio_object():
-    runtime_dir = REPO_ROOT / "pcc" / "py_runtime"
+    runtime_dir = REPO_ROOT / "pcc" / "runtime"
     plan = subprocess.run(
         ["make", "-B", "-n", "libpy_runtime_pcc_py.a"],
         cwd=runtime_dir,
@@ -545,7 +545,7 @@ int main(int argc, char **argv) {
 
 
 def test_linux_stdio_seek_is_owned_by_raw_syscall_intrinsic(tmp_path, monkeypatch):
-    from pcc.py_frontend.codegen.unsafe_lowering import UnsafeIntrinsicMixin
+    from pcc.frontends.python.codegen.unsafe_lowering import UnsafeIntrinsicMixin
 
     monkeypatch.setattr(
         UnsafeIntrinsicMixin, "_target_sys_platform_text", lambda self: "linux"
@@ -1042,7 +1042,7 @@ int main(void) {
             "clang",
             "-fno-builtin",
             "-I",
-            str(REPO_ROOT / "pcc" / "py_runtime" / "include"),
+            str(REPO_ROOT / "pcc" / "runtime" / "include"),
             str(harness),
             str(obj),
             str(allocator),

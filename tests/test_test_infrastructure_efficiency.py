@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import subprocess
 
 ROOT = Path(__file__).absolute().parents[1]
 TESTS = ROOT / "tests"
@@ -93,11 +94,11 @@ def test_nested_pytest_invocations_are_finite_and_audited():
 def test_l1_codegen_static_method_table_matches_host_contract():
     import inspect
 
-    from pcc.py_frontend.codegen._l1_codegen_static_methods import (
+    from pcc.frontends.python.codegen._l1_codegen_static_methods import (
         L1_CODEGEN_STATIC_METHODS,
     )
-    from pcc.py_frontend.codegen.host_contract import L1_CODEGEN_HOST_METHODS
-    from pcc.py_frontend.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.codegen.host_contract import L1_CODEGEN_HOST_METHODS
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
 
     generated_names = tuple(entry["name"] for entry in L1_CODEGEN_STATIC_METHODS)
     assert generated_names == L1_CODEGEN_HOST_METHODS
@@ -200,10 +201,10 @@ def test_tests_use_only_the_content_addressed_pcc_python_runtime():
     fixtures = (ROOT / "tests/conftest.py").read_text(encoding="utf-8")
     python_fixtures = (ROOT / "tests/python/conftest.py").read_text(encoding="utf-8")
     cache = (ROOT / "tests/runtime_build_cache.py").read_text(encoding="utf-8")
-    assert "def pcc_py_runtime_archive" in fixtures
-    assert "def threaded_pcc_py_runtime_archive" in fixtures
-    assert "def pcc_py_runtime_archive" not in python_fixtures
-    assert "def threaded_pcc_py_runtime_archive" not in python_fixtures
+    assert "def pcc_runtime_archive" in fixtures
+    assert "def threaded_pcc_runtime_archive" in fixtures
+    assert "def pcc_runtime_archive" not in python_fixtures
+    assert "def threaded_pcc_runtime_archive" not in python_fixtures
     assert "def cached_pcc_python_runtime" in cache
     assert "def cached_threaded_pcc_python_runtime" in cache
     assert cache.count('f"PCC_WITH_THREADS={1 if threaded else 0}"') == 1
@@ -299,18 +300,46 @@ def test_gc_meta_matrix_retains_required_modes_without_accidental_duplicates():
         for frontend, gc_backend, _targets in (parameter.values,)
     }
     gc4_contract = "tests/python/test_gc_backend4_production.py"
-    assert gc4_contract in cases[("llvm", "4")]
+    assert gc4_contract in cases[(None, "4")]
     assert gc4_contract in cases[("self", "4")]
     assert set(heavy_groups.values()) == {
-        "pcc_heavy_llvm",
+        "pcc_heavy_self_full",
         "pcc_heavy_self",
     }
     assert all(
-        group == f"pcc_heavy_{frontend}"
+        group == ("pcc_heavy_self_full" if frontend is None else "pcc_heavy_self")
         for (frontend, _gc_backend), group in heavy_groups.items()
     )
     assert runtime_oracle.pytestmark.mark.kwargs["name"] == "pcc_heavy_self"
     assert self_host_oracle.pytestmark.mark.kwargs["name"] == "pcc_heavy_self"
+
+    for gc_backend, targets in matrix._BACKEND_TEST_GROUPS.items():
+        complete = {
+            node for target in targets for node in matrix._target_args(target)
+        }
+        assert cases[(None, gc_backend)] == complete
+        assert all(
+            node in complete or node.split("::", 1)[0] in complete
+            for node in cases[("self", gc_backend)]
+        )
+
+
+def test_gc_meta_matrix_uses_owned_backend_and_stops_at_first_failure(monkeypatch):
+    from tests.python import test_gc_backend_under_env as matrix
+
+    calls = []
+
+    def run(**kwargs):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess(kwargs["args"], 0, stdout="", stderr="")
+
+    monkeypatch.setenv("PCC_BACKEND", "llvm")
+    monkeypatch.setattr(matrix.subprocess, "run", run)
+    for backend in matrix._FRONTEND_BACKENDS:
+        matrix._run_file_under_backends(backend, "4", "unchanged-test-target.py")
+    assert [call["env"]["PCC_BACKEND"] for call in calls] == ["", "self"]
+    assert all("-x" in call["args"] for call in calls)
+    assert all(call["args"][-1] == "unchanged-test-target.py" for call in calls)
 
 
 def test_stateless_gc_compile_suites_are_not_forced_onto_one_worker():

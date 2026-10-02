@@ -34,19 +34,14 @@ CAPI_INVENTORY_SUFFIX = ".capi_syms"
 
 _PCC_PYTHON_SOURCE_KIND = "pcc-python"
 _PCC_PYTHON_PRODUCER = "pcc-python-library-ir-to-obj"
-_LLVM_OBJECT_EMITTER = "llvmlite-target-machine"
-# pcc's own assembler + Mach-O object writer.  The runtime archive's members
-# are what pcc1 links, so emitting them through llvmlite made an
-# llvmlite-free pcc1 depend on llvmlite to exist at all.
+# The runtime archive uses pcc's assembler and standard object writers.
 _PCC_OBJECT_EMITTER = "pcc-self-backend-object-writer"
-# Receipts name which one ran; both are legitimate, and `PCC_IR_TO_OBJ_EMITTER`
-# selects the llvmlite oracle for differential runs.
-_OBJECT_EMITTERS = frozenset({_LLVM_OBJECT_EMITTER, _PCC_OBJECT_EMITTER})
+# Only the owned emitter can authorize a production runtime receipt.
+_OBJECT_EMITTERS = frozenset({_PCC_OBJECT_EMITTER})
 _EMITTER_BY_IR_TO_OBJ_NAME = {
     "pcc": _PCC_OBJECT_EMITTER,
-    "llvmlite": _LLVM_OBJECT_EMITTER,
 }
-_LOGICAL_RUNTIME_ROOT = "pcc/py_runtime"
+_LOGICAL_RUNTIME_ROOT = "pcc/runtime"
 _REGULAR_AR_MAGIC = b"!<arch>\n"
 _RECEIPT_REQUIRED_FIELDS = frozenset(
     {
@@ -371,7 +366,7 @@ def codegen_checksum() -> str:
     if cached is not None:
         return cached
     try:
-        from pcc.bootstrap_cache_identity import bootstrap_source_sha256
+        from pcc.driver.bootstrap_cache_identity import bootstrap_source_sha256
 
         # Frontend identity excludes pcc/tools; bind emitter source without
         # importing its LLVM implementation into the self compilation path.
@@ -783,11 +778,8 @@ def main(argv: list[str] | None = None) -> int:
             archive = Path(args.archive)
             if not archive.is_file():
                 raise ProvenanceError("runtime archive is missing: " + str(archive))
-            from pcc.py_frontend.pipeline_runtime_archive import (
-                target_id,
-                write_target_stamp,
-            )
-            from pcc.py_frontend.pipeline_targets import host_target_triple
+            from pcc.frontends.python.pipeline_runtime_archive import target_id, write_target_stamp
+            from pcc.frontends.python.pipeline_targets import host_target_triple
 
             write_target_stamp(
                 str(archive),

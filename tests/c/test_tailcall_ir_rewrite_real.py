@@ -4,7 +4,7 @@ import json
 
 
 def test_rewrite_simple_void_self_tailcall_changes_ir():
-    from pcc.tailcall_ir import rewrite_simple_void_self_tailcalls
+    from pcc.ir.optimization.tailcall_ir import rewrite_simple_void_self_tailcalls
 
     src = '''
 define void @spin(i64 %n) {
@@ -22,7 +22,7 @@ entry:
 
 
 def test_value_return_tailcall_is_reported_but_not_lied_about():
-    from pcc.tailcall_ir import rewrite_simple_void_self_tailcalls
+    from pcc.ir.optimization.tailcall_ir import rewrite_simple_void_self_tailcalls
 
     src = '''
 define i64 @fact_tail(i64 %n, i64 %acc) {
@@ -41,7 +41,7 @@ entry:
 
 
 def test_tailcall_rewrite_report_is_json():
-    from pcc.tailcall_ir import rewrite_simple_void_self_tailcalls
+    from pcc.ir.optimization.tailcall_ir import rewrite_simple_void_self_tailcalls
 
     result = rewrite_simple_void_self_tailcalls('''
 define void @f() {

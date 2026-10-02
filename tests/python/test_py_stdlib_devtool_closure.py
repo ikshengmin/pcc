@@ -12,9 +12,9 @@ import zipfile
 
 import pytest
 
-from pcc.py_stdlib import cProfile as port_cprofile
-from pcc.py_stdlib import compileall as port_compileall
-from pcc.py_stdlib import zipapp as port_zipapp
+from pcc.stdlib import cProfile as port_cprofile
+from pcc.stdlib import compileall as port_compileall
+from pcc.stdlib import zipapp as port_zipapp
 
 
 def test_devtool_public_exports_match_cpython():
@@ -179,11 +179,11 @@ def test_cprofile_import_state_and_sampling_boundary():
 
 @pytest.mark.parametrize("module_name", ["cProfile", "compileall", "zipapp"])
 def test_devtool_ports_are_selected_by_recursive_stdlib_registry(module_name):
-    from pcc.py_frontend import pipeline
+    from pcc.frontends.python import pipeline
 
     source = pipeline._locate_native_stdlib_module_source(module_name)
     assert source is not None
-    assert source.endswith("/pcc/py_stdlib/" + module_name + ".py")
+    assert source.endswith("/pcc/stdlib/" + module_name + ".py")
     assert module_name not in pipeline._NATIVE_BUILTIN_IMPORTS
 
 

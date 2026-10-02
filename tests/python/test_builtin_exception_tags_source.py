@@ -4,7 +4,7 @@ import re
 
 def _runtime_exception_names() -> list[str]:
     """The runtime's builtin exception name table, indexed by tag."""
-    py_substrate = _read("pcc/py_runtime/py/py_substrate.py")
+    py_substrate = _read("pcc/runtime/py/py_substrate.py")
     names = dict(
         (int(index), name)
         for index, name in re.findall(
@@ -14,13 +14,13 @@ def _runtime_exception_names() -> list[str]:
     return [names[index] for index in range(len(names))]
 
 def test_warning_siblings_have_distinct_native_identity_and_handlers(
-    tmp_path, pcc_py_runtime_archive,
+    tmp_path, pcc_runtime_archive,
 ):
     import os
     import subprocess
     import sys
 
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     source = tmp_path / "warning_identity.py"
     source.write_text('''
@@ -65,7 +65,7 @@ main()
     output = tmp_path / "warning_identity"
     compile_python(
         str(source), str(output), backend="self", libpython_mode="off",
-        runtime_archive=str(pcc_py_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
         result = subprocess.run(
@@ -85,7 +85,7 @@ def _find_repo_root() -> Path:
 
 
 _REPO_ROOT = _find_repo_root()
-_CODEGEN_DIR = _REPO_ROOT / "pcc" / "py_frontend" / "codegen"
+_CODEGEN_DIR = _REPO_ROOT / "pcc" / "frontends" / "python" / "codegen"
 
 
 def _read(rel: str) -> str:
@@ -93,7 +93,7 @@ def _read(rel: str) -> str:
 
 
 def test_all_builtin_type_cache_slots_have_matching_c_and_python_gc_roots():
-    py = _read("pcc/py_runtime/py/py_obj_ops_dispatch.py")
+    py = _read("pcc/runtime/py/py_obj_ops_dispatch.py")
     declared = re.findall(r'define_global_ptr_null\("(pcc_type_cls_\w+|pcc_slice_cls)"\)', py)
     visitor = py.split('"pcc_builtin_type_root_slots",', 1)[1].split('\n)', 1)[0]
     assert re.findall(r'"(\w+)"', visitor) == declared
@@ -107,22 +107,22 @@ def test_builtin_exception_tag_metadata_has_one_authoritative_source():
         if re.search(r"(?m)^_?BUILTIN_EXC_TAG\s*=\s*\{", source):
             tag_defs.append(str(path.relative_to(_REPO_ROOT)))
 
-    assert tag_defs == ["pcc/py_frontend/codegen/builtin_exceptions.py"]
+    assert tag_defs == ["pcc/frontends/python/codegen/builtin_exceptions.py"]
 
     for rel in (
-        "pcc/py_frontend/codegen/call_expression_lowering.py",
-        "pcc/py_frontend/codegen/class_gen.py",
-        "pcc/py_frontend/codegen/comprehension_lowering.py",
-        "pcc/py_frontend/codegen/exception_lowering.py",
-        "pcc/py_frontend/codegen/for_loop_lowering.py",
-        "pcc/py_frontend/codegen/isinstance_lowering.py",
+        "pcc/frontends/python/codegen/call_expression_lowering.py",
+        "pcc/frontends/python/codegen/class_gen.py",
+        "pcc/frontends/python/codegen/comprehension_lowering.py",
+        "pcc/frontends/python/codegen/exception_lowering.py",
+        "pcc/frontends/python/codegen/for_loop_lowering.py",
+        "pcc/frontends/python/codegen/isinstance_lowering.py",
     ):
         source = _read(rel)
         assert "from .builtin_exceptions import" in source
 
 
 def test_builtin_exception_tag_lookup_covers_runtime_tags():
-    from pcc.py_frontend.codegen.builtin_exceptions import (
+    from pcc.frontends.python.codegen.builtin_exceptions import (
         BUILTIN_EXC_TAG,
         builtin_exc_tag_or_missing,
     )
@@ -148,8 +148,8 @@ def test_builtin_exception_tag_lookup_covers_runtime_tags():
 
 
 def test_class_base_exception_lookup_uses_shared_tags():
-    from pcc.py_frontend.codegen.class_gen import _builtin_exception_tag_for_base_name
-    from pcc.py_frontend.codegen.builtin_exceptions import BUILTIN_EXC_TAG
+    from pcc.frontends.python.codegen.class_gen import _builtin_exception_tag_for_base_name
+    from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG
 
     assert (
         _builtin_exception_tag_for_base_name("Exception")
@@ -163,9 +163,9 @@ def test_class_base_exception_lookup_uses_shared_tags():
 
 
 def test_memory_error_runtime_tables_match_header_and_pcc_python():
-    c_header = _read("pcc/py_runtime/include/py_runtime.h")
-    py_substrate = _read("pcc/py_runtime/py/py_substrate.py")
-    py_gc = _read("pcc/py_runtime/py/freestanding_gc_mapped_roots.py")
+    c_header = _read("pcc/runtime/include/py_runtime.h")
+    py_substrate = _read("pcc/runtime/py/py_substrate.py")
+    py_gc = _read("pcc/runtime/py/freestanding_gc_mapped_roots.py")
 
     assert "PY_EXC_MEMORYERROR       = 19" in c_header
     assert "PY_EXC_IMPORTERROR       = 20" in c_header

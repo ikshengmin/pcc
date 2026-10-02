@@ -1,4 +1,4 @@
-from pcc.tailcall_accumulator import rewrite_accumulator_tailcalls
+from pcc.ir.optimization.tailcall_accumulator import rewrite_accumulator_tailcalls
 
 
 def test_rewrite_accumulator_tailcalls_changes_ir_text():

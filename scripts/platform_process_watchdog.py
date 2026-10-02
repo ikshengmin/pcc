@@ -140,10 +140,12 @@ def linux_sample(root, known):
     return rows
 
 
-def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False):
+def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel=None):
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
+    if cancel is not None and cancel.is_set():
+        raise RuntimeError("qualification cancelled after a peer failure")
     job = WindowsJob(rss_limit) if os.name == "nt" else None
     known = {}
     peak = 0
@@ -160,6 +162,8 @@ def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False):
             if job:
                 job.attach(process)
             while process.poll() is None:
+                if cancel is not None and cancel.is_set():
+                    raise RuntimeError("qualification cancelled after a peer failure")
                 rows = job.sample() if job else linux_sample(process.pid, known)
                 rss = sum(row[1] for row in rows)
                 peak = max(peak, rss)

@@ -436,6 +436,23 @@ def _encode_mov(operands: list, pc: int) -> EncodedInstruction:
     if len(operands) != 2:
         raise X86EncodeError("mov expects two operands")
     dst, src = operands
+    if isinstance(dst, _Mem) and isinstance(src, _Imm):
+        width = dst.width
+        if width not in (8, 16, 32, 64):
+            raise X86EncodeError("mov memory immediate requires an explicit scalar width")
+        immediate_width = 1 if width == 8 else 2 if width == 16 else 4
+        _require_immediate_bits(src.value, immediate_width, owner="mov", signed_only=width == 64)
+        base = _modrm_instruction(
+            pc=pc, legacy=_legacy_width(width), opcode=b"\xc6" if width == 8 else b"\xc7",
+            width=width, reg=_Reg("group", 0, width), rm=dst,
+        )
+        tail = _int_bytes(src.value, immediate_width)
+        # RIP-relative displacements refer to the end of the whole instruction,
+        # including the immediate that follows the addressing bytes.
+        relocations = tuple(EncodedRelocation(rel.offset, rel.symbol, rel.type,
+                                            rel.addend - immediate_width)
+                            for rel in base.relocations)
+        return EncodedInstruction(base.code + tail, relocations)
     if isinstance(dst, _Reg) and dst.kind == "gp" and isinstance(src, _Imm):
         width = dst.width
         if width == 8:

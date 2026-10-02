@@ -3,8 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from pcc.py_frontend.codegen import runtime_abi
-from pcc.py_frontend.codegen.runtime_abi import (
+from pcc.frontends.python.codegen import runtime_abi
+from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_CROSS_OBJECT_SIGNATURES,
     RUNTIME_SIGNATURES,
 )
@@ -12,8 +12,7 @@ from pcc.py_frontend.codegen.runtime_abi import (
 
 SOURCE = (
     Path(__file__).resolve().parents[2]
-    / "pcc"
-    / "py_frontend"
+    / "pcc" / "frontends" / "python"
     / "codegen"
     / "runtime_abi.py"
 )

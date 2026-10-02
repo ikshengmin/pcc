@@ -19,7 +19,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from pcc.package_schema import PCC_CAPI_HEADERS, pcc_native_extension_suffix
+from pcc.package.schema import PCC_CAPI_HEADERS, pcc_native_extension_suffix
 
 from .build_plan import (
     BuildCommand,
@@ -82,7 +82,7 @@ def _pcc_capi_source_dir() -> Path | None:
 
 
 def _pcc_runtime_include_dir() -> Path | None:
-    candidate = _repo_root() / "pcc" / "py_runtime" / "include"
+    candidate = _repo_root() / "pcc" / "runtime" / "include"
     return candidate if candidate.is_dir() else None
 
 

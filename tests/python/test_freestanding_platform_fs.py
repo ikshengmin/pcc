@@ -3,12 +3,12 @@ import platform
 import subprocess
 import sys
 
-from pcc.py_frontend import pipeline
+from pcc.frontends.python import pipeline
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_SOURCE = (
-    REPO_ROOT / "pcc" / "py_runtime" / "py" / "freestanding_platform_fs.py"
+    REPO_ROOT / "pcc" / "runtime" / "py" / "freestanding_platform_fs.py"
 )
 PLATFORM_SYMBOLS = (
     "pcc_platform_access",
@@ -254,7 +254,7 @@ def test_platform_fs_mkdtemp_creates_unique_directories(tmp_path):
 
 def test_linux_platform_fs_lowers_to_raw_syscalls(tmp_path, monkeypatch):
     from pcc.backend.self_backend_dispatch import emit_self_asm
-    from pcc.py_frontend.codegen.unsafe_lowering import UnsafeIntrinsicMixin
+    from pcc.frontends.python.codegen.unsafe_lowering import UnsafeIntrinsicMixin
 
     monkeypatch.setattr(
         UnsafeIntrinsicMixin,
@@ -282,7 +282,7 @@ def test_linux_platform_fs_lowers_to_raw_syscalls(tmp_path, monkeypatch):
 
 
 def test_runtime_archive_plan_selects_platform_fs_object():
-    runtime_dir = REPO_ROOT / "pcc" / "py_runtime"
+    runtime_dir = REPO_ROOT / "pcc" / "runtime"
     plan = subprocess.run(
         ["make", "-B", "-n", "libpy_runtime_pcc_py.a"],
         cwd=runtime_dir,
@@ -301,7 +301,7 @@ def test_runtime_archive_plan_selects_platform_fs_object():
 
 def test_default_runtime_routes_path_queries_through_platform_fs_object(
     tmp_path,
-    pcc_py_runtime_archive,
+    pcc_runtime_archive,
 ):
     source = tmp_path / "platform_fs_runtime_smoke.py"
     executable = tmp_path / "platform_fs_runtime_smoke"
@@ -338,7 +338,7 @@ def test_default_runtime_routes_path_queries_through_platform_fs_object(
         backend="self",
         ir_scaffold_mode="on",
         libpython_mode="off",
-        runtime_archive=str(pcc_py_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     symbols = subprocess.run(
         ["nm", "-g", str(executable)],

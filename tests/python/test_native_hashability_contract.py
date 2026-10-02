@@ -21,12 +21,12 @@ REPO = Path(__file__).resolve().parents[2]
 
 def test_hash_runtime_mirrors_reject_mutable_builtins_and_guard_callers():
     compare_py = (
-        REPO / "pcc" / "py_runtime" / "py" / "py_obj_ops_compare.py"
+        REPO / "pcc" / "runtime" / "py" / "py_obj_ops_compare.py"
     ).read_text(encoding="utf-8")
-    dict_py = (REPO / "pcc" / "py_runtime" / "py" / "py_dict.py").read_text(
+    dict_py = (REPO / "pcc" / "runtime" / "py" / "py_dict.py").read_text(
         encoding="utf-8"
     )
-    set_py = (REPO / "pcc" / "py_runtime" / "py" / "py_set.py").read_text(
+    set_py = (REPO / "pcc" / "runtime" / "py" / "py_set.py").read_text(
         encoding="utf-8"
     )
 
@@ -60,10 +60,10 @@ def test_hash_runtime_mirrors_reject_mutable_builtins_and_guard_callers():
 def test_mutable_builtin_hash_failures_match_cpython_without_mutation(
     tmp_path,
     monkeypatch,
-    pcc_py_runtime_archive,
+    pcc_runtime_archive,
 ):
-    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_py_runtime_archive))
-    from pcc.py_frontend.pipeline import compile_python
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
+    from pcc.frontends.python.pipeline import compile_python
 
     source = textwrap.dedent(
         """

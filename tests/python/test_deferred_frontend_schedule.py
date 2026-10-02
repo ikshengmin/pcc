@@ -2,7 +2,7 @@ from itertools import combinations
 
 import pytest
 
-from pcc.py_frontend import deferred_frontend_schedule as scheduler
+from pcc.frontends.python import deferred_frontend_schedule as scheduler
 
 
 def test_call_node_score_matches_wire_marker_count():
@@ -17,7 +17,7 @@ def test_call_node_score_matches_wire_marker_count():
 
 @pytest.mark.integration
 def test_call_node_score_executes_natively_under_all_collectors(
-    tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive,
+    tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive,
 ):
     import inspect
     import os
@@ -41,7 +41,7 @@ def test_call_node_score_executes_natively_under_all_collectors(
     binary = tmp_path / "ast_score"
     python_program_compiler(
         str(source), str(binary), backend="self", libpython_mode="off",
-        runtime_archive=str(pcc_py_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
         run = subprocess.run(
@@ -205,7 +205,7 @@ def test_closure_floor_applies_to_gc0_only():
 def _write_indexed_exports(path, payloads, dependencies):
     import json
 
-    from pcc.py_frontend import pipeline_exports
+    from pcc.frontends.python import pipeline_exports
 
     rows = [pipeline_exports._NATIVE_EXPORT_INDEXED_SCHEMA]
     for name, payload in payloads.items():
@@ -250,7 +250,7 @@ def test_auto_uses_closure_floors_from_manifest_exports(tmp_path, monkeypatch, g
             stream.truncate(size)
         manifest = tmp_path / (str(index) + ".manifest")
         manifest.write_text("\n".join(
-            ["pcc.py_frontend.codegen_worker.v4", "result", "out", str(exports),
+            ["pcc.frontends.python.codegen_worker.v4", "result", "out", str(exports),
              "codegen", str(tmp_path), "root", "off", "on", "0", "0", str(len(names))]
             + [str(i) + "\t" + name + "\tsrc.py" for i, name in enumerate(names)]
             + ["1", str(index)]
@@ -286,7 +286,7 @@ def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatc
             stream.truncate(size)
         manifest = tmp_path / (str(index) + ".manifest")
         manifest.write_text("\n".join([
-            "pcc.py_frontend.codegen_worker.v4", "result", "out", "exports", "",
+            "pcc.frontends.python.codegen_worker.v4", "result", "out", "exports", "",
             str(tmp_path), "", "", "", "", "1", str(index),
         ]) + "\n")
         manifests.append(str(manifest))
@@ -313,7 +313,7 @@ def test_auto_reads_assigned_ast_and_passes_selected_groups(tmp_path, monkeypatc
 
 
 def test_frontend_and_pco_admission_execute_natively_under_all_collectors(
-    tmp_path, monkeypatch, python_program_compiler, pcc_py_runtime_archive,
+    tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive,
 ):
     import inspect
     import os
@@ -358,7 +358,7 @@ main()
 ''')
     binary = tmp_path / "pco_admission"
     python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
-                            runtime_archive=str(pcc_py_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
@@ -381,7 +381,7 @@ def test_auto_chains_each_pco_job_after_its_own_frontend_job(tmp_path, monkeypat
             stream.truncate(size)
         manifest = tmp_path / (str(index) + ".manifest")
         manifest.write_text("\n".join([
-            "pcc.py_frontend.codegen_worker.v4", "result", "out", "exports", "",
+            "pcc.frontends.python.codegen_worker.v4", "result", "out", "exports", "",
             str(tmp_path), "", "", "", "", "1", str(index),
         ]) + "\n")
         manifests.append(str(manifest))

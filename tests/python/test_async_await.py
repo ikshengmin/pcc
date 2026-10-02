@@ -25,7 +25,7 @@ import textwrap
 
 
 def _compile_and_run(tmp_path, source: str) -> subprocess.CompletedProcess[str]:
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"
@@ -260,7 +260,7 @@ def test_async_param_captured_by_returned_closure_is_a_cell(tmp_path):
 
 
 def test_cross_module_async_function_attr_call_returns_coroutine(tmp_path):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     mod = tmp_path / "moda.py"
     mod.write_text(

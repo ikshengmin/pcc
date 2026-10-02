@@ -1,6 +1,6 @@
 """``print`` must consume an argument that produced a fresh reference.
 
-``py_print`` borrows: ``pcc/py_runtime/src/py_print_fmt.c`` defines it as
+``py_print`` borrows: ``pcc/runtime/src/py_print_fmt.c`` defines it as
 ``py_format(stdout, o); fputc('\\n', stdout);`` with no refcount traffic.  The
 generic print tail never released its argument, so ``print(a[0])`` leaked one
 reference per call -- the subscript's root is balanced, but the new reference

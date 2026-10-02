@@ -74,7 +74,7 @@ def main() -> None:
         )
     if not any(name.endswith((".data/scripts/pcc1", ".data/scripts/pcc1.exe")) for name in names):
         raise RuntimeError("wheel does not contain its native pcc1 script")
-    if "pcc/py_runtime/libpy_runtime_pcc_py.a" not in names:
+    if "pcc/runtime/libpy_runtime_pcc_py.a" not in names:
         raise RuntimeError("wheel does not contain the matching native runtime")
 
     with wheel.open("rb") as stream:
@@ -109,9 +109,11 @@ def main() -> None:
 
         source = root / "main.py"
         source.write_text(
+            "import sys\n\n"
             "def add(left: int, right: int) -> int:\n"
             "    return left + right\n\n"
-            "print(add(20, 22))\n",
+            "print(add(20, 22))\n"
+            "print(sys.version_info)\n",
             encoding="utf-8",
         )
         output = root / ("program.exe" if os.name == "nt" else "program")
@@ -128,8 +130,10 @@ def main() -> None:
                 "installed pcc1 returned success without a native output"
             )
         stdout = _run([str(output)], cwd=root, env=environment, timeout=30)
-        if stdout != "42\n":
-            raise RuntimeError(f"native program printed {stdout!r}, expected '42\\n'")
+        from pcc.driver.python_target import PYTHON_TARGET_VERSION_INFO
+        expected = "42\n" + str(PYTHON_TARGET_VERSION_INFO) + "\n"
+        if stdout != expected:
+            raise RuntimeError(f"native program printed {stdout!r}, expected {expected!r}")
     print("installed pcc and pcc1: native compile and execution passed", flush=True)
 
 

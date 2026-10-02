@@ -381,7 +381,7 @@ def _assert_no_libpython(path: Path) -> None:
 
 def test_current_pcc1_replaces_cpython_for_frozen_pproxy_service(
     tmp_path: Path,
-    pcc_py_runtime_archive: Path,
+    pcc_runtime_archive: Path,
 ):
     assert _tree_sha256(PROJECT) == PINNED_TREE_SHA256
     pcc1 = find_current_pcc1(ROOT)
@@ -406,7 +406,7 @@ def test_current_pcc1_replaces_cpython_for_frozen_pproxy_service(
             "PCC_HOST_PYTHON": "/usr/bin/false",
             "PCC_HOST_PCC": "/usr/bin/false",
             "PCC_COMPAT_PYTHON": "/usr/bin/false",
-            "PCC_RUNTIME_ARCHIVE": str(pcc_py_runtime_archive),
+            "PCC_RUNTIME_ARCHIVE": str(pcc_runtime_archive),
             "PCC_RUNTIME_CC": "pcc",
             "PCC_RUNTIME_HIGH": "py",
             "PCC_PY_RUN_CACHE_DIR": str(tmp_path / "run-cache"),

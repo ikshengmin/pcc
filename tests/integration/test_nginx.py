@@ -1,3 +1,4 @@
+from tests.owned_ir_validation import verify_ir_text
 """nginx compilation test suite.
 
 Tests nginx source files through pcc's full pipeline:
@@ -16,21 +17,18 @@ import subprocess
 import tempfile
 
 import pytest
-import llvmlite.ir as ir
-import llvmlite.binding as llvm
+from pcc.ir import ir
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.parse.c_parser import CParser
-from pcc.codegen.c_codegen import LLVMCodeGenerator, postprocess_ir_text
-from pcc.project import (
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.frontends.c.parse.c_parser import CParser
+from pcc.frontends.c.codegen.c_codegen import CCodeGenerator, postprocess_ir_text
+from pcc.driver.project import (
     TranslationUnit,
     collect_translation_units,
     translation_unit_include_dirs,
 )
 from tests.parallel_jobs import translation_unit_jobs
 
-llvm.initialize_native_target()
-llvm.initialize_native_asmprinter()
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 PROJECTS_DIR = os.path.join(PROJECT_DIR, "projects")
@@ -197,7 +195,7 @@ def _clean_nginx_preprocessed_source(processed):
 def _nginx_source_files():
     """Get the list of nginx source files from make goal."""
     _ensure_nginx_configured()
-    from pcc.project import _scan_make_goal
+    from pcc.driver.project import _scan_make_goal
     sources, _cpp_groups = _scan_make_goal(NGINX_DIR, NGINX_MAKE_GOAL)
     return sources
 
@@ -274,7 +272,7 @@ def _compile_nginx_file(fname):
         ast = CParser().parse(processed)
         stage = "parse"
 
-        cg = LLVMCodeGenerator()
+        cg = CCodeGenerator()
         cg.generate_code(ast)
         stage = "codegen"
 
@@ -289,7 +287,7 @@ def _compile_nginx_file(fname):
         funcs = [l for l in ir_text.splitlines() if l.startswith("define ")]
         stage = "ir_serialize"
 
-        llvm.parse_assembly(ir_text)
+        verify_ir_text(ir_text)
         stage = "llvm_verify"
 
         return "ok", len(funcs)

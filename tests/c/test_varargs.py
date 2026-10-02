@@ -9,10 +9,10 @@ this_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(os.path.dirname(this_dir))
 sys.path.insert(0, parent_dir)
 
-from pcc.evaluater.c_evaluator import CEvaluator
-from pcc.parse.c_parser import CParser
-from pcc.codegen.c_codegen import LLVMCodeGenerator, postprocess_ir_text
-from pcc.project import TranslationUnit
+from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.frontends.c.parse.c_parser import CParser
+from pcc.frontends.c.codegen.c_codegen import CCodeGenerator, postprocess_ir_text
+from pcc.driver.project import TranslationUnit
 
 
 def test_stdarg_pointer_int_double_roundtrip():
@@ -41,7 +41,7 @@ def test_stdarg_pointer_int_double_roundtrip():
 
     processed = CEvaluator._system_cpp(source, base_dir=parent_dir)
     ast = CParser().parse(processed)
-    cg = LLVMCodeGenerator()
+    cg = CCodeGenerator()
     cg.generate_code(ast)
 
     with tempfile.TemporaryDirectory(prefix="pcc_vararg_") as tmpdir:
@@ -104,7 +104,7 @@ def test_stdarg_helper_accepts_va_list_parameter():
 
     processed = CEvaluator._system_cpp(source, base_dir=parent_dir)
     ast = CParser().parse(processed)
-    cg = LLVMCodeGenerator()
+    cg = CCodeGenerator()
     cg.generate_code(ast)
 
     with tempfile.TemporaryDirectory(prefix="pcc_vararg_") as tmpdir:
@@ -160,7 +160,7 @@ def test_variadic_string_literal_argument_decays_to_pointer():
 
     processed = CEvaluator._system_cpp(source, base_dir=parent_dir)
     ast = CParser().parse(processed)
-    cg = LLVMCodeGenerator()
+    cg = CCodeGenerator()
     cg.generate_code(ast)
 
     with tempfile.TemporaryDirectory(prefix="pcc_vararg_") as tmpdir:

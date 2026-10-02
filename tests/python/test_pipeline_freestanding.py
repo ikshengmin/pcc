@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from pcc.py_frontend import pipeline
-from pcc.py_frontend import pipeline_freestanding
+from pcc.frontends.python import pipeline
+from pcc.frontends.python import pipeline_freestanding
 
 
 def test_pipeline_freestanding_facade_is_thin():

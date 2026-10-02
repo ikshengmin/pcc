@@ -85,7 +85,7 @@ def _compile_repo_main_binary(main_py, exe):
     source edit during a long test process forces a fresh compile.
     """
     if _test_compile_cache_disabled():
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         with mock.patch.dict(os.environ, {"PCC_PYTHON_IR_PASSES": "off"}):
             compile_python(main_py, exe, libpython_mode="off")
@@ -98,7 +98,7 @@ def _compile_repo_main_binary(main_py, exe):
     key = (os.path.realpath(main_py), _repo_source_fingerprint(repo_root))
     cached = _COMPILED_REPO_MAIN_CACHE.get(key)
     if cached is None or not os.path.isfile(cached):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         if _COMPILED_REPO_MAIN_CACHE_DIR is None:
             _COMPILED_REPO_MAIN_CACHE_DIR = tempfile.mkdtemp(
@@ -129,7 +129,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         return dst
 
     def _assert_no_libpython_fallback_calls(self, ll_path):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         with open(ll_path, "r", encoding="utf-8") as f:
             ir_text = f.read()
@@ -163,7 +163,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 print(helper(n + 1))
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "shim.out")
         compile_python_multi(
@@ -216,7 +216,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     return self.x * self.y
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "klass.out")
         compile_python_multi(
@@ -262,7 +262,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 return x + 10
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "typed.out")
         compile_python_multi(
@@ -307,7 +307,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 return a + b
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "chain.out")
         compile_python_multi(
@@ -347,7 +347,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 return name in module_names
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "contains.out")
         compile_python_multi(
@@ -387,7 +387,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     self.value = value
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "alias_class.out")
         compile_python_multi(
@@ -435,7 +435,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     print("value")
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "default_none.out")
         compile_python_multi(
@@ -482,7 +482,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     return match(text) is not None
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "attribute_default_owner.out")
         compile_python_multi(
@@ -524,7 +524,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 source: str
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "extern_dataclass.out")
         compile_python_multi(
@@ -563,7 +563,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     return "hello " + name
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "function_scope_class_import.out")
         compile_python_multi(
@@ -605,7 +605,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 pass
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "extern_inherited_dataclass.out")
         compile_python_multi(
@@ -652,7 +652,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 pass
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         exe = os.path.join(self.td, "inherit_order.out")
         compile_python(main_py, exe, libpython_mode="auto")
@@ -664,7 +664,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """``Base.method(self, ...)`` should treat the first positional
         arg as the explicit receiver rather than failing during codegen
         as if an implicit class receiver were still required."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write(
             "base_dispatch.py",
@@ -708,7 +708,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 return value + 1
         """,
         )
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         exe = os.path.join(self.td, "nested_module_import.out")
         compile_python_multi(
@@ -728,7 +728,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """Type-alias literals like ``Callable[[str], str]`` should
         build CPython containers directly instead of storing foreign
         CPython refs inside pcc-native list/tuple objects."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write(
             "callable_alias.py",
@@ -754,7 +754,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """``from pkg import submod`` should bind the submodule object
         itself when the imported name is another compiled sibling
         module, not ``getattr(pkg, 'submod')`` on an empty package."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write(
             "pkg/__main__.py",
@@ -788,7 +788,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """Package ``__init__.py`` should resolve ``from .context`` to
         ``pkg.sub.context`` instead of incorrectly stripping one extra
         segment and looking for ``pkg.context``."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write(
             "pkg/__main__.py",
@@ -826,7 +826,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """Built-in ``getattr(obj, name, default)`` should work when
         ``obj`` is a CPython-backed sibling submodule object imported
         through the native multi-file closure."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write(
             "pkg/__main__.py",
@@ -859,7 +859,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """CPython-backed ``sys.argv`` slices should support list
         slicing, string equality, and tuple-membership checks without
         falling through the pcc-native list/str paths."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write(
             "argv_probe.py",
@@ -924,9 +924,9 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 
     def test_compiled_repo_main_auto_closes_same_package_absolute_imports(self):
         """Single-file compile of the real repo main should pull
-        ``pcc.cli_bootstrap`` into the native package closure instead of
+        ``pcc.driver.cli_bootstrap`` into the native package closure instead of
         leaving a direct CPython import of that sibling module."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -938,14 +938,14 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(out_ll))
         with open(out_ll, "r", encoding="utf-8") as f:
             ir_text = f.read()
-        self.assertIn("user_pcc_cli_bootstrap_bootstrap_cli_sys_argv_exit", ir_text)
-        self.assertNotIn("cpy.fromimport.pcc.cli_bootstrap", ir_text)
-        self.assertNotIn("cpy.fromimport.pcc.parse", ir_text)
-        self.assertNotIn("cpy.fromimport.pcc.parse.py_lift", ir_text)
-        self.assertNotIn("cpy.fromimport.pcc.parse.c_parser", ir_text)
-        self.assertNotIn("cpy.fromimport.pcc.parse.c_parse_driver", ir_text)
-        self.assertNotIn("cpy.fromimport.pcc.parse.plyparser", ir_text)
-        self.assertNotIn("cpy.fromimport.pcc.ply", ir_text)
+        self.assertIn("user_pcc_driver_cli_bootstrap_bootstrap_cli_sys_argv_exit", ir_text)
+        self.assertNotIn("cpy.fromimport.pcc.driver.cli_bootstrap", ir_text)
+        self.assertNotIn("cpy.fromimport.pcc.frontends.c.parse", ir_text)
+        self.assertNotIn("cpy.fromimport.pcc.frontends.python.py_lift", ir_text)
+        self.assertNotIn("cpy.fromimport.pcc.frontends.c.parse.c_parser", ir_text)
+        self.assertNotIn("cpy.fromimport.pcc.frontends.c.parse.c_parse_driver", ir_text)
+        self.assertNotIn("cpy.fromimport.pcc.frontends.c.parse.plyparser", ir_text)
+        self.assertNotIn("cpy.fromimport.pcc.frontends.c.ply", ir_text)
 
     def test_compiled_repo_main_can_compile_toy_python_program(self):
         """The compiled real CLI should preserve positional PATH
@@ -1023,7 +1023,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {"PCC_TEST_DISABLE_COMPILE_CACHE": "1"}):
             with mock.patch(
-                "pcc.py_frontend.pipeline.compile_python",
+                "pcc.frontends.python.pipeline.compile_python",
                 side_effect=fake_compile,
             ) as compile_mock:
                 _compile_repo_main_binary(main_py, out1)
@@ -1056,7 +1056,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.stderr, "")
 
     def test_pcc_multi_pipeline_error_diagnostic_is_never_blank(self):
-        from pcc.py_frontend.pipeline import PyPipelineError
+        from pcc.frontends.python.pipeline import PyPipelineError
 
         repo_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1073,7 +1073,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         emitted = []
 
         with mock.patch(
-            "pcc.py_frontend.pipeline.compile_python_multi",
+            "pcc.frontends.python.pipeline.compile_python_multi",
             side_effect=PyPipelineError(),
         ), mock.patch.object(
             module,
@@ -1166,11 +1166,10 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 + "=bootstrap.pcc_multi",
                 os.path.join(
                     repo_root,
-                    "pcc",
-                    "py_frontend",
+                    "pcc", "frontends", "python",
                     "pipeline.py",
                 )
-                + "=pcc.py_frontend.pipeline",
+                + "=pcc.frontends.python.pipeline",
             ],
             cwd=repo_root,
             env={
@@ -1252,7 +1251,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """Single-file package entry compilation should infer
         ``pkg.__main__`` instead of bare ``__main__`` so relative
         imports like ``from .tool import run`` resolve correctly."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         pkg_dir = os.path.join(self.td, "pkg")
         os.makedirs(pkg_dir, exist_ok=True)
@@ -1298,7 +1297,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """Auto-closure package compile should treat an unannotated
         sibling return as dynamic rather than ``None``, so tuple
         unpacking across the module boundary still compiles."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         pkg_dir = os.path.join(self.td, "pkg")
         os.makedirs(pkg_dir, exist_ok=True)
@@ -1345,7 +1344,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """Returning a nested def that itself closes over ``self``
         should at least compile through the hoist/capture lowering
         instead of failing with an unbound ``self`` during codegen."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write(
             "nested_self.py",
@@ -1379,7 +1378,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
     def test_tuple_of_class_objects_boxes_cleanly(self):
         """Tuple literals containing class objects should marshal as
         object pointers instead of erroring on ``ClassType``."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write(
             "class_tuple.py",
@@ -1414,22 +1413,22 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         LLVM IR. This locks the recent real-file fixes in the codegen
         layer and keeps the main pipeline / CLI entry path on the same
         compile-only self-host baseline."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
         cases = [
             (
-                os.path.join(repo_root, "pcc", "py_frontend", "codegen", "layer1.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "codegen", "layer1.py"),
                 os.path.join(self.td, "layer1_self.ll"),
             ),
             (
-                os.path.join(repo_root, "pcc", "py_frontend", "pipeline.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "pipeline.py"),
                 os.path.join(self.td, "pipeline_self.ll"),
             ),
             (
-                os.path.join(repo_root, "pcc", "cli_core.py"),
+                os.path.join(repo_root, "pcc", "driver", "cli_core.py"),
                 os.path.join(self.td, "cli_core_self.ll"),
             ),
         ]
@@ -1441,16 +1440,16 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 msg=f"expected LLVM output for {src_py}",
             )
 
-    def test_importing_pcc_py_frontend_does_not_eagerly_import_api(self):
-        """Bootstrap helpers import ``pcc.py_frontend`` inside an
+    def test_importing_pcc_frontends_python_does_not_eagerly_import_api(self):
+        """Bootstrap helpers import ``pcc.frontends.python`` inside an
         embedded interpreter that may not have llvmlite available.
         Importing the frontend package should therefore avoid the
         top-level ``pcc.api`` / C-evaluator path entirely."""
         code = (
             "import importlib, sys\n"
-            "importlib.import_module('pcc.py_frontend')\n"
+            "importlib.import_module('pcc.frontends.python')\n"
             "print('pcc.api' in sys.modules)\n"
-            "print('pcc.evaluater.c_evaluator' in sys.modules)\n"
+            "print('pcc.frontends.c.evaluator.c_evaluator' in sys.modules)\n"
         )
         r = subprocess.run(
             [sys.executable, "-c", code],
@@ -1466,7 +1465,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         ``PCC_PYTHON_LDFLAGS`` override should suppress any fallback
         ``python3-config`` probe. This keeps compiled bootstrap stages
         bound to the intended interpreter's embed flags."""
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         in_ll = os.path.join(self.td, "in.ll")
         with open(in_ll, "w", encoding="utf-8") as f:
@@ -1482,9 +1481,9 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         env["PCC_PYTHON_CONFIG"] = "/definitely/missing/python-config"
 
         with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch("pcc.py_frontend.pipeline.subprocess.run") as run_mock:
+            with mock.patch("pcc.frontends.python.pipeline.subprocess.run") as run_mock:
                 with mock.patch(
-                    "pcc.py_frontend.pipeline.subprocess.check_output"
+                    "pcc.frontends.python.pipeline.subprocess.check_output"
                 ) as check_output_mock:
                     run_mock.return_value = subprocess.CompletedProcess(
                         ["clang"],
@@ -1505,7 +1504,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("/definitely/missing/python-config", " ".join(cmd))
 
     def test_ensure_runtime_passes_absolute_host_python_to_make(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         make_cmds = []
         built = {"done": False}
@@ -1515,15 +1514,15 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             built["done"] = True
 
         with mock.patch(
-            "pcc.py_frontend.pipeline._resolve_pcc_binary",
+            "pcc.frontends.python.pipeline._resolve_pcc_binary",
             return_value="/tmp/pcc1",
         ):
             with mock.patch(
-                "pcc.py_frontend.pipeline._host_python_command",
+                "pcc.frontends.python.pipeline._host_python_command",
                 return_value=".venv/bin/python3",
             ):
                 with mock.patch(
-                    "pcc.py_frontend.pipeline.os.path.isfile"
+                    "pcc.frontends.python.pipeline.os.path.isfile"
                 ) as isfile:
                     isfile.side_effect = lambda path: (
                         str(path).endswith("Makefile")
@@ -1535,16 +1534,16 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                         )
                     )
                     with mock.patch(
-                        "pcc.py_frontend.pipeline._run_runtime_make",
+                        "pcc.frontends.python.pipeline._run_runtime_make",
                         side_effect=fake_run_runtime_make,
                     ):
                         with mock.patch(
-                            "pcc.py_frontend.pipeline."
+                            "pcc.frontends.python.pipeline."
                             "_runtime_archive_c_bundle_valid",
                             return_value=True,
                         ):
                             with mock.patch(
-                                "pcc.py_frontend.pipeline."
+                                "pcc.frontends.python.pipeline."
                                 "_write_runtime_archive_target_stamp"
                             ):
                                 pipeline._ensure_runtime(
@@ -1560,7 +1559,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertIn("PCC_PYTHON_IR_PASSES=default", make_cmds[0])
 
     def test_runtime_python_ir_pass_mode_has_independent_override(self):
-        from pcc.py_frontend.pipeline_runtime_archive import (
+        from pcc.frontends.python.pipeline_runtime_archive import (
             runtime_python_ir_pass_mode,
         )
 
@@ -1577,7 +1576,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             self.assertEqual(runtime_python_ir_pass_mode(), "off")
 
     def test_host_python_prefers_source_root_venv_outside_repo_cwd(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         source_root = "/work/pcc-source"
         blessed = source_root + "/.venv/bin/python3"
@@ -1588,23 +1587,23 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {}, clear=True):
             with mock.patch(
-                "pcc.py_frontend.pipeline.os.getcwd",
+                "pcc.frontends.python.pipeline.os.getcwd",
                 return_value="/tmp/unrelated-app",
             ):
                 with mock.patch(
-                    "pcc.py_frontend.pipeline._pcc_source_root_for_host_subprocess",
+                    "pcc.frontends.python.pipeline._pcc_source_root_for_host_subprocess",
                     return_value=source_root,
                 ):
                     with mock.patch(
-                        "pcc.py_frontend.pipeline.os.path.isfile",
+                        "pcc.frontends.python.pipeline.os.path.isfile",
                         side_effect=fake_isfile,
                     ):
                         self.assertEqual(pipeline._host_python_command(), blessed)
 
     def test_runtime_archive_link_args_only_force_capi_for_native_extensions(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
-        with mock.patch("pcc.py_frontend.pipeline.sys.platform", "darwin"):
+        with mock.patch("pcc.frontends.python.pipeline.sys.platform", "darwin"):
             self.assertEqual(
                 pipeline._runtime_archive_link_args_for_native_extensions(
                     "/tmp/fake_runtime.a",
@@ -1626,14 +1625,14 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             )
 
     def test_libpython_link_hides_pcc_capi_from_dynamic_extensions(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         archive = "/tmp/libpy_runtime_pcc_py_libpython.a"
         with mock.patch(
-            "pcc.py_frontend.pipeline._capi_export_anchor_symbols",
+            "pcc.frontends.python.pipeline._capi_export_anchor_symbols",
             return_value=["_PyCapsule_New", "__Py_NoneStruct"],
         ):
-            with mock.patch("pcc.py_frontend.pipeline.sys.platform", "darwin"):
+            with mock.patch("pcc.frontends.python.pipeline.sys.platform", "darwin"):
                 self.assertEqual(
                     pipeline._libpython_capi_isolation_link_flags(archive, True),
                     [
@@ -1641,7 +1640,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                         "-Wl,-unexported_symbol,__Py_NoneStruct",
                     ],
                 )
-            with mock.patch("pcc.py_frontend.pipeline.sys.platform", "linux"):
+            with mock.patch("pcc.frontends.python.pipeline.sys.platform", "linux"):
                 self.assertEqual(
                     pipeline._libpython_capi_isolation_link_flags(archive, True),
                     ["-Wl,--exclude-libs,libpy_runtime_pcc_py_libpython.a"],
@@ -1651,7 +1650,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_libpython_rejects_pcc_native_extension_object_model(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         with self.assertRaisesRegex(
             pipeline.PyPipelineError,
@@ -1671,8 +1670,8 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_absolute_from_import_detects_native_extension_alias(self):
-        from pcc.parse.py_lift import parse_and_lift
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python.py_lift import parse_and_lift
+        from pcc.frontends.python import pipeline
 
         ast_mod = parse_and_lift(
             "from generic_ext import _native\n",
@@ -1692,7 +1691,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         # old pipeline-module alias intercepted nothing and the gate went red
         # while the behavior it guards stayed correct.
         with mock.patch(
-            "pcc.py_frontend.pipeline_libpython.resolve_pcc_native_extension_path",
+            "pcc.frontends.python.pipeline_libpython.resolve_pcc_native_extension_path",
             side_effect=resolve_extension,
         ):
             needs_exports = pipeline._module_imports_pcc_native_extension(
@@ -1704,42 +1703,36 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertTrue(needs_exports)
         self.assertIn("generic_ext._native", resolved)
 
-    def test_compile_python_backend_llvm_uses_legacy_clang_link(self):
-        from pcc.py_frontend.pipeline import compile_python
+    def test_compile_python_rejects_removed_llvm_backend_before_runtime(self):
+        from pcc.frontends.python.pipeline import PyPipelineError, compile_python
 
         main_py = self._write("backend_llvm.py", "print(1)\n")
         exe = os.path.join(self.td, "backend_llvm.out")
         with mock.patch(
-            "pcc.py_frontend.pipeline._ensure_runtime",
+            "pcc.frontends.python.pipeline._ensure_runtime",
             return_value="/tmp/fake_runtime.a",
-        ):
-            with mock.patch("pcc.py_frontend.pipeline._link_with_clang") as clang_link:
-                with mock.patch(
-                    "pcc.py_frontend.pipeline._link_with_self_backend"
-                ) as self_link:
-                    compile_python(main_py, exe, backend="llvm")
+        ) as runtime:
+            with self.assertRaisesRegex(PyPipelineError, "unknown backend.*expected self"):
+                compile_python(main_py, exe, backend="llvm")
 
-        clang_link.assert_called_once()
-        self_link.assert_not_called()
-        self.assertFalse(
-            clang_link.call_args.kwargs.get("needs_native_extension_exports")
-        )
+        runtime.assert_not_called()
+        self.assertFalse(os.path.exists(exe))
 
     def test_compile_python_backend_env_self_uses_self_link(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         main_py = self._write("backend_self_env.py", "print(1)\n")
         exe = os.path.join(self.td, "backend_self_env.out")
         with mock.patch.dict(os.environ, {"PCC_BACKEND": "self"}):
             with mock.patch(
-                "pcc.py_frontend.pipeline._ensure_runtime",
+                "pcc.frontends.python.pipeline._ensure_runtime",
                 return_value="/tmp/fake_runtime.a",
             ):
                 with mock.patch(
-                    "pcc.py_frontend.pipeline._link_with_clang"
+                    "pcc.frontends.python.pipeline._link_with_clang"
                 ) as clang_link:
                     with mock.patch(
-                        "pcc.py_frontend.pipeline._link_with_self_backend_ir_texts"
+                        "pcc.frontends.python.pipeline._link_with_self_backend_ir_texts"
                     ) as self_link:
                         compile_python(main_py, exe)
 
@@ -1747,7 +1740,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         clang_link.assert_not_called()
 
     def test_self_native_link_reaches_in_process_emitter_and_host_triple(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ll_path = os.path.join(self.td, "self_input.ll")
         with open(ll_path, "w", encoding="utf-8") as f:
@@ -1767,11 +1760,11 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         with mock.patch(
-            "pcc.py_frontend.pipeline._host_target_triple_for_self_backend",
+            "pcc.frontends.python.pipeline._host_target_triple_for_self_backend",
             return_value="arm64-apple-darwin23.6.0",
         ) as host_triple_mock:
             with mock.patch(
-                "pcc.py_frontend.pipeline.subprocess.check_output",
+                "pcc.frontends.python.pipeline.subprocess.check_output",
                 side_effect=AssertionError("host emitter must not run"),
             ) as check_output_mock:
                 with mock.patch.object(
@@ -1780,7 +1773,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     return_value=asm_text,
                 ) as emit_mock:
                     with mock.patch(
-                        "pcc.py_frontend.pipeline.subprocess.run",
+                        "pcc.frontends.python.pipeline.subprocess.run",
                         side_effect=_successful_self_link_subprocess,
                     ) as run_mock:
                         pipeline._link_with_self_backend(
@@ -1817,7 +1810,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_self_native_link_keeps_in_process_emission_for_multiple_modules(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ll_paths = []
         for idx in range(2):
@@ -1836,11 +1829,11 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             return _successful_self_link_subprocess(cmd, **kwargs)
 
         with mock.patch(
-            "pcc.py_frontend.pipeline._host_target_triple_for_self_backend",
+            "pcc.frontends.python.pipeline._host_target_triple_for_self_backend",
             return_value="arm64-apple-darwin23.6.0",
         ):
             with mock.patch(
-                "pcc.py_frontend.pipeline.subprocess.check_output",
+                "pcc.frontends.python.pipeline.subprocess.check_output",
                 side_effect=AssertionError("host emitter must not run"),
             ) as check_output_mock:
                 with mock.patch.object(
@@ -1849,7 +1842,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     return_value=".text\n",
                 ) as emit_mock:
                     with mock.patch(
-                        "pcc.py_frontend.pipeline.subprocess.run",
+                        "pcc.frontends.python.pipeline.subprocess.run",
                         side_effect=fake_run,
                     ) as run_mock:
                         pipeline._link_with_self_backend(
@@ -1884,7 +1877,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_self_native_emitter_collects_incrementally(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "arm64-apple-darwin23.6.0"\n'
@@ -1901,7 +1894,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 return_value=[],
             ):
                 with mock.patch(
-                    "pcc.py_frontend.pipeline.subprocess.run",
+                    "pcc.frontends.python.pipeline.subprocess.run",
                     return_value=subprocess.CompletedProcess(["cc"], 0),
                 ):
                     with mock.patch.object(pipeline.gc, "collect") as collect_mock:
@@ -1917,7 +1910,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(collect_mock.call_count, 2)
 
     def test_self_native_emitter_uses_fresh_compiled_stage_workers(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "arm64-apple-darwin23.6.0"\n'
@@ -1975,7 +1968,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     ) as worker_commands_mock:
                         with mock.patch.object(pipeline.gc, "collect") as collect_mock:
                             with mock.patch(
-                                "pcc.py_frontend.pipeline.subprocess.run",
+                                "pcc.frontends.python.pipeline.subprocess.run",
                                 side_effect=fake_run,
                             ):
                                 pairs = pipeline._emit_self_objects_many_in_process(
@@ -1998,7 +1991,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_self_native_emitter_bounds_residual_oversized_shards(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "arm64-apple-darwin23.6.0"\n'
@@ -2051,7 +2044,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 side_effect=fake_worker_commands,
             ),
             mock.patch(
-                "pcc.py_frontend.pipeline.subprocess.run",
+                "pcc.frontends.python.pipeline.subprocess.run",
                 side_effect=fake_run,
             ),
         ):
@@ -2124,7 +2117,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_self_native_emitter_preserves_explicit_oversized_worker_override(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "arm64-apple-darwin23.6.0"\n'
@@ -2211,7 +2204,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_self_native_emitter_stops_before_safe_lane_on_oversized_failure(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         small_ir = (
             'target triple = "arm64-apple-darwin23.6.0"\n'
@@ -2279,7 +2272,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         publish_cache.assert_not_called()
 
     def test_self_backend_emit_batch_worker_stops_on_first_failure(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         manifest_path = os.path.join(self.td, "emit-batch.manifest")
         with open(manifest_path, "w", encoding="utf-8") as f:
@@ -2301,7 +2294,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(emit.call_count, 2)
 
     def test_self_native_emitter_skips_compiled_workers_for_cache_hits(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "arm64-apple-darwin23.6.0"\n'
@@ -2359,7 +2352,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(profile["counters"]["link_self_native_object_cache_hits"], 2)
 
     def test_self_native_emitter_splits_large_ir_in_compiled_stage_worker(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = 'target triple = "arm64-apple-darwin23.6.0"\n'
         for index in range(6):
@@ -2448,7 +2441,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_self_source_emitter_uses_python_module_workers_after_parent_split(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "arm64-apple-darwin23.6.0"\n'
@@ -2533,7 +2526,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_self_native_emit_worker_writes_target_and_assembly(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_path = os.path.join(self.td, "worker.ll")
         result_path = os.path.join(self.td, "worker.result")
@@ -2551,7 +2544,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             self.assertEqual(f.read(), "self-aarch64-darwin-v0\n.text\n")
 
     def test_self_native_emit_worker_publishes_internal_asm_without_cc(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_path = os.path.join(self.td, "worker-internal.ll")
         result_path = os.path.join(self.td, "worker-internal.result")
@@ -2587,7 +2580,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             )
 
     def test_self_native_emit_worker_normalizes_missing_target_triple(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_path = os.path.join(self.td, "worker-missing-target.ll")
         result_path = os.path.join(self.td, "worker-missing-target.result")
@@ -2620,7 +2613,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_frontend_worker_empty_ir_fails_with_module_name(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_path = os.path.join(self.td, "empty-worker.ll")
         with open(ir_path, "w", encoding="utf-8"):
@@ -2633,7 +2626,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             pipeline._read_python_frontend_worker_ir(ir_path, "pcc.example")
 
     def test_self_native_object_cache_publisher_enables_next_plan_hit(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_path = os.path.join(self.td, "cached-worker.ll")
         cache_dir = os.path.join(self.td, "object-cache")
@@ -2684,7 +2677,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 self.assertEqual(f.read().splitlines()[-1], "hit")
 
     def test_self_native_object_cache_plan_binds_identity_and_ir(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         cache_dir = os.path.join(self.td, "planned-object-cache")
         ir_path = os.path.join(self.td, "planned-worker.ll")
@@ -2762,7 +2755,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             self.assertNotEqual(changed_ir_plan[0][0], first_cache_path)
 
     def test_self_backend_split_worker_writes_isolated_shard_manifest(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_path = os.path.join(self.td, "large-worker.ll")
         result_path = os.path.join(self.td, "large-worker.result")
@@ -2793,7 +2786,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 self.assertIn('target triple = "arm64-apple-darwin23.6.0"', f.read())
 
     def test_self_backend_large_ir_module_split_keeps_one_global_definition(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "unknown-unknown-unknown"\n'
@@ -2850,7 +2843,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         cross-object globals leaves the emitter unable to recover root count
         and ownership.
         """
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "arm64-apple-darwin23.6.0"\n'
@@ -2903,7 +2896,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
     def test_self_backend_large_ir_module_split_namespaces_internal_symbols_per_module(
         self,
     ):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         def module_ir(func_name):
             return (
@@ -2945,7 +2938,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("ptr @counter", joined)
 
     def test_self_backend_link_requests_host_split_for_large_single_module(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             'target triple = "unknown-unknown-unknown"\n'
@@ -3006,15 +2999,15 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             },
         ):
             with mock.patch(
-                "pcc.py_frontend.pipeline._host_target_triple_for_self_backend",
+                "pcc.frontends.python.pipeline._host_target_triple_for_self_backend",
                 return_value="arm64-apple-darwin23.6.0",
             ):
                 with mock.patch(
-                    "pcc.py_frontend.pipeline._emit_self_objects_many_via_host_python",
+                    "pcc.frontends.python.pipeline._emit_self_objects_many_via_host_python",
                     side_effect=fake_emit_objects,
                 ) as emit_many:
                     with mock.patch(
-                        "pcc.py_frontend.pipeline.subprocess.run",
+                        "pcc.frontends.python.pipeline.subprocess.run",
                         side_effect=fake_link_run,
                     ) as run_mock:
                         pipeline._link_with_self_backend_ir_texts(
@@ -3035,7 +3028,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(len(linked_objects), 1)
 
     def test_self_backend_skip_ll_temp_defaults_to_direct_module_ir_texts(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         main_py = self._write(
             "main.py",
@@ -3070,15 +3063,15 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PCC_SELF_BACKEND_SKIP_LL_TEMP", None)
             with mock.patch(
-                "pcc.py_frontend.pipeline._ensure_runtime",
+                "pcc.frontends.python.pipeline._ensure_runtime",
                 return_value="/tmp/fake_runtime.a",
             ):
                 with mock.patch(
-                    "pcc.py_frontend.pipeline._link_with_self_backend_ir_texts",
+                    "pcc.frontends.python.pipeline._link_with_self_backend_ir_texts",
                     side_effect=fake_link,
                 ) as text_link_mock:
                     with mock.patch(
-                        "pcc.py_frontend.pipeline._link_native",
+                        "pcc.frontends.python.pipeline._link_native",
                     ) as path_link_mock:
                         pipeline.compile_python(
                             main_py,
@@ -3096,7 +3089,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertIn("define", linked[0][0][0])
 
     def test_self_backend_skip_ll_temp_can_be_disabled(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         with mock.patch.dict(
             os.environ,
@@ -3105,7 +3098,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             self.assertFalse(pipeline._self_backend_skip_ll_temp())
 
     def test_self_backend_target_triple_scan_is_header_limited(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         ir_text = (
             "; module without target in header\n"
@@ -3120,20 +3113,20 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertIn('target triple = "x-should-not-count"', normalized)
 
     def test_self_backend_failure_does_not_fallback_to_llvm(self):
-        from pcc.py_frontend.pipeline import PyPipelineError, compile_python
+        from pcc.frontends.python.pipeline import PyPipelineError, compile_python
 
         main_py = self._write("backend_self_fail.py", "print(1)\n")
         exe = os.path.join(self.td, "backend_self_fail.out")
         with mock.patch(
-            "pcc.py_frontend.pipeline._ensure_runtime",
+            "pcc.frontends.python.pipeline._ensure_runtime",
             return_value="/tmp/fake_runtime.a",
         ):
             with mock.patch(
-                "pcc.py_frontend.pipeline._link_with_self_backend_ir_texts",
+                "pcc.frontends.python.pipeline._link_with_self_backend_ir_texts",
                 side_effect=PyPipelineError("self backend stopped here"),
             ) as self_link:
                 with mock.patch(
-                    "pcc.py_frontend.pipeline._link_with_clang"
+                    "pcc.frontends.python.pipeline._link_with_clang"
                 ) as clang_link:
                     with self.assertRaisesRegex(
                         PyPipelineError, "self backend stopped here"
@@ -3147,8 +3140,8 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         from pcc.backend.self_backend_targets import (
             is_supported_self_backend_target_triple,
         )
-        from pcc.py_frontend import pipeline
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python import pipeline
+        from pcc.frontends.python.pipeline import compile_python
 
         triple = pipeline._host_target_triple_for_self_backend()
         if not is_supported_self_backend_target_triple(triple):
@@ -3167,11 +3160,11 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.stdout, "1\n")
 
     def test_bootstrap_cli_threads_backend_to_python_pipeline(self):
-        from pcc import cli_bootstrap
+        from pcc.driver import cli_bootstrap
 
         main_py = self._write("bootstrap_backend.py", "print(1)\n")
         exe = os.path.join(self.td, "bootstrap_backend.out")
-        with mock.patch("pcc.cli_bootstrap._compile_python") as compile_mock:
+        with mock.patch("pcc.driver.cli_bootstrap._compile_python") as compile_mock:
             rc = cli_bootstrap.bootstrap_cli_main(
                 [
                     "--backend=self",
@@ -3188,7 +3181,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(compile_mock.call_args.kwargs["ir_scaffold_mode"], "on")
 
     def test_bootstrap_cli_dispatches_self_backend_emit_batch_worker(self):
-        from pcc import cli_bootstrap
+        from pcc.driver import cli_bootstrap
 
         manifest = os.path.join(self.td, "emit-batch.manifest")
         with mock.patch.object(
@@ -3204,7 +3197,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         worker.assert_called_once_with(manifest)
 
     def test_bootstrap_cli_dispatches_indexed_module_emit_worker(self):
-        from pcc import cli_bootstrap
+        from pcc.driver import cli_bootstrap
 
         sidecar = os.path.join(self.td, "module.pidx")
         output = os.path.join(self.td, "module.pco")
@@ -3226,7 +3219,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         worker.assert_called_once_with(sidecar, output, "PCO")
 
     def test_resolve_python_config_command_uses_sysconfig_bindir(self):
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         values = {
             "BINDIR": "/opt/homebrew/python/bin",
@@ -3237,10 +3230,10 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             with mock.patch("sysconfig.get_config_var") as get_var:
                 with mock.patch(
-                    "pcc.py_frontend.pipeline_libpython.os.path.isfile"
+                    "pcc.frontends.python.pipeline_libpython.os.path.isfile"
                 ) as isfile:
                     with mock.patch(
-                        "pcc.py_frontend.pipeline_libpython.os.access"
+                        "pcc.frontends.python.pipeline_libpython.os.access"
                     ) as access:
                         get_var.side_effect = lambda name: values.get(name)
                         isfile.side_effect = (
@@ -3262,7 +3255,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """``from dataclasses import dataclass, field`` should be
         consumed at compile time when the names are only used for
         dataclass expansion / default-factory lowering."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "dataclass_field_off.py",
@@ -3307,7 +3300,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             self.assertNotIn("libpython", lk.stdout)
 
     def test_compile_python_libpython_off_rejects_fallback_program(self):
-        from pcc.py_frontend.pipeline import PyPipelineError, compile_python
+        from pcc.frontends.python.pipeline import PyPipelineError, compile_python
 
         src = self._write(
             "needs_libpython.py",
@@ -3327,34 +3320,34 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 
     def test_types_module_self_compiles_without_libpython(self):
         """The frontend type helpers should stay off-safe instead of
-        importing ``pcc.py_frontend.py_ast`` through the CPython module
+        importing ``pcc.frontends.python.py_ast`` through the CPython module
         path."""
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
-        src = os.path.join(repo_root, "pcc", "py_frontend", "types.py")
+        src = os.path.join(repo_root, "pcc", "frontends", "python", "types.py")
         out_ll = os.path.join(self.td, "types_off.ll")
         compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
         self.assertTrue(os.path.isfile(out_ll))
         with open(out_ll, "r", encoding="utf-8") as f:
             ir_text = f.read()
-        self.assertNotIn("cpy.import.pcc_py_frontend_py_ast", ir_text)
+        self.assertNotIn("cpy.import.pcc_frontends_python_py_ast", ir_text)
 
     def test_native_parser_modules_self_compile_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
         cases = [
             (
-                os.path.join(repo_root, "pcc", "parse", "py_lex.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_lex.py"),
                 os.path.join(self.td, "py_lex_off.ll"),
             ),
             (
-                os.path.join(repo_root, "pcc", "parse", "py_parse.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_parse.py"),
                 os.path.join(self.td, "py_parse_off.ll"),
             ),
         ]
@@ -3368,7 +3361,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(out_ll), msg=src)
 
     def test_native_parser_pair_compiles_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -3376,12 +3369,12 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         out_ll = os.path.join(self.td, "py_parse_pair.ll")
         compile_python_multi(
             [
-                os.path.join(repo_root, "pcc", "parse", "py_parse.py"),
-                os.path.join(repo_root, "pcc", "parse", "py_lex.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_parse.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_lex.py"),
             ],
             out_ll,
-            module_names=["pcc.parse.py_parse", "pcc.parse.py_lex"],
-            entry_module="pcc.parse.py_parse",
+            module_names=["pcc.frontends.python.py_parse", "pcc.frontends.python.py_lex"],
+            entry_module="pcc.frontends.python.py_parse",
             emit_llvm_only=True,
             libpython_mode="off",
         )
@@ -3389,7 +3382,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self._assert_no_libpython_fallback_calls(out_ll)
 
     def test_native_lift_stack_compiles_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -3397,19 +3390,19 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         out_ll = os.path.join(self.td, "py_lift_stack.ll")
         compile_python_multi(
             [
-                os.path.join(repo_root, "pcc", "parse", "py_lift.py"),
-                os.path.join(repo_root, "pcc", "parse", "py_parse.py"),
-                os.path.join(repo_root, "pcc", "parse", "py_lex.py"),
-                os.path.join(repo_root, "pcc", "py_frontend", "py_ast.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_lift.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_parse.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_lex.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_ast.py"),
             ],
             out_ll,
             module_names=[
-                "pcc.parse.py_lift",
-                "pcc.parse.py_parse",
-                "pcc.parse.py_lex",
-                "pcc.py_frontend.py_ast",
+                "pcc.frontends.python.py_lift",
+                "pcc.frontends.python.py_parse",
+                "pcc.frontends.python.py_lex",
+                "pcc.frontends.python.py_ast",
             ],
-            entry_module="pcc.parse.py_lift",
+            entry_module="pcc.frontends.python.py_lift",
             emit_llvm_only=True,
             libpython_mode="off",
         )
@@ -3418,7 +3411,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         with open(out_ll, "r", encoding="utf-8") as f:
             ir_text = f.read()
         start = ir_text.index(
-            "define ptr @user_pcc_parse_py_lift__Lifter__s_Expr"
+            "define ptr @user_pcc_frontends_python_py_lift__Lifter__s_Expr"
         )
         end = ir_text.index("\ndefine ", start + 1)
         expr_lifter_ir = ir_text[start:end]
@@ -3426,7 +3419,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("@.pyattr.kind_id", expr_lifter_ir)
 
     def test_native_type_infer_stack_compiles_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python_multi
+        from pcc.frontends.python.pipeline import compile_python_multi
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -3434,19 +3427,19 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         out_ll = os.path.join(self.td, "type_infer_stack.ll")
         compile_python_multi(
             [
-                os.path.join(repo_root, "pcc", "py_frontend", "type_infer.py"),
-                os.path.join(repo_root, "pcc", "py_frontend", "py_ast.py"),
-                os.path.join(repo_root, "pcc", "py_frontend", "export_meta.py"),
-                os.path.join(repo_root, "pcc", "py_frontend", "types.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "type_infer.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "py_ast.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "export_meta.py"),
+                os.path.join(repo_root, "pcc", "frontends", "python", "types.py"),
             ],
             out_ll,
             module_names=[
-                "pcc.py_frontend.type_infer",
-                "pcc.py_frontend.py_ast",
-                "pcc.py_frontend.export_meta",
-                "pcc.py_frontend.types",
+                "pcc.frontends.python.type_infer",
+                "pcc.frontends.python.py_ast",
+                "pcc.frontends.python.export_meta",
+                "pcc.frontends.python.types",
             ],
-            entry_module="pcc.py_frontend.type_infer",
+            entry_module="pcc.frontends.python.type_infer",
             emit_llvm_only=True,
             libpython_mode="off",
         )
@@ -3454,7 +3447,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self._assert_no_libpython_fallback_calls(out_ll)
 
     def test_pcc_unsafe_memory_intrinsics_compile_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "unsafe_probe.py",
@@ -3512,7 +3505,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         repo_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        runtime_dir = os.path.join(repo_root, "pcc", "py_runtime", "py")
+        runtime_dir = os.path.join(repo_root, "pcc", "runtime", "py")
 
         # System and third-party entry points whose public C declarations are
         # genuinely variadic.  Runtime-owned variadic exports are discovered
@@ -3676,8 +3669,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 
         unsafe_lowering_path = os.path.join(
             repo_root,
-            "pcc",
-            "py_frontend",
+            "pcc", "frontends", "python",
             "codegen",
             "unsafe_lowering.py",
         )
@@ -3721,8 +3713,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 
         declaration_helpers_path = os.path.join(
             repo_root,
-            "pcc",
-            "py_frontend",
+            "pcc", "frontends", "python",
             "codegen",
             "ir_decl_helpers.py",
         )
@@ -3750,7 +3741,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertTrue(printf_variadic)
 
     def test_variadic_dynamic_call_intrinsics_emit_exact_c_abi(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "variadic_call_ir.py",
@@ -3779,7 +3770,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertIn("sext i32", ir_text)
 
     def test_c_abi_i32_result_widens_before_python_int_ternary_phi(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "c_abi_i32_ternary.py",
@@ -3803,7 +3794,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
     def test_variadic_dynamic_call_intrinsics_match_c_va_arg(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         if sys.platform not in {"darwin", "linux"}:
             self.skipTest("dynamic-library variadic ABI test supports Darwin/Linux")
@@ -3902,15 +3893,14 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(result.stdout, "7\n42\n")
 
     def test_py_gc_backend_runtime_file_compiles_without_libpython_fallback(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
         src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_gc_backend.py",
         )
@@ -3931,8 +3921,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         # self-root via pcc_gc_frame_enter — assert that at its new home.
         reg_src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "freestanding_gc_frame_registry.py",
         )
@@ -3956,15 +3945,14 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("@pcc_gc_frame_enter", body)
 
     def test_py_obj_runtime_refcount_primitives_do_not_self_root(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
         src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_obj.py",
         )
@@ -3993,15 +3981,14 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("@pcc_gc_frame_enter", ptr_body)
 
     def test_py_gc_telemetry_runtime_file_compiles_without_libpython_fallback(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
         src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_gc_telemetry.py",
         )
@@ -4018,7 +4005,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self._assert_no_libpython_fallback_calls(out_ll)
 
     def test_py_gc_telemetry_split_preserves_runtime_api(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "gc_telemetry_split_probe.py",
@@ -4060,15 +4047,13 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pcc.__file__)))
         backend_src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_gc_backend.py",
         )
         telemetry_src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_gc_telemetry.py",
         )
@@ -4091,13 +4076,12 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 
     def test_py_obj_ops_mod_runtime_file_compiles_without_libpython_fallback(self):
         import pcc
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pcc.__file__)))
         src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_obj_ops_mod.py",
         )
@@ -4113,8 +4097,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pcc.__file__)))
         src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_obj_ops_dispatch.py",
         )
@@ -4126,7 +4109,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn('@c_abi_export("py_obj_mod")', text)
 
     def test_py_obj_mod_split_preserves_int_and_string_modulo_runtime(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "obj_mod_split_probe.py",
@@ -4150,11 +4133,11 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self,
     ):
         import pcc
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pcc.__file__)))
         for name in ("py_list_set_slice.py", "py_obj_ops_set_slice.py"):
-            src = os.path.join(repo_root, "pcc", "py_runtime", "py", name)
+            src = os.path.join(repo_root, "pcc", "runtime", "py", name)
             out_ll = os.path.join(self.td, name + ".ll")
 
             compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
@@ -4165,11 +4148,10 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         import pcc
 
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pcc.__file__)))
-        list_src = os.path.join(repo_root, "pcc", "py_runtime", "py", "py_list.py")
+        list_src = os.path.join(repo_root, "pcc", "runtime", "py", "py_list.py")
         dispatch_src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_obj_ops_dispatch.py",
         )
@@ -4184,7 +4166,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn('@c_abi_export("py_obj_set_slice")', dispatch_text)
 
     def test_list_set_slice_split_preserves_slice_assignment_runtime(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "list_set_slice_split_probe.py",
@@ -4215,11 +4197,11 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 
     def test_slice_split_runtime_files_compile_without_libpython_fallback(self):
         import pcc
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pcc.__file__)))
         for name in ("py_str_slice.py", "py_tuple_slice.py", "py_obj_ops_slice.py"):
-            src = os.path.join(repo_root, "pcc", "py_runtime", "py", name)
+            src = os.path.join(repo_root, "pcc", "runtime", "py", name)
             out_ll = os.path.join(self.td, name + ".ll")
 
             compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
@@ -4232,15 +4214,13 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pcc.__file__)))
         str_src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_str_accessors.py",
         )
         dispatch_src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_obj_ops_dispatch.py",
         )
@@ -4260,15 +4240,13 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pcc.__file__)))
         tuple_src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_tuple.py",
         )
         tuple_slice_src = os.path.join(
             repo_root,
-            "pcc",
-            "py_runtime",
+            "pcc", "runtime",
             "py",
             "py_tuple_slice.py",
         )
@@ -4282,7 +4260,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertIn('@c_abi_export("py_tuple_slice")', tuple_slice_text)
 
     def test_slice_split_preserves_string_list_and_tuple_slice_runtime(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "slice_split_probe.py",
@@ -4317,7 +4295,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.stdout, "bd\néll\n2\n4\n7\n5\n")
 
     def test_pcc_unsafe_tagged_int_intrinsics_compile_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "unsafe_tagged_int_probe.py",
@@ -4353,7 +4331,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.stdout, "True\n123\n-45\n")
 
     def test_pcc_unsafe_f64_intrinsics_compile_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "unsafe_f64_probe.py",
@@ -4388,7 +4366,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.stdout, "3.0\n")
 
     def test_pcc_unsafe_libc_buffer_intrinsics_compile_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "unsafe_libc_probe.py",
@@ -4448,7 +4426,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.stdout, "OK\nAAAAAA\n")
 
     def test_pcc_unsafe_env_and_access_intrinsics_compile_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         marker = os.path.join(self.td, "unsafe_access_marker.txt")
         with open(marker, "w", encoding="utf-8") as f:
@@ -4502,7 +4480,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.stdout, "False\n90\n2\n0\nTrue\n")
 
     def test_pcc_unsafe_external_pointer_globals_compile_without_libpython(self):
-        from pcc.py_frontend.pipeline import compile_python
+        from pcc.frontends.python.pipeline import compile_python
 
         src = self._write(
             "unsafe_global_probe.py",
@@ -4573,7 +4551,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
     def test_resolve_python_config_command_falls_back_to_python3_config(self):
         """When sysconfig yields no executable candidate, pipeline
         should fall back to a bare ``python3-config`` probe."""
-        from pcc.py_frontend import pipeline
+        from pcc.frontends.python import pipeline
 
         with mock.patch.dict(os.environ, {}, clear=True):
             with mock.patch("sysconfig.get_config_var", return_value=None):

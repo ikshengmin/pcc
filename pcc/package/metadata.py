@@ -20,12 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from pcc.package_schema import (
-    distribution_filename_fields,
-    pcc_native_wheel_tag as pcc_native_wheel_tag_for_platform,
-    validate_project_name,
-    wheel_tag_fields,
-)
+from pcc.package.schema import distribution_filename_fields, pcc_native_wheel_tag as pcc_native_wheel_tag_for_platform, validate_project_name, wheel_tag_fields
 
 try:  # Python 3.11+
     import tomllib

@@ -3,7 +3,7 @@ from __future__ import annotations
 import textwrap
 import subprocess
 
-from pcc.py_frontend.pipeline import compile_python
+from pcc.frontends.python.pipeline import compile_python
 
 
 def test_instance_field_callable_call_compiles_to_dynamic_attribute_call(tmp_path):
@@ -30,7 +30,7 @@ def test_instance_field_callable_call_compiles_to_dynamic_attribute_call(tmp_pat
     compile_python(
         str(src),
         str(exe),
-        backend="llvm",
+        backend="self",
         libpython_mode="off",
         ir_scaffold_mode="on",
     )
@@ -58,7 +58,7 @@ def test_local_callable_shadows_same_named_function_for_codegen(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        backend="llvm",
+        backend="self",
         libpython_mode="off",
         ir_scaffold_mode="on",
     )
@@ -86,7 +86,7 @@ def test_unhinted_module_global_dunder_new_does_not_bind_unrelated_class(tmp_pat
     compile_python(
         str(src),
         str(exe),
-        backend="llvm",
+        backend="self",
         libpython_mode="off",
         ir_scaffold_mode="on",
     )

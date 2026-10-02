@@ -124,7 +124,7 @@ def pytest_configure(config):
     # Cache warming exists only to make xdist worker collection consistent.
     # Nested/focused ``-n0`` pytest processes must not repeat this startup work.
     if _xdist_controller_enabled(config):
-        from pcc.parse.c_parser import CParser
+        from pcc.frontends.c.parse.c_parser import CParser
 
         CParser()
 

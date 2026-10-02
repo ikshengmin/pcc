@@ -12,19 +12,18 @@ import sys
 from pathlib import Path
 
 import pytest
-from llvmlite import binding as llvm
 
 from pcc.backend.self_backend_x86_64_linux import emit_x86_64_linux_asm
-from pcc.py_frontend import pipeline
+from pcc.frontends.python import pipeline
 from pcc.tools.ir_to_obj import emit_object
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NUMERIC_SOURCE = (
-    REPO_ROOT / "pcc" / "py_runtime" / "py" / "freestanding_libc_numeric.py"
+    REPO_ROOT / "pcc" / "runtime" / "py" / "freestanding_libc_numeric.py"
 )
 ERRNO_SOURCE = (
-    REPO_ROOT / "pcc" / "py_runtime" / "py" / "freestanding_errno.py"
+    REPO_ROOT / "pcc" / "runtime" / "py" / "freestanding_errno.py"
 )
 MATH_SYMBOLS = {
     "atan2",
@@ -211,28 +210,26 @@ def test_numeric_object_resolves_a_native_c_math_consumer(tmp_path: Path) -> Non
 
 
 def _native_math_functions(tmp_path: Path):
-    llvm.initialize_native_target()
-    llvm.initialize_native_asmprinter()
-    errno_value = ctypes.c_int32(0)
+    from pcc.backend.host_owned_load import load_functions
+    from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+    from pcc.driver.project import TranslationUnit
+    from pcc.frontends.python.pipeline_targets import host_target_triple
 
-    @ctypes.CFUNCTYPE(None, ctypes.c_int32)
-    def errno_set(value: int) -> None:
-        errno_value.value = value
-
-    errno_address = ctypes.cast(errno_set, ctypes.c_void_p).value
-    assert errno_address is not None
-    llvm.add_symbol("pcc_errno_set", errno_address)
-    module = llvm.parse_assembly(_numeric_ir(tmp_path).read_text(encoding="utf-8"))
-    module.verify()
-    module.triple = llvm.get_default_triple()
-    machine = llvm.Target.from_default_triple().create_target_machine()
-    engine = llvm.create_mcjit_compiler(module, machine)
-    engine.finalize_object()
+    shim = CEvaluator().compile_translation_units([TranslationUnit(
+        name="errno-shim.c", path="", source="int owned_errno; void pcc_errno_set(int value) {owned_errno = value;}"
+    )], use_compile_cache=False)
+    numeric_ir = _numeric_ir(tmp_path).read_text(encoding="utf-8")
+    memory, symbols = load_functions([("numeric", numeric_ir)] + shim, host_target_triple())
+    errno_value = ctypes.c_int32.from_address(symbols["_owned_errno"])
+    errno_set = ctypes.CFUNCTYPE(None, ctypes.c_int32)(symbols["_pcc_errno_set"])
+    errno_set._pcc_owned_memory = memory
 
     def bind(name: str, *argument_types):
-        address = engine.get_function_address(name)
+        address = symbols["_" + name]
         assert address != 0
-        return ctypes.CFUNCTYPE(ctypes.c_double, *argument_types)(address)
+        function = ctypes.CFUNCTYPE(ctypes.c_double, *argument_types)(address)
+        function._pcc_owned_memory = memory
+        return function
 
     unary = {
         name: bind(name, ctypes.c_double)
@@ -253,16 +250,18 @@ def _native_math_functions(tmp_path: Path):
     }
     functions = unary | binary
     functions["scalbn"] = bind("scalbn", ctypes.c_double, ctypes.c_int)
-    strtod_address = engine.get_function_address("strtod")
+    strtod_address = symbols["_strtod"]
     assert strtod_address != 0
     functions["strtod"] = ctypes.CFUNCTYPE(
         ctypes.c_double,
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_void_p),
     )(strtod_address)
-    return engine, module, functions, errno_value, errno_set
+    functions["strtod"]._pcc_owned_memory = memory
+    return memory, symbols, functions, errno_value, errno_set
 
 
+@pytest.mark.pcc_gate(unavailable=None if sys.platform == "darwin" and platform.machine() == "arm64" else "owned in-process loader requires Darwin arm64; executable ABI tests cover other targets")
 def test_numeric_exports_execute_without_host_libm(tmp_path: Path) -> None:
     # Calling the emitted functions through their C ABI keeps this an execution
     # test of the production IR, while the object-level test above proves that
@@ -462,6 +461,7 @@ def _host_strtod() -> object:
     return function
 
 
+@pytest.mark.pcc_gate(unavailable=None if sys.platform == "darwin" and platform.machine() == "arm64" else "owned in-process loader requires Darwin arm64; executable ABI tests cover other targets")
 def test_strtod_full_precision_hex_endptr_and_errno_match_c_oracle(
     tmp_path: Path,
 ) -> None:

@@ -12,13 +12,13 @@ from pcc.tools.runtime_archive_provenance import (
 from tests.runtime_build_cache import cached_pcc_python_runtime, cached_threaded_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "py_runtime"
+RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 
 _PCC_PY_RUNTIME_BUILD_CACHE: Path | None = None
 
 
 def _compile_probe(tmp_path, source: str):
-    from pcc.py_frontend.pipeline import compile_python
+    from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "probe.py"
     exe = tmp_path / "probe.out"
@@ -48,7 +48,7 @@ def _build_runtime(tmp_path: Path) -> Path:
     return cached_pcc_python_runtime()
 
 
-def _build_pcc_py_runtime(tmp_path: Path) -> Path:
+def _build_pcc_runtime(tmp_path: Path) -> Path:
     global _PCC_PY_RUNTIME_BUILD_CACHE
     explicit = os.environ.get("PCC_RUNTIME_ARCHIVE")
     if explicit:
@@ -1282,7 +1282,7 @@ def test_colored_relocating_task_and_scheduler_queue_follow_forwarding(tmp_path)
 def test_pcc_python_colored_relocating_task_and_scheduler_queue_follow_forwarding(
     tmp_path,
 ):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_backend_four_task_and_scheduler_queue_follow_forwarding(
         tmp_path,
         work_runtime,
@@ -1292,7 +1292,7 @@ def test_pcc_python_colored_relocating_task_and_scheduler_queue_follow_forwardin
 
 
 def test_pcc_python_memoryview_owned_buffer_follows_relocation(tmp_path):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_pcc_python_memoryview_owned_buffer_follows_relocation(
         tmp_path,
         work_runtime,
@@ -1309,7 +1309,7 @@ def test_colored_relocating_list_copy_owns_item_array(tmp_path):
 
 
 def test_pcc_python_colored_relocating_list_copy_owns_item_array(tmp_path):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_backend_four_list_relocation_copies_owned_items(
         tmp_path,
         work_runtime,
@@ -1328,7 +1328,7 @@ def test_colored_relocating_tuple_copy_retains_owned_items(tmp_path):
 
 
 def test_pcc_python_colored_relocating_tuple_copy_retains_owned_items(tmp_path):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_backend_four_tuple_relocation_retain_owned_items(
         tmp_path,
         work_runtime,
@@ -1347,7 +1347,7 @@ def test_colored_relocating_task_copy_retains_state_slots(tmp_path):
 
 
 def test_pcc_python_colored_relocating_task_copy_retains_state_slots(tmp_path):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_backend_four_task_relocation_retains_state_slots(
         tmp_path,
         work_runtime,
@@ -1366,7 +1366,7 @@ def test_colored_relocating_set_copy_retains_owned_entries(tmp_path):
 
 
 def test_pcc_python_colored_relocating_set_copy_retains_owned_entries(tmp_path):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_backend_four_set_relocation_retains_owned_entries(
         tmp_path,
         work_runtime,
@@ -1385,7 +1385,7 @@ def test_colored_relocating_dict_copy_retains_owned_tables(tmp_path):
 
 
 def test_pcc_python_colored_relocating_dict_copy_retains_owned_tables(tmp_path):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_backend_four_dict_relocation_retains_owned_tables(
         tmp_path,
         work_runtime,
@@ -1404,7 +1404,7 @@ def test_colored_relocating_instance_copy_retains_owned_fields(tmp_path):
 
 
 def test_pcc_python_colored_relocating_instance_copy_retains_owned_fields(tmp_path):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_backend_four_instance_relocation_retains_owned_fields(
         tmp_path,
         work_runtime,
@@ -1423,7 +1423,7 @@ def test_colored_relocating_targets_wait_for_phase_reset(tmp_path):
 
 
 def test_pcc_python_colored_relocating_targets_wait_for_phase_reset(tmp_path):
-    work_runtime = _build_pcc_py_runtime(tmp_path)
+    work_runtime = _build_pcc_runtime(tmp_path)
     _assert_backend_four_targets_wait_for_phase_reset(
         tmp_path,
         work_runtime,
