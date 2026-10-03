@@ -587,6 +587,38 @@ class SetLoweringMixin:
         self._emit_post_call_err_check(expr.span)
         return self._emit_none_literal()
 
+    def _emit_owned_set_constructor(self, expr):
+        """Publish a native zero/one-argument constructor before any cleanup."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("set.constructor.result")
+            roots.append(output)
+        operands = []
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if expr.args:
+                argument = self._emit_slot_call_operand(expr.args[0], "set.constructor.argument")
+                operands.append(argument)
+                roots.append(argument)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            runtime_name = "py_set_from_iterable" if operands else "py_set_new"
+            self._slot_call_runtime_call(runtime_name, tuple(operands), result_slot=output,
+                                         span=expr.span)
+            self._release_slot_call_roots(tuple(operands))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("set.constructor.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _maybe_emit_set_builtin(self, expr: Call) -> Optional[ir.Value]:
         """``set()`` / ``set([a, b])`` / ``set((a, b, c))`` / ``set(iterable)``.
 
@@ -596,6 +628,9 @@ class SetLoweringMixin:
           complete argument before the constructor starts hashing members.
           Then use the runtime iterator protocol for every type hint.
         """
+        if (not expr.is_set_literal and not expr.kwargs and len(expr.args) <= 1
+                and (not expr.args or not self._expr_looks_cpython(expr.args[0]))):
+            return self._emit_owned_set_constructor(expr)
         if expr.args and not expr.is_set_literal:
             arg = expr.args[0]
             src = self._emit_as_object(arg)

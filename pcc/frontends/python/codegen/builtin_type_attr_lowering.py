@@ -483,74 +483,68 @@ class BuiltinTypeAttrLoweringMixin:
         expr: Call,
         name: str,
     ) -> Optional[ir.Value]:
-        if expr.kwargs:
+        if expr.kwargs or name not in ("bytes", "bytearray", "memoryview"):
             return None
-        if name in ("bytes", "bytearray", "memoryview") and len(expr.args) == 1:
-            src = self._emit_as_object(expr.args[0])
-            if not self._owned_release_needed(src, expr.args[0]):
-                src = self._gc_retain(src, name=self._fresh("buffer.source.retain"))
-            self._gc_pin(src)
+        helper = None
+        encoded = False
+        if len(expr.args) == 1:
             helper = {
                 "bytes": "py_bytes_from_obj",
                 "bytearray": "py_bytearray_from_obj",
                 "memoryview": "py_memoryview_new",
             }[name]
-            result = self.builder.call(
-                self.runtime[helper], [src], name=self._fresh(name + ".from"),
-            )
-            self._note_owned_object_value(result)
-            self._emit_post_call_err_check(
-                getattr(expr, "span", None), pinned_release_on_error=((src, True),),
-            )
-            # bytes(existing_bytes) may return the same object with a new ref.
-            self._gc_pin(result)
-            self._gc_unpin(src)
-            self._gc_release(src)
-            self._gc_unpin(result)
-            return result
-        if name == "bytes":
-            if not expr.args:
-                return self.builder.call(
-                    self.runtime["py_bytes_new"],
-                    [ir.Constant(_CSTR, None), ir.Constant(_I64, 0)],
-                    name=self._fresh("bytes.empty"),
-                )
-            if len(expr.args) == 2 and isinstance(expr.args[0].ty, StrType):
-                # bytes(str, encoding-literal) -> encode the str directly with
-                # the matching runtime helper. Only literal utf-8 / latin-1
-                # encodings are handled natively; anything else returns None so
-                # the caller falls through to the libpython fallback.
-                helper = self._bytes_encoding_helper_for_arg(expr.args[1])
-                if helper is not None:
-                    return self._emit_str_encode_to_bytes(
-                        expr.args[0], helper, "bytes.encode"
-                    )
-            return None
-        if (
-            name == "bytearray"
-            and len(expr.args) == 2
-            and isinstance(expr.args[0].ty, StrType)
-        ):
-            # bytearray(str, encoding-literal) -> encode the str to bytes, then
-            # wrap the bytes object as a bytearray (mirrors CPython's
-            # bytearray(str, encoding) two-arg form).
+        elif len(expr.args) == 2 and name != "memoryview" and isinstance(expr.args[0].ty, StrType):
             helper = self._bytes_encoding_helper_for_arg(expr.args[1])
-            if helper is not None:
-                return self._emit_str_encode_to_bytes(
-                    expr.args[0], helper, "bytearray.encode.bytes", True
+            encoded = helper is not None
+        elif not expr.args and name != "memoryview":
+            helper = "py_bytes_new" if name == "bytes" else "py_bytearray_from_obj"
+        if helper is None:
+            return None
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root(name + ".result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if not expr.args:
+                suffix = (ir.Constant(_CSTR, None),)
+                if name == "bytes":
+                    suffix += (ir.Constant(_I64, 0),)
+                self._slot_call_runtime_call(
+                    helper, (), result_slot=output, suffix_args=suffix, span=expr.span,
                 )
-        if name == "bytearray" and not expr.args:
-            # bytearray() -> empty bytearray, built from an empty bytes object
-            # (mirrors the bytes() 0-arg path above). Without this the 0-arg
-            # form forced the libpython fallback.
-            empty = self.builder.call(
-                self.runtime["py_bytes_new"],
-                [ir.Constant(_CSTR, None), ir.Constant(_I64, 0)],
-                name=self._fresh("bytearray.empty.bytes"),
-            )
-            return self.builder.call(
-                self.runtime["py_bytearray_from_obj"],
-                [empty],
-                name=self._fresh("bytearray.empty"),
-            )
-        return None
+            else:
+                source = self._emit_slot_call_operand(expr.args[0], name + ".source")
+                roots.append(source)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                encoded_root = output
+                if encoded and name == "bytearray":
+                    encoded_root = self._new_slot_call_root(name + ".encoded")
+                    roots.append(encoded_root)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                # bytes(existing_bytes) aliases its argument with an additional
+                # reference. Publish that separate owner before retiring either
+                # operand lease or source owner; bytearray/view return NEW too.
+                self._slot_call_runtime_call(
+                    helper, (source,), result_slot=encoded_root, span=expr.span,
+                )
+                if encoded and name == "bytearray":
+                    self._slot_call_runtime_call(
+                        "py_bytearray_from_obj", (encoded_root,),
+                        result_slot=output, span=expr.span,
+                    )
+                self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh(name + ".current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy

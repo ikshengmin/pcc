@@ -8,6 +8,7 @@ import pytest
 
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 from pcc.driver.project import TranslationUnit
+from tests.owned_c_corpus import run_owned_c_corpus
 from tests.gcc_torture_cases import (
     DEFAULT_TIMEOUT,
     PccCompileResult,
@@ -63,16 +64,20 @@ def _run_backend(
     unit = TranslationUnit(case_path.name, str(case_path), _read_case_source(case_path))
     try:
         options = gcc_torture_case_options(case_path)
-        result = CEvaluator(
+        # The oracle's host -lm is supplied by PCC's own runtime in this lane.
+        # Do not silently discard any future caller-selected link dependency.
+        if options.link_args not in ((), ("-lm",)):
+            raise RuntimeError("unsupported owned corpus link dependency: " + repr(options.link_args))
+        evaluator = CEvaluator(
             backend=backend,
             allow_unimplemented_backend=allow_unimplemented_backend,
-        ).run_translation_units_with_system_cc(
+        )
+        result = run_owned_c_corpus(evaluator,
             [unit],
             base_dir=str(case_path.parent),
             include_dirs=[str(case_path.parent)],
             timeout=timeout,
             cpp_args=[options.standard],
-            link_args=list(options.link_args),
         )
         return PccCompileResult(result.returncode, result.stdout, result.stderr)
     except Exception as exc:
@@ -89,7 +94,7 @@ def _run_self_backend(case_path: Path, timeout: int = DEFAULT_TIMEOUT):
 
 
 def _run_llvm_backend(case_path: Path, timeout: int = DEFAULT_TIMEOUT):
-    """Historical label: run_pcc now uses the default self backend and host cc.
+    """Historical label: run_pcc now uses the default owned self backend.
 
     Keep the existing coverage/node identities; this lane is not evidence of
     independent LLVM execution or native pcc1 ownership. An unsupported

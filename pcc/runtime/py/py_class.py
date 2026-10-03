@@ -181,6 +181,7 @@ py_dict_keys = extern("py_dict_keys", (c_ptr,), c_ptr)
 py_dict_update = extern("py_dict_update", (c_ptr, c_ptr), c_void)
 py_dict_del = extern("py_dict_del", (c_ptr, c_ptr), c_int64)
 py_builtin_type_class_tag = extern("py_builtin_type_class_tag", (c_ptr,), c_int32)
+py_subs_alloc_user_tag = extern("py_subs_alloc_user_tag", (), c_int32)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_bool_from_bit = extern("py_bool_from_bit", (c_int32,), c_ptr)
@@ -272,10 +273,8 @@ def _class_require_result(result, helper_name, message):
 
 
 def _alloc_user_tag() -> int:
-    slot = global_addr("py_next_user_tag")
-    tag: int = load_i32(slot, 0)
-    store_i32(slot, 0, tag + 1)
-    return tag
+    # The substrate owns the shared counter, reserved tags and exhaustion.
+    return py_subs_alloc_user_tag()
 
 
 def _object_root():
@@ -3287,6 +3286,9 @@ def py_super_lookup(start_cls, from_cls, name):
     return null()
 
 
+pcc_class_retire_metaclass = extern("pcc_class_retire_metaclass", (c_ptr,), c_void)
+
+
 @c_abi_export("py_class_dealloc")
 def py_class_dealloc(o) -> None:
     if ptr_is_null(o) != 0:
@@ -3307,14 +3309,14 @@ def py_class_dealloc(o) -> None:
     field_names = load_ptr(o, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
     if ptr_is_null(field_names) == 0:
         free(field_names)
-    # Detach the counted metaclass relation before its release can run
-    # nested cleanup. The remaining class retirement uses no metaclass data.
-    metaclass = pcc_gc_load_ptr(o, ptr_add(o, PYCLASSOBJECT_METACLASS_OFFSET))
-    store_ptr(o, PYCLASSOBJECT_METACLASS_OFFSET, null())
     # Attribute outcomes are keyed by this address; retire them before a new
     # class can be allocated there or relation cleanup can reenter lookup.
+    # The counted relation stays in its authoritative slot across this call.
     _bump_class_attr_cache_epoch()
-    py_decref(metaclass)
+    # Retire the relation through the existing owning-slot transaction. Its
+    # commit detaches before deferred cleanup, without an unrooted raw value
+    # spanning a safepoint in the epoch or decref helpers.
+    pcc_class_retire_metaclass(o)
     pcc_gc_free_object_memory(o)
 
 
@@ -3689,6 +3691,12 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
         c = pcc_gc_load_ptr(null(), roots)
         store_ptr(c, PYCLASSOBJECT_FIELD_NAMES_OFFSET, copied_fields)
     user_tag: int = _alloc_user_tag()
+    if user_tag < 0:
+        _class_require_result(
+            null(), cstr("class type tag allocation"),
+            cstr("user class type tag space exhausted"),
+        )
+        return _class_construct_finish(roots, borrowed, 0)
     c = pcc_gc_load_ptr(null(), roots)
     store_i32(c, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET, user_tag)
     n_slots: int = n_fields + 1
@@ -4551,3 +4559,133 @@ def py_obj_special_present(value, name) -> int:
                 found = 1
     pcc_py_gc_minor_graph_unlock()
     return found
+
+
+pcc_class_namespace_acquire_slots = extern(
+    "pcc_class_namespace_acquire_slots", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64
+)
+pcc_class_namespace_install_slots = extern(
+    "pcc_class_namespace_install_slots", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64
+)
+pcc_gc_store_ptr_plan_init = extern(
+    "pcc_gc_store_ptr_plan_init", (c_ptr, c_ptr, c_int64), c_void
+)
+pcc_gc_store_ptr_plan_finish = extern("pcc_gc_store_ptr_plan_finish", (c_ptr,), c_void)
+py_dict_namespace_set_slots = extern(
+    "py_dict_namespace_set_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
+)
+py_dict_namespace_del_slots = extern(
+    "py_dict_namespace_del_slots", (c_ptr, c_ptr, c_ptr), c_int64
+)
+
+# Owning namespace writer. No graph lock spans a
+# semantic function call or local integer assignment in this module.
+_CLASS_WRITE_CLASS = 1
+_CLASS_WRITE_VALUE = 2
+_CLASS_WRITE_DICT = 3
+_CLASS_WRITE_KEY = 4
+_CLASS_WRITE_CREATED = 5
+_CLASS_WRITE_SLOT_COUNT = 14
+_CLASS_WRITE_CONTEXT_OWNER_SLOT = 0
+_CLASS_WRITE_CONTEXT_NAME = 1
+_CLASS_WRITE_CONTEXT_COUNT = 2
+
+
+def _class_write_acquire_namespace(slots: c_ptr, tokens: c_ptr, create: int) -> int:
+    output = ptr_add(slots, _CLASS_WRITE_DICT * C_POINTER_SIZE)
+    token_slot = ptr_add(tokens, _CLASS_WRITE_DICT * C_POINTER_SIZE)
+    class_slot = ptr_add(slots, _CLASS_WRITE_CLASS * C_POINTER_SIZE)
+    plan = stack_alloc(256)
+    prepared = stack_alloc(C_POINTER_SIZE)
+    status: int = pcc_class_namespace_acquire_slots(class_slot, output, token_slot, plan, prepared)
+    if load_i64(prepared, 0) != 0:
+        pcc_gc_root_copy_lease_finish(plan)
+    if status != 0:
+        return status
+    if create == 0:
+        return 0
+    created_slot = ptr_add(slots, _CLASS_WRITE_CREATED * C_POINTER_SIZE)
+    store_ptr(created_slot, 0, py_dict_new())
+    if _special_adopt(slots, tokens, _CLASS_WRITE_CREATED) != 0:
+        return -1
+    if ptr_is_null(load_ptr(created_slot, 0)) != 0:
+        return _special_error(cstr("class namespace allocation failed"))
+    write_plan = stack_alloc(128)
+    pcc_gc_store_ptr_plan_init(write_plan, load_ptr(class_slot, 0), pcc_gc_backend())
+    status = pcc_class_namespace_install_slots(class_slot, created_slot, output, token_slot, write_plan, plan, prepared)
+    pcc_gc_store_ptr_plan_finish(write_plan)
+    if load_i64(prepared, 0) != 0:
+        pcc_gc_root_copy_lease_finish(plan)
+    _special_drop(slots, tokens, _CLASS_WRITE_CREATED)
+    return status
+
+
+def _class_write_namespace_body(slots: c_ptr, tokens: c_ptr, name: c_ptr, value_slot: c_ptr, remove: int) -> int:
+    class_slot = ptr_add(slots, _CLASS_WRITE_CLASS * C_POINTER_SIZE)
+    if remove == 0:
+        if _special_copy(slots, tokens, _CLASS_WRITE_VALUE, value_slot, 0) != 0:
+            return -1
+    key_slot = ptr_add(slots, _CLASS_WRITE_KEY * C_POINTER_SIZE)
+    store_ptr(key_slot, 0, py_str_new(name, strlen(name)))
+    if _special_adopt(slots, tokens, _CLASS_WRITE_KEY) != 0:
+        return -1
+    if ptr_is_null(load_ptr(key_slot, 0)) != 0:
+        return _special_error(cstr("class namespace key allocation failed"))
+    # Discovery is conservative: a failed installation may leave this hint
+    # positive, but no successful __del__ installation may leave it zero.
+    if _strs_eq(name, cstr("__del__")) != 0 and remove == 0:
+        _note_class_defines_del()
+    context = stack_alloc(_CLASS_WRITE_CONTEXT_COUNT * C_POINTER_SIZE)
+    store_ptr(context, _CLASS_WRITE_CONTEXT_OWNER_SLOT * C_POINTER_SIZE, class_slot)
+    store_ptr(context, _CLASS_WRITE_CONTEXT_NAME * C_POINTER_SIZE, name)
+    while True:
+        acquired: int = _class_write_acquire_namespace(slots, tokens, 0 if remove != 0 else 1)
+        if acquired < 0:
+            return _special_error(cstr("class namespace owner acquisition failed"))
+        if acquired == 0:
+            return 1
+        if remove != 0:
+            status: int = py_dict_namespace_del_slots(
+                ptr_add(slots, _CLASS_WRITE_DICT * C_POINTER_SIZE), key_slot, context,
+            )
+        else:
+            status = py_dict_namespace_set_slots(
+                ptr_add(slots, _CLASS_WRITE_DICT * C_POINTER_SIZE), key_slot,
+                ptr_add(slots, _CLASS_WRITE_VALUE * C_POINTER_SIZE), context,
+            )
+        if status != -2:
+            return status
+        # A validated receiver's namespace identity changed before commit.
+        # Reacquire its current owner; neither a stale dictionary nor an
+        # invalid receiver is silently treated as a successful mutation.
+        _special_drop(slots, tokens, _CLASS_WRITE_DICT)
+
+
+@c_abi_export("py_class_write_namespace_slots")
+def py_class_write_namespace_slots(class_slot: c_ptr, name: c_ptr, value_slot: c_ptr, remove: int) -> int:
+    """Internal owning-slot writer; 0 success, 1 absent delete, -1 error.
+
+    Inputs are registered owning roots. name is an immutable C string whose
+    caller-owned storage remains valid throughout the call. Raw callbacks are
+    never supplied as values; their publication has a separate native ABI.
+    """
+    if ptr_is_null(class_slot) != 0 or ptr_is_null(name) != 0:
+        return _special_error(cstr("class namespace write requires owner and name"))
+    if remove == 0 and ptr_is_null(value_slot) != 0:
+        return _special_error(cstr("class namespace write requires a value owner"))
+    slots = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == _CLASS_WRITE_SLOT_COUNT:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _CLASS_WRITE_CLASS, class_slot, 0)
+        if status == 0:
+            status = _class_write_namespace_body(slots, tokens, name, value_slot, remove)
+    if status < 0:
+        _special_error(cstr("class namespace write failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    return status

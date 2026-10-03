@@ -51,6 +51,7 @@ class RelationMemory:
             store_ptr=lambda owner, offset, value: self.words.__setitem__(owner + offset, value),
             store_i64=lambda owner, offset, value: self.words.__setitem__(owner + offset, value),
             pcc_gc_store_ptr=self.store,
+            pcc_class_retire_metaclass=lambda owner: self.store(owner, owner + abi.PYCLASSOBJECT_METACLASS_OFFSET, 0),
             py_decref=self.release,
             free=lambda value: self.events.append(('free_payload', value)),
             _bump_class_attr_cache_epoch=lambda: self.events.append(('invalidate_cache', self.owner)),
@@ -151,3 +152,50 @@ def test_class_immortality_is_still_explicitly_preserved():
     tree = ast.parse(CLASS_SOURCE.read_text())
     constructor = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'py_class_new')
     assert any(isinstance(node, ast.Name) and node.id == 'PY_FLAG_IMMORTAL' for node in ast.walk(constructor))
+
+
+def test_class_retirement_keeps_relation_owned_across_cache_safepoint():
+    memory = RelationMemory()
+    memory.assign(memory.old)
+    relocated = 4096
+
+    def invalidate_and_relocate():
+        # The cache helper is a semantic runtime function and its actual IR
+        # contains a safepoint. A detached raw local is not a moving owner.
+        assert memory.words[memory.slot] == memory.old
+        memory.events.append(('invalidate_cache', memory.owner))
+        memory.counts[relocated] = memory.counts.pop(memory.old)
+        memory.classes.remove(memory.old)
+        memory.classes.add(relocated)
+        memory.words[memory.slot] = relocated
+
+    memory.environment['_bump_class_attr_cache_epoch'] = invalidate_and_relocate
+    memory.environment['py_class_dealloc'](memory.owner)
+    assert memory.words[memory.slot] == 0
+    assert memory.counts[relocated] == 1
+    assert ('release', relocated) in memory.events
+    assert memory.events[-1] == ('free_class', memory.owner)
+
+
+def assert_metaclass_retirement_slot_ir(text):
+    import re
+
+    match = re.search(r'^define[^\n]*@py_class_dealloc\([^\n]*\).*?^}', text, re.M | re.S)
+    assert match
+    body = match.group(0)
+    assert re.search(r'@pcc_class_retire_metaclass\(ptr %o\)', body)
+    # The semantic deallocator never detaches the relation into a raw SSA.
+    assert not re.search(r'getelementptr i8, ptr %o, i64 112\b', body)
+    return {'retirement_owner': 'pcc_class_retire_metaclass'}
+
+
+def test_metaclass_self_alias_retains_and_replaces_one_owner():
+    memory = RelationMemory()
+    memory.assign(memory.owner)
+    assert memory.words[memory.slot] == memory.owner
+    assert memory.counts[memory.owner] == 2
+    memory.assign(memory.owner)
+    assert memory.counts[memory.owner] == 2
+    memory.assign(memory.new)
+    assert memory.counts[memory.owner] == 1
+    assert memory.counts[memory.new] == 2

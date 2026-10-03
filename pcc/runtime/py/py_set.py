@@ -27,6 +27,7 @@ __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
     PYTUPLEOBJECT_LEN_OFFSET,
     PY_TYPE_SET,
@@ -36,6 +37,8 @@ from pcc.unsafe import (
     cstr,
     free,
     global_load_ptr,
+    global_addr,
+    define_global_i32,
     ptr_add,
     is_tagged_int,
     load_i32,
@@ -1041,32 +1044,101 @@ def _set_update_iterable(dst, src) -> None:
         index = index - 1
 
 
+# Constructor input, result and pending exception keep separate actual owners.
+_SET_CONSTRUCTOR_SOURCE = 0
+_SET_CONSTRUCTOR_RESULT = 1
+_SET_CONSTRUCTOR_ERROR = 2
+_SET_CONSTRUCTOR_SLOT_COUNT = 3
+_SET_CONSTRUCTOR_SLOT_BYTES = 8
+
+define_global_i32("pcc_set_constructor_borrowed_map", -1)
+define_global_i32("pcc_set_constructor_owned_map", 3)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+
+def _set_constructor_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
+    slot = ptr_add(slots, index * _SET_CONSTRUCTOR_SLOT_BYTES)
+    token: int = load_i64(tokens, index * _SET_CONSTRUCTOR_SLOT_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) < 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * _SET_CONSTRUCTOR_SLOT_BYTES, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _set_constructor_pin(slot: c_ptr) -> int:
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), slot)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    return prior
+
+
 @c_abi_export("py_set_from_iterable")
 def py_set_from_iterable(src):
-    slots = stack_alloc(24)
-    handles = stack_alloc(24)
-    memset(slots, 0, 24)
-    memset(handles, 0, 24)
-    backend: int = pcc_gc_backend()
-    ok: int = _set_predicate_hold(slots, handles, 0, src, backend)
-    result = null()
+    borrowed = stack_alloc(_SET_CONSTRUCTOR_SLOT_BYTES)
+    store_ptr(borrowed, 0, src)
+    pcc_gc_frame_enter(global_addr("pcc_set_constructor_borrowed_map"), borrowed)
+    slots = stack_alloc(_SET_CONSTRUCTOR_SLOT_COUNT * _SET_CONSTRUCTOR_SLOT_BYTES)
+    tokens = stack_alloc(_SET_CONSTRUCTOR_SLOT_COUNT * _SET_CONSTRUCTOR_SLOT_BYTES)
+    memset(slots, 0, _SET_CONSTRUCTOR_SLOT_COUNT * _SET_CONSTRUCTOR_SLOT_BYTES)
+    index: int = 0
+    while index < _SET_CONSTRUCTOR_SLOT_COUNT:
+        store_i64(tokens, index * _SET_CONSTRUCTOR_SLOT_BYTES, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_set_constructor_owned_map"), slots)
+    source_slot = ptr_add(slots, _SET_CONSTRUCTOR_SOURCE * _SET_CONSTRUCTOR_SLOT_BYTES)
+    result_slot = ptr_add(slots, _SET_CONSTRUCTOR_RESULT * _SET_CONSTRUCTOR_SLOT_BYTES)
+    error_slot = ptr_add(slots, _SET_CONSTRUCTOR_ERROR * _SET_CONSTRUCTOR_SLOT_BYTES)
+    token: int = pcc_gc_root_copy_borrowed_lease(source_slot, borrowed)
+    store_i64(tokens, _SET_CONSTRUCTOR_SOURCE * _SET_CONSTRUCTOR_SLOT_BYTES, token)
+    ok: int = 1
+    if token < 0:
+        _set_call_error(7, cstr("cannot retain set constructor input"))
+        ok = 0
     if ok != 0:
-        out = py_set_new()
-        ok = _set_predicate_hold(slots, handles, 2, out, backend)
-        if ptr_is_null(out) != 0:
-            py_raise_owned(py_exc_new(19, cstr("cannot allocate set")))
+        # Empty registered owner receives the actual NEW result before any call.
+        store_ptr(result_slot, 0, py_set_new())
+        if ptr_is_null(load_ptr(result_slot, 0)) != 0:
+            _set_call_error(19, cstr("cannot allocate set"))
             ok = 0
+        else:
+            token = pcc_gc_foreign_lease_acquire(result_slot)
+            store_i64(tokens, _SET_CONSTRUCTOR_RESULT * _SET_CONSTRUCTOR_SLOT_BYTES, token)
+            if token < 0:
+                _set_call_error(7, cstr("cannot lease set constructor result"))
+                ok = 0
     if ok != 0:
-        py_set_update(_set_predicate_load(slots, handles, 2),
-                      _set_predicate_load(slots, handles, 0))
-        if py_err_occurred() == 0:
-            result = _set_predicate_load(slots, handles, 2)
-            py_incref(result)
-    index: int = 2
-    while index >= 0:
-        _set_predicate_drop(slots, handles, index)
-        index = index - 1
-    return result
+        py_set_update(load_ptr(result_slot, 0), load_ptr(source_slot, 0))
+        if py_err_occurred() != 0:
+            ok = 0
+    py_tls_exc_swap_slot(error_slot)
+    store_ptr(borrowed, 0, null())
+    _set_constructor_drop(slots, tokens, _SET_CONSTRUCTOR_SOURCE)
+    if ok == 0:
+        _set_constructor_drop(slots, tokens, _SET_CONSTRUCTOR_RESULT)
+    py_clear_exception()
+    py_tls_exc_swap_slot(error_slot)
+    # The only raw return transfer happens after every callback-capable cleanup.
+    prior: int = _set_constructor_pin(result_slot)
+    token = load_i64(tokens, _SET_CONSTRUCTOR_RESULT * _SET_CONSTRUCTOR_SLOT_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(result_slot, token) < 0:
+            pcc_platform_abort()
+            return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result_slot, prior)
 
 
 def _set_predicate_iterable(a, b, superset: int) -> int:

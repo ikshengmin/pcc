@@ -27,6 +27,7 @@ from pcc.diagnostics.dependency_verdict import probe_executable_dependency
 
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 from pcc.driver.project import TranslationUnit
+from tests.owned_c_corpus import run_owned_c_corpus
 from tests.worker_process import run_worker_process
 
 # ---------------------------------------------------------------------------
@@ -156,7 +157,7 @@ def _pcc_worker_entry(pp_path: str, timeout: int, conn) -> None:
     unit = TranslationUnit("csmith_test.c", pp_path, source)
     try:
         ev = CEvaluator()
-        result = ev.run_translation_units_with_system_cc(
+        result = run_owned_c_corpus(ev,
             [unit],
             base_dir=str(Path(pp_path).parent),
             timeout=timeout,

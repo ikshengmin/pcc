@@ -28,6 +28,10 @@ from pcc.runtime.py.py_abi_constants import PY_OBJ_CMP_UNORDERED, C_POINTER_SIZE
 from pcc.runtime.py.py_abi_constants import PY_TYPE_INSTANCE, PY_TYPE_USER_CLASS_START
 from pcc.unsafe import (
     cstr,
+    define_global_i32,
+    free,
+    malloc,
+    memset,
     global_addr,
     global_load_ptr,
     is_tagged_int,
@@ -1163,6 +1167,298 @@ def py_obj_min_max(iterable, want_max: int):
 
 
 # ---- sorted (insertion sort) — fixed break logic --------------------
+
+# Sorted uses integer index buffers; every managed value lives in this frame.
+_SORT_SOURCE = 0
+_SORT_KEY = 1
+_SORT_COMPARE = 2
+_SORT_VALUES = 3
+_SORT_KEYS = 4
+_SORT_RESULT = 5
+_SORT_ARGS = 6
+_SORT_ITEM = 7
+_SORT_LEFT = 8
+_SORT_RIGHT = 9
+_SORT_ERROR = 10
+_SORT_COUNT = 11
+_SORT_BYTES = 8
+
+define_global_i32("pcc_sorted_owned_map", 11)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
+py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
+py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
+py_obj_call_slots = extern("py_obj_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+py_obj_truthy = extern("py_obj_truthy", (c_ptr,), c_int64)
+
+
+def _sorted_error(message) -> int:
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(19, message))
+    return -1
+
+
+def _sorted_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * _SORT_BYTES)
+    token: int = load_i64(tokens, index * _SORT_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) < 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * _SORT_BYTES, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _sorted_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * _SORT_BYTES)
+    if ptr_is_null(load_ptr(slot, 0)) != 0:
+        return _sorted_error(cstr("sorted: missing owned value"))
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    store_i64(tokens, index * _SORT_BYTES, token)
+    if token < 0:
+        return _sorted_error(cstr("sorted: cannot lease owned value"))
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    if py_err_occurred() != 0:
+        return -1
+    return 0
+
+
+def _sorted_copy(slots, tokens, index: int, source) -> int:
+    if ptr_is_null(source) != 0:
+        return 0
+    token: int = pcc_gc_root_copy_lease(ptr_add(slots, index * _SORT_BYTES), source)
+    store_i64(tokens, index * _SORT_BYTES, token)
+    if token < 0:
+        return _sorted_error(cstr("sorted: cannot retain input"))
+    return 0
+
+
+def _sorted_arguments(slots, tokens, first, second) -> int:
+    count: int = 1
+    if ptr_is_null(second) == 0:
+        count = 2
+    arguments = ptr_add(slots, _SORT_ARGS * _SORT_BYTES)
+    store_ptr(arguments, 0, py_tuple_new(count))
+    if _sorted_adopt(slots, tokens, _SORT_ARGS) != 0:
+        return -1
+    py_tuple_set_item(load_ptr(arguments, 0), 0, load_ptr(first, 0))
+    if py_err_occurred() != 0:
+        return -1
+    if count == 2:
+        py_tuple_set_item(load_ptr(arguments, 0), 1, load_ptr(second, 0))
+        if py_err_occurred() != 0:
+            return -1
+    return 0
+
+
+def _sorted_prepare_keys(slots, tokens) -> int:
+    values = ptr_add(slots, _SORT_VALUES * _SORT_BYTES)
+    keys = ptr_add(slots, _SORT_KEYS * _SORT_BYTES)
+    key = ptr_add(slots, _SORT_KEY * _SORT_BYTES)
+    item = ptr_add(slots, _SORT_ITEM * _SORT_BYTES)
+    result = ptr_add(slots, _SORT_LEFT * _SORT_BYTES)
+    callable_key: int = 0
+    if ptr_is_null(load_ptr(key, 0)) == 0:
+        if _type_of(load_ptr(key, 0)) != PY_TYPE_NONE:
+            callable_key = 1
+    if callable_key == 0:
+        return _sorted_copy(slots, tokens, _SORT_KEYS, values)
+    n: int = py_list_len(load_ptr(values, 0))
+    store_ptr(keys, 0, py_list_new(n))
+    if _sorted_adopt(slots, tokens, _SORT_KEYS) != 0:
+        return -1
+    index: int = 0
+    while index < n:
+        store_ptr(item, 0, py_list_get(load_ptr(values, 0), index))
+        if _sorted_adopt(slots, tokens, _SORT_ITEM) != 0:
+            return -1
+        if _sorted_arguments(slots, tokens, item, null()) != 0:
+            return -1
+        if py_obj_call_slots(key, ptr_add(slots, _SORT_ARGS * _SORT_BYTES), null(), result) != 0:
+            return -1
+        if _sorted_adopt(slots, tokens, _SORT_LEFT) != 0:
+            return -1
+        py_list_append(load_ptr(keys, 0), load_ptr(result, 0))
+        if py_err_occurred() != 0:
+            return -1
+        _sorted_drop(slots, tokens, _SORT_LEFT)
+        _sorted_drop(slots, tokens, _SORT_ARGS)
+        _sorted_drop(slots, tokens, _SORT_ITEM)
+        index = index + 1
+    return 0
+
+
+def _sorted_less(slots, tokens, first: int, second: int) -> int:
+    keys = ptr_add(slots, _SORT_KEYS * _SORT_BYTES)
+    left = ptr_add(slots, _SORT_LEFT * _SORT_BYTES)
+    right = ptr_add(slots, _SORT_RIGHT * _SORT_BYTES)
+    compare = ptr_add(slots, _SORT_COMPARE * _SORT_BYTES)
+    item = ptr_add(slots, _SORT_ITEM * _SORT_BYTES)
+    store_ptr(left, 0, py_list_get(load_ptr(keys, 0), first))
+    if _sorted_adopt(slots, tokens, _SORT_LEFT) != 0:
+        return -1
+    store_ptr(right, 0, py_list_get(load_ptr(keys, 0), second))
+    if _sorted_adopt(slots, tokens, _SORT_RIGHT) != 0:
+        return -1
+    verdict: int = 0
+    if ptr_is_null(load_ptr(compare, 0)) == 0:
+        if _sorted_arguments(slots, tokens, left, right) != 0:
+            return -1
+        if py_obj_call_slots(compare, ptr_add(slots, _SORT_ARGS * _SORT_BYTES), null(), item) != 0:
+            return -1
+        if _sorted_adopt(slots, tokens, _SORT_ITEM) != 0:
+            return -1
+        verdict = py_obj_truthy(load_ptr(item, 0))
+    else:
+        verdict = py_obj_lt(load_ptr(left, 0), load_ptr(right, 0))
+    if py_err_occurred() != 0:
+        return -1
+    _sorted_drop(slots, tokens, _SORT_ITEM)
+    _sorted_drop(slots, tokens, _SORT_ARGS)
+    _sorted_drop(slots, tokens, _SORT_RIGHT)
+    _sorted_drop(slots, tokens, _SORT_LEFT)
+    return verdict
+
+
+def _sorted_merge_indices(slots, tokens, order, scratch, count: int, reverse: int) -> int:
+    width: int = 1
+    while width < count:
+        low: int = 0
+        while low < count:
+            middle: int = low + width
+            if middle > count:
+                middle = count
+            high: int = middle + width
+            if high > count:
+                high = count
+            left: int = low
+            right: int = middle
+            out: int = low
+            while out < high:
+                take_right: int = 0
+                if left >= middle:
+                    take_right = 1
+                elif right < high:
+                    # Ties always choose the left run, including reverse=True.
+                    # Reversing a completed ascending list would reverse ties.
+                    if reverse != 0:
+                        take_right = _sorted_less(slots, tokens, load_i64(order, left * 8), load_i64(order, right * 8))
+                    else:
+                        take_right = _sorted_less(slots, tokens, load_i64(order, right * 8), load_i64(order, left * 8))
+                    if take_right < 0:
+                        return -1
+                if take_right != 0:
+                    store_i64(scratch, out * 8, load_i64(order, right * 8))
+                    right = right + 1
+                else:
+                    store_i64(scratch, out * 8, load_i64(order, left * 8))
+                    left = left + 1
+                out = out + 1
+            low = high
+        index: int = 0
+        while index < count:
+            store_i64(order, index * 8, load_i64(scratch, index * 8))
+            index = index + 1
+        width = width * 2
+    return 0
+
+
+@c_abi_export("py_obj_sorted_slots")
+def py_obj_sorted_slots(source_slot, key_slot, compare_slot, reverse: int, result_slot) -> int:
+    if ptr_is_null(source_slot) != 0 or ptr_is_null(result_slot) != 0:
+        return _sorted_error(cstr("sorted: missing source or result root"))
+    if ptr_is_null(load_ptr(result_slot, 0)) == 0:
+        return _sorted_error(cstr("sorted: result root must be empty"))
+    slots = stack_alloc(_SORT_COUNT * _SORT_BYTES)
+    tokens = stack_alloc(_SORT_COUNT * _SORT_BYTES)
+    memset(slots, 0, _SORT_COUNT * _SORT_BYTES)
+    index: int = 0
+    while index < _SORT_COUNT:
+        store_i64(tokens, index * _SORT_BYTES, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_sorted_owned_map"), slots)
+    status: int = _sorted_copy(slots, tokens, _SORT_SOURCE, source_slot)
+    if status == 0:
+        status = _sorted_copy(slots, tokens, _SORT_KEY, key_slot)
+    if status == 0:
+        status = _sorted_copy(slots, tokens, _SORT_COMPARE, compare_slot)
+    source = ptr_add(slots, _SORT_SOURCE * _SORT_BYTES)
+    values = ptr_add(slots, _SORT_VALUES * _SORT_BYTES)
+    result = ptr_add(slots, _SORT_RESULT * _SORT_BYTES)
+    item = ptr_add(slots, _SORT_ITEM * _SORT_BYTES)
+    error = ptr_add(slots, _SORT_ERROR * _SORT_BYTES)
+    if status == 0:
+        store_ptr(values, 0, py_list_new(0))
+        status = _sorted_adopt(slots, tokens, _SORT_VALUES)
+    if status == 0:
+        py_list_extend(load_ptr(values, 0), load_ptr(source, 0))
+        if py_err_occurred() != 0:
+            status = -1
+    if status == 0:
+        status = _sorted_prepare_keys(slots, tokens)
+    count: int = 0
+    order = null()
+    scratch = null()
+    if status == 0:
+        count = py_list_len(load_ptr(values, 0))
+        if count > 1152921504606846975:
+            status = _sorted_error(cstr("sorted: index buffer is too large"))
+        elif count > 0:
+            order = malloc(count * 8)
+            scratch = malloc(count * 8)
+            if ptr_is_null(order) != 0 or ptr_is_null(scratch) != 0:
+                status = _sorted_error(cstr("sorted: cannot allocate index buffer"))
+    if status == 0:
+        index = 0
+        while index < count:
+            store_i64(order, index * 8, index)
+            index = index + 1
+        status = _sorted_merge_indices(slots, tokens, order, scratch, count, reverse)
+    if status == 0:
+        store_ptr(result, 0, py_list_new(count))
+        status = _sorted_adopt(slots, tokens, _SORT_RESULT)
+    index = 0
+    while index < count and status == 0:
+        store_ptr(item, 0, py_list_get(load_ptr(values, 0), load_i64(order, index * 8)))
+        status = _sorted_adopt(slots, tokens, _SORT_ITEM)
+        if status == 0:
+            py_list_append(load_ptr(result, 0), load_ptr(item, 0))
+            if py_err_occurred() != 0:
+                status = -1
+        if status == 0:
+            _sorted_drop(slots, tokens, _SORT_ITEM)
+        index = index + 1
+    if status == 0:
+        status = pcc_gc_root_move(result_slot, result)
+        if status == 0:
+            token: int = load_i64(tokens, _SORT_RESULT * _SORT_BYTES)
+            store_i64(tokens, _SORT_RESULT * _SORT_BYTES, -1)
+            if pcc_gc_foreign_lease_release(result_slot, token) < 0:
+                pcc_platform_abort()
+                return -1
+        else:
+            _sorted_error(cstr("sorted: cannot transfer result owner"))
+    py_tls_exc_swap_slot(error)
+    free(scratch)
+    free(order)
+    index = _SORT_ERROR - 1
+    while index >= 0:
+        _sorted_drop(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave(slots)
+    return status
+
 
 @c_abi_export("py_obj_sorted")
 def py_obj_sorted(x):

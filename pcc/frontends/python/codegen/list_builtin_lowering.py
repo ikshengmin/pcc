@@ -6,7 +6,15 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Call, ClassType, DictType, DynType, Lambda, ListExpr, ListType, Name, NoneLit, SetType, TupleExpr, TupleType
+from pcc.frontends.python.py_ast import (
+    Call,
+    DictType,
+    DynType,
+    Lambda,
+    Name,
+    NoneLit,
+)
+from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_TUPLE
 from pcc.frontends.python.codegen import marshal
 
 _I64 = ir.IntType(64)
@@ -94,173 +102,97 @@ class ListBuiltinLoweringMixin:
     def _maybe_emit_list_builtin(
         self,
         expr: Call,
+        tuple_result: bool = False,
     ) -> Optional[ir.Value]:
-        """``list()`` / ``list([a, b])`` / ``list((a, b))`` / ``list(dict_keys)``.
+        """Build a sequence in a caller-owned output before any cleanup.
 
-        - no args → empty ``py_list_new(0)``.
-        - list/tuple literal → alloc + per-element ``py_list_append``.
-        - list-typed arg → same (materialises a copy).
-        - dict-typed arg → ``py_dict_keys(d)`` (already a list).
+        Every runtime operand is independently owned. A list always copies;
+        tuple's exact-tuple edge keeps identity with a second owned reference.
+        General iteration and partially-filled list cleanup belong to extend;
+        the tuple conversion consumes neither its list nor its elements.
         """
-        new_list = self.builder.call(
-            self.runtime["py_list_new"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh("list.new"),
-        )
-        if not expr.args:
-            return new_list
-        arg = expr.args[0]
-        if isinstance(arg, Call):
-            mapped = self._maybe_emit_list_from_map_filter(arg, new_list)
-            if mapped is not None:
-                return mapped
-        if isinstance(arg, (ListExpr, TupleExpr)):
-            for el in arg.elems:
-                v_obj = self._emit_expr_as_pcc_object(el)
-                self.builder.call(
-                    self.runtime["py_list_append"],
-                    [new_list, v_obj],
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        label = "tuple.builtin" if tuple_result else "list.builtin"
+        if output is None:
+            output = self._new_slot_call_root(label + ".result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if not expr.args:
+                self._slot_call_runtime_call(
+                    "py_tuple_new" if tuple_result else "py_list_new", (),
+                    result_slot=output, suffix_args=(ir.Constant(_I64, 0),),
+                    span=expr.span,
                 )
-            return new_list
-        arg_ty = arg.ty
-        if isinstance(arg_ty, DictType):
-            obj = self._emit_expr(arg)
-            return self.builder.call(
-                self.runtime["py_dict_keys"],
-                [obj],
-                name=self._fresh("list.from_dict"),
-            )
-        if isinstance(arg_ty, ListType):
-            src_val = self._emit_expr(arg)
-            n_val = self.builder.call(
-                self.runtime["py_list_len"],
-                [src_val],
-                name=self._fresh("list.copy.len"),
-            )
-            fn = self.current_function
-            idx_slot = self._alloca_in_entry(_I64, name="list.copy.idx.addr")
-            self.builder.store(ir.Constant(_I64, 0), idx_slot)
-            cond_bb = fn.append_basic_block(name=self._fresh("list.copy.cond"))
-            body_bb = fn.append_basic_block(name=self._fresh("list.copy.body"))
-            step_bb = fn.append_basic_block(name=self._fresh("list.copy.step"))
-            end_bb = fn.append_basic_block(name=self._fresh("list.copy.end"))
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(cond_bb)
-            cur = self.builder.load(idx_slot, name=self._fresh("list.copy.idx"))
-            cond = self.builder.icmp_signed(
-                "<",
-                cur,
-                n_val,
-                name=self._fresh("list.copy.cond.i1"),
-            )
-            self.builder.cbranch(cond, body_bb, end_bb)
-            self.builder.position_at_end(body_bb)
-            elem = self.builder.call(
-                self.runtime["py_list_get"],
-                [src_val, cur],
-                name=self._fresh("list.copy.elem"),
-            )
-            self.builder.call(
-                self.runtime["py_list_append"],
-                [new_list, elem],
-            )
-            self._gc_release(
-                elem,
-                self._release_context_label("list.copy.elem"),
-            )
-            self.builder.branch(step_bb)
-            self.builder.position_at_end(step_bb)
-            nxt = self.builder.add(
-                cur,
-                ir.Constant(_I64, 1),
-                name=self._fresh("list.copy.idx.next"),
-            )
-            self.builder.store(nxt, idx_slot)
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(end_bb)
-            return new_list
-        if isinstance(arg_ty, (DynType, ClassType, SetType)):
-            # DynType / a user-class instance / a set may be iterator-only
-            # (generator, custom __iter__/__next__, or unordered set: no
-            # positional __getitem__).
-            # Consume via the iterator protocol — matching CPython's list(x),
-            # the statement for-loop, and the comprehension path. Previously a
-            # ClassType went through the py_obj_len + py_obj_getitem arm below,
-            # so list(CustomIterator()) (no __len__) yielded an empty list. See
-            # docs/investigations/sequence-builtins-len-getitem-not-iterator-protocol.md
-            src_val = self._emit_expr(arg)
-            src_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                src_val,
-                arg_ty,
-            )
-            return self._emit_list_append_via_iter(
-                new_list, src_obj, getattr(arg, "span", None),
-                source_owned=self._owned_release_needed(src_obj, arg),
-            )
-        if isinstance(arg_ty, TupleType):
-            # Iterate source via py_obj_len + py_obj_getitem and
-            # append to a fresh list. Works for any pcc-native
-            # container that supports length + index access.
-            src_val = self._emit_expr(arg)
-            src_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                src_val,
-                arg_ty,
-            )
-            fn = self.current_function
-            n_val = self.builder.call(
-                self.runtime["py_obj_len"],
-                [src_obj],
-                name=self._fresh("list.src.len"),
-            )
-            idx_slot = self._alloca_in_entry(_I64, name="list.idx.addr")
-            self.builder.store(ir.Constant(_I64, 0), idx_slot)
-            cond_bb = fn.append_basic_block(name=self._fresh("list.cond"))
-            body_bb = fn.append_basic_block(name=self._fresh("list.body"))
-            step_bb = fn.append_basic_block(name=self._fresh("list.step"))
-            end_bb = fn.append_basic_block(name=self._fresh("list.end"))
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(cond_bb)
-            cur = self.builder.load(idx_slot, name=self._fresh("list.idx"))
-            cond = self.builder.icmp_signed(
-                "<",
-                cur,
-                n_val,
-                name=self._fresh("list.cond.i1"),
-            )
-            self.builder.cbranch(cond, body_bb, end_bb)
-            self.builder.position_at_end(body_bb)
-            idx_box = self.builder.call(
-                self.runtime["py_int_from_i64"],
-                [cur],
-                name=self._fresh("list.idx.box"),
-            )
-            elem = self.builder.call(
-                self.runtime["py_obj_getitem"],
-                [src_obj, idx_box],
-                name=self._fresh("list.elem"),
-            )
-            self.builder.call(
-                self.runtime["py_list_append"],
-                [new_list, elem],
-            )
-            self.builder.branch(step_bb)
-            self.builder.position_at_end(step_bb)
-            nxt = self.builder.add(
-                cur,
-                ir.Constant(_I64, 1),
-                name=self._fresh("list.idx.next"),
-            )
-            self.builder.store(nxt, idx_slot)
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(end_bb)
-            return new_list
-        return None
+            else:
+                arg = expr.args[0]
+                # The specialized map/filter producer owns the same output
+                # transaction; it reports a match before the general operand
+                # path tries to resolve map/filter as ordinary callables.
+                sequence = output
+                if tuple_result:
+                    sequence = self._new_slot_call_root(label + ".items")
+                    roots.append(sequence)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                mapped = None
+                if isinstance(arg, Call):
+                    mapped = self._maybe_emit_list_from_map_filter(arg, sequence)
+                if mapped is not None:
+                    if tuple_result:
+                        self._slot_call_runtime_call(
+                            "py_tuple_from_list", (sequence,), result_slot=output,
+                            span=expr.span,
+                        )
+                else:
+                    source = self._emit_slot_call_operand(arg, label + ".source")
+                    roots.append(source)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    done = None
+                    if tuple_result:
+                        tag = self._slot_call_runtime_call(
+                            "py_obj_type_tag", (source,), span=expr.span,
+                        )
+                        exact_tuple = self.builder.icmp_signed(
+                            "==", tag, ir.Constant(_I64, PY_TYPE_TUPLE),
+                        )
+                        alias = self.current_function.append_basic_block(self._fresh(label + ".alias"))
+                        copy = self.current_function.append_basic_block(self._fresh(label + ".copy"))
+                        done = self.current_function.append_basic_block(self._fresh(label + ".ready"))
+                        self.builder.cbranch(exact_tuple, alias, copy)
+                        self.builder.position_at_end(alias)
+                        self._slot_call_copy_source(output, source, span=expr.span)
+                        self._slot_call_note_published(output)
+                        self.builder.branch(done)
+                        self.builder.position_at_end(copy)
+                    self._slot_call_runtime_call(
+                        "py_list_new", (), result_slot=sequence,
+                        suffix_args=(ir.Constant(_I64, 0),), span=expr.span,
+                    )
+                    self._slot_call_runtime_call(
+                        "py_list_extend", (sequence, source), span=expr.span,
+                    )
+                    if tuple_result:
+                        self._slot_call_runtime_call(
+                            "py_tuple_from_list", (sequence,), result_slot=output,
+                            span=expr.span,
+                        )
+                        self.builder.branch(done)
+                        self.builder.position_at_end(done)
+                self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh(label + ".current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_list_append_via_iter(self, new_list, src_obj, span, *, source_owned=False):
         """Append every item of an iterable to ``new_list`` via the iterator
@@ -418,146 +350,117 @@ class ListBuiltinLoweringMixin:
         if filter_none or lam is not None:
             builtin_map_chr = False
         ast_fd = self._find_user_funcdef(func_name) if fn is not None else None
-        src_expr = call.args[1]
-        src_val = self._emit_expr(src_expr)
-        src_obj = marshal.marshal_to_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            src_val,
-            src_expr.ty,
-        )
-        n_val = self.builder.call(
-            self.runtime["py_obj_len"],
-            [src_obj],
-            name=self._fresh(f"{mode}.src.len"),
-        )
-        idx_slot = self._alloca_in_entry(_I64, name=f"{mode}.idx.addr")
-        item_slot = None
-        temp_name = ""
-        lam_param = ""
-        lam_saved = None
-        lam_had_binding = False
-        if lam is not None:
-            # Bind the lambda's single param to the per-element slot; restore the
-            # outer binding (if any) after the loop body is emitted.
-            item_slot = self._alloca_in_entry(_CSTR, name=f"{mode}.item.addr")
-            lam_param = lam.params[0].name
-            if lam_param in self.env:
-                lam_had_binding = True
-                lam_saved = self.env[lam_param]
-            self.env[lam_param] = (item_slot, _CSTR, DynType(name="dyn"))
-        elif fn is not None:
-            item_slot = self._alloca_in_entry(_CSTR, name=f"{mode}.item.addr")
-            temp_name = f"__pcc_{mode}_item_{len(self.env)}"
-            self.env[temp_name] = (item_slot, _CSTR, DynType(name="dyn"))
-        self.builder.store(ir.Constant(_I64, 0), idx_slot)
-
-        fn_cur = self.current_function
-        cond_bb = fn_cur.append_basic_block(name=self._fresh(f"{mode}.cond"))
-        body_bb = fn_cur.append_basic_block(name=self._fresh(f"{mode}.body"))
-        step_bb = fn_cur.append_basic_block(name=self._fresh(f"{mode}.step"))
-        end_bb = fn_cur.append_basic_block(name=self._fresh(f"{mode}.end"))
-        self.builder.branch(cond_bb)
-        self.builder.position_at_end(cond_bb)
-        cur = self.builder.load(idx_slot, name=self._fresh(f"{mode}.idx"))
-        cond = self.builder.icmp_signed(
-            "<",
-            cur,
-            n_val,
-            name=self._fresh(f"{mode}.cond.i1"),
-        )
-        self.builder.cbranch(cond, body_bb, end_bb)
-
-        self.builder.position_at_end(body_bb)
-        idx_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [cur],
-            name=self._fresh(f"{mode}.idx.box"),
-        )
-        elem = self.builder.call(
-            self.runtime["py_obj_getitem"],
-            [src_obj, idx_box],
-            name=self._fresh(f"{mode}.elem"),
-        )
-        if lam is not None:
-            # Inline the lambda body with its param bound to the element.
-            self.builder.store(elem, item_slot)
-            result = self._emit_expr(lam.body)
-            result_ty = getattr(lam.body, "ty", None) or DynType(name="dyn")
-        elif filter_none:
-            # filter(None, ...): keep elements that are truthy themselves.
-            result = elem
-            result_ty = DynType(name="dyn")
-        elif fn is not None:
-            self.builder.store(elem, item_slot)
-            arg_expr = Name(
-                span=call.span,
-                ty=DynType(name="dyn"),
-                ident=temp_name,
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = []
+        lam_param = lam.params[0].name if lam is not None else ""
+        lam_had_binding = lam_param in self.env
+        lam_saved = self.env.get(lam_param)
+        try:
+            source = self._emit_slot_call_operand(call.args[1], mode + ".source")
+            roots.append(source)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_list_new", (), result_slot=out_list,
+                suffix_args=(ir.Constant(_I64, 0),), span=call.span,
             )
-            result = self._emit_direct_user_function_call(
-                display_name=func_name,
-                fn=fn,
-                ast_func_def=ast_fd,
-                args=(arg_expr,),
-                kwargs=(),
+            n_val = self._slot_call_runtime_call("py_obj_len", (source,), span=call.span)
+            idx_slot = self._alloca_in_entry(_I64, name=mode + ".idx.addr")
+            self.builder.store(ir.Constant(_I64, 0), idx_slot)
+            # Loop temporaries are registered once and cleared each iteration.
+            # Their physical slots survive lambda/callee reentry and collection.
+            index = self._new_slot_call_root(mode + ".index")
+            item = self._new_slot_call_root(mode + ".item")
+            roots.extend((index, item))
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            cond = self.current_function.append_basic_block(self._fresh(mode + ".cond"))
+            body = self.current_function.append_basic_block(self._fresh(mode + ".body"))
+            step = self.current_function.append_basic_block(self._fresh(mode + ".step"))
+            end = self.current_function.append_basic_block(self._fresh(mode + ".end"))
+            self.builder.branch(cond)
+            self.builder.position_at_end(cond)
+            current = self.builder.load(idx_slot, name=self._fresh(mode + ".index"))
+            keep_going = self.builder.icmp_signed("<", current, n_val)
+            self.builder.cbranch(keep_going, body, end)
+            self.builder.position_at_end(body)
+            self._slot_call_runtime_call(
+                "py_int_from_i64", (), result_slot=index,
+                suffix_args=(current,), span=call.span,
             )
-            result_ty = ast_fd.return_ty or DynType(name="dyn")
-        elif builtin_map_chr:
-            codepoint = self.builder.call(
-                self.runtime["py_obj_index_i64"],
-                [elem],
-                name=self._fresh("map.chr.index"),
+            self._slot_call_runtime_call(
+                "py_obj_getitem", (source, index), result_slot=item, span=call.span,
             )
-            result = self.builder.call(
-                self.runtime["py_chr_from_i64"],
-                [codepoint],
-                name=self._fresh("map.chr"),
-            )
-            result_ty = DynType(name="dyn")
-        else:
-            result = self.builder.call(
-                self.runtime["py_obj_str"],
-                [elem],
-                name=self._fresh("map.str"),
-            )
-            result_ty = DynType(name="dyn")
-        if mode == "map":
-            result_obj = self._emit_value_as_pcc_object_or_bridge(
-                result,
-                result_ty,
-                f"{mode}.result",
-            )
-            self.builder.call(
-                self.runtime["py_list_append"],
-                [out_list, result_obj],
-            )
-            self.builder.branch(step_bb)
-        else:
-            keep = self._truthy(result, result_ty)
-            append_bb = fn_cur.append_basic_block(name=self._fresh("filter.keep"))
-            self.builder.cbranch(keep, append_bb, step_bb)
-            self.builder.position_at_end(append_bb)
-            self.builder.call(
-                self.runtime["py_list_append"],
-                [out_list, elem],
-            )
-            self.builder.branch(step_bb)
-
-        self.builder.position_at_end(step_bb)
-        nxt = self.builder.add(
-            cur,
-            ir.Constant(_I64, 1),
-            name=self._fresh(f"{mode}.idx.next"),
-        )
-        self.builder.store(nxt, idx_slot)
-        self.builder.branch(cond_bb)
-        self.builder.position_at_end(end_bb)
-        if lam is not None:
-            # Restore the outer binding for the lambda param name.
-            if lam_had_binding:
-                self.env[lam_param] = lam_saved
+            result = item
+            if lam is not None:
+                self.env[lam_param] = (item, _CSTR, DynType(name="dyn"))
+                result = self._emit_slot_call_operand(lam.body, mode + ".result")
+            elif fn is not None:
+                temp_name = self._fresh("__pcc_" + mode + "_item")
+                self.env[temp_name] = (item, _CSTR, DynType(name="dyn"))
+                argument = Name(span=call.span, ty=DynType(name="dyn"), ident=temp_name)
+                invocation = Call(
+                    span=call.span, ty=ast_fd.return_ty or DynType(name="dyn"),
+                    func=Name(span=call.span, ty=call.args[0].ty, ident=func_name),
+                    args=(argument,), kwargs=(),
+                )
+                try:
+                    result = self._emit_slot_call_operand(invocation, mode + ".result")
+                finally:
+                    self.env.pop(temp_name, None)
+            elif not filter_none:
+                result = self._new_slot_call_root(mode + ".result")
+                roots.append(result)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if builtin_map_chr:
+                    codepoint = self._slot_call_runtime_call("py_obj_index_i64", (item,), span=call.span)
+                    self._slot_call_runtime_call(
+                        "py_chr_from_i64", (), result_slot=result,
+                        suffix_args=(codepoint,), span=call.span,
+                    )
+                else:
+                    self._slot_call_runtime_call("py_obj_str", (item,), result_slot=result, span=call.span)
+            if result is not item and result not in roots:
+                roots.append(result)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if mode == "map":
+                self._slot_call_runtime_call("py_list_append", (out_list, result), span=call.span)
+                self.builder.branch(step)
             else:
-                self.env.pop(lam_param, None)
-        return out_list
+                truth = self._slot_call_runtime_call("py_obj_truthy", (result,), span=call.span)
+                keep = self.builder.icmp_signed("!=", truth, ir.Constant(_I64, 0))
+                append = self.current_function.append_basic_block(self._fresh("filter.keep"))
+                self.builder.cbranch(keep, append, step)
+                self.builder.position_at_end(append)
+                self._slot_call_runtime_call("py_list_append", (out_list, item), span=call.span)
+                self.builder.branch(step)
+            self.builder.position_at_end(step)
+            if result is not item:
+                self._release_slot_call_roots((result,))
+                roots.pop()
+            # Keep these two root registrations live around the loop; clearing
+            # retires their owners, but does not pop module LIFO root frames.
+            for root in (item, index):
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(root), ir.Constant(_CSTR, None)],
+                )
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self.builder.store(self.builder.add(current, ir.Constant(_I64, 1)), idx_slot)
+            self.builder.branch(cond)
+            self.builder.position_at_end(end)
+            self._release_slot_call_roots(tuple(roots))
+            return out_list
+        finally:
+            if lam is not None:
+                if lam_had_binding:
+                    self.env[lam_param] = lam_saved
+                else:
+                    self.env.pop(lam_param, None)
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy

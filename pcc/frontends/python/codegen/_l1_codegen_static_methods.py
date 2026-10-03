@@ -596,20 +596,27 @@ def _part_49(out):
 
 def _part_50(out):
     _append_method(out, '_emit_owned_object_constructor', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_emit_owned_set_constructor', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_dict_get_uses_owned_slots', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_emit_rooted_dict_get', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_emit_owned_os_getenv_call', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_native_join_call', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_format_call', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_slot_call_binary_runtime', (('self', 'pos', False), ('expr', 'pos', False), ('object_boundary', 'pos', True)))
+
+
+def _part_51(out):
     _append_method(out, '_emit_slot_call_binary', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
     _append_method(out, '_emit_slot_call_attribute', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_kwargs_object', (('self', 'pos', False), ('kwargs', 'pos', False), ('kwargs_expr', 'pos', False), ('span', 'pos', False), ('label', 'pos', True), ('callable_root', 'pos', True)))
     _append_method(out, '_foreign_super_initializer_base', (('self', 'pos', False), ('info', 'pos', False)))
-
-
-def _part_51(out):
     _append_method(out, '_emit_foreign_super_init_slots', (('self', 'pos', False), ('expr', 'pos', False), ('from_class', 'pos', False), ('super_args', 'pos', False), ('base', 'pos', False)))
     _append_method(out, '_slot_call_literal_integer_kind', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_slot_call_literal_integer', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_rooted_native_callable', (('self', 'pos', False), ('adapter', 'pos', False), ('original_args', 'pos', False), ('capture_exprs', 'pos', False), ('display_name_ptr', 'pos', False), ('qualname', 'pos', False), ('fd', 'pos', False), ('label', 'pos', False), ('cache_gv', 'pos', True)))
+
+
+def _part_52(out):
     _append_method(out, '_emit_native_func_default_root', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_class_namespace_name_root', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
 
@@ -668,6 +675,7 @@ def _build_static_methods():
     _part_49(out)
     _part_50(out)
     _part_51(out)
+    _part_52(out)
     return tuple(out)
 
 L1_CODEGEN_STATIC_METHODS = _build_static_methods()

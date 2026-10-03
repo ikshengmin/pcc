@@ -1421,6 +1421,10 @@ int64_t py_dict_set_slots(PyObject **dict_slot, PyObject **key_slot,
 int64_t py_dict_update_slots(PyObject **dict_slot, PyObject **source_slot);
 int64_t py_dict_setdefault_slots(PyObject **dict_slot, PyObject **key_slot,
     PyObject **default_slot, PyObject **result_slot);
+/* Read-only lookup: retaining result publication into an EMPTY caller root;
+ * all input/output slots remain registered through callbacks and cleanup. */
+int64_t py_dict_get_default_slots(PyObject **dict_slot, PyObject **key_slot,
+    PyObject **default_slot, PyObject **result_slot);
 PyObject *py_property_new(PyObject *fget, PyObject *fset, PyObject *fdel);
 PyObject *py_classmethod_new(PyObject *func);
 PyObject *py_staticmethod_new(PyObject *func);
@@ -1802,13 +1806,15 @@ PyObject *py_sys_stdin_readline(void);
  * ``os.path``. ``join`` expects a list/tuple of path components and returns
  * a pcc string; ``basename`` returns the last path component; ``exists``
  * returns 0/1. */
+/* Borrow key/default for the call; return NEW on hit or miss (including the
+ * retained default), or NULL with a pending error. The key must be a str. */
 PyObject *py_os_getenv(PyObject *key, PyObject *default_value);
 PyObject *py_os_putenv(PyObject *key, PyObject *value);
 PyObject *py_os_unsetenv(PyObject *key);
 /* os.environ mapping semantics: getitem raises KeyError (carrying the
  * key) when unset and TypeError for non-str keys; setitem requires str
- * key/value (TypeError otherwise) and stores via setenv. The plain
- * getenv/putenv helpers above stay coercing/non-raising. */
+ * key/value (TypeError otherwise) and stores via setenv. getenv returns its
+ * retained default on a missing key; putenv keeps its legacy coercion. */
 PyObject *py_os_environ_getitem(PyObject *key);
 PyObject *py_os_environ_setitem(PyObject *key, PyObject *value);
 int32_t   py_os_environ_contains(PyObject *key);
@@ -2247,8 +2253,9 @@ int64_t     py_subs_write_fd(int32_t fd, const void *buf, int64_t n);
 /* String substrate for py_class.py method/field name lookup. */
 int32_t     py_subs_strcmp(const char *a, const char *b);
 
-/* Type-tag allocator counter for user-defined classes. Substrate hosts
- * it so the counter survives a swap of py_class.c for py_class.py. */
+/* Shared atomic type-tag allocator for user-defined classes. Returns an
+ * unreserved user tag, or -1 when the bounded user range is exhausted.
+ * Both the substrate export and its callers use this signed 32-bit ABI. */
 int32_t     py_subs_alloc_user_tag(void);
 
 /* Lazily-bootstrapped root "object" class used as the universal MRO

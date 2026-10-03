@@ -29,6 +29,8 @@ from pcc.runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     cstr,
+    define_global_i32,
+    global_addr,
     free,
     global_load_ptr,
     is_tagged_int,
@@ -48,7 +50,6 @@ from pcc.unsafe import (
     stack_alloc,
     store_i32,
     store_i64,
-    store_i8,
     store_i8,
     store_ptr,
     untag_int,
@@ -1823,6 +1824,141 @@ def py_list_del_slice(lst, lo, hi, step) -> int:
     return -1
 
 
+# Iterator-extension frame: independent destination/source owners, iterator,
+# current item, and an exception preserved while disposal can run user code.
+_LIST_EXTEND_DESTINATION = 0
+_LIST_EXTEND_SOURCE = 1
+_LIST_EXTEND_ITERATOR = 2
+_LIST_EXTEND_ITEM = 3
+_LIST_EXTEND_ERROR = 4
+_LIST_EXTEND_SLOT_COUNT = 5
+_LIST_EXTEND_SLOT_BYTES = 8
+
+define_global_i32("pcc_list_extend_borrowed_map", -2)
+define_global_i32("pcc_list_extend_owned_map", 5)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_root_copy_borrowed_lease = extern(
+    "pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64,
+)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+
+
+def _list_extend_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * _LIST_EXTEND_SLOT_BYTES)
+    token: int = load_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) < 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _list_extend_acquire(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * _LIST_EXTEND_SLOT_BYTES)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, token)
+    if token < 0:
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(7, cstr("cannot lease list extension value")))
+        return 0
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    return 1
+
+
+def _list_extend_iterable(destination, source) -> None:
+    borrowed = stack_alloc(2 * _LIST_EXTEND_SLOT_BYTES)
+    store_ptr(borrowed, 0, destination)
+    store_ptr(borrowed, _LIST_EXTEND_SLOT_BYTES, source)
+    pcc_gc_frame_enter(global_addr("pcc_list_extend_borrowed_map"), borrowed)
+    slots = stack_alloc(_LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
+    tokens = stack_alloc(_LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
+    memset(slots, 0, _LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
+    index: int = 0
+    while index < _LIST_EXTEND_SLOT_COUNT:
+        store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_list_extend_owned_map"), slots)
+    destination_slot = ptr_add(slots, _LIST_EXTEND_DESTINATION * _LIST_EXTEND_SLOT_BYTES)
+    source_slot = ptr_add(slots, _LIST_EXTEND_SOURCE * _LIST_EXTEND_SLOT_BYTES)
+    iterator_slot = ptr_add(slots, _LIST_EXTEND_ITERATOR * _LIST_EXTEND_SLOT_BYTES)
+    item_slot = ptr_add(slots, _LIST_EXTEND_ITEM * _LIST_EXTEND_SLOT_BYTES)
+    error_slot = ptr_add(slots, _LIST_EXTEND_ERROR * _LIST_EXTEND_SLOT_BYTES)
+    ok: int = 1
+    index = 0
+    while index < 2 and ok != 0:
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, index * _LIST_EXTEND_SLOT_BYTES),
+            ptr_add(borrowed, index * _LIST_EXTEND_SLOT_BYTES),
+        )
+        store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, token)
+        if token < 0:
+            if py_err_occurred() == 0:
+                py_raise_owned(py_exc_new(7, cstr("cannot retain list extension input")))
+            ok = 0
+        index = index + 1
+    # The exception table publishes immortal canonical classes. Initialize
+    # StopIteration before calling user iteration, while no error is pending.
+    stop_class = null()
+    if ok != 0:
+        stop_class = py_exc_builtin_class(8)
+        if ptr_is_null(stop_class) != 0 or py_err_occurred() != 0:
+            ok = 0
+    if ok != 0:
+        store_ptr(iterator_slot, 0, py_obj_iter(load_ptr(source_slot, 0)))
+        if ptr_is_null(load_ptr(iterator_slot, 0)) != 0:
+            if py_err_occurred() == 0:
+                py_raise_owned(py_exc_new(3, cstr("object is not iterable")))
+            ok = 0
+        else:
+            ok = _list_extend_acquire(slots, tokens, _LIST_EXTEND_ITERATOR)
+    while ok != 0:
+        # Each actual NEW value reaches its pre-registered owner before any
+        # call, error inspection, lease release, or iterator disposal.
+        store_ptr(item_slot, 0, py_obj_next(load_ptr(iterator_slot, 0)))
+        if ptr_is_null(load_ptr(item_slot, 0)) != 0:
+            if py_err_occurred() != 0:
+                py_tls_exc_swap_slot(error_slot)
+                matched: int = 0
+                if _list_extend_acquire(slots, tokens, _LIST_EXTEND_ERROR) != 0:
+                    matched = py_exc_matches(load_ptr(error_slot, 0), stop_class)
+                if matched != 0:
+                    _list_extend_drop(slots, tokens, _LIST_EXTEND_ERROR)
+                else:
+                    ok = 0
+            break
+        ok = _list_extend_acquire(slots, tokens, _LIST_EXTEND_ITEM)
+        if ok != 0:
+            py_list_append(load_ptr(destination_slot, 0), load_ptr(item_slot, 0))
+            if py_err_occurred() != 0:
+                ok = 0
+        if ok != 0:
+            _list_extend_drop(slots, tokens, _LIST_EXTEND_ITEM)
+    if ptr_is_null(load_ptr(error_slot, 0)) != 0:
+        py_tls_exc_swap_slot(error_slot)
+    store_ptr(borrowed, 0, null())
+    store_ptr(borrowed, _LIST_EXTEND_SLOT_BYTES, null())
+    index = _LIST_EXTEND_ITEM
+    while index >= 0:
+        _list_extend_drop(slots, tokens, index)
+        index = index - 1
+    # Disposal errors cannot replace the iterator/append exception. Transfer
+    # it back to TLS before leaving the now-empty owning and borrowed frames.
+    py_clear_exception()
+    token = load_i64(tokens, _LIST_EXTEND_ERROR * _LIST_EXTEND_SLOT_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(error_slot, token) < 0:
+            pcc_platform_abort()
+            return
+    py_tls_exc_swap_slot(error_slot)
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+
+
 @c_abi_export("py_list_extend")
 def py_list_extend(a, b) -> None:
     if not _list_is_sane(a, -113):
@@ -1882,23 +2018,7 @@ def py_list_extend(a, b) -> None:
                 fast_grown, PYLISTOBJECT_LENGTH_OFFSET, fast_la + fast_bl
             )
             return
-        fast_it = py_obj_iter(b)
-        if ptr_is_null(fast_it):
-            return
-        while True:
-            fast_item = py_obj_next(fast_it)
-            if ptr_is_null(fast_item):
-                if py_err_occurred() != 0:
-                    fast_cur = py_current_exception()
-                    fast_stop = py_exc_builtin_class(8)
-                    if py_exc_matches(fast_cur, fast_stop) != 0:
-                        py_clear_exception()
-                        break
-                py_decref(fast_it)
-                return
-            py_list_append(a, fast_item)
-            py_decref(fast_item)
-        py_decref(fast_it)
+        _list_extend_iterable(a, b)
         return
 
     list_slot = stack_alloc(8)
@@ -2002,29 +2122,9 @@ def py_list_extend(a, b) -> None:
         _finish_moving_root(source_handle_slot)
         _finish_moving_root(list_handle_slot)
         return
+    a = _reload_moving_root(list_slot, list_handle_slot)
     b = _reload_moving_root(source_slot, source_handle_slot)
-    it = py_obj_iter(b)
-    if ptr_is_null(it):
-        _finish_moving_root(source_handle_slot)
-        _finish_moving_root(list_handle_slot)
-        return
-    while True:
-        item = py_obj_next(it)
-        if ptr_is_null(item):
-            if py_err_occurred() != 0:
-                cur = py_current_exception()
-                stop = py_exc_builtin_class(8)  # StopIteration
-                if py_exc_matches(cur, stop) != 0:
-                    py_clear_exception()
-                    break
-            py_decref(it)
-            _finish_moving_root(source_handle_slot)
-            _finish_moving_root(list_handle_slot)
-            return
-        a = _reload_moving_root(list_slot, list_handle_slot)
-        py_list_append(a, item)
-        py_decref(item)
-    py_decref(it)
+    _list_extend_iterable(a, b)
     _finish_moving_root(source_handle_slot)
     _finish_moving_root(list_handle_slot)
 

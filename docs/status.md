@@ -1,310 +1,205 @@
 # Current status
 
-Updated October 3, 2026. Maintain this page in place. [Project Intent](project-intent.md)
-and [compiler contracts](compiler-contract.md) remain the requirements; focused
-review repairs do not replace the original ten goals.
+Updated October 3, 2026, 11:31 UTC. Maintain this page in place.
+[Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
+remain authoritative. Focused repairs do not replace the original ten goals.
 
-## Source and recovery boundary
+## Current boundary
 
-A cloud filesystem reset lost work after the October 2, 19:20 UTC backup,
-including generated compiler/runtime artifacts and unuploaded test receipts.
-The three source repositories were restored from verified Library bytes matching
-the pre-reset synchronized commits: PCC `351c617eb27979ecaad6c96bc94a38b98fbbd444`,
-gateway `83577bc41dc79d3ead2e217bfa04f0f500799012`, and GUI
-`3843a75a5634dfb3107890a2d628517713782080`.
+There is no qualified current pcc1, pcc2 or pcc3, and no Stage2/Stage3 fixed point.
+The latest complete compiler-context diagnostic regenerated all 441 module
+contexts: 190 lowered successfully and 251 stopped at their first frontend
+failure. It had no timeouts or crashes, and reverified every source/context
+identity. These are shared producer-contract failures, not 251 independent bugs.
+Relative to the previous 167/274 diagnostic, 27 modules advanced to passing,
+163 stayed passing, 247 stayed failing and four gained a strict failure.
 
-The first authorized hourly sync completed October 3 at 04:46 UTC from the
-immutable 04:33 source capture: PCC `1a891b352b6d6c53b28d7ae2b846ebf7771388ed`
-(39 paths), GUI `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c` (10 paths), and gateway
-unchanged. All 49 before/after hashes and modes were verified locally, with no
-push. Subsequent changes remain unsynchronized until the next capture.
+That diagnostic used source
+`c81cfd1f1731f5e438d244ddf60bdaaacf3049b11752202268d1e0be6d751842`,
+frozen at 10:20. Later mutable-source changes have separate focused evidence.
+The next compiler boundary requires another complete fresh-context diagnostic
+and then actual native bootstrap on the same final source.
 
-The second hourly sync completed at 05:42 UTC from the immutable 05:35:57
-capture: PCC `208f806c40e5b3b79deb926b761bf038e44d711a` (23 paths), with GUI and
-gateway unchanged. All before/after hashes and modes were verified; there was no
-push. Later candidate changes remain unsynchronized until the next capture.
+## Matched runtime and native evidence
 
-The third hourly sync completed at 06:45 UTC from the immutable 06:36:46
-capture: PCC `62c0bdad8fc4fabf9da795759dde1dec1a31a144` (17 paths), with GUI and
-gateway unchanged. Before/after bytes and modes were verified locally. This exact
-capture remains preserved. The fourth sync used the 07:35 capture and produced
-PCC `8ed4eabec0ddc2505570ba6b413f88de0964ff76` (9 paths). The fifth completed
-at 08:51 from the exact 08:31 capture: PCC
-`9c834d952d4b8b582b7cdfef818ba91478132295` (18 paths), with GUI and gateway
-unchanged. That fifth capture remains preserved. The sixth sync completed at09:56 from
-the exact09:46 capture: PCC `f4d02d9dc01372889c7e40d0f52d6315970d58cc`
-(45 paths), with GUI and gateway unchanged. It recorded385 fast passes and one
-failed frozenset producer case, with17,753 selected and5,726 gate-deselected
-collection nodes and no errors. The09:46 capture is the current verified baseline. Its fast checks
-recorded 169 passes and two failures; collection had no errors. Local work only
-applies and commits the source delta; validation runs in the cloud.
+The complete Linux x86-64 threaded/atomic runtime frozen at 09:59 passed strict
+admission for all 184 ordered, unique members. It took 437.79 seconds with about
+439 MB peak RSS. The recorded build used the owned compiler/emitter/archive APIs;
+no host assembler/linker or libpython supplied the generated runtime.
 
-The exact PCC base `1a59d09df54cc0b7b46219395d3419cab8543675` was verified
-across 29,601 Git blob bytes and modes, followed by all 154 paths in the backed-up
-forward delta. This restores source content, not Git history or qualification.
-The candidate includes reconstructed later changes, each with actual before/after
-bytes, modes and hashes outside the repositories. Historical passing results
-cannot qualify these recreated changes.
+- Source: `3b1592b4aa8c7c409669e938740717ee96d3002718623cedfdf3a68d3ec94c59`
+- Compiler: `78d785e3766a5a8b71999210400c582fcbecd1d8c73d2b3663dcec9f3c72af29`
+- Archive: `e9f501eddc9984e63d04da3de5365a43fb5f8364332ec0e1f5cf15602e2599e4`
 
-Hourly local synchronization is authorized from October 3, 04:40 UTC. Include all
-legitimate source work, including failing or unqualified work, in one commit per
-changed repository, preserve unrelated local edits and do not push. The accidental
-`work-in-progress` directory is removed with its bytes preserved outside source.
-Scratch files, backups and duplicate handoffs must stay outside the repositories.
+Eight unchanged Python controls passed all five requested GC settings: canonical
+object/base-subclass behavior, finalizer callbacks and resurrection, module
+except-as lifetime, short-circuit destructor order, format, type, namespace
+identity and indexed-payload behavior. Those are 40 native executions. Separate
+unchanged-binary GC sidecars confirmed actual backend selection for 35 runs.
+Indexed-payload emitted no collection event in its five runs, so its receipts
+prove requested settings only.
 
-## Fresh evidence and active repairs
+The original failed-class cleanup program still fails under GC0 at
+`references[0]() is None`; its other four GC variants remain unexecuted. Classes
+are still made immortal, and complete class/base/MRO/name/registry retirement
+semantics remain open. Two original C controls and six public-abort signal-state
+cases passed against the matched runtime.
 
-CPython 3.15.0rc1 and locked pytest dependencies are restored in an isolated
-environment. Fresh post-reset results are tied to their recorded source hashes;
-later changes require the affected checks again:
+These binaries were produced by host pcc0. They do not establish native pcc1
+compilation, fixed-point bootstrap, complete C/Python coverage or production GC
+performance. The current candidate is newer than this runtime and must be
+rebuilt before claiming combined qualification.
 
-- Compiler/capture/producer matrix: 107 passed, 1 failed, 28 deselected. The
-  original integer-constructor case exposed an unowned repr(self.value) result
-  in a generated dataclass __repr__. A shared repr/ascii producer repair is now
-  reconstructed and its 13-case causal gate passed, including the unchanged
-  original program and strict rejection checks. Two native cases are pending.
-- Callable metadata: 20 host/source-model checks passed, covering rooted
-  construction, default lifetimes, callback representation and helper contracts.
-  The corrected py_func and py_class components emitted strict owned objects
-  in 38.98s / 339 MB with the codegen checksum unchanged. The subsequent matched
-  whole archive passed strict admission; native execution remains pending.
-- Installed-wheel isolation/provenance: 15 checks passed, including a real
-  isolated interpreter import fixture. This does not qualify a native wheel.
-- Runtime receipt producers: 25 focused/controlled Make cases passed, including
-  missing/null/configuration/stale-source/codegen rejection. The producer files
-  were unchanged; an early broad preflight snapshot preceded a separate metadata
-  annotation correction, so no whole-candidate stability is claimed for this gate.
-- Explicit default/threaded/integration runtime fixtures: 61 host cases passed
-  with 873 production/fixture hashes and modes unchanged, including actual
-  archive-byte tampering and MZ-prefix handling. This is no native Windows proof.
-- GUI Harness: 147 host tests passed with all 32 input hashes unchanged. Native,
-  TLS, reference application, interaction and pixel gates remain open against
-  DeepSeekHarness `47f943859bef60e4160492346772ded9b24f765a`.
+Earlier replacement-object experiments are retained as mixed diagnostics.
+Their compiler/source closure differed from the original archive; one early
+finalizer experiment also used the wrong threading setting. Observed passes
+from those experiments are not source-only causal or matched-runtime proof.
 
-Reconstructed compiler changes include transitive closure captures, hidden
-capture operands, persistent default roots, pooled-name ownership, and shared
-Call/Subscript/BinOp result publication. Runtime list/tuple concatenation and
-mixed numeric/reflected-add dispatch have code and formal tests, but no fresh
-native qualification. Live class namespace and bound-method delegation remain
-partially unreconstructed. Runtime configuration/inventory producers and explicit
-fixture provenance are freshly checked at their host/component boundaries.
-Darwin implicit stream symbols passed 25 host/owned-object checks. Five narrow
-atomic instruction forms passed 41 encoding checks; narrow atomic lowering and
-cmpxchg layout passed 91 focused/codec cases. These are not actual Darwin or
-AArch64 execution. C parser/abort and thread logging remain active reconstruction
-or qualification work.
+## Active repairs
 
-Two complete, fresh compiler graph audits are preserved. V1 finished with
-120 indexed-lowering passes and 321 first failures. V2 finished with 167 passes
-and 274 first failures across all 441 unique modules, with no timeouts or crashes.
-V2 source is 4c655275e6d5d25f56e78fc43e10a037e3a6d938c9bf2f8dd6d05f20bb3a7a14;
-graph is 01bd87ba833da60059cc41988d9666f0c6461683fa6d379444660ca03ced9125.
-The source/context were reverified unchanged; watchdog time was 942.838 seconds
-and peak tree RSS 908,316,672 bytes. Matching module names gives 59 fail-to-pass,
-108 pass-to-pass, 262 fail-to-fail and 12 newly exposed strict failures. These
-are first failures per module, not independent bug counts or native proof.
+The strict ownership validator remains enabled. Shared producers must publish
+managed results to authoritative output roots before parking cleanup and reload
+through those roots after relocation boundaries.
 
-V2 first failures concentrate on Call handoff (118), Call ownership (43),
-BoolExpr (31), arithmetic proof (24), BinOp handoff (18), Name ownership (14),
-set receiver (7), valueclass attributes (3), and 16 smaller root/bridge/base-class
-cases. Producer migration and unchanged strict validation continue together.
-The earlier historical 237/204 counts came from lost source and are not a matched
-comparison.
+- The original module except-as regression is reproduced across the old source
+  boundary and repaired through its registered module-global binding. The four
+  unchanged target object cases and the matched native lifetime control pass.
+- Set construction now has coherent compiler/runtime result-owner changes and
+  30 focused checks. An original macho_link context advances past its frozenset
+  constructor to a separate sum producer. Actual immutable frozenset semantics,
+  new runtime components and native qualification remain open.
+- Environment lookup now evaluates and roots key before default, publishes the
+  result before cleanup, and returns an owned default on a miss. Its 32 focused
+  checks and original pipeline-context advancement pass. This changes the
+  ownership ABI despite an unchanged symbol signature: an old borrowed-default
+  runtime must be rejected. Native proof requires a rebuilt matching runtime.
+- Remaining shared families include list/tuple construction, sorted/bytes,
+  dict.get and dynamic branch merges, native OS wrappers, valueclass boxing,
+  arithmetic value-kind proof and authoritative Name bindings. The complete
+  diagnostic retains each original AST/callee failure for causal replay.
+- Metaclass ownership has 10 host/IR checks. Class tag allocation has a shared
+  CAS owner, reserved-tag exclusion and exhaustion cleanup with 14 host checks.
+  The old bodies reproduced a collision with reserved tag 200 on allocation 97,
+  C-extension-range overflow and duplicate allocation under controlled
+  interleaving. Actual emitted ABI and native contention/exhaustion are pending.
+- Namespace transaction support has a freestanding component with zero calls in
+  its locked helpers. The later namespace writer API has 36 body-model checks;
+  legacy writers/readers, raw callbacks and managed method-selection ownership
+  remain incompletely migrated. No production safety conclusion follows from
+  support-only tests.
 
-After V2, the real selected-owner BoolExpr path passed 21 focused checks; two
-unchanged original contexts advanced to separate os.uname/join producer failures.
-Ordinary class-namespace lookup passed nine focused cases and fully generated
-LLVM text for original py_ast module116. That replay did not enable the audit's
-PIDX environment; it establishes host IR lowering only. Prepared custom namespaces
-remain unchanged and unqualified. The one-argument type producer passed 19
-focused checks, with four native cases still pending. Original type contexts
-advanced to separate dict.get and constructor-handoff producer failures.
+The allocator/metaclass/namespace components are being checked together to avoid
+repeating py_class compilation. Off-tree proposals and integrated but unqualified
+work remain distinguishable in the retained code batches.
 
-The managed binary-call result owner repair passes 33 host models. Component
-lowering exposed a map-literal and then managed-versus-raw helper-signature error;
-those narrow corrections are integrated. The exact optimized IR emitted an
-owned 1,881,160-byte object with SHA256
-e86035918c8d21f4aef023780807dd01cc70139dc3d3e1384b847c2d32acada6.
-Incoming method lookup/replacement ownership remains a separate known gap, so
-native overloaded arithmetic is not qualified by these models. Public Linux abort
-is integrated after two syscall models and two owned cross-object checks; six
-native signal-state cases remain pending. Four standalone owned-linked x86_64
-varargs programs passed; these do not qualify a complete runtime or C suite.
+## C and ABI work
 
-A fresh threaded atomic Linux x86_64 runtime finished at 07:09 UTC from frozen
-source c3ade842a23fa0863027d7cb7d3f56b223d8b155296366c9965274e04bd47fe2.
-All 183 ordered members and the real threads=true/refcount=atomic configuration
-passed strict source, policy, codegen and archive admission. Build watchdog time
-was 431.33 seconds and peak tree RSS 428,994,560 bytes. Archive SHA256 is
-61ff10c984181c233b92e5eb224ff3dbe5d23df39af5cfc73de6df4bd571da58.
-The first staging attempt failed because its directory was not recognized as a
-runtime library source; a byte-identical recognized staging path passed. Both
-receipts are preserved and the compiler/runtime inputs remained unchanged.
+Named declarations, layout/pointer/signature caches and deferred backend
+consumers now retain module-owned type context. The repair has 226 scoped checks
+and two owned Linux late/nested-layout executions. A broader stage1-context node
+previously timed out and a native codec node was deselected; neither is passed.
 
-All six prepared Python controls compiled and linked against the frozen runtime.
-Format, type, ordinary class-default identity/lifetime and the exact restored
-indexed_payload.py each passed GC0 through GC4 with exact output and empty
-stderr: 20 native passes. BoolExpr temporary disposal order failed GC0 at the
-unchanged event-order assertion; class-construction failure cleanup failed GC0
-at the unchanged weakref-release assertion. Their other eight collector runs
-remain unobserved. Retained original IR is being traced for the owners that keep
-these objects alive. Assertions and original source programs remain unchanged.
-The original GCC 20000223-1.c also compiled, linked and executed with exit 0 and
-empty output. Other original C and abort signal-state controls remain pending.
+Darwin stream resolution now covers implicit use, explicit file/block externs,
+owned-header macros and local/translation-unit definitions. Its 114 focused
+checks include actual owned Mach-O undefined-symbol inspection. Actual Darwin
+execution remains unrun. Narrow AArch64 atomics have encoder/lowering evidence,
+not native AArch64 qualification.
 
-Earlier format attempts stopped at test-harness guards rejecting host PCC export
-and object worker subprocesses. Exact-target dispatch preserves the full source
-closure. Eight narrow guard checks passed before allowing only verified frozen
-PCC object workers, rejecting arbitrary subprocesses and external tool fallback.
-All results here are host-pcc0-produced native programs. No current pcc1 or pcc2
-exists and there is no Stage2 to Stage3 fixed point. Further complete PIDX
-censuses and native/compiler gates remain required on the combined candidate.
+Six C corpus product adapters previously forced host assembly/linking through
+`run_translation_units_with_system_cc`. Their old passes cannot prove owned
+product execution. A test-only migration now routes product programs through
+public owned compile/emit APIs while preserving original C sources/assertions
+and the external reference oracle. Eighteen host route checks pass. Six unchanged-source native entries across
+five product adapters also pass against the external oracle, with the product
+guard permitting only PCC-owned executables. Complete corpus execution is pending. Csmith generation is unavailable in this environment.
 
-PCC_LOG=thread instrumentation has been reconstructed in the logger and pthread
-kernel, with 22 fresh host-body checks passing and all three tested file hashes
-unchanged. Tests exercise filtering, disabled fast path, event codes, allocation
-and platform errors, lock/TLS order, join and both detach disposal orders. Native
-component/thread/five-GC execution and overhead remain unqualified. Property
-accessor construction owners are also integrated with their separate focused
-gate pending; these later candidate changes are outside the frozen runtime above.
+Historical reviewer counts of five C root errors and 45 failures/16 csmith
+failures are attributed, unresolved counts. A precise five-node ledger was not
+retained, and they are not current candidate totals. Full source-bound collection
+and execution must establish the actual remaining failures.
 
-The October 3 review reproduced a real exception-binding regression: all four
-unchanged module-handler object-emission cases pass on the 04:33 synchronized
-source and fail on the 05:35 source. The module except-as binding repair now
-uses its registered module-global slot and clears it on handler exits; its fresh
-checks are pending. The two ordinary native lifetime failures above are separate
-preexisting behaviors and are not attributed to that regression.
+## Thread diagnostics
 
-Named-type declarations, layout/pointer/signature caches and deferred backend
-consumers now carry their owning module context. The integrated parser repair has
-226 scoped host checks and two owned Linux late/nested-layout executables passing.
-A broadly selected full-stage1-context node timed out and one native codec node
-was deselected; neither is qualified. Explicit Darwin stdio declarations remain
-an off-tree proposal awaiting validation.
+Lifecycle, scheduler-lock, safepoint and stop-the-world events, plus an independent
+lock-held suspend tripwire, are integrated. Raw sink component checks exclude
+allocation, registration, implicit safepoints and indirect calls; explicit safe
+wait polls are retained. Actual per-module frontend settings were recorded in
+the complete runtime build.
 
-Scheduler-lock, safepoint suspend/resume and stop-the-world events plus an
-independent lock-held suspend tripwire are integrated. The logger uses a raw
-syscall sink outside the scheduler/world locks. There are 127 unique focused host
-checks and four owned component emissions passing. Their frozen source predates
-later parser integration; a complete matching runtime and native five-GC run are
-still required. The freestanding class-namespace callback split is integrated
-with its new host/component checks pending.
+The first native attempt stopped before execution at an ambiguous raw getenv
+return declaration. After the fixture declared c_rawptr explicitly, compilation
+passed. Five GC0 mask cases passed; the sixth, thread+gc, produced the correct
+program output but failed the preserved suspension/resumption assertion. Its
+log contained four suspend records, zero resume records and 49 reported drops.
+The remaining 54 cases were not run.
 
-The unchanged four-target module-handler regression now passes. Canonical object()
-construction and weakref semantics are integrated; host checks pass but a native
-component-to-executable attempt stopped at source-identity preflight after parser
-files changed. It must be replayed against an immutable compiler. The finalizer
-original-IR diagnostic passes GC0–4 with explicit matching threaded/atomic build
-settings, but combines source/compiler revisions and cannot establish a complete
-matched-runtime result. The earlier diagnostic also had a threading mismatch;
-its observed passes are retained without attributing them solely to the fix.
+Independent try-lock delivery can separate the two records of a completed
+suspension. A paired-delivery repair after world unlock, with zero no-park depth and
+reentrancy checks, now has a separately rebuilt complete184-member archive.
+All18 GC0/GC1 mask/format cases pass, including the previously failing pair check.
+The first GC2 case, with logging disabled, timed out at the unchanged20-second
+limit;41 later cases remain unrun. An unchanged-baseline comparison is required
+before attributing that timeout to the repair. Potentially locked observation paths
+must remain nonwaiting. Logs and strict assertions are retained; native
+concurrency, five-GC coverage and logging overhead remain unqualified.
 
-Full C/Python collection on the immutable 08:08 capture completed without errors:
-23,354 discovered nodes, 3,027 C and 14,605 Python selected, and 5,722 gate-deselected.
-No test body executed in that collection. All 29,634 source identities stayed
-unchanged. Every later hourly source capture must run its own collection and fast
-affected regressions before the local commit. Preserve failing work in the sync,
-report exact failures and unexecuted cases, and use commit subjects describing the
-actual changes rather than synchronization workflow labels.
+## GUI, gateway and remaining goals
 
-A new complete Linux x86-64 threaded/atomic runtime, frozen at09:59:56, passed
-strict admission for all184 ordered members in437.79 seconds, with439MB peak.
-Its source identity is `3b1592b4aa8c7c409669e938740717ee96d3002718623cedfdf3a68d3ec94c59`
-and archive is `e9f501eddc9984e63d04da3de5365a43fb5f8364332ec0e1f5cf15602e2599e4`.
-Eight unchanged Python controls passed all five requested GC settings (40 runs).
-Separate unchanged-binary sidecars confirmed actual backend selection for35 of
-those runs; indexed-payload emitted no collection event in its five runs. The
-ordinary failed-class cleanup case still fails GC0, leaving its other four
-variants unexecuted. Two original C programs and all six abort cases passed.
-These are host-pcc0-produced native controls, not a native compiler fixed point.
+The pinned Harness reference is restored at
+`47f943859bef60e4160492346772ded9b24f765a`. All 7,412 Git blob hashes and modes
+match tree `f904efab9ef435201d6ba4da88a34d6366568272`, with no missing/extra
+files or submodules. Reference recovery is not behavioral or pixel parity.
+The reconstructed GUI Loader/session tranche has 147 host checks; actual native
+GUI, HTTP/TLS, HMR, typed FFI/bridges, interaction traces and pixels remain open.
 
-The thread diagnostic passed archive/sink/settings admission but its program
-stopped at a raw getenv return annotation before any of60 executions. The fixture
-now declares c_rawptr explicitly; its native replay remains queued. A fresh441-
-module diagnostic is running on separately frozen10:20 source. Later metaclass
-owner changes passed10 host/IR cases but are outside the09:59 runtime. The owned
-Darwin external-stream resolver passed114 host/object cases, including real
-Mach-O symbol checks; actual Darwin execution remains unrun.
+All ten acceptance goals remain active:
 
-The pinned Harness reference was recovered from the official archive at
-`47f943859bef60e4160492346772ded9b24f765a`. All7,412 blob hashes and modes match
-Git tree `f904efab9ef435201d6ba4da88a34d6366568272`; this is reference recovery,
-not behavioral or pixel parity. Corpus C helpers still route product assembly
-through host cc in several suites; migration to the owned executable API is
-underway, preserving external reference oracles and original C programs.
+1. Native bootstrap through byte-identical Stage2/Stage3, with original C/Python
+   controls and no libpython.
+2. Equal production correctness, concurrency, throughput and long-run memory
+   behavior for all five GCs, including relocation and GC4 capacity contracts.
+3. Actual macOS ARM64, Linux x86-64, Windows and Linux AArch64 qualification;
+   the required macOS-15 job uses the standard 3-core M1/7 GB/45-minute envelope.
+4. Owned compiler/runtime/ABI/provenance throughout, including runtime self-build,
+   bindgen, lockfile and consistent CLI/API/diagnostics.
+5. Complete EDG semantics and compilation-memory targets.
+6. Stage2 no slower than Stage1 and the five-GC shared build under six hours.
+7. Complete C and Python execution and the remaining cleanup goals.
+8. Gateway semantic and performance goals beyond the asyncio reference.
+9. Deferred tail-call, multiply-add, peephole and other planned optimizations,
+   scaffold identity and complete thread diagnostics.
+10. Complete native GUI/Harness behavior and visual equivalence to the pinned
+    reference.
 
-## Qualification order
+Cross-object emission does not establish execution on another platform. Missing
+platform execution must remain explicit until a suitable environment is arranged.
 
-Use the checked-in Python version, isolated outputs, durable node logs, the shared
-heavy-run lock and a process-tree RSS watchdog. Disable surprise native builds
-with PCC_NO_AUTO_PCC1=1 and PCC_TEST_NO_NATIVE_PROVISIONING=1. Every pytest
-diagnostic uses -x -n0 -vv --tb=short. Timeouts guard runaway processes; they are
-not acceptance budgets. Freeze source, configuration and artifact identities.
+## Source recovery and synchronization
 
-Finish causal producer checks and the fresh full graph audit, then build a matched
-whole runtime. Execute changed-shape programs under all five GCs, original C/Python
-controls, and complete tests/c and tests/python inventories. Report passed, failed,
-deselected, unavailable and unobserved nodes separately. Run dependent bootstrap
-stages in order through scripts/bootstrap.py; only successful Stage2 and Stage3
-raw-byte equality establishes the fixed point. See [validation workflow](validation-workflow.md).
+The reset recovery restored verified source bytes from the last backed-up
+October 2 boundary. Historical passing results never qualify reconstructed
+bytes. Recoverable current code, before/after patches, source identities and
+execution artifacts are retained outside the repositories and backed up durably.
+No generated backups, scratch tests or work-in-progress directory belong here.
 
-## Ten goals still open
+The latest verified local synchronization used the immutable 10:30:50 capture:
+PCC `f3a043008d70132d8aefea2bf14931d533c288a6` (10 paths), GUI
+`45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
+`83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact bytes/modes and diff checks
+passed. That capture recorded 306 fast passes and one frozenset producer failure;
+collection selected 17,857 nodes and gate-deselected 5,726, with no errors/skips.
+Collection executed no test bodies.
 
-1. Native pcc0 to pcc1 to pcc2 to pcc3, byte-identical Stage2/Stage3, original
-   C/Python execution controls, and no libpython.
-2. Equal semantics and production correctness/concurrency/performance for all
-   five collectors. Include original GC4 getter/iterator/capacity failures,
-   relocation, FRESH_ALLOC, finalizers, weakrefs, resurrection and long-run RSS,
-   throughput and stability under the shared authoritative root/slot contract.
-3. Actual macOS ARM64, Linux x86_64, Windows and Linux aarch64 jobs, including
-   Linux aarch64 Stage1 through Stage3. Preserve macOS-15 standard three-core M1,
-   7 GB and 45-minute qualification, plus installed wheel/version parity.
-4. Owned compiler/runtime/ABI/provenance, native runtime self-build, bindgen,
-   lockfile, CLI/API/diagnostics and real function implementations, without LLVM,
-   host C compiler or hidden external-owner fallback.
-5. Complete EDG-inspired semantic facts, one layout authority, layered native
-   validation, compilation-memory targets and centralized target ABI coverage.
-6. Successful comparable Stage2 no slower than Stage1, and shared builds for
-   all five collectors within six hours.
-7. Complete C and Python suites and authorized cleanup, including external TLS,
-   BSD archives, freestanding assertions and partial-async timeout cases.
-8. Gateway semantics and measured performance beyond asyncio with identical
-   inputs, long-running behavior and traceable configuration.
-9. Tail calls, multiply-add, peepholes, scaffold identity and PCC_LOG=thread,
-   with native semantics and measured effects.
-10. GUI/Harness native app/five-GC behavior, HTTP/TLS, Loader HMR, typed FFI/UI
-    bridges, interaction and pixel equivalence against the pinned reference.
-    Host models and cross-compilation do not prove device execution.
+Hourly synchronization includes legitimate integrated work even when failing or
+unqualified. Run collection and affected fast tests on the exact capture first;
+report failures and unexecuted cases instead of treating sync as acceptance.
+The local executor only applies and commits one change-based commit per changed
+repository, preserves user edits, and does not develop, test or push. Promote a
+capture to the next baseline only after its actual local commit is verified.
+Later mutable changes remain separate until the next capture.
 
-## Durable evidence
-
-The recoverable base delta is Library `libfile_85beb2beb8f88191b47144ac4fa719ea`.
-Reconstruction code and receipts are versioned under
-`libfile_a5f7c11281008191be4ea89ea9611cbd`; version 20 contains the October 3,
-07:24 code checkpoint. Archives contain recoverable code bytes and a verified
-baseline/incremental chain, not only recipes or remembered hashes. The cloud
-recovery directory is pcc-reset-recovery-20261003 outside the source repositories.
-Save every coherent batch before heavy tests and preserve failure evidence.
-Old generated binaries and graphs were lost; newly regenerated graph and runtime
-bytes are preserved below. Historical hashes alone do not recover bytes.
-
-The fresh graph inputs are preserved as Library
-`libfile_e4d21adda870819187f2218b0924cb1c`; all 3,975 terminal node/guard/artifact
-files are in `libfile_ba4713127d888191996585e2a8a70dd3`. Both archives passed
-hash/mode readback. The completed hourly delta is
-`libfile_2b94b861f9048191a0f2c3272ccab2a9`; its exact captured source, not later
-candidate changes, is the next synchronization baseline.
-
-V2 inputs are Library `libfile_b94df145020c819185824ff43dc3e8b6`; the complete
-4,035-file terminal evidence is `libfile_7bec6b7a854c8191a540cb39c13c0c0b`.
-The verified second hourly delta is `libfile_ef1cd16a09148191b6898141b26678db`.
-Current backups also contain an exact integrated-source delta separately from
-unapplied proposals, so an off-tree proposal cannot be mistaken for candidate code.
-
-The verified third hourly delta is `libfile_c3a466e41e9c8191a95f9d2f2732be8b`.
-The admitted matched runtime and its frozen compiler/runtime source, all 183
-member objects and IR/provenance, and build receipts are recoverable from
-`libfile_bc542c184fa48191a0d8bb964e443e3a`: 2,005 files, 55,383,935 archive bytes,
-SHA256 77ee0582d6adeafdc2c55de729899710345c831eed136cdc26e0dfcc0e4951b3.
-Archive readback verified every included file hash and mode. Native execution
-receipts remain a separate boundary.
+Use the qualified CPython 3.15.0rc1 environment, isolated outputs, source/config
+identities and resource watchdogs. Coordinate heavy runs, forbid surprise
+compiler/runtime provisioning, and stop each independent diagnostic at its first
+real failure. Safety timeouts are not acceptance budgets. Preserve failures and
+continue other independent authorized work.

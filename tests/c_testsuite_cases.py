@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 from pcc.driver.project import TranslationUnit
+from tests.owned_c_corpus import run_owned_c_corpus
 from tests.worker_process import run_worker_process
 
 DEFAULT_TIMEOUT = 10
@@ -174,7 +175,7 @@ def _pcc_worker_entry(mode: str, case_path_str: str, timeout: int, conn) -> None
             conn.send({"returncode": 0, "stdout": "", "stderr": ""})
             return
 
-        result = evaluator.run_translation_units_with_system_cc(
+        result = run_owned_c_corpus(evaluator,
             [unit],
             base_dir=str(case_path.parent),
             include_dirs=[str(case_path.parent)],

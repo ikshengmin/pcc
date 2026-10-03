@@ -1114,6 +1114,7 @@ def _runtime_signatures_part_16():
     "py_time_strftime": (_PYOBJ, [_PYOBJ], False),
     "py_sys_stdin_readline": (_PYOBJ, [], False),
     # ---- Narrow os.path subset ------------------------------------
+    # Borrowed, address-stable key/default; NEW result on hit and miss, NULL on error.
     "py_os_getenv": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_os_putenv": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_os_unsetenv": (_PYOBJ, [_PYOBJ], False),
@@ -1254,6 +1255,7 @@ def _runtime_signatures_part_18():
     "py_dict_set_slots": (_I64, [_PTR, _PTR, _PTR], False),
     "py_dict_update_slots": (_I64, [_PTR, _PTR], False),
     "py_dict_setdefault_slots": (_I64, [_PTR, _PTR, _PTR, _PTR], False),
+    "py_dict_get_default_slots": (_I64, [_PTR, _PTR, _PTR, _PTR], False),
     "py_class_setattr": (_I64, [_PYOBJ, _CSTR, _PYOBJ], False),
     "py_class_setattr_raw": (_I64, [_PYOBJ, _CSTR, _PYOBJ], False),
     "py_class_apply_namespace_dict": (_I64, [_PYOBJ, _PYOBJ], False),

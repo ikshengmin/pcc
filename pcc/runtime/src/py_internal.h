@@ -357,6 +357,12 @@ void pcc_diagnostics_runtime_log_event(const char *category, const char *event,
  * materialize borrowed C string literals in every hot path. */
 extern int32_t pcc_diagnostics_runtime_log_fast_state;
 void pcc_diagnostics_runtime_log_event_code(int32_t category, int32_t event, int64_t value0, int64_t value1, const void *ptr);
+/* Internal completed-suspension flush. Caller is registered, holds no runtime
+ * lock/no-park lease, and has returned from an allowed suspension. Captured ID
+ * avoids registration; both records share one sink acquisition. Unlike the
+ * general trace path, this boundary may safepoint while waiting for the sink. */
+void pcc_diagnostics_runtime_log_suspension_pair(int64_t thread_id,
+                                               int64_t epoch, int64_t waits);
 
 /* ---- Production-safe runtime tripwires --------------------------------
  *

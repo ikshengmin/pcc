@@ -534,6 +534,7 @@ class WorldTraceModel:
             pcc_cond_wait=self.wait, pcc_cond_broadcast=lambda cond: 0,
             pcc_platform_abort=self.abort,
             pcc_diagnostics_runtime_log_event_code=self.log,
+            pcc_diagnostics_runtime_log_suspension_pair=self.log_pair,
             stack_alloc=lambda size: object(),
         )
 
@@ -576,6 +577,12 @@ class WorldTraceModel:
         self.actions.append(("trace", event, first, second))
         if self.on_event:
             self.on_event(event)
+
+    def log_pair(self, thread_id, epoch, waits):
+        assert thread_id == 1 and not self.locked
+        assert self.state["pcc_tls_no_park_depth_py"] == 0
+        self.log(9, 14, epoch, waits, None)
+        self.log(9, 15, epoch, waits, None)
 
     def abort(self):
         assert not self.locked
@@ -669,3 +676,123 @@ def test_raw_sink_transitive_helpers_have_no_allocations_or_safepoints():
                                   "thread_safepoint", "pcc_current_thread_id", "_init_once",
                                   "pcc_thread_no_park_enter", "pcc_thread_no_park_exit"})
     assert {"open_file", "write", "close", "stack_alloc"} <= calls
+
+
+def _forbid_pair_registration_and_init(model):
+    for name in ("pcc_current_thread_id", "_init_once", "_code_enabled"):
+        model.namespace[name] = lambda *args, name=name: pytest.fail("pair called " + name)
+
+
+def test_completed_suspension_pair_keeps_one_sink_acquisition_and_captured_identity():
+    model = RawLogModel()
+    _forbid_pair_registration_and_init(model)
+    acquires = []
+    releases = []
+    original_cas = model.namespace["atomic_cas_i32"]
+    original_release = model.namespace["_write_lock_release"]
+
+    def acquire(*args):
+        acquires.append("try")
+        return original_cas(*args)
+
+    def release():
+        # A competing writer can take the sink immediately after release;
+        # both records must already exist before that ownership gap opens.
+        releases.append([row["event"] for row in model.records()])
+        original_release()
+        model.state["pcc_log_write_lock"] = 1
+
+    model.namespace["atomic_cas_i32"] = acquire
+    model.namespace["_write_lock_release"] = release
+    model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 17, 3)
+    assert acquires == ["try"]
+    assert releases == [["safepoint_suspend_deferred", "safepoint_resume_deferred"]]
+    assert [(row["thread"], row["value0"], row["value1"]) for row in model.records()] == [(41, 17, 3)] * 2
+    assert model.state["pcc_log_emitting"] == 0
+    assert model.registrations == []
+
+
+def test_pair_waits_outside_sink_and_reentrant_suspension_drops_both_records():
+    model = RawLogModel()
+    _forbid_pair_registration_and_init(model)
+    model.state["pcc_log_write_lock"] = 1
+    polls = []
+
+    def safepoint():
+        assert model.state["pcc_log_emitting"] == 1
+        assert model.state["pcc_log_write_lock"] == 1  # Other writer owns it.
+        assert model.depth == 0 and model.output == b""
+        polls.append("allowed unlocked wait")
+        model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 18, 1)
+        assert model.state["pcc_log_thread_trace_dropped"] == 2
+        assert model.output == b""  # Nested call cannot take the sink or recurse.
+        model.state["pcc_log_write_lock"] = 0
+
+    model.namespace["thread_safepoint"] = safepoint
+    model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 17, 3)
+    assert polls == ["allowed unlocked wait"]
+    rows = model.records()
+    assert [row["event"] for row in rows] == ["safepoint_suspend_deferred", "safepoint_resume_deferred", "trace_dropped"]
+    assert [row["value0"] for row in rows] == [17, 17, 2]
+    assert model.state["pcc_log_write_lock"] == model.state["pcc_log_emitting"] == 0
+    assert model.registrations == []
+
+
+@pytest.mark.parametrize("block", ["recursion", "no_park", "missing_identity", "invalid_epoch", "no_wait"])
+def test_forbidden_pair_never_waits_and_loss_is_counted_as_two_records(block):
+    model = RawLogModel()
+    _forbid_pair_registration_and_init(model)
+    arguments = [41, 17, 3]
+    if block == "recursion":
+        model.state["pcc_log_emitting"] = 1
+    elif block == "no_park":
+        model.depth = 1
+    elif block == "missing_identity":
+        arguments[0] = 0
+    elif block == "invalid_epoch":
+        arguments[1] = 0
+    else:
+        arguments[2] = 0
+    model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](*arguments)
+    assert model.output == b"" and model.state["pcc_log_write_lock"] == 0
+    assert model.state["pcc_log_thread_trace_dropped"] == 2
+    model.state["pcc_log_emitting"] = model.depth = 0
+    model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 17, 3)
+    assert [row["event"] for row in model.records()] == ["safepoint_suspend_deferred", "safepoint_resume_deferred", "trace_dropped"]
+    assert model.records()[-1]["value0"] == 2
+
+
+@pytest.mark.parametrize("fast,initialized,mask", [(0, 2, 256), (1, 1, 256), (-1, 0, 0), (1, 2, 0)])
+def test_disabled_or_uninitialized_pair_never_initializes_registers_or_takes_sink(fast, initialized, mask):
+    model = RawLogModel()
+    _forbid_pair_registration_and_init(model)
+    model.state.update(pcc_diagnostics_runtime_log_fast_state=fast,
+                       pcc_log_init_state=initialized, pcc_log_mask=mask)
+    model.namespace["atomic_cas_i32"] = lambda *args: pytest.fail("disabled pair took sink")
+    model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 17, 3)
+    assert model.output == b"" and model.registrations == []
+    assert model.state["pcc_log_emitting"] == model.state["pcc_log_thread_trace_dropped"] == 0
+
+
+def test_pair_sink_recursion_does_not_split_delivered_records():
+    model = RawLogModel()
+    _forbid_pair_registration_and_init(model)
+    model.on_write = lambda: model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 18, 1)
+    model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 17, 3)
+    assert [(row["event"], row["value0"]) for row in model.records()] == [
+        ("safepoint_suspend_deferred", 17), ("safepoint_resume_deferred", 17), ("trace_dropped", 2)]
+    assert model.state["pcc_log_emitting"] == model.state["pcc_log_write_lock"] == 0
+
+
+def test_kernel_pair_flush_uses_captured_identity_without_individual_trace_attempts():
+    namespace = _namespace("freestanding_thread_kernel_pthread.py")
+    memory = {0: 17, 8: 3, 16: 18, 24: 1}
+    pairs = []
+    namespace.update(
+        load_i64=lambda record, offset: memory[offset],
+        pcc_current_thread_id=lambda: pytest.fail("flush re-registered"),
+        _thread_trace=lambda *args: pytest.fail("pair split into individual trace attempts"),
+        pcc_diagnostics_runtime_log_suspension_pair=lambda *args: pairs.append(args),
+    )
+    namespace["_flush_suspend_trace"]("records", 2, 18, 41)
+    assert pairs == [(41, 17, 3), (41, 18, 1)]

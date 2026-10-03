@@ -558,14 +558,18 @@ def _write_event_unlocked(
         close(stream)
 
 
-def _note_thread_trace_drop() -> None:
+def _note_thread_trace_drop_count(count: int) -> None:
     # Loss is explicit when recursive diagnostics or sink contention would
     # otherwise make tracing itself wait on the runtime it is diagnosing.
     if atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2:
         if load_i32(global_addr("pcc_log_mask"), 0) & 256:
             atomic_rmw_i64(
-                "add", global_addr("pcc_log_thread_trace_dropped"), 0, 1, "relaxed"
+                "add", global_addr("pcc_log_thread_trace_dropped"), 0, count, "relaxed"
             )
+
+
+def _note_thread_trace_drop() -> None:
+    _note_thread_trace_drop_count(1)
 
 
 def _write_thread_trace_drops(thread_id: int) -> None:
@@ -624,6 +628,52 @@ def _thread_transition_event(
         return
     _write_event_unlocked(
         cstr("thread"), _event_from_code(9, event), value0, value1, pointer, thread_id
+    )
+    _write_thread_trace_drops(thread_id)
+    _write_lock_release()
+    store_i32(global_addr("pcc_log_emitting"), 0, 0)
+
+
+@c_abi_export("pcc_diagnostics_runtime_log_suspension_pair")
+def pcc_diagnostics_runtime_log_suspension_pair(
+    thread_id: int, epoch: int, waits: int
+) -> None:
+    # Internal completed-suspension boundary, not a general trace API. The
+    # kernel captured the identity before suspension and calls only after
+    # releasing its world lock. It has already proved that this caller may
+    # park with no scheduler lock/no-park lease. Never initialize logging or
+    # register here; doing either could change that suspension/teardown state.
+    if atomic_load_i32(
+        global_addr("pcc_diagnostics_runtime_log_fast_state"), 0, "relaxed"
+    ) == 0:
+        return
+    if atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") != 2:
+        return
+    if load_i32(global_addr("pcc_log_mask"), 0) & 256 == 0:
+        return
+    if (
+        thread_id <= 0
+        or epoch <= 0
+        or waits <= 0
+        or load_i32(global_addr("pcc_log_emitting"), 0) != 0
+        or pcc_thread_no_park_depth() != 0
+    ):
+        _note_thread_trace_drop_count(2)
+        return
+    # Only this proven post-suspension boundary may wait for the sink. While
+    # waiting it owns no sink/runtime lock and retains explicit safepoints.
+    # A nested safepoint sees emitting=1 and drops its whole pair; it never
+    # recursively waits on this operation. A sink holder cannot park or
+    # allocate: its emitted closure is raw and implicit polls are disabled.
+    store_i32(global_addr("pcc_log_emitting"), 0, 1)
+    _write_lock_acquire()
+    # Contention cannot split the pair or steal the sink between records.
+    # OS write failures retain the ordinary sink's error semantics.
+    _write_event_unlocked(
+        cstr("thread"), cstr("safepoint_suspend_deferred"), epoch, waits, null(), thread_id
+    )
+    _write_event_unlocked(
+        cstr("thread"), cstr("safepoint_resume_deferred"), epoch, waits, null(), thread_id
     )
     _write_thread_trace_drops(thread_id)
     _write_lock_release()

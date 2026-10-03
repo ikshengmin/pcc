@@ -1,12 +1,8 @@
-"""Phase 4c.9: pcc-Python port of py_os_env.c.
+"""Owned environment-variable helpers (getenv / putenv / unsetenv).
 
-Environment-variable helpers (getenv / putenv / unsetenv). The path
-helpers stay in py_os_path.c for now because they need mutable byte-
-buffer growth that pcc-Python cannot yet express cleanly.
-
-Coercion: keys/values may be any py object; non-str gets routed
-through py_obj_str() to realize a PyStrObject before reading its
-UTF-8 bytes.
+Getenv and the environ mapping require string keys. The legacy putenv and
+unsetenv helpers coerce non-string operands through py_obj_str(). Path
+helpers live in py_os_path.py.
 """
 
 __pcc_runtime_port__ = True
@@ -40,6 +36,7 @@ py_dict_new = extern("py_dict_new", (), c_ptr)
 py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
 
 py_decref = extern("py_decref", (c_ptr,), c_void)
+py_incref = extern("py_incref", (c_ptr,), c_void)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_obj_str = extern("py_obj_str", (c_ptr,), c_ptr)
@@ -72,20 +69,19 @@ def _coerce_to_str(o):
 
 @c_abi_export("py_os_getenv")
 def py_os_getenv(key, default_value):
-    item, owned = _coerce_to_str(key)
-    if ptr_is_null(item):
-        if not ptr_is_null(owned):
-            py_decref(owned)
-        return default_value
-    name = py_str_utf8(item)
+    # The caller owns/leases key and default for this call. Every successful
+    # result transfers one independent owner, including an aliased default.
+    # Like os.environ.get, os.getenv requires a str key and only suppresses
+    # missing-key errors; it must not invoke an arbitrary key's __str__.
+    if ptr_is_null(key) or _type_of(key) != PY_TYPE_STR:
+        py_raise_owned(py_exc_new(3, cstr("str expected")))
+        return null()
+    name = py_str_utf8(key)
     if ptr_is_null(name):
-        if not ptr_is_null(owned):
-            py_decref(owned)
-        return default_value
+        return null()
     raw = getenv(name)
-    if not ptr_is_null(owned):
-        py_decref(owned)
     if ptr_is_null(raw):
+        py_incref(default_value)
         return default_value
     n: int = strlen(raw)
     return py_str_new(raw, n)
@@ -182,9 +178,8 @@ def py_os_putenv(key, value):
 def py_os_environ_getitem(key):
     # os.environ[key]: CPython mapping semantics — the key must be a
     # str (TypeError otherwise, like CPython's encodekey()) and a
-    # missing variable raises KeyError carrying the key. Mirrors
-    # py_os_environ_getitem in py_os_env.c; py_os_getenv stays
-    # non-raising for os.getenv() / os.environ.get().
+    # missing variable raises KeyError carrying the key. py_os_getenv uses
+    # the supplied default only for a missing key, retaining that owner.
     if ptr_is_null(key) != 0:
         py_raise_owned(py_exc_new(3, cstr("str expected")))  # PY_EXC_TYPEERROR
         return null()

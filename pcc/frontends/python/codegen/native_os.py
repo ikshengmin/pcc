@@ -5,7 +5,20 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, Call, Expr, ListType, Name, Slice, StrType, StrLit, Subscript, TupleType
+from pcc.frontends.python.py_ast import (
+    Attr,
+    Call,
+    Expr,
+    ListType,
+    Name,
+    NoneLit,
+    NoneType,
+    Slice,
+    StrType,
+    StrLit,
+    Subscript,
+    TupleType,
+)
 from pcc.frontends.python.codegen import marshal
 
 
@@ -16,6 +29,43 @@ _PYOBJ = ir.IntType(8).as_pointer()
 
 
 class NativeOsLoweringMixin:
+    def _emit_owned_os_getenv_call(self, expr: Call) -> ir.Value:
+        """Retain both operands and publish getenv's uniform NEW result."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("os.getenv.result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            key = self._emit_slot_call_operand(expr.args[0], "os.getenv.key")
+            roots.append(key)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            default_expr = (
+                expr.args[1] if len(expr.args) == 2
+                else NoneLit(span=expr.span, ty=NoneType(name="None"))
+            )
+            default = self._emit_slot_call_operand(default_expr, "os.getenv.default")
+            roots.append(default)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_os_getenv", (key, default), result_slot=output, span=expr.span,
+            )
+            self._release_slot_call_roots((key, default))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("os.getenv.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _is_os_environ_attr(self, expr: Expr) -> bool:
         """Recognise the ``os.environ`` attribute expression."""
         return (
@@ -50,17 +100,7 @@ class NativeOsLoweringMixin:
             self._gc_release(snapshot)
             return result
         if attr.name == "get" and 1 <= len(expr.args) <= 2:
-            key_obj = self._emit_as_object(expr.args[0])
-            default_obj = (
-                self._emit_none_literal()
-                if len(expr.args) == 1
-                else self._emit_as_object(expr.args[1])
-            )
-            return self.builder.call(
-                self.runtime["py_os_getenv"],
-                [key_obj, default_obj],
-                name=self._fresh("os.environ.get"),
-            )
+            return self._emit_owned_os_getenv_call(expr)
         if attr.name == "pop" and 1 <= len(expr.args) <= 2:
             key_obj = self._emit_as_object(expr.args[0])
             default_obj = self._emit_as_object(expr.args[1]) if len(expr.args) == 2 else None
@@ -295,16 +335,7 @@ class NativeOsLoweringMixin:
             return None
         name = attr.name
         if name == "getenv" and 1 <= len(expr.args) <= 2:
-            default_obj = (
-                self._emit_none_literal()
-                if len(expr.args) == 1
-                else self._emit_as_object(expr.args[1])
-            )
-            return self.builder.call(
-                self.runtime["py_os_getenv"],
-                [self._emit_as_object(expr.args[0]), default_obj],
-                name=self._fresh("os.getenv"),
-            )
+            return self._emit_owned_os_getenv_call(expr)
         if name == "putenv" and len(expr.args) == 2:
             return self.builder.call(
                 self.runtime["py_os_putenv"],

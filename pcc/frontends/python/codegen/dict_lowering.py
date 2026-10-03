@@ -5,7 +5,10 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, Call, DictExpr, DictType, DynType, Expr, Name, StrLit, StrType
+from pcc.frontends.python.py_ast import (
+    Attr, Call, DictExpr, DictType, DynType, Expr, Name, NoneLit, NoneType,
+    StrLit, StrType,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_DICT, PY_TYPE_LIST, PY_TYPE_SET
 
@@ -32,12 +35,118 @@ def _dict_method_box(host, e: Expr) -> ir.Value:
 
 
 class DictLoweringMixin:
+    def _dict_get_uses_owned_slots(self, expr):
+        if expr.func.name != "get" or expr.kwargs or len(expr.args) not in (1, 2):
+            return False
+        if self._expr_looks_cpython(expr.func.obj):
+            return False
+        for argument in expr.args:
+            if (isinstance(argument, Call) and isinstance(argument.func, Name)
+                    and argument.func.ident in ("*", "__starred__", "**")):
+                return False
+        return True
+
+    def _emit_rooted_dict_get(self, expr):
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root('dict.get.result')
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(expr.func.obj, 'dict.get.receiver')
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            tag = self._slot_call_runtime_call('py_obj_type_tag', (receiver,), span=expr.span)
+            is_dict = self.builder.icmp_signed('==', tag, ir.Constant(_I64, PY_TYPE_DICT))
+            native_bb = self.current_function.append_basic_block(self._fresh('dict.get.native'))
+            generic_bb = self.current_function.append_basic_block(self._fresh('dict.get.generic'))
+            done_bb = self.current_function.append_basic_block(self._fresh('dict.get.done'))
+            self.builder.cbranch(is_dict, native_bb, generic_bb)
+
+            self.builder.position_at_end(native_bb)
+            native_roots = list(roots)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(native_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            key = self._emit_slot_call_operand(expr.args[0], 'dict.get.key')
+            native_roots.append(key)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(native_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            default_expr = expr.args[1] if len(expr.args) == 2 else NoneLit(span=expr.span, ty=NoneType(name='None'))
+            default = self._emit_slot_call_operand(default_expr, 'dict.get.default')
+            native_roots.append(default)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(native_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(
+                self.runtime['py_dict_get_default_slots'],
+                [self._as_gc_ptr(receiver), self._as_gc_ptr(key),
+                 self._as_gc_ptr(default), self._as_gc_ptr(output)],
+                name=self._fresh('dict.get.invoke'),
+            )
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, 'dictionary lookup', expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots((key, default))
+            self.builder.branch(done_bb)
+
+            self.builder.position_at_end(generic_bb)
+            generic_roots = list(roots)
+            callable_root = self._new_slot_call_root('dict.get.callable')
+            generic_roots.append(callable_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Python resolves the user method before evaluating its arguments.
+            self._slot_call_runtime_call(
+                'py_obj_getattr', (receiver,), result_slot=callable_root,
+                suffix_args=(self._attr_name_ptr('get'),), span=expr.span,
+            )
+            current_method = self.builder.load(callable_root, name=self._fresh('dict.get.method.current'))
+            self._emit_attribute_error_if_null(current_method, 'get', expr.span)
+            args = self._emit_slot_call_args_tuple(expr.args, 'dict.get.args')
+            generic_roots.append(args)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            kwargs = self._emit_slot_call_kwargs_object((), None, expr.span, 'dict.get.kwargs', callable_root)
+            generic_roots.append(kwargs)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(
+                self.runtime['py_obj_call_slots'],
+                [self._as_gc_ptr(callable_root), self._as_gc_ptr(args),
+                 self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                name=self._fresh('dict.get.generic.invoke'),
+            )
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, 'get method call', expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots((callable_root, args, kwargs))
+            self.builder.branch(done_bb)
+
+            self.builder.position_at_end(done_bb)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._release_slot_call_roots((receiver,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh('dict.get.current'))
+        return self._take_slot_call_root(output)
+
     def _maybe_emit_dict_method_via_dyn(
         self,
         expr: Call,
     ) -> Optional[ir.Value]:
         attr = expr.func
         assert isinstance(attr, Attr)
+        if self._dict_get_uses_owned_slots(expr):
+            return self._emit_rooted_dict_get(expr)
         if attr.name == "update" and len(expr.args) == 1 and not expr.kwargs:
             return self._emit_dyn_container_method_with_tag_guard(
                 expr, (PY_TYPE_DICT, PY_TYPE_SET),
@@ -308,6 +417,8 @@ class DictLoweringMixin:
         if expr.kwargs and attr.name != "update":
             return None  # d.update(k=v, ...) is handled below; others fall back
         name = attr.name
+        if recv is None and self._dict_get_uses_owned_slots(expr):
+            return self._emit_rooted_dict_get(expr)
         if recv is None:
             recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):

@@ -10,9 +10,44 @@ stripped synthetic main().
 
 __pcc_runtime_port__ = True
 
-from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
-from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE, PYCLASSOBJECT_BASES_OFFSET, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYCLASSOBJECT_INSTANCE_SIZE_OFFSET, PYCLASSOBJECT_METHODS_OFFSET, PYCLASSOBJECT_MRO_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_BASES_OFFSET, PYCLASSOBJECT_N_FIELDS_OFFSET, PYCLASSOBJECT_N_METHODS_OFFSET, PYCLASSOBJECT_N_MRO_OFFSET, PYCLASSOBJECT_SIZE, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET, PYINSTANCEOBJECT_SIZE, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_IMMORTAL, PY_TYPE_CLASS, PY_TYPE_INSTANCE, PY_TYPE_USER_CLASS_START
+from pcc.extern import (
+    c_abi_export,
+    c_abi_typed_export,
+    c_int32,
+    c_int64,
+    c_ptr,
+    c_void,
+    extern,
+)
+from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
+    PYCLASSOBJECT_BASES_OFFSET,
+    PYCLASSOBJECT_FIELD_NAMES_OFFSET,
+    PYCLASSOBJECT_INSTANCE_SIZE_OFFSET,
+    PYCLASSOBJECT_METHODS_OFFSET,
+    PYCLASSOBJECT_MRO_OFFSET,
+    PYCLASSOBJECT_NAME_OFFSET,
+    PYCLASSOBJECT_N_BASES_OFFSET,
+    PYCLASSOBJECT_N_FIELDS_OFFSET,
+    PYCLASSOBJECT_N_METHODS_OFFSET,
+    PYCLASSOBJECT_N_MRO_OFFSET,
+    PYCLASSOBJECT_SIZE,
+    PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET,
+    PYINSTANCEOBJECT_SIZE,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PYOBJECTHEADER_REFCOUNT_OFFSET,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_FLAG_GC_MALLOC_ALLOC,
+    PY_FLAG_IMMORTAL,
+    PY_TYPE_CLASS,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_USER_CLASS_START,
+    PY_TYPE_VALUEBOX,
+    PY_TYPE_CEXT_TAG_BASE,
+)
 from pcc.unsafe import (
+    atomic_cas_i32,
+    atomic_load_i32,
     define_global_cstr,
     define_global_header,
     define_global_i8,
@@ -584,12 +619,30 @@ def py_subs_strcmp(a, b) -> int:
         i = i + 1
 
 
-@c_abi_export("py_subs_alloc_user_tag")
+@c_abi_typed_export("py_subs_alloc_user_tag", "i32", ())
 def py_subs_alloc_user_tag() -> int:
+    """Allocate one ABI-valid user tag, or -1 without advancing on exhaustion.
+
+    The counter is shared by runtime and class constructors. It names no
+    published object, so relaxed CAS provides the required unique allocation
+    order without imposing unrelated object-publication ordering.
+    """
     slot = global_addr("py_next_user_tag")
-    tag: int = load_i32(slot, 0)
-    store_i32(slot, 0, tag + 1)
-    return tag
+    while True:
+        observed: int = atomic_load_i32(slot, 0, "relaxed")
+        if observed < PY_TYPE_USER_CLASS_START or observed >= PY_TYPE_CEXT_TAG_BASE:
+            return -1
+        tag: int = observed
+        if tag == PY_TYPE_VALUEBOX:
+            tag = tag + 1
+        if tag >= PY_TYPE_CEXT_TAG_BASE:
+            return -1
+        next_tag: int = tag + 1
+        previous: int = atomic_cas_i32(
+            slot, 0, observed, next_tag, "relaxed", "relaxed",
+        )
+        if previous == observed:
+            return tag
 
 
 @c_abi_export("py_subs_object_root")

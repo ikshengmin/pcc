@@ -15,6 +15,7 @@ from pathlib import Path
 
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 from pcc.driver.project import TranslationUnit
+from tests.owned_c_corpus import run_owned_c_corpus
 from tests.worker_process import run_worker_process
 
 # GCC torture cases run under pytest-xdist and then spawn an extra worker
@@ -301,6 +302,10 @@ def _pcc_worker_entry(mode: str, case_path_str: str, timeout: int, conn) -> None
     unit = TranslationUnit(case_path.name, str(case_path), _read_case_source(case_path))
     try:
         options = gcc_torture_case_options(case_path)
+        # The oracle's host -lm is supplied by PCC's own runtime in this lane.
+        # Do not silently discard any future caller-selected link dependency.
+        if options.link_args not in ((), ("-lm",)):
+            raise RuntimeError("unsupported owned corpus link dependency: " + repr(options.link_args))
         evaluator = CEvaluator()
         if mode == "compile":
             evaluator.compile_translation_units(
@@ -312,13 +317,12 @@ def _pcc_worker_entry(mode: str, case_path_str: str, timeout: int, conn) -> None
             conn.send({"returncode": 0, "stdout": "", "stderr": ""})
             return
 
-        result = evaluator.run_translation_units_with_system_cc(
+        result = run_owned_c_corpus(evaluator,
             [unit],
             base_dir=str(case_path.parent),
             include_dirs=[str(case_path.parent)],
             timeout=timeout,
             cpp_args=[options.standard],
-            link_args=list(options.link_args),
         )
         conn.send(
             {

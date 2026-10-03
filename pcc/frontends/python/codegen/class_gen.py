@@ -5013,9 +5013,11 @@ class ClassLowering:
                         class_body_names[self.mangle_private_attr_name(info, target.ident)] = target.ident
         for attr_name in tuple(info.class_attr_values) + tuple(info.methods) + tuple(class_body_names.values()):
             saved_class_attr_env[attr_name] = self.parent.env.get(attr_name, missing_env)
-        namespace_methods = dict(prepared_method_objects)
-        pinned_methods = []
-        factory_captures = []
+        # Each ordinary lexical method value remains in an authoritative
+        # owner. Prepared constructor values retain their external pin/owner
+        # until their individual publication copies them into a local root.
+        namespace_methods = {name: (None, value) for name, value in prepared_method_objects.items()}
+        class_body_lifetimes = []
         events = []
         event_index = 0
         for statement_index, statement in enumerate(cd.body):
@@ -5059,25 +5061,24 @@ class ClassLowering:
                 if event_kind == "factory":
                     if prepared_method_objects:
                         continue
-                    factory_captures.append(self._emit_dataclass_factory_capture(value_expr))
+                    capture_root, owns_capture = self._emit_dataclass_factory_capture(value_expr)
+                    class_body_lifetimes.append(("factory", capture_root, owns_capture))
                     continue
                 if event_kind == "method":
-                    namespace_obj = self._emit_class_method_publication(cd, info, cls_ptr, attr_name, info.methods[attr_name], value_expr, namespace_methods, prepared_method_objects)
-                    if namespace_obj is not None:
-                        if value_expr is not None and attr_name == value_expr.name and (
-                            attr_name not in prepared_method_objects or info.method_kinds.get(attr_name) in ("static", "classmethod")
-                        ):
-                            self.parent._gc_pin(namespace_obj)
-                            pinned_methods.append(namespace_obj)
-                            self.parent._try_err_block = self.parent._make_cpy_operand_cleanup_block(
-                                (), (), self.parent._current_try_err_block(), "class.method.pin.unwind",
-                                pinned_pcc=((namespace_obj, False),),
-                            )
-                        namespace_methods[attr_name] = namespace_obj
-                        namespace_slot = self.parent._alloca_in_entry(_PTR, name=self._fresh("class.namespace.method"), init_null=True)
-                        builder.store(namespace_obj, namespace_slot)
-                        self.parent.env[attr_name] = (namespace_slot, _PTR, DynType(name="dyn"))
-                        namespace_bindings[attr_name] = (namespace_slot, attr_name)
+                    method_root = self._emit_class_method_publication(
+                        cd, info, class_body_root, attr_name, info.methods[attr_name],
+                        value_expr, namespace_methods, prepared_method_objects,
+                    )
+                    if method_root is not None:
+                        target = self.parent._current_try_err_block()
+                        if target is None:
+                            target = self.parent._ensure_fn_err_exit()
+                        self.parent._try_err_block = self.parent._slot_call_cleanup_block((method_root,), target)
+                        self.parent._cpy_operand_cleanup_block = self.parent._try_err_block
+                        class_body_lifetimes.append(("method", method_root, True))
+                        namespace_methods[attr_name] = (method_root, None)
+                        self.parent.env[attr_name] = (method_root, _PTR, DynType(name="dyn"))
+                        namespace_bindings[attr_name] = (method_root, attr_name)
                     continue
                 self._emit_class_attribute_initializer(info, cls_ptr, attr_name, value_expr, prepared_attr_objects, class_body_root)
                 namespace_bindings[attr_name] = (self.parent.env[attr_name][0], attr_name)
@@ -5087,18 +5088,21 @@ class ClassLowering:
                     namespace_bindings[original_name] = (self.parent.env[original_name][0], attr_name)
             self._emit_property_descriptor_class_attrs(cd, info, class_body_root)
         finally:
-            for method_obj in reversed(pinned_methods):
-                self.parent._gc_unpin(method_obj)
             for method_obj in prepared_method_objects.values():
                 self.parent._gc_unpin(method_obj)
-            for capture_root, owns_capture in reversed(factory_captures):
-                capture_value = self.parent.builder.call(
-                    runtime["pcc_gc_load_ptr"], [ir.Constant(_PTR, None), capture_root],
-                    name=self._fresh("class.factory.current"),
-                )
-                self.parent._leave_container_temp_root(capture_root)
-                if owns_capture:
-                    self.parent._gc_release(capture_value)
+            # Factory captures and methods can interleave. Their lexical
+            # module frames must unwind in actual reverse registration order.
+            for lifetime_kind, lifetime_root, owns_lifetime in reversed(class_body_lifetimes):
+                if lifetime_kind == "method":
+                    self.parent._release_slot_call_roots((lifetime_root,))
+                else:
+                    capture_value = self.parent.builder.call(
+                        runtime["pcc_gc_load_ptr"], [ir.Constant(_PTR, None), lifetime_root],
+                        name=self._fresh("class.factory.current"),
+                    )
+                    self.parent._leave_container_temp_root(lifetime_root)
+                    if owns_lifetime:
+                        self.parent._gc_release(capture_value)
             self.parent._class_namespace_context = saved_namespace_context
             if namespace_root is not None:
                 self.parent._release_slot_call_roots((namespace_root,))
@@ -5166,72 +5170,103 @@ class ClassLowering:
             builder.store(cls_ptr, info.global_var)
         return cls_ptr
 
-    def _emit_class_method_publication(self, cd, info, cls_ptr, mname, mfunc, method_def, namespace_methods, prepared_method_objects):
-        builder = self.parent.builder
-        runtime = self.parent.runtime
+    def _emit_class_method_publication(self, cd, info, class_root, mname, mfunc, method_def, namespace_methods, prepared_method_objects):
+        """Publish a method while its class and managed values have owners.
+
+        A returned slot owns the class-body lexical value until the caller's
+        reverse-order cleanup. Native callback addresses remain suffix args;
+        they never enter managed roots. Prepared values retain their existing
+        external pinned-owner contract until copied into this local owner.
+        """
+        parent = self.parent
+        builder = parent.builder
         mname_ptr = self._cname_ptr(mname)
         method_kind = info.method_kinds.get(mname, "instance")
         mref = info.method_refs.get(mname)
         if mref is None:
             mref = mfunc
-        if method_def is not None and mname != method_def.name and method_def.name in namespace_methods:
-            namespace_obj = namespace_methods[method_def.name]
-            method_value = namespace_obj if method_kind == "instance" else builder.bitcast(mref, _PTR)
-            builder.call(runtime["py_class_add_method"], [cls_ptr, mname_ptr, method_value])
-            builder.call(runtime["py_class_setattr_raw"], [cls_ptr, mname_ptr, namespace_obj])
-            return namespace_obj
-        if method_kind == "instance" and method_def is not None:
-            if mname != method_def.name:
-                # An alias retains the same function/default objects; it is
-                # an assignment, not another evaluation of the original def.
-                func_as_obj = builder.call(runtime["py_class_getattr"], [cls_ptr, self._cname_ptr(method_def.name)], name=self._fresh("method.alias"))
-            elif mname in prepared_method_objects:
-                func_as_obj = prepared_method_objects[mname]
-            else:
-                func_as_obj = self._emit_method_pyfunc_object(cd, mname, mfunc, method_def, mname_ptr, "method")
-        else:
-            func_as_obj = builder.bitcast(
-                mref, _PTR, name=self._fresh(f"m.{mname}")
+        raw_method = builder.bitcast(mref, _PTR)
+        alias = method_def is not None and mname != method_def.name and method_def.name in namespace_methods
+        if method_def is None or (not alias and method_kind not in ("instance", "static", "classmethod")):
+            parent._slot_call_runtime_call(
+                "py_class_add_method", (class_root,),
+                suffix_args=(mname_ptr, raw_method), argument_order=(0, 1, 2),
+                span=cd.span,
             )
-        builder.call(
-            runtime["py_class_add_method"], [cls_ptr, mname_ptr, func_as_obj]
-        )
-        if method_kind == "instance" and method_def is not None:
-            # The dispatch table alone does not publish the class body
-            # namespace. Reflection and MRO method collection must see
-            # the same unbound function object through cls.__dict__.
-            builder.call(
-                runtime["py_class_setattr_raw"],
-                [cls_ptr, mname_ptr, func_as_obj],
-            )
-        if method_kind in ("classmethod", "static"):
-            if method_def is not None:
-                descriptor_kind = "staticmethod" if method_kind == "static" else "classmethod"
-                func_obj = prepared_method_objects.get(mname)
-                if func_obj is None:
-                    func_obj = self._emit_method_pyfunc_object(
-                        cd,
-                        mname,
-                        mfunc,
-                        method_def,
-                        mname_ptr,
-                        descriptor_kind,
+            return None
+        previous = parent._current_try_err_block()
+        target = previous if previous is not None else parent._ensure_fn_err_exit()
+        saved_cpy = parent._cpy_operand_cleanup_block
+        output = parent._new_slot_call_root("class.method.publication")
+        output_cleanup = parent._slot_call_cleanup_block((output,), target)
+        parent._try_err_block = output_cleanup
+        parent._cpy_operand_cleanup_block = output_cleanup
+        try:
+            if method_kind != "instance":
+                # Preserve native table publication order for the legacy
+                # static/class adapter ABI while the slot selector migrates.
+                parent._slot_call_runtime_call(
+                    "py_class_add_method", (class_root,),
+                    suffix_args=(mname_ptr, raw_method), argument_order=(0, 1, 2),
+                    span=method_def.span,
+                )
+            if alias:
+                source_root, prepared_value = namespace_methods[method_def.name]
+                if source_root is not None:
+                    parent._slot_call_copy_source(output, source_root, span=method_def.span)
+                else:
+                    borrowed = parent._alloca_in_entry(_PTR, name=self._fresh("method.prepared.alias"), init_null=True)
+                    builder.store(prepared_value, borrowed)
+                    parent._slot_call_copy_source(output, borrowed, borrowed=True, span=method_def.span)
+            elif method_kind == "instance":
+                if mname != method_def.name:
+                    parent._slot_call_runtime_call(
+                        "py_class_getattr", (class_root,), result_slot=output,
+                        suffix_args=(self._cname_ptr(method_def.name),), span=method_def.span,
                     )
-                descriptor_obj = builder.call(
-                    runtime["py_" + descriptor_kind + "_new"],
-                    [func_obj],
-                    name=self._fresh(f"{descriptor_kind}.{mname}"),
+                elif mname in prepared_method_objects:
+                    borrowed = parent._alloca_in_entry(_PTR, name=self._fresh("method.prepared"), init_null=True)
+                    builder.store(prepared_method_objects[mname], borrowed)
+                    parent._slot_call_copy_source(output, borrowed, borrowed=True, span=method_def.span)
+                else:
+                    value = self._emit_method_pyfunc_object(cd, mname, mfunc, method_def, mname_ptr, "method")
+                    parent._publish_slot_call_owned(output, value, label="class method")
+            else:
+                descriptor_kind = "staticmethod" if method_kind == "static" else "classmethod"
+                function = parent._new_slot_call_root("class.method.descriptor.function")
+                parent._try_err_block = parent._slot_call_cleanup_block((function,), output_cleanup)
+                parent._cpy_operand_cleanup_block = parent._try_err_block
+                prepared_value = prepared_method_objects.get(mname)
+                if prepared_value is not None:
+                    borrowed = parent._alloca_in_entry(_PTR, name=self._fresh("method.prepared.function"), init_null=True)
+                    builder.store(prepared_value, borrowed)
+                    parent._slot_call_copy_source(function, borrowed, borrowed=True, span=method_def.span)
+                else:
+                    value = self._emit_method_pyfunc_object(cd, mname, mfunc, method_def, mname_ptr, descriptor_kind)
+                    parent._publish_slot_call_owned(function, value, label="class descriptor function")
+                parent._slot_call_runtime_call(
+                    "py_" + descriptor_kind + "_new", (function,), result_slot=output,
+                    span=method_def.span,
                 )
-                builder.call(
-                    runtime["py_class_setattr_raw"],
-                    [cls_ptr, mname_ptr, descriptor_obj],
+                parent._guard_cpy_value_not_null(builder.load(output))
+                parent._release_slot_call_roots((function,))
+                parent._try_err_block = output_cleanup
+                parent._cpy_operand_cleanup_block = output_cleanup
+            parent._guard_cpy_value_not_null(builder.load(output))
+            if method_kind == "instance":
+                parent._slot_call_runtime_call(
+                    "py_class_add_method", (class_root, output),
+                    suffix_args=(mname_ptr,), argument_order=(0, 2, 1), span=method_def.span,
                 )
-                builder.call(runtime["py_decref"], [descriptor_obj])
-                builder.call(runtime["py_decref"], [func_obj])
-                return descriptor_obj
-        if method_kind == "instance" and method_def is not None:
-            return func_as_obj
-        return None
+            status = parent._slot_call_runtime_call(
+                "py_class_setattr_raw", (class_root, output),
+                suffix_args=(mname_ptr,), argument_order=(0, 2, 1), span=method_def.span,
+            )
+            parent._slot_call_check_status(status, "class method namespace publication", method_def.span)
+            return output
+        finally:
+            parent._try_err_block = previous
+            parent._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_dataclass_factory_capture(self, capture):
         factory_expr = capture.args[1]

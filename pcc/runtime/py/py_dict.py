@@ -1753,6 +1753,10 @@ def _dict_slot_close(slots, tokens, handles, count: int, suspended: int) -> None
         index = index + 1
 
 
+# Read-only lookup shares the checked probe and copied-result owner.
+_DICT_SLOT_GET_ONLY = 2
+
+
 def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_existing: int, namespace_commit_context: int = 0) -> int:
     # 1 destination, 2 key, 3 value, 4 collision candidate. All four own
     # independently counted address leases whenever nonempty.
@@ -1813,6 +1817,8 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
             if restart != 0:
                 break
             if entry == -1:
+                if keep_existing == _DICT_SLOT_GET_ONLY:
+                    return _dict_slot_copy(slots, tokens, 5, ptr_add(slots, 3 * C_POINTER_SIZE))
                 if used >= capacity:
                     if _maybe_grow(load_ptr(slots, C_POINTER_SIZE)) != 0:
                         py_raise_owned(py_exc_new(19, cstr("dictionary entry storage allocation failed")))
@@ -1893,6 +1899,8 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
             bucket = (bucket * 5 + perturb + 1) & mask
             probes = probes + 1
         if restart == 0:
+            if keep_existing == _DICT_SLOT_GET_ONLY:
+                return _dict_slot_copy(slots, tokens, 5, ptr_add(slots, 3 * C_POINTER_SIZE))
             if used >= capacity:
                 if _maybe_grow(load_ptr(slots, C_POINTER_SIZE)) != 0:
                     py_raise_owned(py_exc_new(19, cstr("dictionary entry storage allocation failed")))
@@ -1931,6 +1939,18 @@ def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_
         _dict_slot_error(cstr("dictionary set failed without an exception"))
     _dict_slot_close(slots, tokens, handles, count, suspended)
     return status
+
+
+@c_abi_export("py_dict_get_default_slots")
+def py_dict_get_default_slots(dict_slot, key_slot, default_slot, result_slot) -> int:
+    """Copy the found value/default into the caller's empty registered owner.
+
+    Get-only mode never inserts, replaces, grows or notifies namespace writers.
+    The legacy set/setdefault namespace context and -2 retry paths are unchanged.
+    """
+    return _dict_slot_set_bound(
+        dict_slot, key_slot, default_slot, 0, 0, _DICT_SLOT_GET_ONLY, result_slot,
+    )
 
 
 @c_abi_export("py_dict_set_slots")

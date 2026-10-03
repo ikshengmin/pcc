@@ -84,6 +84,12 @@ class DictMemory(Memory):
             tree = ast.parse(path.read_text())
             if filename == "py_protocol_runtime.py":
                 self.ns.update(_scratch_layout(tree))
+            if filename == "py_dict.py":
+                for node in tree.body:
+                    if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                            and isinstance(node.targets[0], ast.Name)
+                            and node.targets[0].id == "_DICT_SLOT_GET_ONLY"):
+                        self.ns[node.targets[0].id] = ast.literal_eval(node.value)
             body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and (node.name.startswith(prefix) or node.name in additional)]
             for node in body:

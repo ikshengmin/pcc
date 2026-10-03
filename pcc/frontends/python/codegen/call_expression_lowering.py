@@ -1243,23 +1243,11 @@ class CallExpressionLoweringMixin:
                 return environ_dict
             return self._emit_dict_builtin(expr)
         if name == "list" and not expr.args and not expr.kwargs:
-            return self.builder.call(
-                self.runtime["py_list_new"],
-                [ir.Constant(_I64, 0)],
-                name=self._fresh("list.new"),
-            )
+            return self._maybe_emit_list_builtin(expr)
         if name == "set" and not expr.args and not expr.kwargs:
-            return self.builder.call(
-                self.runtime["py_set_new"],
-                [],
-                name=self._fresh("set.new"),
-            )
+            return self._emit_owned_set_constructor(expr)
         if name == "tuple" and not expr.args and not expr.kwargs:
-            return self.builder.call(
-                self.runtime["py_tuple_new"],
-                [ir.Constant(_I64, 0)],
-                name=self._fresh("tuple.new"),
-            )
+            return self._maybe_emit_tuple_builtin(expr)
         if name == "enumerate":
             result = self._emit_enumerate_builtin(expr)
             if result is not None:

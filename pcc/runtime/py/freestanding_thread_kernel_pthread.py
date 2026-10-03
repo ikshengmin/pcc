@@ -93,6 +93,13 @@ pcc_diagnostics_runtime_log_event_code = extern(
 )
 
 
+pcc_diagnostics_runtime_log_suspension_pair = extern(
+    "pcc_diagnostics_runtime_log_suspension_pair",
+    (c_int64, c_int64, c_int64),
+    c_void,
+)
+
+
 def _thread_log(event: int, status: int, handle) -> None:
     # Local raw constants avoid runtime module-initialization dependencies.
     # Never call this under world/state locks or after thread unregister.
@@ -120,16 +127,18 @@ def _suspend_permitted(lock) -> int:
     return 1
 
 
-def _flush_suspend_trace(records, count: int, last_epoch: int) -> None:
+def _flush_suspend_trace(records, count: int, last_epoch: int, thread_id: int) -> None:
     # Raw stack records contain epoch and actual condition-wait call count.
     # Emit only after unlocking, with explicit deferred names: log timestamps
     # describe delivery, not the earlier suspend/resume transition times.
+    # These callers have returned from an allowed suspension, hold no world
+    # lock, and have not unregistered. Pass their captured ID; the paired sink
+    # must not register or independently drop the two halves under contention.
     index: int = 0
     while index < count and index < 8:
         epoch: int = load_i64(records, index * 16)
         waits: int = load_i64(records, index * 16 + 8)
-        _thread_trace(14, epoch, waits, null())
-        _thread_trace(15, epoch, waits, null())
+        pcc_diagnostics_runtime_log_suspension_pair(thread_id, epoch, waits)
         index = index + 1
     if count > 8:
         _thread_trace(25, last_epoch, count - 8, null())
@@ -501,7 +510,7 @@ def pcc_thread_safepoint() -> None:
         store_i32(global_addr("pcc_tls_thread_parked_py"), 0, 0)
         _tls_store_i64(global_addr("pcc_tls_parked_epoch_py"), 0)
     pthread_mutex_unlock(lock)
-    _flush_suspend_trace(trace_records, trace_count, trace_epoch)
+    _flush_suspend_trace(trace_records, trace_count, trace_epoch, self_id)
 
 
 @c_abi_export("pcc_thread_owns_stopped_world")
@@ -590,7 +599,7 @@ def pcc_stop_the_world() -> int:
         epoch = _world_i64(global_addr("pcc_stop_epoch_py"))
         depth = _world_i64(global_addr("pcc_stop_depth_py"))
         pthread_mutex_unlock(lock)
-        _flush_suspend_trace(trace_records, trace_count, trace_epoch)
+        _flush_suspend_trace(trace_records, trace_count, trace_epoch, self_id)
         _thread_trace(18, epoch, depth, null())
         return 0
     atomic_store_i32(
@@ -612,7 +621,7 @@ def pcc_stop_the_world() -> int:
         pcc_cond_wait(cond, lock)
     live = _world_i64(global_addr("pcc_live_thread_count_py"))
     pthread_mutex_unlock(lock)
-    _flush_suspend_trace(trace_records, trace_count, trace_epoch)
+    _flush_suspend_trace(trace_records, trace_count, trace_epoch, self_id)
     _thread_trace(17, epoch, live, null())
     return 0
 
