@@ -10,6 +10,8 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.codegen.self_module_contracts import IR_SCAFFOLD_CONTRACT, module_has_contract
+from pcc.frontends.python.export_meta import decode_type
+from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.py_ast import (
     Arg,
     Attr,
@@ -26,6 +28,7 @@ from pcc.frontends.python.py_ast import (
     Name,
     NoneLit,
     NoneType,
+    RawPointerType,
     StrLit,
     StrType,
     TupleExpr,
@@ -50,46 +53,98 @@ _VOID = ir.VoidType()
 _CSTR = ir.IntType(8).as_pointer()
 
 
-def _scaffold_emit_declared_call(host, symbol, ret_ty, arg_exprs, integer_positions=()):
-    """Use the real Python helper's operand ABI, preserving exact integers.
+def _scaffold_emit_declared_call(
+    host, symbol, ret_ty, arg_exprs, integer_positions=(), *,
+    call_expr=None, owned_result=False,
+):
+    """Call a declared helper with its actual ABI and explicit result contract.
 
-    The fallback declaration describes ordinary Python helper parameters.
-    A predeclared closed-world signature is authoritative, including an
-    explicitly machine-typed operand. Share method-call argument ownership
-    and error cleanup rather than narrowing an object int and reboxing it.
+    Only a dispatcher for an ordinary Python object producer may request an
+    owned result. A pointer-shaped prototype alone proves no ownership. The
+    provider's raw/manual ABI metadata overrides that contract; scalar and
+    value-payload results retain their actual physical representation.
     """
+    exports = (host._native_module_exports or {}).get("pcc.ir.ir", {})
+    exported_name = symbol[len("user_pcc_ir_ir_"):]
+    info = exports.get(exported_name)
+    if info is None and exported_name.startswith("IRBuilder_"):
+        method_name = exported_name[len("IRBuilder_"):]
+        class_info = exports.get("IRBuilder", {})
+        for method in class_info.get("methods", ()):
+            if method.get("name") == method_name:
+                info = method
+                break
     fn = host.module.globals.get(symbol)
     if not isinstance(fn, ir.Function):
-        exports = (host._native_module_exports or {}).get("pcc.ir.ir", {})
-        exported_name = symbol[len("user_pcc_ir_ir_"):]
-        info = exports.get(exported_name)
-        if info is None and exported_name.startswith("IRBuilder_"):
-            method_name = exported_name[len("IRBuilder_"):]
-            class_info = exports.get("IRBuilder", {})
-            for method in class_info.get("methods", ()):
-                if method.get("name") == method_name:
-                    info = method
-                    break
         if isinstance(info, dict) and "param_types" in info:
             fn = host._declare_extern_user_function("pcc.ir.ir", exported_name, info)
         else:
             fn = host._declare_external_function(symbol, ret_ty, [_CSTR] * len(arg_exprs))
     actual_return_type = fn.function_type.return_type
-    declared = []
-    for index, expr in enumerate(arg_exprs):
-        integer = index in integer_positions or isinstance(expr.ty, IntType)
-        declared.append(Arg(name="arg" + str(index), annotation=IntType(name="int") if integer else None, default=None, kind="pos"))
-    args, _types, provenance = _method_emit_ast_args(
-        host, fn, "IR scaffold " + symbol, tuple(arg_exprs), declared,
-        param_offset=0,
+    semantic_result = decode_type(info.get("return_ty")) if isinstance(info, dict) else None
+    manual_result = (
+        fn.name in host._manual_pointer_abi_functions
+        or isinstance(info, dict) and bool(info.get("manual_pointer_abi", False))
     )
-    result = host._call_user(
-        fn, list(args), "" if isinstance(actual_return_type, ir.VoidType) else host._fresh("scaffold.call"),
-        root_result=isinstance(actual_return_type, ir.PointerType),
-        pinned_arg_temps=_method_pinned_arg_cleanup(provenance),
+    managed_result = (
+        owned_result and isinstance(actual_return_type, ir.PointerType)
+        and not manual_result and not isinstance(semantic_result, RawPointerType)
+        and not (semantic_result is not None and host._is_valueclass_payload_type(semantic_result))
     )
-    _method_release_arg_provenance(host, provenance)
-    return ir.Constant(_CSTR, None) if isinstance(actual_return_type, ir.VoidType) else result
+    sink = None if call_expr is None else host._slot_call_result_sink(call_expr)
+    if sink is not None and isinstance(actual_return_type, ir.PointerType) and not managed_result:
+        raise L1CodegenError("scaffold call has no managed result contract: " + symbol)
+    output = sink if managed_result else None
+    previous = None
+    saved_cpy = None
+    if managed_result:
+        if output is None:
+            output = host._new_slot_call_root("scaffold.result")
+        previous = host._current_try_err_block()
+        target = previous if previous is not None else host._ensure_fn_err_exit()
+        saved_cpy = host._cpy_operand_cleanup_block
+        roots = (output,) if sink is None else ()
+        host._try_err_block = host._slot_call_cleanup_block(roots, target)
+        host._cpy_operand_cleanup_block = host._try_err_block
+    try:
+        declared = []
+        for index, argument in enumerate(arg_exprs):
+            integer = index in integer_positions or isinstance(argument.ty, IntType)
+            declared.append(Arg(name="arg" + str(index), annotation=IntType(name="int") if integer else None, default=None, kind="pos"))
+        args, _types, provenance = _method_emit_ast_args(
+            host, fn, "IR scaffold " + symbol, tuple(arg_exprs), declared,
+            param_offset=0,
+        )
+        argument_cleanup = _method_pinned_arg_cleanup(provenance)
+        result_error_target = host._current_try_err_block() if managed_result else None
+        result_cpy_target = host._cpy_operand_cleanup_block if managed_result else None
+        if managed_result:
+            # Publication itself can fail before _call_user reaches its
+            # ordinary pending-error check. Both errors must release the
+            # same argument owners once, then clean up the result root.
+            host._try_err_block = host._make_cpy_operand_cleanup_block(
+                (), (), result_error_target, "scaffold.arguments.cleanup", argument_cleanup,
+            )
+            host._cpy_operand_cleanup_block = host._try_err_block
+        result = host._call_user(
+            fn, list(args), "" if isinstance(actual_return_type, ir.VoidType) else host._fresh("scaffold.call"),
+            root_result=managed_result,
+            pinned_arg_temps=() if managed_result else argument_cleanup,
+            result_slot=output,
+        )
+        if managed_result:
+            host._try_err_block = result_error_target
+            host._cpy_operand_cleanup_block = result_cpy_target
+        _method_release_arg_provenance(host, provenance)
+        if managed_result:
+            if sink is None:
+                return host._take_slot_call_root(output)
+            return host.builder.load(output, name=host._fresh("scaffold.current"))
+        return ir.Constant(_CSTR, None) if isinstance(actual_return_type, ir.VoidType) else result
+    finally:
+        if managed_result:
+            host._try_err_block = previous
+            host._cpy_operand_cleanup_block = saved_cpy
 
 
 def _scaffold_node_kind_name(node) -> str:
@@ -1236,6 +1291,7 @@ class IrScaffoldLoweringMixin:
             _CSTR,
             (expr.func.obj,) + expr.args,
             (5,),
+            call_expr=expr, owned_result=True,
         )
 
     def _emit_scaffold_alloca(self, expr: Call) -> ir.Value:
@@ -1446,6 +1502,7 @@ class IrScaffoldLoweringMixin:
                 _VOID,
                 (expr.func.obj, int_value_expr.args[1], expr.args[1]),
                 (1,),
+                call_expr=expr, owned_result=True,
             )
         receiver = self._scaffold_to_handle(expr.func.obj)
         target = self._scaffold_to_handle(expr.args[1])
@@ -1730,6 +1787,10 @@ class IrScaffoldLoweringMixin:
         extern_name = self._IR_BUILDER_SYMBOL_PREFIX + method
         return _scaffold_emit_declared_call(
             self, extern_name, ret_ty, argument_exprs, integer_positions,
+            # A void LLVM operation can still return an owned Python Value
+            # (store/ret/branch). The actual provider ABI decides whether the
+            # explicit object-result contract needs a root.
+            call_expr=expr, owned_result=True,
         )
 
     def _emit_ir_scaffold_symbol(
@@ -1787,6 +1848,7 @@ class IrScaffoldLoweringMixin:
             _CSTR,
             expr.args,
             (0,),
+            call_expr=expr, owned_result=True,
         )
 
     def _emit_scaffold_pointer_type(self, expr: Call) -> ir.Value:
@@ -1817,6 +1879,7 @@ class IrScaffoldLoweringMixin:
             _CSTR,
             expr.args,
             (1,),
+            call_expr=expr, owned_result=True,
         )
 
     def _emit_scaffold_constant(self, expr: Call) -> ir.Value:
@@ -1830,6 +1893,7 @@ class IrScaffoldLoweringMixin:
                 _CSTR,
                 expr.args,
                 (1,),
+                call_expr=expr, owned_result=True,
             )
         ty = self._scaffold_to_handle(expr.args[0])
         if isinstance(value_expr, NoneLit):

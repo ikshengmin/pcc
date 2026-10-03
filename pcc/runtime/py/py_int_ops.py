@@ -161,6 +161,8 @@ def _int_i64_value(o) -> int:
 def _int_to_double(o) -> float:
     if is_tagged_int(o):
         return float(untag_int(o))
+    if load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BOOL:
+        return 1.0 if ptr_eq(o, global_load_ptr("py_True")) != 0 else 0.0
     return py_bigint_to_double(o)
 
 
@@ -294,6 +296,9 @@ def py_int_truediv(a, b):
     if is_tagged_int(b):
         if untag_int(b) == 0:
             return null()
+    elif load_i32(b, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BOOL:
+        if ptr_eq(b, global_load_ptr("py_False")) != 0:
+            return null()
     elif load_i32(b, PYINTOBJECT_SIGN_OFFSET) == 0:
         return null()
     return _float_new(_int_to_double(a) / _int_to_double(b))
@@ -305,8 +310,9 @@ def py_int_pow(a, b):
         ev: int = untag_int(b)
         if ev < 0:
             return _float_new(pow_c(_int_to_double(a), float(ev)))
-    elif load_i32(b, PYINTOBJECT_SIGN_OFFSET) < 0:
-        return null()
+    elif load_i32(b, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_BOOL:
+        if load_i32(b, PYINTOBJECT_SIGN_OFFSET) < 0:
+            return null()
 
     ba = py_bigint_from_any(a)
     bb = py_bigint_from_any(b)

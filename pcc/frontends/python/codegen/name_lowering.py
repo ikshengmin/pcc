@@ -75,6 +75,30 @@ def _is_nested_hoist_collision_name(name: str, direct_hoist: str) -> bool:
 
 
 class NameLoweringMixin:
+    def _emit_owned_namespace_runtime_value(self, runtime_name, arguments, expr=None):
+        """Publish a native namespace API's NEW reference before any check."""
+        sink = self._slot_call_result_sink(expr) if expr is not None else None
+        output = sink
+        if output is None:
+            output = self._new_slot_call_root("namespace.value")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = () if sink is not None else (output,)
+        self._try_err_block = self._slot_call_cleanup_block(roots, target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            self._slot_call_runtime_call(
+                runtime_name, (), result_slot=output, suffix_args=arguments,
+                span=expr.span if expr is not None else None,
+            )
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("namespace.value.current"))
+        return self._take_slot_call_root(output)
+
     def _emit_owned_builtin_exception_class(self, tag, expr=None):
         """Copy a canonical class from its mapped cache into a real owner."""
         sink = self._slot_call_result_sink(expr) if expr is not None else None
@@ -333,7 +357,7 @@ class NameLoweringMixin:
         self._note_owned_object_value(fn_obj)
         return fn_obj
 
-    def _emit_native_builtin_callable_value(self, name: str) -> Optional[ir.Value]:
+    def _emit_native_builtin_callable_value(self, name: str, expr=None) -> Optional[ir.Value]:
         builtin_value = self._native_builtin_value_for_name(name)
         canonical_names = {
             "builtins.bool": "bool",
@@ -379,10 +403,9 @@ class NameLoweringMixin:
             "object": -1,
         }
         if canonical_name in builtin_tags:
-            return self.builder.call(
-                self.runtime["py_builtin_type_for_tag"],
-                [ir.Constant(_I64, builtin_tags[canonical_name])],
-                name=self._fresh(f"{canonical_name}.type.value"),
+            return self._emit_owned_namespace_runtime_value(
+                "py_builtin_type_for_tag",
+                (ir.Constant(_I64, builtin_tags[canonical_name]),), expr,
             )
         if canonical_name == "abs":
             fn_obj = self.builder.call(
@@ -669,6 +692,80 @@ class NameLoweringMixin:
             return ann.ident
         return type(ann).__name__
 
+    def _emit_owned_module_name_lookup(self, expr):
+        """Read a live module binding into a NEW owner, preserving NameError."""
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        if output is None:
+            output = self._new_slot_call_root("name.dynamic")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = () if sink is not None else (output,)
+        self._try_err_block = self._slot_call_cleanup_block(roots, target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            module_name = self.ast_module.name or "__main__"
+            module_name_ptr = self._ptr_to_cstr(
+                self._cstr_global(
+                    module_name,
+                    self._fresh(".name.module"),
+                )
+            )
+            dynamic_value = self.builder.call(
+                self.runtime["py_module_attr_get"],
+                [
+                    module_name_ptr,
+                    self._pooled_cstr_ptr(expr.ident, ".name.dynamic.attr"),
+                ],
+                name=self._fresh(f"name.dynamic.{expr.ident}"),
+            )
+            self._publish_slot_call_owned(output, dynamic_value, label="module name lookup")
+            dynamic_value = self.builder.load(output, name=self._fresh("name.dynamic.current"))
+            missing = self.builder.icmp_signed(
+                "==",
+                dynamic_value,
+                ir.Constant(_CSTR, None),
+                name=self._fresh(f"name.dynamic.{expr.ident}.missing"),
+            )
+            err_bb = self.current_function.append_basic_block(
+                name=self._fresh(f"name.dynamic.{expr.ident}.err")
+            )
+            ok_bb = self.current_function.append_basic_block(
+                name=self._fresh(f"name.dynamic.{expr.ident}.ok")
+            )
+            self.builder.cbranch(missing, err_bb, ok_bb)
+
+            self.builder.position_at_end(err_bb)
+            msg = self._pooled_cstr_ptr(
+                "name '" + expr.ident + "' is not defined",
+                ".name_error",
+            )
+            exc = self.builder.call(
+                self.runtime["py_exc_new"],
+                [ir.Constant(_I64, 10), msg],
+                name=self._fresh("name_error"),
+            )
+            self.builder.call(self.runtime["py_raise"], [exc])
+            frame_exc = self.builder.call(
+                self.runtime["py_current_exception"],
+                [],
+                name=self._fresh("name.frame.exc"),
+            )
+            self._emit_exception_frame(frame_exc, getattr(expr, "span", None))
+            err_target = self._current_try_err_block()
+            if err_target is None:
+                err_target = self._ensure_fn_err_exit()
+            self.builder.branch(err_target)
+
+            self.builder.position_at_end(ok_bb)
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("name.dynamic.current"))
+            return self._take_slot_call_root(output)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_name(self, expr: Name) -> ir.Value:
         class_value = self._emit_class_namespace_name_root(expr, "class.name.value")
         if class_value is not None:
@@ -771,6 +868,14 @@ class NameLoweringMixin:
                 return self._emit_none_literal()
             if expr.ident == "NotImplemented":
                 gv = declare_runtime_global(self.module, "py_NotImplemented")
+                sink = self._slot_call_result_sink(expr)
+                if sink is not None:
+                    # py_substrate defines this exact global as the immortal
+                    # singleton's physical pointer slot. Shadowed Names have
+                    # already taken the normal local/global source path.
+                    self._slot_call_copy_source(sink, gv, span=expr.span)
+                    self._slot_call_note_published(sink)
+                    return self.builder.load(sink, name=self._fresh("notimplemented.current"))
                 return self.builder.load(gv, name=self._fresh("notimplemented"))
             if expr.ident == "super":
                 # ``super`` is also a first-class built-in type object.  The
@@ -799,12 +904,12 @@ class NameLoweringMixin:
             # cases are handled before name lowering by type-tag compare
             # fast paths.
             if expr.ident in _CPY_BUILTIN_TYPE_NAMES:
-                native_callable = self._emit_native_builtin_callable_value(expr.ident)
+                native_callable = self._emit_native_builtin_callable_value(expr.ident, expr)
                 if native_callable is not None:
                     return native_callable
                 return self._load_cpython_builtin(expr.ident)
             if self._name_returns_native_builtin_callable_value(expr.ident):
-                native_callable = self._emit_native_builtin_callable_value(expr.ident)
+                native_callable = self._emit_native_builtin_callable_value(expr.ident, expr)
                 if native_callable is not None:
                     return native_callable
             builtin_value = self._native_builtin_value_for_name(expr.ident)
@@ -819,15 +924,10 @@ class NameLoweringMixin:
             if builtin_value == "os.pathsep":
                 return self._emit_str_literal(";" if self._target_sys_platform_text() == "win32" else ":")
             if builtin_value in ("sys.prefix", "sys.base_prefix"):
-                return self.builder.call(
-                    self.runtime["py_sys_prefix_str"],
-                    [
-                        ir.Constant(
-                            _I64,
-                            1 if builtin_value == "sys.base_prefix" else 0,
-                        )
-                    ],
-                    name=self._fresh(builtin_value),
+                return self._emit_owned_namespace_runtime_value(
+                    "py_sys_prefix_str",
+                    (ir.Constant(_I64, 1 if builtin_value == "sys.base_prefix" else 0),),
+                    expr,
                 )
             if builtin_value == "pcc.optional_import_missing.None":
                 return self._emit_none_literal()
@@ -872,11 +972,9 @@ class NameLoweringMixin:
                 # direct ``mod.attr`` lowering) and the real live module
                 # object.  In value position Python passes the object, not
                 # the historical module-name string placeholder.
-                if native_ext_gv is not None:
-                    return self.builder.load(
-                        native_ext_gv,
-                        name=self._fresh(f"pcc.ext.{expr.ident}"),
-                    )
+                if (native_ext_gv is not None
+                        or native_alias_module in getattr(self, "_sibling_module_inits", ())):
+                    return self._emit_owned_module_name_lookup(expr)
                 return self._emit_native_module_placeholder(native_alias_module)
             native_constant = getattr(
                 self,
@@ -886,10 +984,7 @@ class NameLoweringMixin:
             if native_constant is not None:
                 return self._emit_native_module_constant(native_constant)
             if native_ext_gv is not None:
-                return self.builder.load(
-                    native_ext_gv,
-                    name=self._fresh(f"pcc.ext.{expr.ident}"),
-                )
+                return self._emit_owned_module_name_lookup(expr)
             # Fall back to the module-wide CPython import registry for
             # ``from os import sep`` / ``import sys`` style bindings.
             cpy_gv = getattr(self, "_cpy_module_env", {}).get(expr.ident)
@@ -1118,64 +1213,18 @@ class NameLoweringMixin:
                     + expr.ident
                     + "' is not defined (import it or declare it with extern())"
                 )
-            module_name = self.ast_module.name or "__main__"
-            module_name_ptr = self._ptr_to_cstr(
-                self._cstr_global(
-                    module_name,
-                    self._fresh(".name.module"),
-                )
-            )
-            dynamic_value = self.builder.call(
-                self.runtime["py_module_attr_get"],
-                [
-                    module_name_ptr,
-                    self._pooled_cstr_ptr(expr.ident, ".name.dynamic.attr"),
-                ],
-                name=self._fresh(f"name.dynamic.{expr.ident}"),
-            )
-            missing = self.builder.icmp_signed(
-                "==",
-                dynamic_value,
-                ir.Constant(_CSTR, None),
-                name=self._fresh(f"name.dynamic.{expr.ident}.missing"),
-            )
-            err_bb = self.current_function.append_basic_block(
-                name=self._fresh(f"name.dynamic.{expr.ident}.err")
-            )
-            ok_bb = self.current_function.append_basic_block(
-                name=self._fresh(f"name.dynamic.{expr.ident}.ok")
-            )
-            self.builder.cbranch(missing, err_bb, ok_bb)
-
-            self.builder.position_at_end(err_bb)
-            msg = self._pooled_cstr_ptr(
-                "name '" + expr.ident + "' is not defined",
-                ".name_error",
-            )
-            exc = self.builder.call(
-                self.runtime["py_exc_new"],
-                [ir.Constant(_I64, 10), msg],
-                name=self._fresh("name_error"),
-            )
-            self.builder.call(self.runtime["py_raise"], [exc])
-            frame_exc = self.builder.call(
-                self.runtime["py_current_exception"],
-                [],
-                name=self._fresh("name.frame.exc"),
-            )
-            self._emit_exception_frame(frame_exc, getattr(expr, "span", None))
-            err_target = self._current_try_err_block()
-            if err_target is None:
-                err_target = self._ensure_fn_err_exit()
-            self.builder.branch(err_target)
-
-            self.builder.position_at_end(ok_bb)
-            # py_module_attr_get returns an owned lookup reference. Static
-            # global-name loads are borrowed, so release the lookup ownership;
-            # the module namespace remains the value's owner/root.
-            self._gc_release(dynamic_value)
-            return dynamic_value
+            return self._emit_owned_module_name_lookup(expr)
         alloca, ir_ty, _ = slot
+        module_binding = self._module_globals.get(expr.ident)
+        if (
+            module_binding is not None
+            and module_binding[0] is alloca
+            and self._module_global_needs_bound_check(expr.ident)
+        ):
+            # Module-body bindings also live in env. Their slot can remain
+            # empty after a zero-iteration loop or be cleared by del; a bare
+            # expression read needs the same check as a call operand.
+            self._emit_module_global_bound_check(expr.ident, expr)
         if (
             expr.ident in getattr(self, "_gc_rooted_local_names", set())
             and isinstance(ir_ty, ir.PointerType)

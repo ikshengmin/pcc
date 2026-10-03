@@ -1,6 +1,6 @@
 # Current status
 
-Updated October 3, 2026, 15:04 UTC. Maintain this page in place.
+Updated October 3, 2026, 17:20 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
@@ -20,9 +20,10 @@ Compared with the previous 214/227 diagnostic, 65 failures became passes,
 213 stayed passing, 162 stayed failing and one previously passing context
 failed. All 17 regressions from the earlier 190/251-to-214/227 transition and
 all 41 gains from that transition now pass on this single combined source.
-The remaining new regression is pipeline_import_scan: a dynamic count() call
-returns an unowned branch result before strict subtraction. Its shared method
-producer is under repair without changing the validator. Remaining families
+The one new regression was pipeline_import_scan: a dynamic count() call
+returned an unowned branch result before strict subtraction. Its producer is
+now repaired, with eight focused checks and an unchanged original-context PIDX
+pass. The validator remains unchanged. Remaining families
 include multiplication/repetition, OS/path result publication, imported
 constructors, namespace bindings and string-method result handoff.
 
@@ -34,45 +35,59 @@ v4 PIDX are retained; this is not memory-target acceptance.
 The preceding complete diagnostic used source
 `c2b078540e55363d779beba964b8430460184cfb02844e50cf7addadbdaa6108`,
 frozen at 12:27, and produced 214 passes and 227 failures. Later mutable-source
-repairs have separate focused evidence. Neither complete diagnostic emits or
+repairs have separate focused evidence. The next complete source was frozen at
+16:18 as `d396b3e1c42f84a313f3f099036bfb90f308b706a7cb3c5b8a51abf1ba2dc633`;
+its retained-source diagnostic accounts for all 441 modules across two phases:
+350 pass, 90 fail in the frontend, and one (call_expression_lowering) reaches
+the original 120-second worker limit. The initial 30-minute outer stop and all
+partial receipts are retained. A single-worker diagnostic recheck of that one
+module is pending. V5-to-V6 has 75 new passes and three frontend regressions:
+dataclass-factory callable, bytes.decode handoff and floor-division feeding
+repetition. The first two have separate repaired original-context proofs;
+floor-division repair is active. None of these counts proves native bootstrap. Neither complete diagnostic emits or
 executes a native compiler. The next compiler boundary requires a green fresh
 complete diagnostic and actual native bootstrap on the same final source.
 
 ## Matched runtime and native evidence
 
-A fresh complete 184-member runtime build started at 15:03 using the exact
-15:01 diagnostic source, Linux x86-64, threads enabled and atomic refcounts.
-Its sealed control plan contains original Python/C programs and independent
-known-failure groups. Build and native execution results remain pending; newer
-mutable producer repairs cannot inherit this frozen build's eventual results.
+The Linux x86-64 runtime for source
+`b8aee32d012ae42c5ef87fef7ac20916f9bd39a00535158f5b7a4c0dafb91767`
+is admitted with all 184 members, threads enabled and atomic refcounts. Its
+compiler checksum is `2da4f0c36d8bd6402630a86aed3ea9965a2beb61b92f2d8cb38001dbf241d0b4`
+and archive hash is `126a3c35f178b1e74fc1d99d59e628e23dcc4f469365f25639efd1867eb18d3d`.
+Input identities remained stable. Construction took 510.41 seconds with
+439.8 MB observed process-tree peak; overlapping diagnostics prevent a build
+performance claim.
 
-The complete Linux x86-64 threaded/atomic runtime frozen at 09:59 passed strict
-admission for all 184 ordered, unique members. It took 437.79 seconds with about
-439 MB peak RSS. The recorded build used the owned compiler/emitter/archive APIs;
-no host assembler/linker or libpython supplied the generated runtime.
+Its native controller is terminal. Twenty-seven of 31 Python groups pass all
+five requested GC settings. The four failing groups are retained: failed-class
+mortality under GC0, a zero-iteration module-loop target that fails to raise
+NameError under GC0, mixed-numeric addition blocked by ComplexLit publication
+at compile time, and division's zero-divisor assertion under GC0. The later four
+GC variants in each runtime-failing group remain unrun. Original C controls (2),
+abort cases (6) and thread cases (60) pass. Separate collector observations
+record 112 verified selections, 26 unobservable cases, 12 skipped variants and
+five compile-failed variants. These observations do not replace program outcomes
+or establish all-GC production, concurrency or performance qualification.
 
-- Source: `3b1592b4aa8c7c409669e938740717ee96d3002718623cedfdf3a68d3ec94c59`
-- Compiler: `78d785e3766a5a8b71999210400c582fcbecd1d8c73d2b3663dcec9f3c72af29`
-- Archive: `e9f501eddc9984e63d04da3de5365a43fb5f8364332ec0e1f5cf15602e2599e4`
+Two additional unchanged SSA short-circuit C tests pass through their migrated
+owned helper with optimize=True and the same admitted source/runtime. Their
+executables exit zero with empty stdout/stderr. The wrapper's two existing
+TYPEOF parser warnings are recorded separately.
 
-Eight unchanged Python controls passed all five requested GC settings: canonical
-object/base-subclass behavior, finalizer callbacks and resurrection, module
-except-as lifetime, short-circuit destructor order, format, type, namespace
-identity and indexed-payload behavior. Those are 40 native executions. Separate
-unchanged-binary GC sidecars confirmed actual backend selection for 35 runs.
-Indexed-payload emitted no collection event in its five runs, so its receipts
-prove requested settings only.
+The newer ComplexLit repair passes 88 host checks and makes the unchanged
+mixed-numeric source emit an owned ELF object. The module-loop bound check
+passes 14 host/reference cases; its native fixture remains unchanged. A bool
+layout repair removes reads beyond header-only singleton globals. An isolated
+two-member runtime comparison reproduces the old division failure and passes
+all five requested settings with the correction, using unchanged original IR.
+That comparison has no production receipt and does not qualify the combined
+candidate. Class mortality and full class/base/MRO/registry retirement remain
+open. The newer candidate also adds two repetition runtime modules and requires
+its own complete matching archive.
 
-The original failed-class cleanup program still fails under GC0 at
-`references[0]() is None`; its other four GC variants remain unexecuted. Classes
-are still made immortal, and complete class/base/MRO/name/registry retirement
-semantics remain open. Two original C controls and six public-abort signal-state
-cases passed against the matched runtime.
-
-These binaries were produced by host pcc0. They do not establish native pcc1
-compilation, fixed-point bootstrap, complete C/Python coverage or production GC
-performance. The current candidate is newer than this runtime and must be
-rebuilt before claiming combined qualification.
+These binaries were produced by host pcc0. They do not establish native pcc1,
+Stage2/Stage3 fixed point, complete C/Python execution or final-source acceptance.
 
 Earlier replacement-object experiments are retained as mixed diagnostics.
 Their compiler/source closure differed from the original archive; one early
@@ -276,27 +291,36 @@ bytes. Recoverable current code, before/after patches, source identities and
 execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
-The latest verified local synchronization used the immutable 14:20:58 capture:
-PCC `816fb03fa0f521eb714bd87100f5a4825fd68483` (16 paths), GUI
+The latest verified local synchronization used the immutable 15:19:46 capture:
+PCC `71e15ea62ceadbfeb716824ba0e7d5d8cdf95b10` (15 paths), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
-`83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact bytes, modes and diff checks
-passed. Its exact-source checks record 1,152 passes and one original contextual
-failure, with 22 IR outputs and 25 codegen exceptions. Its changed Csmith file
-executes no bodies: all 21 cases are deselected because the generator is
-unavailable. The all-test inventory clears the default marker expression and
-records 24,540 total nodes, 24,315 selected and 225 capability/environment
-deselections. A separate integration-only inventory selects 5,521 from the same
-union. Both have zero collection errors or skips and retain exact per-node
-reasons. Neither inventory establishes execution coverage or completion of the
-C/Python suites. Later source changes remain separate.
+`83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact hashes, modes and diff checks
+passed. Its scoped execution records 1,189 passes and three failures: the
+original Stage1-context test (22 IR outputs, 25 codegen exceptions), sys.prefix
+passed to path join, and the first original C short-circuit native test blocked
+by the explicit no-provisioning guard. Its second native test was unrun. A later
+frozen V5 control proves those C programs through the owned route; it does not
+supply this capture's missing matching runtime.
 
-For comparison, the previous 13:26:05 capture associated with `1ef656e3`
-recorded 1,192 passes and one failure, also with 22 IR outputs and 25 exceptions.
-Its collection selected 18,593 nodes and deselected 5,742. That historical
-command retained the default non-integration marker expression, so those
-deselections combine marker selection and capability gates. It executed no test
-bodies. These counts belong to their own source and command, not the current
-capture.
+The all-test inventory has 24,706 nodes, 24,481 selected and 225 capability or
+environment deselections. A separate integration inventory selects 5,529 from
+the same union. Both have zero collection errors/skips and retain per-node
+reasons. Neither inventory establishes test execution. Later namespace and
+fixture corrections pass all 224 affected OS host checks, with three native
+cases explicitly excluded. Those results belong to newer source.
+
+The preceding 14:20:58 capture associated with `816fb03f` recorded 1,152 passes
+and one contextual failure, with 22 IR outputs and 25 exceptions. Its inventories
+contained 24,540 nodes, 24,315 selected by the all-test command and 5,521 selected
+by the integration command. The earlier 13:26 capture retained a default
+non-integration marker expression; its 5,742 deselections therefore combined
+marker selection and capability gates. Historical counts are not interchangeable.
+
+The 16:20 source capture contains 37 PCC paths and records 1,426 passing
+checks with one resource-incomplete contextual test. Its 47-target assertion
+stopped at the 1.5 GiB diagnostic cap, retaining 19 IR outputs and six error
+records. The recorded synchronized baseline remains `71e15ea6`; later source
+changes have separate manifests and scoped results.
 
 Hourly synchronization includes legitimate integrated work even when failing or
 unqualified. Run collection and affected fast tests on the exact capture first;

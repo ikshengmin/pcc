@@ -97,6 +97,7 @@ def _runtime_signatures_part_0():
     "pcc_gc_root_move": (_I64, [_PTR, _PTR], False),
     "pcc_gc_root_copy_borrowed_lease": (_I64, [_PTR, _PTR], False),
     "pcc_gc_root_copy_lease_prepare_locked": (_I64, [_PTR, _PTR, _I64, _PTR], False),
+    "pcc_gc_copy_ptr_lease_commit_locked": (_I64, [_PTR, _PTR, _PTR, _PTR], False),
     "pcc_gc_root_copy_lease_finish": (_VOID, [_PTR], False),
     "pcc_gc_object_is_address_pinned": (_I64, [_PYOBJ], False),
     "pcc_gc_take_pinned_slot": (_PYOBJ, [_PTR, _I64], False),
@@ -746,6 +747,8 @@ def _runtime_signatures_part_11():
     "py_obj_add": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_sub": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_mul": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    # Registered owning operands; distinct empty output receives NEW on success.
+    "py_obj_mul_slots": (_I64, [_PTR, _PTR, _PTR], False),
     "py_obj_and": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_or": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_xor": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -1240,6 +1243,7 @@ def _runtime_signatures_part_18():
     #              field_names: const char**, n_fields: i32)
     #   -> PyClassObject*
     "py_class_new": (_PYOBJ, [_CSTR, _PTR, _I32, _PTR, _I32], False),
+    "py_class_abort_definition_slots": (_VOID, [_PTR], False),
     "py_class_new_from_objects": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_class_mark_slots_only": (_VOID, [_PYOBJ], False),
     "py_class_mark_dict_subclass": (_VOID, [_PYOBJ], False),
@@ -1949,6 +1953,7 @@ def _cross_object_signatures_part_1():
     "pcc_gc_root_move": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_root_copy_borrowed_lease": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_root_copy_lease_prepare_locked": (("c_ptr", "c_ptr", "c_int64", "c_ptr"), "c_int64"),
+    "pcc_gc_copy_ptr_lease_commit_locked": (("c_ptr", "c_ptr", "c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_root_copy_lease_finish": (("c_ptr",), "c_void"),
     "pcc_gc_object_is_address_pinned": (("c_ptr",), "c_int64"),
     "pcc_gc_pointer_register": (("c_ptr",), "c_int64"),

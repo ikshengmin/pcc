@@ -52,6 +52,17 @@ class CallObjectLoweringMixin:
     def _slot_call_published_module_ref(self, expr):
         """Locate an already-published callable without evaluating operands."""
         if isinstance(expr, Attr):
+            base = expr.obj
+            while isinstance(base, Attr):
+                base = base.obj
+            if isinstance(base, Name):
+                if base.ident in self.env or base.ident in self._module_globals:
+                    return None
+                if base.ident in getattr(self, "_native_extension_module_env", {}):
+                    return None
+                alias = getattr(self, "_native_module_aliases", {}).get(base.ident)
+                if alias is not None and alias in getattr(self, "_sibling_module_inits", ()):
+                    return None
             export = self._native_module_expr_export_info(expr.obj, expr.name)
             if export is not None and export[1].get("kind") in ("function", "class"):
                 return export[0], expr.name
@@ -1222,6 +1233,9 @@ class CallObjectLoweringMixin:
         uname = self._emit_slot_call_os_uname_attr(expr, label)
         if uname is not None:
             return uname
+        namespace = self._emit_slot_call_namespace_attribute(expr, label)
+        if namespace is not None:
+            return namespace
         projected = self._emit_slot_call_valueclass_attribute(expr, label)
         if projected is not None:
             return projected

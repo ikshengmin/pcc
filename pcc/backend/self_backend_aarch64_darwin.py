@@ -1250,8 +1250,14 @@ def _line_defines_reg(line: str, reg: str) -> bool:
         return False
     if opcode in (
         "cmp",
+        "cmn",
+        "tst",
         "fcmp",
         "ret",
+        "br",
+        "blr",
+        "tbz",
+        "tbnz",
         "stur",
         "str",
         # Release stores consume their first register operand just like the
@@ -1279,7 +1285,10 @@ def _line_uses_reg(line: str, reg: str) -> bool:
     opcode, sep, rest = stripped.partition(" ")
     if not sep:
         return reg in _tokens_for_reg_scan(stripped)
-    if _line_defines_reg(line, reg):
+    # These partial writes preserve bits from the previous destination.  They
+    # define it and use it, including when the scan observes its W/X alias.
+    # Treating the destination as write-only can delete its initialization.
+    if opcode not in ("movk", "bfi", "bfxil") and _line_defines_reg(line, reg):
         _dest, sep2, tail = rest.partition(", ")
         return bool(sep2) and reg in _tokens_for_reg_scan(tail)
     return reg in _tokens_for_reg_scan(rest)
@@ -1303,7 +1312,10 @@ def _can_drop_zero_mov_after_store(
             _local_label_name(line) is not None
             or _is_function_label(line)
             or line.startswith(".")
-            or line.startswith(("  b ", "  b.", "  bl ", "  cbz ", "  cbnz ", "  ret"))
+            or line.startswith(
+                ("  b ", "  b.", "  bl ", "  cbz ", "  cbnz ", "  ret",
+                 "  br ", "  blr ", "  tbz ", "  tbnz ")
+            )
         ):
             return False
         if _line_uses_reg_alias(line, reg):

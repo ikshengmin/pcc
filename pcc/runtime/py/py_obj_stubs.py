@@ -189,8 +189,8 @@ def py_float_to_f64(o) -> float:
         return load_f64(o, 16)
     if tag == PY_TYPE_INT:  # PY_TYPE_INT (bignum)
         return py_bigint_to_double(o)
-    if tag == PY_TYPE_BOOL:  # PY_TYPE_BOOL
-        return float(load_i32(o, 16))
+    if tag == PY_TYPE_BOOL:  # Header-only immutable singletons have no value payload.
+        return 1.0 if ptr_eq(o, global_load_ptr("py_True")) != 0 else 0.0
     return 0.0
 
 
@@ -365,7 +365,7 @@ def _complex_real_part(o) -> float:
     if tag == PY_TYPE_INT:
         return py_bigint_to_double(o)
     if tag == PY_TYPE_BOOL:
-        return float(load_i32(o, 16))
+        return 1.0 if ptr_eq(o, global_load_ptr("py_True")) != 0 else 0.0
     return 0.0
 
 

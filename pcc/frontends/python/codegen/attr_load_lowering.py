@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from pcc.ir.compat import ir
-from pcc.driver.python_target import PYTHON_TARGET_FULL_VERSION
+from pcc.driver.python_target import (
+    PYTHON_TARGET_FULL_VERSION, PYTHON_TARGET_VERSION_INFO,
+    PYTHON_TARGET_MAJOR, PYTHON_TARGET_MINOR, PYTHON_TARGET_MICRO,
+)
+from pcc.frontends.python.py_ast import BoolLit, IntLit, NoneLit, StrLit
 
 from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, BytesType, Call, ClassType, DictType, DynType, Expr, FloatType, IntType, ListType, MemoryViewType, Name, NoneType, StrType, Subscript, TupleType, Type
 from pcc.frontends.python.codegen import marshal
@@ -27,6 +31,139 @@ def _same_type_kind(a: Type, b: Type) -> bool:
 
 
 class AttrLoadLoweringMixin:
+    def _native_namespace_projection(self, expr):
+        """Resolve only compiler-native namespace provenance, never spelling."""
+        base = expr.obj
+        while isinstance(base, Attr):
+            base = base.obj
+        if not isinstance(base, Name):
+            return None
+        if base.ident in self.env or base.ident in self._module_globals:
+            return None
+        export = self._native_module_object_export_info(expr.obj, expr.name)
+        if export is not None:
+            value_ty = export[1].get("value_ty", ())
+            if value_ty and value_ty[0] == "raw_pointer":
+                return ("raw",)
+        # A real imported object must be read through its live binding; its
+        # metadata alias does not authorize bypassing rebinding or descriptors.
+        if base.ident in getattr(self, "_native_extension_module_env", {}):
+            return None
+        alias = getattr(self, "_native_module_aliases", {}).get(base.ident)
+        if alias is not None and alias in getattr(self, "_sibling_module_inits", ()):
+            return None
+        module = self._native_builtin_module_for_name(base.ident)
+        if module is None and self._native_builtin_value_kind_for_expr(expr.obj) == "os.path":
+            module = "os.path"
+        if isinstance(expr.obj, Name) and module is not None:
+            override = self._native_module_attr_global_if_exists(module, expr.name)
+            if override is not None:
+                return ("source", override)
+        if export is not None and export[0] != self.ast_module.name:
+            if export[1].get("kind") in ("constant", "module_global", "function", "class"):
+                return ("module", export[0], expr.name)
+        if module is None:
+            return None
+        if isinstance(expr.obj, Attr):
+            if (module == "sys" and isinstance(expr.obj.obj, Name)
+                    and expr.obj.name == "version_info"
+                    and self._native_module_attr_global_if_exists("sys", "version_info") is None):
+                versions = {"major": PYTHON_TARGET_MAJOR, "minor": PYTHON_TARGET_MINOR,
+                            "micro": PYTHON_TARGET_MICRO}
+                if expr.name in versions:
+                    return ("int", versions[expr.name])
+            if not (module == "os" and isinstance(expr.obj.obj, Name)
+                    and expr.obj.name == "path"):
+                return None
+            module = "os.path"
+        if module in ("os", "os.path"):
+            windows = self._target_sys_platform_text() == "win32"
+            constants = {"sep": "\\" if windows else "/", "pathsep": ";" if windows else ":",
+                         "curdir": ".", "pardir": "..", "extsep": ".",
+                         "devnull": "nul" if windows else "/dev/null"}
+            if module == "os":
+                constants["name"] = "nt" if windows else "posix"
+                constants["linesep"] = "\r\n" if windows else "\n"
+            if expr.name in constants:
+                return ("str", constants[expr.name])
+            if expr.name == "altsep":
+                return ("str", "/") if windows else ("none", None)
+            access = {"F_OK": 0, "X_OK": 1, "W_OK": 2, "R_OK": 4}
+            if module == "os" and expr.name in access:
+                return ("int", access[expr.name])
+        if module == "sys":
+            if expr.name == "argv":
+                return ("argv",)
+            if expr.name == "version_info":
+                return ("version_info",)
+            if expr.name in ("stdin", "stdout", "stderr"):
+                fd = {"stdin": 0, "stdout": 1, "stderr": 2}[expr.name]
+                return ("runtime", "py_sys_stream_object", (ir.Constant(_I64, fd),))
+            if expr.name in ("prefix", "base_prefix"):
+                return ("runtime", "py_sys_prefix_str", (ir.Constant(_I64, expr.name == "base_prefix"),))
+            calls = {"executable": "py_sys_executable_str", "platform": "py_sys_platform_str",
+                     "path": "py_sys_path_list"}
+            if expr.name in calls:
+                return ("runtime", calls[expr.name], ())
+            if expr.name == "version":
+                return ("str", PYTHON_TARGET_FULL_VERSION + " (pcc self-host)")
+            if expr.name == "byteorder":
+                return ("str", "little")
+            if expr.name in ("maxunicode", "maxsize"):
+                return ("int", 0x10FFFF if expr.name == "maxunicode" else (1 << 63) - 1)
+        return None
+
+    def _emit_slot_call_namespace_attribute(self, expr, label):
+        projection = self._native_namespace_projection(expr)
+        if projection is None:
+            return None
+        if projection[0] == "raw":
+            raise L1CodegenError("raw module export cannot be a managed namespace operand")
+        base = expr.obj
+        while isinstance(base, Attr):
+            base = base.obj
+        check_local_bound(self, base)
+        kind = projection[0]
+        if kind == "module":
+            return self._emit_slot_call_module_value(projection[1], projection[2], expr.span, label)
+        if kind == "argv":
+            return self._emit_slot_call_program_argv(expr.span, label)
+        if kind == "version_info":
+            values = tuple(IntLit(span=expr.span, ty=IntType(name="int"), value=value)
+                           for value in PYTHON_TARGET_VERSION_INFO)
+            return self._emit_slot_call_sequence(values, label, True)
+        if kind == "str":
+            literal = StrLit(span=expr.span, ty=StrType(name="str"), value=projection[1])
+            return self._emit_slot_call_operand(literal, label)
+        if kind == "int":
+            literal = IntLit(span=expr.span, ty=IntType(name="int"), value=projection[1])
+            return self._emit_slot_call_operand(literal, label)
+        if kind == "none":
+            literal = NoneLit(span=expr.span, ty=NoneType(name="None"))
+            return self._emit_slot_call_operand(literal, label)
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            if kind == "source":
+                # These exact module-attribute globals are registered by
+                # module_global_lowering and retained by module lifecycle.
+                self._slot_call_copy_source(output, projection[1], span=expr.span)
+                current = self.builder.load(output, name=self._fresh("namespace.attribute.current"))
+                self._emit_attribute_error_if_null(current, expr.name, expr.span)
+            elif kind == "runtime":
+                self._slot_call_runtime_call(projection[1], (), result_slot=output,
+                                             suffix_args=projection[2], span=expr.span)
+            else:
+                raise L1CodegenError("unknown native namespace producer contract")
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
     def _valueclass_payload_expr_type(self, expr: Expr) -> Type | None:
         if isinstance(expr, Name):
             slot = self.env.get(expr.ident)
@@ -862,6 +999,10 @@ class AttrLoadLoweringMixin:
         return result
 
     def _emit_attr(self, expr: Attr) -> ir.Value:
+        if not isinstance(expr.ty, RawPointerType):
+            namespace = self._emit_slot_call_namespace_attribute(expr, "namespace.attribute")
+            if namespace is not None:
+                return self._take_slot_call_root(namespace)
         runtime_attr_name = expr.name
         scaffold_symbol = self._maybe_emit_ir_scaffold_symbol_value(expr)
         if scaffold_symbol is not None:

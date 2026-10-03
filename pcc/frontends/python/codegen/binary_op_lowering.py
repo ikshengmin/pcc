@@ -57,7 +57,7 @@ class BinaryOpLoweringMixin:
         never admit a primitive integer kernel or prove overflow impossible.
         Explicit machine projections retain their own lowering.
         """
-        if (expr.op not in ("+", "-", "/", "%", "<<", ">>") or getattr(self, "_freestanding_module", False)
+        if (expr.op not in ("+", "-", "*", "/", "%", "<<", ">>") or getattr(self, "_freestanding_module", False)
                 or getattr(self, "_runtime_port_module", False)):
             return None
         function = self.current_function
@@ -83,6 +83,13 @@ class BinaryOpLoweringMixin:
         for operand in (expr.lhs, expr.rhs):
             if self._expr_returns_unsafe_raw_pointer(operand):
                 return None
+        if expr.op == "*":
+            # The slot ABI owns both numeric inputs and every repetition
+            # snapshot. Ordinary int counts never pass through an i64 lane
+            # unless the runtime has checked their actual index value.
+            if any(isinstance(ty, ComplexType) for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty)):
+                return None
+            return "py_obj_mul_slots"
         if expr.op == "%":
             # Match the existing generic modulo/percent-format route. Fully
             # numeric static operands keep their existing integer/float lane;
@@ -137,9 +144,19 @@ class BinaryOpLoweringMixin:
             roots.append(right)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            self._slot_call_runtime_call(
-                runtime_name, (left, right), result_slot=output, span=expr.span,
-            )
+            if runtime_name == "py_obj_mul_slots":
+                status = self.builder.call(
+                    self.runtime[runtime_name],
+                    [self._as_gc_ptr(left), self._as_gc_ptr(right), self._as_gc_ptr(output)],
+                    name=self._fresh("binary.slot.invoke"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "multiplication", expr.span)
+                self._emit_post_call_err_check(expr.span)
+            else:
+                self._slot_call_runtime_call(
+                    runtime_name, (left, right), result_slot=output, span=expr.span,
+                )
             current = self.builder.load(output, name=self._fresh("binary.slot.result"))
             if runtime_name == "py_obj_mod":
                 # The existing integer modulo ABI leaves zero-divisor raising

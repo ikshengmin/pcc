@@ -6,9 +6,25 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BoolLit, NoneLit, ByteArrayType, BytesType, Call, DynType, Expr, IntLit, IntType, StrLit, StrType
+from pcc.frontends.python.py_ast import (
+    Attr,
+    BoolLit,
+    NoneLit,
+    ByteArrayType,
+    BytesType,
+    Call,
+    DynType,
+    Expr,
+    IntLit,
+    IntType,
+    StrLit,
+    StrType,
+)
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BYTEARRAY, PY_TYPE_BYTES
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+)
 
 _I1 = ir.IntType(1)
 _I32 = ir.IntType(32)
@@ -245,6 +261,127 @@ class StringMethodLoweringMixin:
         self._note_owned_object_value(result)
         return result
 
+    def _emit_owned_bytes_decode(self, expr, dynamic):
+        """Keep decoder inputs owned and publish either branch before cleanup."""
+        if self._has_starred_unpack(expr.args) or any(key == "**" for key, _value in expr.kwargs):
+            return None
+        operands = []
+        seen = set()
+        if len(expr.args) > 2:
+            raise NotImplementedError("bytes.decode() accepts at most encoding and errors")
+        for index, operand in enumerate(expr.args):
+            key = "encoding" if index == 0 else "errors"
+            operands.append((key, operand))
+            seen.add(key)
+        for key, operand in expr.kwargs:
+            if key not in ("encoding", "errors") or key in seen:
+                raise NotImplementedError("bytes.decode() accepts at most encoding and errors")
+            operands.append((key, operand))
+            seen.add(key)
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("decode.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(expr.func.obj, "decode.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            generic_block = None
+            done_block = None
+            if dynamic:
+                tag = self._slot_call_runtime_call("py_obj_type_tag", (receiver,), span=expr.span)
+                is_bytes = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_BYTES))
+                is_bytearray = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_BYTEARRAY))
+                is_native = self.builder.or_(is_bytes, is_bytearray, name=self._fresh("decode.is_native"))
+                native_block = self.current_function.append_basic_block(self._fresh("decode.native"))
+                generic_block = self.current_function.append_basic_block(self._fresh("decode.generic"))
+                done_block = self.current_function.append_basic_block(self._fresh("decode.done"))
+                self.builder.cbranch(is_native, native_block, generic_block)
+                self.builder.position_at_end(native_block)
+
+            branch_roots = list(roots)
+            encoding = None
+            errors = None
+            for key, operand in operands:
+                value = self._emit_slot_call_operand(operand, "decode." + key)
+                branch_roots.append(value)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if key == "encoding":
+                    encoding = value
+                else:
+                    errors = value
+            if encoding is None:
+                default_encoding = StrLit(span=expr.span, ty=StrType(name="str"), value="utf-8")
+                encoding = self._emit_slot_call_operand(default_encoding, "decode.encoding.default")
+                branch_roots.append(encoding)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            if errors is None:
+                default_errors = StrLit(span=expr.span, ty=StrType(name="str"), value="strict")
+                errors = self._emit_slot_call_operand(default_errors, "decode.errors.default")
+                branch_roots.append(errors)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_bytes_decode_with_encoding", (receiver, encoding, errors),
+                result_slot=output, span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(branch_roots[len(roots):]))
+            if dynamic:
+                self.builder.branch(done_block)
+                self.builder.position_at_end(generic_block)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                method = self._new_slot_call_root("decode.method")
+                branch_roots = list(roots) + [method]
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_getattr", (receiver,), result_slot=method,
+                    suffix_args=(self._attr_name_ptr("decode"),), span=expr.span,
+                )
+                current = self.builder.load(method, name=self._fresh("decode.callable"))
+                self._emit_attribute_error_if_null(current, "decode", expr.func.span)
+                positional, keywords = self._slot_call_split_operands(expr)
+                args = self._emit_slot_call_args_tuple(positional, "decode.args")
+                branch_roots.append(args)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                kwargs = self._emit_slot_call_kwargs_object(keywords, None, expr.span, "decode.kwargs", method)
+                branch_roots.append(kwargs)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                status = self.builder.call(
+                    self.runtime["py_obj_call_slots"],
+                    [self._as_gc_ptr(method), self._as_gc_ptr(args), self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                    name=self._fresh("decode.invoke"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "decode method call", expr.span)
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots(tuple(branch_roots[len(roots):]))
+                self.builder.branch(done_block)
+                self.builder.position_at_end(done_block)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_note_published(output)
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("decode.output"))
+        return self._take_slot_call_root(output)
+
     def _emit_bytes_decode_call(self, recv, receiver_expr, operands, span):
         if not self._owned_release_needed(recv, receiver_expr):
             recv = self._gc_retain(recv, name=self._fresh("decode.receiver.retain"))
@@ -433,6 +570,104 @@ class StringMethodLoweringMixin:
                 return True
         return None
 
+    def _maybe_emit_owned_str_result(self, expr):
+        """Evaluate native string operands in roots and publish before cleanup.
+
+        Only the explicit object-returning shapes below enter this producer.
+        Scalar-returning, encoding, formatting, foreign and keyword binding
+        routes keep their separate contracts.
+        """
+        attr = expr.func
+        if expr.kwargs or self._has_starred_unpack(expr.args):
+            return None
+        if self._expr_looks_cpython(attr.obj):
+            return None
+        name = attr.name
+        runtime_name = None
+        object_count = len(expr.args)
+        scalar_index = -1
+        null_separator = False
+        if name in ("upper", "lower", "capitalize", "swapcase", "title", "casefold"):
+            if expr.args:
+                return None
+            runtime_name = "py_str_" + name
+        elif name in ("strip", "lstrip", "rstrip"):
+            if len(expr.args) > 1:
+                return None
+            runtime_name = "py_str_" + name + ("_chars" if expr.args else "")
+        elif name in ("split", "rsplit"):
+            if len(expr.args) > 2:
+                return None
+            runtime_name = "py_str_split"
+            null_separator = not expr.args
+            if len(expr.args) == 2:
+                runtime_name = "py_str_" + name + "_maxsplit"
+                scalar_index = 1
+                object_count = 1
+        elif name == "replace":
+            if len(expr.args) not in (2, 3):
+                return None
+            runtime_name = "py_str_replace"
+            if len(expr.args) == 3:
+                runtime_name += "_count"
+                scalar_index = 2
+                object_count = 2
+        elif name in ("partition", "rpartition", "removeprefix", "removesuffix"):
+            if len(expr.args) != 1:
+                return None
+            runtime_name = "py_str_" + name
+        else:
+            return None
+
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("str.method.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(attr.obj, "str.method.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            arguments = [receiver]
+            for index, argument in enumerate(expr.args):
+                operand = self._emit_slot_call_operand(argument, "str.method.argument")
+                roots.append(operand)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if index < object_count:
+                    arguments.append(operand)
+            suffix = ()
+            if null_separator:
+                suffix = (ir.Constant(_CSTR, None),)
+            if scalar_index >= 0:
+                # The checked conversion receives the actual owning argument
+                # slot. Other arguments stay rooted while __index__ executes.
+                scalar = self.builder.call(
+                    self.runtime["py_index_i64_checked_slots"],
+                    [self._as_gc_ptr(roots[-1])],
+                    name=self._fresh("str.method.index"),
+                )
+                self._emit_post_call_err_check(expr.span)
+                suffix = (scalar,)
+            self._slot_call_runtime_call(
+                runtime_name, tuple(arguments), result_slot=output,
+                suffix_args=suffix, span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("str.method.output"))
+        return self._take_slot_call_root(output)
+
     def _emit_str_method_with_receiver(self, expr: Call, recv: ir.Value, dynamic: bool):
         if expr.func.name == "encode":
             return self._emit_str_encode_call(expr, recv)
@@ -524,6 +759,9 @@ class StringMethodLoweringMixin:
             or attr.name == "encode"
         ):
             return None
+        owned_result = self._maybe_emit_owned_str_result(expr)
+        if owned_result is not None:
+            return owned_result
         if (attr.name == "join" and len(expr.args) == 1
                 and not self._expr_looks_cpython(attr.obj)):
             return self._emit_owned_native_join_call(expr)
@@ -897,6 +1135,10 @@ class StringMethodLoweringMixin:
             # calls still use the precise bytes branch in
             # method_call_expression_lowering.
             return None
+        if name == "decode" and not self._expr_looks_cpython(attr.obj):
+            owned = self._emit_owned_bytes_decode(expr, True)
+            if owned is not None:
+                return owned
         recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):
             recv = self.builder.call(
@@ -1072,6 +1314,9 @@ class StringMethodLoweringMixin:
             or attr.name in ("format", "encode")
         ):
             return None
+        owned_result = self._maybe_emit_owned_str_result(expr)
+        if owned_result is not None:
+            return owned_result
         if (attr.name == "join" and len(expr.args) == 1
                 and not self._expr_looks_cpython(attr.obj)):
             return self._emit_owned_native_join_call(expr)

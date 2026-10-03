@@ -341,14 +341,35 @@ class ExprDispatchLoweringMixin:
         if isinstance(expr, FloatLit):
             return ir.Constant(_DOUBLE, _as_native_float(expr.value))
         if isinstance(expr, ComplexLit):
-            return self.builder.call(
-                self.runtime["py_complex_new"],
-                [
-                    ir.Constant(_DOUBLE, _as_native_float(expr.real)),
-                    ir.Constant(_DOUBLE, _as_native_float(expr.imag)),
-                ],
-                name=self._fresh("complex.lit"),
-            )
+            # This producer returns a NEW managed object, even though its
+            # inputs are scalar constants. Publish before any error check or
+            # cleanup; a complex annotation cannot establish pointer ownership.
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = ()
+            if output is None:
+                output = self._new_slot_call_root("complex.literal.result")
+                roots = (output,)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cleanup = self._cpy_operand_cleanup_block
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(roots, target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_complex_new", (), result_slot=output,
+                    suffix_args=(
+                        ir.Constant(_DOUBLE, _as_native_float(expr.real)),
+                        ir.Constant(_DOUBLE, _as_native_float(expr.imag)),
+                    ),
+                    span=expr.span,
+                )
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("complex.literal.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cleanup
         if isinstance(expr, BoolLit):
             return ir.Constant(_I1, 1 if bool(expr.value) else 0)
         if isinstance(expr, NoneLit):

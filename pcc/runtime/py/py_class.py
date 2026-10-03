@@ -3287,6 +3287,23 @@ def py_super_lookup(start_cls, from_cls, name):
 
 
 pcc_class_retire_metaclass = extern("pcc_class_retire_metaclass", (c_ptr,), c_void)
+pcc_class_abort_definition_slots = extern("pcc_class_abort_definition_slots", (c_ptr,), c_void)
+define_global_i32("pcc_class_definition_abort_error_map", 1)
+
+
+@c_abi_export("py_class_abort_definition_slots")
+def py_class_abort_definition_slots(class_slot: c_ptr) -> None:
+    # Keep exception ownership in the semantic layer. The freestanding entry
+    # owns only graph detach and deferred disposal; class_slot is the caller's
+    # still-registered root, never a borrowed managed address.
+    error = stack_alloc(C_POINTER_SIZE)
+    store_ptr(error, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_class_definition_abort_error_map"), error)
+    py_tls_exc_swap_slot(error)
+    pcc_class_abort_definition_slots(class_slot)
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave(error)
 
 
 @c_abi_export("py_class_dealloc")

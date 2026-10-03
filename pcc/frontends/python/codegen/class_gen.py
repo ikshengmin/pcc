@@ -4921,6 +4921,7 @@ class ClassLowering:
                 cls_ptr = self._maybe_emit_metaclass_inherited_constructor(cd, info)
             if cls_ptr is None:
                 cls_ptr = self._maybe_emit_metaclass_keyword_constructor(cd, info)
+        fresh_builtin_class = cls_ptr is None
         if cls_ptr is None:
             cls_ptr = builder.call(
                 runtime["py_class_new"],
@@ -4942,6 +4943,26 @@ class ClassLowering:
             rooted_pcc_lifetimes=((class_body_root, True),),
         )
         class_body_cleanup = self.parent._try_err_block
+        class_abort_flag = None
+        if fresh_builtin_class and not getattr(info, "metaclass_name", None) and self._class_metaclass_expr(cd) is None:
+            # The builtin constructor made this object for this definition.
+            # Its namespace has a separate owner even though classes remain
+            # immortal. Drop that owner only while the class cannot escape.
+            class_abort_flag = self.parent._alloca_in_entry(
+                ir.IntType(1), name=self._fresh("class.definition.abort"),
+            )
+            builder.store(ir.Constant(ir.IntType(1), 1), class_abort_flag)
+            saved_block = builder._block
+            check = self.parent.current_function.append_basic_block(self._fresh("class.definition.unwind"))
+            rollback = self.parent.current_function.append_basic_block(self._fresh("class.definition.rollback"))
+            builder.position_at_end(check)
+            builder.cbranch(builder.load(class_abort_flag), rollback, class_body_cleanup)
+            builder.position_at_end(rollback)
+            builder.call(runtime["py_class_abort_definition_slots"], [self.parent._as_gc_ptr(class_body_root)])
+            builder.branch(class_body_cleanup)
+            builder.position_at_end(saved_block)
+            class_body_cleanup = check
+            self.parent._try_err_block = check
         saved_class_body_cpy = self.parent._cpy_operand_cleanup_block
         # The constructor's NEW owner must be rooted before metaclass or
         # header metadata can allocate or report an exception.
@@ -4981,6 +5002,8 @@ class ClassLowering:
         # The class-local namespace remains a live owner throughout default
         # evaluation. Cached attribute globals identify bindings only.
         saved_namespace_context = getattr(self.parent, "_class_namespace_context", None)
+        saved_abort_context = getattr(self.parent, "_class_definition_abort_context", None)
+        self.parent._class_definition_abort_context = (info, class_abort_flag)
         namespace_bindings = {}
         namespace_root = None
         self.parent._class_namespace_context = None
@@ -5104,6 +5127,7 @@ class ClassLowering:
                     if owns_lifetime:
                         self.parent._gc_release(capture_value)
             self.parent._class_namespace_context = saved_namespace_context
+            self.parent._class_definition_abort_context = saved_abort_context
             if namespace_root is not None:
                 self.parent._release_slot_call_roots((namespace_root,))
             self.parent._try_err_block = class_body_cleanup
@@ -6648,6 +6672,11 @@ class ClassLowering:
         set_name = desc_info.methods.get("__set_name__")
         if set_name is None:
             return
+        context = getattr(self.parent, "_class_definition_abort_context", None)
+        if context is not None and context[0] is owner_info and context[1] is not None:
+            # __set_name__ can retain its class argument. Once exposed, the
+            # definition error edge must not dismantle that live class.
+            self.parent.builder.store(ir.Constant(ir.IntType(1), 0), context[1])
         name_obj = self.parent._emit_str_literal(attr_name)
         self.parent._call_user(
             set_name,

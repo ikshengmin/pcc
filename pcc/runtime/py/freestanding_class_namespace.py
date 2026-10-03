@@ -228,3 +228,42 @@ def pcc_class_retire_metaclass(cls: c_ptr) -> None:
     # The old count was consumed under lock. A terminal old value is already
     # nonrelocatable; a surviving old value needs no further pointer access.
     pcc_gc_store_ptr_plan_finish(plan)
+
+
+_CLASS_DEFINITION_ABORT_PLAN_BYTES: i64 = 128
+
+
+@c_abi_export("pcc_class_abort_definition_slots")
+def pcc_class_abort_definition_slots(class_slot: c_ptr) -> None:
+    """Retire definition owners of a fresh, unexposed builtin class.
+
+    Only the compiler's pre-publication error edge may call this entry. Its
+    class slot remains registered throughout. A custom metaclass result or a
+    class already passed to a Python callback is outside this contract.
+    Keep the immortal class shell, tag, bases, MRO and field layout intact:
+    their wider dynamic-reclamation contract is independent of this rollback.
+    Detaching the namespace releases this owner, never clears a shared dict.
+    """
+    plan = stack_alloc(_CLASS_DEFINITION_ABORT_PLAN_BYTES)
+    pcc_py_gc_minor_graph_lock()
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    pcc_gc_store_root_plan_init(plan, backend)
+    source = _class_namespace_source_locked(class_slot)
+    if ptr_is_null(source) == 0:
+        cls = load_ptr(class_slot, 0)
+        methods = load_ptr(cls, PYCLASSOBJECT_METHODS_OFFSET)
+        count: i64 = load_i32(cls, PYCLASSOBJECT_N_METHODS_OFFSET)
+        index: i64 = 0
+        if ptr_is_null(methods) == 0:
+            while index < count:
+                store_ptr(methods, index * PYCLASSMETHOD_SIZE + PYCLASSMETHOD_FUNC_OFFSET, null())
+                index += 1
+        store_ptr(cls, PYCLASSOBJECT_DEL_METHOD_OFFSET, null())
+        # Every method-table pointer is a borrowed alias. Retire aliases and
+        # cached outcomes before the namespace owner can invoke finalizers.
+        atomic_rmw_i32("add", global_addr("py_class_attr_cache_epoch"), 0, 1, "release")
+        pcc_gc_store_ptr_plan_commit_locked(plan, cls, source, null())
+    pcc_py_gc_minor_graph_unlock()
+    # A terminal namespace is stable; a surviving one may have moved and the
+    # existing plan finish does not dereference its old address.
+    pcc_gc_store_ptr_plan_finish(plan)

@@ -361,6 +361,18 @@ class UnaryCallLoweringMixin:
         # at every park).  Global-backed operands are re-derived here; every
         # other value passes through unchanged.
         args_ir = [self._value_available_at_insertion_point(a) for a in args_ir]
+        publication_cleanup = None
+        if (result_slot is not None and pinned_arg_temps
+                and isinstance(fn.function_type.return_type, ir.PointerType)):
+            error_target = self._current_try_err_block()
+            if error_target is None:
+                error_target = self._ensure_fn_err_exit()
+            # Build this edge before the call, so its returned owner still
+            # reaches the output slot without intervening instructions.
+            publication_cleanup = self._make_cpy_operand_cleanup_block(
+                (), (), error_target, "call.publication.arguments.cleanup",
+                pinned_arg_temps,
+            )
         result = self.builder.call(fn, args_ir, name=call_name)
         root_slot = None
         root_ptr = None
@@ -368,7 +380,16 @@ class UnaryCallLoweringMixin:
             # The expression consumer registered this empty owning output
             # before any operand evaluation. Publish at the actual return
             # instruction, ahead of error checks and argument cleanup.
-            self._publish_slot_call_owned(result_slot, result, label="user call")
+            previous = self._current_try_err_block()
+            saved_cpy = self._cpy_operand_cleanup_block
+            try:
+                if publication_cleanup is not None:
+                    self._try_err_block = publication_cleanup
+                    self._cpy_operand_cleanup_block = publication_cleanup
+                self._publish_slot_call_owned(result_slot, result, label="user call")
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         if (
             root_result
             and result_slot is None

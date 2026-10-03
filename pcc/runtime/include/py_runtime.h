@@ -1276,6 +1276,9 @@ PyObject *py_obj_sorted(PyObject *x);
 int64_t py_obj_sorted_slots(PyObject **source_slot, PyObject **key_slot,
                             PyObject **compare_slot, int64_t reverse,
                             PyObject **result_slot);
+/* Registered owning inputs; distinct empty output. Returns 0 or -1. */
+int64_t py_obj_mul_slots(PyObject **left_owner, PyObject **right_owner,
+                         PyObject **output_owner);
 /* int64_t returns for pcc-Python ABI parity (default-int lowering). */
 int64_t   py_obj_truthy(PyObject *o);                /* 0 or 1 */
 int64_t   py_obj_type_tag(PyObject *o);

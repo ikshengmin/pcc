@@ -670,69 +670,58 @@ class NativeSystemLoweringMixin:
         return fn
 
     def _emit_program_argv_list(self) -> ir.Value:
-        argc = self.builder.call(
-            self.runtime["py_program_argc"],
-            [],
-            name=self._fresh("argv.argc"),
-        )
-        lst = self.builder.call(
-            self.runtime["py_list_new"],
-            [argc],
-            name=self._fresh("argv.list"),
-        )
-        idx_slot = self._alloca_in_entry(_I64, name=self._fresh("argv.i"))
-        self.builder.store(ir.Constant(_I64, 0), idx_slot)
-        fn = self.builder._block.function
-        cond_bb = fn.append_basic_block(name=self._fresh("argv.cond"))
-        body_bb = fn.append_basic_block(name=self._fresh("argv.body"))
-        step_bb = fn.append_basic_block(name=self._fresh("argv.step"))
-        end_bb = fn.append_basic_block(name=self._fresh("argv.end"))
-        self.builder.branch(cond_bb)
+        return self._take_slot_call_root(self._emit_slot_call_program_argv(None, "argv"))
 
-        self.builder.position_at_end(cond_bb)
-        cur = self.builder.load(idx_slot, name=self._fresh("argv.cur"))
-        more = self.builder.icmp_signed(
-            "<",
-            cur,
-            argc,
-            name=self._fresh("argv.more"),
-        )
-        self.builder.cbranch(more, body_bb, end_bb)
+    def _emit_slot_call_program_argv(self, span, label):
+        """Own the existing kernel argv projection throughout list population.
 
-        self.builder.position_at_end(body_bb)
-        raw = self.builder.call(
-            self.runtime["py_program_argv"],
-            [cur],
-            name=self._fresh("argv.raw"),
-        )
-        n_bytes = self.builder.call(
-            self._declare_strlen(),
-            [raw],
-            name=self._fresh("argv.len"),
-        )
-        item = self.builder.call(
-            self.runtime["py_str_new"],
-            [raw, n_bytes],
-            name=self._fresh("argv.str"),
-        )
-        self.builder.call(
-            self.runtime["py_list_append"],
-            [lst, item],
-        )
-        self.builder.branch(step_bb)
-
-        self.builder.position_at_end(step_bb)
-        cur2 = self.builder.load(idx_slot, name=self._fresh("argv.cur2"))
-        nxt = self.builder.add(
-            cur2,
-            ir.Constant(_I64, 1),
-            name=self._fresh("argv.next"),
-        )
-        self.builder.store(nxt, idx_slot)
-        self.builder.branch(cond_bb)
-
-        self.builder.position_at_end(end_bb)
-        return lst
+        This only repairs publication. The existing projection creates a new
+        list; shared sys.argv identity and mutation need their own contract.
+        """
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            argc = self.builder.call(self.runtime["py_program_argc"], [], name=self._fresh("argv.argc"))
+            self._slot_call_runtime_call("py_list_new", (), result_slot=output,
+                                         suffix_args=(argc,), span=span)
+            item = self._new_slot_call_root(label + ".item")
+            roots.append(item)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            idx_slot = self._alloca_in_entry(_I64, name=self._fresh("argv.i"))
+            self.builder.store(ir.Constant(_I64, 0), idx_slot)
+            fn = self.current_function
+            cond_bb = fn.append_basic_block(name=self._fresh("argv.cond"))
+            body_bb = fn.append_basic_block(name=self._fresh("argv.body"))
+            end_bb = fn.append_basic_block(name=self._fresh("argv.end"))
+            self.builder.branch(cond_bb)
+            self.builder.position_at_end(cond_bb)
+            cur = self.builder.load(idx_slot, name=self._fresh("argv.cur"))
+            more = self.builder.icmp_signed("<", cur, argc, name=self._fresh("argv.more"))
+            self.builder.cbranch(more, body_bb, end_bb)
+            self.builder.position_at_end(body_bb)
+            raw = self.builder.call(self.runtime["py_program_argv"], [cur], name=self._fresh("argv.raw"))
+            n_bytes = self.builder.call(self._declare_strlen(), [raw], name=self._fresh("argv.len"))
+            # The kernel argv C string is unmanaged process-lifetime storage.
+            self._slot_call_runtime_call("py_str_new", (), result_slot=item,
+                                         suffix_args=(raw, n_bytes), span=span)
+            self._slot_call_runtime_call("py_list_append", (output, item), span=span)
+            self.builder.call(self.runtime["pcc_gc_store_root"],
+                              [self._as_gc_ptr(item), ir.Constant(_CSTR, None)])
+            nxt = self.builder.add(cur, ir.Constant(_I64, 1), name=self._fresh("argv.next"))
+            self.builder.store(nxt, idx_slot)
+            self.builder.branch(cond_bb)
+            self.builder.position_at_end(end_bb)
+            self._release_slot_call_roots((item,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
 
 
 __all__ = ["NativeSystemLoweringMixin"]

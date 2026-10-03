@@ -971,6 +971,23 @@ class CallExpressionLoweringMixin:
             )
             if literal_dispatch is not None:
                 return literal_dispatch
+            current_function = self.current_function
+            if (
+                self._strict_no_libpython
+                and not getattr(self, "_freestanding_module", False)
+                and not getattr(self, "_runtime_port_module", False)
+                and not self._expr_looks_cpython(func_expr)
+                and not self._expr_returns_unsafe_raw_pointer(func_expr)
+                and not self._is_valueclass_payload_type(func_expr.ty)
+                and (current_function is None or (
+                    current_function.name not in self._manual_pointer_abi_functions
+                    and current_function.name not in self._c_abi_export_symbols
+                ))
+            ):
+                # A computed native callable has the same input/result ABI as
+                # a named binding. Retain its owner before arguments execute,
+                # and let the runtime publish directly into the caller's sink.
+                return self._emit_slot_call_object(expr, "expr.obj.call")
             fn_val = self._emit_expr(func_expr)
             if fn_val in getattr(self, "_cpy_values", ()):
                 if expr.kwargs:
@@ -2218,6 +2235,7 @@ class CallExpressionLoweringMixin:
                     class_name,
                     expr.args,
                     expr.kwargs,
+                    expr=expr,
                 )
                 if inst is not None:
                     return attach_hoisted_class_captures(inst)
@@ -2261,6 +2279,7 @@ class CallExpressionLoweringMixin:
                     expr.args,
                     expr.kwargs,
                     force=True,
+                    expr=expr,
                 )
                 if inst is not None:
                     return attach_hoisted_class_captures(inst)
@@ -2589,6 +2608,20 @@ class CallExpressionLoweringMixin:
             # missing name then raises NameError at runtime instead of being
             # rejected during compilation; names populated by dynamic import
             # machinery can still be called.
+            current_function = self.current_function
+            if (
+                self._strict_no_libpython
+                and not getattr(self, "_freestanding_module", False)
+                and not getattr(self, "_runtime_port_module", False)
+                and (current_function is None or (
+                    current_function.name not in self._manual_pointer_abi_functions
+                    and current_function.name not in self._c_abi_export_symbols
+                ))
+            ):
+                # The live namespace lookup returns an owner. Keep it rooted
+                # while options execute, and publish the call result before
+                # releasing either the callable or its argument containers.
+                return self._emit_slot_call_object(expr, name + ".dyn.call")
             fn_val = self._emit_name(
                 Name(
                     span=self._expr_span_or_none(expr),

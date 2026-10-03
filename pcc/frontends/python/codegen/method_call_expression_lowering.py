@@ -2416,6 +2416,10 @@ class MethodCallExpressionLoweringMixin:
                 name=self._fresh(f"bytes.{attr.name}.bool"),
             )
         if isinstance(obj_ty, (BytesType, ByteArrayType)) and attr.name == "decode":
+            if not self._expr_looks_cpython(attr.obj):
+                owned = self._emit_owned_bytes_decode(expr, False)
+                if owned is not None:
+                    return owned
             # decode() defaults to utf-8, and pcc str is utf-8 internally, so an
             # explicit "utf-8" encoding (+ optional supported errors mode) stays
             # in the native runtime. Other encodings / error modes fall back.

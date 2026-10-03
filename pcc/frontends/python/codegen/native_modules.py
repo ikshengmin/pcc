@@ -3161,308 +3161,87 @@ class NativeModuleAliasMixin:
         self,
         class_name: str,
         args: tuple,
+        expr=None,
     ) -> ir.Value:
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
-
-            sys.stderr.write(
-                "debug: native_class_instantiate enter class_name="
-                + str(class_name)
-                + " args_len="
-                + str(len(args))
-                + "\n"
-            )
         class_info = self.class_lowering.classes.get(class_name)
         if class_info is None:
             raise NotImplementedError(
                 f"instantiation: class {class_name!r} not found in module"
             )
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
-
-            try:
-                gv = class_info.global_var
-                sys.stderr.write(
-                    "debug: native_class_instantiate info name="
-                    + str(class_info.name)
-                    + " fields="
-                    + ",".join(class_info.field_names)
-                    + " gv_type="
-                    + type(gv).__name__
-                    + " gv_name="
-                    + str(getattr(gv, "name", "<missing>"))
-                    + "\n"
-                )
-            except Exception:
-                sys.stderr.write("debug: native_class_instantiate info_dump_failed=1\n")
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
-
-            sys.stderr.write("debug: native_class_instantiate before_load\n")
-        cls_ptr = self.builder.load(
-            class_info.global_var, name=self._fresh(f".cls.{class_name}")
-        )
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
-
-            sys.stderr.write("debug: native_class_instantiate after_load\n")
-        # CPython constructs with ``cls.__new__(cls, *args)``.  This is the
-        # cross-module construction path -- ``ir.IntType(1)`` reached through
-        # an imported module object -- and it allocated straight from
-        # py_instance_new, so a user ``__new__`` never ran.  Interning and
-        # singleton classes therefore returned a fresh object every call, and
-        # pcc1 died at pcc/frontends/c/codegen/c_types.py:22 with ``'object' object has
-        # no attribute '_cache'`` because ``__new__`` was the thing that
-        # would have made ``cls`` meaningful there.
-        extern_new_fn = class_info.methods.get("__new__")
-        if extern_new_fn is None:
-            # ``__new__`` is commonly declared on a base -- the singleton
-            # idiom puts it on the shared base and subclasses only set class
-            # attributes -- and an extern class's method table carries only
-            # its own methods.
-            new_owner = self._resolve_method_mro(class_name, "__new__")
-            if new_owner is not None:
-                extern_new_fn = new_owner.methods.get("__new__")
-        if extern_new_fn is not None:
-            new_call_args = [cls_ptr]
-            for arg_expr in args:
-                new_call_args.append(self._emit_expr_as_pcc_object(arg_expr))
-            constructed = self.builder.call(
-                extern_new_fn,
-                new_call_args,
-                name=self._fresh(f"new.{class_name}"),
-            )
-            self._emit_post_call_err_check(None)
-            return constructed
-        inst = self.builder.call(
-            self.runtime["py_instance_new"],
-            [cls_ptr],
-            name=self._fresh(f"inst.{class_name}"),
-        )
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
-
-            sys.stderr.write("debug: native_class_instantiate after_new\n")
+        init_info = class_info
         init_fn = class_info.init_fn
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
-
-            sys.stderr.write("debug: native_class_instantiate before_methods\n")
         if init_fn is None:
             init_fn = class_info.methods.get("__init__")
-        init_info = class_info
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
-
-            sys.stderr.write("debug: native_class_instantiate before_bases\n")
         if init_fn is None:
-            visited: set[str] = set()
-            queue: list[str] = []
-            for base_expr in init_info.bases_ast:
-                if isinstance(base_expr, Name) and base_expr.ident != "object":
-                    queue.append(base_expr.ident)
-            while queue and init_fn is None:
-                base_name = queue.pop(0)
-                if base_name in visited:
-                    continue
-                visited.add(base_name)
-                base_info = self.class_lowering.classes.get(base_name)
-                if base_info is None:
-                    continue
-                candidate = base_info.init_fn
-                if candidate is None:
-                    candidate = base_info.methods.get("__init__")
-                if candidate is not None:
-                    init_info = base_info
-                    init_fn = candidate
-                    break
-                for parent_expr in base_info.bases_ast:
-                    if isinstance(parent_expr, Name) and parent_expr.ident != "object":
-                        queue.append(parent_expr.ident)
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
+            inherited = self._resolve_method_mro(class_name, "__init__")
+            if inherited is not None:
+                init_info = inherited
+                init_fn = inherited.init_fn
+                if init_fn is None:
+                    init_fn = inherited.methods.get("__init__")
 
-            sys.stderr.write("debug: native_class_instantiate before_method_def\n")
-        init_ast_fd = self._native_class_method_def(init_info, "__init__")
-        if init_fn is not None:
-            # Imported initializers obey their declared operand ABI just like
-            # ordinary method calls. In a scaffold caller, an ordinary int
-            # expression can be machine-valued even though the provider's
-            # Python-int parameter is boxed. Share the established adapter,
-            # including defaults, argument ownership and exceptional cleanup.
-            instance_root = self._extern_enter_root(
-                inst, True, "native.constructor.instance"
+        span = None if expr is None else expr.span
+        sink = None if expr is None else self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("native.constructor.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            cls = self._new_slot_call_root("native.constructor.class")
+            roots.append(cls)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # The module-qualified class comes from this provider's global;
+            # a caller local with the same short name is a different binding.
+            self._slot_call_copy_source(cls, class_info.global_var, span=span)
+            # This runtime producer has an actual NEW managed-object result.
+            # Publish it before lease release, errors, initializer evaluation,
+            # or any argument/default/finalizer cleanup can safepoint.
+            self._slot_call_runtime_call(
+                "py_instance_new", (cls,), result_slot=output, span=span,
             )
-            previous_err = self._current_try_err_block()
-            error_target = previous_err
-            if error_target is None:
-                error_target = self._ensure_fn_err_exit()
-            self._try_err_block = self._extern_cleanup_block(
-                (instance_root,), error_target
-            )
-            try:
+            if init_fn is not None:
+                token = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_acquire"],
+                    [self._as_gc_ptr(output)],
+                    name=self._fresh("native.constructor.lease"),
+                )
+                self._slot_call_check_status(token, "constructor receiver lease", span)
+                self._try_err_block = self._slot_call_cleanup_block(
+                    tuple(roots), target, ((output, token),),
+                )
+                self._cpy_operand_cleanup_block = self._try_err_block
+                receiver = self.builder.load(output, name=self._fresh("native.constructor.receiver"))
+                # Keep the provider's declared physical ABI. In particular,
+                # Python int and runtime machine-int parameters are different
+                # even when both source annotations spell int. The counted
+                # receiver lease survives this helper's legacy pin cleanup.
                 self._emit_direct_method_call(
-                    init_fn, self._extern_load_root(instance_root),
-                    init_info, "__init__", args,
+                    init_fn, receiver, init_info, "__init__", args,
                 )
-            finally:
-                self._try_err_block = previous_err
-            return self._extern_take_root(instance_root)
-        if str(
-            os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-        ).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            import sys
-
-            sys.stderr.write("debug: native_class_instantiate after_method_def\n")
-        should_call_init = init_fn is not None
-        if not should_call_init and init_ast_fd is not None:
-            should_call_init = True
-        if not should_call_init and len(args) > 0:
-            should_call_init = True
-        if should_call_init:
-            if str(
-                os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-            ).strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                import sys
-
-                sys.stderr.write(
-                    "debug: native_class_instantiate call_init class_name="
-                    + str(class_name)
-                    + " init_info="
-                    + str(init_info.name)
-                    + " init_ast="
-                    + str(init_ast_fd is not None)
-                    + "\n"
+                released = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_release"],
+                    [self._as_gc_ptr(output), token],
+                    name=self._fresh("native.constructor.release"),
                 )
-            init_args: list[ir.Value] = [inst]
-            declared = [
-                a for a in (init_ast_fd.args[1:] if init_ast_fd else ()) if a.name != ""
-            ]
-            for i, arg_expr in enumerate(args):
-                v = self._emit_expr(arg_expr)
-                if i < len(declared) and declared[i].annotation is not None:
-                    v = self._coerce(v, arg_expr.ty, declared[i].annotation)
-                else:
-                    v = marshal.marshal_to_object(
-                        self.builder,
-                        self.module,
-                        self.runtime,
-                        v,
-                        arg_expr.ty,
-                    )
-                init_args.append(v)
-
-            for j in range(len(args), len(declared)):
-                arg = declared[j]
-                arg_kind = getattr(arg, "kind", "pos")
-                if arg_kind == "*args":
-                    # Unfilled ``*args``: pass an empty tuple so the
-                    # callee's iteration over the vararg is well-formed
-                    # (``for part in extra:`` immediately terminates).
-                    empty_tuple = self.builder.call(
-                        self.runtime["py_tuple_new"],
-                        [ir.Constant(ir.IntType(64), 0)],
-                        name=self._fresh(f"{class_name}.init.extras"),
-                    )
-                    init_args.append(empty_tuple)
-                    continue
-                if arg_kind == "**kwargs":
-                    # Unfilled ``**kwargs``: pass an empty dict so the
-                    # callee's lookup over the varkwarg is well-formed.
-                    empty_dict = self.builder.call(
-                        self.runtime["py_dict_new"],
-                        [],
-                        name=self._fresh(f"{class_name}.init.kwextras"),
-                    )
-                    init_args.append(empty_dict)
-                    continue
-                if not getattr(arg, "has_default", False):
-                    raise NotImplementedError(
-                        f"instantiation: {class_name}.__init__ missing "
-                        f"argument {arg.name!r} and has no default"
-                    )
-                v = self._emit_expr(arg.default)
-                if arg.annotation is not None:
-                    v = self._coerce(v, arg.default.ty, arg.annotation)
-                else:
-                    v = marshal.marshal_to_object(
-                        self.builder,
-                        self.module,
-                        self.runtime,
-                        v,
-                        arg.default.ty,
-                    )
-                init_args.append(v)
-            # No __init__ was found in the class or a pcc-known base. Keep
-            # evaluation above, but do not invent a phantom initializer.
-            # See python-class-init-phantom-symbol-link-fail.md.
-        return inst
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_check_status(released, "constructor receiver lease release", span)
+            elif args:
+                raise L1CodegenError("constructor without an initializer requires the class binder")
+            self._release_slot_call_roots((cls,))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("native.constructor.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_no_init_field_instance(
         self,
@@ -3471,9 +3250,10 @@ class NativeModuleAliasMixin:
         kwargs: tuple,
         *,
         force: bool = False,
+        expr=None,
     ) -> ir.Value | None:
         info = self.class_lowering.classes.get(class_name)
-        if info is None:
+        if info is None or info.valueclass:
             return None
         if info.init_fn is not None and not force:
             return None
@@ -3485,155 +3265,82 @@ class NativeModuleAliasMixin:
                 f"class {class_name!r} has no __init__ for extra "
                 "positional arguments"
             )
-
-        cls_ptr = self.class_lowering._load_class_object(
-            info,
-            f".cls.{class_name}.field",
-        )
-        inst = self.builder.call(
-            self.runtime["py_instance_new"],
-            [cls_ptr],
-            name=self._fresh(f"inst.{class_name}.field"),
-        )
-        seen = set()
-
-        for i, arg_expr in enumerate(args):
-            field_name = field_names[i]
-            seen.add(field_name)
-            if str(
-                os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-            ).strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                import sys
-
-                sys.stderr.write(
-                    "debug: native_field_init arg index="
-                    + str(i)
-                    + " field="
-                    + field_name
-                    + " expr_type="
-                    + type(arg_expr).__name__
-                    + " ty_name="
-                    + str(getattr(getattr(arg_expr, "ty", None), "name", ""))
-                    + "\n"
-                )
-            # An `int` field holds the OBJECT projection (the store below is
-            # `py_instance_set_field`, which takes a pointer), so emit the
-            # argument as an object rather than as an i64.  `_emit_expr` yields
-            # i64 for an int-typed expression, and i64 cannot carry a value
-            # above 2**63-1 -- which is exactly how the parser's
-            # `pa.IntLit(span, ty, int(e.text, 0))` stored 0 for every source
-            # literal beyond that range.  This dataclass fast path (no user
-            # `__init__`) bypasses every other constructor lowering, so the fix
-            # has to be here too.
-            raw_v = None
-            arg_ty = getattr(arg_expr, "ty", None)
-            if isinstance(arg_ty, IntType):
-                raw_v = self._maybe_emit_exact_int_object(arg_expr)
-            if raw_v is None:
-                raw_v = self._emit_expr(arg_expr)
-            if str(
-                os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-            ).strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                import sys
-
-                try:
-                    sys.stderr.write(
-                        "debug: native_field_init raw index="
-                        + str(i)
-                        + " raw_type="
-                        + type(raw_v).__name__
-                        + " ir_type="
-                        + str(getattr(raw_v, "type", "<missing>"))
-                        + "\n"
-                    )
-                except Exception:
-                    sys.stderr.write("debug: native_field_init raw_dump_failed=1\n")
-            v_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                raw_v,
-                arg_expr.ty,
-            )
-            if str(
-                os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-            ).strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                import sys
-
-                try:
-                    setter = self.runtime["py_obj_setattr"]
-                    sys.stderr.write(
-                        "debug: native_field_init boxed index="
-                        + str(i)
-                        + " boxed_type="
-                        + type(v_obj).__name__
-                        + " boxed_ir_type="
-                        + str(getattr(v_obj, "type", "<missing>"))
-                        + " setter_type="
-                        + type(setter).__name__
-                        + " setter_ir_type="
-                        + str(getattr(setter, "type", "<missing>"))
-                        + "\n"
-                    )
-                except Exception:
-                    sys.stderr.write("debug: native_field_init boxed_dump_failed=1\n")
-            self.builder.call(
-                self.runtime["py_obj_setattr"],
-                [inst, self._attr_name_ptr(field_name), v_obj],
-            )
-            if str(
-                os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or ""
-            ).strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                import sys
-
-                sys.stderr.write(
-                    "debug: native_field_init set_done index="
-                    + str(i)
-                    + " field="
-                    + field_name
-                    + "\n"
-                )
-
-        for kw_name, kw_expr in kwargs:
+        seen = set(field_names[:len(args)])
+        for kw_name, _kw_expr in kwargs:
             if kw_name in seen:
                 raise NotImplementedError(
                     f"class {class_name!r} got multiple values for "
                     f"field {kw_name!r}"
                 )
             seen.add(kw_name)
-            raw_v = self._emit_expr(kw_expr)
-            v_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                raw_v,
-                kw_expr.ty,
+
+        span = None if expr is None else expr.span
+        sink = None if expr is None else self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("constructor.fields.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Keep the class lookup before operand evaluation. A local class
+            # may have a live binding; an imported class has its provider's
+            # authoritative global. Neither is an owned raw SSA pointer.
+            cls = self._new_slot_call_root("constructor.fields.class")
+            roots.append(cls)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if info.owning_module:
+                source = (info.global_var, False)
+            else:
+                source = self._slot_call_name_source(
+                    Name(span=span, ty=DynType(name="dyn"), ident=class_name),
+                )
+            if source is None:
+                raise L1CodegenError("field constructor class has no authoritative source")
+            self._slot_call_copy_source(cls, source[0], source[1], span)
+            operands = []
+            if expr is not None and expr.operand_order:
+                for kind, index in expr.operand_order:
+                    if kind == "kw":
+                        operands.append(kwargs[index])
+                    else:
+                        operands.append((field_names[index], args[index]))
+            else:
+                for index, argument in enumerate(args):
+                    operands.append((field_names[index], argument))
+                operands.extend(kwargs)
+            fields = []
+            # Finish every source expression before allocation or a setter
+            # callback. Object operands use their exact object projection,
+            # including arbitrary-precision integers; raw pointers fail closed.
+            for field_name, argument in operands:
+                item = self._emit_slot_call_operand(argument, "constructor.fields.argument")
+                fields.append((field_name, item))
+                roots.append(item)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_instance_new", (cls,), result_slot=output, span=span,
             )
-            self.builder.call(
-                self.runtime["py_obj_setattr"],
-                [inst, self._attr_name_ptr(kw_name), v_obj],
-            )
-        return inst
+            for field_name, item in fields:
+                self._slot_call_runtime_call(
+                    "py_obj_setattr", (output, item),
+                    suffix_args=(self._attr_name_ptr(field_name),),
+                    argument_order=(0, 2, 1), span=span,
+                )
+            retained = tuple(roots[1:]) if sink is None else tuple(roots)
+            self._release_slot_call_roots(retained)
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("constructor.fields.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _declare_extern_user_function(
         self,
@@ -3830,9 +3537,18 @@ class NativeModuleAliasMixin:
                 expr.args,
                 expr.kwargs,
                 force=True,
+                expr=expr,
             )
             if inst is not None:
                 return inst
+        new_owner = self._resolve_method_mro(class_info.name, "__new__")
+        if new_owner is None and "__new__" in class_info.methods:
+            new_owner = class_info
+        if new_owner is not None:
+            if class_info.valueclass:
+                # Explicit payload constructors keep their existing ABI owner.
+                return self.class_lowering.emit_instantiate(class_info.name, expr.args, self, kwargs=expr.kwargs)
+            return self._emit_compiled_module_object_call(module_name, attr, expr)
         init_fd = self._native_class_method_def(class_info, "__init__")
         if (not class_info.valueclass
                 and self._ordinary_call_needs_runtime_binding(expr, init_fd, True)):
@@ -3857,12 +3573,16 @@ class NativeModuleAliasMixin:
                 class_info.name,
                 expr.args,
                 expr.kwargs,
+                expr=expr,
             )
             if inst is not None:
                 return inst
+            if expr.args:
+                return self._emit_compiled_module_object_call(module_name, attr, expr)
         return self._emit_native_class_instantiate(
             class_info.name,
             expr.args,
+            expr=expr,
         )
 
     def _maybe_emit_native_builtin_compiled_call(
