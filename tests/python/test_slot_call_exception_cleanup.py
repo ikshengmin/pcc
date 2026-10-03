@@ -28,6 +28,7 @@ class CleanupModel(CallObjectLoweringMixin):
         self.roots = {name: 100 + index * 2 for index, name in enumerate(owners)}
         self.registered = list(owners)
         self.retired = []
+        self.flags = {}
         self.events = []
         self.callback = callback
         self.move = move
@@ -35,7 +36,7 @@ class CleanupModel(CallObjectLoweringMixin):
         self.builder = SimpleNamespace(
             _block="entry", position_at_end=self.position, call=self.call,
             branch=lambda target: self.events.append(("branch", target)),
-            store=lambda value, flag: self.events.append(("flag", flag)),
+            store=self.store_flag,
         )
         self.current_function = SimpleNamespace(append_basic_block=lambda label: label)
         self.module = SimpleNamespace(globals={"py_tls_exc_swap_slot": "py_tls_exc_swap_slot"})
@@ -105,12 +106,18 @@ class CleanupModel(CallObjectLoweringMixin):
 
     def _emit_gc_frame_leave_lifo_for_slot(self, slot):
         assert self.roots[slot] == 0
-        self.registered.remove(slot)
+        assert self.registered and self.registered[-1] == slot, (slot, self.registered)
+        self.registered.pop()
         if slot == self.saved:
             assert self.pending == self.original
             self.events.append(("retire-exception", slot))
         else:
             self.retired.append(slot)
+            self.events.append(("retire-owner", slot))
+
+    def store_flag(self, value, flag):
+        self.flags[flag] = value.value
+        self.events.append(("flag", flag))
 
     def tls_store(self, name, value):
         if name == "py_tls_current_exc_storage":
@@ -205,6 +212,9 @@ def test_real_cleanup_preserves_exception_and_retires_owners(owners, callback, m
     assert model.pending == model.original, "root disposal lost the selecting exception"
     assert model.callback_count == 1
     assert model.retired == list(reversed(owners))
+    kinds = [event[0] for event in model.events]
+    assert max(i for i, kind in enumerate(kinds) if kind == "dispose") < kinds.index("retire-exception")
+    assert kinds.index("retire-exception") < kinds.index("retire-owner")
     assert model.registered == [] and not any(model.roots.values())
     assert model.events[-1] == ("branch", "handler")
     assert model.builder._block == "entry"
@@ -234,6 +244,19 @@ def test_combined_cleanup_saves_exception_before_releasing_leases_and_roots():
     events = [event[0] for event in model.events]
     assert events.index("swap") < events.index("lease") < events.index("dispose")
     assert model.pending == model.original and model.registered == []
+
+
+def test_generator_cleanup_clears_flags_but_retains_function_root_frames():
+    owners = ("output", "argument")
+    model = CleanupModel(owners, "weakref", True)
+    model._slot_call_root_records = [(name, name + ".owned", False) for name in owners]
+    model.flags = {name + ".owned": 1 for name in owners}
+    model._slot_call_cleanup_block(owners, "handler")
+    assert model.pending == model.original
+    assert model.registered == list(owners) and model.retired == []
+    assert not any(model.roots.values()) and not any(model.flags.values())
+    for name in owners:
+        assert model.events.index(("flag", name + ".owned")) < model.events.index(("dispose", name))
 
 
 def assert_dict_copy_error_cleanup(body):
@@ -278,8 +301,8 @@ def assert_dict_copy_error_cleanup(body):
         assert enters[0].start() < swaps[0].start() < stores[0].start()
         assert stores[-1].start() < clear < swaps[1].start(), block
         leaves = list(re.finditer(r"@pcc_gc_frame_leave_lifo\(ptr (%[\w.]+)\)", block))
-        assert original(leaves[-1][1]) == saved and swaps[1].start() < leaves[-1].start()
-        assert [original(leave[1]) for leave in leaves[:-1]] == [original(store[1]) for store in stores]
+        assert original(leaves[0][1]) == saved and swaps[1].start() < leaves[0].start()
+        assert [original(leave[1]) for leave in leaves[1:]] == [original(store[1]) for store in stores]
         assert "@pcc_gc_store_root" not in block[swaps[1].end():], block
         assert "err.exit" in reachable(name), block
         cleanup_by_owners.setdefault(owners, set()).add(name)

@@ -222,7 +222,18 @@ class CallObjectLoweringMixin:
                 self.runtime["pcc_gc_foreign_lease_release"],
                 [self._as_gc_ptr(slot), token],
             )
-        self._release_slot_call_roots(roots)
+        # The exception frame is above the operand frames. Clear their owners
+        # now, but retain every frame until the exception frame has left.
+        # Reentrant disposal sees only registered, authoritative slots, and a
+        # generator's function-owned flag is cleared before its value drops.
+        for slot in reversed(roots):
+            _slot, flag, _lifo = self._slot_call_root_record(slot)
+            if flag is not None:
+                self.builder.store(ir.Constant(_I1, 0), flag)
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
+            )
         if exception_slot is not None:
             # Weakref callbacks can clear TLS; finalizers can replace it. Drop
             # those errors before returning the original owner to TLS. The
@@ -231,6 +242,12 @@ class CallObjectLoweringMixin:
             self.builder.call(self.runtime["py_clear_exception"], [])
             self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
             self._emit_gc_frame_leave_lifo_for_slot(exception_slot)
+        # All operand slots are empty, so these strict reverse-order frame
+        # leaves cannot invoke another finalizer or clobber restored TLS.
+        for slot in reversed(roots):
+            _slot, _flag, lifo = self._slot_call_root_record(slot)
+            if lifo:
+                self._emit_gc_frame_leave_lifo_for_slot(slot)
         self.builder.branch(target)
         self.builder.position_at_end(saved)
         return cleanup

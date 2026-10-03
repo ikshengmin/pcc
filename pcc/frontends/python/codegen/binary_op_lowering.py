@@ -57,7 +57,7 @@ class BinaryOpLoweringMixin:
         never admit a primitive integer kernel or prove overflow impossible.
         Explicit machine projections retain their own lowering.
         """
-        if (expr.op not in ("+", "-", "*", "/", "//", "%", "<<", ">>") or getattr(self, "_freestanding_module", False)
+        if (expr.op not in ("+", "-", "*", "/", "//", "%", "<<", ">>", "&", "|", "^") or getattr(self, "_freestanding_module", False)
                 or getattr(self, "_runtime_port_module", False)):
             return None
         function = self.current_function
@@ -83,6 +83,15 @@ class BinaryOpLoweringMixin:
         for operand in (expr.lhs, expr.rhs):
             if self._expr_returns_unsafe_raw_pointer(operand):
                 return None
+        if expr.op in ("&", "|", "^"):
+            # Actual runtime tags select arbitrary-precision integer, bool,
+            # container or user/reflected protocols. An annotation never
+            # proves the integer fast path or permits scalar truncation.
+            if expr.op == "&":
+                return "py_obj_and"
+            if expr.op == "|":
+                return "py_obj_or"
+            return "py_obj_xor"
         if expr.op == "*":
             # The slot ABI owns both numeric inputs and every repetition
             # snapshot. Ordinary int counts never pass through an i64 lane

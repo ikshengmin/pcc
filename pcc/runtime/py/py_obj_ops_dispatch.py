@@ -28,6 +28,10 @@ from pcc.runtime.py.py_abi_constants import (
 )
 from pcc.runtime.py.py_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PY_TYPE_COMPLEX, PY_TYPE_COROUTINE, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FILE, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STATICMETHOD, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_WEAKREF
 from pcc.unsafe import (
+    store_ptr,
+    stack_alloc,
+    memset,
+    define_global_i32,
     atomic_load_i32,
     atomic_rmw_i32,
     call_ptr1,
@@ -54,6 +58,22 @@ from pcc.unsafe import (
     store_i8,
     strlen,
 )
+
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+py_dict_update_slots = extern("py_dict_update_slots", (c_ptr, c_ptr), c_int64)
+py_set_union = extern("py_set_union", (c_ptr, c_ptr), c_ptr)
 
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 strcmp = extern("strcmp", (c_ptr, c_ptr), c_int32)
@@ -907,138 +927,224 @@ def _union_operand_len(obj, tag: int) -> int:
     return -1
 
 
-def _union_join(a, b, a_len: int, b_len: int, at: int, bt: int):
-    out = py_tuple_new(a_len + b_len)
-    if ptr_is_null(out):
-        return null()
-    pos: int = 0
-    if at == PY_TYPE_CLASS:
-        py_tuple_set_item(out, pos, a)
-        pos = pos + 1
-    else:
-        i: int = 0
-        while i < a_len:
-            py_tuple_set_item(out, pos, py_tuple_get(a, i))
-            pos = pos + 1
-            i = i + 1
-    if bt == PY_TYPE_CLASS:
-        py_tuple_set_item(out, pos, b)
-        pos = pos + 1
-    else:
-        j: int = 0
-        while j < b_len:
-            py_tuple_set_item(out, pos, py_tuple_get(b, j))
-            pos = pos + 1
-            j = j + 1
-    return out
+_BITWISE_LEFT = 0
+_BITWISE_RIGHT = 1
+_BITWISE_RESULT = 2
+_BITWISE_ITEM = 3
+_BITWISE_ERROR = 4
+_BITWISE_SLOT_COUNT = 5
+_BITWISE_INCOMING_COUNT = 2
+
+define_global_i32("pcc_bitwise_borrowed_map", -2)
+define_global_i32("pcc_bitwise_owned_map", 5)
 
 
-def _py_obj_bitwise_dispatch(a, b, op: int):
+def _bitwise_error(kind: int, message: c_ptr) -> int:
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(kind, message))
+    return -1
+
+
+def _bitwise_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        return _bitwise_error(7, cstr("binary bitwise result lease failed"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    if ptr_is_null(load_ptr(slot, 0)) != 0:
+        return _bitwise_error(19, cstr("binary bitwise result allocation failed"))
+    return -1 if py_err_occurred() != 0 else 0
+
+
+def _bitwise_clear(slots: c_ptr, tokens: c_ptr, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = load_i64(tokens, index * C_POINTER_SIZE)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) != 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * C_POINTER_SIZE, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _bitwise_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
+    error = ptr_add(slots, _BITWISE_ERROR * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(error)
+    _bitwise_clear(slots, tokens, index)
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+
+
+def _bitwise_union_join(slots: c_ptr, tokens: c_ptr, a_len: int, b_len: int, at: int, bt: int) -> int:
+    # Preserve the existing tuple representation and member order. Each NEW
+    # tuple getter owns a separate temporary until the destination retains it.
+    result = ptr_add(slots, _BITWISE_RESULT * C_POINTER_SIZE)
+    item = ptr_add(slots, _BITWISE_ITEM * C_POINTER_SIZE)
+    store_ptr(result, 0, py_tuple_new(a_len + b_len))
+    if _bitwise_adopt(slots, tokens, _BITWISE_RESULT) != 0:
+        return -1
+    side: int = 0
+    position: int = 0
+    while side < _BITWISE_INCOMING_COUNT:
+        source = ptr_add(slots, side * C_POINTER_SIZE)
+        tag: int = at if side == _BITWISE_LEFT else bt
+        length: int = a_len if side == _BITWISE_LEFT else b_len
+        index: int = 0
+        while index < length:
+            if tag == PY_TYPE_CLASS:
+                py_tuple_set_item(load_ptr(result, 0), position, load_ptr(source, 0))
+            else:
+                store_ptr(item, 0, py_tuple_get(load_ptr(source, 0), index))
+                if _bitwise_adopt(slots, tokens, _BITWISE_ITEM) != 0:
+                    return -1
+                py_tuple_set_item(load_ptr(result, 0), position, load_ptr(item, 0))
+                _bitwise_drop(slots, tokens, _BITWISE_ITEM)
+            if py_err_occurred() != 0:
+                return -1
+            position = position + 1
+            index = index + 1
+        side = side + 1
+    return 0
+
+
+def _bitwise_body(slots: c_ptr, tokens: c_ptr, op: int) -> int:
+    left = ptr_add(slots, _BITWISE_LEFT * C_POINTER_SIZE)
+    right = ptr_add(slots, _BITWISE_RIGHT * C_POINTER_SIZE)
+    result = ptr_add(slots, _BITWISE_RESULT * C_POINTER_SIZE)
+    a = load_ptr(left, 0)
+    b = load_ptr(right, 0)
     if ptr_is_null(a) != 0 or ptr_is_null(b) != 0:
-        if op == 0:
-            py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for &")))
-        elif op == 1:
-            py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for |")))
-        else:
-            py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for ^")))
-        return null()
+        return _bitwise_unsupported(op)
     at: int = _type_of(a)
     bt: int = _type_of(b)
-    if (
-        pcc_capi_is_cext_type_tag(at) != 0
-        or pcc_capi_is_cext_type_tag(bt) != 0
-    ):
+    if pcc_capi_is_cext_type_tag(at) != 0 or pcc_capi_is_cext_type_tag(bt) != 0:
         cext_op: int = 8
         if op == 1:
             cext_op = 10
         elif op == 2:
             cext_op = 9
-        return pcc_capi_cext_binary_number(a, b, cext_op)
+        store_ptr(result, 0, pcc_capi_cext_binary_number(a, b, cext_op))
+        return _bitwise_adopt(slots, tokens, _BITWISE_RESULT)
+    if at == PY_TYPE_BOOL and bt == PY_TYPE_BOOL:
+        # Both actual bool operands produce the canonical bool singleton.
+        av: int = 1 if ptr_eq(a, global_load_ptr("py_True")) != 0 else 0
+        bv: int = 1 if ptr_eq(b, global_load_ptr("py_True")) != 0 else 0
+        value: int = av & bv
+        if op == 1:
+            value = av | bv
+        elif op == 2:
+            value = av ^ bv
+        chosen = global_load_ptr("py_True") if value != 0 else global_load_ptr("py_False")
+        py_incref(chosen)
+        store_ptr(result, 0, chosen)
+        return _bitwise_adopt(slots, tokens, _BITWISE_RESULT)
     if (at == PY_TYPE_INT or at == PY_TYPE_BOOL) and (bt == PY_TYPE_INT or bt == PY_TYPE_BOOL):
         if op == 0:
-            return py_int_and(a, b)
-        if op == 1:
-            return py_int_or(a, b)
-        return py_int_xor(a, b)
+            store_ptr(result, 0, py_int_and(a, b))
+        elif op == 1:
+            store_ptr(result, 0, py_int_or(a, b))
+        else:
+            store_ptr(result, 0, py_int_xor(a, b))
+        return _bitwise_adopt(slots, tokens, _BITWISE_RESULT)
     if op == 1:
-        # PEP 604 `A | B` between class objects.  The frontend folds this at
-        # compile time when both operands are plain names, but an operand
-        # reached through a module attribute (`bytes | spec.MachOObject`)
-        # stays a runtime `|` -- and this dispatcher had no class case, so a
-        # module-level union alias raised "unsupported operand type(s) for |"
-        # at import.  That is the gap a `LinkInput` string alias was once
-        # written to dodge.  Build the same tuple representation the folded
-        # form produces.
         a_union: int = _union_operand_len(a, at)
         b_union: int = _union_operand_len(b, bt)
         if a_union >= 0 and b_union >= 0 and (at == PY_TYPE_CLASS or bt == PY_TYPE_CLASS):
-            return _union_join(a, b, a_union, b_union, at, bt)
+            return _bitwise_union_join(slots, tokens, a_union, b_union, at, bt)
     if at == PY_TYPE_SET and bt == PY_TYPE_SET:
         if op == 0:
-            return py_set_intersection(a, b)
-        if op == 2:
-            return py_set_symmetric_difference(a, b)
-        out = py_set_new()
-        if ptr_is_null(out) != 0:
-            return null()
-        py_set_update(out, a)
-        if py_err_occurred() != 0:
-            py_decref(out)
-            return null()
-        py_set_update(out, b)
-        if py_err_occurred() != 0:
-            py_decref(out)
-            return null()
-        return out
+            store_ptr(result, 0, py_set_intersection(a, b))
+        elif op == 1:
+            store_ptr(result, 0, py_set_union(a, b))
+        else:
+            store_ptr(result, 0, py_set_symmetric_difference(a, b))
+        return _bitwise_adopt(slots, tokens, _BITWISE_RESULT)
     if op == 1 and at == PY_TYPE_DICT and bt == PY_TYPE_DICT:
-        out = py_dict_new()
-        if ptr_is_null(out) != 0:
-            return null()
-        py_dict_update(out, a)
-        if py_err_occurred() != 0:
-            py_decref(out)
-            return null()
-        py_dict_update(out, b)
-        if py_err_occurred() != 0:
-            py_decref(out)
-            return null()
-        return out
-    if (
-        at == PY_TYPE_INSTANCE
-        or at >= PY_TYPE_USER_CLASS_START
-        or bt == PY_TYPE_INSTANCE
-        or bt >= PY_TYPE_USER_CLASS_START
-    ):
+        store_ptr(result, 0, py_dict_new())
+        if _bitwise_adopt(slots, tokens, _BITWISE_RESULT) != 0:
+            return -1
+        if py_dict_update_slots(result, left) != 0:
+            return -1
+        return py_dict_update_slots(result, right)
+    if at == PY_TYPE_INSTANCE or at >= PY_TYPE_USER_CLASS_START or bt == PY_TYPE_INSTANCE or bt >= PY_TYPE_USER_CLASS_START:
         if op == 0:
-            return py_user_binop_dispatch(
-                a,
-                b,
-                cstr("__and__"),
-                cstr("__rand__"),
-                cstr("unsupported operand type(s) for &"),
-            )
-        if op == 1:
-            return py_user_binop_dispatch(
-                a,
-                b,
-                cstr("__or__"),
-                cstr("__ror__"),
-                cstr("unsupported operand type(s) for |"),
-            )
-        return py_user_binop_dispatch(
-            a,
-            b,
-            cstr("__xor__"),
-            cstr("__rxor__"),
-            cstr("unsupported operand type(s) for ^"),
-        )
+            store_ptr(result, 0, py_user_binop_dispatch(a, b, cstr("__and__"), cstr("__rand__"), cstr("unsupported operand type(s) for &")))
+        elif op == 1:
+            store_ptr(result, 0, py_user_binop_dispatch(a, b, cstr("__or__"), cstr("__ror__"), cstr("unsupported operand type(s) for |")))
+        else:
+            store_ptr(result, 0, py_user_binop_dispatch(a, b, cstr("__xor__"), cstr("__rxor__"), cstr("unsupported operand type(s) for ^")))
+        return _bitwise_adopt(slots, tokens, _BITWISE_RESULT)
+    return _bitwise_unsupported(op)
+
+
+def _bitwise_unsupported(op: int) -> int:
     if op == 0:
-        py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for &")))
-    elif op == 1:
-        py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for |")))
-    else:
-        py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for ^")))
-    return null()
+        return _bitwise_error(3, cstr("unsupported operand type(s) for &"))
+    if op == 1:
+        return _bitwise_error(3, cstr("unsupported operand type(s) for |"))
+    return _bitwise_error(3, cstr("unsupported operand type(s) for ^"))
+
+
+def _bitwise_pin_result(slot: c_ptr) -> int:
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), slot)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    return prior
+
+
+def _py_obj_bitwise_dispatch(a, b, op: int):
+    # Incoming values are borrowed from live caller owners. Register their
+    # updateable slots before any new owner frame or input-copy operation.
+    borrowed = stack_alloc(_BITWISE_INCOMING_COUNT * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, a)
+    store_ptr(borrowed, C_POINTER_SIZE, b)
+    pcc_gc_frame_enter(global_addr("pcc_bitwise_borrowed_map"), borrowed)
+    slots = stack_alloc(_BITWISE_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_BITWISE_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _BITWISE_SLOT_COUNT * C_POINTER_SIZE)
+    index: int = 0
+    while index < _BITWISE_SLOT_COUNT:
+        store_i64(tokens, index * C_POINTER_SIZE, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_bitwise_owned_map"), slots)
+    status: int = 0
+    index = 0
+    while index < _BITWISE_INCOMING_COUNT and status == 0:
+        token: int = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, index * C_POINTER_SIZE), ptr_add(borrowed, index * C_POINTER_SIZE))
+        store_i64(tokens, index * C_POINTER_SIZE, token)
+        if token < 0:
+            status = _bitwise_error(7, cstr("binary bitwise input owner copy failed"))
+        index = index + 1
+    if status == 0:
+        status = _bitwise_body(slots, tokens, op)
+    if py_err_occurred() != 0:
+        status = -1
+    error = ptr_add(slots, _BITWISE_ERROR * C_POINTER_SIZE)
+    result = ptr_add(slots, _BITWISE_RESULT * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(error)
+    memset(borrowed, 0, _BITWISE_INCOMING_COUNT * C_POINTER_SIZE)
+    _bitwise_clear(slots, tokens, _BITWISE_ITEM)
+    _bitwise_clear(slots, tokens, _BITWISE_RIGHT)
+    _bitwise_clear(slots, tokens, _BITWISE_LEFT)
+    if status != 0:
+        _bitwise_clear(slots, tokens, _BITWISE_RESULT)
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    prior: int = _bitwise_pin_result(result)
+    token = load_i64(tokens, _BITWISE_RESULT * C_POINTER_SIZE)
+    if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result, prior)
 
 
 @c_abi_export("py_obj_and")

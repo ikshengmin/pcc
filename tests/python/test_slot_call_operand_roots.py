@@ -393,10 +393,23 @@ def test_literal_unary_bool_plus_produces_integer():
     # Identity-copying the bool would preserve the wrong runtime type.
     assert _calls(text, "py_int_add")
     assert not _calls(text, "pcc_gc_root_copy_lease")
-    for expression in ("True & False", "True | False", "True ^ False",
-                       "(True | False) + 1", "~(True & False)"):
-        with pytest.raises(L1CodegenError, match="proven literal-derived integer tree"):
-            _emit("def probe():\n    return slot_operand_probe(" + expression + ")\n")
+    for expression, helper in (("True & False", "py_obj_and"),
+                               ("True | False", "py_obj_or"),
+                               ("True ^ False", "py_obj_xor"),
+                               ("(True | False) + 1", "py_obj_or"),
+                               ("~(True & False)", "py_obj_and")):
+        source = "def probe():\n    return slot_operand_probe(" + expression + ")\n"
+        module = type_infer.infer_module(parse_and_lift(source, "slot_operand.py", "slot_operand"))
+        operand = module.body[0].body[0].value.args[0]
+        codegen = SlotProbeCodegen(module, ir_scaffold_mode="on")
+        assert codegen._slot_call_literal_integer_kind(operand) == 0
+        with pytest.raises(L1CodegenError, match="integer producer requires literal provenance"):
+            codegen._emit_slot_call_literal_integer(operand, "unproven.bool.tree")
+        text = _probe_function(_emit(source))
+        produced = re.search(r"(%[^ ]+) = call ptr[^\n]*@" + helper + r"\([^\n]*\n([^\n]+)", text)
+        assert produced is not None
+        assert produced.group(2).lstrip().startswith("store ptr " + produced.group(1) + ",")
+        assert not _calls(text, "py_int_to_i64_lane")
 
 
 @pytest.mark.parametrize("source", (
@@ -550,10 +563,17 @@ def test_literal_bool_integer_leaves_preserve_kernel_preconditions():
     bare = _probe_function(bare)
     assert _calls(bare, "py_bool_from_bit")
     assert not _calls(bare, "py_int_add")
-    for expression in ("True & False", "True | False", "True ^ False",
-                       "(True | False) + 1", "~True", "(~False) + 1"):
-        # The first four must retain bool result semantics. The last two
-        # require the qualified 3.15 DeprecationWarning, which this bounded
-        # producer cannot issue. Neither may become warning-free int IR.
+    for expression, helper in (("True & False", "py_obj_and"),
+                               ("True | False", "py_obj_or"),
+                               ("True ^ False", "py_obj_xor"),
+                               ("(True | False) + 1", "py_obj_or")):
+        # These stay bool-valued through their actual generic bitwise call;
+        # they never enter the literal-only integer primitive above.
+        text = _probe_function(_emit("def probe():\n    return slot_operand_probe(" + expression + ")\n"))
+        produced = re.search(r"(%[^ ]+) = call ptr[^\n]*@" + helper + r"\([^\n]*\n([^\n]+)", text)
+        assert produced is not None
+        assert produced.group(2).lstrip().startswith("store ptr " + produced.group(1) + ",")
+    for expression in ("~True", "(~False) + 1"):
+        # Direct bool inversion still requires the qualified 3.15 warning.
         with pytest.raises(L1CodegenError, match="proven literal-derived integer tree"):
             _emit("def probe():\n    return slot_operand_probe(" + expression + ")\n")

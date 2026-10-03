@@ -1,6 +1,6 @@
 # Current status
 
-Updated October 3, 2026, 21:15 UTC. Maintain this page in place.
+Updated October 3, 2026, 22:22 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
@@ -21,7 +21,9 @@ Compared with V7, 361 passes remain passes, 22 failures pass, 56 failures remain
 one pass becomes a failure and one prior failure reaches its 120-second worker
 cap. The single new regression is native_text_modules: the added regex flag
 helper's lhs.value | rhs.value reaches the unchanged arithmetic ownership gate.
-It is the first regression target for the shared bitwise producer/callee repair.
+The later shared bitwise producer/callee repair makes its unchanged full module
+lower successfully in a separate causal replay. That repair is outside V8; a
+new complete integrated census remains required.
 The timed-out cli_bootstrap module advances beyond its old frontend error into
 __nested_read_labeled_report; its partial output is preserved, not classified
 as a semantic failure. Both prior V7 regressions, macho_spec and
@@ -281,48 +283,54 @@ execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
 The last confirmed local source baseline is PCC
-`5c72b625c927205d2d868bfbd479a10744b852fd` (20:15 capture), GUI
+`65044e8893965e8122a4e2296409de22076bbd83` (21:17 capture), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
-`83577bc41dc79d3ead2e217bfa04f0f500799012`. All 14 PCC paths passed local
-before/after hash, mode and diff checks. Later cloud repairs remain unsynchronized.
+`83577bc41dc79d3ead2e217bfa04f0f500799012`. All 17 PCC paths passed local
+before/after hash, mode and diff checks. Later cloud changes remain unsynchronized.
 
-The latest synchronized immutable capture is October 3 at 20:15:06 UTC,
-containing 14 PCC paths against `f4d83e8`. Exact-source execution records 1,413
-distinct passes, four completed failures and one separate resource-incomplete
-attempt. The original 47-target Stage1 context test completes with 37 IR outputs
-and ten codegen errors under the unchanged 1.5 GiB safety cap (298.032 seconds,
-1,539,309,568-byte peak). No targets newly fail or recover compared with 19:17;
-all ten error texts are byte-identical. The original assertion still fails.
+The latest synchronized immutable capture is October 3 at 21:17:27 UTC,
+containing 17 PCC paths against `5c72b625`. Exact-source execution records 1,539
+distinct passes, three completed failures and one memory-incomplete context test.
+Two new failures are non-LIFO cleanup in the unchanged method-publication and
+lambda-adapter checks: the exception frame remained above operand frames being
+retired. The third is the native reservation correctly rejecting an unadmitted
+runtime request before compilation. All five original host container IR cases
+pass, and the original native program strings remain unchanged.
 
-The other completed failures are class_gen's direct append_basic_block dispatch
-assertion, the imported valueclass aggregate ABI assertion, and an existing
-dict-copy cleanup IR assertion reached by a separately selected host subset.
-Class_gen now completes lowering beyond both repaired bridge/format failures.
-The valueclass failure has a later separate repair for constructor payloads and
-exported class identity, with 38 focused checks; one larger original case remains
-resource-limited and native qualification remains open.
+The LIFO correction is now in the cloud candidate. It clears owners while keeping
+their frames registered, restores TLS and removes the exception frame, then
+retires empty operand frames in reverse order. The original whole-file failures
+reproduce before correction; after correction the method, lambda adapter,
+lambda constructor and frame suites pass 14, 12, 9 and 6 cases respectively.
+The broader matrix passes 239 checks. Native execution of this correction remains
+pending on a matching source/runtime.
 
-The changed container test module contains unmarked native cases. Its first
-native case unexpectedly started owned runtime construction despite the test
-provisioning flags, then reached its 300-second guard without a native outcome.
-The remaining 17 cases were unexecuted in that attempt. The separate five-case
-host subset passed one case and failed the next cleanup assertion; three remained
-unexecuted. All original captured source bytes and modes stayed unchanged.
-Generated runtime artifacts and its stopped lock owner were retained outside the
-source snapshot, and the complete source inventory was reverified. The provisioning
-bypass is being repaired; no partial runtime admission or native pass is inferred.
+The original 47-target context test on the synchronized snapshot reached its
+unchanged 1.5 GiB memory guard after 19 IR outputs and six errors, before its
+assertion. A same-input A/B isolates the added cleanup protocol: the old body
+completes all 47 targets at a 1,569,239,040-byte peak, while the new body reaches
+the same cap at 1,618,747,392 bytes. The added exception owners contribute exactly
+12 instructions each, with unchanged CFG block counts, permanent-root counts
+and return-cleanup sites. This is linear overhead, not the earlier quadratic
+root-enrollment defect. Failure occurs after class_gen string generation and
+before its output file is created, at whole-string line-list counting. No
+nonexistent partial class_gen output is claimed. Releasing the previous IR string
+and codegen object alone still reaches the unchanged cap at 1,626,624,000 bytes.
+A separate lifetime-plus-streaming-counter experiment is running; its line
+predicate matches the original counter in 10,077 reference comparisons. It has
+not yet qualified the original full context, and remains outside current source.
 
-The complete inventory contains 25,962 nodes: 25,737 selected and 225 capability
-or environment deselections. The independent integration inventory selects 5,553
+The complete inventory contains 26,210 nodes: 25,985 selected and 225 capability
+or environment deselections. The independent integration inventory selects 5,559
 from the same union. Both have zero collection errors/skips. Collection does not
-execute test bodies. All 37 contextual IR files are separately backed up as
-Library `libfile_9d741b07b8a08191b7bf92ffd9c95fc3`; the synchronization packet
-records their hashes and source identity.
+execute test bodies. The 19 context IR outputs are separately backed up as
+Library `libfile_0814369c2a308191986aa055294a2971`; the source packet records their
+hashes and source identity.
 
-Historical captures remain separate: 19:17 recorded 1,685 passes and four failures;
-18:25 recorded 1,544 passes and six failures; 17:21 recorded 1,780 passes, one
-completed failure and one resource-incomplete context node. Later scoped repairs
-do not rewrite those receipts, and differing selected groups prevent a simple
+Historical captures remain separate: 20:15 recorded 1,413 passes, four failures
+and one resource-incomplete native attempt; 19:17 recorded 1,685 passes and four
+failures; 18:25 recorded 1,544 passes and six failures. Later scoped repairs do
+not rewrite those receipts, and differing selected groups prevent a simple
 comparison of passing totals.
 
 Recoverable code bytes, before/after patches and detailed historical receipts
