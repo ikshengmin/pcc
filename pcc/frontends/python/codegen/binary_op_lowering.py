@@ -57,7 +57,7 @@ class BinaryOpLoweringMixin:
         never admit a primitive integer kernel or prove overflow impossible.
         Explicit machine projections retain their own lowering.
         """
-        if (expr.op not in ("+", "-", "/", "<<", ">>") or getattr(self, "_freestanding_module", False)
+        if (expr.op not in ("+", "-", "/", "%", "<<", ">>") or getattr(self, "_freestanding_module", False)
                 or getattr(self, "_runtime_port_module", False)):
             return None
         function = self.current_function
@@ -83,6 +83,14 @@ class BinaryOpLoweringMixin:
         for operand in (expr.lhs, expr.rhs):
             if self._expr_returns_unsafe_raw_pointer(operand):
                 return None
+        if expr.op == "%":
+            # Match the existing generic modulo/percent-format route. Fully
+            # numeric static operands keep their existing integer/float lane;
+            # no annotation establishes a literal integer provenance proof.
+            numeric = (IntType, BoolType, FloatType)
+            if isinstance(expr.lhs.ty, numeric) and isinstance(expr.rhs.ty, numeric):
+                return None
+            return "py_obj_mod"
         if expr.op in ("<<", ">>"):
             # Keep arbitrary-precision values and counts boxed. The runtime
             # checks actual types and count sign/size; annotations prove no
@@ -133,7 +141,13 @@ class BinaryOpLoweringMixin:
                 runtime_name, (left, right), result_slot=output, span=expr.span,
             )
             current = self.builder.load(output, name=self._fresh("binary.slot.result"))
-            self._guard_cpy_value_not_null(current)
+            if runtime_name == "py_obj_mod":
+                # The existing integer modulo ABI leaves zero-divisor raising
+                # to this caller after the pending-error check. Publication
+                # already happened, so both success and error cleanup own it.
+                self._emit_zero_division_if_null(current, "division by zero")
+            else:
+                self._guard_cpy_value_not_null(current)
             self._release_slot_call_roots((left, right))
         finally:
             self._try_err_block = previous

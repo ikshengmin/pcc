@@ -15,7 +15,7 @@ from tests.native_provisioning import require_native_provisioning_allowed
 
 def run_owned_c_corpus(
     evaluator, units, *, base_dir=None, include_dirs=None, cpp_args=None,
-    timeout=20, optimize=True, link_args=None,
+    timeout=20, optimize=True, link_args=None, jobs=1,
 ):
     if evaluator.backend != "self":
         raise RuntimeError("corpus product execution requires the owned self backend")
@@ -27,7 +27,7 @@ def run_owned_c_corpus(
     compiled = evaluator.compile_translation_units(
         units, base_dir=base_dir, use_system_cpp=False,
         include_dirs=include_dirs, cpp_args=cpp_args,
-        frontend_opt_level=level,
+        frontend_opt_level=level, jobs=jobs,
     )
     with tempfile.TemporaryDirectory(prefix="pcc_owned_c_corpus_") as temporary:
         executable = Path(temporary) / ("program.exe" if os.name == "nt" else "program")

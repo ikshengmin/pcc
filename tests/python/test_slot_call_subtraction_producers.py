@@ -19,6 +19,10 @@ from pcc.frontends.python.py_ast import (
 from pcc.frontends.python.py_lift import (
     parse_and_lift,
 )
+from tests.python.owned_regression_support import (
+    assert_owned_program,
+    explicit_owned_runtime,
+)
 from tests.python.test_shared_call_binding import (
     _emit as emit_binding,
 )
@@ -100,3 +104,92 @@ def test_subtraction_retains_the_literal_integer_kernel():
     text = emit_operand("def probe():\n    return slot_operand_probe((1 << 100) - 1)\n")
     assert _calls(text, "py_int_sub")
     assert not _calls(text, "py_obj_sub")
+
+
+PROGRAM = '''\
+import gc
+
+events = []
+marker = {'value': 42}
+
+class Left:
+    def __sub__(self, other):
+        gc.collect()
+        events.append('sub')
+        return NotImplemented
+    def __del__(self):
+        events.append('left-drop')
+
+class Right:
+    def __rsub__(self, other):
+        gc.collect()
+        events.append('rsub')
+        return marker
+    def __del__(self):
+        events.append('right-drop')
+
+class Raising:
+    def __sub__(self, other):
+        gc.collect()
+        raise KeyError('subtraction')
+
+def subtract(left, right):
+    return left - right
+
+def take(*, value, later=None):
+    gc.collect()
+    events.append('take')
+    return value
+
+def later():
+    events.append('later')
+    raise ValueError('later')
+
+def main():
+    big = 1 << 200
+    assert take(value=big - 1) == big - 1
+    assert subtract(-big, big) == -(1 << 201)
+    assert subtract(1.25, 0.5) == 0.75
+    assert subtract(True, False) == 1
+    events.clear()
+    assert take(value=Left() - Right()) is marker
+    assert events[:2] == ['sub', 'rsub']
+    assert events.count('left-drop') == 1 and events.count('right-drop') == 1
+    assert events[-1] == 'take'
+    events.clear()
+    try:
+        take(value=Left() - Right(), later=later())
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('missing later exception')
+    gc.collect()
+    assert events[-1] == 'later'
+    assert events.count('left-drop') == 1 and events.count('right-drop') == 1
+    try:
+        take(value=Raising() - 1)
+    except KeyError as error:
+        assert error.args[0] == 'subtraction'
+    else:
+        raise AssertionError('missing operator exception')
+    def target(value=big - 1):
+        gc.collect()
+        return value
+    assert target() == big - 1
+    print('SUBTRACTION_OWNER_NATIVE_OK')
+
+main()
+'''
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
+def test_subtraction_producer_native_five_gc(
+    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
+):
+    mode = request.node.callspec.params["python_program_compiler"]
+    assert_owned_program(
+        PROGRAM, 'SUBTRACTION_OWNER_NATIVE_OK\n', tmp_path, python_program_compiler, mode,
+        explicit_owned_runtime, capfd, provenance_probe="2",
+    )
+    assert (tmp_path / "compiler-wrapper.stderr").read_text() == ""

@@ -19,6 +19,10 @@ from pcc.frontends.python.py_ast import (
 from pcc.frontends.python.py_lift import (
     parse_and_lift,
 )
+from tests.python.owned_regression_support import (
+    assert_owned_program,
+    explicit_owned_runtime,
+)
 from tests.python.test_shared_call_binding import (
     _emit as emit_binding,
 )
@@ -98,3 +102,99 @@ def test_fully_typed_division_retains_its_separate_route(numeric):
     right = Name(span=None, ty=numeric, ident="right")
     expr = BinOp(span=None, ty=numeric, op="/", lhs=left, rhs=right)
     assert codegen._slot_call_binary_runtime(expr, object_boundary=True) is None
+
+
+PROGRAM = '''\
+import gc
+
+events = []
+marker = {'value': 42}
+
+class Left:
+    def __truediv__(self, other):
+        gc.collect()
+        events.append('divide')
+        return NotImplemented
+    def __del__(self):
+        events.append('left-drop')
+
+class Right:
+    def __rtruediv__(self, other):
+        gc.collect()
+        events.append('reflected')
+        return marker
+    def __del__(self):
+        events.append('right-drop')
+
+class Raising:
+    def __truediv__(self, other):
+        gc.collect()
+        raise KeyError('division')
+
+def divide(left, right):
+    return left / right
+
+def take(*, value, later=None):
+    gc.collect()
+    events.append('take')
+    return value
+
+def later():
+    events.append('later')
+    raise ValueError('later')
+
+def main():
+    assert divide(7, 2) == 3.5
+    assert divide(7.0, 2) == 3.5
+    assert divide(True, 2) == 0.5
+    assert divide(1 << 100, 1 << 100) == 1.0
+    for zero in (0, 0.0, False):
+        try:
+            divide(1, zero)
+        except ZeroDivisionError:
+            pass
+        else:
+            raise AssertionError('missing division by zero')
+    events.clear()
+    assert take(value=Left() / Right()) is marker
+    assert events[:2] == ['divide', 'reflected']
+    assert events.count('left-drop') == 1 and events.count('right-drop') == 1
+    assert events[-1] == 'take'
+    events.clear()
+    try:
+        take(value=Left() / Right(), later=later())
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('missing later exception')
+    gc.collect()
+    assert events[-1] == 'later'
+    try:
+        take(value=Raising() / 1)
+    except KeyError as error:
+        assert error.args[0] == 'division'
+    else:
+        raise AssertionError('missing operator exception')
+    def defaulted(left, right):
+        def target(value=left / right):
+            gc.collect()
+            return value
+        return target()
+    assert defaulted(7, 2) == 3.5
+    print('DIVISION_OWNER_NATIVE_OK')
+
+main()
+'''
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
+def test_division_producer_native_five_gc(
+    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
+):
+    mode = request.node.callspec.params["python_program_compiler"]
+    assert_owned_program(
+        PROGRAM, 'DIVISION_OWNER_NATIVE_OK\n', tmp_path, python_program_compiler, mode,
+        explicit_owned_runtime, capfd, provenance_probe="2",
+    )
+    assert (tmp_path / "compiler-wrapper.stderr").read_text() == ""

@@ -1219,6 +1219,9 @@ class CallObjectLoweringMixin:
         return output
 
     def _emit_slot_call_attribute(self, expr, label):
+        uname = self._emit_slot_call_os_uname_attr(expr, label)
+        if uname is not None:
+            return uname
         projected = self._emit_slot_call_valueclass_attribute(expr, label)
         if projected is not None:
             return projected

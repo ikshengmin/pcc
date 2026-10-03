@@ -1,38 +1,50 @@
 # Current status
 
-Updated October 3, 2026, 13:58 UTC. Maintain this page in place.
+Updated October 3, 2026, 15:04 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
 ## Current boundary
 
 There is no qualified current pcc1, pcc2 or pcc3, and no Stage2/Stage3 fixed point.
-The latest complete compiler-context diagnostic regenerated all 441 module
-contexts: 214 lowered successfully and 227 stopped at their first frontend
-failure. It had no timeouts or crashes, and reverified every source/context
-identity. These are shared producer-contract failures, not 227 independent bugs.
-Relative to the previous 190/251 diagnostic, 41 modules advanced to passing,
-173 stayed passing, 210 stayed failing and 17 previously passing contexts now
-fail. Those 17 integration regressions are the next producer gate, with exact
-old/new module identities retained. Preserve the 41 gains while repairing the
-newly exposed input-call, subtraction/division, set-difference, lambda-return and
-module-loop ownership paths.
-Sixteen of those 17 original contexts now reach production PIDX on repaired
-frozen compilers. The remaining canonicalize module advances past division to
-later modulo/shift producers; their runtime owner repair is still in progress.
-The 41 previous gains also pass on frozen source `333f9be7`: 40 under a 512 MiB
-diagnostic cap, and py_parse in a separately authorized 1.5 GiB recheck after
-its initial memory-limit stop. Its 1.35 GB peak and byte-identical v4 PIDX are
-recorded; this is not memory-target acceptance. Later loop changes and the
-complete combined current-source audit remain outside that preservation proof.
+The latest complete compiler-context diagnostic finished at 15:01 on source
+`b8aee32d012ae42c5ef87fef7ac20916f9bd39a00535158f5b7a4c0dafb91767`.
+It regenerated all 441 contexts: 278 lowered successfully and 163 stopped at
+their first frontend failure, with no timeouts or crashes. Source and context
+identities reverified. These are shared producer-contract failures, not 163
+independent bugs. The run took 1,388.22 seconds with 1.65 GB peak process-tree
+RSS while other bounded diagnostics and archival work overlapped; it is not a
+build-performance acceptance result.
 
-That diagnostic used source
+Compared with the previous 214/227 diagnostic, 65 failures became passes,
+213 stayed passing, 162 stayed failing and one previously passing context
+failed. All 17 regressions from the earlier 190/251-to-214/227 transition and
+all 41 gains from that transition now pass on this single combined source.
+The remaining new regression is pipeline_import_scan: a dynamic count() call
+returns an unowned branch result before strict subtraction. Its shared method
+producer is under repair without changing the validator. Remaining families
+include multiplication/repetition, OS/path result publication, imported
+constructors, namespace bindings and string-method result handoff.
+
+The earlier 41-context preservation run used source `333f9be7`: 40 passed under
+a 512 MiB diagnostic cap, while py_parse passed a separately authorized 1.5 GiB
+recheck after its initial memory-limit stop. Its 1.35 GB peak and byte-identical
+v4 PIDX are retained; this is not memory-target acceptance.
+
+The preceding complete diagnostic used source
 `c2b078540e55363d779beba964b8430460184cfb02844e50cf7addadbdaa6108`,
-frozen at 12:27. Later mutable-source changes have separate focused evidence.
-The next compiler boundary requires another complete fresh-context diagnostic
-and then actual native bootstrap on the same final source.
+frozen at 12:27, and produced 214 passes and 227 failures. Later mutable-source
+repairs have separate focused evidence. Neither complete diagnostic emits or
+executes a native compiler. The next compiler boundary requires a green fresh
+complete diagnostic and actual native bootstrap on the same final source.
 
 ## Matched runtime and native evidence
+
+A fresh complete 184-member runtime build started at 15:03 using the exact
+15:01 diagnostic source, Linux x86-64, threads enabled and atomic refcounts.
+Its sealed control plan contains original Python/C programs and independent
+known-failure groups. Build and native execution results remain pending; newer
+mutable producer repairs cannot inherit this frozen build's eventual results.
 
 The complete Linux x86-64 threaded/atomic runtime frozen at 09:59 passed strict
 admission for all 184 ordered, unique members. It took 437.79 seconds with about
@@ -154,6 +166,12 @@ and the external reference oracle. Eighteen host route checks pass. Six native
 entries using unchanged sources across five product adapters also pass against
 that oracle, with the product guard permitting only PCC-owned executables.
 Complete corpus execution is pending. Csmith generation is unavailable here.
+Its product adapter now feeds the original generated source and include directory
+to PCC's own preprocessor; the external compiler remains the separate oracle.
+Twenty route checks pass. Two original SSA short-circuit programs also now use
+the owned helper, with their source, optimization, jobs, timeout and assertions
+preserved; 25 focused route/SSA checks pass. Their native executions await the
+new matching runtime and are not included in the older six executions above.
 
 The Make fixture incorrectly paired Linux ELF probe objects with the host archive
 utilities on every platform. A target-aware host fixture and explicit NM override
@@ -258,15 +276,27 @@ bytes. Recoverable current code, before/after patches, source identities and
 execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
-The latest verified local synchronization used the immutable 13:26:05 capture:
-PCC `1ef656e38dd4ca6a5d420bb8e1b029ab2cd3f9e1` (33 paths), GUI
+The latest verified local synchronization used the immutable 14:20:58 capture:
+PCC `816fb03fa0f521eb714bd87100f5a4825fd68483` (16 paths), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
 `83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact bytes, modes and diff checks
-passed. That capture recorded 1,192 passes and one failure across 37 independent
-affected-file groups. The failed original contextual test produced 22 IR outputs
-and 25 codegen exceptions. Collection selected 18,593 nodes and gate-deselected
-5,742, with no errors or skips; it executed no test bodies. These results qualify
-the capture's scoped checks only. Later source changes remain separate.
+passed. Its exact-source checks record 1,152 passes and one original contextual
+failure, with 22 IR outputs and 25 codegen exceptions. Its changed Csmith file
+executes no bodies: all 21 cases are deselected because the generator is
+unavailable. The all-test inventory clears the default marker expression and
+records 24,540 total nodes, 24,315 selected and 225 capability/environment
+deselections. A separate integration-only inventory selects 5,521 from the same
+union. Both have zero collection errors or skips and retain exact per-node
+reasons. Neither inventory establishes execution coverage or completion of the
+C/Python suites. Later source changes remain separate.
+
+For comparison, the previous 13:26:05 capture associated with `1ef656e3`
+recorded 1,192 passes and one failure, also with 22 IR outputs and 25 exceptions.
+Its collection selected 18,593 nodes and deselected 5,742. That historical
+command retained the default non-integration marker expression, so those
+deselections combine marker selection and capability gates. It executed no test
+bodies. These counts belong to their own source and command, not the current
+capture.
 
 Hourly synchronization includes legitimate integrated work even when failing or
 unqualified. Run collection and affected fast tests on the exact capture first;

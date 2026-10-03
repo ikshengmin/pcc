@@ -20,6 +20,7 @@ from pcc.frontends.python.py_ast import (
     TupleType,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
 _I32 = ir.IntType(32)
@@ -62,6 +63,123 @@ class NativeOsLoweringMixin:
             if sink is None:
                 return self._take_slot_call_root(output)
             return self.builder.load(output, name=self._fresh("os.getenv.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
+    def _emit_os_path_slot_operand(self, expr, label):
+        """Preserve the explicit CPython path bridge's NEW-result boundary."""
+        if not self._expr_looks_cpython(expr):
+            return self._emit_slot_call_operand(expr, label)
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        cleanup = self._slot_call_cleanup_block((output,), target)
+        self._try_err_block = cleanup
+        self._cpy_operand_cleanup_block = cleanup
+        try:
+            value = self._emit_expr(expr)
+            if value not in self._cpy_values:
+                raise L1CodegenError("CPython path bridge requires a CPython value")
+            owned = self._cpy_value_is_owned(value)
+            if owned:
+                self._try_err_block = self._make_cpy_operand_cleanup_block(
+                    (value,), (), cleanup, "os.path.bridge.cleanup",
+                )
+                self._cpy_operand_cleanup_block = self._try_err_block
+            self._guard_cpy_value_not_null(value)
+            bridged = self.builder.call(
+                self.runtime["py_cpy_to_pcc_obj"], [value],
+                name=self._fresh("os.path.bridge"),
+            )
+            self._publish_slot_call_owned(output, bridged, label="CPython path bridge")
+            current = self.builder.load(output, name=self._fresh("os.path.bridge.current"))
+            self._guard_cpy_value_not_null(current)
+            if owned:
+                self.builder.call(self.runtime["py_cpy_decref"], [value])
+                self._forget_owned_cpy_value(value)
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            self._emit_post_call_err_check(expr.span)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _emit_owned_os_runtime_call(
+        self, expr, runtime_name, arguments=None, sequence=False, field_index=-1,
+    ):
+        """Publish proven NEW OS/path results before any parking operation.
+
+        Only the dispatches whose runtime bodies return a new reference use
+        this path. Operands remain owned in slots through later evaluation,
+        runtime entry, and cleanup; the shared call helper leases addresses.
+        """
+        if arguments is None:
+            arguments = expr.args
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root(runtime_name + ".result")
+            roots.append(output)
+        temporary_start = len(roots)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            operands = []
+            if sequence:
+                parts = self._new_slot_call_root("os.path.join.parts")
+                roots.append(parts)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_list_new", (), result_slot=parts,
+                    suffix_args=(ir.Constant(_I64, 0),), span=expr.span,
+                )
+            for argument in arguments:
+                splat = sequence and self._is_starred_unpack_expr(argument)
+                source = argument.args[0] if splat else argument
+                item = self._emit_os_path_slot_operand(source, runtime_name + ".argument")
+                roots.append(item)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if sequence:
+                    self._slot_call_runtime_call(
+                        "py_list_extend" if splat else "py_list_append",
+                        (parts, item), span=source.span,
+                    )
+                    self._release_slot_call_roots((item,))
+                    roots.pop()
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                else:
+                    operands.append(item)
+            if sequence:
+                operands.append(parts)
+            produced = output
+            if field_index >= 0:
+                produced = self._new_slot_call_root("os.uname.sequence")
+                roots.append(produced)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                runtime_name, tuple(operands), result_slot=produced, span=expr.span,
+            )
+            if field_index >= 0:
+                # py_tuple_get returns a retained field, never a borrowed item.
+                self._slot_call_runtime_call(
+                    "py_tuple_get", (produced,), result_slot=output,
+                    suffix_args=(ir.Constant(_I64, field_index),), span=expr.span,
+                )
+            self._release_slot_call_roots(tuple(roots[temporary_start:]))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh(runtime_name + ".current"))
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
@@ -352,17 +470,9 @@ class NativeOsLoweringMixin:
                 name=self._fresh("os.unsetenv"),
             )
         if name == "getcwd" and len(expr.args) == 0:
-            return self.builder.call(
-                self.runtime["py_os_getcwd_str"],
-                [],
-                name=self._fresh("os.getcwd"),
-            )
+            return self._emit_owned_os_runtime_call(expr, "py_os_getcwd_str")
         if name == "getpid" and len(expr.args) == 0:
-            return self.builder.call(
-                self.runtime["py_os_getpid"],
-                [],
-                name=self._fresh("os.getpid"),
-            )
+            return self._emit_owned_os_runtime_call(expr, "py_os_getpid")
         if name == "kill" and len(expr.args) == 2:
             pid = self._emit_as_object(expr.args[0])
             pid_root = self._enter_container_temp_root(pid, self._fresh("os.kill.pid"))
@@ -411,19 +521,9 @@ class NativeOsLoweringMixin:
             # it after operand finalizers have run, with no unrooted result.
             return self._emit_none_literal()
         if name == "cpu_count" and len(expr.args) == 0:
-            return self.builder.call(
-                self.runtime["py_os_cpu_count"],
-                [],
-                name=self._fresh("os.cpu_count"),
-            )
+            return self._emit_owned_os_runtime_call(expr, "py_os_cpu_count")
         if name == "uname" and len(expr.args) == 0:
-            result = self.builder.call(
-                self.runtime["py_os_uname"],
-                [],
-                name=self._fresh("os.uname"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
+            return self._emit_owned_os_runtime_call(expr, "py_os_uname")
         if name == "listdir" and len(expr.args) == 1:
             return self._emit_owned_unary_runtime_call(expr, "py_os_listdir")
         if name == "write" and len(expr.args) == 2:
@@ -560,13 +660,8 @@ class NativeOsLoweringMixin:
             return result
         return None
 
-    def _emit_native_os_uname_attr(self, expr: Attr) -> Optional[ir.Value]:
-        """Lower direct ``os.uname().<field>`` access.
-
-        ``py_os_uname`` returns the correct five-field sequence for unpacking;
-        this preserves the named-result access used by platform/bootstrap code
-        without routing the result through libpython.
-        """
+    def _native_os_uname_attr_index(self, expr):
+        """Recognise the named fields without emitting receiver evaluation."""
         call = expr.obj
         if not isinstance(call, Call) or call.args or call.kwargs:
             return None
@@ -578,28 +673,42 @@ class NativeOsLoweringMixin:
             or self._native_builtin_module_for_name(func.obj.ident) != "os"
         ):
             return None
-        field_index = {
+        return {
             "sysname": 0,
             "nodename": 1,
             "release": 2,
             "version": 3,
             "machine": 4,
         }.get(expr.name)
+
+    def _emit_native_os_uname_attr(self, expr: Attr) -> Optional[ir.Value]:
+        """Keep the uname sequence and its retained field in owning slots."""
+        field_index = self._native_os_uname_attr_index(expr)
         if field_index is None:
             return None
-        result = self.builder.call(
-            self.runtime["py_os_uname"],
-            [],
-            name=self._fresh("os.uname.attr.result"),
+        return self._emit_owned_os_runtime_call(
+            expr, "py_os_uname", arguments=(), field_index=field_index,
         )
-        self._emit_post_call_err_check(getattr(expr, "span", None))
-        field = self.builder.call(
-            self.runtime["py_tuple_get"],
-            [result, ir.Constant(_I64, field_index)],
-            name=self._fresh(f"os.uname.{expr.name}"),
-        )
-        self._gc_release(result)
-        return field
+
+    def _emit_slot_call_os_uname_attr(self, expr, label):
+        if self._native_os_uname_attr_index(expr) is None:
+            return None
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        if not hasattr(self, "_slot_call_result_sinks"):
+            self._slot_call_result_sinks = []
+        self._slot_call_result_sinks.append((expr, output, False))
+        try:
+            self._emit_native_os_uname_attr(expr)
+        finally:
+            self._slot_call_result_sinks.pop()
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
 
     def _emit_native_platform_call(self, expr: Call) -> Optional[ir.Value]:
         attr = expr.func
@@ -612,17 +721,9 @@ class NativeOsLoweringMixin:
         ):
             return None
         if attr.name == "machine":
-            return self.builder.call(
-                self.runtime["py_platform_machine_str"],
-                [],
-                name=self._fresh("platform.machine"),
-            )
+            return self._emit_owned_os_runtime_call(expr, "py_platform_machine_str")
         if attr.name == "release":
-            return self.builder.call(
-                self.runtime["py_platform_release_str"],
-                [],
-                name=self._fresh("platform.release"),
-            )
+            return self._emit_owned_os_runtime_call(expr, "py_platform_release_str")
         return None
 
     # Method names recognised by `_emit_native_os_path_call` —
@@ -808,52 +909,13 @@ class NativeOsLoweringMixin:
                 else:
                     if not self._native_os_path_arg_can_stay_native(arg):
                         return None
-            lst = self.builder.call(
-                self.runtime["py_list_new"],
-                [ir.Constant(_I64, 0)],
-                name=self._fresh("os.path.join.args"),
+            return self._emit_owned_os_runtime_call(
+                expr, "py_os_path_join", sequence=True,
             )
-            for arg in expr.args:
-                if self._is_starred_unpack_expr(arg):
-                    inner_val = self._emit_as_object(arg.args[0])
-                    self.builder.call(
-                        self.runtime["py_list_extend"],
-                        [lst, inner_val],
-                    )
-                else:
-                    self.builder.call(
-                        self.runtime["py_list_append"],
-                        [lst, self._emit_os_path_arg_object(arg)],
-                    )
-            return self.builder.call(
-                self.runtime["py_os_path_join"],
-                [lst],
-                name=self._fresh("os.path.join"),
-            )
-        if name == "basename" and len(expr.args) == 1:
+        if name in ("basename", "dirname", "split") and len(expr.args) == 1:
             if not self._native_os_path_arg_can_stay_native(expr.args[0]):
                 return None
-            return self.builder.call(
-                self.runtime["py_os_path_basename"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.basename"),
-            )
-        if name == "dirname" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_dirname"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.dirname"),
-            )
-        if name == "split" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_split"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.split"),
-            )
+            return self._emit_owned_os_runtime_call(expr, "py_os_path_" + name)
         if name == "exists" and len(expr.args) == 1:
             if not self._native_os_path_arg_can_stay_native(expr.args[0]):
                 return None
@@ -888,161 +950,29 @@ class NativeOsLoweringMixin:
                 ir.Constant(_I32, 0),
                 name=self._fresh(f"os.path.{name}.i1"),
             )
-        if name == "getmtime" and len(expr.args) == 1:
+        if name in (
+            "getmtime", "getsize", "commonpath", "commonprefix", "splitext",
+            "normcase", "splitdrive", "expanduser", "expandvars", "abspath",
+            "normpath", "realpath",
+        ) and len(expr.args) == 1:
             if not self._native_os_path_arg_can_stay_native(expr.args[0]):
                 return None
-            result = self.builder.call(
-                self.runtime["py_os_path_getmtime"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.getmtime"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
-        if name == "getsize" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            helper = self.runtime.get("py_os_path_getsize")
-            if helper is None:
-                helper = self._declare_external_function(
-                    "py_os_path_getsize",
-                    _PYOBJ,
-                    [_PYOBJ],
+            if name == "getsize" and "py_os_path_getsize" not in self.runtime:
+                self.runtime["py_os_path_getsize"] = self._declare_external_function(
+                    "py_os_path_getsize", _PYOBJ, [_PYOBJ],
                 )
-            result = self.builder.call(
-                helper,
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.getsize"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
-        if name == "commonpath" and len(expr.args) == 1:
-            # Single-arg form: ``os.path.commonpath([a, b, ...])``.
-            # The arg must be a list/tuple expression we can lower
-            # natively; the runtime helper coerces each element.
-            paths_arg = expr.args[0]
-            if not self._native_os_path_arg_can_stay_native(paths_arg):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_commonpath"],
-                [self._emit_os_path_arg_object(paths_arg)],
-                name=self._fresh("os.path.commonpath"),
-            )
-        if name == "commonprefix" and len(expr.args) == 1:
-            paths_arg = expr.args[0]
-            if not self._native_os_path_arg_can_stay_native(paths_arg):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_commonprefix"],
-                [self._emit_os_path_arg_object(paths_arg)],
-                name=self._fresh("os.path.commonprefix"),
-            )
-        if name == "splitext" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_splitext"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.splitext"),
-            )
-        if name == "normcase" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_normcase"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.normcase"),
-            )
-        if name == "splitdrive" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_splitdrive"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.splitdrive"),
-            )
-        if name == "expanduser" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_expanduser"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.expanduser"),
-            )
-        if name == "expandvars" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_expandvars"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.expandvars"),
-            )
-        if ((name in ("abspath", "normpath") and len(expr.args) == 1)
-                or (name == "relpath" and len(expr.args) in (1, 2))) and not expr.kwargs:
-            # Keep operands alive and pinned across later argument factories
-            # and runtime entry polls. relpath validates its original path
-            # before absolutizing, so an empty path still raises ValueError.
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            if len(expr.args) == 2 and not self._native_os_path_arg_can_stay_native(
-                expr.args[1]
-            ):
-                return None
-            path_obj = self._emit_os_path_arg_object(expr.args[0])
-            path_root = self._enter_container_temp_root(path_obj, self._fresh("os.path.relpath.path"))
-            path_lifetime = (path_root, self._owned_release_needed(path_obj, expr.args[0])
-                             or self._pcc_pointer_source_is_owned(expr.args[0]))
-            roots = (path_lifetime,)
-            if name == "relpath":
-                start_expr = expr.args[1] if len(expr.args) == 2 else StrLit(
-                    span=getattr(expr, "span", None), ty=StrType(name="str"), value="."
-                )
-                start_obj = self._emit_expr_with_cpy_operand_cleanup(
-                    start_expr, (), as_object=True, rooted_pcc_lifetimes=(path_lifetime,),
-                )
-                start_root = self._enter_container_temp_root(start_obj, self._fresh("os.path.start"))
-                roots = roots + ((start_root,
-                    self._owned_release_needed(start_obj, start_expr)
-                    or self._pcc_pointer_source_is_owned(start_expr)),)
-            operands = []
-            for root, _owned in roots:
-                operands.append(self.builder.call(
-                    self.runtime["pcc_gc_load_ptr"],
-                    [ir.Constant(_PYOBJ, None), self._as_gc_ptr(root)],
-                    name=self._fresh("os.path.argument"),
-                ))
-            result = self.builder.call(
-                self.runtime["py_os_path_" + name], operands,
-                name=self._fresh("os.path.relpath"),
-            )
-            result_root = self._enter_container_temp_root(result, self._fresh("os.path.relpath.result"))
-            old_error = self._current_try_err_block()
-            error_target = old_error if old_error is not None else self._ensure_fn_err_exit()
-            self._try_err_block = self._make_cpy_operand_cleanup_block(
-                (), (), error_target, "os.path.relpath.error.cleanup",
-                rooted_pcc_lifetimes=roots + ((result_root, True),),
-            )
-            try:
-                self._emit_post_call_err_check(getattr(expr, "span", None))
-            finally:
-                self._try_err_block = old_error
-            self._release_rooted_pcc_lifetimes(roots)
-            result = self.builder.call(
-                self.runtime["pcc_gc_load_ptr"],
-                [ir.Constant(_PYOBJ, None), self._as_gc_ptr(result_root)],
-                name=self._fresh("os.path.relpath.result.current"),
-            )
-            self._gc_pin(result)
-            self._leave_container_temp_root(result_root)
-            self._gc_unpin(result)
-            self._note_owned_object_value(result)
-            return result
-        if name == "realpath" and len(expr.args) == 1:
-            if not self._native_os_path_arg_can_stay_native(expr.args[0]):
-                return None
-            return self.builder.call(
-                self.runtime["py_os_path_realpath"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.realpath"),
+            return self._emit_owned_os_runtime_call(expr, "py_os_path_" + name)
+        if name == "relpath" and len(expr.args) in (1, 2):
+            for argument in expr.args:
+                if not self._native_os_path_arg_can_stay_native(argument):
+                    return None
+            arguments = expr.args
+            if len(arguments) == 1:
+                arguments = arguments + (StrLit(
+                    span=expr.span, ty=StrType(name="str"), value=".",
+                ),)
+            return self._emit_owned_os_runtime_call(
+                expr, "py_os_path_relpath", arguments=arguments,
             )
         return None
 

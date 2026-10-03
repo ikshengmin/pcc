@@ -58,12 +58,12 @@ def test_owned_runner_preserves_source_options_and_child_outcome(tmp_path, monke
     monkeypatch.setattr(subprocess, "run", execute)
     result = owned_c_corpus.run_owned_c_corpus(
         evaluator, units, base_dir=str(tmp_path), include_dirs=["include"],
-        cpp_args=["-std=gnu89", "-DFEATURE=1"], timeout=17,
+        cpp_args=["-std=gnu89", "-DFEATURE=1"], timeout=17, jobs=3,
     )
     assert evaluator.events[0] == ("compile", units, {
         "base_dir": str(tmp_path), "use_system_cpp": False,
         "include_dirs": ["include"], "cpp_args": ["-std=gnu89", "-DFEATURE=1"],
-        "frontend_opt_level": 2,
+        "frontend_opt_level": 2, "jobs": 3,
     })
     assert evaluator.events[1][0] == "emit"
     assert evaluator.events[1][3] == {"optimize": 2, "link_args": None}
@@ -248,6 +248,34 @@ def test_csmith_product_uses_owned_preprocessor_with_original_header_path(tmp_pa
     assert connection.payload == {"returncode": 42, "stdout": "", "stderr": ""}
     assert len(emissions) == 1
     assert source.read_text() == original
+
+
+@pytest.mark.parametrize("test_name", [
+    "test_ssa_branch_prune_preserves_short_circuit_global_side_effect_runtime",
+    "test_ssa_branch_prune_preserves_short_circuit_value_side_effect_runtime",
+])
+def test_short_circuit_product_preserves_compile_options_and_uses_owned_runner(monkeypatch, test_name):
+    from tests.c import test_ssa_branch_prune as module
+
+    evaluator = EvaluatorModel()
+    monkeypatch.setattr(module, "CEvaluator", lambda: evaluator)
+    executions = []
+
+    def execute(argv, **options):
+        assert len(argv) == 1
+        assert Path(argv[0]).read_bytes() == b"model image; never executed"
+        executions.append(options)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    getattr(module, test_name)()
+    assert [event[0] for event in evaluator.events] == ["compile", "emit"]
+    assert evaluator.events[0][2] == {
+        "base_dir": ".", "use_system_cpp": False, "include_dirs": None,
+        "cpp_args": None, "frontend_opt_level": 2, "jobs": 1,
+    }
+    assert evaluator.events[1][3] == {"optimize": 2, "link_args": None}
+    assert executions == [{"cwd": ".", "timeout": 120, "capture_output": True, "text": True}]
 
 
 @pytest.mark.parametrize("module_name", ["tests.gcc_torture_cases", "tests.c.test_gcc_torture_self"])

@@ -4,6 +4,7 @@ from pcc.frontends.c.parse.c_parser import CParser
 from pcc.frontends.c.passes import PassContext
 from pcc.frontends.c.passes.ssa_branch_prune import SSABranchPrunePass
 from pcc.driver.project import TranslationUnit
+from tests.owned_c_corpus import run_owned_c_corpus
 
 
 _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
@@ -167,11 +168,12 @@ def test_ssa_branch_prune_preserves_short_circuit_global_side_effect_runtime():
     """
 
     unit = TranslationUnit("short_circuit_global.c", "short_circuit_global.c", source)
-    result = CEvaluator().run_translation_units_with_system_cc(
+    result = run_owned_c_corpus(CEvaluator(),
         [unit],
         optimize=True,
         base_dir=".",
         jobs=1,
+        timeout=120,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -204,11 +206,12 @@ def test_ssa_branch_prune_preserves_short_circuit_value_side_effect_runtime():
     """
 
     unit = TranslationUnit("short_circuit_value.c", "short_circuit_value.c", source)
-    result = CEvaluator().run_translation_units_with_system_cc(
+    result = run_owned_c_corpus(CEvaluator(),
         [unit],
         optimize=True,
         base_dir=".",
         jobs=1,
+        timeout=120,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
