@@ -73,6 +73,60 @@ def is_i64_int_literal(expr: Expr) -> bool:
 
 
 class UnaryCallLoweringMixin:
+    def _slot_call_unary_runtime(self, expr):
+        """Choose the generic object protocol only for ordinary Python values."""
+        runtime_name = {"+": "py_obj_pos", "-": "py_obj_neg", "~": "py_obj_invert"}.get(expr.op)
+        if (runtime_name is None or getattr(self, "_freestanding_module", False)
+                or getattr(self, "_runtime_port_module", False)):
+            return None
+        function = self.current_function
+        if function is not None and (
+                function.name in getattr(self, "_manual_pointer_abi_functions", ())
+                or function.name in getattr(self, "_c_abi_export_symbols", ())):
+            return None
+        for ty in (expr.ty, expr.operand.ty):
+            if isinstance(ty, IntType) and (
+                    ty.name != "int" or ty.width != 64 or not ty.signed):
+                return None
+            if isinstance(ty, FloatType) and (ty.name != "float" or ty.width != 64):
+                return None
+            if self._is_valueclass_payload_type(ty):
+                return None
+        # The existing runtime does not emit Python 3.15's ~bool warning.
+        # Preserve the prior explicit boundary for statically known booleans.
+        if expr.op == "~" and isinstance(expr.operand.ty, BoolType):
+            return None
+        if self._expr_looks_cpython(expr):
+            return None
+        if (self._expr_returns_unsafe_raw_pointer(expr)
+                or self._expr_returns_unsafe_raw_pointer(expr.operand)):
+            return None
+        return runtime_name
+
+    def _emit_slot_call_unary(self, expr, label, runtime_name):
+        """Root the operand and publish the owned runtime result before cleanup."""
+        output = self._new_slot_call_root(label + ".result")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cleanup = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            operand = self._emit_slot_call_operand(expr.operand, label + ".operand")
+            roots.append(operand)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                runtime_name, (operand,), result_slot=output, span=expr.span,
+            )
+            self._guard_cpy_value_not_null(self.builder.load(output))
+            self._release_slot_call_roots((operand,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cleanup
+        return output
+
     def _emit_unary(self, expr: UnaryOp) -> ir.Value:
         if expr.op == "not":
             truth = self._emit_condition_value(expr.operand)

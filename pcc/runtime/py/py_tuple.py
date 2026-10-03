@@ -200,6 +200,8 @@ def py_tuple_new(n: int):
     bytes_total: int = PYTUPLEOBJECT_SIZE + n * 8          # OFFSET_ITEMS + n * SIZEOF_PTR
     t = pcc_gc_alloc(bytes_total, PY_TYPE_TUPLE, 0)
     if ptr_is_null(t):
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("tuple: out of memory")))
         return null()
     store_i64(t, PYTUPLEOBJECT_LEN_OFFSET, n)             # len = n
     if n > 0:

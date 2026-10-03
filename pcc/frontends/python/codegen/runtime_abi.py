@@ -795,6 +795,7 @@ def _runtime_signatures_part_11():
     "py_obj_len": (_I64, [_PYOBJ], False),
     "py_obj_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_sorted": (_PYOBJ, [_PYOBJ], False),
+    "py_obj_sorted_slots": (_I64, [_PTR, _PTR, _PTR, _I64, _PTR], False),
     }
 
 
@@ -1199,6 +1200,8 @@ def _runtime_signatures_part_18():
     # py_exc_builtin_class(tag) -> PyClassObject* for a builtin class tag.
     # i64 to match the pcc-Python port's default int lowering.
     "py_exc_builtin_class": (_PYOBJ, [_I64], False),
+    # Address of the authoritative mapped cache slot, not a managed value.
+    "py_subs_exc_cache_slot": (_PTR, [_I64], False),
     # py_exc_matches(exc, class) -> 0/1 (walks MRO). i64 to match the
     # pcc-Python port's default `int` lowering.
     "py_exc_matches": (_I64, [_PYOBJ, _PYOBJ], False),

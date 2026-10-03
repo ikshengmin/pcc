@@ -753,6 +753,8 @@ def py_bytes_new(data, byte_len: int):
         byte_len = 0
     p = pcc_gc_alloc(24 + byte_len + 1, PY_TYPE_BYTES, 0)
     if ptr_is_null(p):
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("bytes: out of memory")))
         return null()
     store_i64(p, 0, 1)
     store_i32(p, 8, PY_TYPE_BYTES)  # PY_TYPE_BYTES
@@ -771,6 +773,8 @@ def _bytearray_new_raw(data, byte_len: int):
         byte_len = 0
     p = pcc_gc_alloc(24 + byte_len + 1, PY_TYPE_BYTEARRAY, 0)
     if ptr_is_null(p):
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("bytearray: out of memory")))
         return null()
     store_i64(p, 0, 1)
     store_i32(p, 8, PY_TYPE_BYTEARRAY)  # PY_TYPE_BYTEARRAY
@@ -2025,6 +2029,8 @@ def py_memoryview_new(o):
     # depend on the C-API module during archive extraction.
     p = pcc_gc_alloc(32, PY_TYPE_MEMORYVIEW, 0)
     if ptr_is_null(p):
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("memoryview: out of memory")))
         return null()
     store_i64(p, 0, 1)
     store_i32(p, 8, PY_TYPE_MEMORYVIEW)  # PY_TYPE_MEMORYVIEW

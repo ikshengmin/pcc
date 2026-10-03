@@ -75,6 +75,40 @@ def _is_nested_hoist_collision_name(name: str, direct_hoist: str) -> bool:
 
 
 class NameLoweringMixin:
+    def _emit_owned_builtin_exception_class(self, tag, expr=None):
+        """Copy a canonical class from its mapped cache into a real owner."""
+        sink = self._slot_call_result_sink(expr) if expr is not None else None
+        output = sink
+        if output is None:
+            output = self._new_slot_call_root("builtin.exception.class")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = () if sink is not None else (output,)
+        self._try_err_block = self._slot_call_cleanup_block(roots, target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        span = expr.span if expr is not None else None
+        try:
+            tag_value = ir.Constant(_I64, tag)
+            # This initializes the canonical cache and returns a BORROWED
+            # value. Never transport that raw value across another call.
+            self.builder.call(self.runtime["py_exc_builtin_class"], [tag_value])
+            self._emit_post_call_err_check(span)
+            source = self.builder.call(
+                self.runtime["py_subs_exc_cache_slot"], [tag_value],
+                name=self._fresh("builtin.exception.cache.slot"),
+            )
+            # The cache is a mapped owning root. Copying from its physical
+            # slot permits relocation while establishing the caller's owner.
+            self._slot_call_copy_source(output, source, span=span)
+            self._slot_call_note_published(output)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("builtin.exception.class.current"))
+        return self._take_slot_call_root(output)
+
     def _name_returns_native_builtin_callable_value(self, name: str) -> bool:
         if name in _NATIVE_BUILTIN_CALLABLE_NAMES:
             return True
@@ -320,11 +354,7 @@ class NameLoweringMixin:
         canonical_name = (name[len("builtins."):] if name.startswith("builtins.")
                           else canonical_names.get(builtin_value, name))
         if canonical_name in _BUILTIN_EXC_TAG:
-            return self.builder.call(
-                self.runtime["py_exc_builtin_class"],
-                [ir.Constant(_I64, _BUILTIN_EXC_TAG[canonical_name])],
-                name=self._fresh("exc.class." + canonical_name),
-            )
+            return self._emit_owned_builtin_exception_class(_BUILTIN_EXC_TAG[canonical_name])
         if canonical_name not in _NATIVE_BUILTIN_CALLABLE_NAMES:
             return None
         if canonical_name == "range":
@@ -760,11 +790,7 @@ class NameLoweringMixin:
                 # aliases.  Reuse the runtime's cached native class object so
                 # these value-position uses stay no-libpython and preserve
                 # identity with exception matching/constructors.
-                return self.builder.call(
-                    self.runtime["py_exc_builtin_class"],
-                    [ir.Constant(_I64, _BUILTIN_EXC_TAG[expr.ident])],
-                    name=self._fresh(f"exc.class.{expr.ident}"),
-                )
+                return self._emit_owned_builtin_exception_class(_BUILTIN_EXC_TAG[expr.ident], expr)
             # Built-in type names at value position (``isinstance(x,
             # int)`` already folds compile-time; this covers the
             # residual ``obj_type = int`` / ``self.ty = str`` uses).

@@ -6,7 +6,25 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BinOp, BoolLit, Call, ClassType, DynType, Expr, IntLit, Lambda, ListType, Name, StrType, Subscript, TupleExpr, Type, UnaryOp
+from pcc.frontends.python.py_ast import (
+    Attr,
+    BinOp,
+    BoolLit,
+    Call,
+    ClassType,
+    DynType,
+    Expr,
+    IntLit,
+    Lambda,
+    ListType,
+    Name,
+    NoneLit,
+    StrType,
+    Subscript,
+    TupleExpr,
+    Type,
+    UnaryOp,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_LIST
 
@@ -1193,92 +1211,83 @@ class ListMethodLoweringMixin:
         )
 
     def _emit_sorted_with_key_lambda(self, expr, key_lambda, reverse_const):
-        """Build the fresh list required by ``sorted(xs, key=callable)``.
-
-        Structural lambda/builtin keys retain their inline extraction path.
-        Other native callable values use the same ``py_obj_call`` key path as
-        ``list.sort(key=callable)`` instead of falling through to libpython.
-        """
-        elem_ty = (
-            expr.args[0].ty.elem if isinstance(expr.args[0].ty, ListType) else None
-        )
-        key_spec = self._key_spec_from_callable(key_lambda, elem_ty)
-        if key_spec is None:
-            key_spec = ("callable", self._emit_as_object(key_lambda))
+        """Evaluate the iterable before the key and use the rooted sort ABI."""
+        elem_hint = None
+        if isinstance(key_lambda, NoneLit):
+            elem_hint = self._list_elem_class_hint_for_expr(expr.args[0])
+            if elem_hint is None and isinstance(expr.args[0], Name):
+                elem_hint = self.env_list_elem_class_hint.get(expr.args[0].ident)
         return self._emit_sorted_with_lifetimes(
-            expr, key_spec, key_lambda, reverse_const,
+            expr, None, key_lambda, reverse_const, elem_hint,
         )
 
     def _emit_sorted_with_lifetimes(
         self, expr, key_spec, key_expr, reverse_const, elem_hint=None,
     ):
-        """Keep sorted's iterable/key live and consume their temporary owners."""
-        state = self._begin_sort_key_lifetime(key_spec, key_expr)
-        source_lifetimes = ()
-        new_list = None
+        """Keep source, optional callables, and output authoritative throughout."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("sorted.result")
+            roots.append(output)
         try:
-            src_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                self._emit_expr(expr.args[0]),
-                expr.args[0].ty,
-            )
-            source_owned = self._owned_release_needed(src_obj, expr.args[0])
-            source_root = self._enter_container_temp_root(
-                src_obj, self._fresh("sorted.source"),
-            )
-            source_lifetimes = ((source_root, source_owned),)
-            source_error = self._make_cpy_operand_cleanup_block(
-                (), (), self._current_try_err_block() or self._ensure_fn_err_exit(),
-                "sorted.source.error", rooted_pcc_lifetimes=source_lifetimes,
-            )
-            self._try_err_block = source_error
-            self._cpy_operand_cleanup_block = source_error
-            if key_spec is None and elem_hint is None:
-                new_list = self.builder.call(
-                    self.runtime["py_obj_sorted"], [src_obj],
-                    name=self._fresh("sorted"),
-                )
-                self._emit_post_call_err_check(getattr(expr, "span", None))
-            else:
-                new_list = self.builder.call(
-                    self.runtime["py_list_new"],
-                    [ir.Constant(_I64, 0)],
-                    name=self._fresh("sorted.copy"),
-                )
-            # Source/key finalizers may collect after the sort. Keep the
-            # result stable until both operand lifetimes have ended.
-            self._gc_pin(new_list)
-            sort_error = self._make_cpy_operand_cleanup_block(
-                (), (), source_error, "sorted.result.error",
-                pinned_pcc=((new_list, True),),
-            )
-            self._try_err_block = sort_error
-            self._cpy_operand_cleanup_block = sort_error
-            if key_spec is not None or elem_hint is not None:
-                self.builder.call(self.runtime["py_list_extend"], [new_list, src_obj])
-                self._emit_post_call_err_check(getattr(expr, "span", None))
-                if key_spec is not None:
-                    self._emit_list_sort_by_key(new_list, key_spec)
-                else:
-                    elem_ty = (
-                        expr.args[0].ty.elem
-                        if isinstance(expr.args[0].ty, ListType)
-                        else DynType(name="dyn")
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            source = self._emit_slot_call_operand(expr.args[0], "sorted.source")
+            roots.append(source)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            key = None
+            if key_expr is not None:
+                key = self._emit_slot_call_operand(key_expr, "sorted.key")
+                roots.append(key)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            compare = None
+            if elem_hint is not None and (key_expr is None or isinstance(key_expr, NoneLit)):
+                # Preserve the valueclass wrapper lane: its boxes do not use
+                # generic instance protocol dispatch. Ordinary classes use
+                # rich comparison so reflected/subclass/NotImplemented rules
+                # retain their runtime semantics.
+                info = self._resolve_method_mro(elem_hint, "__lt__")
+                if info is not None and info.valueclass:
+                    compare = self._new_slot_call_root("sorted.compare")
+                    roots.append(compare)
+                    owner = self._new_slot_call_root("sorted.compare.class")
+                    roots.append(owner)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_copy_source(owner, info.global_var, span=expr.span)
+                    self._slot_call_runtime_call(
+                        "py_obj_getattr", (owner,), result_slot=compare,
+                        suffix_args=(self._attr_name_ptr("__lt__"),), span=expr.span,
                     )
-                    self._emit_list_sort_with_dunder_lt(new_list, elem_hint, elem_ty)
-            if reverse_const:
-                self.builder.call(self.runtime["py_list_reverse"], [new_list])
+                    self._release_slot_call_roots((owner,))
+                    roots.pop()
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(
+                self.runtime["py_obj_sorted_slots"],
+                [self._as_gc_ptr(source),
+                 self._as_gc_ptr(key) if key is not None else ir.Constant(_CSTR, None),
+                 self._as_gc_ptr(compare) if compare is not None else ir.Constant(_CSTR, None),
+                 ir.Constant(_I64, 1 if reverse_const else 0), self._as_gc_ptr(output)],
+                name=self._fresh("sorted.status"),
+            )
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, "sorted", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("sorted.current"))
         finally:
-            # sorted borrows its input, including an attribute/call result.
-            # Its temporary owner outlives callbacks but must not outlive the
-            # operation. Leave this root before the enclosing key root.
-            self._release_rooted_pcc_lifetimes(source_lifetimes)
-            self._end_sort_key_lifetime(state)
-            if new_list is not None:
-                self._gc_unpin(new_list)
-        return new_list
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_list_sort_by_key(self, recv, key_spec):
         """Sort ``recv`` by ``key_spec`` in ``O(n log n)`` comparisons.

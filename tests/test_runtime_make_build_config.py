@@ -14,10 +14,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 
 import pytest
 
+from pcc.backend.ar import read_members
+from pcc.backend.ar_writer import _defined_symbols, write_archive
 from pcc.frontends.python import owned_runtime_build as owned
+from pcc.frontends.python.pipeline_targets import host_target_triple
 from pcc.tools import ir_to_obj, runtime_archive_provenance as provenance
 from pcc.tools import runtime_module_inventory
 
@@ -157,7 +161,7 @@ def test_inventory_rejects_unknown_target_without_partial_output(capsys, field):
     assert "no emitter" in output.err
 
 
-def _controlled_make_runtime(tmp_path, target, threads, refcount):
+def _controlled_make_runtime(tmp_path, target, threads, refcount, *, archive_tools=None):
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     # Retain the actual production recipes and configuration selection. Reduce
@@ -194,13 +198,15 @@ def _controlled_make_runtime(tmp_path, target, threads, refcount):
     environment.update(FRONTEND_LOG=str(log), CC=str(host_cc),
                        PCC_WITH_THREADS="0" if threads else "1",
                        PCC_REFCOUNT_KIND="ambient-other")
+    tools = archive_tools or {"AR": "ar", "RANLIB": "ranlib", "NM": "nm"}
     result = subprocess.run([
         "make", "--no-print-directory", "-rR", "-j1",
         f"PYTHON={sys.executable}", f"PCC_REPO_ROOT={ROOT}",
         f"PCC={shlex.quote(sys.executable)} {shlex.quote(str(frontend))}",
         f"PCC_RUNTIME_TARGET={target}", f"PCC_WITH_THREADS={int(threads)}",
         f"PCC_REFCOUNT_KIND={refcount}", f"CC={host_cc}",
-        "AR=ar", "RANLIB=ranlib", "libpy_runtime_pcc_py.a",
+        *(name + "=" + str(tool) for name, tool in tools.items()),
+        "libpy_runtime_pcc_py.a",
     ], cwd=runtime, env=environment, capture_output=True, text=True, timeout=90)
     (tmp_path / "make.stdout").write_text(result.stdout, encoding="utf-8")
     (tmp_path / "make.stderr").write_text(result.stderr, encoding="utf-8")
@@ -212,7 +218,8 @@ def _controlled_make_runtime(tmp_path, target, threads, refcount):
     (False, "atomic"), (True, "atomic"), (False, "local"), (True, "local"),
 ])
 def test_real_make_recipes_record_archive_configuration(tmp_path, monkeypatch, threads, refcount):
-    target = TARGETS[0]
+    # Native archive tools consume native objects, including Mach-O on macOS.
+    target = host_target_triple()
     runtime, calls = _controlled_make_runtime(tmp_path, target, threads, refcount)
     archive = runtime / "libpy_runtime_pcc_py.a"
     config = {"threads": threads, "refcount": refcount}
@@ -260,3 +267,130 @@ def test_real_make_recipes_record_archive_configuration(tmp_path, monkeypatch, t
     source.write_text(source.read_text() + "# changed source\n", encoding="utf-8")
     with pytest.raises(ValueError, match="source"):
         owned.ensure_target_runtime(str(runtime), target, explicit_archive=str(archive))
+
+
+# These adapters exercise the real Make tool-selection contract using PCC's
+# existing object readers and indexed archive writer. They do not emulate a
+# native Darwin toolchain or certify execution on another operating system.
+def _owned_archive_tools(tmp_path, *, required_format=None):
+    tools_dir = tmp_path / "archive-tools"
+    tools_dir.mkdir()
+    log = tools_dir / "calls.jsonl"
+    program = (
+        "#!" + sys.executable + "\n"
+        "import json, sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0, " + repr(str(ROOT)) + ")\n"
+        "from pcc.backend.ar import read_members\n"
+        "from pcc.backend.ar_writer import _defined_symbols, write_archive\n"
+        "required_format = " + repr(required_format) + "\n"
+        "log = Path(" + repr(str(log)) + ")\n"
+        + textwrap.dedent("""\
+        role = Path(sys.argv[0]).name
+        args = sys.argv[1:]
+        with log.open('a') as stream:
+            stream.write(json.dumps({'role': role, 'args': args}) + chr(10))
+        if role == 'ar':
+            assert args[0] == 'rcs' and len(args) >= 3
+            members = [(Path(path).name, Path(path).read_bytes()) for path in args[2:]]
+            Path(args[1]).write_bytes(write_archive(members))
+        else:
+            assert (role == 'ranlib' and len(args) == 1) or (role == 'nm' and args[:1] == ['-g'] and len(args) == 2)
+            payload = Path(args[-1]).read_bytes()
+            assert b'__.SYMDEF SORTED' in payload, 'owned archive lacks index'
+            members = read_members(payload)
+            assert members, 'owned archive lacks members'
+            for name, data in members:
+                kind, symbols = _defined_symbols(data)
+                if required_format is not None and kind != required_format:
+                    raise SystemExit('target archive tool requires ' + required_format + ', got ' + kind + ': ' + name)
+                if role == 'nm':
+                    for symbol in symbols:
+                        print('00000000 T ' + symbol)
+        """)
+    )
+    result = {}
+    for role in ('ar', 'ranlib', 'nm'):
+        tool = tools_dir / role
+        tool.write_text(program, encoding="utf-8")
+        tool.chmod(0o755)
+        result[role.upper()] = tool
+    return result, log
+
+
+def _emit_probe_object(tmp_path, target):
+    source = tmp_path / "py" / "probe.py"
+    source.parent.mkdir()
+    source.write_text("def probe() -> int:\n    return 7\n", encoding="utf-8")
+    ir = tmp_path / "probe.ll"
+    ir.write_text(
+        f'target triple = "{target}"\n'
+        "define i32 @PyProbe() {\nentry:\n  ret i32 7\n}\n",
+        encoding="utf-8",
+    )
+    obj = tmp_path / "probe.o"
+    assert ir_to_obj.main([
+        str(ir), str(obj), "--target", target,
+        "--source", str(source), "--runtime-root", str(tmp_path),
+        "--provenance", str(provenance.receipt_path_for_object(obj)),
+        "--runtime-threads", "1", "--runtime-refcount", "local",
+    ]) == 0
+    return obj
+
+
+@pytest.mark.parametrize("target, kind, machine", [
+    (TARGETS[0], "elf", 62),
+    (TARGETS[1], "elf", 183),
+    (TARGETS[2], "macho", 0x0100000c),
+    (TARGETS[3], "coff", 0x8664),
+])
+def test_explicit_target_object_archive_shape(tmp_path, monkeypatch, target, kind, machine):
+    monkeypatch.setenv("PCC_IR_TO_OBJ_EMITTER", "pcc")
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+    obj = _emit_probe_object(tmp_path, target)
+    data = obj.read_bytes()
+    actual_kind, symbols = _defined_symbols(data)
+    assert actual_kind == kind
+    offset, size = {"elf": (18, 2), "macho": (4, 4), "coff": (0, 2)}[kind]
+    assert int.from_bytes(data[offset:offset + size], "little") == machine
+    assert symbols == (["_PyProbe"] if kind == "macho" else ["PyProbe"])
+    archive = tmp_path / "probe.a"
+    archive.write_bytes(write_archive([(obj.name, data)]))
+    assert read_members(archive.read_bytes()) == [(obj.name, data)]
+    provenance.capi_inventory_path_for_archive(archive).write_text("\n".join(symbols) + "\n")
+    provenance.assemble_runtime_archive_manifest(archive, [obj], runtime_root=tmp_path)
+    manifest = provenance.verify_runtime_archive_manifest(archive, runtime_root=tmp_path)
+    assert manifest["target_triple"] == target
+    assert manifest["member_count"] == 1
+    assert manifest["members"][0]["runtime_build_config"] == {"threads": True, "refcount": "local"}
+    assert manifest["capi_symbols"] == symbols
+
+
+def test_archive_tool_rejects_incompatible_member_format(tmp_path, monkeypatch):
+    # Model the reported ELF-to-Mach-O tool mismatch with actual owned bytes.
+    # The diagnostic is ours; this is not an execution of Apple's ranlib.
+    monkeypatch.setenv("PCC_IR_TO_OBJ_EMITTER", "pcc")
+    obj = _emit_probe_object(tmp_path, TARGETS[0])
+    tools, _ = _owned_archive_tools(tmp_path, required_format="macho")
+    archive = tmp_path / "wrong-target.a"
+    result = subprocess.run([str(tools["AR"]), "rcs", str(archive), str(obj)],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([str(tools["RANLIB"]), str(archive)],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0
+    assert "target archive tool requires macho, got elf: probe.o" in result.stderr
+    assert not provenance.manifest_path_for_archive(archive).exists()
+
+
+def test_make_explicit_cross_target_uses_selected_archive_tools(tmp_path):
+    target = TARGETS[2]
+    tools, log = _owned_archive_tools(tmp_path, required_format="macho")
+    runtime, _ = _controlled_make_runtime(tmp_path, target, True, "local", archive_tools=tools)
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [call["role"] for call in calls] == ["ar", "ranlib", "nm"]
+    archive = runtime / "libpy_runtime_pcc_py.a"
+    manifest = provenance.verify_runtime_archive_manifest(archive, runtime_root=runtime)
+    config = {"threads": True, "refcount": "local"}
+    assert owned._manifest_matches_config(manifest, str(runtime), target, config)
+    assert all(_defined_symbols(data)[0] == "macho" for _, data in read_members(archive.read_bytes()))
+    assert manifest["capi_symbols"] == sorted("_PyProbe_" + name for name in owned.runtime_modules(str(runtime), target, True))

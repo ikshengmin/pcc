@@ -420,29 +420,73 @@ def _normalize_index(i: int, length: int, clip: int) -> int:
     return i
 
 
+# A new list owns both its header and separately allocated items array. Keep
+# the header rooted before malloc/tracking, and preserve TLS across partial
+# destruction. The second slot owns only a temporarily suspended exception.
+define_global_i32("pcc_list_factory_owned_map", 2)
+
+
+def _list_factory_finish(slots, token: int, success: int):
+    error = ptr_add(slots, 8)
+    if success == 0:
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("list: out of memory")))
+        py_tls_exc_swap_slot(error)
+        if token >= 0:
+            if pcc_gc_foreign_lease_release(slots, token) < 0:
+                pcc_platform_abort()
+                return null()
+        pcc_gc_store_root(slots, null())
+        py_clear_exception()
+        py_tls_exc_swap_slot(error)
+        pcc_gc_frame_leave(slots)
+        return null()
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), slots)
+    prior: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+    pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slots, token) < 0:
+            pcc_platform_abort()
+            return null()
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(slots, prior)
+
+
 @c_abi_export("py_list_new")
 def py_list_new(initial_capacity: int):
     if initial_capacity > 134217728:
         _debug_bad_container(null(), -100)
         return null()
-    l = pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0)
-    if ptr_is_null(l):
-        return null()
-    store_i64(l, PYLISTOBJECT_LENGTH_OFFSET, 0)  # length
+    slots = stack_alloc(16)
+    memset(slots, 0, 16)
+    pcc_gc_frame_enter(global_addr("pcc_list_factory_owned_map"), slots)
+    store_ptr(slots, 0, pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0))
+    if ptr_is_null(load_ptr(slots, 0)) != 0:
+        return _list_factory_finish(slots, -1, 0)
+    # Initialize the collector-visible shape before the first parking call.
+    l = load_ptr(slots, 0)
+    store_i64(l, PYLISTOBJECT_LENGTH_OFFSET, 0)
     cap: int = initial_capacity
     if cap < 4:
         cap = 4
-    store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, null())  # items
+    store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, null())
     store_i64(l, PYLISTOBJECT_CAPACITY_OFFSET, cap)
+    token: int = pcc_gc_foreign_lease_acquire(slots)
+    if token < 0:
+        return _list_factory_finish(slots, token, 0)
+    l = load_ptr(slots, 0)
+    pcc_gc_note_slot_write_barrier(null(), slots, l)
     items = malloc(cap * 8)
     if ptr_is_null(items):
-        py_decref(l)
-        return null()
+        return _list_factory_finish(slots, token, 0)
+    l = load_ptr(slots, 0)
     store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, items)
     pcc_gc_backend4_zpage_register_owner_payload_span(l, items, cap * 8)
     py_gc_track(l)
     pcc_gc_publish_initialized(l)
-    return l
+    return _list_factory_finish(slots, token, 1)
 
 
 @c_abi_export("py_list_from_static_items")

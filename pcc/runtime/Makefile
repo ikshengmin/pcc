@@ -19,6 +19,8 @@
 CC       ?= cc
 AR       ?= ar
 RANLIB   ?= ranlib
+# Cross builds must select symbol inspection for the same object target.
+NM       ?= nm
 PCC      ?= pcc
 PYTHON   ?= python3
 PCC_IR_TO_OBJ ?= $(PYTHON) -m pcc.tools.ir_to_obj
@@ -200,7 +202,7 @@ $(LIB_PCC_PY): $(PCC_PY_OBJECTS) $(PCC_PY_RECEIPTS)
 	rm -f "$@.provenance.json.tmp"; \
 	$(AR) rcs $@.tmp $(PCC_PY_OBJECTS); \
 	$(RANLIB) "$@.tmp"; \
-	nm -g "$@.tmp" > "$@.capi_syms.nm.tmp" 2>/dev/null; \
+	$(NM) -g "$@.tmp" > "$@.capi_syms.nm.tmp" 2>/dev/null; \
 	awk '$$2!="U" && $$2 ~ /^[A-Z]$$/ && ($$3 ~ /^_?Py/ || $$3 ~ /^_?_Py/) {print $$3}' "$@.capi_syms.nm.tmp" | LC_ALL=C sort -u > "$@.capi_syms.tmp"; \
 	rm -f "$@.capi_syms.nm.tmp"; \
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.tools.runtime_archive_provenance assemble --archive "$@.tmp" --runtime-root $(CURDIR) --output "$@.provenance.json.tmp" --capi-inventory "$@.capi_syms.tmp" --ar $(AR) $(PCC_PY_OBJECTS); \
@@ -225,7 +227,7 @@ $(LIB_PCC_PY_LIBPYTHON): $(LIB_PCC_PY) $(OBJDIR_LIBPY)/py_libpython.o
 	$(AR) d "$@.tmp" py_extension_loader_runtime.o; \
 	$(AR) r "$@.tmp" $(OBJDIR_LIBPY)/py_libpython.o; \
 	$(RANLIB) "$@.tmp"; \
-	nm -g "$@.tmp" > "$@.capi_syms.nm.tmp" 2>/dev/null; \
+	$(NM) -g "$@.tmp" > "$@.capi_syms.nm.tmp" 2>/dev/null; \
 	awk '$$2!="U" && $$2 ~ /^[A-Z]$$/ && ($$3 ~ /^_?Py/ || $$3 ~ /^_?_Py/) {print $$3}' "$@.capi_syms.nm.tmp" | LC_ALL=C sort -u > "$@.capi_syms.tmp"; \
 	test -s "$@.capi_syms.nm.tmp"; \
 	test -s "$@.capi_syms.tmp"; \

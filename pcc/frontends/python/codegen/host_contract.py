@@ -28,6 +28,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_c_abi_export_symbols",
     "_class_aliases",
     "_class_namespace_context",
+    "_lambda_adapter_root_scope",
     "_class_attr_mutation_in_loop_depth",
     "_class_attr_runtime_state",
     "_class_type_export_cache",
@@ -328,6 +329,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_static_literal_init_function",
     "_emit_method_arg_as_pcc_object",
     "_emit_name",
+    "_emit_owned_builtin_exception_class",
     "_emit_native_builtin_callable_type_error",
     "_emit_native_builtin_callable_value",
     "_emit_native_func_adapter",
@@ -658,6 +660,9 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_rooted_native_callable",
     "_emit_native_func_default_root",
     "_emit_class_namespace_name_root",
+    "_emit_lambda_adapter_name_root",
+    "_slot_call_unary_runtime",
+    "_emit_slot_call_unary",
 )
 
 

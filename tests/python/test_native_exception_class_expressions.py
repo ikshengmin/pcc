@@ -141,12 +141,14 @@ EXPRESSION_PROGRAMS = {
 }
 
 
-def _expression_ir(source):
+def _expression_ir(source, target=None):
     from pcc.frontends.python.codegen.layer1 import L1CodeGen
     from pcc.frontends.python.py_lift import parse_and_lift
     from pcc.frontends.python.type_infer import infer_module
     module = infer_module(parse_and_lift(source, "<exception-class-expression>", "exception_class_expression"))
     codegen = L1CodeGen(module, ir_scaffold_mode="on")
+    if target is not None:
+        codegen._target_triple = target
     codegen._strict_no_libpython = True
     text = str(codegen.generate(module))
     has_unavailable_function = "strict.nolib.stub:" in text
@@ -202,7 +204,7 @@ def test_exception_expression_controls_follow_cpython(capsys, name):
 @pytest.mark.parametrize("target", ("arm64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"))
 def test_exception_expression_programs_reach_owned_objects(name, target):
     from pcc.backend.owned_object_emit import emit_owned_object
-    assert len(emit_owned_object(_expression_ir(EXPRESSION_PROGRAMS[name][0]), target)) > 0
+    assert len(emit_owned_object(_expression_ir(EXPRESSION_PROGRAMS[name][0], target), target)) > 0
 
 
 TUPLE_HANDLER_SOURCE = '''events = []

@@ -1,21 +1,21 @@
 """Read-only control-flow checks for class method owner frames."""
 import re
 
+from ir_pointer_aliases import (
+    canonical_pointer,
+    function_bodies,
+    pointer_bitcast_aliases,
+)
+
 
 def check_method_frames(text):
     checked = []
-    for match in re.finditer(r'^define [^\n]*@([\w.$]+)\([^\n]*\).*?^}', text, re.M | re.S):
-        name, body = match[1], match[0]
+    for name, body in function_bodies(text):
         if 'class.method.publication' not in body:
             continue
-        aliases = dict(re.findall(r'(%[\w.$]+) = bitcast ptr (%[\w.$]+) to ptr', body))
+        aliases = pointer_bitcast_aliases(body)
         def canonical(value):
-            visited = set()
-            while value in aliases:
-                assert value not in visited, (name, value)
-                visited.add(value)
-                value = aliases[value]
-            return value
+            return canonical_pointer(value, aliases)
         blocks = {}
         current = None
         for line in body.splitlines()[1:]:
@@ -83,17 +83,12 @@ def check_method_frames(text):
 
 def method_owner_copies(text):
     copies = []
-    for match in re.finditer(r'^define [^\n]*@([\w.$]+)\([^\n]*\).*?^}', text, re.M | re.S):
-        aliases = dict(re.findall(r'(%[\w.$]+) = bitcast ptr (%[\w.$]+) to ptr', match[0]))
+    for name, body in function_bodies(text):
+        aliases = pointer_bitcast_aliases(body)
         def canonical(value):
-            visited = set()
-            while value in aliases:
-                assert value not in visited
-                visited.add(value)
-                value = aliases[value]
-            return value
-        for dest, source in re.findall(r'@pcc_gc_root_copy_lease\(ptr (%[^ ,]+), ptr (%[^ ,)]+)\)', match[0]):
+            return canonical_pointer(value, aliases)
+        for dest, source in re.findall(r'@pcc_gc_root_copy_lease\(ptr (%[^ ,]+), ptr (%[^ ,)]+)\)', body):
             dest, source = canonical(dest), canonical(source)
             if 'class.method.publication' in dest and 'class.method.publication' in source:
-                copies.append((match[1], dest, source))
+                copies.append((name, dest, source))
     return copies

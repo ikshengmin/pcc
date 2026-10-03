@@ -349,6 +349,37 @@ class LambdaHelperLoweringMixin:
         collect(expr.body, set(param_names), free_vars)
         return free_vars
 
+    def _emit_lambda_adapter_name_root(self, expr, label):
+        """Copy only an exact owning slot in the currently active adapter."""
+        if not isinstance(expr, Name):
+            return None
+        scope = getattr(self, "_lambda_adapter_root_scope", None)
+        if scope is None or scope[0] is not self.current_function:
+            return None
+        entry = self.env.get(expr.ident)
+        if entry is None:
+            return None
+        for name, source in scope[1]:
+            if name != expr.ident or entry[0] is not source:
+                continue
+            # The adapter registers each root before tuple_get and publishes
+            # its NEW result immediately. Scope activation follows binding;
+            # scope restoration precedes the balancing root cleanup.
+            self._slot_call_root_record(source)
+            output = self._new_slot_call_root(label)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cleanup = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                self._slot_call_copy_source(output, source, False, expr.span)
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cleanup
+            return output
+        return None
+
     def _maybe_emit_native_lambda_func(self, expr: Lambda) -> Optional[ir.Value]:
         """Lower a small no-closure lambda to a pcc-native function object."""
         arity = len(expr.params)
@@ -397,6 +428,12 @@ class LambdaHelperLoweringMixin:
             for default_i, (i, _p) in enumerate(default_params)
         }
 
+        legacy_adapter = any(
+            getattr(self, "_cpy_env_flags", {}).get(name, False)
+            or self._is_valueclass_payload_type(self.env[name][2])
+            for name in free_var_names
+        ) or any(self._expr_looks_cpython(param.default) for _index, param in default_params)
+
         if not hasattr(self, "_native_lambda_func_counter"):
             self._native_lambda_func_counter = 0
         idx = self._native_lambda_func_counter
@@ -432,6 +469,7 @@ class LambdaHelperLoweringMixin:
         # the loop variable's flag, so the enclosing exit cleanup found a
         # fresh never-set flag and leaked the last element.
         saved_ownership_state = _swap_in_fresh_ownership_state(self)
+        saved_adapter_scope = getattr(self, "_lambda_adapter_root_scope", None)
 
         entry = adapter.append_basic_block(name="entry")
         self.builder = ir.IRBuilder(entry)
@@ -452,138 +490,245 @@ class LambdaHelperLoweringMixin:
         # "self backend expected pointer value 'st.addr.N'").
         self._current_entry_block = entry
 
-        # Register the return root first so argument roots can leave in LIFO
-        # order while the result survives their finalizers/relocation.
-        return_slot = self._alloca_in_entry(
-            _CSTR, name=self._fresh("lambda.return.root"), init_null=True,
-        )
-        return_ptr = self._as_gc_ptr(return_slot)
-        self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), return_slot)
-        argument_roots = []
-        for i, fv in enumerate(free_var_names):
-            cap = self.builder.call(
-                self.runtime["py_tuple_get"],
-                [adapter.args[0], ir.Constant(_I64, i)],
-                name=self._fresh(f"{fv}.cap"),
+        if not legacy_adapter:
+            # Every slot starts registered EMPTY before its tuple-get producer.
+            # The return root outlives argument roots and keeps the callback's
+            # result authoritative while argument finalizers run.
+            return_slot = self._new_slot_call_root("lambda.return")
+            error_target = self._ensure_fn_err_exit()
+            roots = [return_slot]
+            bindings = []
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            for index, name in enumerate(free_var_names):
+                slot = self._new_slot_call_root("lambda.capture." + name)
+                roots.append(slot)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                value = self.builder.call(
+                    self.runtime["py_tuple_get"],
+                    [adapter.args[0], ir.Constant(_I64, index)],
+                    name=self._fresh(name + ".cap"),
+                )
+                self._publish_slot_call_owned(slot, value, label="lambda captured argument")
+                self._emit_post_call_err_check(expr.span)
+                self.env[name] = (slot, _CSTR, DynType(name="dyn"))
+                bindings.append((name, slot))
+
+            args_len = self.builder.call(
+                self.runtime["py_tuple_len"], [adapter.args[1]],
+                name=self._fresh("lambda.args.len"),
             )
-            slot = self._enter_container_temp_root(cap, self._fresh(f"{fv}.cap"))
-            argument_roots.append((slot, True))
-            self.env[fv] = (slot, _CSTR, DynType(name="dyn"))
+            for index, name in enumerate(param_names):
+                slot = self._new_slot_call_root("lambda.parameter." + name)
+                roots.append(slot)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if index in default_capture_index:
+                    has_arg = self.builder.icmp_signed(
+                        ">", args_len, ir.Constant(_I64, index),
+                        name=self._fresh(name + ".has_arg"),
+                    )
+                    arg_bb = adapter.append_basic_block(name=self._fresh(name + ".arg"))
+                    default_bb = adapter.append_basic_block(name=self._fresh(name + ".default"))
+                    cont_bb = adapter.append_basic_block(name=self._fresh(name + ".cont"))
+                    self.builder.cbranch(has_arg, arg_bb, default_bb)
+                    self.builder.position_at_end(arg_bb)
+                    value = self.builder.call(
+                        self.runtime["py_tuple_get"], [adapter.args[1], ir.Constant(_I64, index)],
+                        name=self._fresh(name + ".arg"),
+                    )
+                    self._publish_slot_call_owned(slot, value, label="lambda positional argument")
+                    self._emit_post_call_err_check(expr.span)
+                    self.builder.branch(cont_bb)
+                    self.builder.position_at_end(default_bb)
+                    value = self.builder.call(
+                        self.runtime["py_tuple_get"],
+                        [adapter.args[0], ir.Constant(_I64, default_capture_index[index])],
+                        name=self._fresh(name + ".default"),
+                    )
+                    self._publish_slot_call_owned(slot, value, label="lambda default argument")
+                    self._emit_post_call_err_check(expr.span)
+                    self.builder.branch(cont_bb)
+                    self.builder.position_at_end(cont_bb)
+                else:
+                    value = self.builder.call(
+                        self.runtime["py_tuple_get"], [adapter.args[1], ir.Constant(_I64, index)],
+                        name=self._fresh(name + ".arg"),
+                    )
+                    self._publish_slot_call_owned(slot, value, label="lambda positional argument")
+                    self._emit_post_call_err_check(expr.span)
+                self.env[name] = (slot, _CSTR, DynType(name="dyn"))
+                bindings.append((name, slot))
 
-        args_len = self.builder.call(
-            self.runtime["py_tuple_len"],
-            [adapter.args[1]],
-            name=self._fresh("lambda.args.len"),
-        )
-        for i, pname in enumerate(param_names):
-            slot = self.builder.alloca(_CSTR, name=f"{pname}.addr")
-            if i in default_capture_index:
-                has_arg = self.builder.icmp_signed(
-                    ">",
-                    args_len,
-                    ir.Constant(_I64, i),
-                    name=self._fresh(f"{pname}.has_arg"),
+            self._lambda_adapter_root_scope = (adapter, tuple(bindings))
+            try:
+                result_root = self._emit_slot_call_operand(expr.body, "lambda.body.result")
+                roots.append(result_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                moved = self.builder.call(
+                    self.runtime["pcc_gc_root_move"],
+                    [self._as_gc_ptr(return_slot), self._as_gc_ptr(result_root)],
+                    name=self._fresh("lambda.return.move"),
                 )
-                arg_bb = adapter.append_basic_block(name=self._fresh(f"{pname}.arg"))
-                default_bb = adapter.append_basic_block(
-                    name=self._fresh(f"{pname}.default")
-                )
-                cont_bb = adapter.append_basic_block(name=self._fresh(f"{pname}.cont"))
-                self.builder.cbranch(has_arg, arg_bb, default_bb)
+                self._slot_call_check_status(moved, "lambda return owner move", expr.span)
+                self._lambda_adapter_root_scope = saved_adapter_scope
+                self._release_slot_call_roots(tuple(roots[1:]))
+                self._try_err_block = self._slot_call_cleanup_block((return_slot,), error_target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self.builder.ret(self._take_slot_call_root(return_slot))
+            except NotImplementedError:
+                self.builder = saved_builder
+                self.env = saved_env
+                self.env_class_hint = saved_env_class_hint
+                self.env_class_object_hint = saved_env_class_object_hint
+                self._cpy_env_flags = saved_cpy_env_flags
+                self._cpy_values = saved_cpy_values
+                self._owned_cpy_values = saved_owned_cpy_values
+                self.current_function = saved_current_fn
+                self.current_func_def = saved_current_fd
+                self.loop_stack = saved_loops
+                self._current_entry_block = saved_entry_block
+                self._try_err_block = saved_try_err_block
+                self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block
+                self._lambda_adapter_root_scope = saved_adapter_scope
+                _restore_ownership_state(self, saved_ownership_state)
+                return None
 
-                self.builder.position_at_end(arg_bb)
-                obj = self.builder.call(
-                    self.runtime["py_tuple_get"],
-                    [adapter.args[1], ir.Constant(_I64, i)],
-                    name=self._fresh(f"{pname}.arg"),
-                )
-                self.builder.store(obj, slot)
-                self.builder.branch(cont_bb)
-
-                self.builder.position_at_end(default_bb)
-                obj = self.builder.call(
-                    self.runtime["py_tuple_get"],
-                    [
-                        adapter.args[0],
-                        ir.Constant(_I64, default_capture_index[i]),
-                    ],
-                    name=self._fresh(f"{pname}.default"),
-                )
-                self.builder.store(obj, slot)
-                self.builder.branch(cont_bb)
-
-                self.builder.position_at_end(cont_bb)
-            else:
-                obj = self.builder.call(
-                    self.runtime["py_tuple_get"],
-                    [adapter.args[1], ir.Constant(_I64, i)],
-                    name=self._fresh(f"{pname}.arg"),
-                )
-                self.builder.store(obj, slot)
-            # Both tuple-get arms return NEW references. Keep their common
-            # value traced across arbitrary callback bodies and retire it on
-            # normal return or exception, just like a named-function adapter.
-            obj = self.builder.load(slot, name=self._fresh(f"{pname}.bound"))
-            root = self._enter_container_temp_root(obj, self._fresh(f"{pname}.arg"))
-            argument_roots.append((root, True))
-            self.env[pname] = (root, _CSTR, DynType(name="dyn"))
-
-        argument_lifetimes = tuple(argument_roots)
-        self._try_err_block = self._make_cpy_operand_cleanup_block(
-            (), (), self._ensure_fn_err_exit(), "lambda.arguments.error",
-            rooted_pcc_lifetimes=((return_slot, False),) + argument_lifetimes,
-        )
-        self._cpy_operand_cleanup_block = self._try_err_block
-
-        try:
-            body_val = self._emit_expr(expr.body)
-            if isinstance(getattr(body_val, "type", None), ir.VoidType):
-                result_obj = self._emit_none_literal()
-            elif isinstance(getattr(body_val, "type", None), ir.PointerType):
-                result_obj = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    body_val,
-                    expr.body.ty,
-                )
-            else:
-                result_obj = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    body_val,
-                    expr.body.ty,
-                )
-            result_owned = self._owned_release_needed(result_obj, expr.body) or (
-                self._container_store_temp_needs_release(
-                    expr.body, expr.body.ty, False, result_obj,
-                )
+        else:
+            # Register the return root first so argument roots can leave in LIFO
+            # order while the result survives their finalizers/relocation.
+            return_slot = self._alloca_in_entry(
+                _CSTR, name=self._fresh("lambda.return.root"), init_null=True,
             )
-            if not result_owned:
-                # ``lambda value: value`` returns a borrowed argument. Give
-                # the caller its reference before retiring the argument root.
-                self._gc_retain(result_obj)
-            self.builder.call(self.runtime["pcc_gc_store_root"], [return_ptr, result_obj])
-            self._release_rooted_pcc_lifetimes(argument_lifetimes)
-            result_obj = self._leave_return_cleanup_root(result_obj, return_slot, return_ptr)
-            self.builder.ret(result_obj)
-        except NotImplementedError:
-            self.builder = saved_builder
-            self.env = saved_env
-            self.env_class_hint = saved_env_class_hint
-            self.env_class_object_hint = saved_env_class_object_hint
-            self._cpy_env_flags = saved_cpy_env_flags
-            self._cpy_values = saved_cpy_values
-            self._owned_cpy_values = saved_owned_cpy_values
-            self.current_function = saved_current_fn
-            self.current_func_def = saved_current_fd
-            self.loop_stack = saved_loops
-            self._current_entry_block = saved_entry_block
-            self._try_err_block = saved_try_err_block
-            self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block
-            _restore_ownership_state(self, saved_ownership_state)
-            return None
+            return_ptr = self._as_gc_ptr(return_slot)
+            self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), return_slot)
+            argument_roots = []
+            for i, fv in enumerate(free_var_names):
+                cap = self.builder.call(
+                    self.runtime["py_tuple_get"],
+                    [adapter.args[0], ir.Constant(_I64, i)],
+                    name=self._fresh(f"{fv}.cap"),
+                )
+                slot = self._enter_container_temp_root(cap, self._fresh(f"{fv}.cap"))
+                argument_roots.append((slot, True))
+                self.env[fv] = (slot, _CSTR, DynType(name="dyn"))
+
+            args_len = self.builder.call(
+                self.runtime["py_tuple_len"],
+                [adapter.args[1]],
+                name=self._fresh("lambda.args.len"),
+            )
+            for i, pname in enumerate(param_names):
+                slot = self.builder.alloca(_CSTR, name=f"{pname}.addr")
+                if i in default_capture_index:
+                    has_arg = self.builder.icmp_signed(
+                        ">",
+                        args_len,
+                        ir.Constant(_I64, i),
+                        name=self._fresh(f"{pname}.has_arg"),
+                    )
+                    arg_bb = adapter.append_basic_block(name=self._fresh(f"{pname}.arg"))
+                    default_bb = adapter.append_basic_block(
+                        name=self._fresh(f"{pname}.default")
+                    )
+                    cont_bb = adapter.append_basic_block(name=self._fresh(f"{pname}.cont"))
+                    self.builder.cbranch(has_arg, arg_bb, default_bb)
+
+                    self.builder.position_at_end(arg_bb)
+                    obj = self.builder.call(
+                        self.runtime["py_tuple_get"],
+                        [adapter.args[1], ir.Constant(_I64, i)],
+                        name=self._fresh(f"{pname}.arg"),
+                    )
+                    self.builder.store(obj, slot)
+                    self.builder.branch(cont_bb)
+
+                    self.builder.position_at_end(default_bb)
+                    obj = self.builder.call(
+                        self.runtime["py_tuple_get"],
+                        [
+                            adapter.args[0],
+                            ir.Constant(_I64, default_capture_index[i]),
+                        ],
+                        name=self._fresh(f"{pname}.default"),
+                    )
+                    self.builder.store(obj, slot)
+                    self.builder.branch(cont_bb)
+
+                    self.builder.position_at_end(cont_bb)
+                else:
+                    obj = self.builder.call(
+                        self.runtime["py_tuple_get"],
+                        [adapter.args[1], ir.Constant(_I64, i)],
+                        name=self._fresh(f"{pname}.arg"),
+                    )
+                    self.builder.store(obj, slot)
+                # Both tuple-get arms return NEW references. Keep their common
+                # value traced across arbitrary callback bodies and retire it on
+                # normal return or exception, just like a named-function adapter.
+                obj = self.builder.load(slot, name=self._fresh(f"{pname}.bound"))
+                root = self._enter_container_temp_root(obj, self._fresh(f"{pname}.arg"))
+                argument_roots.append((root, True))
+                self.env[pname] = (root, _CSTR, DynType(name="dyn"))
+
+            argument_lifetimes = tuple(argument_roots)
+            self._try_err_block = self._make_cpy_operand_cleanup_block(
+                (), (), self._ensure_fn_err_exit(), "lambda.arguments.error",
+                rooted_pcc_lifetimes=((return_slot, False),) + argument_lifetimes,
+            )
+            self._cpy_operand_cleanup_block = self._try_err_block
+
+            try:
+                body_val = self._emit_expr(expr.body)
+                if isinstance(getattr(body_val, "type", None), ir.VoidType):
+                    result_obj = self._emit_none_literal()
+                elif isinstance(getattr(body_val, "type", None), ir.PointerType):
+                    result_obj = marshal.marshal_to_object(
+                        self.builder,
+                        self.module,
+                        self.runtime,
+                        body_val,
+                        expr.body.ty,
+                    )
+                else:
+                    result_obj = marshal.marshal_to_object(
+                        self.builder,
+                        self.module,
+                        self.runtime,
+                        body_val,
+                        expr.body.ty,
+                    )
+                result_owned = self._owned_release_needed(result_obj, expr.body) or (
+                    self._container_store_temp_needs_release(
+                        expr.body, expr.body.ty, False, result_obj,
+                    )
+                )
+                if not result_owned:
+                    # ``lambda value: value`` returns a borrowed argument. Give
+                    # the caller its reference before retiring the argument root.
+                    self._gc_retain(result_obj)
+                self.builder.call(self.runtime["pcc_gc_store_root"], [return_ptr, result_obj])
+                self._release_rooted_pcc_lifetimes(argument_lifetimes)
+                result_obj = self._leave_return_cleanup_root(result_obj, return_slot, return_ptr)
+                self.builder.ret(result_obj)
+            except NotImplementedError:
+                self.builder = saved_builder
+                self.env = saved_env
+                self.env_class_hint = saved_env_class_hint
+                self.env_class_object_hint = saved_env_class_object_hint
+                self._cpy_env_flags = saved_cpy_env_flags
+                self._cpy_values = saved_cpy_values
+                self._owned_cpy_values = saved_owned_cpy_values
+                self.current_function = saved_current_fn
+                self.current_func_def = saved_current_fd
+                self.loop_stack = saved_loops
+                self._current_entry_block = saved_entry_block
+                self._try_err_block = saved_try_err_block
+                self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block
+                _restore_ownership_state(self, saved_ownership_state)
+                return None
 
         self.builder = saved_builder
         self.env = saved_env
@@ -598,7 +743,82 @@ class LambdaHelperLoweringMixin:
         self._current_entry_block = saved_entry_block
         self._try_err_block = saved_try_err_block
         self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block
+        self._lambda_adapter_root_scope = saved_adapter_scope
         _restore_ownership_state(self, saved_ownership_state)
+
+        # Foreign Python values retain their existing explicit bridge path.
+        # Ordinary native captures/defaults use the same authoritative slot
+        # producers as other call operands, in their existing capture order.
+        capture_exprs = tuple(
+            Name(
+                span=expr.span,
+                ty=saved_env[name][2],
+                ident=name,
+            )
+            for name in free_var_names
+        )
+        default_exprs = tuple(param.default for _index, param in default_params)
+        legacy_bridge = any(saved_cpy_env_flags.get(name, False) for name in free_var_names)
+        legacy_bridge = legacy_bridge or any(
+            self._expr_looks_cpython(default) for default in default_exprs
+        )
+        legacy_bridge = legacy_bridge or any(
+            self._is_valueclass_payload_type(capture.ty) for capture in capture_exprs
+        )
+        if not legacy_bridge:
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cleanup = self._cpy_operand_cleanup_block
+            output = self._slot_call_result_sink(expr)
+            owns_output = output is None
+            if owns_output:
+                output = self._new_slot_call_root("lambda.native.result")
+            roots = [output] if owns_output else []
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                captures_root = self._new_slot_call_root("lambda.native.captures")
+                roots.append(captures_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                captures = self.builder.call(
+                    self.runtime["py_tuple_new"],
+                    [ir.Constant(_I64, len(capture_exprs) + len(default_exprs))],
+                    name=self._fresh("lambda.native.captures.new"),
+                )
+                self._publish_slot_call_owned(captures_root, captures, label="lambda captures")
+                self._emit_post_call_err_check(expr.span)
+                self._guard_cpy_value_not_null(self.builder.load(captures_root))
+                for index, capture in enumerate(capture_exprs + default_exprs):
+                    item = self._emit_slot_call_operand(capture, "lambda.native.capture")
+                    roots.append(item)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_runtime_call(
+                        "py_tuple_set_item", (captures_root, item),
+                        suffix_args=(ir.Constant(_I64, index),),
+                        argument_order=(0, 2, 1), span=expr.span,
+                    )
+                    self._release_slot_call_roots((item,))
+                    roots.pop()
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_func_new", (captures_root,), result_slot=output,
+                    suffix_args=(adapter,), argument_order=(1, 0), span=expr.span,
+                )
+                self._guard_cpy_value_not_null(self.builder.load(output))
+                self._release_slot_call_roots((captures_root,))
+                if owns_output:
+                    self._try_err_block = self._slot_call_cleanup_block((output,), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    return self._take_slot_call_root(output)
+                # The caller owns this already-published root; a borrowed load
+                # only satisfies the expression interface, not a new handoff.
+                return self.builder.load(output, name=self._fresh("lambda.native.rooted"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cleanup
 
         captures = self.builder.call(
             self.runtime["py_tuple_new"],

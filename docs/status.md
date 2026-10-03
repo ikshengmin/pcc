@@ -1,6 +1,6 @@
 # Current status
 
-Updated October 3, 2026, 11:31 UTC. Maintain this page in place.
+Updated October 3, 2026, 12:24 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
@@ -73,24 +73,41 @@ through those roots after relocation boundaries.
   checks and original pipeline-context advancement pass. This changes the
   ownership ABI despite an unchanged symbol signature: an old borrowed-default
   runtime must be rejected. Native proof requires a rebuilt matching runtime.
-- Remaining shared families include list/tuple construction, sorted/bytes,
-  dict.get and dynamic branch merges, native OS wrappers, valueclass boxing,
-  arithmetic value-kind proof and authoritative Name bindings. The complete
-  diagnostic retains each original AST/callee failure for causal replay.
+- List/tuple constructors, iterator ownership, bytes caller publication, sorting
+  and factory-allocation failure handling now have 250 host/model/reference
+  checks. Sorting preserves stable reverse order and roots comparator inputs;
+  the bytes runtime still has interior-buffer and post-result cleanup hazards.
+  Dict.get now publishes through caller output roots and has 87 integrated
+  checks. These source batches are newer than the last matched runtime.
+- The later exception-class Name regression is reproduced on unchanged Linux
+  matrix sources: five baseline passes became four passes and one failure.
+  Copying from the authoritative exception cache slot restores all five. A
+  separately recorded target-plumbing fixture correction allows the 07:35
+  compiler and repaired compiler to pass all 20 four-target expression cases. An
+  exact reconstruction of the retained pre-fix closure reproduces 16 passes and
+  four matching Name failures with that same corrected fixture. The repaired
+  whole host/object boundary has 108 passes, including all 14 exact class-attribute
+  cases; 41 archive-dependent native cases remain unexecuted.
+- Remaining shared families include dynamic branch merges, native OS wrappers,
+  valueclass boxing, arithmetic value-kind proof and authoritative Name bindings.
+  The complete diagnostic retains original AST/callee failures for causal replay.
 - Metaclass ownership has 10 host/IR checks. Class tag allocation has a shared
   CAS owner, reserved-tag exclusion and exhaustion cleanup with 14 host checks.
   The old bodies reproduced a collision with reserved tag 200 on allocation 97,
   C-extension-range overflow and duplicate allocation under controlled
-  interleaving. Actual emitted ABI and native contention/exhaustion are pending.
+  interleaving. Four source-matched runtime components now emit the required i32
+  tag ABI and metaclass/namespace operations. Later metaclass retirement changes
+  have 27 body-model checks; their two-component replay and native contention,
+  exhaustion and lifetime qualification remain pending.
 - Namespace transaction support has a freestanding component with zero calls in
   its locked helpers. The later namespace writer API has 36 body-model checks;
   legacy writers/readers, raw callbacks and managed method-selection ownership
   remain incompletely migrated. No production safety conclusion follows from
   support-only tests.
 
-The allocator/metaclass/namespace components are being checked together to avoid
-repeating py_class compilation. Off-tree proposals and integrated but unqualified
-work remain distinguishable in the retained code batches.
+Off-tree proposals and integrated but unqualified work remain distinguishable
+in the retained code batches. Strict lambda adapter scope checks are progressing
+separately; they do not qualify unsupported callback semantics.
 
 ## C and ABI work
 
@@ -98,6 +115,13 @@ Named declarations, layout/pointer/signature caches and deferred backend
 consumers now retain module-owned type context. The repair has 226 scoped checks
 and two owned Linux late/nested-layout executions. A broader stage1-context node
 previously timed out and a native codec node was deselected; neither is passed.
+The full original Stage1-context test now has terminal results. The reviewed
+f3a0430 snapshot generates IR for 9 of its 47 targets and records 38 codegen
+exceptions (113.3 seconds, 755 MB peak). Source frozen at 12:13 generates IR for
+13 and records 34 exceptions (126.2 seconds, 834 MB peak), with four newly passing
+targets and no new failing target. Both tests fail. Negative fallback counts are
+existing exception sentinels; they and the strict ownership checks are unchanged.
+These contextual tests do not execute a native compiler.
 
 Darwin stream resolution now covers implicit use, explicit file/block externs,
 owned-header macros and local/translation-unit definitions. Its 114 focused
@@ -109,9 +133,17 @@ Six C corpus product adapters previously forced host assembly/linking through
 `run_translation_units_with_system_cc`. Their old passes cannot prove owned
 product execution. A test-only migration now routes product programs through
 public owned compile/emit APIs while preserving original C sources/assertions
-and the external reference oracle. Eighteen host route checks pass. Six unchanged-source native entries across
-five product adapters also pass against the external oracle, with the product
-guard permitting only PCC-owned executables. Complete corpus execution is pending. Csmith generation is unavailable in this environment.
+and the external reference oracle. Eighteen host route checks pass. Six native
+entries using unchanged sources across five product adapters also pass against
+that oracle, with the product guard permitting only PCC-owned executables.
+Complete corpus execution is pending. Csmith generation is unavailable here.
+
+The Make fixture incorrectly paired Linux ELF probe objects with the host archive
+utilities on every platform. A target-aware host fixture and explicit NM override
+now pass all 31 cases: the original 25 strict Make/provenance cases and six owned
+cross-format archive/tool checks. The old Make's ignored NM setting produces an
+empty Mach-O symbol inventory with GNU tools; strict admission rejects it. Native
+macOS execution has not been performed.
 
 Historical reviewer counts of five C root errors and 45 failures/16 csmith
 failures are attributed, unresolved counts. A precise five-node ledger was not
@@ -134,14 +166,17 @@ log contained four suspend records, zero resume records and 49 reported drops.
 The remaining 54 cases were not run.
 
 Independent try-lock delivery can separate the two records of a completed
-suspension. A paired-delivery repair after world unlock, with zero no-park depth and
-reentrancy checks, now has a separately rebuilt complete184-member archive.
-All18 GC0/GC1 mask/format cases pass, including the previously failing pair check.
-The first GC2 case, with logging disabled, timed out at the unchanged20-second
-limit;41 later cases remain unrun. An unchanged-baseline comparison is required
-before attributing that timeout to the repair. Potentially locked observation paths
-must remain nonwaiting. Logs and strict assertions are retained; native
-concurrency, five-GC coverage and logging overhead remain unqualified.
+suspension. A paired-delivery repair after world unlock, with zero no-park depth
+and reentrancy checks, has a separately rebuilt complete 184-member archive.
+All 18 GC0/GC1 mask/format cases pass, including the previously failing pair check.
+The first GC2 case, with logging disabled, timed out at the unchanged 20-second
+limit; 41 later cases were not run in that original matrix. Separate baseline and
+repaired binaries both pass a GC2 replay, so the intermittent timeout remains
+unattributed. Independent slices pass all 15 tripwire cases and all nine mask
+cases under each of GC3 and GC4. GC labels here are requested settings without
+an actual collector-event witness. The original stopped receipt is preserved.
+Potentially locked observation paths remain nonwaiting. Native concurrency,
+complete five-GC coverage and logging overhead remain unqualified.
 
 ## GUI, gateway and remaining goals
 
@@ -182,13 +217,14 @@ bytes. Recoverable current code, before/after patches, source identities and
 execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
-The latest verified local synchronization used the immutable 10:30:50 capture:
-PCC `f3a043008d70132d8aefea2bf14931d533c288a6` (10 paths), GUI
+The latest verified local synchronization used the immutable 11:32:28 capture:
+PCC `97b6bcedb0c01995a0468b068aa1157b3b54ab84` (47 paths), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
-`83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact bytes/modes and diff checks
-passed. That capture recorded 306 fast passes and one frozenset producer failure;
-collection selected 17,857 nodes and gate-deselected 5,726, with no errors/skips.
-Collection executed no test bodies.
+`83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact bytes, modes and diff checks
+passed. That capture recorded 493 fast passes and no failures; collection selected
+18,194 nodes and gate-deselected 5,734, with no errors or skips. Collection executed
+no test bodies. These results qualify that capture's scoped checks only; later
+source changes require their own validation.
 
 Hourly synchronization includes legitimate integrated work even when failing or
 unqualified. Run collection and affected fast tests on the exact capture first;

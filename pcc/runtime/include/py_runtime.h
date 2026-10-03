@@ -1272,6 +1272,10 @@ int64_t   py_str_rindex_of_range(PyObject *s, PyObject *sub,
  * element types order correctly; mixed types fall back to
  * py_obj_hash order (stable but not Python-equivalent). */
 PyObject *py_obj_sorted(PyObject *x);
+/* Slot inputs remain rooted; successful output is a NEW owning reference. */
+int64_t py_obj_sorted_slots(PyObject **source_slot, PyObject **key_slot,
+                            PyObject **compare_slot, int64_t reverse,
+                            PyObject **result_slot);
 /* int64_t returns for pcc-Python ABI parity (default-int lowering). */
 int64_t   py_obj_truthy(PyObject *o);                /* 0 or 1 */
 int64_t   py_obj_type_tag(PyObject *o);
@@ -2228,7 +2232,7 @@ int32_t     py_subs_exc_n_builtin(void);
 /* Legacy function-style accessors for the builtin exception cache. */
 void       *py_subs_exc_cache_get(int32_t tag);
 void        py_subs_exc_cache_set(int32_t tag, void *cls);
-void      **py_subs_exc_cache_slot(int32_t tag);
+void      **py_subs_exc_cache_slot(int64_t tag);
 extern void **pcc_builtin_type_root_slots[];
 
 /* py_set_dummy tombstone sentinel accessor (value of the global

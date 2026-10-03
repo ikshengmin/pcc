@@ -132,3 +132,26 @@ class Box:
 ''')
     assert 'class.method.publication' in text
     assert 'class.factory.capture' in text
+
+
+@pytest.mark.parametrize('static', (False, True))
+def test_prepared_namespace_method_reuses_its_original_default(static):
+    decorator = '    @staticmethod\n' if static else ''
+    parameters = 'value=factory()' if static else 'self, value=factory()'
+    source = '''def factory():
+    return []
+class Meta(type):
+    @classmethod
+    def __prepare__(cls, name, bases):
+        return {}
+    def __new__(cls, name, bases, namespace):
+        return type(name, bases, namespace)
+class Box(metaclass=Meta):
+''' + decorator + '    def first(' + parameters + '):\n        return value\n    second = first\n'
+    text = emit(source)
+    for symbol in ('main', '_pcc_py_module_init_method_roots'):
+        body = re.search(r'^define [^\n]*@' + re.escape(symbol) + r'\([^\n]*\).*?^}', text, re.M | re.S)
+        assert body is not None, symbol
+        calls = re.findall(r'\bcall\b[^\n]*@user_method_roots_factory\(', body[0])
+        assert len(calls) == 1, (symbol, len(calls))
+    assert method_owner_copies(text)

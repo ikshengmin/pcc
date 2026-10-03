@@ -341,6 +341,9 @@ class CallObjectLoweringMixin:
         class_value = self._emit_class_namespace_name_root(expr, label)
         if class_value is not None:
             return class_value
+        adapter_value = self._emit_lambda_adapter_name_root(expr, label)
+        if adapter_value is not None:
+            return adapter_value
         if isinstance(expr, BoolExpr):
             return self._emit_slot_call_short_circuit(expr, label)[0]
         published = self._slot_call_published_module_ref(expr)
@@ -349,6 +352,10 @@ class CallObjectLoweringMixin:
         if isinstance(expr, (UnaryOp, BinOp)):
             if self._slot_call_literal_integer_kind(expr):
                 return self._emit_slot_call_literal_integer(expr, label)
+            if isinstance(expr, UnaryOp):
+                runtime_unary = self._slot_call_unary_runtime(expr)
+                if runtime_unary is not None:
+                    return self._emit_slot_call_unary(expr, label, runtime_unary)
             if isinstance(expr, BinOp):
                 runtime_binary = self._slot_call_binary_runtime(expr, object_boundary=True)
                 if runtime_binary is not None:
