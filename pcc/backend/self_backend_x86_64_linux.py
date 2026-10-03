@@ -669,7 +669,7 @@ def _materialize_aggregate_to_sse_regs(
             for reg, member_type, _member_offset in regs_and_members
         ]
     if is_aggregate_literal_value(value):
-        literal_bytes = aggregate_literal_to_bytes(type_desc, value)
+        literal_bytes = aggregate_literal_to_bytes(type_desc, value, type_context=func.type_context)
         lines: list[str] = []
         for reg, member_type, member_offset in regs_and_members:
             member_size = member_type.slot_size
@@ -703,7 +703,7 @@ def _materialize_aggregate_to_gp_regs(
     if value in {"zeroinitializer", "poison", "undef"}:
         return [f"  xor {_reg32_alias(reg64)}, {_reg32_alias(reg64)}" for reg64, _chunk in regs_and_chunks]
     if is_aggregate_literal_value(value):
-        literal_bytes = aggregate_literal_to_bytes(type_desc, value)
+        literal_bytes = aggregate_literal_to_bytes(type_desc, value, type_context=func.type_context)
         lines: list[str] = []
         offset = 0
         for reg64, chunk_size in regs_and_chunks:
@@ -919,7 +919,7 @@ def _materialize_vector_lane_to_reg(
     if value == "zeroinitializer" or value == "poison":
         return [f"  xor {reg}, {reg}"] if not elem_type.is_fp else _materialize_fp_constant("0.0", elem_type, reg)
     if is_aggregate_literal_value(value):
-        data = aggregate_literal_to_bytes(vector_type, value)
+        data = aggregate_literal_to_bytes(vector_type, value, type_context=func.type_context)
         lane_bytes = data[lane_offset : lane_offset + elem_type.slot_size]
         if elem_type.is_fp:
             int_value = int.from_bytes(lane_bytes, "little", signed=False)
@@ -945,7 +945,7 @@ def _materialize_vector_value_to_address(
     if value == "zeroinitializer" or value == "poison":
         return _zero_address(addr_reg, vector_type.slot_size)
     if is_aggregate_literal_value(value):
-        return _store_literal_bytes_to_address(aggregate_literal_to_bytes(vector_type, value), addr_reg)
+        return _store_literal_bytes_to_address(aggregate_literal_to_bytes(vector_type, value, type_context=func.type_context), addr_reg)
     lines: list[str] = []
     lane_reg = _reg_name(elem_type, 10)
     lines.extend(_materialize_value(func, value, elem_type, lane_reg))
@@ -1015,7 +1015,7 @@ def _store_vararg_stack_value(func: ParsedFunction, arg_type: TypeDesc, value: s
             lines.extend(_zero_address("r11", arg_type.slot_size))
             return lines
         if is_aggregate_literal_value(value):
-            lines.extend(_store_literal_bytes_to_address(aggregate_literal_to_bytes(arg_type, value), "r11"))
+            lines.extend(_store_literal_bytes_to_address(aggregate_literal_to_bytes(arg_type, value, type_context=func.type_context), "r11"))
             return lines
         lines.extend(_materialize_aggregate_value_address(func, value, arg_type, "r10"))
         lines.extend(_copy_address_to_address("r10", "r11", arg_type.slot_size))
@@ -1419,7 +1419,7 @@ def _materialize_constant_gep(value: str, reg: str) -> list[str]:
         lines.extend(_emit_add_immediate_to_reg(reg, int(offset_text)))
         return lines
     if value.startswith("getelementptr"):
-        base, offset = parse_constant_gep(value)
+        base, offset = parse_constant_gep(value, type_context=_MODULE_SYMBOLS.type_context)
         lines = _materialize_global_symbol_address(base, reg)
         lines.extend(_emit_add_immediate_to_reg(reg, offset))
         return lines
@@ -2293,7 +2293,7 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
         if dest not in func.value_slots:
             return []
         if is_aggregate_literal_value(value):
-            literal_bytes = aggregate_literal_to_bytes(aggregate_type, value)
+            literal_bytes = aggregate_literal_to_bytes(aggregate_type, value, type_context=func.type_context)
             field_bytes = literal_bytes[offset : offset + result_type.slot_size]
             field_value = str(int.from_bytes(field_bytes, byteorder="little", signed=False))
             lines = _materialize_value(func, field_value, result_type, _reg_name(result_type, 10))
@@ -2324,7 +2324,7 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
         elif is_aggregate_literal_value(aggregate_value):
             lines.extend(
                 _store_literal_bytes_to_address(
-                    aggregate_literal_to_bytes(aggregate_type, aggregate_value),
+                    aggregate_literal_to_bytes(aggregate_type, aggregate_value, type_context=func.type_context),
                     "r11",
                 )
             )
@@ -2340,7 +2340,7 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             if is_aggregate_literal_value(elem_value):
                 lines.extend(
                     _store_literal_bytes_to_address(
-                        aggregate_literal_to_bytes(elem_type, elem_value),
+                        aggregate_literal_to_bytes(elem_type, elem_value, type_context=func.type_context),
                         "r11",
                     )
                 )
@@ -2430,7 +2430,7 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             raise BackendUnavailable(
                 f"x86_64 self backend shufflevector mask not translated yet in {func.name!r}: {mask_value}"
             )
-        mask_bytes = aggregate_literal_to_bytes(vector_type, mask_value)
+        mask_bytes = aggregate_literal_to_bytes(vector_type, mask_value, type_context=func.type_context)
         for lane in range(vector_type.count):
             mask_offset = lane * elem_type.slot_size
             source_lane = int.from_bytes(
@@ -2671,7 +2671,7 @@ def _emit_return_terminator(func: ParsedFunction, ret_type: TypeDesc, value: str
             if value == "zeroinitializer":
                 lines.extend(_zero_address("r11", ret_type.slot_size))
             elif is_aggregate_literal_value(value):
-                literal = aggregate_literal_to_bytes(ret_type, value)
+                literal = aggregate_literal_to_bytes(ret_type, value, type_context=func.type_context)
                 lines.extend(_store_literal_bytes_to_address(literal, "r11"))
             else:
                 lines.extend(_materialize_aggregate_value_address(func, value, ret_type, "r10"))
@@ -2776,7 +2776,7 @@ def _emit_phi_assignments(func: ParsedFunction, *, source_block: str, target_blo
             elif match.value == "zeroinitializer":
                 lines.extend(_zero_address("r11", phi.type.slot_size))
             elif is_aggregate_literal_value(match.value):
-                lines.extend(_store_literal_bytes_to_address(aggregate_literal_to_bytes(phi.type, match.value), "r11"))
+                lines.extend(_store_literal_bytes_to_address(aggregate_literal_to_bytes(phi.type, match.value, type_context=func.type_context), "r11"))
             else:
                 lines.extend(_materialize_aggregate_value_address(func, match.value, phi.type, "r10"))
                 lines.extend(_copy_address_to_address("r10", "r11", phi.type.slot_size))

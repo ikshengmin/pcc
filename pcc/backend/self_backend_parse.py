@@ -41,6 +41,7 @@ from .self_backend_ir import (
     PhiIncoming,
     PhiInstr,
     TypeDesc,
+    TypeParseContext,
     _PARSED_INSTRUCTION_KIND_IDS,
     _align_to,
     aggregate_member_info,
@@ -253,33 +254,30 @@ _RET_RE = re.compile(rf"^ret\s+(?P<type>{_TYPE_TOKEN})\s+(?P<value>.+)$")
 _UNREACHABLE_RE = re.compile(r"^unreachable$")
 _INDEX_RE = re.compile(r"^(?P<type>i\d+)\s+(?P<value>.+)$")
 _FUNCTION_DECL_RE = re.compile(r"^declare\s+", re.MULTILINE)
-_NAMED_TYPE_BODIES: dict[str, str] = {}
 _DECLARATION_ONLY_SCALAR_TYPES = (
     "half", "bfloat", "x86_fp80", "fp128", "ppc_fp128", "x86_amx",
 )
 
-_NAMED_TYPES: dict[str, TypeDesc] = {}
-_TYPE_CACHE: dict[str, TypeDesc] = {}
-_POINTER_TYPE_CACHE: dict[int, tuple[TypeDesc, TypeDesc]] = {}
-_CALL_SIGNATURE_CACHE: dict[str, tuple[int, bool]] = {}
 _NUMERIC_SSA_NAME_CACHE: dict[int, str] = {}
 _DOT_NUMERIC_SSA_NAME_CACHE: dict[int, str] = {}
 _SPLIT_NESTING_MARKERS = '"{}[]()<>'
 
 
-def _canonical_pointer_type(pointee: TypeDesc) -> TypeDesc:
+def _canonical_pointer_type(pointee: TypeDesc, *, type_context=None) -> TypeDesc:
+    if type_context is None:
+        type_context = TypeParseContext()
     key = id(pointee)
-    entry = _POINTER_TYPE_CACHE.get(key)
+    entry = type_context.pointer_type_cache.get(key)
     if entry is not None and entry[0] is pointee:
         return entry[1]
     result = TypeDesc("ptr", pointee=pointee)
     # Pin the identity key with the result. A bare id()-keyed cache can return
     # the wrong type after address reuse; this entry keeps the pointee alive.
-    _POINTER_TYPE_CACHE[key] = (pointee, result)
+    type_context.pointer_type_cache[key] = (pointee, result)
     return result
 
 
-def _canonical_leaf_type(token: str) -> TypeDesc:
+def _canonical_leaf_type(token: str, *, type_context=None) -> TypeDesc:
     """Return the per-module identity for one non-recursive LLVM type.
 
     `_extract_leading_type_token` must parse a prefix before it knows the text
@@ -287,13 +285,15 @@ def _canonical_leaf_type(token: str) -> TypeDesc:
     floating token allocates a fresh frozen dataclass and overwrites the text
     cache; item311 retained 137,468 TypeDesc objects for 74 structural values.
     """
-    cached = _TYPE_CACHE.get(token)
+    if type_context is None:
+        type_context = TypeParseContext()
+    cached = type_context.type_cache.get(token)
     if cached is not None:
         return cached
     if token == "void":
         result = TypeDesc("void")
     elif token == "ptr":
-        result = _canonical_pointer_type(_canonical_leaf_type("void"))
+        result = _canonical_pointer_type(_canonical_leaf_type("void", type_context=type_context), type_context=type_context)
     elif token == "float":
         result = TypeDesc("fp", 32)
     elif token == "double":
@@ -304,7 +304,7 @@ def _canonical_leaf_type(token: str) -> TypeDesc:
         raise BackendUnavailable(
             f"self backend cannot intern non-leaf LLVM type token {token!r}"
         )
-    _TYPE_CACHE[token] = result
+    type_context.type_cache[token] = result
     return result
 
 
@@ -318,9 +318,9 @@ def parse_self_backend_target_triple(ir_text: str) -> str:
 
 
 def parse_self_backend_module(ir_text: str) -> ParsedModule:
-    _TYPE_CACHE.clear()
-    _POINTER_TYPE_CACHE.clear()
-    _CALL_SIGNATURE_CACHE.clear()
+    type_context = TypeParseContext()
+    type_context.type_cache.clear()
+    type_context.pointer_type_cache.clear()
     _NUMERIC_SSA_NAME_CACHE.clear()
     _DOT_NUMERIC_SSA_NAME_CACHE.clear()
     # Compact instruction operand canonicalization is module-scoped.  Keeping
@@ -329,12 +329,12 @@ def parse_self_backend_module(ir_text: str) -> ParsedModule:
     # spelling, breaking the parser's within-module identity invariant and
     # retaining every compiler input forever.
     reset_operand_intern()
-    _parse_named_types(ir_text)
-    _resolve_declaration_type_attributes(ir_text)
+    _parse_named_types(ir_text, type_context=type_context)
+    _resolve_declaration_type_attributes(ir_text, type_context=type_context)
     return ParsedModule(
         triple=parse_self_backend_target_triple(ir_text),
-        globals_=tuple(_parse_globals(ir_text)),
-        functions=tuple(_parse_functions(ir_text)),
+        globals_=tuple(_parse_globals(ir_text, type_context=type_context)),
+        functions=tuple(_parse_functions(ir_text, type_context=type_context)), type_context=type_context,
     )
 
 
@@ -435,12 +435,14 @@ def _has_split_nesting_markers(text: str) -> bool:
     return False
 
 
-def strip_typed_initializer(item: str) -> str:
+def strip_typed_initializer(item: str, *, type_context=None) -> str:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = item.strip()
     if not text or text == "zeroinitializer":
         return text
     try:
-        _type_text, initializer = _extract_leading_type_token(text)
+        _type_text, initializer = _extract_leading_type_token(text, type_context=type_context)
     except BackendUnavailable:
         initializer = ""
     if initializer:
@@ -484,18 +486,20 @@ def decode_llvm_c_string(token: str) -> bytes:
     return bytes(data)
 
 
-def decode_value_token(token: str) -> str:
+def decode_value_token(token: str, *, type_context=None) -> str:
+    if type_context is None:
+        type_context = TypeParseContext()
     token = token.strip()
     simple = _decode_simple_value_token(token)
     if simple is not None:
         return simple
-    typed_token = _decode_parenthesized_typed_value(token)
+    typed_token = _decode_parenthesized_typed_value(token, type_context=type_context)
     if typed_token is not None:
         return typed_token
-    cast_token = _decode_parenthesized_constant_cast(token)
+    cast_token = _decode_parenthesized_constant_cast(token, type_context=type_context)
     if cast_token is not None:
         return cast_token
-    expr_token = _decode_parenthesized_constant_expr(token)
+    expr_token = _decode_parenthesized_constant_expr(token, type_context=type_context)
     if expr_token is not None:
         return expr_token
     while token:
@@ -534,13 +538,13 @@ def decode_value_token(token: str) -> str:
     simple = _decode_simple_value_token(token)
     if simple is not None:
         return simple
-    typed_token = _decode_parenthesized_typed_value(token)
+    typed_token = _decode_parenthesized_typed_value(token, type_context=type_context)
     if typed_token is not None:
         return typed_token
-    cast_token = _decode_parenthesized_constant_cast(token)
+    cast_token = _decode_parenthesized_constant_cast(token, type_context=type_context)
     if cast_token is not None:
         return cast_token
-    expr_token = _decode_parenthesized_constant_expr(token)
+    expr_token = _decode_parenthesized_constant_expr(token, type_context=type_context)
     if expr_token is not None:
         return expr_token
     if token == "null":
@@ -554,7 +558,7 @@ def decode_value_token(token: str) -> str:
     if token.startswith("{") or token.startswith("[") or token.startswith("<"):
         return token
     if token.startswith("getelementptr"):
-        base, offset = parse_constant_gep(token)
+        base, offset = parse_constant_gep(token, type_context=type_context)
         return f"gepconst:{base}:{offset}"
     if gep := _GEP_INIT_RE.match(token):
         return f"gep0:{decode_global_name(gep.group('base'))}"
@@ -686,9 +690,11 @@ def _parse_ir_type_tokens(
     index: int,
     *,
     resolve_named=None,
-    declaration_only: bool = False,
+    declaration_only: bool = False, type_context=None,
 ) -> tuple[TypeDesc, int]:
     """Recursively parse one TypeDesc from the lazy token cursor."""
+    if type_context is None:
+        type_context = TypeParseContext()
     token_info, index = _next_ir_type_token(text, index)
     if token_info[0] == "eof":
         raise _ir_type_parse_error(text, "expected a type")
@@ -708,7 +714,7 @@ def _parse_ir_type_tokens(
             text,
             index,
             resolve_named=resolve_named,
-            declaration_only=declaration_only,
+            declaration_only=declaration_only, type_context=type_context,
         )
         close_info, index = _next_ir_type_token(text, index)
         if close_info[0] == "eof" or close_info[1] != close:
@@ -725,7 +731,7 @@ def _parse_ir_type_tokens(
                     text,
                     index,
                     resolve_named=resolve_named,
-                    declaration_only=declaration_only,
+                    declaration_only=declaration_only, type_context=type_context,
                 )
                 fields.append(field)
                 delimiter_info, next_offset = _next_ir_type_token(text, index)
@@ -747,21 +753,19 @@ def _parse_ir_type_tokens(
     elif token in ("void", "ptr", "float", "double") or (
         token.startswith("i") and token[1:].isdigit()
     ):
-        base = _canonical_leaf_type(token)
+        base = _canonical_leaf_type(token, type_context=type_context)
     elif token.startswith("%"):
         if declaration_only:
-            if token not in _NAMED_TYPE_BODIES:
+            if token not in type_context.named_type_bodies:
                 raise BackendUnavailable(
                     f"self backend has no definition for named type {token!r}"
                 )
             base = TypeDesc("void")
         else:
-            if token not in _NAMED_TYPES:
-                if resolve_named is not None:
-                    resolve_named(token)
-                else:
-                    _resolve_named_type(token)
-            base = _NAMED_TYPES[token]
+            if resolve_named is not None:
+                base = resolve_named(token)
+            else:
+                base = _resolve_named_type(token, type_context=type_context)
     elif declaration_only and token in _DECLARATION_ONLY_SCALAR_TYPES:
         base = TypeDesc("void")
     else:
@@ -773,7 +777,7 @@ def _parse_ir_type_tokens(
             star_index += 1
         if star_index >= len(text) or text[star_index] != "*":
             break
-        base = _canonical_pointer_type(base)
+        base = _canonical_pointer_type(base, type_context=type_context)
         index = star_index + 1
     return base, index
 
@@ -781,12 +785,14 @@ def _parse_ir_type_tokens(
 def _parse_ir_type_prefix(
     text: str,
     *,
-    resolve_named=None,
+    resolve_named=None, type_context=None,
 ) -> tuple[TypeDesc, int]:
+    if type_context is None:
+        type_context = TypeParseContext()
     return _parse_ir_type_tokens(
         text,
         0,
-        resolve_named=resolve_named,
+        resolve_named=resolve_named, type_context=type_context,
     )
 
 
@@ -794,8 +800,10 @@ def _parse_ir_type_list(
     text: str,
     *,
     allow_vararg: bool = False,
-    resolve_named=None,
+    resolve_named=None, type_context=None,
 ) -> tuple[tuple[TypeDesc, ...], bool]:
+    if type_context is None:
+        type_context = TypeParseContext()
     parsed: list[TypeDesc] = []
     index = 0
     is_vararg = False
@@ -823,7 +831,7 @@ def _parse_ir_type_list(
         item, index = _parse_ir_type_tokens(
             text,
             index,
-            resolve_named=resolve_named,
+            resolve_named=resolve_named, type_context=type_context,
         )
         parsed.append(item)
         delimiter_info, next_offset = _next_ir_type_token(text, index)
@@ -840,12 +848,16 @@ def _parse_ir_type_list(
             raise _ir_type_parse_error(text, "trailing comma in type list")
 
 
-def parse_ir_type(text: str) -> TypeDesc:
-    return _parse_type(text)
+def parse_ir_type(text: str, *, type_context=None) -> TypeDesc:
+    if type_context is None:
+        type_context = TypeParseContext()
+    return _parse_type(text, type_context=type_context)
 
 
-def extract_leading_type_token(text: str) -> tuple[str, str]:
-    return _extract_leading_type_token(text)
+def extract_leading_type_token(text: str, *, type_context=None) -> tuple[str, str]:
+    if type_context is None:
+        type_context = TypeParseContext()
+    return _extract_leading_type_token(text, type_context=type_context)
 
 
 def _split_top_level_keyword(text: str, keyword: str) -> tuple[str, str]:
@@ -921,22 +933,26 @@ def split_top_level_keyword(text: str, keyword: str) -> tuple[str, str]:
     return _split_top_level_keyword(text, keyword)
 
 
-def _decode_parenthesized_typed_value(token: str) -> str | None:
+def _decode_parenthesized_typed_value(token: str, *, type_context=None) -> str | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = token.strip()
     if not (text.startswith("(") and text.endswith(")")):
         return None
     body = text[1:-1].strip()
     try:
-        type_text, value_text = _extract_leading_type_token(body)
-        _parse_type(type_text)
+        type_text, value_text = _extract_leading_type_token(body, type_context=type_context)
+        _parse_type(type_text, type_context=type_context)
     except BackendUnavailable:
         return None
     if not value_text:
         return None
-    return decode_value_token(value_text)
+    return decode_value_token(value_text, type_context=type_context)
 
 
-def _decode_parenthesized_constant_cast(token: str) -> str | None:
+def _decode_parenthesized_constant_cast(token: str, *, type_context=None) -> str | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = token.strip()
     original_text = text
     op: str | None = None
@@ -951,27 +967,27 @@ def _decode_parenthesized_constant_cast(token: str) -> str | None:
         return None
     body = text[1:-1].strip()
     try:
-        _src_type_text, remainder = _extract_leading_type_token(body)
+        _src_type_text, remainder = _extract_leading_type_token(body, type_context=type_context)
     except BackendUnavailable:
         return None
     if " to " not in remainder:
-        return decode_value_token(remainder.strip())
+        return decode_value_token(remainder.strip(), type_context=type_context)
     try:
         value_text, dst_type_text = _split_top_level_keyword(remainder, " to ")
     except BackendUnavailable:
         return None
     try:
-        dst_type = _parse_type(dst_type_text.strip())
+        dst_type = _parse_type(dst_type_text.strip(), type_context=type_context)
     except BackendUnavailable:
         return None
-    decoded_value = decode_value_token(value_text.strip())
+    decoded_value = decode_value_token(value_text.strip(), type_context=type_context)
     if op == "ptrtoint":
         if not dst_type.is_int:
             return None
         return f"ptrtointconst:{decoded_value}"
     if op == "bitcast":
         try:
-            src_type = _parse_type(_src_type_text.strip())
+            src_type = _parse_type(_src_type_text.strip(), type_context=type_context)
         except BackendUnavailable:
             return None
         # A pointer-to-pointer bitcast is the identity, and C static
@@ -1013,7 +1029,7 @@ def _decode_parenthesized_constant_cast(token: str) -> str | None:
     if not dst_type.is_ptr:
         return None
     try:
-        src_type = _parse_type(_src_type_text.strip())
+        src_type = _parse_type(_src_type_text.strip(), type_context=type_context)
     except BackendUnavailable:
         return None
     if not src_type.is_int or src_type.width < 1:
@@ -1035,7 +1051,9 @@ def _decode_parenthesized_constant_cast(token: str) -> str | None:
     return f"inttoptrconst:{pointer_bits}"
 
 
-def _decode_parenthesized_constant_expr(token: str) -> str | None:
+def _decode_parenthesized_constant_expr(token: str, *, type_context=None) -> str | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = token.strip()
     op: str | None = None
     pieces = text.split(None, 1)
@@ -1066,12 +1084,12 @@ def _decode_parenthesized_constant_expr(token: str) -> str | None:
     if len(parts) != 2:
         return None
     try:
-        _lhs_type_text, lhs_value_text = _extract_leading_type_token(parts[0])
-        _rhs_type_text, rhs_value_text = _extract_leading_type_token(parts[1])
+        _lhs_type_text, lhs_value_text = _extract_leading_type_token(parts[0], type_context=type_context)
+        _rhs_type_text, rhs_value_text = _extract_leading_type_token(parts[1], type_context=type_context)
     except BackendUnavailable:
         return None
-    lhs_value = decode_value_token(lhs_value_text.strip())
-    rhs_value = decode_value_token(rhs_value_text.strip())
+    lhs_value = decode_value_token(lhs_value_text.strip(), type_context=type_context)
+    rhs_value = decode_value_token(rhs_value_text.strip(), type_context=type_context)
     if op == "sub" and lhs_value == "0":
         return f"negconst:{rhs_value}"
     if op == "add":
@@ -1348,9 +1366,11 @@ def _append_simple_call_arg_spans(
     text: str,
     start: int,
     end: int,
-    call_plane: IndexedCallPlane,
+    call_plane: IndexedCallPlane, *, type_context=None,
 ) -> int:
     """Append a prevalidated scalar argument range without a split list."""
+    if type_context is None:
+        type_context = TypeParseContext()
 
     position = start
     count = 0
@@ -1379,8 +1399,8 @@ def _append_simple_call_arg_spans(
             if code != 32 and code != 9:
                 break
             value_start += 1
-        arg_type = _parse_type(text[position:type_end])
-        arg_value = decode_value_token(text[value_start:chunk_end])
+        arg_type = _parse_type(text[position:type_end], type_context=type_context)
+        arg_value = decode_value_token(text[value_start:chunk_end], type_context=type_context)
         if arg_type.is_int and arg_type.width == 1:
             if arg_value == "false":
                 arg_value = "0"
@@ -1474,7 +1494,9 @@ def _write_bytes(dst: bytearray, offset: int, src: bytes) -> None:
         i += 1
 
 
-def aggregate_literal_to_bytes(value_type: TypeDesc, value: str) -> bytes:
+def aggregate_literal_to_bytes(value_type: TypeDesc, value: str, *, type_context=None) -> bytes:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = value.strip()
     if value_type.is_array:
         if text in {"zeroinitializer", "poison", "undef"}:
@@ -1510,7 +1532,7 @@ def aggregate_literal_to_bytes(value_type: TypeDesc, value: str) -> bytes:
         stride = _align_to(value_type.elem.slot_size, value_type.elem.align)
         for index, item in enumerate(items):
             item_bytes = aggregate_literal_to_bytes(
-                value_type.elem, strip_typed_initializer(item)
+                value_type.elem, strip_typed_initializer(item, type_context=type_context), type_context=type_context
             )
             start = index * stride
             _write_bytes(data, start, item_bytes)
@@ -1530,7 +1552,7 @@ def aggregate_literal_to_bytes(value_type: TypeDesc, value: str) -> bytes:
         data = bytearray(value_type.slot_size)
         for index, (field_type, item) in enumerate(zip(value_type.fields, items)):
             field_bytes = aggregate_literal_to_bytes(
-                field_type, strip_typed_initializer(item)
+                field_type, strip_typed_initializer(item, type_context=type_context), type_context=type_context
             )
             field_offset = value_type.field_offset(index)
             _write_bytes(data, field_offset, field_bytes)
@@ -1539,7 +1561,7 @@ def aggregate_literal_to_bytes(value_type: TypeDesc, value: str) -> bytes:
         if text in {"null", "poison", "undef"}:
             return (0).to_bytes(8, "little")
         if text.startswith("inttoptr"):
-            decoded = decode_value_token(text)
+            decoded = decode_value_token(text, type_context=type_context)
             if decoded.startswith("inttoptrconst:"):
                 text = decoded.split(":", 1)[1]
         int_value = const_int_from_value(text)
@@ -1606,7 +1628,9 @@ def gep_result_type(
     return current.ptr()
 
 
-def parse_constant_gep(text: str) -> tuple[str, int]:
+def parse_constant_gep(text: str, *, type_context=None) -> tuple[str, int]:
+    if type_context is None:
+        type_context = TypeParseContext()
     match = _CONST_GEP_RE.match(text.strip())
     if match is None:
         raise BackendUnavailable(
@@ -1617,17 +1641,17 @@ def parse_constant_gep(text: str) -> tuple[str, int]:
         raise BackendUnavailable(
             f"self backend constant getelementptr is incomplete: {text!r}"
         )
-    base_type = _parse_type(parts[0])
-    ptr_type_text, base_value = _extract_leading_type_token(parts[1])
-    ptr_type = _parse_type(ptr_type_text)
+    base_type = _parse_type(parts[0], type_context=type_context)
+    ptr_type_text, base_value = _extract_leading_type_token(parts[1], type_context=type_context)
+    ptr_type = _parse_type(ptr_type_text, type_context=type_context)
     if not ptr_type.is_ptr or not base_value.startswith("@"):
         raise BackendUnavailable(
             f"self backend constant getelementptr currently requires a global pointer base, got {parts[1]!r}"
         )
     indices: list[tuple[TypeDesc, str]] = []
     for chunk in parts[2:]:
-        index_type_text, index_value = _extract_leading_type_token(chunk)
-        indices.append((_parse_type(index_type_text), decode_value_token(index_value)))
+        index_type_text, index_value = _extract_leading_type_token(chunk, type_context=type_context)
+        indices.append((_parse_type(index_type_text, type_context=type_context), decode_value_token(index_value, type_context=type_context)))
     return decode_global_name(base_value), _constant_gep_offset(
         base_type, tuple(indices)
     )
@@ -1643,20 +1667,22 @@ def _arg_list_is_vararg(args_text: str) -> bool:
 
 
 def _parse_type(
-    text: str, *, resolve_named=None, declaration_only: bool = False,
+    text: str, *, resolve_named=None, declaration_only: bool = False, type_context=None,
 ) -> TypeDesc:
+    if type_context is None:
+        type_context = TypeParseContext()
     token = text.strip()
     if not token:
         raise BackendUnavailable("self backend does not understand empty LLVM type")
     if resolve_named is None and not declaration_only:
-        cached = _TYPE_CACHE.get(token)
+        cached = type_context.type_cache.get(token)
         if cached is not None:
             return cached
     base, end = _parse_ir_type_tokens(
         token,
         0,
         resolve_named=resolve_named,
-        declaration_only=declaration_only,
+        declaration_only=declaration_only, type_context=type_context,
     )
     trailing_info, _trailing_offset = _next_ir_type_token(token, end)
     if trailing_info[0] != "eof":
@@ -1665,7 +1691,7 @@ def _parse_type(
             f"unexpected trailing token {trailing_info[1]!r}",
         )
     if resolve_named is None and not declaration_only:
-        _TYPE_CACHE[token] = base
+        type_context.type_cache[token] = base
     return base
 
 
@@ -1676,49 +1702,57 @@ def _strip_volatile_memory_op_prefix(text: str) -> str:
     return token
 
 
-def _parse_named_types(ir_text: str) -> None:
-    _NAMED_TYPES.clear()
-    _NAMED_TYPE_BODIES.clear()
-    _TYPE_CACHE.clear()
-    _POINTER_TYPE_CACHE.clear()
+def _parse_named_types(ir_text: str, *, type_context=None) -> TypeParseContext:
+    if type_context is None:
+        type_context = TypeParseContext()
+    type_context.call_signature_cache.clear()
+    type_context.named_types.clear()
+    type_context.named_type_bodies.clear()
+    type_context.type_cache.clear()
+    type_context.pointer_type_cache.clear()
     search_pos = 0
     while search_pos < len(ir_text):
         match = _NAMED_TYPEDEF_RE.search(ir_text, search_pos)
         if match is None:
             break
         body_text = match.group("body").strip()
-        _NAMED_TYPE_BODIES[match.group("name")] = body_text
+        type_context.named_type_bodies[match.group("name")] = body_text
         search_pos = match.end()
     # Keep malformed unused normal structs diagnostic; preserve the existing
     # unused opaque/packed boundary. No layout is resolved here.
-    for body_text in _NAMED_TYPE_BODIES.values():
+    for body_text in type_context.named_type_bodies.values():
         if body_text.startswith("{"):
-            _parse_type(body_text, declaration_only=True)
+            _parse_type(body_text, declaration_only=True, type_context=type_context)
+    return type_context
 
 
-def _resolve_named_type(name: str) -> TypeDesc:
-    existing = _NAMED_TYPES.get(name)
+def _resolve_named_type(name: str, *, type_context=None) -> TypeDesc:
+    if type_context is None:
+        type_context = TypeParseContext()
+    existing = type_context.named_types.get(name)
     if existing is not None:
         return existing
-    body_text = _NAMED_TYPE_BODIES.get(name, "")
+    body_text = type_context.named_type_bodies.get(name, "")
     if not body_text.startswith("{"):
         raise BackendUnavailable(
             f"self backend does not know named LLVM type {name!r}"
         )
-    _NAMED_TYPES[name] = TypeDesc("struct", name=name)
+    type_context.named_types[name] = TypeDesc("struct", name=name)
     try:
-        parsed = _parse_type(body_text, resolve_named=_resolve_named_type)
+        parsed = _parse_type(body_text, type_context=type_context)
     except Exception:
-        _NAMED_TYPES.clear()
-        _TYPE_CACHE.clear()
-        _POINTER_TYPE_CACHE.clear()
+        type_context.named_types.clear()
+        type_context.type_cache.clear()
+        type_context.pointer_type_cache.clear()
         raise
     resolved = TypeDesc("struct", name=name, fields=parsed.fields)
-    _NAMED_TYPES[name] = resolved
+    type_context.named_types[name] = resolved
     return resolved
 
 
-def _resolve_typed_abi_attributes(text: str) -> None:
+def _resolve_typed_abi_attributes(text: str, *, type_context=None) -> None:
+    if type_context is None:
+        type_context = TypeParseContext()
     if "(" not in text:
         return
     attributes = ("byval", "byref", "sret", "inalloca", "preallocated", "elementtype")
@@ -1739,11 +1773,13 @@ def _resolve_typed_abi_attributes(text: str) -> None:
             continue
         opening = opening_token[2]
         closing = _find_matching_paren(text, opening)
-        _parse_type(text[opening + 1:closing])
+        _parse_type(text[opening + 1:closing], type_context=type_context)
         position = closing + 1
 
 
-def _resolve_declaration_type_attributes(ir_text: str) -> None:
+def _resolve_declaration_type_attributes(ir_text: str, *, type_context=None) -> None:
+    if type_context is None:
+        type_context = TypeParseContext()
     position = 0
     while position < len(ir_text):
         declaration = _FUNCTION_DECL_RE.search(ir_text, position)
@@ -1754,22 +1790,24 @@ def _resolve_declaration_type_attributes(ir_text: str) -> None:
             raise BackendUnavailable("self backend malformed function declaration")
         opening = function_name.end() - 1
         closing = _find_matching_paren(ir_text, opening)
-        _resolve_typed_abi_attributes(ir_text[opening + 1:closing])
+        _resolve_typed_abi_attributes(ir_text[opening + 1:closing], type_context=type_context)
         position = closing + 1
 
 
-def _parse_functions(ir_text: str) -> list[ParsedFunction]:
+def _parse_functions(ir_text: str, *, type_context=None) -> list[ParsedFunction]:
+    if type_context is None:
+        type_context = TypeParseContext()
     functions: list[ParsedFunction] = []
     for header_text, body_text in _iter_function_defs(ir_text):
         prefix_text, ret_type_text, name_text, args_text = _parse_function_header(
-            header_text
+            header_text, type_context=type_context
         )
         prefix = prefix_text.strip().split()
         name = decode_global_name(name_text)
         check_simple_symbol_name(name)
-        ret_type = _parse_type(ret_type_text)
-        args = _parse_arg_infos(name, args_text)
-        blocks, indexed_seed = _parse_blocks(name, body_text, args)
+        ret_type = _parse_type(ret_type_text, type_context=type_context)
+        args = _parse_arg_infos(name, args_text, type_context=type_context)
+        blocks, indexed_seed = _parse_blocks(name, body_text, args, type_context=type_context)
         function = ParsedFunction(
                 name=name,
                 ret_type=ret_type,
@@ -1803,7 +1841,7 @@ def _parse_functions(ir_text: str) -> list[ParsedFunction]:
                 aarch64_callee_saved=[],
                 aarch64_reload_slot_offsets=[],
                 aarch64_fused_branch_values={},
-                aarch64_frameless=False,
+                aarch64_frameless=False, type_context=type_context,
             )
         # Freeze/adopt the complete function plane at the parser boundary.
         # Downstream consumers never need the construction seed or a block
@@ -2004,14 +2042,16 @@ def _find_matching_paren(text: str, open_index: int) -> int:
     )
 
 
-def _split_trailing_type_token(text: str) -> tuple[str, str]:
+def _split_trailing_type_token(text: str, *, type_context=None) -> tuple[str, str]:
+    if type_context is None:
+        type_context = TypeParseContext()
     source = text.strip()
     tokens = _tokenize_ir_type(source)
     for token in tokens:
         start = token[2]
         candidate = source[start:].strip()
         try:
-            _parse_type(candidate)
+            _parse_type(candidate, type_context=type_context)
         except BackendUnavailable:
             continue
         return source[:start].rstrip(), candidate
@@ -2020,7 +2060,9 @@ def _split_trailing_type_token(text: str) -> tuple[str, str]:
     )
 
 
-def _parse_function_header(header_text: str) -> tuple[str, str, str, str]:
+def _parse_function_header(header_text: str, *, type_context=None) -> tuple[str, str, str, str]:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = header_text.strip()
     if not text.endswith("{"):
         raise BackendUnavailable(
@@ -2038,9 +2080,9 @@ def _parse_function_header(header_text: str) -> tuple[str, str, str, str]:
             f"self backend could not decode function name from header: {header_text!r}"
         )
     prefix_and_ret = text[: name_match.start()].rstrip()
-    prefix, ret = _split_trailing_type_token(prefix_and_ret)
+    prefix, ret = _split_trailing_type_token(prefix_and_ret, type_context=type_context)
     try:
-        _parse_type(ret)
+        _parse_type(ret, type_context=type_context)
     except BackendUnavailable:
         raise BackendUnavailable(
             f"self backend could not decode return type from header: {header_text!r}"
@@ -2101,7 +2143,9 @@ def _thread_local_models(prefix: str, line: str) -> list[str]:
         search_pos = close + 1
 
 
-def _parse_globals(ir_text: str) -> list[GlobalDef]:
+def _parse_globals(ir_text: str, *, type_context=None) -> list[GlobalDef]:
+    if type_context is None:
+        type_context = TypeParseContext()
     globals_: list[GlobalDef] = []
     seen: set[str] = set()
     for line in ir_text.splitlines():
@@ -2129,7 +2173,7 @@ def _parse_globals(ir_text: str) -> list[GlobalDef]:
         if declaration:
             body_text, declaration_attributes = _split_global_trailing_attrs(body_text)
         try:
-            type_text, initializer = _extract_leading_type_token(body_text)
+            type_text, initializer = _extract_leading_type_token(body_text, type_context=type_context)
         except BackendUnavailable as exc:
             raise BackendUnavailable(
                 f"self backend could not split global type from initializer: {body_text!r}"
@@ -2153,7 +2197,7 @@ def _parse_globals(ir_text: str) -> list[GlobalDef]:
         if gep := _GLOBAL_PTR_GEP_RE.match(line):
             initializer = f"gep0:{decode_global_name(gep.group('base'))}"
         try:
-            parsed_type = _parse_type(type_text)
+            parsed_type = _parse_type(type_text, type_context=type_context)
         except TypeError as exc:
             raise BackendUnavailable(type_text) from exc
         globals_.append(
@@ -2166,7 +2210,7 @@ def _parse_globals(ir_text: str) -> list[GlobalDef]:
                 tls_model=tls_model,
                 alignment=alignment,
                 ir_prefix=prefix.strip(),
-                trailing_attributes=trailing_attributes,
+                trailing_attributes=trailing_attributes, type_context=type_context,
             )
         )
         seen.add(name)
@@ -2236,19 +2280,21 @@ def _last_top_level_comma(text: str) -> int:
     return last
 
 
-def _extract_leading_type_token(text: str) -> tuple[str, str]:
+def _extract_leading_type_token(text: str, *, type_context=None) -> tuple[str, str]:
+    if type_context is None:
+        type_context = TypeParseContext()
     source = text.lstrip()
     if not source:
         raise BackendUnavailable(
             f"self backend could not extract leading type token from {text!r}"
         )
-    parsed, end = _parse_ir_type_prefix(source)
+    parsed, end = _parse_ir_type_prefix(source, type_context=type_context)
     if end < len(source) and not source[end].isspace() and source[end] != ",":
         raise BackendUnavailable(
             f"self backend found no boundary after leading LLVM type in {text!r}"
         )
     type_text = source[:end].strip()
-    _TYPE_CACHE[type_text] = parsed
+    type_context.type_cache[type_text] = parsed
     rest = source[end:].lstrip()
     if rest.startswith("addrspace"):
         raise BackendUnavailable(
@@ -2408,7 +2454,9 @@ def _first_top_level_piece(text: str) -> str:
     return pieces[0].strip() if pieces else text.strip()
 
 
-def _parse_arg_infos(function_name: str, args_text: str) -> list[ArgInfo]:
+def _parse_arg_infos(function_name: str, args_text: str, *, type_context=None) -> list[ArgInfo]:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = (args_text or "").strip()
     if not text:
         return []
@@ -2433,12 +2481,12 @@ def _parse_arg_infos(function_name: str, args_text: str) -> list[ArgInfo]:
     args: list[ArgInfo] = []
     for chunk in chunks:
         try:
-            type_text, remainder = _extract_leading_type_token(chunk)
+            type_text, remainder = _extract_leading_type_token(chunk, type_context=type_context)
         except BackendUnavailable as exc:
             raise BackendUnavailable(
                 f"self backend could not decode argument in {function_name!r}: {chunk}"
             ) from exc
-        _resolve_typed_abi_attributes(remainder)
+        _resolve_typed_abi_attributes(remainder, type_context=type_context)
         name_match = re.search(
             r'(%(?:"[^"]+"|[A-Za-z_.$][\w.$-]*|[0-9]+))\s*$', remainder
         )
@@ -2449,7 +2497,7 @@ def _parse_arg_infos(function_name: str, args_text: str) -> list[ArgInfo]:
         args.append(
             ArgInfo(
                 name=decode_ssa_name(name_match.group(1)),
-                type=_parse_type(type_text),
+                type=_parse_type(type_text, type_context=type_context),
             )
         )
     return args
@@ -2467,6 +2515,7 @@ class _FunctionBlockPlane:
     """
 
     __slots__ = (
+        "type_context",
         "block_names",
         "block_indices_by_key",
         "headers",
@@ -2481,7 +2530,8 @@ class _FunctionBlockPlane:
         "missing_target_names",
     )
 
-    def __init__(self, block_names: list[str]) -> None:
+    def __init__(self, block_names: list[str], type_context=None) -> None:
+        self.type_context = type_context if type_context is not None else TypeParseContext()
         self.block_names = block_names
         self.block_indices_by_key: dict[int, list[int]] = {}
         for block_id, name in enumerate(self.block_names):
@@ -2541,20 +2591,20 @@ class _FunctionBlockPlane:
                 f"self backend could not decode phi in {function_name!r}/{block_name!r}: {line}"
             )
         type_text, incoming_text = _extract_leading_type_token(
-            phi_match.group("body")
+            phi_match.group("body"), type_context=self.type_context
         )
         incoming_start = len(self.phi_incoming) // 2
         incoming_count = 0
         for item in _parse_phi_incoming_entries(incoming_text):
             value_text, label_text = _split_top_level_once(item, ",")
             self.phi_incoming.append2(
-                self._value_ref(decode_value_token(value_text.strip())),
+                self._value_ref(decode_value_token(value_text.strip(), type_context=self.type_context)),
                 self._target_ref(decode_label_ref(label_text.strip())),
             )
             incoming_count += 1
         self.phi_records.append4(
             self._value_ref(decode_ssa_name(phi_match.group("dest"))),
-            self._type_ref(_parse_type(type_text)),
+            self._type_ref(_parse_type(type_text, type_context=self.type_context)),
             incoming_start,
             incoming_count,
         )
@@ -2650,7 +2700,7 @@ class _FunctionBlockPlane:
                 target0 = self._target_ref(false_label)
             else:
                 kind = "br_cond"
-                value_ref = self._value_ref(decode_value_token(cond_text))
+                value_ref = self._value_ref(decode_value_token(cond_text, type_context=self.type_context))
                 target0 = self._target_ref(true_label)
                 target1 = self._target_ref(false_label)
         elif match := _BR_RE.match(line):
@@ -2662,27 +2712,27 @@ class _FunctionBlockPlane:
             kind = "ret_void"
         elif line.startswith("ret "):
             ret_type_text, value_text = _extract_leading_type_token(
-                line[len("ret ") :].strip()
+                line[len("ret ") :].strip(), type_context=self.type_context
             )
             if not value_text:
                 raise BackendUnavailable(
                     f"self backend does not support terminator in {function_name!r}/{block_name!r}: {line}"
                 )
             kind = "ret"
-            type_ref = self._type_ref(_parse_type(ret_type_text))
-            value_ref = self._value_ref(decode_value_token(value_text))
+            type_ref = self._type_ref(_parse_type(ret_type_text, type_context=self.type_context))
+            value_ref = self._value_ref(decode_value_token(value_text, type_context=self.type_context))
         elif _UNREACHABLE_RE.match(line):
             kind = "unreachable"
         elif match := _SWITCH_RE.match(switch_line):
             kind = "switch"
-            value_type = _parse_type(match.group("type"))
+            value_type = _parse_type(match.group("type"), type_context=self.type_context)
             if not value_type.is_int:
                 raise BackendUnavailable(
                     f"self backend only supports integer switch values, got {value_type.describe()}"
                 )
             type_ref = self._type_ref(value_type)
             value_ref = self._value_ref(
-                decode_value_token(match.group("value"))
+                decode_value_token(match.group("value"), type_context=self.type_context)
             )
             target0 = self._target_ref(
                 decode_label_ref(match.group("default"))
@@ -2698,7 +2748,7 @@ class _FunctionBlockPlane:
                     raise BackendUnavailable(
                         f"self backend could not decode switch table in {function_name!r}/{block_name!r}: {line}"
                     )
-                case_type = _parse_type(case_match.group("type"))
+                case_type = _parse_type(case_match.group("type"), type_context=self.type_context)
                 if case_type.describe() != value_type.describe():
                     raise BackendUnavailable(
                         "self backend requires switch case values to use the switch operand type"
@@ -2958,9 +3008,11 @@ def _finish_indexed_block_plane(
     function_name: str,
     args: list[ArgInfo],
     block_names: list[str],
-    block_plane: _FunctionBlockPlane,
+    block_plane: _FunctionBlockPlane, *, type_context=None,
 ) -> IndexedFunctionSeed:
     """Freeze one already-tokenized function into the final kernel seed."""
+    if type_context is None:
+        type_context = TypeParseContext()
     reachable_old_ids = _filter_reachable_blocks_indexed(block_plane)
     reachable_set = set(reachable_old_ids)
     old_block_id = 0
@@ -2973,7 +3025,7 @@ def _finish_indexed_block_plane(
                 _parse_instruction(
                     function_name,
                     block_names[old_block_id],
-                    block_plane.instruction_lines[line_start + line_index],
+                    block_plane.instruction_lines[line_start + line_index], type_context=type_context,
                 )
                 line_index += 1
         old_block_id += 1
@@ -3021,7 +3073,7 @@ def _finish_indexed_block_plane(
             block_plane.instruction_lines,
             block_plane.instruction_start(old_block_id),
             block_plane.instruction_count(old_block_id),
-            indexed_seed,
+            indexed_seed, type_context=type_context,
         )
     block_plane.publish_reachable(indexed_seed, reachable_old_ids)
     block_plane.publish_reachable_phis(indexed_seed, reachable_old_ids)
@@ -3034,7 +3086,7 @@ def build_indexed_function_seed_from_block_lines(
     function_name: str,
     args: list[ArgInfo],
     block_names: list[str],
-    block_lines: list[list[str]],
+    block_lines: list[list[str]], *, type_context=None,
 ) -> IndexedFunctionSeed:
     """Build the canonical seed without serializing function/block topology.
 
@@ -3043,11 +3095,13 @@ def build_indexed_function_seed_from_block_lines(
     lines; later builder publishers replace each line parser with the same
     final record append API rather than introducing a second IR schema.
     """
+    if type_context is None:
+        type_context = TypeParseContext()
     if not block_names or len(block_names) != len(block_lines):
         raise BackendUnavailable(
             "direct indexed function requires matching non-empty block inputs"
         )
-    block_plane = _FunctionBlockPlane(list(block_names))
+    block_plane = _FunctionBlockPlane(list(block_names), type_context=type_context)
     block_id = 0
     while block_id < len(block_names):
         lines = block_lines[block_id]
@@ -3063,15 +3117,17 @@ def build_indexed_function_seed_from_block_lines(
         function_name,
         args,
         block_names,
-        block_plane,
+        block_plane, type_context=type_context,
     )
 
 
 def _parse_blocks(
     function_name: str,
     body: str,
-    args: list[ArgInfo],
+    args: list[ArgInfo], *, type_context=None,
 ) -> tuple[list[ParsedBlock], object]:
+    if type_context is None:
+        type_context = TypeParseContext()
     block_names: list[str] = []
     raw_lines: list[str] = []
     raw_line_spans = CompilerIntArena()
@@ -3112,7 +3168,7 @@ def _parse_blocks(
         )
     raw_line_spans.append2(current_start, len(raw_lines) - current_start)
 
-    block_plane = _FunctionBlockPlane(block_names)
+    block_plane = _FunctionBlockPlane(block_names, type_context=type_context)
     old_block_id = 0
     while old_block_id < len(block_names):
         block_plane.parse_block(
@@ -3129,7 +3185,7 @@ def _parse_blocks(
         function_name,
         args,
         block_names,
-        block_plane,
+        block_plane, type_context=type_context,
     )
 
 
@@ -3407,19 +3463,21 @@ def _instruction_destination_from_line(line: str) -> str | None:
     return decode_ssa_name(dest_text)
 
 
-def _parse_block_structure(function_name: str, block: ParsedBlock) -> str:
+def _parse_block_structure(function_name: str, block: ParsedBlock, *, type_context=None) -> str:
+    if type_context is None:
+        type_context = TypeParseContext()
     lines = list(block.raw_lines)
     parsed_phis = None
     while lines and _PHI_RE.match(lines[0]):
         phi_match = _PHI_RE.match(lines.pop(0))
         assert phi_match is not None
-        type_text, incoming_text = _extract_leading_type_token(phi_match.group("body"))
+        type_text, incoming_text = _extract_leading_type_token(phi_match.group("body"), type_context=type_context)
         incoming_entries = []
         for item in _parse_phi_incoming_entries(incoming_text):
             value_text, label_text = _split_top_level_once(item, ",")
             incoming_entries.append(
                 PhiIncoming(
-                    value=decode_value_token(value_text.strip()),
+                    value=decode_value_token(value_text.strip(), type_context=type_context),
                     label=decode_label_ref(label_text.strip()),
                 )
             )
@@ -3428,7 +3486,7 @@ def _parse_block_structure(function_name: str, block: ParsedBlock) -> str:
         parsed_phis.append(
             PhiInstr(
                 dest=decode_ssa_name(phi_match.group("dest")),
-                type=_parse_type(type_text),
+                type=_parse_type(type_text, type_context=type_context),
                 incoming=tuple(incoming_entries),
             )
         )
@@ -3470,8 +3528,10 @@ def _parse_block_instructions(
     instruction_lines: list[str],
     line_start: int,
     line_count: int,
-    indexed_seed: IndexedFunctionSeed,
+    indexed_seed: IndexedFunctionSeed, *, type_context=None,
 ) -> None:
+    if type_context is None:
+        type_context = TypeParseContext()
     instruction_start = len(indexed_seed.instruction_metadata) // 4
     line_index = 0
     while line_index < line_count:
@@ -3484,7 +3544,7 @@ def _parse_block_instructions(
                 function_name,
                 block_name,
                 line,
-                indexed_seed,
+                indexed_seed, type_context=type_context,
             )
             if parsed_call is not None:
                 raise BackendUnavailable(
@@ -3496,11 +3556,11 @@ def _parse_block_instructions(
             function_name,
             block_name,
             line,
-            indexed_seed,
+            indexed_seed, type_context=type_context,
         ):
             line_index += 1
             continue
-        parsed = _parse_instruction(function_name, block_name, line)
+        parsed = _parse_instruction(function_name, block_name, line, type_context=type_context)
         dest = _instruction_destination_from_line(line)
         dest_value_id = -1 if dest is None else indexed_seed.value_id(dest)
         payload_id = indexed_seed.append_cold_instruction_data(parsed.data)
@@ -3521,7 +3581,9 @@ def _parse_block_instructions(
     )
 
 
-def _parse_binop_instruction(line: str) -> ParsedInstr | None:
+def _parse_binop_instruction(line: str, *, type_context=None) -> ParsedInstr | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     if "=" not in line:
         return None
     dest_text, rest = line.split("=", 1)
@@ -3550,8 +3612,8 @@ def _parse_binop_instruction(line: str) -> ParsedInstr | None:
     arithmetic_flags: list[str] = []
     while True:
         try:
-            type_text, remainder = _extract_leading_type_token(rest)
-            value_type = _parse_type(type_text)
+            type_text, remainder = _extract_leading_type_token(rest, type_context=type_context)
+            value_type = _parse_type(type_text, type_context=type_context)
             break
         except BackendUnavailable:
             attr_pieces = rest.split(None, 1)
@@ -3566,14 +3628,16 @@ def _parse_binop_instruction(line: str) -> ParsedInstr | None:
             op,
             decode_ssa_name(dest_text.strip()),
             value_type,
-            decode_value_token(lhs_text),
-            decode_value_token(rhs_text),
+            decode_value_token(lhs_text, type_context=type_context),
+            decode_value_token(rhs_text, type_context=type_context),
         ),
         arithmetic_flags=tuple(arithmetic_flags),
     )
 
 
-def _parse_icmp_instruction(line: str) -> ParsedInstr | None:
+def _parse_icmp_instruction(line: str, *, type_context=None) -> ParsedInstr | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     if "=" not in line:
         return None
     dest_text, rest = line.split("=", 1)
@@ -3589,21 +3653,23 @@ def _parse_icmp_instruction(line: str) -> ParsedInstr | None:
     cond, rest = pieces
     if cond not in {"eq", "ne", "slt", "sle", "sgt", "sge", "ult", "ule", "ugt", "uge"}:
         return None
-    type_text, rest = _extract_leading_type_token(rest)
+    type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
     lhs_text, rhs_text = _split_top_level_once(rest, ",")
     return ParsedInstr(
         "icmp",
         (
             cond,
             decode_ssa_name(dest_text.strip()),
-            _parse_type(type_text),
-            decode_value_token(lhs_text),
-            decode_value_token(rhs_text),
+            _parse_type(type_text, type_context=type_context),
+            decode_value_token(lhs_text, type_context=type_context),
+            decode_value_token(rhs_text, type_context=type_context),
         ),
     )
 
 
-def _parse_fcmp_instruction(line: str) -> ParsedInstr | None:
+def _parse_fcmp_instruction(line: str, *, type_context=None) -> ParsedInstr | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     if "=" not in line:
         return None
     dest_text, rest = line.split("=", 1)
@@ -3632,23 +3698,25 @@ def _parse_fcmp_instruction(line: str) -> ParsedInstr | None:
         "uno",
     }:
         return None
-    type_text, rest = _extract_leading_type_token(rest)
+    type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
     lhs_text, rhs_text = _split_top_level_once(rest, ",")
     return ParsedInstr(
         "fcmp",
         (
             cond,
             decode_ssa_name(dest_text.strip()),
-            _parse_type(type_text),
-            decode_value_token(lhs_text),
-            decode_value_token(rhs_text),
+            _parse_type(type_text, type_context=type_context),
+            decode_value_token(lhs_text, type_context=type_context),
+            decode_value_token(rhs_text, type_context=type_context),
         ),
     )
 
 
 def _parse_insertvalue_instruction(
-    function_name: str, block_name: str, line: str
+    function_name: str, block_name: str, line: str, *, type_context=None
 ) -> ParsedInstr | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     if "= insertvalue " not in line:
         return None
     dest_text, rest = line.split("= insertvalue ", 1)
@@ -3657,14 +3725,14 @@ def _parse_insertvalue_instruction(
         raise BackendUnavailable(
             f"self backend malformed insertvalue in {function_name!r}/{block_name!r}: {line}"
         )
-    aggregate_type_text, aggregate_value_text = _extract_leading_type_token(pieces[0])
-    elem_type_text, elem_value_text = _extract_leading_type_token(pieces[1])
+    aggregate_type_text, aggregate_value_text = _extract_leading_type_token(pieces[0], type_context=type_context)
+    elem_type_text, elem_value_text = _extract_leading_type_token(pieces[1], type_context=type_context)
     if not aggregate_value_text or not elem_value_text:
         raise BackendUnavailable(
             f"self backend malformed insertvalue operands in {function_name!r}/{block_name!r}: {line}"
         )
-    aggregate_type = _parse_type(aggregate_type_text)
-    elem_type = _parse_type(elem_type_text)
+    aggregate_type = _parse_type(aggregate_type_text, type_context=type_context)
+    elem_type = _parse_type(elem_type_text, type_context=type_context)
     indices = tuple(_parse_extractvalue_indices(",".join(pieces[2:])))
     result_type, offset = aggregate_member_info(aggregate_type, indices)
     if result_type.describe() != elem_type.describe():
@@ -3677,9 +3745,9 @@ def _parse_insertvalue_instruction(
         (
             decode_ssa_name(dest_text.strip()),
             aggregate_type,
-            decode_value_token(aggregate_value_text),
+            decode_value_token(aggregate_value_text, type_context=type_context),
             elem_type,
-            decode_value_token(elem_value_text),
+            decode_value_token(elem_value_text, type_context=type_context),
             indices,
             offset,
         ),
@@ -3687,8 +3755,10 @@ def _parse_insertvalue_instruction(
 
 
 def _parse_extractvalue_instruction(
-    function_name: str, block_name: str, line: str
+    function_name: str, block_name: str, line: str, *, type_context=None
 ) -> ParsedInstr | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     if "= extractvalue " not in line:
         return None
     dest_text, rest = line.split("= extractvalue ", 1)
@@ -3697,12 +3767,12 @@ def _parse_extractvalue_instruction(
         raise BackendUnavailable(
             f"self backend malformed extractvalue in {function_name!r}/{block_name!r}: {line}"
         )
-    aggregate_type_text, aggregate_value_text = _extract_leading_type_token(pieces[0])
+    aggregate_type_text, aggregate_value_text = _extract_leading_type_token(pieces[0], type_context=type_context)
     if not aggregate_value_text:
         raise BackendUnavailable(
             f"self backend malformed extractvalue operand in {function_name!r}/{block_name!r}: {line}"
         )
-    aggregate_type = _parse_type(aggregate_type_text)
+    aggregate_type = _parse_type(aggregate_type_text, type_context=type_context)
     indices = tuple(_parse_extractvalue_indices(",".join(pieces[1:])))
     result_type, offset = aggregate_member_info(aggregate_type, indices)
     return ParsedInstr(
@@ -3710,7 +3780,7 @@ def _parse_extractvalue_instruction(
         (
             decode_ssa_name(dest_text.strip()),
             aggregate_type,
-            decode_value_token(aggregate_value_text),
+            decode_value_token(aggregate_value_text, type_context=type_context),
             indices,
             result_type,
             offset,
@@ -3727,10 +3797,12 @@ def _call_instr_from_parts(
     sig_text: str | None,
     callee_token: str,
     args_text: str,
-    call_plane: IndexedFunctionSeed | None = None,
+    call_plane: IndexedFunctionSeed | None = None, *, type_context=None,
 ) -> ParsedInstr | None:
-    ret_type = _parse_type(ret_text)
-    fixed_arg_count, is_vararg_call = _parse_call_signature(sig_text)
+    if type_context is None:
+        type_context = TypeParseContext()
+    ret_type = _parse_type(ret_text, type_context=type_context)
+    fixed_arg_count, is_vararg_call = _parse_call_signature(sig_text, type_context=type_context)
     if ret_type.is_void and dest is not None:
         raise BackendUnavailable(
             f"self backend saw void call with SSA destination in {function_name!r}/{block_name!r}: {line}"
@@ -3752,7 +3824,7 @@ def _call_instr_from_parts(
         arg_count = _parse_call_args_into_plane(
             function_name,
             args_text,
-            call_plane,
+            call_plane, type_context=type_context,
         )
         call_plane.append_parsed_call(
             decoded_dest,
@@ -3765,7 +3837,7 @@ def _call_instr_from_parts(
             is_vararg_call,
         )
         return None
-    args, arg_alignments = _parse_call_args(function_name, args_text)
+    args, arg_alignments = _parse_call_args(function_name, args_text, type_context=type_context)
     return ParsedInstr(
         "call",
         (
@@ -3785,9 +3857,11 @@ def _parse_indexed_scalar_call_span(
     function_name: str,
     block_name: str,
     line: str,
-    call_plane: IndexedFunctionSeed,
+    call_plane: IndexedFunctionSeed, *, type_context=None,
 ) -> bool:
     """Publish one canonical scalar call from integer spans, or decline."""
+    if type_context is None:
+        type_context = TypeParseContext()
 
     line_length = len(line)
     if line_length == 0:
@@ -3924,7 +3998,7 @@ def _parse_indexed_scalar_call_span(
             return False
 
     dest = None if dest_start < 0 else line[dest_start:dest_end]
-    ret_type = _parse_type(line[ret_start:ret_end])
+    ret_type = _parse_type(line[ret_start:ret_end], type_context=type_context)
     if ret_type.is_void and dest is not None:
         return False
     if (not ret_type.is_void) and dest is None:
@@ -3944,7 +4018,7 @@ def _parse_indexed_scalar_call_span(
         line,
         args_start,
         args_close,
-        call_plane,
+        call_plane, type_context=type_context,
     )
     call_plane.append_parsed_call(
         decoded_dest,
@@ -3963,8 +4037,10 @@ def _parse_call_instruction(
     function_name: str,
     block_name: str,
     line: str,
-    call_plane: IndexedFunctionSeed | None = None,
+    call_plane: IndexedFunctionSeed | None = None, *, type_context=None,
 ) -> ParsedInstr | None:
+    if type_context is None:
+        type_context = TypeParseContext()
     is_call_shape = _is_call_instruction_shape(line)
     if not is_call_shape:
         return None
@@ -3973,7 +4049,7 @@ def _parse_call_instruction(
         function_name,
         block_name,
         line,
-        call_plane,
+        call_plane, type_context=type_context,
     ):
         return None
 
@@ -3987,7 +4063,7 @@ def _parse_call_instruction(
             match.group("sig"),
             match.group("callee"),
             match.group("args"),
-            call_plane,
+            call_plane, type_context=type_context,
         )
 
     dest: str | None = None
@@ -4006,8 +4082,8 @@ def _parse_call_instruction(
 
     while True:
         try:
-            ret_text, rest_after_ret = _extract_leading_type_token(rest)
-            _parse_type(ret_text)
+            ret_text, rest_after_ret = _extract_leading_type_token(rest, type_context=type_context)
+            _parse_type(ret_text, type_context=type_context)
             break
         except BackendUnavailable:
             attr_parts = rest.split(None, 1)
@@ -4047,7 +4123,7 @@ def _parse_call_instruction(
         sig_text,
         callee_token,
         rest[args_open + 1 : args_close],
-        call_plane,
+        call_plane, type_context=type_context,
     )
 
 
@@ -4064,9 +4140,11 @@ def _parse_indexed_hot_instruction(
     function_name: str,
     block_name: str,
     line: str,
-    indexed_seed: IndexedFunctionSeed,
+    indexed_seed: IndexedFunctionSeed, *, type_context=None,
 ) -> bool:
     """Publish the supported hot subset directly into final kernel records."""
+    if type_context is None:
+        type_context = TypeParseContext()
     dest = _instruction_destination_from_line(line)
     dest_value_id = -1 if dest is None else indexed_seed.value_id(dest)
 
@@ -4080,9 +4158,9 @@ def _parse_indexed_hot_instruction(
         alignment = int(alignment_text) if alignment_text is not None else 0
         if alignment_text is not None and (alignment <= 0 or alignment & (alignment - 1)):
             raise BackendUnavailable("atomic memory alignment must be a positive power of two")
-        value_type_id = indexed_seed.intern_type(_parse_type(match.group("val_type")))
-        ptr_type_id = indexed_seed.intern_type(_parse_type(match.group("ptr_type")))
-        ptr_ref = indexed_seed.operand_ref(decode_value_token(match.group("ptr")))
+        value_type_id = indexed_seed.intern_type(_parse_type(match.group("val_type"), type_context=type_context))
+        ptr_type_id = indexed_seed.intern_type(_parse_type(match.group("ptr_type"), type_context=type_context))
+        ptr_ref = indexed_seed.operand_ref(decode_value_token(match.group("ptr"), type_context=type_context))
         record_id = len(indexed_seed.instruction_record_scalars) // 4
         if atomic_load:
             indexed_seed.instruction_record_scalars.append4(
@@ -4092,7 +4170,7 @@ def _parse_indexed_hot_instruction(
         else:
             indexed_seed.instruction_record_scalars.append4(
                 value_type_id,
-                indexed_seed.operand_ref(decode_value_token(match.group("value"))),
+                indexed_seed.operand_ref(decode_value_token(match.group("value"), type_context=type_context)),
                 ptr_type_id, ptr_ref,
             )
         indexed_seed.instruction_record_dest_ids.append(dest_value_id)
@@ -4107,11 +4185,11 @@ def _parse_indexed_hot_instruction(
 
     alloca_type = None
     if match := _ALLOCA_RE.match(line):
-        alloca_type = _parse_type(match.group("type"))
+        alloca_type = _parse_type(match.group("type"), type_context=type_context)
     elif "= alloca " in line:
         _dest_text, rest = line.split("= alloca ", 1)
-        type_text, _tail = _extract_leading_type_token(rest)
-        alloca_type = _parse_type(type_text)
+        type_text, _tail = _extract_leading_type_token(rest, type_context=type_context)
+        alloca_type = _parse_type(type_text, type_context=type_context)
     if alloca_type is not None:
         if dest_value_id < 0:
             raise BackendUnavailable(
@@ -4134,16 +4212,16 @@ def _parse_indexed_hot_instruction(
         raw_rest = line[len("store ") :]
         is_volatile = raw_rest.strip().startswith("volatile ")
         rest = _strip_volatile_memory_op_prefix(raw_rest)
-        value_type_text, rest = _extract_leading_type_token(rest)
+        value_type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
         value_text, rest = _split_top_level_once(rest, ",")
-        ptr_type_text, rest = _extract_leading_type_token(rest)
+        ptr_type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
         ptr_text = _first_top_level_piece(rest)
         record_id = len(indexed_seed.instruction_record_scalars) // 4
         indexed_seed.instruction_record_scalars.append4(
-            indexed_seed.intern_type(_parse_type(value_type_text)),
-            indexed_seed.operand_ref(decode_value_token(value_text)),
-            indexed_seed.intern_type(_parse_type(ptr_type_text)),
-            indexed_seed.operand_ref(decode_value_token(ptr_text)),
+            indexed_seed.intern_type(_parse_type(value_type_text, type_context=type_context)),
+            indexed_seed.operand_ref(decode_value_token(value_text, type_context=type_context)),
+            indexed_seed.intern_type(_parse_type(ptr_type_text, type_context=type_context)),
+            indexed_seed.operand_ref(decode_value_token(ptr_text, type_context=type_context)),
         )
         indexed_seed.instruction_record_dest_ids.append(-1)
         indexed_seed.append_instruction(
@@ -4159,14 +4237,14 @@ def _parse_indexed_hot_instruction(
         is_volatile = rest.strip().startswith("volatile ")
         rest = _strip_volatile_memory_op_prefix(rest)
         value_type_text, rest = _split_top_level_once(rest.strip(), ",")
-        ptr_type_text, rest = _extract_leading_type_token(rest)
+        ptr_type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
         ptr_text = _first_top_level_piece(rest)
-        value_type_id = indexed_seed.intern_type(_parse_type(value_type_text))
+        value_type_id = indexed_seed.intern_type(_parse_type(value_type_text, type_context=type_context))
         record_id = len(indexed_seed.instruction_record_scalars) // 4
         indexed_seed.instruction_record_scalars.append4(
             value_type_id,
-            indexed_seed.intern_type(_parse_type(ptr_type_text)),
-            indexed_seed.operand_ref(decode_value_token(ptr_text)),
+            indexed_seed.intern_type(_parse_type(ptr_type_text, type_context=type_context)),
+            indexed_seed.operand_ref(decode_value_token(ptr_text, type_context=type_context)),
             0,
         )
         indexed_seed.instruction_record_dest_ids.append(dest_value_id)
@@ -4189,7 +4267,7 @@ def _parse_indexed_hot_instruction(
         base_type_text = parts[0].strip()
         while True:
             try:
-                base_type = _parse_type(base_type_text)
+                base_type = _parse_type(base_type_text, type_context=type_context)
                 break
             except BackendUnavailable:
                 pieces = base_type_text.split(None, 1)
@@ -4198,18 +4276,18 @@ def _parse_indexed_hot_instruction(
                 ):
                     raise
                 base_type_text = pieces[1].strip()
-        ptr_type_text, ptr_value_text = _extract_leading_type_token(parts[1])
-        ptr_type = _parse_type(ptr_type_text)
-        ptr_ref = indexed_seed.operand_ref(decode_value_token(ptr_value_text))
+        ptr_type_text, ptr_value_text = _extract_leading_type_token(parts[1], type_context=type_context)
+        ptr_type = _parse_type(ptr_type_text, type_context=type_context)
+        ptr_ref = indexed_seed.operand_ref(decode_value_token(ptr_value_text, type_context=type_context))
         index_start = len(indexed_seed.gep_index_scalars) // 2
         index_count = 0
         current_type = base_type
         for raw_index in parts[2:]:
             index_type_text, index_value_text = _extract_leading_type_token(
-                raw_index.strip()
+                raw_index.strip(), type_context=type_context
             )
-            index_type = _parse_type(index_type_text)
-            index_value = decode_value_token(index_value_text)
+            index_type = _parse_type(index_type_text, type_context=type_context)
+            index_value = decode_value_token(index_value_text, type_context=type_context)
             indexed_seed.gep_index_scalars.append2(
                 indexed_seed.intern_type(index_type),
                 indexed_seed.operand_ref(index_value),
@@ -4285,8 +4363,8 @@ def _parse_indexed_hot_instruction(
         arithmetic_flags: list[str] = []
         while True:
             try:
-                type_text, remainder = _extract_leading_type_token(typed_rest)
-                value_type = _parse_type(type_text)
+                type_text, remainder = _extract_leading_type_token(typed_rest, type_context=type_context)
+                value_type = _parse_type(type_text, type_context=type_context)
                 break
             except BackendUnavailable:
                 attr_pieces = typed_rest.split(None, 1)
@@ -4300,8 +4378,8 @@ def _parse_indexed_hot_instruction(
         indexed_seed.instruction_record_scalars.append4(
             indexed_seed.intern_text(op),
             value_type_id,
-            indexed_seed.operand_ref(decode_value_token(lhs_text)),
-            indexed_seed.operand_ref(decode_value_token(rhs_text)),
+            indexed_seed.operand_ref(decode_value_token(lhs_text, type_context=type_context)),
+            indexed_seed.operand_ref(decode_value_token(rhs_text, type_context=type_context)),
         )
         indexed_seed.instruction_record_dest_ids.append(dest_value_id)
         indexed_seed.publish_value_type_id(dest_value_id, value_type_id)
@@ -4335,9 +4413,9 @@ def _parse_indexed_hot_instruction(
             "uge",
         }:
             return False
-        type_text, typed_rest = _extract_leading_type_token(typed_rest)
+        type_text, typed_rest = _extract_leading_type_token(typed_rest, type_context=type_context)
         lhs_text, rhs_text = _split_top_level_once(typed_rest, ",")
-        value_type = _parse_type(type_text)
+        value_type = _parse_type(type_text, type_context=type_context)
         value_type_id = indexed_seed.intern_type(value_type)
         result_type = (
             TypeDesc("array", count=value_type.count, elem=I1)
@@ -4349,8 +4427,8 @@ def _parse_indexed_hot_instruction(
         indexed_seed.instruction_record_scalars.append4(
             indexed_seed.intern_text(cond),
             value_type_id,
-            indexed_seed.operand_ref(decode_value_token(lhs_text)),
-            indexed_seed.operand_ref(decode_value_token(rhs_text)),
+            indexed_seed.operand_ref(decode_value_token(lhs_text, type_context=type_context)),
+            indexed_seed.operand_ref(decode_value_token(rhs_text, type_context=type_context)),
         )
         indexed_seed.instruction_record_dest_ids.append(dest_value_id)
         indexed_seed.publish_value_type_id(dest_value_id, result_type_id)
@@ -4363,17 +4441,17 @@ def _parse_indexed_hot_instruction(
 
     if match := _CAST_RE.match(line):
         src_type_id = indexed_seed.intern_type(
-            _parse_type(match.group("src_type"))
+            _parse_type(match.group("src_type"), type_context=type_context)
         )
         dst_type_id = indexed_seed.intern_type(
-            _parse_type(match.group("dst_type"))
+            _parse_type(match.group("dst_type"), type_context=type_context)
         )
         record_id = len(indexed_seed.instruction_record_scalars) // 4
         indexed_seed.instruction_record_scalars.append4(
             indexed_seed.intern_text(match.group("op")),
             src_type_id,
             indexed_seed.operand_ref(
-                decode_value_token(match.group("value"))
+                decode_value_token(match.group("value"), type_context=type_context)
             ),
             dst_type_id,
         )
@@ -4396,14 +4474,14 @@ def _parse_indexed_hot_instruction(
         ):
             break
         select_rest = select_parts[1].strip()
-    cond_type_text, select_rest = _extract_leading_type_token(select_rest)
+    cond_type_text, select_rest = _extract_leading_type_token(select_rest, type_context=type_context)
     cond_value_text, select_rest = _split_top_level_once(select_rest, ",")
-    true_type_text, select_rest = _extract_leading_type_token(select_rest)
+    true_type_text, select_rest = _extract_leading_type_token(select_rest, type_context=type_context)
     true_value_text, select_rest = _split_top_level_once(select_rest, ",")
-    false_type_text, false_value_text = _extract_leading_type_token(select_rest)
-    cond_type = _parse_type(cond_type_text)
-    true_type = _parse_type(true_type_text)
-    false_type = _parse_type(false_type_text)
+    false_type_text, false_value_text = _extract_leading_type_token(select_rest, type_context=type_context)
+    cond_type = _parse_type(cond_type_text, type_context=type_context)
+    true_type = _parse_type(true_type_text, type_context=type_context)
+    false_type = _parse_type(false_type_text, type_context=type_context)
     if not (
         (cond_type.is_int and cond_type.width == 1)
         or (
@@ -4425,9 +4503,9 @@ def _parse_indexed_hot_instruction(
     record_id = len(indexed_seed.instruction_record_scalars) // 4
     indexed_seed.instruction_record_scalars.append4(
         result_type_id,
-        indexed_seed.operand_ref(decode_value_token(cond_value_text)),
-        indexed_seed.operand_ref(decode_value_token(true_value_text)),
-        indexed_seed.operand_ref(decode_value_token(false_value_text)),
+        indexed_seed.operand_ref(decode_value_token(cond_value_text, type_context=type_context)),
+        indexed_seed.operand_ref(decode_value_token(true_value_text, type_context=type_context)),
+        indexed_seed.operand_ref(decode_value_token(false_value_text, type_context=type_context)),
     )
     indexed_seed.instruction_record_dest_ids.append(dest_value_id)
     indexed_seed.publish_value_type_id(dest_value_id, result_type_id)
@@ -4439,27 +4517,29 @@ def _parse_indexed_hot_instruction(
     return True
 
 
-def _parse_instruction(function_name: str, block_name: str, line: str) -> ParsedInstr:
+def _parse_instruction(function_name: str, block_name: str, line: str, *, type_context=None) -> ParsedInstr:
+    if type_context is None:
+        type_context = TypeParseContext()
     if match := _ALLOCA_RE.match(line):
         return ParsedInstr(
             "alloca",
-            (decode_ssa_name(match.group("dest")), _parse_type(match.group("type"))),
+            (decode_ssa_name(match.group("dest")), _parse_type(match.group("type"), type_context=type_context)),
         )
     if "= alloca " in line:
         dest_text, rest = line.split("= alloca ", 1)
-        type_text, _tail = _extract_leading_type_token(rest)
+        type_text, _tail = _extract_leading_type_token(rest, type_context=type_context)
         return ParsedInstr(
-            "alloca", (decode_ssa_name(dest_text.strip()), _parse_type(type_text))
+            "alloca", (decode_ssa_name(dest_text.strip()), _parse_type(type_text, type_context=type_context))
         )
     if line.startswith("store atomic "):
         if match := _STORE_ATOMIC_RE.match(line):
             return ParsedInstr(
                 "store_atomic",
                 (
-                    _parse_type(match.group("val_type")),
-                    decode_value_token(match.group("value")),
-                    _parse_type(match.group("ptr_type")),
-                    decode_value_token(match.group("ptr")),
+                    _parse_type(match.group("val_type"), type_context=type_context),
+                    decode_value_token(match.group("value"), type_context=type_context),
+                    _parse_type(match.group("ptr_type"), type_context=type_context),
+                    decode_value_token(match.group("ptr"), type_context=type_context),
                     match.group("ordering"),
                     int(match.group("align")) if match.group("align") is not None else 0,
                 ),
@@ -4473,9 +4553,9 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
                 "load_atomic",
                 (
                     decode_ssa_name(match.group("dest").strip()),
-                    _parse_type(match.group("val_type")),
-                    _parse_type(match.group("ptr_type")),
-                    decode_value_token(match.group("ptr")),
+                    _parse_type(match.group("val_type"), type_context=type_context),
+                    _parse_type(match.group("ptr_type"), type_context=type_context),
+                    decode_value_token(match.group("ptr"), type_context=type_context),
                     match.group("ordering"),
                     int(match.group("align")) if match.group("align") is not None else 0,
                 ),
@@ -4490,10 +4570,10 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
                 (
                     decode_ssa_name(match.group("dest").strip()),
                     match.group("op"),
-                    _parse_type(match.group("ptr_type")),
-                    decode_value_token(match.group("ptr")),
-                    _parse_type(match.group("val_type")),
-                    decode_value_token(match.group("value")),
+                    _parse_type(match.group("ptr_type"), type_context=type_context),
+                    decode_value_token(match.group("ptr"), type_context=type_context),
+                    _parse_type(match.group("val_type"), type_context=type_context),
+                    decode_value_token(match.group("value"), type_context=type_context),
                     match.group("ordering"),
                 ),
             )
@@ -4507,18 +4587,18 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
                 raise BackendUnavailable(
                     f"self backend cmpxchg operand types disagree in {function_name!r}/{block_name!r}: {line}"
                 )
-            value_type = _parse_type(value_type_text)
-            pair_type = _parse_type("{ " + value_type_text + ", i1 }")
+            value_type = _parse_type(value_type_text, type_context=type_context)
+            pair_type = _parse_type("{ " + value_type_text + ", i1 }", type_context=type_context)
             return ParsedInstr(
                 "cmpxchg",
                 (
                     decode_ssa_name(match.group("dest").strip()),
                     pair_type,
-                    _parse_type(match.group("ptr_type")),
-                    decode_value_token(match.group("ptr")),
+                    _parse_type(match.group("ptr_type"), type_context=type_context),
+                    decode_value_token(match.group("ptr"), type_context=type_context),
                     value_type,
-                    decode_value_token(match.group("expected")),
-                    decode_value_token(match.group("desired")),
+                    decode_value_token(match.group("expected"), type_context=type_context),
+                    decode_value_token(match.group("desired"), type_context=type_context),
                     match.group("success"),
                     match.group("failure"),
                 ),
@@ -4537,13 +4617,13 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             arg_values = []
             for piece in split_top_level(match.group("args")):
                 arg_type_text, arg_value_text = _extract_leading_type_token(
-                    piece.strip()
+                    piece.strip(), type_context=type_context
                 )
                 if arg_type_text != "i64" or not arg_value_text:
                     raise BackendUnavailable(
                         f"self backend syscall6 argument must be i64 in {function_name!r}/{block_name!r}: {line}"
                     )
-                arg_values.append(decode_value_token(arg_value_text))
+                arg_values.append(decode_value_token(arg_value_text, type_context=type_context))
             if len(arg_values) != 7:
                 raise BackendUnavailable(
                     f"self backend syscall6 expects 7 arguments in {function_name!r}/{block_name!r}: {line}"
@@ -4559,17 +4639,17 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
         raw_rest = line[len("store ") :]
         is_volatile = raw_rest.strip().startswith("volatile ")
         rest = _strip_volatile_memory_op_prefix(raw_rest)
-        val_type_text, rest = _extract_leading_type_token(rest)
+        val_type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
         value_text, rest = _split_top_level_once(rest, ",")
-        ptr_type_text, rest = _extract_leading_type_token(rest)
+        ptr_type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
         ptr_text = _first_top_level_piece(rest)
         return ParsedInstr(
             "store",
             (
-                _parse_type(val_type_text),
-                decode_value_token(value_text),
-                _parse_type(ptr_type_text),
-                decode_value_token(ptr_text),
+                _parse_type(val_type_text, type_context=type_context),
+                decode_value_token(value_text, type_context=type_context),
+                _parse_type(ptr_type_text, type_context=type_context),
+                decode_value_token(ptr_text, type_context=type_context),
             ),
             is_volatile,
         )
@@ -4578,15 +4658,15 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
         is_volatile = rest.strip().startswith("volatile ")
         rest = _strip_volatile_memory_op_prefix(rest)
         val_type_text, rest = _split_top_level_once(rest.strip(), ",")
-        ptr_type_text, rest = _extract_leading_type_token(rest)
+        ptr_type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
         ptr_text = _first_top_level_piece(rest)
         return ParsedInstr(
             "load",
             (
                 decode_ssa_name(dest_text.strip()),
-                _parse_type(val_type_text),
-                _parse_type(ptr_type_text),
-                decode_value_token(ptr_text),
+                _parse_type(val_type_text, type_context=type_context),
+                _parse_type(ptr_type_text, type_context=type_context),
+                decode_value_token(ptr_text, type_context=type_context),
             ),
             is_volatile,
         )
@@ -4600,7 +4680,7 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
         base_type_text = parts[0].strip()
         while True:
             try:
-                base_type = _parse_type(base_type_text)
+                base_type = _parse_type(base_type_text, type_context=type_context)
                 break
             except BackendUnavailable:
                 pieces = base_type_text.split(None, 1)
@@ -4609,20 +4689,20 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
                 ):
                     raise
                 base_type_text = pieces[1].strip()
-        ptr_type_text, ptr_value_text = _extract_leading_type_token(parts[1])
+        ptr_type_text, ptr_value_text = _extract_leading_type_token(parts[1], type_context=type_context)
         return ParsedInstr(
             "gep",
             (
                 decode_ssa_name(dest_text.strip()),
                 base_type,
-                _parse_type(ptr_type_text),
-                decode_value_token(ptr_value_text),
-                tuple(_parse_gep_indices("," + ",".join(parts[2:]))),
+                _parse_type(ptr_type_text, type_context=type_context),
+                decode_value_token(ptr_value_text, type_context=type_context),
+                tuple(_parse_gep_indices("," + ",".join(parts[2:]), type_context=type_context)),
             ),
         )
-    if parsed := _parse_call_instruction(function_name, block_name, line):
+    if parsed := _parse_call_instruction(function_name, block_name, line, type_context=type_context):
         return parsed
-    if parsed := _parse_binop_instruction(line):
+    if parsed := _parse_binop_instruction(line, type_context=type_context):
         return parsed
     if match := _FBINOP_RE.match(line):
         return ParsedInstr(
@@ -4630,9 +4710,9 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             (
                 match.group("op"),
                 decode_ssa_name(match.group("dest")),
-                _parse_type(match.group("type")),
-                decode_value_token(match.group("lhs")),
-                decode_value_token(match.group("rhs")),
+                _parse_type(match.group("type"), type_context=type_context),
+                decode_value_token(match.group("lhs"), type_context=type_context),
+                decode_value_token(match.group("rhs"), type_context=type_context),
             ),
         )
     if match := _FNEG_RE.match(line):
@@ -4640,13 +4720,13 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             "fneg",
             (
                 decode_ssa_name(match.group("dest")),
-                _parse_type(match.group("type")),
-                decode_value_token(match.group("value")),
+                _parse_type(match.group("type"), type_context=type_context),
+                decode_value_token(match.group("value"), type_context=type_context),
             ),
         )
-    if parsed := _parse_icmp_instruction(line):
+    if parsed := _parse_icmp_instruction(line, type_context=type_context):
         return parsed
-    if parsed := _parse_fcmp_instruction(line):
+    if parsed := _parse_fcmp_instruction(line, type_context=type_context):
         return parsed
     if match := _CAST_RE.match(line):
         return ParsedInstr(
@@ -4654,9 +4734,9 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             (
                 match.group("op"),
                 decode_ssa_name(match.group("dest")),
-                _parse_type(match.group("src_type")),
-                decode_value_token(match.group("value")),
-                _parse_type(match.group("dst_type")),
+                _parse_type(match.group("src_type"), type_context=type_context),
+                decode_value_token(match.group("value"), type_context=type_context),
+                _parse_type(match.group("dst_type"), type_context=type_context),
             ),
         )
     if "= select " in line:
@@ -4669,14 +4749,14 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             ):
                 break
             rest = pieces[1].strip()
-        cond_type_text, rest = _extract_leading_type_token(rest)
+        cond_type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
         cond_value_text, rest = _split_top_level_once(rest, ",")
-        true_type_text, rest = _extract_leading_type_token(rest)
+        true_type_text, rest = _extract_leading_type_token(rest, type_context=type_context)
         true_value_text, rest = _split_top_level_once(rest, ",")
-        false_type_text, false_value_text = _extract_leading_type_token(rest)
-        cond_type = _parse_type(cond_type_text)
-        true_type = _parse_type(true_type_text)
-        false_type = _parse_type(false_type_text)
+        false_type_text, false_value_text = _extract_leading_type_token(rest, type_context=type_context)
+        cond_type = _parse_type(cond_type_text, type_context=type_context)
+        true_type = _parse_type(true_type_text, type_context=type_context)
+        false_type = _parse_type(false_type_text, type_context=type_context)
         if not (
             (cond_type.is_int and cond_type.width == 1)
             or (
@@ -4699,14 +4779,14 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             (
                 decode_ssa_name(dest_text.strip()),
                 true_type,
-                decode_value_token(cond_value_text),
-                decode_value_token(true_value_text),
-                decode_value_token(false_value_text),
+                decode_value_token(cond_value_text, type_context=type_context),
+                decode_value_token(true_value_text, type_context=type_context),
+                decode_value_token(false_value_text, type_context=type_context),
             ),
         )
     if match := _SELECT_RE.match(line):
-        true_type = _parse_type(match.group("true_type"))
-        false_type = _parse_type(match.group("false_type"))
+        true_type = _parse_type(match.group("true_type"), type_context=type_context)
+        false_type = _parse_type(match.group("false_type"), type_context=type_context)
         if true_type.describe() != false_type.describe():
             raise BackendUnavailable(
                 "self backend select parser expected matching arm types in "
@@ -4717,9 +4797,9 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             (
                 decode_ssa_name(match.group("dest")),
                 true_type,
-                decode_value_token(match.group("cond")),
-                decode_value_token(match.group("true_value")),
-                decode_value_token(match.group("false_value")),
+                decode_value_token(match.group("cond"), type_context=type_context),
+                decode_value_token(match.group("true_value"), type_context=type_context),
+                decode_value_token(match.group("false_value"), type_context=type_context),
             ),
         )
     if match := _FREEZE_RE.match(line):
@@ -4727,8 +4807,8 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             "freeze",
             (
                 decode_ssa_name(match.group("dest")),
-                _parse_type(match.group("type")),
-                decode_value_token(match.group("value")),
+                _parse_type(match.group("type"), type_context=type_context),
+                decode_value_token(match.group("value"), type_context=type_context),
             ),
         )
     if match := _INSERTELEMENT_RE.match(line):
@@ -4737,10 +4817,10 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             raise BackendUnavailable(
                 f"self backend malformed insertelement in {function_name!r}/{block_name!r}: {line}"
             )
-        vector_type_text, vector_value_text = _extract_leading_type_token(pieces[0])
-        elem_type_text, elem_value_text = _extract_leading_type_token(pieces[1])
-        index_type_text, index_value_text = _extract_leading_type_token(pieces[2])
-        index_type = _parse_type(index_type_text)
+        vector_type_text, vector_value_text = _extract_leading_type_token(pieces[0], type_context=type_context)
+        elem_type_text, elem_value_text = _extract_leading_type_token(pieces[1], type_context=type_context)
+        index_type_text, index_value_text = _extract_leading_type_token(pieces[2], type_context=type_context)
+        index_type = _parse_type(index_type_text, type_context=type_context)
         if not index_type.is_int:
             raise BackendUnavailable(
                 f"self backend insertelement expects integer lane index in {function_name!r}/{block_name!r}: {line}"
@@ -4749,11 +4829,11 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             "insertelement",
             (
                 decode_ssa_name(match.group("dest")),
-                _parse_type(vector_type_text),
-                decode_value_token(vector_value_text),
-                _parse_type(elem_type_text),
-                decode_value_token(elem_value_text),
-                decode_value_token(index_value_text),
+                _parse_type(vector_type_text, type_context=type_context),
+                decode_value_token(vector_value_text, type_context=type_context),
+                _parse_type(elem_type_text, type_context=type_context),
+                decode_value_token(elem_value_text, type_context=type_context),
+                decode_value_token(index_value_text, type_context=type_context),
             ),
         )
     if match := _SHUFFLEVECTOR_RE.match(line):
@@ -4762,12 +4842,12 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             raise BackendUnavailable(
                 f"self backend malformed shufflevector in {function_name!r}/{block_name!r}: {line}"
             )
-        lhs_type_text, lhs_value_text = _extract_leading_type_token(pieces[0])
-        rhs_type_text, rhs_value_text = _extract_leading_type_token(pieces[1])
-        mask_type_text, mask_value_text = _extract_leading_type_token(pieces[2])
-        lhs_type = _parse_type(lhs_type_text)
-        rhs_type = _parse_type(rhs_type_text)
-        mask_type = _parse_type(mask_type_text)
+        lhs_type_text, lhs_value_text = _extract_leading_type_token(pieces[0], type_context=type_context)
+        rhs_type_text, rhs_value_text = _extract_leading_type_token(pieces[1], type_context=type_context)
+        mask_type_text, mask_value_text = _extract_leading_type_token(pieces[2], type_context=type_context)
+        lhs_type = _parse_type(lhs_type_text, type_context=type_context)
+        rhs_type = _parse_type(rhs_type_text, type_context=type_context)
+        mask_type = _parse_type(mask_type_text, type_context=type_context)
         if lhs_type.describe() != rhs_type.describe():
             raise BackendUnavailable(
                 "self backend shufflevector parser expected matching operand vector types in "
@@ -4786,15 +4866,15 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             (
                 decode_ssa_name(match.group("dest")),
                 TypeDesc("array", count=mask_type.count, elem=lhs_type.elem),
-                decode_value_token(lhs_value_text),
-                decode_value_token(rhs_value_text),
+                decode_value_token(lhs_value_text, type_context=type_context),
+                decode_value_token(rhs_value_text, type_context=type_context),
                 mask_type,
-                decode_value_token(mask_value_text),
+                decode_value_token(mask_value_text, type_context=type_context),
             ),
         )
-    if parsed := _parse_extractvalue_instruction(function_name, block_name, line):
+    if parsed := _parse_extractvalue_instruction(function_name, block_name, line, type_context=type_context):
         return parsed
-    if parsed := _parse_insertvalue_instruction(function_name, block_name, line):
+    if parsed := _parse_insertvalue_instruction(function_name, block_name, line, type_context=type_context):
         return parsed
     if match := _EXTRACTELEMENT_RE.match(line):
         pieces = split_top_level(match.group("body").strip())
@@ -4802,10 +4882,10 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             raise BackendUnavailable(
                 f"self backend malformed extractelement in {function_name!r}/{block_name!r}: {line}"
             )
-        vector_type_text, vector_value_text = _extract_leading_type_token(pieces[0])
-        index_type_text, index_value_text = _extract_leading_type_token(pieces[1])
-        vector_type = _parse_type(vector_type_text)
-        index_type = _parse_type(index_type_text)
+        vector_type_text, vector_value_text = _extract_leading_type_token(pieces[0], type_context=type_context)
+        index_type_text, index_value_text = _extract_leading_type_token(pieces[1], type_context=type_context)
+        vector_type = _parse_type(vector_type_text, type_context=type_context)
+        index_type = _parse_type(index_type_text, type_context=type_context)
         if not vector_type.is_array or vector_type.elem is None:
             raise BackendUnavailable(
                 f"self backend extractelement expects vector/array source in {function_name!r}/{block_name!r}: {line}"
@@ -4819,8 +4899,8 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             (
                 decode_ssa_name(match.group("dest")),
                 vector_type,
-                decode_value_token(vector_value_text),
-                decode_value_token(index_value_text),
+                decode_value_token(vector_value_text, type_context=type_context),
+                decode_value_token(index_value_text, type_context=type_context),
                 vector_type.elem,
             ),
         )
@@ -4829,9 +4909,9 @@ def _parse_instruction(function_name: str, block_name: str, line: str) -> Parsed
             "va_arg",
             (
                 decode_ssa_name(match.group("dest")),
-                _parse_type(match.group("ap_type")),
-                decode_value_token(match.group("ap")),
-                _parse_type(match.group("value_type")),
+                _parse_type(match.group("ap_type"), type_context=type_context),
+                decode_value_token(match.group("ap"), type_context=type_context),
+                _parse_type(match.group("value_type"), type_context=type_context),
             ),
         )
     raise BackendUnavailable(
@@ -4870,8 +4950,10 @@ def _parse_call_arg_alignment(value_text: str) -> int:
 
 
 def _parse_call_args(
-    function_name: str, args_text: str
+    function_name: str, args_text: str, *, type_context=None
 ) -> tuple[list[tuple[TypeDesc, str]], tuple[int, ...]]:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = (args_text or "").strip()
     if not text:
         return [], ()
@@ -4880,7 +4962,7 @@ def _parse_call_args(
     chunks = [chunk.strip() for chunk in split_top_level(text) if chunk.strip()]
     for chunk in chunks:
         try:
-            type_text, value_text = _extract_leading_type_token(chunk)
+            type_text, value_text = _extract_leading_type_token(chunk, type_context=type_context)
         except BackendUnavailable as exc:
             raise BackendUnavailable(
                 f"self backend could not decode call arg in {function_name!r}: {chunk}"
@@ -4890,9 +4972,9 @@ def _parse_call_args(
                 f"self backend call arg missing value in {function_name!r}: {chunk}"
             )
         alignments.append(_parse_call_arg_alignment(value_text))
-        arg_type = _parse_type(type_text)
-        _resolve_typed_abi_attributes(value_text)
-        arg_value = decode_value_token(value_text)
+        arg_type = _parse_type(type_text, type_context=type_context)
+        _resolve_typed_abi_attributes(value_text, type_context=type_context)
+        arg_value = decode_value_token(value_text, type_context=type_context)
         # Keep the internal call ABI canonical: integer operands are numeric
         # strings throughout the emitters.  LLVM permits the aliases
         # ``true``/``false`` for i1, but preserving them here made call parsing
@@ -4910,8 +4992,10 @@ def _parse_call_args(
 def _parse_call_args_into_plane(
     function_name: str,
     args_text: str,
-    call_plane: IndexedCallPlane,
+    call_plane: IndexedCallPlane, *, type_context=None,
 ) -> int:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = (args_text or "").strip()
     if not text:
         return 0
@@ -4921,7 +5005,7 @@ def _parse_call_args_into_plane(
         if not chunk:
             continue
         try:
-            type_text, value_text = _extract_leading_type_token(chunk)
+            type_text, value_text = _extract_leading_type_token(chunk, type_context=type_context)
         except BackendUnavailable as exc:
             raise BackendUnavailable(
                 f"self backend could not decode call arg in {function_name!r}: {chunk}"
@@ -4931,9 +5015,9 @@ def _parse_call_args_into_plane(
                 f"self backend call arg missing value in {function_name!r}: {chunk}"
             )
         alignment = _parse_call_arg_alignment(value_text)
-        arg_type = _parse_type(type_text)
-        _resolve_typed_abi_attributes(value_text)
-        arg_value = decode_value_token(value_text)
+        arg_type = _parse_type(type_text, type_context=type_context)
+        _resolve_typed_abi_attributes(value_text, type_context=type_context)
+        arg_value = decode_value_token(value_text, type_context=type_context)
         if arg_type.is_int and arg_type.width == 1:
             if arg_value == "false":
                 arg_value = "0"
@@ -4962,14 +5046,16 @@ def _parse_extractvalue_indices(indices_text: str) -> list[int]:
     return indices
 
 
-def _parse_call_signature(sig_text: str | None) -> tuple[int, bool]:
+def _parse_call_signature(sig_text: str | None, *, type_context=None) -> tuple[int, bool]:
+    if type_context is None:
+        type_context = TypeParseContext()
     text = (sig_text or "").strip()
-    cached = _CALL_SIGNATURE_CACHE.get(text)
+    cached = type_context.call_signature_cache.get(text)
     if cached is not None:
         return cached
     if not text:
         result = (0, False)
-        _CALL_SIGNATURE_CACHE[text] = result
+        type_context.call_signature_cache[text] = result
         return result
     if not (text.startswith("(") and text.endswith(")")):
         raise BackendUnavailable(
@@ -4978,15 +5064,17 @@ def _parse_call_signature(sig_text: str | None) -> tuple[int, bool]:
     inner = text[1:-1].strip()
     if not inner:
         result = (0, False)
-        _CALL_SIGNATURE_CACHE[text] = result
+        type_context.call_signature_cache[text] = result
         return result
-    fixed, is_vararg = _parse_ir_type_list(inner, allow_vararg=True)
+    fixed, is_vararg = _parse_ir_type_list(inner, allow_vararg=True, type_context=type_context)
     result = (len(fixed), is_vararg)
-    _CALL_SIGNATURE_CACHE[text] = result
+    type_context.call_signature_cache[text] = result
     return result
 
 
-def _parse_gep_indices(indices_text: str) -> list[tuple[TypeDesc, str]]:
+def _parse_gep_indices(indices_text: str, *, type_context=None) -> list[tuple[TypeDesc, str]]:
+    if type_context is None:
+        type_context = TypeParseContext()
     indices: list[tuple[TypeDesc, str]] = []
     if not _has_split_nesting_markers(indices_text):
         for chunk in indices_text.split(","):
@@ -4998,7 +5086,7 @@ def _parse_gep_indices(indices_text: str) -> list[tuple[TypeDesc, str]]:
                 raise BackendUnavailable(
                     f"self backend could not decode getelementptr index {piece!r}"
                 )
-            indices.append((_parse_type(type_text), decode_value_token(value_text)))
+            indices.append((_parse_type(type_text, type_context=type_context), decode_value_token(value_text, type_context=type_context)))
         return indices
     for chunk in indices_text.split(","):
         piece = chunk.strip()
@@ -5010,7 +5098,7 @@ def _parse_gep_indices(indices_text: str) -> list[tuple[TypeDesc, str]]:
                 f"self backend could not decode getelementptr index {piece!r}"
             )
         indices.append(
-            (_parse_type(match.group("type")), decode_value_token(match.group("value")))
+            (_parse_type(match.group("type"), type_context=type_context), decode_value_token(match.group("value"), type_context=type_context))
         )
     return indices
 
@@ -5051,7 +5139,9 @@ def _constant_gep_offset(
     return offset
 
 
-def _parse_terminator(function_name: str, block_name: str, line: str) -> ParsedInstr:
+def _parse_terminator(function_name: str, block_name: str, line: str, *, type_context=None) -> ParsedInstr:
+    if type_context is None:
+        type_context = TypeParseContext()
     switch_line = _normalize_switch_terminator_line(line)
     if match := _BR_COND_RE.match(line):
         cond_text = match.group("cond").strip()
@@ -5064,7 +5154,7 @@ def _parse_terminator(function_name: str, block_name: str, line: str) -> ParsedI
         return ParsedInstr(
             "br_cond",
             (
-                decode_value_token(cond_text),
+                decode_value_token(cond_text, type_context=type_context),
                 true_label,
                 false_label,
             ),
@@ -5075,17 +5165,17 @@ def _parse_terminator(function_name: str, block_name: str, line: str) -> ParsedI
         return ParsedInstr("ret_void", ())
     if line.startswith("ret "):
         ret_type_text, value_text = _extract_leading_type_token(
-            line[len("ret ") :].strip()
+            line[len("ret ") :].strip(), type_context=type_context
         )
         if value_text:
             return ParsedInstr(
                 "ret",
-                (_parse_type(ret_type_text), decode_value_token(value_text)),
+                (_parse_type(ret_type_text, type_context=type_context), decode_value_token(value_text, type_context=type_context)),
             )
     if _UNREACHABLE_RE.match(line):
         return ParsedInstr("unreachable", ())
     if match := _SWITCH_RE.match(switch_line):
-        value_type = _parse_type(match.group("type"))
+        value_type = _parse_type(match.group("type"), type_context=type_context)
         if not value_type.is_int:
             raise BackendUnavailable(
                 f"self backend only supports integer switch values, got {value_type.describe()}"
@@ -5103,7 +5193,7 @@ def _parse_terminator(function_name: str, block_name: str, line: str) -> ParsedI
                     raise BackendUnavailable(
                         f"self backend could not decode switch table in {function_name!r}/{block_name!r}: {line}"
                     )
-                case_type = _parse_type(case_match.group("type"))
+                case_type = _parse_type(case_match.group("type"), type_context=type_context)
                 if case_type.describe() != value_type.describe():
                     raise BackendUnavailable(
                         "self backend requires switch case values to use the switch operand type"
@@ -5119,7 +5209,7 @@ def _parse_terminator(function_name: str, block_name: str, line: str) -> ParsedI
             "switch",
             (
                 value_type,
-                decode_value_token(match.group("value")),
+                decode_value_token(match.group("value"), type_context=type_context),
                 decode_label_ref(match.group("default")),
                 tuple(cases),
             ),

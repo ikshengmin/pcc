@@ -163,7 +163,7 @@ def _controlled_make_runtime(tmp_path, target, threads, refcount):
     # Retain the actual production recipes and configuration selection. Reduce
     # only the common fixture inventory; the target module additions stay real.
     makefile = (RUNTIME / "Makefile").read_text(encoding="utf-8")
-    makefile = re.sub(r"^PY_MODULES =.*$", "PY_MODULES = probe", makefile, flags=re.M)
+    makefile = re.sub(r"^PY_MODULES =.*$", "PY_MODULES = probe py_runtime_log", makefile, flags=re.M)
     makefile = re.sub(r"^PY_MODULES \+=.*$", "", makefile, flags=re.M)
     makefile = re.sub(r"^FREESTANDING_PY_MODULES (?:\+)?=.*$", "", makefile, flags=re.M)
     (runtime / "Makefile").write_text(makefile, encoding="utf-8")
@@ -221,7 +221,7 @@ def test_real_make_recipes_record_archive_configuration(tmp_path, monkeypatch, t
     for call in calls:
         assert call["target"] == target
         assert call["refcount"] == refcount
-        assert call["threads"] == ("0" if call["name"] == owned._THREAD_KERNEL_MODULE else str(int(threads)))
+        assert call["threads"] == ("0" if call["name"] in owned._NO_IMPLICIT_POLL_MODULES else str(int(threads)))
     manifest = provenance.verify_runtime_archive_manifest(archive, runtime_root=runtime)
     assert [row["member"] for row in manifest["members"]] == [name + ".o" for name in names]
     assert all(row["runtime_build_config"] == config for row in manifest["members"])

@@ -1,6 +1,7 @@
 """Ordinary class namespaces own values; declaration globals are identities."""
 from __future__ import annotations
 
+from collections import deque
 import re
 from types import SimpleNamespace
 
@@ -80,18 +81,84 @@ Base.fields = ('replacement',)
     assert "@py_obj_setattr(" in text
 
 
+def _assert_scalar_conversion_owner(body):
+    roots = re.findall(r"(%class\.attribute\.value\.operand[-\w.]*) = alloca ptr", body)
+    assert len(roots) == 1, roots
+    root = roots[0]
+    aliases = dict(re.findall(r"(%[-\w.]+) = bitcast ptr (%[-\w.]+) to ptr", body))
+
+    def physical(value):
+        visited = set()
+        while value in aliases:
+            assert value not in visited
+            visited.add(value)
+            value = aliases[value]
+        return value
+
+    loaded_from = dict(re.findall(r"(%[-\w.]+) = load ptr, ptr (%[-\w.]+)", body))
+    blocks = {}
+    current = None
+    for line in body.splitlines()[1:-1]:
+        label = re.match(r"^([-\w.$]+):", line)
+        if label:
+            current = label.group(1)
+            blocks[current] = []
+        elif current is not None:
+            blocks[current].append(line.strip())
+    queue = deque([(next(iter(blocks)), False, frozenset(), False)])
+    visited = set()
+    conversions = 0
+    converted_returns = 0
+    while queue:
+        block, live, leases, converted = queue.popleft()
+        state = (block, live, leases, converted)
+        if state in visited:
+            continue
+        visited.add(state)
+        active = set(leases)
+        successors = []
+        for line in blocks[block]:
+            acquire = re.search(r"(%[-\w.]+) = call [^\n]*@pcc_gc_foreign_lease_acquire\(ptr (%[-\w.]+)\)", line)
+            if acquire and physical(acquire.group(2)) == root:
+                active.add(acquire.group(1))
+            release = re.search(r"@pcc_gc_foreign_lease_release\(ptr (%[-\w.]+), i64 (%[-\w.]+)\)", line)
+            if release and physical(release.group(1)) == root:
+                active.discard(release.group(2))
+            conversion = re.search(r"@py_float_to_f64\(ptr (%[-\w.]+)\)", line)
+            if conversion:
+                assert physical(loaded_from[conversion.group(1)]) == root
+                assert live and active, (block, live, active)
+                converted = True
+                conversions += 1
+            store = re.search(r"store ptr (null|%[-\w.]+), ptr (%[-\w.]+)", line)
+            if store and physical(store.group(2)) == root:
+                live = store.group(1) != "null"
+            clear = re.search(r"@pcc_gc_store_root\(ptr (%[-\w.]+), ptr null\)", line)
+            if clear and physical(clear.group(1)) == root:
+                if converted:
+                    assert not active, (block, active)
+                live = False
+            if line.startswith("br "):
+                successors.extend(re.findall(r"label %([-\w.$]+)", line))
+            if line.startswith("ret ") and converted:
+                assert not live and not active, (block, live, active)
+                converted_returns += 1
+        queue.extend((name, live, frozenset(active), converted) for name in successors)
+    assert conversions and converted_returns
+
+
 def test_scalar_class_read_keeps_owner_until_conversion():
+    # Float exercises scalar conversion. Ordinary Python int deliberately
+    # uses the separate exact-integer object path, even with annotations.
     text = _emit('''class Holder:
-    count = 7
-    def read(self) -> int:
+    count: float = 7.0
+    def read(self) -> float:
         return self.count
 ''')
     _assert_no_cached_values(text)
     body = re.search(r"^define [^\n]*@user_attribute_owner_Holder_read\([^\n]*\).*?^}", text, re.M | re.S)
     assert body is not None
-    assert "class.attribute.current" in body.group(0)
-    assert "@pcc_gc_foreign_lease_acquire(" in body.group(0)
-    assert "@pcc_gc_foreign_lease_release(" in body.group(0)
+    _assert_scalar_conversion_owner(body.group(0))
 
 
 @pytest.mark.parametrize("value", ("[object()]", "{'key': object()}", "(object(),)", "frozenset((1, 2))", "make_default"))

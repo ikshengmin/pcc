@@ -35,9 +35,9 @@ def _module(declarations="", body=None, target=TARGETS[0]):
 def test_unused_unsupported_nested_type_preserves_owned_object(target, leaf):
     declarations = "%Unused = type { i8, [2 x { " + leaf + " }] }\n"
     text = _module(declarations, target=target)
-    parser.parse_self_backend_module(text)
-    assert "%Unused" not in parser._NAMED_TYPES
-    assert leaf not in parser._TYPE_CACHE
+    module = parser.parse_self_backend_module(text)
+    assert "%Unused" not in module.type_context.named_types
+    assert leaf not in module.type_context.type_cache
     assert emit_owned_object(text, target) == emit_owned_object(_module(target=target), target)
 
 
@@ -55,9 +55,10 @@ def test_used_unsupported_named_layout_fails_and_does_not_leak_cache(leaf, site)
         text = _module(declarations, "define ptr @probe(ptr %address) {\nentry:\n  %value = getelementptr %T, ptr %address, i32 0, i32 0\n  ret ptr %value\n}\n")
     with pytest.raises(BackendUnavailable):
         parser.parse_self_backend_module(text)
-    assert "%T" not in parser._NAMED_TYPES
+    context = parser._parse_named_types(declarations)
     with pytest.raises(BackendUnavailable):
-        parser.parse_ir_type("%T")
+        parser.parse_ir_type("%T", type_context=context)
+    assert "%T" not in context.named_types
 
 
 @pytest.mark.parametrize("attribute", ATTRIBUTES)
@@ -85,24 +86,24 @@ def test_malformed_unused_struct_is_still_rejected(body):
 
 
 def test_forward_nested_and_recursive_pointer_types_resolve_on_use():
-    parser.parse_self_backend_module(_module(
+    module = parser.parse_self_backend_module(_module(
         "%Envelope = type { [2 x %Pair], %Node* }\n"
         "%Node = type { i32, %Node* }\n"
         "%Pair = type { i16, i16 }\n",
         "define %Envelope @identity(%Envelope %value) {\nentry:\n  ret %Envelope %value\n}\n",
     ))
-    envelope = parser.parse_ir_type("%Envelope")
+    envelope = parser.parse_ir_type("%Envelope", type_context=module.type_context)
     assert envelope.fields[0].elem.name == "%Pair"
     assert envelope.fields[0].elem.fields[0].width == 16
-    node = parser.parse_ir_type("%Node")
+    node = parser.parse_ir_type("%Node", type_context=module.type_context)
     assert node.fields[1].pointee.name == "%Node"
-    assert parser.parse_ir_type("%Envelope") is envelope
+    assert parser.parse_ir_type("%Envelope", type_context=module.type_context) is envelope
 
 
 def test_ssa_name_does_not_request_same_named_type():
     text = _module("%T = type { x86_fp80 }\n", "define i32 @probe(i32 %T) {\nentry:\n  ret i32 %T\n}\n")
     assert emit_owned_object(text, TARGETS[0])
-    assert "%T" not in parser._NAMED_TYPES
+    assert "%T" not in parser.parse_self_backend_module(text).type_context.named_types
 
 
 def test_named_bodies_do_not_leak_between_modules():
@@ -122,7 +123,7 @@ def test_supported_typed_abi_metadata_and_ordinary_metadata_stay_accepted():
         "  call void @external(ptr byval(%T) %value)\n  ret void\n}\n",
     ))
     assert module.functions[0].name == "probe"
-    assert parser.parse_ir_type("%T").fields[0].width == 64
+    assert parser.parse_ir_type("%T", type_context=module.type_context).fields[0].width == 64
 
 
 def test_typed_abi_resolution_uses_lazy_cursor_not_diagnostic_token_list(monkeypatch):
@@ -136,7 +137,7 @@ def test_typed_abi_resolution_uses_lazy_cursor_not_diagnostic_token_list(monkeyp
     )
     with monkeypatch.context() as guard:
         guard.setattr(parser, "_tokenize_ir_type", forbidden)
-        parser._parse_named_types("%T = type { i64 }")
-        parser._resolve_declaration_type_attributes("declare void @external(ptr byval(%T))")
-        parser._resolve_typed_abi_attributes("byval(%T) %value")
+        context = parser._parse_named_types("%T = type { i64 }")
+        parser._resolve_declaration_type_attributes("declare void @external(ptr byval(%T))", type_context=context)
+        parser._resolve_typed_abi_attributes("byval(%T) %value", type_context=context)
     assert emit_owned_object(text, TARGETS[0])

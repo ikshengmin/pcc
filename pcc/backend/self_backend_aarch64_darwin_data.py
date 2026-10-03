@@ -46,7 +46,7 @@ def global_ctor_entries(
             "[N x { i32, ptr, ptr }]"
         )
 
-    initializer = strip_typed_initializer(global_.initializer)
+    initializer = strip_typed_initializer(global_.initializer, type_context=global_.type_context)
     if initializer == "zeroinitializer":
         return []
     if not (initializer.startswith("[") and initializer.endswith("]")):
@@ -62,7 +62,7 @@ def global_ctor_entries(
 
     entries: list[tuple[int, int, str]] = []
     for ordinal, raw_entry in enumerate(raw_entries):
-        record = strip_typed_initializer(raw_entry)
+        record = strip_typed_initializer(raw_entry, type_context=global_.type_context)
         if not (record.startswith("{") and record.endswith("}")):
             raise BackendUnavailable(
                 f"bad llvm.global_ctors record {raw_entry!r}"
@@ -72,9 +72,9 @@ def global_ctor_entries(
             raise BackendUnavailable(
                 f"bad llvm.global_ctors record {raw_entry!r}"
             )
-        priority_text = decode_value_token(strip_typed_initializer(fields[0]))
-        target = decode_value_token(strip_typed_initializer(fields[1]))
-        associated = decode_value_token(strip_typed_initializer(fields[2]))
+        priority_text = decode_value_token(strip_typed_initializer(fields[0], type_context=global_.type_context), type_context=global_.type_context)
+        target = decode_value_token(strip_typed_initializer(fields[1], type_context=global_.type_context), type_context=global_.type_context)
+        associated = decode_value_token(strip_typed_initializer(fields[2], type_context=global_.type_context), type_context=global_.type_context)
         try:
             priority = int(priority_text, 0)
         except ValueError as exc:
@@ -238,11 +238,11 @@ def emit_scalar_initializer(
             suffix = "" if offset == 0 else f"+{offset}"
             return [f"  .quad {_initializer_symbol(base, module_symbols)}{suffix}"]
         if init.startswith("getelementptr"):
-            base, offset = parse_constant_gep(init)
+            base, offset = parse_constant_gep(init, type_context=module_symbols.type_context)
             suffix = "" if offset == 0 else f"+{offset}"
             return [f"  .quad {_initializer_symbol(base, module_symbols)}{suffix}"]
         if init.startswith("inttoptr"):
-            decoded = decode_value_token(init)
+            decoded = decode_value_token(init, type_context=module_symbols.type_context)
             if decoded.startswith("inttoptrconst:"):
                 return [f"  .quad {int(decoded.split(':', 1)[1])}"]
             raise BackendUnavailable(
@@ -258,7 +258,7 @@ def emit_scalar_initializer(
             # the inttoptr case above does; otherwise the token fell through
             # to `int(init)` and the whole translation unit failed with
             # "invalid literal for int()".
-            decoded = decode_value_token(init)
+            decoded = decode_value_token(init, type_context=module_symbols.type_context)
             if decoded.startswith("@"):
                 return [f"  .quad {_initializer_symbol(decoded[1:], module_symbols)}"]
             if decoded.startswith("gep0:"):
@@ -347,7 +347,7 @@ def emit_typed_initializer(
         for item in items:
             lines.extend(
                 emit_typed_initializer(
-                    ty.elem, strip_typed_initializer(item), global_name, module_symbols
+                    ty.elem, strip_typed_initializer(item, type_context=module_symbols.type_context), global_name, module_symbols
                 )
             )
             lines.extend(emit_zero_fill(stride - ty.elem.slot_size))
@@ -370,7 +370,7 @@ def emit_typed_initializer(
             lines.extend(emit_zero_fill(field_offset - offset))
             lines.extend(
                 emit_typed_initializer(
-                    field_ty, strip_typed_initializer(item), global_name, module_symbols
+                    field_ty, strip_typed_initializer(item, type_context=module_symbols.type_context), global_name, module_symbols
                 )
             )
             offset = field_offset + field_ty.slot_size

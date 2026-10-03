@@ -18,6 +18,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYCLASSOBJECT_NAME_OFFSET,
     PYCLASSOBJECT_N_MRO_OFFSET,
     PYINSTANCEOBJECT_CLS_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET,
     PYSTATICMETHODOBJECT_FUNC_OFFSET,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
@@ -1733,6 +1734,9 @@ def _builtin_type_class_for_tag(tag: int):
     if ptr_is_null(cls) != 0:
         cls = py_class_new(cstr("object"), null(), 0, null(), 0)
         if ptr_is_null(cls) == 0:
+            # Base object has no instance dictionary. Ordinary subclasses
+            # receive independent flags from py_class_new and may have one.
+            atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, 2, "relaxed")
             global_store_ptr("pcc_type_cls_object", cls)
     return _return_builtin_type(cls)
 

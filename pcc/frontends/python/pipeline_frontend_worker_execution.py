@@ -22,7 +22,9 @@ def _concrete_direct_indexed_target(module, host_target: str):
         raise _worker_failure("direct indexed module has no supported host target")
     from pcc.backend.self_backend_ir import ParsedModule
 
-    return ParsedModule(host_target, module.globals_, module.functions)
+    return ParsedModule(
+        host_target, module.globals_, module.functions, module.type_context
+    )
 
 
 def _direct_owned_pass_names(module_name: str) -> list[str]:

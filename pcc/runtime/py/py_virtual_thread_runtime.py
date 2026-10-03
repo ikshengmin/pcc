@@ -178,6 +178,19 @@ pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
 pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+pcc_thread_scheduler_lock_acquired = extern(
+    "pcc_thread_scheduler_lock_acquired", (), c_void
+)
+pcc_thread_scheduler_lock_released = extern(
+    "pcc_thread_scheduler_lock_released", (), c_void
+)
+pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_diagnostics_runtime_log_event_code = extern(
+    "pcc_diagnostics_runtime_log_event_code",
+    (c_int64, c_int64, c_int64, c_int64, c_ptr),
+    c_void,
+)
 pcc_cond_new = extern("pcc_cond_new", (), c_ptr)
 pcc_cond_free = extern("pcc_cond_free", (c_ptr,), c_void)
 pcc_cond_signal = extern("pcc_cond_signal", (c_ptr,), c_int64)
@@ -332,19 +345,35 @@ def _scheduler_cond():
 def _scheduler_lock() -> int:
     if _scheduler_init() != 0:
         return -1
-    status = pcc_mutex_lock(_scheduler_mutex())
+    # Newcomer admission may wait for STW and must precede lock ownership.
+    pcc_current_thread_id()
+    mutex = _scheduler_mutex()
+    pcc_diagnostics_runtime_log_event_code(9, 9, 0, 0, mutex)
+    status = pcc_mutex_lock(mutex)
     if status == 0:
+        pcc_thread_scheduler_lock_acquired()
         # The holder must not park at a safepoint: a carrier that needs this
         # lock to reach its own safepoint would block, and a stop-the-world
         # would wait for it forever.  Loops in locked regions carry
         # compiler-inserted polls; exit parks once the lock is released.
         pcc_thread_no_park_enter()
+    else:
+        pcc_diagnostics_runtime_log_event_code(9, 12, status, 0, mutex)
     return status
 
 
 def _scheduler_unlock() -> None:
-    pcc_mutex_unlock(_scheduler_mutex())
+    mutex = _scheduler_mutex()
+    if pcc_mutex_unlock(mutex) != 0:
+        # Do not erase ownership or let outer exit park after a failed unlock.
+        pcc_platform_abort()
+        return
+    pcc_thread_scheduler_lock_released()
     pcc_thread_no_park_exit()
+    # Acquisition is recorded after release, never while the lock is held.
+    # A no-park exit may itself suspend; names explicitly disclose deferral.
+    pcc_diagnostics_runtime_log_event_code(9, 10, 0, 0, mutex)
+    pcc_diagnostics_runtime_log_event_code(9, 11, 0, 0, mutex)
 
 
 def _scheduler_signal() -> None:

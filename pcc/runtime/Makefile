@@ -75,6 +75,7 @@ OBJS_PY  = $(patsubst %,$(OBJDIR_PY)/%.o,$(PY_MODULES))
 # Raw C-ABI modules are pcc-Python too, but their strict freestanding
 # contract forbids managed-runtime references, so they are listed apart.
 FREESTANDING_PY_MODULES = freestanding_mem_str freestanding_lfq_spsc freestanding_iobuf_pool freestanding_uring freestanding_libc_numeric freestanding_strtoint freestanding_re_engine freestanding_allocator freestanding_timer_heap freestanding_runtime_high_substrate freestanding_gc_index_table freestanding_gc_external_resource freestanding_gc_state freestanding_gc_control freestanding_gc_tracking freestanding_gc_root_registry freestanding_gc_frame_registry freestanding_gc_root_operations freestanding_gc_mapped_roots freestanding_gc_object_root_seeding freestanding_gc_refcount_roots freestanding_gc_object_slots freestanding_gc_common_mark_cycle freestanding_gc_backend0_slots freestanding_gc_sweep_slots freestanding_gc_tracing_sweep_collector freestanding_gc_public_collection freestanding_gc_incremental_concurrent_scheduler freestanding_gc_forwarding_identity freestanding_gc_object_nodes freestanding_gc_generational_oldification freestanding_gc_generational_remembered_owners freestanding_gc_generational_promotion freestanding_gc_generational_scheduler freestanding_gc_relocation_remap freestanding_gc_relocation_payload freestanding_gc_relocation_copy freestanding_gc_relocation_selector freestanding_gc_relocation_drain freestanding_gc_zpage_mechanics freestanding_gc_zpage_lifecycle freestanding_gc_forwarding_retirement freestanding_gc_barrier_dispatcher freestanding_gc_zpage_allocation freestanding_gc_backend0_collector freestanding_gc_root_introspection freestanding_platform_io freestanding_platform_fs freestanding_platform_env freestanding_platform_system freestanding_platform_time freestanding_platform_process freestanding_platform_socket freestanding_platform_rss freestanding_errno freestanding_metal_runtime freestanding_stdio
+FREESTANDING_PY_MODULES += freestanding_class_namespace
 FREESTANDING_PY_MODULES += freestanding_gateway_control
 ifneq ($(PCC_WITH_THREADS),1)
 FREESTANDING_PY_MODULES += freestanding_thread_kernel
@@ -266,6 +267,16 @@ $(OBJDIR_PY)/%.o.provenance.json: $(OBJDIR_PY)/%.o
 $(OBJDIR_PY)/freestanding_thread_kernel_pthread.o: $(PYDIR)/freestanding_thread_kernel_pthread.py | $(OBJDIR_PY)
 	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) PCC_WITH_THREADS=0 $(PCC) --python-library --target=$(PCC_RUNTIME_TARGET) --emit-llvm=$(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $<
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
+
+# The logger's raw sink cannot suspend while it owns the sink lock. Suppress
+# automatic entry/backedge polls, retaining explicit thread_safepoint calls
+# in initialization and write-lock wait loops. Runtime provenance still uses
+# the archive's actual thread/refcount configuration below.
+$(OBJDIR_PY)/py_runtime_log.o: $(PYDIR)/py_runtime_log.py | $(OBJDIR_PY)
+	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) PCC_WITH_THREADS=0 $(PCC) --python-library --target=$(PCC_RUNTIME_TARGET) --emit-llvm=$(OBJDIR_PY)/py_runtime_log.ll $<
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.ir.optimization.driver "$(PCC_RUNTIME_IR_PASSES)" $(OBJDIR_PY)/py_runtime_log.ll $(OBJDIR_PY)/py_runtime_log.opt.ll
+	mv $(OBJDIR_PY)/py_runtime_log.opt.ll $(OBJDIR_PY)/py_runtime_log.ll
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/py_runtime_log.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
 
 $(OBJDIR_PY):
 	mkdir -p $(OBJDIR_PY)

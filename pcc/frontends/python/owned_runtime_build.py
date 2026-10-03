@@ -42,6 +42,7 @@ def runtime_build_config() -> dict:
 # The Makefile compiles this module without the runtime pass list and with
 # automatic safepoint polls off; the owned builder mirrors both settings.
 _THREAD_KERNEL_MODULE = "freestanding_thread_kernel_pthread"
+_NO_IMPLICIT_POLL_MODULES = (_THREAD_KERNEL_MODULE, "py_runtime_log")
 
 
 def runtime_ir_passes(runtime_dir: str) -> str:
@@ -86,10 +87,10 @@ def _compile_runtime_module(name, source, ir_path, target):
     from pcc.frontends.python.pipeline import compile_python
     from pcc.frontends.python.pipeline_runtime_archive import runtime_python_ir_pass_mode
 
-    # The kernel implements pcc_thread_safepoint itself. Match the Makefile's
-    # per-module setting: instrumenting its entry or helpers would recurse
-    # back into the kernel before it has initialized its synchronization.
-    suppress_polls = name == _THREAD_KERNEL_MODULE
+    # Match the Makefile: implicit kernel polls recurse before initialization;
+    # implicit logger polls can park while its sink lock is held. Explicit
+    # unsafe.thread_safepoint calls in lock-free wait loops remain real calls.
+    suppress_polls = name in _NO_IMPLICIT_POLL_MODULES
     names = list(_RUNTIME_IR_OUTPUT_ENV)
     names.append("PCC_PYTHON_IR_PASSES")
     if suppress_polls:

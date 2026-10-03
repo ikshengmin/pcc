@@ -92,6 +92,8 @@ DATA_PLANE_CLASS_CONTRACT = {
     "self_backend_targets.py:SelfBackendPlatformVerdict": "target_control",
     "self_backend_targets.py:SelfBackendTargetSpec": "target_control",
     "self_backend_ir.py:TypeDesc": "semantic_record",
+    # Per-module lazy declarations and canonicalization ownership.
+    "self_backend_ir.py:TypeParseContext": "phase_shell",
     "self_backend_ir.py:ArgInfo": "semantic_record",
     "self_backend_ir.py:PhiIncoming": "diagnostic_projection",
     "self_backend_ir.py:PhiInstr": "diagnostic_projection",

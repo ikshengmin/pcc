@@ -27,7 +27,13 @@ push. Later candidate changes remain unsynchronized until the next capture.
 The third hourly sync completed at 06:45 UTC from the immutable 06:36:46
 capture: PCC `62c0bdad8fc4fabf9da795759dde1dec1a31a144` (17 paths), with GUI and
 gateway unchanged. Before/after bytes and modes were verified locally. This exact
-capture is the current baseline for the next hourly delta.
+capture remains preserved. The fourth sync used the 07:35 capture and produced
+PCC `8ed4eabec0ddc2505570ba6b413f88de0964ff76` (9 paths). The fifth completed
+at 08:51 from the exact 08:31 capture: PCC
+`9c834d952d4b8b582b7cdfef818ba91478132295` (18 paths), with GUI and gateway
+unchanged. This fifth capture is the current verified baseline. Its fast checks
+recorded 169 passes and two failures; collection had no errors. Local work only
+applies and commits the source delta; validation runs in the cloud.
 
 The exact PCC base `1a59d09df54cc0b7b46219395d3419cab8543675` was verified
 across 29,601 Git blob bytes and modes, followed by all 154 paths in the backed-up
@@ -165,11 +171,29 @@ uses its registered module-global slot and clears it on handler exits; its fresh
 checks are pending. The two ordinary native lifetime failures above are separate
 preexisting behaviors and are not attributed to that regression.
 
-Lazy named-type parser state is still module-global and its reentrant/interleaved
-module ownership is under repair. Explicit Darwin stdio declarations/header macros
-still need the new review coverage. Thread lifecycle logging is only part of the
-requested deadlock diagnostics: scheduler-lock, safepoint suspend/resume, stop-the-
-world events and a lock-held suspend tripwire remain open.
+Named-type declarations, layout/pointer/signature caches and deferred backend
+consumers now carry their owning module context. The integrated parser repair has
+226 scoped host checks and two owned Linux late/nested-layout executables passing.
+A broadly selected full-stage1-context node timed out and one native codec node
+was deselected; neither is qualified. Explicit Darwin stdio declarations remain
+an off-tree proposal awaiting validation.
+
+Scheduler-lock, safepoint suspend/resume and stop-the-world events plus an
+independent lock-held suspend tripwire are integrated. The logger uses a raw
+syscall sink outside the scheduler/world locks. There are 127 unique focused host
+checks and four owned component emissions passing. Their frozen source predates
+later parser integration; a complete matching runtime and native five-GC run are
+still required. The freestanding class-namespace callback split is integrated
+with its new host/component checks pending.
+
+The unchanged four-target module-handler regression now passes. Canonical object()
+construction and weakref semantics are integrated; host checks pass but a native
+component-to-executable attempt stopped at source-identity preflight after parser
+files changed. It must be replayed against an immutable compiler. The finalizer
+original-IR diagnostic passes GC0–4 with explicit matching threaded/atomic build
+settings, but combines source/compiler revisions and cannot establish a complete
+matched-runtime result. The earlier diagnostic also had a threading mismatch;
+its observed passes are retained without attributing them solely to the fix.
 
 Full C/Python collection on the immutable 08:08 capture completed without errors:
 23,354 discovered nodes, 3,027 C and 14,605 Python selected, and 5,722 gate-deselected.

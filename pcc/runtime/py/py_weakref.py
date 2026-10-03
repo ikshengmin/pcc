@@ -2,13 +2,21 @@
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_VALUEBOX, PY_TYPE_WEAKREF
+from pcc.runtime.py.py_abi_constants import (
+    PYINSTANCEOBJECT_CLS_OFFSET,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_USER_CLASS_START,
+    PY_TYPE_VALUEBOX,
+    PY_TYPE_WEAKREF,
+)
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.unsafe import (
     calloc,
     cstr,
     free,
+    global_addr,
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
@@ -58,6 +66,29 @@ pcc_gc_note_relocation_read = extern(
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
+
+
+def _weakref_target_is_base_object(target) -> int:
+    tag: int = load_i32(target, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
+        return 0
+    if tag == PY_TYPE_VALUEBOX or pcc_capi_is_cext_type_tag(tag) != 0:
+        return 0
+    # Compare exact classes in one graph transaction. Slots-only subclasses
+    # and ordinary subclasses have their own weak-reference policy; this is
+    # only the canonical builtin object's unconditional exclusion.
+    pcc_py_gc_minor_graph_lock()
+    current = pcc_gc_note_relocation_read(target)
+    cls = pcc_gc_load_ptr(current, ptr_add(current, PYINSTANCEOBJECT_CLS_OFFSET))
+    base = pcc_gc_load_ptr(null(), global_addr("pcc_type_cls_object"))
+    result: int = 0
+    if ptr_is_null(base) == 0:
+        result = ptr_eq(cls, base)
+    pcc_py_gc_minor_graph_unlock()
+    return result
 
 
 def _py_none():
@@ -108,6 +139,9 @@ def py_weakref_new(target, callback):
                 cstr("cannot create weak reference to a valueclass payload"),
             )
         )
+        return null()
+    if _weakref_target_is_base_object(target) != 0:
+        py_raise_owned(py_exc_new(3, cstr("cannot create weak reference to 'object' object")))
         return null()
     if ptr_eq(callback, _py_none()) != 0:
         callback = null()

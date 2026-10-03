@@ -51,6 +51,7 @@ class DictMemory(Memory):
         self.env_reentry = None
         self.ns.update({name: getattr(abi, name) for name in dir(abi) if name.isupper()})
         self.ns.update({
+            "i64": int,
             "pcc_gc_root_copy_borrowed_lease": self.copy,
             "pcc_gc_note_slot_write_barrier": lambda *_: None,
             "pcc_gc_pointer_is_managed": lambda obj: int(isinstance(obj, Object)),

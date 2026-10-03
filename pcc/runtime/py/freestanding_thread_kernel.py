@@ -28,6 +28,7 @@ __pcc_freestanding__ = True
 define_global_i32("pcc_thread_stop_requested", 0)
 define_thread_local_i32("pcc_native_thread_identity_token", 0)
 define_thread_local_i32("pcc_tls_no_park_depth_py", 0)
+define_thread_local_i32("pcc_tls_scheduler_lock_held_py", 0)
 define_global_i8("pcc_mutex_stub", 0)
 define_global_i8("pcc_cond_stub", 0)
 
@@ -90,6 +91,24 @@ def pcc_current_thread_id() -> i64:
     return 1
 
 
+@c_abi_export("pcc_thread_scheduler_lock_acquired")
+def pcc_thread_scheduler_lock_acquired() -> None:
+    # Independent ownership evidence: a missing no-park lease must not turn
+    # a scheduler-lock holder into a suspendable thread.
+    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+        pcc_platform_abort()
+        return
+    store_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0, 1)
+
+
+@c_abi_export("pcc_thread_scheduler_lock_released")
+def pcc_thread_scheduler_lock_released() -> None:
+    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 1:
+        pcc_platform_abort()
+        return
+    store_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0, 0)
+
+
 @c_abi_export("pcc_thread_no_park_enter")
 def pcc_thread_no_park_enter() -> None:
     depth: i64 = load_i32(global_addr("pcc_tls_no_park_depth_py"), 0)
@@ -124,6 +143,13 @@ def pcc_thread_no_park_depth() -> i64:
 
 @c_abi_export("pcc_thread_safepoint")
 def pcc_thread_safepoint() -> None:
+    # A normal implicit poll inside a valid lease remains suppressed.  Check
+    # independent lock ownership first so a broken/missing lease fails closed.
+    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0 and load_i32(
+        global_addr("pcc_tls_no_park_depth_py"), 0
+    ) <= 0:
+        pcc_platform_abort()
+        return
     if pcc_thread_no_park_depth() != 0:
         return
     return
@@ -141,6 +167,9 @@ def pcc_thread_registration_waiter_count() -> i64:
 
 @c_abi_export("pcc_thread_unregister_current")
 def pcc_thread_unregister_current() -> None:
+    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+        pcc_platform_abort()
+        return
     if pcc_thread_no_park_depth() != 0:
         pcc_platform_abort()
         return
@@ -148,6 +177,10 @@ def pcc_thread_unregister_current() -> None:
 
 @c_abi_export("pcc_stop_the_world")
 def pcc_stop_the_world() -> i64:
+    # A scheduler-lock owner cannot wait for mutators that need this lock.
+    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+        pcc_platform_abort()
+        return -1
     return 0
 
 

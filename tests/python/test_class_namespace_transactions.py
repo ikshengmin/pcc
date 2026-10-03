@@ -14,9 +14,10 @@ def _load_helpers(path, names, environment):
     tree = ast.parse(path.read_text())
     selected = []
     for node in tree.body:
-        if isinstance(node, ast.Assign):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if any(isinstance(target, ast.Name) and target.id.startswith('_CLASS_NAMESPACE_CONTEXT_')
-                   for target in node.targets):
+                   for target in targets):
                 selected.append(node)
         elif isinstance(node, ast.FunctionDef) and node.name in names:
             node.decorator_list = []
@@ -56,7 +57,7 @@ class NamespaceCommitModel:
         self.new = 11000
         self.raw = 12000
         self.env = self.environment()
-        _load_helpers(ROOT / 'pcc/runtime/py/py_class.py', (
+        _load_helpers(ROOT / 'pcc/runtime/py/freestanding_class_namespace.py', (
             '_class_namespace_same_name', 'py_class_namespace_validate_locked',
             'py_class_namespace_commit_locked',
         ), self.env)
@@ -214,7 +215,7 @@ def test_failed_namespace_commit_does_not_notify(operation, failure):
 
 
 def test_namespace_notification_has_no_managed_alias_or_parking_call():
-    tree = ast.parse((ROOT / 'pcc/runtime/py/py_class.py').read_text())
+    tree = ast.parse((ROOT / 'pcc/runtime/py/freestanding_class_namespace.py').read_text())
     selected = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
     allowed = {'load_ptr','load_i32','load_i8','ptr_is_null','ptr_eq','store_ptr',
                '_class_namespace_same_name','null','cstr','atomic_rmw_i32','global_addr'}

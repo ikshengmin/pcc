@@ -18,9 +18,6 @@ come from the generated C-header-derived py_abi_constants module.
 
 __pcc_runtime_port__ = True
 
-from pcc import (
-    i64,
-)
 from pcc.extern import (
     extern,
     c_abi_export,
@@ -387,7 +384,7 @@ def _dict_insert_rooted_slot(
     entries_used: int,
     slot: int,
     hash_val: int,
-    namespace_commit_context: i64 = 0,
+    namespace_commit_context: int = 0,
 ) -> int:
     # Publish key, value, index and size under one graph lock.  A store plan
     # commits exactly one slot, so key and value need one plan each; both are
@@ -404,7 +401,7 @@ def _dict_insert_rooted_slot(
     key = _dict_read_reload_root(key_slot, key_handle)
     value = _dict_read_reload_root(value_slot, value_handle)
     committed: int = 0
-    namespace_valid: i64 = 1
+    namespace_valid: int = 1
     if namespace_commit_context != 0:
         namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), d)
     if namespace_valid == 0:
@@ -471,7 +468,7 @@ def _dict_replace_value_rooted_slot(
     slot: int,
     ix: int,
     hash_val: int,
-    namespace_commit_context: i64 = 0,
+    namespace_commit_context: int = 0,
 ) -> int:
     # `d[k] = v` keeps the original stored key object, so this never writes the
     # key slot.  The displaced value is released in plan finish, after unlock.
@@ -482,7 +479,7 @@ def _dict_replace_value_rooted_slot(
     d = _dict_read_reload_root(dict_slot, dict_handle)
     value = _dict_read_reload_root(value_slot, value_handle)
     committed: int = 0
-    namespace_valid: i64 = 1
+    namespace_valid: int = 1
     if namespace_commit_context != 0:
         namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), d)
     if namespace_valid == 0:
@@ -523,7 +520,7 @@ def _dict_del_rooted_slot(
     capacity: int,
     slot: int,
     ix: int,
-    namespace_commit_context: i64 = 0,
+    namespace_commit_context: int = 0,
 ) -> int:
     # Key, value, index tombstone and size all publish under one graph lock;
     # both releases run in plan finish after unlock.  The legacy path decref'd
@@ -538,7 +535,7 @@ def _dict_del_rooted_slot(
     pcc_py_gc_minor_graph_lock()
     d = _dict_read_reload_root(dict_slot, dict_handle)
     committed: int = 0
-    namespace_valid: i64 = 1
+    namespace_valid: int = 1
     if namespace_commit_context != 0:
         namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), d)
     if namespace_valid == 0:
@@ -581,7 +578,7 @@ def _dict_del_rooted_slot(
     return committed
 
 
-def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_context: i64 = 0):
+def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_context: int = 0):
     # mode 0: get, returning an owned value.  mode 1: delete.  mode 2: set -
     # fresh insert or value replacement.  Modes 1 and 2 return null() and
     # report through status_slot when it is non-null.
@@ -1756,7 +1753,7 @@ def _dict_slot_close(slots, tokens, handles, count: int, suspended: int) -> None
         index = index + 1
 
 
-def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_existing: int, namespace_commit_context: i64 = 0) -> int:
+def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_existing: int, namespace_commit_context: int = 0) -> int:
     # 1 destination, 2 key, 3 value, 4 collision candidate. All four own
     # independently counted address leases whenever nonempty.
     if not _ptr_is_dict(load_ptr(slots, C_POINTER_SIZE)):
@@ -1849,7 +1846,7 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
                 committed: int = 0
                 pcc_py_gc_minor_graph_lock()
                 owner = load_ptr(slots, C_POINTER_SIZE)
-                namespace_valid: i64 = 1
+                namespace_valid: int = 1
                 if namespace_commit_context != 0:
                     namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), owner)
                 if namespace_valid == 0:
@@ -1905,7 +1902,7 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
     return -1
 
 
-def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_value: int, keep_existing: int, result_slot, namespace_commit_context: i64 = 0) -> int:
+def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_value: int, keep_existing: int, result_slot, namespace_commit_context: int = 0) -> int:
     slots = stack_alloc(16 * C_POINTER_SIZE)
     tokens = stack_alloc(16 * C_POINTER_SIZE)
     handles = stack_alloc(16 * C_POINTER_SIZE)

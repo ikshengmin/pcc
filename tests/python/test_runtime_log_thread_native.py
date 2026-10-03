@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import textwrap
 
 import pytest
@@ -27,8 +28,8 @@ PROGRAM = textwrap.dedent('''
     )
     from pcc.unsafe import (
         atomic_load_i32, atomic_rmw_i32, atomic_store_i32, cstr,
-        define_global_i32, function_addr, global_addr, load_i64, load_ptr,
-        null, ptr_add, ptr_to_int, stack_alloc, store_i64, store_ptr,
+        define_global_i32, function_addr, global_addr, load_i8, load_i64, load_ptr,
+        null, ptr_add, ptr_is_null, ptr_to_int, stack_alloc, store_i64, store_ptr,
     )
     start = extern('pcc_thread_start', (c_ptr, c_ptr, c_ptr), c_int64)
     join = extern('pcc_thread_join', (c_ptr, c_ptr), c_int64)
@@ -37,6 +38,12 @@ PROGRAM = textwrap.dedent('''
     safepoint = extern('pcc_thread_safepoint', (), c_void)
     stop_world = extern('pcc_stop_the_world', (), c_int64)
     resume_world = extern('pcc_resume_world', (), c_int64)
+    scheduler_count = extern('py_virtual_thread_ready_count', (), c_int64)
+    scheduler_acquired = extern('pcc_thread_scheduler_lock_acquired', (), c_void)
+    scheduler_released = extern('pcc_thread_scheduler_lock_released', (), c_void)
+    no_park_enter = extern('pcc_thread_no_park_enter', (), c_void)
+    no_park_exit = extern('pcc_thread_no_park_exit', (), c_void)
+    getenv = extern('pcc_platform_getenv', (c_ptr,), c_ptr)
     log_event = extern('pcc_diagnostics_runtime_log_event',
                        (c_ptr, c_ptr, c_int64, c_int64, c_ptr), c_void)
     log_code = extern('pcc_diagnostics_runtime_log_event_code',
@@ -55,11 +62,32 @@ PROGRAM = textwrap.dedent('''
     def main():
         assert enabled() == 1
         parent = identity()
+        tripwire = getenv(cstr('PCC_THREAD_PROBE_TRIPWIRE'))
+        if ptr_is_null(tripwire) == 0:
+            mode = load_i8(tripwire, 0)
+            if mode == 49:
+                scheduler_acquired()
+                safepoint()
+            elif mode == 50:
+                no_park_enter()
+                scheduler_acquired()
+                safepoint()
+                scheduler_released()
+                no_park_exit()
+                print('NO_PARK_OK')
+                return
+            elif mode == 51:
+                no_park_enter()
+                scheduler_acquired()
+                stop_world()
+            print('TRIPWIRE_MISSED')
+            return
         handles = stack_alloc(24)
         arguments = stack_alloc(24)
         returned = stack_alloc(8)
         entry = function_addr('thread_log_probe_worker')
         log_event(cstr('thread'), cstr('probe_begin'), 0, 0, null())
+        assert scheduler_count() >= 0
         assert start(null(), entry, arguments) == -1
         assert start(handles, null(), arguments) == -1
         assert join(null(), returned) == -1
@@ -104,6 +132,9 @@ def _check_lifecycles(events, expected=ROUNDS * WORKERS):
     ends = [index for index, event in enumerate(thread_events) if event['event'] == 'probe_end']
     assert len(begins) == len(ends) == 1 and begins[0] < ends[0]
     phase = thread_events[begins[0] + 1:ends[0]]
+    lifecycle_names = {'start', 'enter', 'exit', 'join', 'joined', 'start_failed',
+                       'join_failed', 'detach'}
+    phase = [event for event in phase if event['event'] in lifecycle_names]
     handles = {event['ptr'] for event in phase if event['event'] == 'start'}
     # A GC collector started before main may enter during the measured phase.
     # Keep the complete log, but validate exactly the application's 24 starts.
@@ -140,6 +171,30 @@ def _check_lifecycles(events, expected=ROUNDS * WORKERS):
     assert not active and len(completed) == expected
     assert len(set(completed)) == expected
     assert failures == [('start_failed', -1), ('start_failed', -1), ('join_failed', -1)]
+
+
+def _check_transitions(events):
+    rows = [event for event in events if event['category'] == 'thread']
+    begin = next(index for index, event in enumerate(rows) if event['event'] == 'probe_begin')
+    end = next(index for index, event in enumerate(rows) if event['event'] == 'probe_end')
+    parent = rows[begin]['thread']
+    phase = rows[begin + 1:end]
+    parent_rows = [event for event in phase if event['thread'] == parent]
+    for name in ('scheduler_lock_request', 'scheduler_acquired_deferred', 'scheduler_lock_released',
+                 'stop_world_request', 'world_stopped', 'resume_world_request', 'world_resumed'):
+        assert any(event['event'] == name for event in parent_rows), name
+    assert any(event['event'] == 'safepoint_stop_observed' for event in phase)
+    suspended = {(event['thread'], event['value0'], event['value1']) for event in phase
+                 if event['event'] == 'safepoint_suspend_deferred'}
+    resumed = {(event['thread'], event['value0'], event['value1']) for event in phase
+               if event['event'] == 'safepoint_resume_deferred'}
+    assert suspended & resumed, 'no matched native suspension/resumption evidence'
+    assert all(epoch > 0 and waits > 0 for _, epoch, waits in suspended | resumed)
+    stopped = {event['value0'] for event in parent_rows if event['event'] == 'world_stopped'}
+    restarted = {event['value0'] for event in parent_rows if event['event'] == 'world_resumed'}
+    assert stopped & restarted, 'no matched native stop/resume epoch'
+    if suspended != resumed or stopped != restarted:
+        assert any(event['event'] == 'trace_dropped' and event['value0'] > 0 for event in phase)
 
 
 def _source_identity(compiler_root, runtime_root):
@@ -276,11 +331,32 @@ def test_native_thread_lifecycle_logging_five_gc(python_program_compiler, reques
                     assert events and all(event['category'] == 'gc' for event in events)
                 else:
                     _check_lifecycles(events)
+                    _check_transitions(events)
                 if selection in ('gc', 'thread,gc', 'all', '1'):
                     assert any(event['category'] == 'gc' and event['value0'] == 123456 for event in events)
                 if selection == 'thread':
                     assert all(event['category'] == 'thread' for event in events)
                     assert log.stat().st_size < len(events) * 512
+        for backend in range(5):
+            for mode in ('1', '2', '3'):
+                label = f'gc{backend}-tripwire-{mode}'
+                environment = dict(os.environ, PCC_GC_BACKEND=str(backend),
+                                   PCC_THREAD_PROBE_TRIPWIRE=mode, PCC_LOG='thread',
+                                   PCC_LOG_FORMAT='json', PCC_LOG_FILE=str(tmp_path / (label + '.log')),
+                                   PATH='')
+                environment.pop('LC_ALL', None)
+                result = run_process_group_timeout([str(binary)], env=environment, timeout=20)
+                (tmp_path / (label + '.stdout')).write_text(result.stdout)
+                (tmp_path / (label + '.stderr')).write_text(result.stderr)
+                receipt['executions'].append({'gc': backend, 'tripwire_mode': mode,
+                                               'returncode': result.returncode, 'stdout': result.stdout,
+                                               'stderr': result.stderr})
+                receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
+                if mode == '2':
+                    assert (result.returncode, result.stdout, result.stderr) == (0, 'NO_PARK_OK\n', '')
+                else:
+                    assert result.returncode == -signal.SIGABRT
+                    assert 'TRIPWIRE_MISSED' not in result.stdout
         receipt['state'] = 'PASS'
     finally:
         captured = capfd.readouterr()
@@ -289,3 +365,48 @@ def test_native_thread_lifecycle_logging_five_gc(python_program_compiler, reques
         receipt['source_stable'] = _source_identity(compiler_root, runtime_root) == before
         receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
         assert receipt['source_stable']
+
+
+def _sample_transitions():
+    def event(name, thread=1, first=0, second=0):
+        return {'category': 'thread', 'event': name, 'thread': thread,
+                'ptr': '0x0', 'value0': first, 'value1': second}
+
+    return [event('probe_begin'), event('scheduler_lock_request'),
+            event('scheduler_acquired_deferred'), event('scheduler_lock_released'),
+            event('stop_world_request'), event('safepoint_stop_observed', 2),
+            event('world_stopped', first=7, second=2), event('resume_world_request'),
+            event('world_resumed', first=7),
+            event('safepoint_suspend_deferred', 2, 7, 1),
+            event('safepoint_resume_deferred', 2, 7, 1), event('probe_end')]
+
+
+def test_transition_validator_requires_captured_native_epoch_evidence():
+    _check_transitions(_sample_transitions())
+
+
+@pytest.mark.parametrize('fault', ['missing-lock', 'intent-only', 'wrong-resume-epoch',
+                                  'zero-waits', 'unreported-loss', 'wrong-stop-epoch'])
+def test_transition_validator_rejects_missing_or_inconsistent_evidence(fault):
+    rows = _sample_transitions()
+    if fault == 'missing-lock':
+        del rows[2]
+    elif fault == 'intent-only':
+        del rows[9:11]
+    elif fault == 'wrong-resume-epoch':
+        rows[10]['value0'] = 8
+    elif fault == 'zero-waits':
+        rows[9]['value1'] = rows[10]['value1'] = 0
+    elif fault == 'unreported-loss':
+        rows.insert(-1, dict(rows[9], value0=8))
+    else:
+        rows[8]['value0'] = 8
+    with pytest.raises(AssertionError):
+        _check_transitions(rows)
+
+
+def test_transition_validator_allows_explicit_loss_only_with_some_complete_evidence():
+    rows = _sample_transitions()
+    rows.insert(-1, dict(rows[9], value0=8))
+    rows.insert(-1, dict(rows[9], event='trace_dropped', value0=1, value1=0))
+    _check_transitions(rows)

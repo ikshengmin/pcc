@@ -595,6 +595,8 @@ def _generate_frontend_module(monkeypatch, *, direct: bool):
     )
     typed = type_infer.infer_module(ast_module)
     codegen = L1CodeGen(typed, ir_scaffold_mode="on")
+    # This fixture exercises the Darwin indexed emitter on every host.
+    codegen._target_triple = "arm64-apple-darwin"
     rendered = codegen.generate(typed)
     return codegen.module, rendered
 

@@ -791,6 +791,11 @@ int64_t pcc_thread_stop_requested_acquire(void);
  * visibility for generated-code stop polls, and do not prove that a managed
  * pcc_thread_start argument or result can survive relocation across its raw
  * native handle/pthread handoff. */
+/* Scheduler ownership is tracked independently of the no-park lease.
+ * Mark acquisition immediately after a successful lock and release only
+ * after a successful unlock. These markers do not register or safepoint. */
+void    pcc_thread_scheduler_lock_acquired(void);
+void    pcc_thread_scheduler_lock_released(void);
 void    pcc_thread_no_park_enter(void);
 void    pcc_thread_no_park_exit(void);
 int64_t pcc_thread_no_park_depth(void);

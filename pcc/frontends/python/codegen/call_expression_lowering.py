@@ -1232,12 +1232,7 @@ class CallExpressionLoweringMixin:
             if result is not None:
                 return result
         if name == "object" and not expr.args and not expr.kwargs:
-            # pcc only needs bare object() today as a unique identity sentinel.
-            return self.builder.call(
-                self.runtime["py_dict_new"],
-                [],
-                name=self._fresh("object.sentinel"),
-            )
+            return self._emit_owned_object_constructor(expr)
         if name == "dict":
             # ``dict(os.environ)`` first: os.environ is a codegen special
             # form with no object behind it, so the generic dict() path

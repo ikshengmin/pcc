@@ -191,7 +191,7 @@ def _global_to_wire(value: GlobalDef):
     ]
 
 
-def _global_from_wire(value) -> GlobalDef:
+def _global_from_wire(value, type_context=None) -> GlobalDef:
     if not isinstance(value, list) or len(value) != 9:
         raise BackendUnavailable("indexed module has an invalid global record")
     value_type = _type_from_wire(value[1])
@@ -202,6 +202,7 @@ def _global_from_wire(value) -> GlobalDef:
         raise BackendUnavailable("indexed module global attributes are invalid")
     return GlobalDef(
         name=_wire_str(value[0], "global name"),
+        type_context=type_context,
         type=value_type,
         initializer=_wire_str(value[2], "global initializer"),
         is_constant=_wire_bool(value[3], "global constant flag"),
@@ -324,6 +325,10 @@ def encode_indexed_module_file(path: str, module: ParsedModule) -> None:
         "scalar_width": 8,
         "byte_order": "little",
         "triple": module.triple,
+        "named_type_bodies": (
+            dict(module.type_context.named_type_bodies)
+            if module.type_context is not None else {}
+        ),
         "globals": [_global_to_wire(item) for item in module.globals_],
         "functions": functions,
         "total_scalars": total_scalars,
@@ -648,11 +653,26 @@ def decode_indexed_module_file(path: str) -> ParsedModule:
             definition_positions.close()
             used_value_ids.close()
             function_index += 1
-    globals_ = tuple(_global_from_wire(row) for row in global_rows)
+    bodies = header.get("named_type_bodies", {})
+    if not isinstance(bodies, dict):
+        raise BackendUnavailable("indexed module named type declarations are invalid")
+    declarations = []
+    for name, body in bodies.items():
+        name = _wire_str(name, "named type name")
+        body = _wire_str(body, "named type body")
+        if not name.startswith("%") or "\n" in name or "\n" in body:
+            raise BackendUnavailable("indexed module named type declaration is invalid")
+        declarations.append(name + " = type " + body)
+    from .self_backend_parse import _parse_named_types
+    type_context = _parse_named_types("\n".join(declarations))
+    for function in functions:
+        function.type_context = type_context
+    globals_ = tuple(_global_from_wire(row, type_context) for row in global_rows)
     return ParsedModule(
         triple=_wire_str(header.get("triple", ""), "target triple"),
         globals_=globals_,
         functions=tuple(functions),
+        type_context=type_context,
     )
 
 

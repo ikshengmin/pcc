@@ -103,7 +103,7 @@ def emit_scalar_initializer(
         init = "1"
     if ty.is_ptr:
         if init.startswith("bitcast"):
-            decoded = decode_value_token(init)
+            decoded = decode_value_token(init, type_context=module_symbols.type_context)
             if decoded == init or decoded.startswith("cexpr:"):
                 raise BackendUnavailable(
                     f"x86_64 self backend does not support pointer bitcast global initializer for {global_name!r}: {init!r}"
@@ -117,7 +117,7 @@ def emit_scalar_initializer(
             suffix = "" if offset == 0 else f"+{offset}"
             return [f"  .quad {asm_symbol(base, module_symbols)}{suffix}"]
         if init.startswith("getelementptr"):
-            base, offset = parse_constant_gep(init)
+            base, offset = parse_constant_gep(init, type_context=module_symbols.type_context)
             suffix = "" if offset == 0 else f"+{offset}"
             return [f"  .quad {asm_symbol(base, module_symbols)}{suffix}"]
         if init.startswith("@"):
@@ -125,7 +125,7 @@ def emit_scalar_initializer(
         if init.startswith("inttoptrconst:"):
             return [f"  .quad {int(init.split(':', 1)[1])}"]
         if init.startswith("inttoptr"):
-            decoded = decode_value_token(init)
+            decoded = decode_value_token(init, type_context=module_symbols.type_context)
             if decoded.startswith("inttoptrconst:"):
                 return [f"  .quad {int(decoded.split(':', 1)[1])}"]
             raise BackendUnavailable(
@@ -221,7 +221,7 @@ def emit_typed_initializer(
         lines: list[str] = []
         stride = _align_to(ty.elem.slot_size, ty.elem.align)
         for item in items:
-            lines.extend(emit_typed_initializer(ty.elem, strip_typed_initializer(item), global_name, module_symbols))
+            lines.extend(emit_typed_initializer(ty.elem, strip_typed_initializer(item, type_context=module_symbols.type_context), global_name, module_symbols))
             lines.extend(emit_zero_fill(stride - ty.elem.slot_size))
         return lines
     if ty.is_struct:
@@ -240,7 +240,7 @@ def emit_typed_initializer(
         for index, (field_ty, item) in enumerate(zip(ty.fields, items)):
             field_offset = ty.field_offset(index)
             lines.extend(emit_zero_fill(field_offset - offset))
-            lines.extend(emit_typed_initializer(field_ty, strip_typed_initializer(item), global_name, module_symbols))
+            lines.extend(emit_typed_initializer(field_ty, strip_typed_initializer(item, type_context=module_symbols.type_context), global_name, module_symbols))
             offset = field_offset + field_ty.slot_size
         lines.extend(emit_zero_fill(ty.slot_size - offset))
         return lines

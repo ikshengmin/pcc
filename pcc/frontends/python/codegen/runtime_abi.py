@@ -307,6 +307,8 @@ def _runtime_signatures_part_3():
 def _runtime_signatures_part_4():
     return {
     "pcc_thread_stop_requested_acquire": (_I64, [], False),
+    "pcc_thread_scheduler_lock_acquired": (_VOID, [], False),
+    "pcc_thread_scheduler_lock_released": (_VOID, [], False),
     "pcc_thread_no_park_enter": (_VOID, [], False),
     "pcc_thread_no_park_exit": (_VOID, [], False),
     "pcc_thread_no_park_depth": (_I64, [], False),
@@ -1822,6 +1824,8 @@ def _cross_object_signatures_part_0():
     "pcc_current_thread_id": ((), "c_int64"),
     "pcc_thread_safepoint": ((), "c_void"),
     "pcc_thread_stop_requested_acquire": ((), "c_int64"),
+    "pcc_thread_scheduler_lock_acquired": ((), "c_void"),
+    "pcc_thread_scheduler_lock_released": ((), "c_void"),
     "pcc_thread_no_park_enter": ((), "c_void"),
     "pcc_thread_no_park_exit": ((), "c_void"),
     "pcc_thread_no_park_depth": ((), "c_int64"),

@@ -482,6 +482,37 @@ class CallObjectLoweringMixin:
         """Publish a unary text conversion through the shared NEW-result ABI."""
         return self._emit_owned_unary_runtime_call(expr, runtime_name)
 
+    def _emit_owned_object_constructor(self, expr):
+        """Allocate an instance of canonical object, publishing both NEW owners."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("object.result")
+            roots.append(output)
+        try:
+            cls = self._new_slot_call_root("object.class")
+            roots.append(cls)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_builtin_type_for_tag", (), result_slot=cls,
+                suffix_args=(ir.Constant(_I64, -1),), span=expr.span,
+            )
+            self._slot_call_runtime_call(
+                "py_instance_new", (cls,), result_slot=output, span=expr.span,
+            )
+            self._release_slot_call_roots((cls,))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("object.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_owned_unary_runtime_call(self, expr, runtime_name):
         """Keep one operand owned and publish the runtime's actual NEW result."""
         previous = self._current_try_err_block()

@@ -481,7 +481,7 @@ def _emit_vector_minmax_lane_value(
     if value == "zeroinitializer":
         return emit_const_to_reg(lane_type, reg_name(lane_type, dest_reg_index), 0)
     if is_aggregate_literal_value(value):
-        literal_bytes = aggregate_literal_to_bytes(vector_type, value)
+        literal_bytes = aggregate_literal_to_bytes(vector_type, value, type_context=module_symbols.type_context)
         stride = _align_to(lane_type.slot_size, lane_type.align)
         lane_bytes = literal_bytes[
             lane_index * stride : lane_index * stride + lane_type.slot_size

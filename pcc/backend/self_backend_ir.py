@@ -1257,6 +1257,17 @@ class AllocaInfo:
     allocated_type: TypeDesc
 
 
+@dataclass
+class TypeParseContext:
+    """One module's lazy named layouts and dependent canonicalization caches."""
+
+    named_type_bodies: dict[str, str] = field(default_factory=dict)
+    call_signature_cache: dict[str, tuple[int, bool]] = field(default_factory=dict)
+    named_types: dict[str, TypeDesc] = field(default_factory=dict)
+    type_cache: dict[str, TypeDesc] = field(default_factory=dict)
+    pointer_type_cache: dict[int, tuple[TypeDesc, TypeDesc]] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class GlobalDef:
     name: str
@@ -1275,6 +1286,7 @@ class GlobalDef:
     alignment: int = 0
     ir_prefix: str = ""
     trailing_attributes: tuple[str, ...] = ()
+    type_context: TypeParseContext | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -1282,6 +1294,7 @@ class ParsedModule:
     triple: str
     globals_: tuple[GlobalDef, ...]
     functions: tuple["ParsedFunction", ...]
+    type_context: TypeParseContext | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -1358,6 +1371,7 @@ class ParsedFunction:
     # stack memory, every value in a register.  Its prologue pushes nothing
     # and every return is a bare ``ret``.
     aarch64_frameless: bool = False
+    type_context: TypeParseContext | None = field(default=None, repr=False, compare=False)
 
 
 def parsed_module_instruction_arena_profile(module: ParsedModule) -> dict[str, int]:

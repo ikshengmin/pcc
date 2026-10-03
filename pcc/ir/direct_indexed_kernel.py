@@ -55,6 +55,7 @@ from pcc.backend.self_backend_parse import (
     decode_ssa_name,
     decode_value_token,
     parse_ir_type,
+    _parse_named_types,
     parse_self_backend_module,
 )
 from pcc.backend.self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntArena
@@ -317,11 +318,11 @@ class DirectIndexedFunctionBuilder:
             self.forward_value_ids[name] = value_id
             value_ref._direct_value_id = value_id
             return value_id
-        decoded = decode_value_token(raw_ref)
+        decoded = _decode_direct_value_token(raw_ref, self.function)
         return self.seed.operand_ref(decoded)
 
     def _operand_text_ref(self, value_ref: str) -> int:
-        return self.seed.operand_ref(decode_value_token(value_ref))
+        return self.seed.operand_ref(_decode_direct_value_token(value_ref, self.function))
 
     def _target_id(self, block_name: str) -> int:
         existing = self.target_name_ids.get(block_name)
@@ -579,8 +580,8 @@ class DirectIndexedFunctionBuilder:
                 op,
                 dest_name,
                 value_desc,
-                decode_value_token(self._value_ref_text(lhs_ref)),
-                decode_value_token(self._value_ref_text(rhs_ref)),
+                _decode_direct_value_token(self._value_ref_text(lhs_ref), self.function),
+                _decode_direct_value_token(self._value_ref_text(rhs_ref), self.function),
             )
         )
         self.seed.publish_value_type_id(
@@ -622,9 +623,9 @@ class DirectIndexedFunctionBuilder:
                 dest_name,
                 op,
                 self._type_desc(ptr_type),
-                decode_value_token(self._value_ref_text(ptr_ref)),
+                _decode_direct_value_token(self._value_ref_text(ptr_ref), self.function),
                 value_desc,
-                decode_value_token(self._value_ref_text(value_ref)),
+                _decode_direct_value_token(self._value_ref_text(value_ref), self.function),
                 ordering,
             )
         )
@@ -659,8 +660,8 @@ class DirectIndexedFunctionBuilder:
                 predicate,
                 dest_name,
                 value_desc,
-                decode_value_token(self._value_ref_text(lhs_ref)),
-                decode_value_token(self._value_ref_text(rhs_ref)),
+                _decode_direct_value_token(self._value_ref_text(lhs_ref), self.function),
+                _decode_direct_value_token(self._value_ref_text(rhs_ref), self.function),
             )
         )
         self.seed.publish_value_type_id(
@@ -690,7 +691,7 @@ class DirectIndexedFunctionBuilder:
             (
                 dest_name,
                 value_desc,
-                decode_value_token(self._value_ref_text(value_ref)),
+                _decode_direct_value_token(self._value_ref_text(value_ref), self.function),
             )
         )
         self.seed.publish_value_type_id(
@@ -788,7 +789,7 @@ class DirectIndexedFunctionBuilder:
             (
                 dest_name,
                 aggregate_desc,
-                decode_value_token(self._value_ref_text(aggregate_ref)),
+                _decode_direct_value_token(self._value_ref_text(aggregate_ref), self.function),
                 index_tuple,
                 result_type,
                 offset,
@@ -822,7 +823,7 @@ class DirectIndexedFunctionBuilder:
             self.record_use_ids.append(ptr_operand)
             use_count += 1
         for index_value in indices:
-            index_ref = decode_value_token(_ir._value_ref(index_value))
+            index_ref = _decode_direct_value_token(_ir._value_ref(index_value), self.function)
             index_operand = self._operand_value_ref(index_value)
             self.seed.gep_index_scalars.append2(
                 self._type_id(index_value.type),
@@ -961,7 +962,7 @@ class DirectIndexedFunctionBuilder:
         values = []
         for arg in args:
             operand = self._operand_value_ref(arg)
-            values.append(decode_value_token(self._value_ref_text(arg)))
+            values.append(_decode_direct_value_token(self._value_ref_text(arg), self.function))
             if self.fuse_uses and operand >= 0:
                 self.record_use_ids.append(operand)
                 use_count += 1
@@ -986,9 +987,10 @@ class DirectIndexedFunctionBuilder:
         use_start = self.record_use_ids._length
         use_count = 0
         arg_count = 0
+        type_context = _direct_type_context(self.function)
         while arg_count < len(arg_ref_texts):
-            arg_desc = parse_ir_type(str(arg_type_texts[arg_count]))
-            arg_ref = decode_value_token(str(arg_ref_texts[arg_count]))
+            arg_desc = parse_ir_type(str(arg_type_texts[arg_count]), type_context=type_context)
+            arg_ref = _decode_direct_value_token(str(arg_ref_texts[arg_count]), self.function)
             if arg_desc.is_int and arg_desc.width == 1:
                 if arg_ref == "false":
                     arg_ref = "0"
@@ -2027,7 +2029,24 @@ def publish_exact_call_fixed(
     )
 
 
-def build_direct_indexed_function(function: _ir.Function) -> ParsedFunction:
+def _direct_type_context(function):
+    # Transitional textual operands must resolve against their actual IR module.
+    # Construction may still add declarations, so take a fresh declaration view
+    # at the text boundary instead of retaining another mutable global cache.
+    declarations = []
+    if function is not None:
+        for value_type in function.module.context.identified_types.values():
+            declarations.append(value_type.get_declaration())
+    return _parse_named_types("\n".join(declarations))
+
+
+def _decode_direct_value_token(value: str, function) -> str:
+    if "getelementptr" in value:
+        return decode_value_token(value, type_context=_direct_type_context(function))
+    return decode_value_token(value)
+
+
+def build_direct_indexed_function(function: _ir.Function, *, type_context=None) -> ParsedFunction:
     """Build one final-kernel function without module/function/block text scan."""
     cached = function._direct_indexed_function_cache
     if cached is not None:
@@ -2035,6 +2054,8 @@ def build_direct_indexed_function(function: _ir.Function) -> ParsedFunction:
     if not function.blocks:
         raise ValueError("direct indexed function requires a definition")
 
+    if type_context is None:
+        type_context = _direct_type_context(function)
     args: list[ArgInfo] = []
     index = 0
     while index < len(function.args):
@@ -2042,7 +2063,7 @@ def build_direct_indexed_function(function: _ir.Function) -> ParsedFunction:
         args.append(
             ArgInfo(
                 decode_ssa_name(argument._ref),
-                parse_ir_type(str(argument.type)),
+                parse_ir_type(str(argument.type), type_context=type_context),
             )
         )
         index += 1
@@ -2072,10 +2093,12 @@ def build_direct_indexed_function(function: _ir.Function) -> ParsedFunction:
             args,
             block_names,
             block_lines,
+            type_context=type_context,
         )
     parsed = ParsedFunction(
         name=str(function.name),
-        ret_type=parse_ir_type(str(function.ftype.return_type)),
+        ret_type=parse_ir_type(str(function.ftype.return_type), type_context=type_context),
+        type_context=type_context,
         args=args,
         is_global=str(function.linkage or "") != "internal",
         is_vararg=bool(function.ftype.var_arg),
@@ -2153,7 +2176,9 @@ def build_direct_indexed_module(module: _ir.Module) -> ParsedModule:
         function = module._functions[index]
         if function.blocks:
             try:
-                functions.append(build_direct_indexed_function(function))
+                functions.append(build_direct_indexed_function(
+                    function, type_context=parsed_skeleton.type_context
+                ))
             except Exception as exc:
                 raise BackendUnavailable(
                     "direct indexed finalize failed for function "
@@ -2178,6 +2203,7 @@ def build_direct_indexed_module(module: _ir.Module) -> ParsedModule:
     return ParsedModule(
         triple=parsed_skeleton.triple,
         globals_=parsed_skeleton.globals_,
+        type_context=parsed_skeleton.type_context,
         functions=tuple(functions),
     )
 
