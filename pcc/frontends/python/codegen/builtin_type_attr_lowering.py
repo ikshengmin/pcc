@@ -320,6 +320,8 @@ class BuiltinTypeAttrLoweringMixin:
         if len(expr.args) != 1:
             raise NotImplementedError("str() with multi-arg not supported")
         arg = expr.args[0]
+        if not self._expr_looks_cpython(arg):
+            return self._emit_owned_text_conversion(expr, "py_obj_str")
         if isinstance(arg.ty, StrType):
             v = self._emit_expr(arg)
             if v in getattr(self, "_cpy_values", ()):

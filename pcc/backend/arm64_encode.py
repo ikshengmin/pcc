@@ -2924,16 +2924,20 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
             size, opc = (3 if t64 else 2), (1 if mn == "ldur" else 0)
         return _enc_ldst_unscaled(size, opc, rt, base, imm)
 
-    if mn in ("ldar", "ldaxr", "stlr", "ldaxrb", "stlrb"):
+    if mn in ("ldar", "ldaxr", "stlr", "ldarb", "ldarh", "ldaxrb", "ldaxrh", "stlrb", "stlrh"):
         rt, t64 = _reg(ops[0])
         base, imm, mode = _mem(ops[1])
         if imm or mode:
             raise EncodeError(f"{mn} takes a bare [Xn] address: {line!r}")
-        if mn.endswith("b"):
-            # byte variants: size bits 00 instead of 10/11
+        if mn.endswith("b") or mn.endswith("h"):
+            # Byte/halfword variants use size bits 00/01 and a W data register.
             if t64:
                 raise EncodeError(f"{mn} takes a W register: {line!r}")
-            base_op = {"ldaxrb": 0x085FFC00, "stlrb": 0x089FFC00}[mn]
+            base_op = {
+                "ldarb": 0x08DFFC00, "ldarh": 0x48DFFC00,
+                "ldaxrb": 0x085FFC00, "ldaxrh": 0x485FFC00,
+                "stlrb": 0x089FFC00, "stlrh": 0x489FFC00,
+            }[mn]
             return base_op | (base << 5) | rt
         sf_bit = 0x40000000 if t64 else 0
         if mn == "ldar":
@@ -2942,7 +2946,7 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
             return 0x885FFC00 | sf_bit | (base << 5) | rt
         return 0x889FFC00 | sf_bit | (base << 5) | rt
 
-    if mn in ("stlxr", "stlxrb"):
+    if mn in ("stlxr", "stlxrb", "stlxrh"):
         rs, s64 = _reg(ops[0])
         if s64:
             raise EncodeError(f"{mn} status register must be a W register: {line!r}")
@@ -2950,10 +2954,11 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         base, imm, mode = _mem(ops[2])
         if imm or mode:
             raise EncodeError(f"{mn} takes a bare [Xn] address: {line!r}")
-        if mn == "stlxrb":
+        if mn in ("stlxrb", "stlxrh"):
             if t64:
-                raise EncodeError(f"stlxrb takes a W data register: {line!r}")
-            return 0x0800FC00 | (rs << 16) | (base << 5) | rt
+                raise EncodeError(f"{mn} takes a W data register: {line!r}")
+            base_op = 0x0800FC00 if mn == "stlxrb" else 0x4800FC00
+            return base_op | (rs << 16) | (base << 5) | rt
         sf_bit = 0x40000000 if t64 else 0
         return 0x8800FC00 | sf_bit | (rs << 16) | (base << 5) | rt
 

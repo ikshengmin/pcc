@@ -9,9 +9,15 @@ review repairs do not replace the original ten goals.
 A cloud filesystem reset lost work after the October 2, 19:20 UTC backup,
 including generated compiler/runtime artifacts and unuploaded test receipts.
 The three source repositories were restored from verified Library bytes matching
-the last synchronized local commits: PCC `351c617eb27979ecaad6c96bc94a38b98fbbd444`,
+the pre-reset synchronized commits: PCC `351c617eb27979ecaad6c96bc94a38b98fbbd444`,
 gateway `83577bc41dc79d3ead2e217bfa04f0f500799012`, and GUI
 `3843a75a5634dfb3107890a2d628517713782080`.
+
+The first authorized hourly sync completed October 3 at 04:46 UTC from the
+immutable 04:33 source capture: PCC `1a891b352b6d6c53b28d7ae2b846ebf7771388ed`
+(39 paths), GUI `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c` (10 paths), and gateway
+unchanged. All 49 before/after hashes and modes were verified locally, with no
+push. Subsequent changes remain unsynchronized until the next capture.
 
 The exact PCC base `1a59d09df54cc0b7b46219395d3419cab8543675` was verified
 across 29,601 Git blob bytes and modes, followed by all 154 paths in the backed-up
@@ -35,21 +41,21 @@ later changes require the affected checks again:
 - Compiler/capture/producer matrix: 107 passed, 1 failed, 28 deselected. The
   original integer-constructor case exposed an unowned repr(self.value) result
   in a generated dataclass __repr__. A shared repr/ascii producer repair is now
-  reconstructed and its13-case causal gate passed, including the unchanged
+  reconstructed and its 13-case causal gate passed, including the unchanged
   original program and strict rejection checks. Two native cases are pending.
 - Callable metadata: 20 host/source-model checks passed, covering rooted
   construction, default lifetimes, callback representation and helper contracts.
   The corrected py_func and py_class components emitted strict owned objects
-  in38.98s/339MB with the codegen checksum unchanged. A whole matched archive
+  in 38.98s / 339 MB with the codegen checksum unchanged. A whole matched archive
   and native execution remain pending.
 - Installed-wheel isolation/provenance: 15 checks passed, including a real
   isolated interpreter import fixture. This does not qualify a native wheel.
-- Runtime receipt producers:25focused/controlled Make cases passed, including
+- Runtime receipt producers: 25 focused/controlled Make cases passed, including
   missing/null/configuration/stale-source/codegen rejection. The producer files
   were unchanged; an early broad preflight snapshot preceded a separate metadata
   annotation correction, so no whole-candidate stability is claimed for this gate.
-- Explicit default/threaded/integration runtime fixtures:61host cases passed
-  with873production/fixture hashes and modes unchanged, including actual
+- Explicit default/threaded/integration runtime fixtures: 61 host cases passed
+  with 873 production/fixture hashes and modes unchanged, including actual
   archive-byte tampering and MZ-prefix handling. This is no native Windows proof.
 - GUI Harness: 147 host tests passed with all 32 input hashes unchanged. Native,
   TLS, reference application, interaction and pixel gates remain open against
@@ -62,15 +68,31 @@ mixed numeric/reflected-add dispatch have code and formal tests, but no fresh
 native qualification. Live class namespace and bound-method delegation remain
 partially unreconstructed. Runtime configuration/inventory producers and explicit
 fixture provenance are freshly checked at their host/component boundaries.
-C parser/abort work, narrow atomics and thread logging remain active reconstruction
+Darwin implicit stream symbols passed 25 host/owned-object checks. Five narrow
+atomic instruction forms passed 41 encoding checks; narrow atomic lowering and
+cmpxchg layout passed 91 focused/codec cases. These are not actual Darwin or
+AArch64 execution. C parser/abort and thread logging remain active reconstruction
 or qualification work.
 
-The pre-reset full compiler graph audit observed 237 lowering passes and 204
-first failures across 441 modules, with no timeouts. These are historical counts
-from a lost graph, not independent bug counts or current results. A fresh graph
-must be exported and audited through the production worker with validation
-unchanged before the next cold runtime/bootstrap qualification. No current pcc1
-or pcc2 exists, and no Stage2 to Stage3 fixed point is established.
+The fresh complete compiler graph audit finished at 04:49 UTC: all 441 unique
+modules completed, with 120 production indexed-lowering passes and 321 strict
+frontend failures, no timeouts or crashes. Source and graph identities were
+reverified unchanged: source 3c4c5fd022b650c3f12a857ecdd2805a5ac9dcbf35c637cef0b8aa14a14cb302,
+graph 0d4c6c15d62a197acd3cfe8e1865f392078407bbc51139890f8491dd464186e1.
+The watchdog recorded 830.310 seconds and 828,022,784 bytes peak tree RSS.
+
+First-failure families are Call ownership/publication (254), arithmetic proof
+(20), BinOp publication (14), Name ownership (14), set receiver (7), registered
+roots (7), CPython dirpath (2), Lambda (1), BoolExpr (1), and foreign-base super
+(1). These are first failures per module, not independent bugs. Shared format,
+container, ordinary boxed-arithmetic and class-global publication contracts are
+being migrated consistently; validators remain strict. The historical 237/204
+counts came from lost earlier source and are not a matched comparison.
+
+After these repairs, regenerate the graph and rerun all 441 contexts before the
+next whole-runtime/bootstrap freeze. No current pcc1 or pcc2 exists, and no Stage2
+to Stage3 fixed point is established. Later Darwin/atomic candidate edits were
+outside the frozen graph and need final integrated qualification.
 
 ## Qualification order
 
@@ -119,10 +141,17 @@ raw-byte equality establishes the fixed point. See [validation workflow](validat
 
 The recoverable base delta is Library `libfile_85beb2beb8f88191b47144ac4fa719ea`.
 Reconstruction code and receipts are versioned under
-`libfile_a5f7c11281008191be4ea89ea9611cbd`; version 7 contains the October 3,
-04:27 checkpoint. Archives contain recoverable code bytes and a verified
+`libfile_a5f7c11281008191be4ea89ea9611cbd`; version 10 contains the October 3,
+04:54 code checkpoint. Archives contain recoverable code bytes and a verified
 baseline/incremental chain, not only recipes or remembered hashes. The cloud
 recovery directory is pcc-reset-recovery-20261003 outside the source repositories.
 Save every coherent batch before heavy tests and preserve failure evidence.
 Old generated binaries, runtimes and the 441-module graph must be rebuilt;
 historical hashes do not recover bytes.
+
+The fresh graph inputs are preserved as Library
+`libfile_e4d21adda870819187f2218b0924cb1c`; all 3,975 terminal node/guard/artifact
+files are in `libfile_ba4713127d888191996585e2a8a70dd3`. Both archives passed
+hash/mode readback. The completed hourly delta is
+`libfile_2b94b861f9048191a0f2c3272ccab2a9`; its exact captured source, not later
+candidate changes, is the next synchronization baseline.

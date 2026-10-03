@@ -112,7 +112,10 @@ def path_toolchain():
 
 
 def _environment(toolchain, directory, gc_backend):
-    _compiler, archive, source_root, _members, _identities = toolchain
+    _compiler, archive, source_root, members, _identities = toolchain
+    # Admission has already required one complete, coherent configuration.
+    # Preserve it when clearing the caller's PCC_* routing/environment.
+    refcount = next(iter(members.values()))["runtime_build_config"]["refcount"]
     # Eliminate replay plans, alternate runtime lookup and sampler injection.
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("PCC_", "DYLD_", "PYTHON")) and key != "LC_ALL"}
@@ -120,6 +123,7 @@ def _environment(toolchain, directory, gc_backend):
         PCC_SOURCE_ROOT=str(source_root), PCC_REPO_ROOT=str(source_root),
         PCC_RUNTIME_DIR=str(source_root / "pcc/runtime"),
         PCC_RUNTIME_ARCHIVE=str(archive), PCC_WITH_THREADS="1", PCC_RUNTIME_HIGH="py",
+        PCC_REFCOUNT_KIND=refcount,
         PCC_SELF_LINK="pcc", PCC_SELF_OBJ="pcc", PCC_IR_TO_OBJ_EMITTER="pcc",
         PCC_PYTHON_IR_PASSES="off", PCC_GC_BACKEND=str(gc_backend),
         PCC_NO_AUTO_PCC1="1", PCC_SELF_BACKEND_OBJECT_CACHE="off",

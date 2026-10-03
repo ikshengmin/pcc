@@ -41,7 +41,7 @@ def _object(assembly):
     return encode_native_object(NativeObject.from_sections(sections, undefined=undefined))
 
 
-@pytest.mark.parametrize("width", [32, 64])
+@pytest.mark.parametrize("width", [8, 16, 32, 64])
 @pytest.mark.parametrize("load_order, store_order", [
     ("unordered", "unordered"), ("monotonic", "monotonic"),
     ("acquire", "release"), ("seq_cst", "seq_cst"),
@@ -67,8 +67,9 @@ def test_atomic_capture_text_codec_and_object_parity(monkeypatch, tmp_path, widt
     direct_asm = emit_aarch64_darwin_indexed_module(direct, optimize=False)
     assert direct_asm == emit_aarch64_darwin_asm(text, optimize=False)
     assert all(get_indexed_function_kernel(fn).diagnostic_projections == 0 for fn in direct.functions)
-    assert ("  ldar " in direct_asm) is (load_order in ("acquire", "seq_cst"))
-    assert ("  stlr " in direct_asm) is (store_order in ("release", "seq_cst"))
+    suffix = "b" if width == 8 else "h" if width == 16 else ""
+    assert ("  ldar" + suffix + " " in direct_asm) is (load_order in ("acquire", "seq_cst"))
+    assert ("  stlr" + suffix + " " in direct_asm) is (store_order in ("release", "seq_cst"))
 
     fresh = _module(monkeypatch, width=width, load_order=load_order, store_order=store_order,
                     no_text=True).direct_indexed_module()
@@ -82,14 +83,15 @@ def test_atomic_capture_text_codec_and_object_parity(monkeypatch, tmp_path, widt
     assert decoded_kernel.diagnostic_projections == 0
 
 
-def test_no_text_atomic_memory_never_parses_or_projects(monkeypatch):
+@pytest.mark.parametrize("width", [8, 16, 32, 64])
+def test_no_text_atomic_memory_never_parses_or_projects(monkeypatch, width):
     import pcc.ir.direct_indexed_kernel as capture
     from pcc.backend.self_backend_kernel import IndexedFunctionKernel
 
     def forbidden(*args, **kwargs):
         raise AssertionError("atomic normal path attempted text/diagnostic fallback")
 
-    source = _module(monkeypatch, no_text=True)
+    source = _module(monkeypatch, width=width, no_text=True)
     function = source.functions[0]
     assert all(record._direct_record_id >= 0 and not record.text for record in function.blocks[0]._instrs)
     monkeypatch.setattr(capture, "build_indexed_function_seed_from_block_lines", forbidden)
@@ -141,7 +143,7 @@ def test_byte_release_store_preserves_width_without_text_fallback(monkeypatch):
     assert encoded == _object(emit_aarch64_darwin_asm(str(build(False)), optimize=False))
 
 
-@pytest.mark.parametrize("width", [8, 16])
+@pytest.mark.parametrize("width", [1, 128])
 def test_unsupported_atomic_load_width_is_an_explicit_target_boundary(monkeypatch, width):
     source = _module(monkeypatch, width=width, alignment=2 if width == 16 else 1, no_text=True)
     with pytest.raises(BackendUnavailable, match="load_atomic|store_atomic"):

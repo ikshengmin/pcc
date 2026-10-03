@@ -10,6 +10,7 @@ from itertools import count
 # Both frontends use the owned IR builder.
 from pcc.ir.compat import ir_c as ir
 from pcc.frontends.python.pipeline_targets import host_target_triple
+from pcc.backend.self_backend_target_match import is_aarch64_darwin_triple
 from pcc.ir.compat import add_raw_function_attribute
 from pcc.frontends.c.c_abi_layout import (
     builtin_integer_is_unsigned,
@@ -1459,6 +1460,10 @@ class CCodeGenerator(
         "errno": int32_t,
     }
 
+    _DARWIN_STDIO_GLOBAL_SYMBOLS = {
+        "stdin": "__stdinp", "stdout": "__stdoutp", "stderr": "__stderrp",
+    }
+
     def lookup(self, name):
         if not isinstance(name, str):
             name = name.name if hasattr(name, "name") else str(name)
@@ -1467,7 +1472,11 @@ class CCodeGenerator(
                 self._declare_libc(name)
             elif name in self._EXTERN_GLOBAL_VARS:
                 gv_type = self._EXTERN_GLOBAL_VARS[name]
-                gv = self._safe_global_var(gv_type, name, external=True)
+                symbol = name
+                if is_aarch64_darwin_triple(str(self.module.triple)):
+                    # These are C ABI names. Mach-O adds its underscore later.
+                    symbol = self._DARWIN_STDIO_GLOBAL_SYMBOLS.get(name, name)
+                gv = self._safe_global_var(gv_type, symbol, external=True)
                 self.define(name, (gv_type, gv))
         try:
             stored = self.env[name]

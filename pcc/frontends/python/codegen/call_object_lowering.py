@@ -343,6 +343,10 @@ class CallObjectLoweringMixin:
         if isinstance(expr, (UnaryOp, BinOp)):
             if self._slot_call_literal_integer_kind(expr):
                 return self._emit_slot_call_literal_integer(expr, label)
+            if isinstance(expr, BinOp):
+                runtime_binary = self._slot_call_binary_runtime(expr, object_boundary=True)
+                if runtime_binary is not None:
+                    return self._emit_slot_call_binary(expr, label, runtime_binary)
             machine_integer = isinstance(expr.ty, IntType) and expr.ty.name != "int"
             if (not machine_integer and (isinstance(expr.ty, IntType)
                     or isinstance(expr, UnaryOp) and expr.op in ("+", "-", "~"))):
@@ -352,10 +356,6 @@ class CallObjectLoweringMixin:
                 )
             # An explicit machine lane retains its pre-existing lowering and
             # ownership boundary; it never enters the exact-int producer.
-            if isinstance(expr, BinOp):
-                runtime_binary = self._slot_call_binary_runtime(expr)
-                if runtime_binary is not None:
-                    return self._emit_slot_call_binary(expr, label, runtime_binary)
         if isinstance(expr, (TupleExpr, ListExpr)):
             return self._emit_slot_call_sequence(expr.elems, label, isinstance(expr, TupleExpr))
         if isinstance(expr, DictExpr):
@@ -473,7 +473,7 @@ class CallObjectLoweringMixin:
         return output
 
     def _emit_owned_text_conversion(self, expr, runtime_name):
-        """Publish a repr/ascii NEW result before releasing its input owner."""
+        """Publish a unary text conversion NEW result before releasing its input owner."""
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
@@ -497,6 +497,39 @@ class CallObjectLoweringMixin:
             if sink is None:
                 return self._take_slot_call_root(output)
             return self.builder.load(output, name=self._fresh("text.conversion.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
+    def _emit_owned_format_call(self, expr):
+        """Evaluate value then spec into owners and publish the runtime result."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("format.result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            value = self._emit_slot_call_operand(expr.args[0], "format.value")
+            roots.append(value)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            spec_expr = (expr.args[1] if len(expr.args) == 2
+                         else StrLit(span=expr.span, ty=StrType(name="str"), value=""))
+            spec = self._emit_slot_call_operand(spec_expr, "format.spec")
+            roots.append(spec)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call("py_obj_format", (value, spec), result_slot=output, span=expr.span)
+            self._release_slot_call_roots((value, spec))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("format.current"))
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy

@@ -637,6 +637,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_slot_call_subscript",
     "_emit_slot_call_int_constructor",
     "_emit_owned_text_conversion",
+    "_emit_owned_format_call",
     "_slot_call_binary_runtime",
     "_emit_slot_call_binary",
     "_emit_slot_call_attribute",

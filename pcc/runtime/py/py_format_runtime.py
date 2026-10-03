@@ -8,6 +8,7 @@ does not replace the C helper with a call back into ``snprintf``.
 __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
     PYCLASSOBJECT_NAME_OFFSET,
     PY_TYPE_BOOL,
@@ -1698,37 +1699,142 @@ def _format_str_value(value, spec, length: int):
     return result
 
 
-def _call_format_method(method, spec):
-    args = py_tuple_new(1)
-    if ptr_is_null(args) != 0:
-        return _format_require_result(
-            null(),
-            cstr("py_tuple_new"),
-            cstr("format callback argument tuple allocation failed"),
-        )
-    actual_spec = spec
-    made_spec: int = 0
-    if ptr_is_null(actual_spec) != 0:
-        actual_spec = py_str_new(cstr(""), 0)
-        made_spec = 1
-        if ptr_is_null(actual_spec) != 0:
-            py_decref(args)
-            return _format_require_result(
-                null(),
-                cstr("py_str_new"),
-                cstr("format callback could not allocate an empty format spec"),
-            )
-    py_tuple_set_item(args, 0, actual_spec)
-    if made_spec != 0:
-        py_decref(actual_spec)
-    result = py_obj_call(method, args, global_load_ptr("py_None"))
-    _format_require_result(
-        result,
-        cstr("__format__"),
-        cstr("format callback returned NULL without setting an exception"),
+# Custom __format__ keeps every callback owner in one registered frame.
+_FORMAT_METHOD = 0
+_FORMAT_ARGS = 1
+_FORMAT_SPEC = 2
+_FORMAT_RESULT = 3
+_FORMAT_ERROR = 4
+_FORMAT_VALUE = 5
+_FORMAT_SLOT_COUNT = 6
+
+define_global_i32("pcc_format_callback_borrowed_map", -2)
+define_global_i32("pcc_format_callback_owned_map", _FORMAT_SLOT_COUNT)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+
+def _format_callback_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
+    # The caller stores NEW before this first potentially parking operation.
+    offset: int = index * C_POINTER_SIZE
+    slot = ptr_add(slots, offset)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        py_runtime_error_if_unset(cstr("format callback"), cstr("result owner lease failed"))
+        return -1
+    store_i64(tokens, offset, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+def _format_callback_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
+    offset: int = index * C_POINTER_SIZE
+    slot = ptr_add(slots, offset)
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(tokens, offset, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _format_callback_body(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr) -> int:
+    # Inputs are borrowed; copy their actual registered slots before lookup.
+    # The method does not exist until its empty owning frame is registered.
+    token: int = pcc_gc_root_copy_borrowed_lease(
+        ptr_add(slots, _FORMAT_VALUE * C_POINTER_SIZE), borrowed,
     )
-    py_decref(args)
-    return result
+    if token < 0:
+        py_runtime_error_if_unset(cstr("format callback"), cstr("format value owner copy failed"))
+        return -1
+    store_i64(tokens, _FORMAT_VALUE * C_POINTER_SIZE, token)
+    spec_slot = ptr_add(slots, _FORMAT_SPEC * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(borrowed, C_POINTER_SIZE)) == 0:
+        token = pcc_gc_root_copy_borrowed_lease(spec_slot, ptr_add(borrowed, C_POINTER_SIZE))
+        if token < 0:
+            py_runtime_error_if_unset(cstr("format callback"), cstr("format spec owner copy failed"))
+            return -1
+        store_i64(tokens, _FORMAT_SPEC * C_POINTER_SIZE, token)
+    store_ptr(slots, _FORMAT_METHOD * C_POINTER_SIZE, py_obj_getattr(
+        load_ptr(slots, _FORMAT_VALUE * C_POINTER_SIZE), cstr("__format__"),
+    ))
+    if _format_callback_adopt(slots, tokens, _FORMAT_METHOD) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _FORMAT_METHOD * C_POINTER_SIZE)) != 0:
+        # Preserve the existing missing-method fallback semantics.
+        if py_err_occurred() != 0:
+            py_clear_exception()
+        store_ptr(slots, _FORMAT_RESULT * C_POINTER_SIZE, _format_value(
+            load_ptr(slots, _FORMAT_VALUE * C_POINTER_SIZE), load_ptr(spec_slot, 0),
+        ))
+        return _format_callback_adopt(slots, tokens, _FORMAT_RESULT)
+    if ptr_is_null(load_ptr(spec_slot, 0)) != 0:
+        store_ptr(spec_slot, 0, py_str_new(cstr(""), 0))
+        if _format_callback_adopt(slots, tokens, _FORMAT_SPEC) != 0:
+            return -1
+        if ptr_is_null(load_ptr(spec_slot, 0)) != 0:
+            _format_require_result(null(), cstr("py_str_new"), cstr("format callback could not allocate an empty format spec"))
+            return -1
+    store_ptr(slots, _FORMAT_ARGS * C_POINTER_SIZE, py_tuple_new(1))
+    if _format_callback_adopt(slots, tokens, _FORMAT_ARGS) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _FORMAT_ARGS * C_POINTER_SIZE)) != 0:
+        _format_require_result(null(), cstr("py_tuple_new"), cstr("format callback argument tuple allocation failed"))
+        return -1
+    py_tuple_set_item(load_ptr(slots, _FORMAT_ARGS * C_POINTER_SIZE), 0, load_ptr(spec_slot, 0))
+    if py_err_occurred() != 0:
+        return -1
+    store_ptr(slots, _FORMAT_RESULT * C_POINTER_SIZE, py_obj_call(
+        load_ptr(slots, _FORMAT_METHOD * C_POINTER_SIZE),
+        load_ptr(slots, _FORMAT_ARGS * C_POINTER_SIZE), global_load_ptr("py_None"),
+    ))
+    if _format_callback_adopt(slots, tokens, _FORMAT_RESULT) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _FORMAT_RESULT * C_POINTER_SIZE)) != 0:
+        _format_require_result(null(), cstr("__format__"), cstr("format callback returned NULL without setting an exception"))
+        return -1
+    return 0
+
+
+def _call_object_format(value: c_ptr, spec: c_ptr) -> c_ptr:
+    # Register incoming addresses before any callback or owner-copy operation.
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, value)
+    store_ptr(borrowed, C_POINTER_SIZE, spec)
+    pcc_gc_frame_enter(global_addr("pcc_format_callback_borrowed_map"), borrowed)
+    slots = stack_alloc(_FORMAT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FORMAT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _FORMAT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _FORMAT_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_format_callback_owned_map"), slots)
+    status: int = _format_callback_body(slots, tokens, borrowed)
+    # Preserve the original exception while decrefs can invoke arbitrary code.
+    py_tls_exc_swap_slot(ptr_add(slots, _FORMAT_ERROR * C_POINTER_SIZE))
+    store_ptr(borrowed, 0, null())
+    store_ptr(borrowed, C_POINTER_SIZE, null())
+    _format_callback_drop(slots, tokens, _FORMAT_ARGS)
+    _format_callback_drop(slots, tokens, _FORMAT_SPEC)
+    _format_callback_drop(slots, tokens, _FORMAT_METHOD)
+    _format_callback_drop(slots, tokens, _FORMAT_VALUE)
+    if status != 0:
+        _format_callback_drop(slots, tokens, _FORMAT_RESULT)
+    py_clear_exception()
+    py_tls_exc_swap_slot(ptr_add(slots, _FORMAT_ERROR * C_POINTER_SIZE))
+    result_slot = ptr_add(slots, _FORMAT_RESULT * C_POINTER_SIZE)
+    # Only the terminal raw ABI transfer uses the existing temporary pin.
+    # The counted result owner remains registered through all disposal above.
+    prior: int = _unicode_format_pin(result_slot)
+    if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _FORMAT_RESULT * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result_slot, prior)
 
 
 @c_abi_export("py_obj_format")
@@ -1737,16 +1843,13 @@ def py_obj_format(value, spec):
         return null()
     tag: int = _type_of(value)
     if tag != PY_TYPE_INT and tag != PY_TYPE_BOOL and tag != PY_TYPE_FLOAT and tag != PY_TYPE_STR:
-        # Builtin scalars format below; everything else may define
-        # __format__ (a failed lookup is not an error).
-        method = py_obj_getattr(value, cstr("__format__"))
-        if ptr_is_null(method) == 0:
-            result = _call_format_method(method, spec)
-            py_decref(method)
-            if ptr_is_null(result) == 0 or py_err_occurred() != 0:
-                return result
-        if py_err_occurred() != 0:
-            py_clear_exception()
+        return _call_object_format(value, spec)
+    return _format_value(value, spec)
+
+
+def _format_value(value: c_ptr, spec: c_ptr) -> c_ptr:
+    # Ordinary scalar formatting and the existing object fallback.
+    tag: int = _type_of(value)
     text = cstr("")
     length: int = 0
     none_obj = global_load_ptr("py_None")

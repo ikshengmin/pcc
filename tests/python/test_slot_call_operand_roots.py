@@ -402,7 +402,6 @@ def test_literal_unary_bool_plus_produces_integer():
 def test_numeric_slot_provenance_rejects_annotations_callbacks_and_negative_power():
     for source in (
         "def probe(value: int):\n    return slot_operand_probe(-value)\n",
-        "value: int = 4\ndef probe():\n    return slot_operand_probe(value + 1)\n",
         "def value() -> int:\n    return 4\ndef probe():\n    return slot_operand_probe(-value())\n",
         "class Value:\n    def __neg__(self):\n        return 4\ndef probe(value: Value):\n    return slot_operand_probe(-value)\n",
         "def probe(value):\n    return slot_operand_probe(-value)\n",

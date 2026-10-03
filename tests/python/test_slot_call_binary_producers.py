@@ -6,6 +6,20 @@ import textwrap
 
 import pytest
 
+from pcc.frontends.python import (
+    type_infer,
+)
+from pcc.frontends.python.py_ast import (
+    BinOp,
+    DynType,
+    FloatType,
+    IntType,
+    Name,
+)
+from pcc.frontends.python.py_lift import (
+    parse_and_lift,
+)
+
 from tests.python.owned_regression_support import (
     assert_owned_program,
     explicit_owned_runtime,
@@ -14,6 +28,8 @@ from tests.python.test_shared_call_binding import (
     _emit as _emit_binding,
 )
 from tests.python.test_slot_call_operand_roots import (
+    SlotProbeCodegen,
+    _calls,
     _emit as _emit_operand_probe,
 )
 
@@ -68,6 +84,55 @@ def test_binary_producer_context_matrix(site):
         body = "    return take(value=left + right)\n"
     text = _emit_binding(prelude + "def probe(left, right):\n" + body)
     _assert_binary_publication(text, 1)
+
+
+@pytest.mark.parametrize("source", [
+    "def probe(value: int):\n    return slot_operand_probe(value + 1)\n",
+    "value: int = 4\ndef probe():\n    return slot_operand_probe(value + 1)\n",
+    "def value() -> int:\n    return 4\ndef probe():\n    return slot_operand_probe(value() + 1)\n",
+    "def probe(left: float, right: float):\n    return slot_operand_probe(left + right)\n",
+])
+def test_ordinary_scalar_addition_uses_runtime_object_dispatch(source):
+    text = _emit_operand_probe(source)
+    _assert_binary_publication(text, 1)
+    # A type annotation is neither an exact runtime-class proof nor a range
+    # proof. The object dispatcher, not a primitive kernel, selects behavior.
+    assert not _calls(text, "py_int_add")
+    assert not _calls(text, "py_int_to_i64_lane")
+
+
+@pytest.mark.parametrize("numeric", [
+    IntType(name="pcc.i64"),
+    IntType(name="pcc.u64", signed=False),
+    IntType(name="int", width=8),
+    IntType(name="int", width=16),
+    IntType(name="int", width=32),
+    IntType(name="int", signed=False),
+    FloatType(name="float", width=32),
+    FloatType(name="pcc.f64"),
+])
+def test_object_addition_does_not_replace_an_explicit_numeric_projection(numeric):
+    module = type_infer.infer_module(parse_and_lift("", "numeric_projection.py", "numeric_projection"))
+    codegen = SlotProbeCodegen(module, ir_scaffold_mode="on")
+    left = Name(span=None, ty=numeric, ident="left")
+    right = Name(span=None, ty=numeric, ident="right")
+    for result_ty in (numeric, DynType(name="dyn")):
+        expr = BinOp(span=None, ty=result_ty, op="+", lhs=left, rhs=right)
+        assert codegen._slot_call_binary_runtime(expr, object_boundary=True) is None
+
+
+def test_global_scaffold_does_not_make_ordinary_addition_a_machine_operation():
+    module = type_infer.infer_module(parse_and_lift("", "ordinary_scaffold.py", "pcc.driver.cli_bootstrap"))
+    codegen = SlotProbeCodegen(module, ir_scaffold_mode="on")
+    codegen._module_uses_raw_int_scaffold = codegen._module_imports_raw_int_scaffold()
+    assert codegen._module_uses_raw_int_scaffold
+    ordinary = IntType(name="int", width=64, signed=True)
+    left = Name(span=None, ty=ordinary, ident="left")
+    right = Name(span=None, ty=ordinary, ident="right")
+    expr = BinOp(span=None, ty=ordinary, op="+", lhs=left, rhs=right)
+    assert codegen._slot_call_binary_runtime(expr, object_boundary=True) == "py_obj_add"
+    codegen._runtime_port_module = True
+    assert codegen._slot_call_binary_runtime(expr, object_boundary=True) is None
 
 
 PROGRAMS = {
@@ -245,8 +310,39 @@ PROGRAMS["error_cleanup"] = textwrap.dedent("""\
     main()
 """)
 
+PROGRAMS["ordinary_integer_annotations"] = textwrap.dedent("""\
+    import gc
+    marker = {'answer': 42}
+    class Override:
+        def __add__(self, other):
+            gc.collect()
+            return marker
+        def __radd__(self, other):
+            gc.collect()
+            return marker
+    def take(*, value):
+        gc.collect()
+        return value
+    def forward(value: int):
+        return take(value=value + 1)
+    def reflected(value: int):
+        return take(value=1 + value)
+    def floating(left: float, right: float):
+        return take(value=left + right)
+    def main():
+        assert forward(1 << 100) == (1 << 100) + 1
+        assert reflected(1 << 100) == (1 << 100) + 1
+        assert forward((1 << 62) - 1) == 1 << 62
+        assert forward(Override()) is marker
+        assert reflected(Override()) is marker
+        assert floating(1.25, 2.5) == 3.75
+        print('BINARY_ORDINARY_ANNOTATIONS_OK')
+    main()
+""")
+
 EXPECTED = {
     "builtins": "BINARY_BUILTINS_OK\n",
+    "ordinary_integer_annotations": "BINARY_ORDINARY_ANNOTATIONS_OK\n",
     "callbacks": "BINARY_CALLBACKS_OK\n",
     "mixed_numeric_callbacks": "BINARY_MIXED_CALLBACKS_OK\n",
     "error_cleanup": "BINARY_ERROR_CLEANUP_OK\n",

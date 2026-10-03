@@ -48,28 +48,40 @@ def _raw_int_name(ty: Type) -> str:
 class BinaryOpLoweringMixin:
     _INLINE_TAGGED_BINOPS = ("+", "-", "*", "&", "|", "^")
 
-    def _slot_call_binary_runtime(self, expr):
+    def _slot_call_binary_runtime(self, expr, object_boundary=False):
         """Select an object protocol, never an annotation-derived int kernel.
 
-        Scalar and explicit machine projections retain their own lowering.
-        An ordinary integer slot operand still needs the existing literal
-        provenance proof before reaching this selector. Dynamic operands use
-        runtime dispatch, including reflected user methods and bignums.
+        A scalar expression retains its usual representation unless its
+        consumer requires an object. At that boundary ordinary annotated
+        integers/floats use actual runtime tag and dunder dispatch; annotations
+        never admit a primitive integer kernel or prove overflow impossible.
+        Explicit machine projections retain their own lowering.
         """
-        if expr.op != "+" or getattr(self, "_freestanding_module", False):
+        if (expr.op != "+" or getattr(self, "_freestanding_module", False)
+                or getattr(self, "_runtime_port_module", False)):
             return None
         function = self.current_function
-        if (function is not None
-                and function.name in getattr(self, "_manual_pointer_abi_functions", ())):
+        if function is not None and (
+                function.name in getattr(self, "_manual_pointer_abi_functions", ())
+                or function.name in getattr(self, "_c_abi_export_symbols", ())):
             return None
-        if isinstance(expr.ty, (IntType, BoolType, FloatType)):
+        # Scaffold-on compiler modules can still perform ordinary Python
+        # arithmetic. Only actual manual function/module boundaries exclude
+        # this route; a scaffold flag alone is not a machine-value contract.
+        for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty):
+            if isinstance(ty, IntType) and (
+                    ty.name != "int" or ty.width != 64 or not ty.signed):
+                return None
+            if isinstance(ty, FloatType) and (ty.name != "float" or ty.width != 64):
+                return None
+            if self._is_valueclass_payload_type(ty):
+                return None
+        if isinstance(expr.ty, (IntType, BoolType, FloatType)) and not object_boundary:
             return None
         if self._expr_looks_cpython(expr) or self._expr_returns_unsafe_raw_pointer(expr):
             return None
         for operand in (expr.lhs, expr.rhs):
-            if (self._is_valueclass_payload_type(operand.ty)
-                    or _raw_int_name(operand.ty)
-                    or self._expr_returns_unsafe_raw_pointer(operand)):
+            if self._expr_returns_unsafe_raw_pointer(operand):
                 return None
         return "py_obj_add"
 

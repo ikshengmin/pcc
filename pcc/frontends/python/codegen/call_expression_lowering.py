@@ -1465,6 +1465,8 @@ class CallExpressionLoweringMixin:
         if name == "bool" and not expr.args:
             return ir.Constant(_I1, 0)
         if name == "format" and not expr.kwargs and 1 <= len(expr.args) <= 2:
+            if not any(self._expr_looks_cpython(argument) for argument in expr.args):
+                return self._emit_owned_format_call(expr)
             value_obj = self._emit_expr_as_pcc_object(expr.args[0])
             if len(expr.args) == 2:
                 if (

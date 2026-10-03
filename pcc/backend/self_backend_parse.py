@@ -252,6 +252,12 @@ _RET_VOID_RE = re.compile(r"^ret\s+void$")
 _RET_RE = re.compile(rf"^ret\s+(?P<type>{_TYPE_TOKEN})\s+(?P<value>.+)$")
 _UNREACHABLE_RE = re.compile(r"^unreachable$")
 _INDEX_RE = re.compile(r"^(?P<type>i\d+)\s+(?P<value>.+)$")
+_FUNCTION_DECL_RE = re.compile(r"^declare\s+", re.MULTILINE)
+_NAMED_TYPE_BODIES: dict[str, str] = {}
+_DECLARATION_ONLY_SCALAR_TYPES = (
+    "half", "bfloat", "x86_fp80", "fp128", "ppc_fp128", "x86_amx",
+)
+
 _NAMED_TYPES: dict[str, TypeDesc] = {}
 _TYPE_CACHE: dict[str, TypeDesc] = {}
 _POINTER_TYPE_CACHE: dict[int, tuple[TypeDesc, TypeDesc]] = {}
@@ -324,6 +330,7 @@ def parse_self_backend_module(ir_text: str) -> ParsedModule:
     # retaining every compiler input forever.
     reset_operand_intern()
     _parse_named_types(ir_text)
+    _resolve_declaration_type_attributes(ir_text)
     return ParsedModule(
         triple=parse_self_backend_target_triple(ir_text),
         globals_=tuple(_parse_globals(ir_text)),
@@ -679,6 +686,7 @@ def _parse_ir_type_tokens(
     index: int,
     *,
     resolve_named=None,
+    declaration_only: bool = False,
 ) -> tuple[TypeDesc, int]:
     """Recursively parse one TypeDesc from the lazy token cursor."""
     token_info, index = _next_ir_type_token(text, index)
@@ -700,6 +708,7 @@ def _parse_ir_type_tokens(
             text,
             index,
             resolve_named=resolve_named,
+            declaration_only=declaration_only,
         )
         close_info, index = _next_ir_type_token(text, index)
         if close_info[0] == "eof" or close_info[1] != close:
@@ -716,6 +725,7 @@ def _parse_ir_type_tokens(
                     text,
                     index,
                     resolve_named=resolve_named,
+                    declaration_only=declaration_only,
                 )
                 fields.append(field)
                 delimiter_info, next_offset = _next_ir_type_token(text, index)
@@ -739,13 +749,21 @@ def _parse_ir_type_tokens(
     ):
         base = _canonical_leaf_type(token)
     elif token.startswith("%"):
-        if token not in _NAMED_TYPES and resolve_named is not None:
-            resolve_named(token)
-        if token not in _NAMED_TYPES:
-            raise BackendUnavailable(
-                f"self backend does not know named LLVM type {token!r}"
-            )
-        base = _NAMED_TYPES[token]
+        if declaration_only:
+            if token not in _NAMED_TYPE_BODIES:
+                raise BackendUnavailable(
+                    f"self backend has no definition for named type {token!r}"
+                )
+            base = TypeDesc("void")
+        else:
+            if token not in _NAMED_TYPES:
+                if resolve_named is not None:
+                    resolve_named(token)
+                else:
+                    _resolve_named_type(token)
+            base = _NAMED_TYPES[token]
+    elif declaration_only and token in _DECLARATION_ONLY_SCALAR_TYPES:
+        base = TypeDesc("void")
     else:
         raise _ir_type_parse_error(text, f"unsupported token {token!r}")
 
@@ -1624,11 +1642,13 @@ def _arg_list_is_vararg(args_text: str) -> bool:
     return bool(pieces) and pieces[-1] == "..."
 
 
-def _parse_type(text: str, *, resolve_named=None) -> TypeDesc:
+def _parse_type(
+    text: str, *, resolve_named=None, declaration_only: bool = False,
+) -> TypeDesc:
     token = text.strip()
     if not token:
         raise BackendUnavailable("self backend does not understand empty LLVM type")
-    if resolve_named is None:
+    if resolve_named is None and not declaration_only:
         cached = _TYPE_CACHE.get(token)
         if cached is not None:
             return cached
@@ -1636,6 +1656,7 @@ def _parse_type(text: str, *, resolve_named=None) -> TypeDesc:
         token,
         0,
         resolve_named=resolve_named,
+        declaration_only=declaration_only,
     )
     trailing_info, _trailing_offset = _next_ir_type_token(token, end)
     if trailing_info[0] != "eof":
@@ -1643,7 +1664,7 @@ def _parse_type(text: str, *, resolve_named=None) -> TypeDesc:
             token,
             f"unexpected trailing token {trailing_info[1]!r}",
         )
-    if resolve_named is None:
+    if resolve_named is None and not declaration_only:
         _TYPE_CACHE[token] = base
     return base
 
@@ -1657,48 +1678,84 @@ def _strip_volatile_memory_op_prefix(text: str) -> str:
 
 def _parse_named_types(ir_text: str) -> None:
     _NAMED_TYPES.clear()
+    _NAMED_TYPE_BODIES.clear()
     _TYPE_CACHE.clear()
     _POINTER_TYPE_CACHE.clear()
-    pending: dict[str, str] = {}
     search_pos = 0
     while search_pos < len(ir_text):
         match = _NAMED_TYPEDEF_RE.search(ir_text, search_pos)
         if match is None:
             break
         body_text = match.group("body").strip()
-        # Preserve the existing boundary for opaque and packed declarations:
-        # they may be present but unused.  A reference still fails closed as
-        # an unknown named type; regular structs are parsed structurally.
-        if body_text.startswith("{"):
-            pending[match.group("name")] = body_text
+        _NAMED_TYPE_BODIES[match.group("name")] = body_text
         search_pos = match.end()
+    # Keep malformed unused normal structs diagnostic; preserve the existing
+    # unused opaque/packed boundary. No layout is resolved here.
+    for body_text in _NAMED_TYPE_BODIES.values():
+        if body_text.startswith("{"):
+            _parse_type(body_text, declaration_only=True)
 
-    def resolve(name: str) -> TypeDesc:
-        existing = _NAMED_TYPES.get(name)
-        if existing is not None:
-            return existing
-        if name not in pending:
-            raise BackendUnavailable(
-                f"self backend has no definition for named type {name!r}"
-            )
-        body_text = pending[name]
-        placeholder = TypeDesc("struct", name=name)
-        _NAMED_TYPES[name] = placeholder
-        parsed = _parse_type(body_text, resolve_named=resolve)
-        if not parsed.is_struct:
-            raise BackendUnavailable(
-                f"self backend named LLVM type {name!r} must be a struct, got {body_text!r}"
-            )
-        resolved = TypeDesc(
-            "struct",
-            name=name,
-            fields=parsed.fields,
+
+def _resolve_named_type(name: str) -> TypeDesc:
+    existing = _NAMED_TYPES.get(name)
+    if existing is not None:
+        return existing
+    body_text = _NAMED_TYPE_BODIES.get(name, "")
+    if not body_text.startswith("{"):
+        raise BackendUnavailable(
+            f"self backend does not know named LLVM type {name!r}"
         )
-        _NAMED_TYPES[name] = resolved
-        return resolved
+    _NAMED_TYPES[name] = TypeDesc("struct", name=name)
+    try:
+        parsed = _parse_type(body_text, resolve_named=_resolve_named_type)
+    except Exception:
+        _NAMED_TYPES.clear()
+        _TYPE_CACHE.clear()
+        _POINTER_TYPE_CACHE.clear()
+        raise
+    resolved = TypeDesc("struct", name=name, fields=parsed.fields)
+    _NAMED_TYPES[name] = resolved
+    return resolved
 
-    for name in list(pending):
-        resolve(name)
+
+def _resolve_typed_abi_attributes(text: str) -> None:
+    if "(" not in text:
+        return
+    attributes = ("byval", "byref", "sret", "inalloca", "preallocated", "elementtype")
+    has_attribute = False
+    for attribute in attributes:
+        if attribute in text:
+            has_attribute = True
+            break
+    if not has_attribute:
+        return
+    position = 0
+    while position < len(text):
+        token, position = _next_ir_type_token(text, position)
+        if token[1] not in attributes:
+            continue
+        opening_token, _after_opening = _next_ir_type_token(text, position)
+        if opening_token[1] != "(":
+            continue
+        opening = opening_token[2]
+        closing = _find_matching_paren(text, opening)
+        _parse_type(text[opening + 1:closing])
+        position = closing + 1
+
+
+def _resolve_declaration_type_attributes(ir_text: str) -> None:
+    position = 0
+    while position < len(ir_text):
+        declaration = _FUNCTION_DECL_RE.search(ir_text, position)
+        if declaration is None:
+            return
+        function_name = _FUNCTION_NAME_RE.search(ir_text, declaration.end())
+        if function_name is None:
+            raise BackendUnavailable("self backend malformed function declaration")
+        opening = function_name.end() - 1
+        closing = _find_matching_paren(ir_text, opening)
+        _resolve_typed_abi_attributes(ir_text[opening + 1:closing])
+        position = closing + 1
 
 
 def _parse_functions(ir_text: str) -> list[ParsedFunction]:
@@ -2381,6 +2438,7 @@ def _parse_arg_infos(function_name: str, args_text: str) -> list[ArgInfo]:
             raise BackendUnavailable(
                 f"self backend could not decode argument in {function_name!r}: {chunk}"
             ) from exc
+        _resolve_typed_abi_attributes(remainder)
         name_match = re.search(
             r'(%(?:"[^"]+"|[A-Za-z_.$][\w.$-]*|[0-9]+))\s*$', remainder
         )
@@ -4833,6 +4891,7 @@ def _parse_call_args(
             )
         alignments.append(_parse_call_arg_alignment(value_text))
         arg_type = _parse_type(type_text)
+        _resolve_typed_abi_attributes(value_text)
         arg_value = decode_value_token(value_text)
         # Keep the internal call ABI canonical: integer operands are numeric
         # strings throughout the emitters.  LLVM permits the aliases
@@ -4873,6 +4932,7 @@ def _parse_call_args_into_plane(
             )
         alignment = _parse_call_arg_alignment(value_text)
         arg_type = _parse_type(type_text)
+        _resolve_typed_abi_attributes(value_text)
         arg_value = decode_value_token(value_text)
         if arg_type.is_int and arg_type.width == 1:
             if arg_value == "false":
