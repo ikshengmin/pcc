@@ -31,7 +31,11 @@ capture remains preserved. The fourth sync used the 07:35 capture and produced
 PCC `8ed4eabec0ddc2505570ba6b413f88de0964ff76` (9 paths). The fifth completed
 at 08:51 from the exact 08:31 capture: PCC
 `9c834d952d4b8b582b7cdfef818ba91478132295` (18 paths), with GUI and gateway
-unchanged. This fifth capture is the current verified baseline. Its fast checks
+unchanged. That fifth capture remains preserved. The sixth sync completed at09:56 from
+the exact09:46 capture: PCC `f4d02d9dc01372889c7e40d0f52d6315970d58cc`
+(45 paths), with GUI and gateway unchanged. It recorded385 fast passes and one
+failed frozenset producer case, with17,753 selected and5,726 gate-deselected
+collection nodes and no errors. The09:46 capture is the current verified baseline. Its fast checks
 recorded 169 passes and two failures; collection had no errors. Local work only
 applies and commits the source delta; validation runs in the cloud.
 
@@ -202,6 +206,32 @@ unchanged. Every later hourly source capture must run its own collection and fas
 affected regressions before the local commit. Preserve failing work in the sync,
 report exact failures and unexecuted cases, and use commit subjects describing the
 actual changes rather than synchronization workflow labels.
+
+A new complete Linux x86-64 threaded/atomic runtime, frozen at09:59:56, passed
+strict admission for all184 ordered members in437.79 seconds, with439MB peak.
+Its source identity is `3b1592b4aa8c7c409669e938740717ee96d3002718623cedfdf3a68d3ec94c59`
+and archive is `e9f501eddc9984e63d04da3de5365a43fb5f8364332ec0e1f5cf15602e2599e4`.
+Eight unchanged Python controls passed all five requested GC settings (40 runs).
+Separate unchanged-binary sidecars confirmed actual backend selection for35 of
+those runs; indexed-payload emitted no collection event in its five runs. The
+ordinary failed-class cleanup case still fails GC0, leaving its other four
+variants unexecuted. Two original C programs and all six abort cases passed.
+These are host-pcc0-produced native controls, not a native compiler fixed point.
+
+The thread diagnostic passed archive/sink/settings admission but its program
+stopped at a raw getenv return annotation before any of60 executions. The fixture
+now declares c_rawptr explicitly; its native replay remains queued. A fresh441-
+module diagnostic is running on separately frozen10:20 source. Later metaclass
+owner changes passed10 host/IR cases but are outside the09:59 runtime. The owned
+Darwin external-stream resolver passed114 host/object cases, including real
+Mach-O symbol checks; actual Darwin execution remains unrun.
+
+The pinned Harness reference was recovered from the official archive at
+`47f943859bef60e4160492346772ded9b24f765a`. All7,412 blob hashes and modes match
+Git tree `f904efab9ef435201d6ba4da88a34d6366568272`; this is reference recovery,
+not behavioral or pixel parity. Corpus C helpers still route product assembly
+through host cc in several suites; migration to the owned executable API is
+underway, preserving external reference oracles and original C programs.
 
 ## Qualification order
 

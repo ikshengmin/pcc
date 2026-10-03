@@ -2325,8 +2325,11 @@ def py_class_set_metaclass(cls, metaclass) -> None:
         if not _ptr_is_class(metaclass):
             return
         metaclass = pcc_gc_note_relocation_read(metaclass)
-    store_ptr(cls, PYCLASSOBJECT_METACLASS_OFFSET, metaclass)
-    _class_note_borrowed_metadata_slot_store(cls, ptr_add(cls, PYCLASSOBJECT_METACLASS_OFFSET), metaclass)
+    # A metaclass is a real class owner, even while user classes remain
+    # immortal. The retaining store also retires the previous relation.
+    pcc_gc_store_ptr(
+        cls, ptr_add(cls, PYCLASSOBJECT_METACLASS_OFFSET), metaclass,
+    )
 
 
 @c_abi_export("py_instance_new")
@@ -3304,9 +3307,14 @@ def py_class_dealloc(o) -> None:
     field_names = load_ptr(o, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
     if ptr_is_null(field_names) == 0:
         free(field_names)
+    # Detach the counted metaclass relation before its release can run
+    # nested cleanup. The remaining class retirement uses no metaclass data.
+    metaclass = pcc_gc_load_ptr(o, ptr_add(o, PYCLASSOBJECT_METACLASS_OFFSET))
+    store_ptr(o, PYCLASSOBJECT_METACLASS_OFFSET, null())
     # Attribute outcomes are keyed by this address; retire them before a new
-    # class can be allocated there.
+    # class can be allocated there or relation cleanup can reenter lookup.
     _bump_class_attr_cache_epoch()
+    py_decref(metaclass)
     pcc_gc_free_object_memory(o)
 
 
@@ -4543,4 +4551,3 @@ def py_obj_special_present(value, name) -> int:
                 found = 1
     pcc_py_gc_minor_graph_unlock()
     return found
-

@@ -421,7 +421,7 @@ def _visit_class_slots(o, visitor, context) -> i64:
     _visit_slot(
         o,
         abi_constant("object.class.metaclass_offset"),
-        2,
+        1,
         visitor,
         context,
     )
@@ -816,7 +816,7 @@ def pcc_gc_visit_object_slots_slice(
                 slot_offset = abi_constant("object.class.attrs_offset")
             else:
                 slot_offset = abi_constant("object.class.metaclass_offset")
-                role = 2
+                role = 1
             if ptr_is_null(slot_base) != 0:
                 present = 0
         else:

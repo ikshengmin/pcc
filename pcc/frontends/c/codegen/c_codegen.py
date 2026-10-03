@@ -10,7 +10,7 @@ from itertools import count
 # Both frontends use the owned IR builder.
 from pcc.ir.compat import ir_c as ir
 from pcc.frontends.python.pipeline_targets import host_target_triple
-from pcc.backend.self_backend_target_match import is_aarch64_darwin_triple
+from pcc.backend.self_backend_target_match import target_os_name
 from pcc.ir.compat import add_raw_function_attribute
 from pcc.frontends.c.c_abi_layout import (
     builtin_integer_is_unsigned,
@@ -299,6 +299,7 @@ class CCodeGenerator(
         self._file_scope_object_states = {}
         self._file_scope_function_states = {}
         self._future_file_scope_object_ir_types = {}
+        self._defined_file_scope_object_names = set()
         self._future_file_scope_function_ir_types = {}
         self.translation_unit_name = self._sanitize_translation_unit_name(
             translation_unit_name
@@ -917,6 +918,7 @@ class CCodeGenerator(
 
     def _collect_file_scope_object_ir_types(self, ext_nodes):
         merged_types = {}
+        defined_names = set()
         for ext in ext_nodes:
             if not (
                 isinstance(ext, c_ast.Decl)
@@ -924,6 +926,8 @@ class CCodeGenerator(
                 and not isinstance(ext.type, c_ast.FuncDecl)
             ):
                 continue
+            if ext.init is not None or "extern" not in (ext.storage or []):
+                defined_names.add(ext.name)
             try:
                 if isinstance(ext.type, c_ast.ArrayDecl):
                     ir_type = self._build_array_ir_type(ext.type, init_node=ext.init)
@@ -941,6 +945,7 @@ class CCodeGenerator(
                     existing_ir_type, ir_type
                 )
         self._future_file_scope_object_ir_types = merged_types
+        self._defined_file_scope_object_names = defined_names
 
     def _collect_file_scope_function_ir_types(self, ext_nodes):
         future_types = {}
@@ -972,8 +977,10 @@ class CCodeGenerator(
             (
                 ir_type,
                 ExternGlobalRef(
-                    self._file_scope_symbol_name(name, storage), ir_type,
-                    is_thread_local_storage(storage),
+                    self._external_object_symbol_name(
+                        self._file_scope_symbol_name(name, storage), ir_type, storage
+                    ),
+                    ir_type, is_thread_local_storage(storage),
                 ),
             ),
         )
@@ -1428,6 +1435,10 @@ class CCodeGenerator(
             state.ir_type = bind_type
             state.type_key = str(bind_type)
             symbol_name = state.symbol_name
+            if state.definition_kind == "extern":
+                symbol_name = self._external_object_symbol_name(
+                    symbol_name, bind_type, storage
+                )
             existing = self.module.globals.get(symbol_name)
             if existing is None:
                 existing = self._safe_global_var(
@@ -1440,9 +1451,10 @@ class CCodeGenerator(
             self.define(name, (bind_type, existing))
             return
 
-        existing = self.module.globals.get(name)
+        symbol_name = self._external_object_symbol_name(name, ir_type, storage)
+        existing = self.module.globals.get(symbol_name)
         if existing is None:
-            existing = self._safe_global_var(ir_type, name, external=True)
+            existing = self._safe_global_var(ir_type, symbol_name, external=True)
             if thread_local:
                 existing.storage_class = "thread_local"
         elif (getattr(existing, "storage_class", "") == "thread_local") != thread_local:
@@ -1464,6 +1476,23 @@ class CCodeGenerator(
         "stdin": "__stdinp", "stdout": "__stdoutp", "stderr": "__stderrp",
     }
 
+    def _external_object_symbol_name(self, name, ir_type, storage=None):
+        """Select the platform ABI for external standard-stream references.
+
+        Explicit declarations and implicit libc bindings share this route.
+        Translation-unit definitions and local storage keep their C identity;
+        an extern declaration before a later definition must bind that object.
+        The owned stdio header performs the usual Apple macro expansion first.
+        """
+        if (
+            target_os_name(str(self.module.triple)) == "darwin"
+            and isinstance(ir_type, ir.PointerType)
+            and not is_thread_local_storage(storage)
+            and name not in self._defined_file_scope_object_names
+        ):
+            return self._DARWIN_STDIO_GLOBAL_SYMBOLS.get(name, name)
+        return name
+
     def lookup(self, name):
         if not isinstance(name, str):
             name = name.name if hasattr(name, "name") else str(name)
@@ -1472,10 +1501,8 @@ class CCodeGenerator(
                 self._declare_libc(name)
             elif name in self._EXTERN_GLOBAL_VARS:
                 gv_type = self._EXTERN_GLOBAL_VARS[name]
-                symbol = name
-                if is_aarch64_darwin_triple(str(self.module.triple)):
-                    # These are C ABI names. Mach-O adds its underscore later.
-                    symbol = self._DARWIN_STDIO_GLOBAL_SYMBOLS.get(name, name)
+                # These are C ABI names. Mach-O adds its underscore later.
+                symbol = self._external_object_symbol_name(name, gv_type)
                 gv = self._safe_global_var(gv_type, symbol, external=True)
                 self.define(name, (gv_type, gv))
         try:

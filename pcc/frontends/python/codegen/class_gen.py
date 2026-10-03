@@ -4933,7 +4933,20 @@ class ClassLowering:
                 ],
                 name=self._fresh(f"class.{cd.name}"),
             )
-        self._maybe_emit_class_metaclass_slot(info, cls_ptr)
+        class_body_root = self.parent._enter_container_temp_root(cls_ptr, self._fresh("class.body"))
+        body_error_target = self.parent._current_try_err_block()
+        if body_error_target is None:
+            body_error_target = self.parent._ensure_fn_err_exit()
+        self.parent._try_err_block = self.parent._make_cpy_operand_cleanup_block(
+            (), (), body_error_target, "class.body.unwind",
+            rooted_pcc_lifetimes=((class_body_root, True),),
+        )
+        class_body_cleanup = self.parent._try_err_block
+        saved_class_body_cpy = self.parent._cpy_operand_cleanup_block
+        # The constructor's NEW owner must be rooted before metaclass or
+        # header metadata can allocate or report an exception.
+        self.parent._cpy_operand_cleanup_block = class_body_cleanup
+        self._maybe_emit_class_metaclass_slot(info, class_body_root)
         if info.slots_only:
             builder.call(runtime["py_class_mark_slots_only"], [cls_ptr])
         if self._class_subclasses_dict(info):
@@ -4964,16 +4977,6 @@ class ClassLowering:
             )
 
         method_defs_by_name = {mname: fd for mname, fd in info.method_defs}
-        class_body_root = self.parent._enter_container_temp_root(cls_ptr, self._fresh("class.body"))
-        body_error_target = self.parent._current_try_err_block()
-        if body_error_target is None:
-            body_error_target = self.parent._ensure_fn_err_exit()
-        self.parent._try_err_block = self.parent._make_cpy_operand_cleanup_block(
-            (), (), body_error_target, "class.body.unwind",
-            rooted_pcc_lifetimes=((class_body_root, True),),
-        )
-        class_body_cleanup = self.parent._try_err_block
-        saved_class_body_cpy = self.parent._cpy_operand_cleanup_block
 
         # The class-local namespace remains a live owner throughout default
         # evaluation. Cached attribute globals identify bindings only.
@@ -5532,7 +5535,7 @@ class ClassLowering:
     def _maybe_emit_class_metaclass_slot(
         self,
         info: ClassInfo,
-        cls_ptr: ir.Value,
+        class_root: ir.Value,
     ) -> None:
         metaclass_name = getattr(info, "metaclass_name", None)
         if not metaclass_name or metaclass_name == _METACLASS_CONFLICT:
@@ -5540,14 +5543,25 @@ class ClassLowering:
         meta_info = self.classes.get(metaclass_name)
         if meta_info is None or meta_info is info:
             return
-        meta_cls = self._load_class_object(
-            meta_info,
-            f".metaclass.{info.name}.{metaclass_name}",
+        parent = self.parent
+        previous = parent._current_try_err_block()
+        target = previous if previous is not None else parent._ensure_fn_err_exit()
+        saved_cpy = parent._cpy_operand_cleanup_block
+        metaclass_root = parent._emit_slot_call_operand(
+            Name(span=None, ty=DynType(name="dyn"), ident=metaclass_name),
+            "class.metaclass.owner",
         )
-        self.parent.builder.call(
-            self.parent.runtime["py_class_set_metaclass"],
-            [cls_ptr, meta_cls],
-        )
+        cleanup = parent._slot_call_cleanup_block((metaclass_root,), target)
+        parent._try_err_block = cleanup
+        parent._cpy_operand_cleanup_block = cleanup
+        try:
+            parent._slot_call_runtime_call(
+                "py_class_set_metaclass", (class_root, metaclass_root),
+            )
+            parent._release_slot_call_roots((metaclass_root,))
+        finally:
+            parent._try_err_block = previous
+            parent._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_property_descriptor_class_attrs(
         self,

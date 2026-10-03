@@ -23,6 +23,7 @@ PROGRAM = textwrap.dedent('''
         c_abi_typed_export,
         c_int64,
         c_ptr,
+        c_rawptr,
         c_void,
         extern,
     )
@@ -43,7 +44,7 @@ PROGRAM = textwrap.dedent('''
     scheduler_released = extern('pcc_thread_scheduler_lock_released', (), c_void)
     no_park_enter = extern('pcc_thread_no_park_enter', (), c_void)
     no_park_exit = extern('pcc_thread_no_park_exit', (), c_void)
-    getenv = extern('pcc_platform_getenv', (c_ptr,), c_ptr)
+    getenv = extern('pcc_platform_getenv', (c_ptr,), c_rawptr)
     log_event = extern('pcc_diagnostics_runtime_log_event',
                        (c_ptr, c_ptr, c_int64, c_int64, c_ptr), c_void)
     log_code = extern('pcc_diagnostics_runtime_log_event_code',
@@ -173,28 +174,56 @@ def _check_lifecycles(events, expected=ROUNDS * WORKERS):
     assert failures == [('start_failed', -1), ('start_failed', -1), ('join_failed', -1)]
 
 
-def _check_transitions(events):
+def _check_transitions(events, expected_workers=ROUNDS * WORKERS):
     rows = [event for event in events if event['category'] == 'thread']
     begin = next(index for index, event in enumerate(rows) if event['event'] == 'probe_begin')
     end = next(index for index, event in enumerate(rows) if event['event'] == 'probe_end')
     parent = rows[begin]['thread']
     phase = rows[begin + 1:end]
     parent_rows = [event for event in phase if event['thread'] == parent]
+    known = {'probe_begin', 'probe_end', 'start', 'enter', 'exit', 'join', 'joined',
+             'start_failed', 'join_failed', 'detach', 'scheduler_lock_request',
+             'scheduler_acquired_deferred', 'scheduler_lock_released', 'scheduler_lock_failed',
+             'safepoint_stop_observed', 'safepoint_suspend_deferred', 'safepoint_resume_deferred',
+             'stop_world_request', 'world_stopped', 'stop_world_nested', 'resume_world_request',
+             'world_resumed', 'resume_world_nested', 'stop_world_failed', 'resume_world_failed',
+             'trace_dropped', 'safepoint_epochs_omitted'}
+    assert all(event['event'] in known for event in rows), 'unknown thread event'
+    assert not any(event['event'] in {'scheduler_lock_failed', 'stop_world_failed', 'resume_world_failed'}
+                   for event in phase), 'unexpected synchronization failure'
     for name in ('scheduler_lock_request', 'scheduler_acquired_deferred', 'scheduler_lock_released',
                  'stop_world_request', 'world_stopped', 'resume_world_request', 'world_resumed'):
         assert any(event['event'] == name for event in parent_rows), name
-    assert any(event['event'] == 'safepoint_stop_observed' for event in phase)
+    application_handles = {event['ptr'] for event in parent_rows if event['event'] == 'start'}
+    worker_ids = {event['thread'] for event in phase
+                  if event['event'] == 'enter' and event['ptr'] in application_handles}
+    assert len(worker_ids) == expected_workers and parent not in worker_ids
+    assert any(event['event'] == 'safepoint_stop_observed' and event['thread'] in worker_ids
+               for event in phase), 'no application worker observed a stop'
     suspended = {(event['thread'], event['value0'], event['value1']) for event in phase
-                 if event['event'] == 'safepoint_suspend_deferred'}
+                 if event['event'] == 'safepoint_suspend_deferred' and event['thread'] in worker_ids}
     resumed = {(event['thread'], event['value0'], event['value1']) for event in phase
-               if event['event'] == 'safepoint_resume_deferred'}
-    assert suspended & resumed, 'no matched native suspension/resumption evidence'
+               if event['event'] == 'safepoint_resume_deferred' and event['thread'] in worker_ids}
+    assert suspended & resumed, 'no matched application suspension/resumption evidence'
     assert all(epoch > 0 and waits > 0 for _, epoch, waits in suspended | resumed)
+    assert any(event['event'] == 'world_stopped' and event['value1'] >= WORKERS + 1
+               for event in parent_rows), 'no stopped world with the three workers and caller'
     stopped = {event['value0'] for event in parent_rows if event['event'] == 'world_stopped'}
     restarted = {event['value0'] for event in parent_rows if event['event'] == 'world_resumed'}
     assert stopped & restarted, 'no matched native stop/resume epoch'
-    if suspended != resumed or stopped != restarted:
-        assert any(event['event'] == 'trace_dropped' and event['value0'] > 0 for event in phase)
+    assert all(epoch > 0 for epoch in stopped | restarted)
+    missing = len(suspended ^ resumed) + len(stopped ^ restarted)
+    drops = [event['value0'] for event in phase if event['event'] == 'trace_dropped']
+    assert all(count > 0 for count in drops)
+    assert sum(drops) >= missing, 'missing transition records exceed reported trace loss'
+    counts = {}
+    for event in events:
+        key = event['category'] + '.' + event['event']
+        counts[key] = counts.get(key, 0) + 1
+    return {'all_event_counts': counts, 'worker_ids': sorted(worker_ids),
+            'matched_worker_suspensions': len(suspended & resumed),
+            'matched_stw_epochs': sorted(stopped & restarted),
+            'missing_transition_records': missing, 'trace_dropped_total': sum(drops)}
 
 
 def _source_identity(compiler_root, runtime_root):
@@ -368,25 +397,28 @@ def test_native_thread_lifecycle_logging_five_gc(python_program_compiler, reques
 
 
 def _sample_transitions():
-    def event(name, thread=1, first=0, second=0):
+    def event(name, thread=1, first=0, second=0, pointer='0x0'):
         return {'category': 'thread', 'event': name, 'thread': thread,
-                'ptr': '0x0', 'value0': first, 'value1': second}
+                'ptr': pointer, 'value0': first, 'value1': second}
 
     return [event('probe_begin'), event('scheduler_lock_request'),
             event('scheduler_acquired_deferred'), event('scheduler_lock_released'),
             event('stop_world_request'), event('safepoint_stop_observed', 2),
-            event('world_stopped', first=7, second=2), event('resume_world_request'),
+            event('world_stopped', first=7, second=4), event('resume_world_request'),
             event('world_resumed', first=7),
             event('safepoint_suspend_deferred', 2, 7, 1),
-            event('safepoint_resume_deferred', 2, 7, 1), event('probe_end')]
+            event('safepoint_resume_deferred', 2, 7, 1),
+            event('start', pointer='0x20'), event('enter', 2, pointer='0x20'), event('probe_end')]
 
 
 def test_transition_validator_requires_captured_native_epoch_evidence():
-    _check_transitions(_sample_transitions())
+    _check_transitions(_sample_transitions(), expected_workers=1)
 
 
 @pytest.mark.parametrize('fault', ['missing-lock', 'intent-only', 'wrong-resume-epoch',
-                                  'zero-waits', 'unreported-loss', 'wrong-stop-epoch'])
+                                  'zero-waits', 'unreported-loss', 'wrong-stop-epoch',
+                                  'collector-only', 'no-worker-stop', 'unknown-event',
+                                  'unexpected-lock-failure', 'insufficient-loss-budget'])
 def test_transition_validator_rejects_missing_or_inconsistent_evidence(fault):
     rows = _sample_transitions()
     if fault == 'missing-lock':
@@ -399,14 +431,30 @@ def test_transition_validator_rejects_missing_or_inconsistent_evidence(fault):
         rows[9]['value1'] = rows[10]['value1'] = 0
     elif fault == 'unreported-loss':
         rows.insert(-1, dict(rows[9], value0=8))
-    else:
+    elif fault == 'wrong-stop-epoch':
         rows[8]['value0'] = 8
+    elif fault == 'collector-only':
+        rows[9]['thread'] = rows[10]['thread'] = 99
+    elif fault == 'no-worker-stop':
+        rows[6]['value1'] = 1
+    elif fault == 'unknown-event':
+        rows.insert(-1, dict(rows[0], event='thread_event'))
+    elif fault == 'unexpected-lock-failure':
+        rows.insert(-1, dict(rows[0], event='scheduler_lock_failed', value0=-1))
+    else:
+        rows.insert(-1, dict(rows[9], value0=8))
+        rows.insert(-1, dict(rows[9], value0=9))
+        rows.insert(-1, dict(rows[9], event='trace_dropped', value0=1, value1=0))
     with pytest.raises(AssertionError):
-        _check_transitions(rows)
+        _check_transitions(rows, expected_workers=1)
 
 
 def test_transition_validator_allows_explicit_loss_only_with_some_complete_evidence():
     rows = _sample_transitions()
     rows.insert(-1, dict(rows[9], value0=8))
     rows.insert(-1, dict(rows[9], event='trace_dropped', value0=1, value1=0))
-    _check_transitions(rows)
+    summary = _check_transitions(rows, expected_workers=1)
+    assert summary['missing_transition_records'] == 1
+    assert summary['trace_dropped_total'] == 1
+    assert summary['worker_ids'] == [2]
+    assert summary['all_event_counts']['thread.trace_dropped'] == 1

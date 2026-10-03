@@ -47,6 +47,7 @@ _CLASS_NAMESPACE_CONTEXT_NAME: i64 = 1
 _CLASS_NAMESPACE_CONTEXT_COUNT: i64 = 2
 
 
+@c_abi_export("pcc_class_namespace_same_name")
 def _class_namespace_same_name(left: c_ptr, right: c_ptr) -> i64:
     index: i64 = 0
     while True:
