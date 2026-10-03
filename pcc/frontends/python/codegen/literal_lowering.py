@@ -1671,10 +1671,12 @@ class LiteralLoweringMixin:
                 f"dict() takes at most 1 positional arg at L2; got {len(expr.args)}"
             )
         # Share the sink-aware owner for empty/keyword/mapping construction.
-        # It declines iterable/unpack forms before emitting any instruction.
-        constructed = self._maybe_emit_dict_builtin(expr)
-        if constructed is not None:
-            return constructed
+        # ValueBox projection still owns a separate aggregate-payload ABI;
+        # retain that established path until its producer accepts a sink.
+        if not any(self._is_valueclass_payload_type(value.ty) for _name, value in expr.kwargs):
+            constructed = self._maybe_emit_dict_builtin(expr)
+            if constructed is not None:
+                return constructed
         out = self.builder.call(
             self.runtime["py_dict_new"],
             [],

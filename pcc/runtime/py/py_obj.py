@@ -1706,39 +1706,3 @@ def pcc_gc_release_known(o) -> None:
     store_i64(prepared, 32, new_rc)
     store_i64(prepared, 40, 1)
     _py_decref_finish(prepared)
-
-
-@c_abi_export("pcc_gc_copy_ptr_lease_commit_locked")
-def pcc_gc_copy_ptr_lease_commit_locked(
-    plan: c_ptr, owner, destination: c_ptr, source: c_ptr,
-) -> int:
-    """Retain into an empty owning heap field and transfer an address lease.
-
-    The caller holds the graph transaction. owner is rooted and address-leased,
-    destination is one of its traced owning fields, and source is a distinct
-    stable owning slot. The destination is empty. plan is a 128-byte pointer
-    store plan initialized for owner/backend BEFORE locking, and must be
-    finished after unlocking on success or failure. Runtime config is ready.
-
-    On success the destination owns one reference and the returned lease,
-    which the caller releases through that destination before mutating it.
-    Negative status leaves the destination empty and transfers no lease.
-    Neither a raw code pointer nor a borrowed metadata alias is an owner.
-    """
-    if ptr_is_null(plan) != 0 or ptr_is_null(owner) != 0:
-        return -1
-    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
-        return -1
-    if ptr_eq(destination, source) != 0:
-        return -1
-    if ptr_is_null(load_ptr(destination, 0)) == 0:
-        return -4
-    token: int = pcc_gc_foreign_lease_acquire(source)
-    if token < 0:
-        return token
-    value = load_ptr(source, 0)
-    if pcc_gc_store_ptr_plan_commit_locked(plan, owner, destination, value) == 0:
-        if pcc_gc_foreign_lease_release(source, token) != 0:
-            return -3
-        return -4
-    return token

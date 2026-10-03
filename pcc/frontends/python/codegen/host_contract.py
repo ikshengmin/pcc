@@ -582,6 +582,8 @@ L1_CODEGEN_HOST_METHODS = (
     "_native_re_compile_argument_exprs",
     "_emit_native_re_compile_call",
     "_emit_native_re_findall_call",
+    "_emit_native_re_compile_alias_method_call",
+    "_native_re_flags_operand_expr",
     "_native_re_class_compile_attr_string_value",
     "_pooled_cstr_ptr",
     "_zero_of",

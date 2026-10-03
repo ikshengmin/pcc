@@ -2526,21 +2526,49 @@ class MethodCallExpressionLoweringMixin:
         if (
             isinstance(obj_ty, (BytesType, ByteArrayType))
             and attr.name == "split"
-            and len(expr.args) == 1
+            and len(expr.args) in (1, 2)
             and not expr.kwargs
         ):
-            # bytes/bytearray .split(sep): list of same-family pieces. Empty sep
-            # raises ValueError (py_bytes_split), so err-check after. No-arg
-            # whitespace split still falls back.
-            recv = self._emit_expr(attr.obj)
-            sep = self._emit_as_object(expr.args[0])
-            result = self.builder.call(
-                self.runtime["py_bytes_split"],
-                [recv, sep],
-                name=self._fresh("bytes.split"),
-            )
-            self._emit_post_call_err_check(expr.span)
-            return result
+            # Both split ABIs return a NEW list. Preserve the receiver and each
+            # argument through later evaluation, then publish the list before
+            # lease release, pending-error checks, or operand disposal.
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("bytes.split.result")
+                roots.append(output)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cleanup = self._cpy_operand_cleanup_block
+            operands = []
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                receiver = self._emit_slot_call_operand(attr.obj, "bytes.split.receiver")
+                roots.append(receiver)
+                operands.append(receiver)
+                for index, argument in enumerate(expr.args):
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    label = "bytes.split.separator" if index == 0 else "bytes.split.limit"
+                    operand = self._emit_slot_call_operand(argument, label)
+                    roots.append(operand)
+                    operands.append(operand)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                runtime_name = "py_bytes_split" if len(expr.args) == 1 else "py_bytes_split_max"
+                self._slot_call_runtime_call(
+                    runtime_name, tuple(operands), result_slot=output, span=expr.span,
+                )
+                self._guard_cpy_value_not_null(self.builder.load(output))
+                self._release_slot_call_roots(tuple(operands))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cleanup
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("bytes.split.output"))
+            return self._take_slot_call_root(output)
         if (
             isinstance(obj_ty, (BytesType, ByteArrayType))
             and attr.name in ("ljust", "rjust")
@@ -2561,26 +2589,6 @@ class MethodCallExpressionLoweringMixin:
                 self.runtime["py_bytes_" + attr.name],
                 [recv, width, fill],
                 name=self._fresh("bytes." + attr.name),
-            )
-            self._emit_post_call_err_check(expr.span)
-            return result
-        if (
-            isinstance(obj_ty, (BytesType, ByteArrayType))
-            and attr.name == "split"
-            and len(expr.args) == 2
-            and not expr.kwargs
-        ):
-            # .split(sep, maxsplit): stop after `maxsplit` cuts.  pcc1 reads
-            # its own Mach-O members through `raw.split(b"\0", 1)[0]`, which
-            # fell through to the dynamic attribute path and raised
-            # "'bytes' object has no attribute 'split'".
-            recv = self._emit_expr(attr.obj)
-            sep = self._emit_as_object(expr.args[0])
-            limit = self._emit_as_object(expr.args[1])
-            result = self.builder.call(
-                self.runtime["py_bytes_split_max"],
-                [recv, sep, limit],
-                name=self._fresh("bytes.split.max"),
             )
             self._emit_post_call_err_check(expr.span)
             return result

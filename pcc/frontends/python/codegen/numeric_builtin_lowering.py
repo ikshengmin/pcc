@@ -1982,28 +1982,37 @@ class NumericBuiltinLoweringMixin:
         routed through the pcc object runtime."""
         a_expr = expr.args[0]
         a_ty = a_expr.ty
-        if isinstance(a_ty, DynType):
-            arg_obj = self._emit_as_object(a_expr)
-            result = self.builder.call(
-                self.runtime["py_obj_abs"],
-                [arg_obj],
-                name=self._fresh("obj.abs"),
-            )
-            self._emit_post_call_err_check(self._expr_span_or_none(expr))
-            return result
-        if isinstance(a_ty, IntType):
-            # ``int`` is arbitrary precision: the i64 fast path truncated a
-            # bignum (abs(10**40) collapsed to 0). Route through the object
-            # runtime py_obj_abs (the bignum-correct path DynType uses), which
-            # preserves/promotes bignums instead of truncating to i64.
-            arg_obj = self._emit_as_object(a_expr)
-            result = self.builder.call(
-                self.runtime["py_obj_abs"],
-                [arg_obj],
-                name=self._fresh("int.abs"),
-            )
-            self._emit_post_call_err_check(self._expr_span_or_none(expr))
-            return result
+        if isinstance(a_ty, (DynType, IntType)):
+            # py_obj_abs returns NEW, including its retained positive-int alias
+            # and the protocol callback result. Keep full integer precision and
+            # publish before disposing an operand that may alias that result.
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("abs.result")
+                roots.append(output)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cleanup = self._cpy_operand_cleanup_block
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                operand = self._emit_slot_call_operand(a_expr, "abs.operand")
+                roots.append(operand)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_abs", (operand,), result_slot=output, span=expr.span,
+                )
+                self._guard_cpy_value_not_null(self.builder.load(output))
+                self._release_slot_call_roots((operand,))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cleanup
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("abs.output"))
+            return self._take_slot_call_root(output)
         if isinstance(a_ty, BoolType):
             # bool is always 0/1, so the i64 path is exact. (NOTE: ``abs(bool)``
             # is an ``int`` in CPython and ``print(abs(True))`` hits a separate

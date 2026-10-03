@@ -197,28 +197,143 @@ def _protocol_require_result(result, helper_name, message):
     return result
 
 
+# Match the managed binary callback transaction below. py_func_call borrows
+# callable/args and returns one NEW result owner, including aliases. Publish
+# that result before tuple/input disposal can run finalizers or move objects.
+# Raw C method addresses keep the separate call_ptr1 route.
+_PROTOCOL_UNARY_METHOD = 0
+_PROTOCOL_UNARY_SELF = 1
+_PROTOCOL_UNARY_ARGS = 2
+_PROTOCOL_UNARY_RESULT = 3
+_PROTOCOL_UNARY_ERROR = 4
+_PROTOCOL_UNARY_SLOT_COUNT = 5
+_PROTOCOL_UNARY_BORROWED_COUNT = 2
+
+define_global_i32("pcc_protocol_unary_borrowed_map", -2)
+define_global_i32("pcc_protocol_unary_owned_map", 5)
+
+
+def _protocol_unary_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
+    # Every NEW producer has already stored into its registered owning slot.
+    offset: int = index * C_POINTER_SIZE
+    slot = ptr_add(slots, offset)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        py_runtime_error_if_unset(cstr("user protocol call"), cstr("unary result owner lease failed"))
+        return -1
+    store_i64(tokens, offset, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+def _protocol_unary_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
+    offset: int = index * C_POINTER_SIZE
+    slot = ptr_add(slots, offset)
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(tokens, offset, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _protocol_unary_body(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr) -> int:
+    index: int = 0
+    while index < _PROTOCOL_UNARY_BORROWED_COUNT:
+        offset: int = index * C_POINTER_SIZE
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, offset), ptr_add(borrowed, offset),
+        )
+        if token < 0:
+            py_runtime_error_if_unset(cstr("user protocol call"), cstr("unary input owner copy failed"))
+            return -1
+        store_i64(tokens, offset, token)
+        index += 1
+    store_ptr(slots, _PROTOCOL_UNARY_ARGS * C_POINTER_SIZE, py_tuple_new(1))
+    if _protocol_unary_adopt(slots, tokens, _PROTOCOL_UNARY_ARGS) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _PROTOCOL_UNARY_ARGS * C_POINTER_SIZE)) != 0:
+        _protocol_require_result(null(), cstr("py_tuple_new"), cstr("user protocol argument tuple allocation failed"))
+        return -1
+    py_tuple_set_item(
+        load_ptr(slots, _PROTOCOL_UNARY_ARGS * C_POINTER_SIZE), 0,
+        load_ptr(slots, _PROTOCOL_UNARY_SELF * C_POINTER_SIZE),
+    )
+    if py_err_occurred() != 0:
+        return -1
+    store_ptr(slots, _PROTOCOL_UNARY_RESULT * C_POINTER_SIZE, py_func_call(
+        load_ptr(slots, _PROTOCOL_UNARY_METHOD * C_POINTER_SIZE),
+        load_ptr(slots, _PROTOCOL_UNARY_ARGS * C_POINTER_SIZE),
+    ))
+    if _protocol_unary_adopt(slots, tokens, _PROTOCOL_UNARY_RESULT) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _PROTOCOL_UNARY_RESULT * C_POINTER_SIZE)) != 0:
+        _protocol_require_result(null(), cstr("user protocol call"), cstr("user protocol callback returned NULL without an exception"))
+        return -1
+    return 0
+
+
+def _protocol_unary_pin_result(slot: c_ptr) -> int:
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), slot)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    return prior
+
+
+def _call_unary_function(method, self_obj):
+    # Precondition: the selected managed method has a live external owner and
+    # a stable address through dispatch classification and this initial pin.
+    # A borrowed method-table entry alone does not establish that contract;
+    # lookup/replacement before this helper is a separate unresolved boundary.
+    # self_obj is borrowed from a live, address-stable caller root.
+    method_pin: int = load_i32(method, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+    pcc_gc_pin(method)
+    borrowed = stack_alloc(_PROTOCOL_UNARY_BORROWED_COUNT * C_POINTER_SIZE)
+    store_ptr(borrowed, _PROTOCOL_UNARY_METHOD * C_POINTER_SIZE, method)
+    store_ptr(borrowed, _PROTOCOL_UNARY_SELF * C_POINTER_SIZE, self_obj)
+    pcc_gc_frame_enter(global_addr("pcc_protocol_unary_borrowed_map"), borrowed)
+    slots = stack_alloc(_PROTOCOL_UNARY_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PROTOCOL_UNARY_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PROTOCOL_UNARY_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PROTOCOL_UNARY_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_protocol_unary_owned_map"), slots)
+    status: int = _protocol_unary_body(slots, tokens, borrowed)
+    py_tls_exc_swap_slot(ptr_add(slots, _PROTOCOL_UNARY_ERROR * C_POINTER_SIZE))
+    # The result has an independent counted owner even when it aliases method,
+    # self, or the argument tuple. Restore the temporary input pin before
+    # disposal; no unregistered raw result crosses this operation.
+    method_slot = ptr_add(borrowed, _PROTOCOL_UNARY_METHOD * C_POINTER_SIZE)
+    store_ptr(method_slot, 0, pcc_gc_take_pinned_slot(method_slot, method_pin))
+    memset(borrowed, 0, _PROTOCOL_UNARY_BORROWED_COUNT * C_POINTER_SIZE)
+    _protocol_unary_drop(slots, tokens, _PROTOCOL_UNARY_ARGS)
+    _protocol_unary_drop(slots, tokens, _PROTOCOL_UNARY_SELF)
+    _protocol_unary_drop(slots, tokens, _PROTOCOL_UNARY_METHOD)
+    if status != 0:
+        _protocol_unary_drop(slots, tokens, _PROTOCOL_UNARY_RESULT)
+    py_clear_exception()
+    py_tls_exc_swap_slot(ptr_add(slots, _PROTOCOL_UNARY_ERROR * C_POINTER_SIZE))
+    result_slot = ptr_add(slots, _PROTOCOL_UNARY_RESULT * C_POINTER_SIZE)
+    prior: int = _protocol_unary_pin_result(result_slot)
+    if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _PROTOCOL_UNARY_RESULT * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result_slot, prior)
+
+
 def _call_unary(method, self_obj):
-    # A missing method is the lookup sentinel consumed by the caller.  Once a
+    # A missing method is the lookup sentinel consumed by the caller. Once a
     # method was selected, every NULL is an error result.
     if ptr_is_null(method) != 0:
         return null()
     if _ptr_can_have_header(method) != 0 and _type_of(method) == PY_TYPE_FUNC:
-        args = py_tuple_new(1)
-        if ptr_is_null(args) != 0:
-            return _protocol_require_result(
-                null(),
-                cstr("py_tuple_new"),
-                cstr("user protocol argument tuple allocation failed"),
-            )
-        py_tuple_set_item(args, 0, self_obj)
-        result = py_func_call(method, args)
-        _protocol_require_result(
-            result,
-            cstr("user protocol call"),
-            cstr("user protocol callback returned NULL without an exception"),
-        )
-        py_decref(args)
-        return result
+        return _call_unary_function(method, self_obj)
     return _protocol_require_result(
         call_ptr1(method, self_obj),
         cstr("user protocol call"),

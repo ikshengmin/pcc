@@ -1,41 +1,41 @@
 # Current status
 
-Updated October 3, 2026, 17:55 UTC. Maintain this page in place.
+Updated October 3, 2026, 19:06 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
 ## Current boundary
 
 There is no qualified current pcc1, pcc2 or pcc3, and no Stage2/Stage3 fixed point.
-The latest frozen compiler-context census uses source
-`d396b3e1c42f84a313f3f099036bfb90f308b706a7cb3c5b8a51abf1ba2dc633`.
-All 441 original modules are accounted across the initial run and a continuation:
-350 pass, 90 fail in the frontend, and one is resource-incomplete. The original
-30-minute outer stop and 120-second module limit are preserved. Replaying that
-module, call_expression_lowering, reached the 2 GiB tree memory guard after
-134.90 seconds. A timeout or memory stop is neither a pass nor a semantic failure.
+The latest complete compiler-context census uses source
+`28828d463503cc4cac9bbdf5e525ed8f30cceb9846b8e852324b5a099ba5de1f`.
+All 441 freshly exported original contexts are accounted: 362 pass and 79 fail
+in the frontend, with no timeout or memory stop. Source and generated input
+identities reverified. The run took 1,746.84 seconds with 1,715,986,432-byte peak
+process-tree RSS while other diagnostics overlapped; this is not build-performance
+acceptance or native execution.
 
-Compared with the preceding V5 census (278 passes, 163 frontend failures), V6
-has 75 new passes, 275 preserved passes, three frontend regressions and one
-resource transition. The three regressions are dataclass-factory call results,
-bytes.decode publication and floor division feeding repetition. Each now has a
-separate unchanged-original-context PIDX pass after its shared producer repair.
-Those newer overlays do not change the recorded V6 counts.
+Compared with V6 (350 passes, 90 frontend failures, one resource-incomplete),
+V7 preserves 348 passes, restores 13 failures and the resource-limited module,
+and introduces two frontend regressions. Those are bytes.split feeding decode
+in macho_spec and abs feeding floor division in integer_fold_contract. Their
+shared producers now have separate causal passes on both original V6 and V7
+contexts. Current macho_spec encounters a newer earlier dict(zip(...)) producer
+gap, so those causal passes do not qualify the mutable whole module.
 
-The resource failure exposed quadratic IR expansion: short-lived call roots
-were enrolled in every function return cleanup. A lexical/LIFO lifetime repair
-preserves exceptional cleanup and keeps generator-resume roots in their frame.
-Its final original-module replay passes under the same 2 GiB/120-second guards
-(35.04 seconds in the worker). Six growth/root-balance tests and 232 related
-host/IR/model checks pass; four native cases remain unrun. This is causal
-compiler evidence, not native execution or build-performance acceptance.
+The earlier resource failure exposed quadratic IR expansion: short-lived call
+roots were enrolled in every function return cleanup. Lexical/LIFO lifetime
+repair preserves exceptional cleanup and keeps generator-resume roots in their
+frame. The final original-module replay passes under the same 2 GiB/120-second
+guards (35.04 seconds in the worker), and module 242 passes in V7. Six growth/root
+balance checks and 232 related host/IR/model cases pass; native qualification is
+separate. Strict ownership validation remains enabled.
 
-The remaining frozen V6 families include managed Call/BinOp publication, dynamic
-set-update receivers, arithmetic kind proof and authoritative Name/CPython
-bridges. Shared contract migration must retain strict validation. The next full
-census and native bootstrap must use a stable integrated source. Earlier V5
-restored all 17 regressions and 41 gains from the V3-to-V4 transition; those
-historical results do not qualify later source.
+Remaining families include managed Call/BinOp publication, iterator producers,
+source bindings and CPython/native bridges. Newer dict/file/regex and Constant
+repairs have bounded original-context evidence but are outside V7. The next
+complete census and native bootstrap require another stable integrated source.
+No earlier source's passing result qualifies later bytes.
 
 ## Matched runtime and native evidence
 
@@ -77,6 +77,19 @@ Its 42 focused checks pass; the unchanged native Token-finalization assertion
 still requires the new archive. Full class/base/MRO/registry retirement remains
 open. The candidate also adds two repetition runtime modules and therefore
 requires its own complete matching 186-member archive.
+
+A newer diagnostic freeze, source `243185b2` with compiler `2be03662`, emitted
+all seven changed/new runtime components. Its preflight then rejected an injected
+safepoint poll in the new locked heap-copy helper; no full 186-member archive or
+native controls ran. Counted no-park handling may suppress parking, but source-body
+witnesses also reach GC3/GC4 heap-barrier allocation under nested graph lock.
+A staged scratch-root snapshot now moves tuple heap stores and retirement after
+unlock. The retry source `ffece4b8`, compiler `312d6631`, contains exactly five
+changes from the preceding freeze. Its seven-object preflight passes unchanged
+logical lock/ownership requirements, including restricted kernel calls, scratch
+clearing, no poll/allocation/indirect call and ordinary wrapper polls. The full
+186-member archive is building; original native controls and a real forced-STW
+held-lock probe are pending. The original failed gate remains retained.
 
 These binaries were produced by host pcc0. They do not establish native pcc1,
 Stage2/Stage3 fixed point, complete C/Python execution or final-source acceptance.
@@ -138,6 +151,21 @@ through those roots after relocation boundaries.
   legacy writers/readers, raw callbacks and managed method-selection ownership
   remain incompletely migrated. No production safety conclusion follows from
   support-only tests.
+
+The completed dynamic set/update tranche has 196 focused checks. Replaying all
+14 original affected V6 contexts gives nine PIDX passes and five distinct later
+producer failures, with no remaining original receiver-slot diagnostic. Native
+qualification remains open. Dict constructors/fromkeys now have 128 focused
+checks; an introduced ValueBox dispatch regression was independently reproduced
+and repaired. Eight original contexts give two passes, four later failures and
+two resource stops; that replay precedes only the final compatibility guard.
+The runtime fromkeys helper's internal rooting is still unqualified.
+
+Scaffold owner dispatch now uses declared semantic capabilities and native export
+metadata. Its affected-file matrix records 115 passes, two attributed preexisting
+failures and one resource-incomplete case. The remaining failures are a class_gen
+Call-source producer and a boxed-integer ABI expectation. Field inventory checks
+now name the audited helpers/callers and preserve provenance assertions.
 
 Off-tree proposals and integrated but unqualified work remain distinguishable
 in the retained code batches. Lambda adapters and generic unary operands now have 35 strict scope/CFG checks.
@@ -262,33 +290,36 @@ execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
 The last confirmed local source baseline is PCC
-`929036867df27190ef13d455bc665c7dfe95d976` (17:21 capture, verified at 17:54), GUI
+`3f995a3dd73d901370c7cc5efed0bf6738ce40b0` (18:25 capture), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
 `83577bc41dc79d3ead2e217bfa04f0f500799012`. Promote a later capture only after its
 actual local application and commit are verified.
 
-The latest validated immutable capture is October 3 at 17:21:44 UTC, containing
-50 cumulative PCC paths against the preceding `71e15ea6` baseline. Exact-source
-execution records
-1,780 distinct passes and one pre-existing scaffold capability-contract failure.
-A separate original 47-target Stage1-context node is resource-incomplete at the
-1.5 GiB diagnostic cap (220.00 seconds, 1,616,273,408 observed bytes), retaining
-19 IR outputs and six error records. The scaffold group stops after two passes
-and one failure, leaving its last test unrun. Later producer, tail-call and
-capability changes are outside this snapshot.
+The latest synchronized immutable capture is October 3 at 18:25:16 UTC,
+containing 31 PCC paths against `9290368`. Exact-source execution records 1,544
+distinct passes and six failures, with no resource-incomplete group. The original
+47-target Stage1 context test completes with 37 IR outputs and ten codegen errors
+under the unchanged 1.5 GiB safety cap (275.41 seconds, 1,537,331,200-byte peak).
+It still fails its original assertion.
 
-Its complete collection inventory contains 25,337 nodes: 25,112 selected and
-225 capability/environment deselections. A separate integration inventory
-selects 5,541 nodes from the same union. Both have zero collection errors/skips;
-per-node selection reasons are retained. Collection does not execute test bodies.
-The host phase excludes archive-dependent native cases explicitly, and the mixed
-backend file selects only its original AArch64 peephole helpers. This is not a
-full C/Python execution result.
+The other failures are the attributed class_gen Call producer, boxed-int ABI
+expectation, pointer native test blocked by the missing matching runtime,
+incomplete re import alias and newly introduced ValueBox keyword-projection
+regression. Later alias/ValueBox repairs are outside this captured source.
+Tests remaining after each first failure and native cases remain unqualified.
 
-The preceding 16:20 capture recorded 1,426 passes and one resource-incomplete
-context node. Its source was not an applied baseline. The earlier 15:19 capture
-associated with `71e15ea6` recorded 1,189 passes and three failures. Those dated
-receipts remain distinct from later repairs and matched V5 native controls.
+Its full inventory contains 25,669 nodes: 25,444 selected and 225 capability or
+environment deselections. The independent integration inventory selects 5,547
+from the same union. Both have zero collection errors/skips. Collection does
+not execute test bodies. The host phase explicitly excludes archive-dependent
+native cases, and the mixed backend file selects only its original AArch64
+peephole helpers.
+
+Historical captures remain separate: 17:21 recorded 1,780 passes, one completed
+failure and one resource-incomplete context node; 16:20 recorded 1,426 passes
+and a resource-incomplete context node. The earlier `71e15ea6` capture recorded
+1,189 passes and three failures. Later scoped repairs do not rewrite those
+receipts.
 
 Recoverable code bytes, before/after patches and detailed historical receipts
 are retained in the external PCC recovery archives in Library. Code archive

@@ -6,7 +6,19 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Assign, Attr, BinOp, BoolLit, Call, Expr, IntLit, Name, StrLit
+from pcc.frontends.python.py_ast import (
+    Assign,
+    Attr,
+    BinOp,
+    BoolLit,
+    Call,
+    Expr,
+    IntLit,
+    IntType,
+    Name,
+    StrLit,
+    StrType,
+)
 from pcc.frontends.python.codegen.import_lowering import _dataclass_field_names, _dataclass_field_value
 
 _I64 = ir.IntType(64)
@@ -291,6 +303,23 @@ class NativeTextModulesLoweringMixin:
             return None
         return pattern, flags
 
+    def _native_re_flags_operand_expr(self, expr):
+        # Builtin module flag constants have a scalar ABI, not a managed
+        # module receiver. Keep ordinary names (including shadowed aliases)
+        # and callback expressions in their original evaluation path.
+        if (isinstance(expr, Attr) and isinstance(expr.obj, Name)
+                and self._native_builtin_module_for_name(expr.obj.ident) == "re"
+                and expr.obj.ident not in self._module_globals
+                and expr.name in _RE_CONSTS):
+            return IntLit(span=expr.span, ty=IntType(name="int"), value=_RE_CONSTS[expr.name])
+        if isinstance(expr, BinOp) and expr.op == "|":
+            lhs = self._native_re_flags_operand_expr(expr.lhs)
+            rhs = self._native_re_flags_operand_expr(expr.rhs)
+            if isinstance(lhs, IntLit) and isinstance(rhs, IntLit):
+                return IntLit(span=expr.span, ty=IntType(name="int"), value=lhs.value | rhs.value)
+            return BinOp(span=expr.span, ty=expr.ty, op=expr.op, lhs=lhs, rhs=rhs)
+        return expr
+
     def _emit_native_re_compile_call(self, expr: Call) -> Optional[ir.Value]:
         arguments = self._native_re_compile_argument_exprs(expr)
         if arguments is None:
@@ -317,7 +346,8 @@ class NativeTextModulesLoweringMixin:
             self._cpy_operand_cleanup_block = self._try_err_block
             for kind, index in order:
                 argument = expr.args[index] if kind == "arg" else expr.kwargs[index][1]
-                root = self._emit_slot_call_operand(argument, "re.compile.argument")
+                operand = self._native_re_flags_operand_expr(argument) if argument is flags_expr else argument
+                root = self._emit_slot_call_operand(operand, "re.compile.argument")
                 operands.append(root)
                 roots.append(root)
                 values[id(argument)] = root
@@ -938,6 +968,7 @@ class NativeTextModulesLoweringMixin:
                     attr.name,
                     expr.args,
                     expr.kwargs,
+                    expr,
                 )
         if (
             not isinstance(attr.obj, Name)
@@ -1076,8 +1107,9 @@ class NativeTextModulesLoweringMixin:
             self._cpy_operand_cleanup_block = self._try_err_block
             # Source order is pattern, text, optional flags. No raw operand
             # survives evaluating the next expression or converting flags.
-            for argument in args:
-                root = self._emit_slot_call_operand(argument, "re.findall.argument")
+            for index, argument in enumerate(args):
+                operand = self._native_re_flags_operand_expr(argument) if index == 2 else argument
+                root = self._emit_slot_call_operand(operand, "re.findall.argument")
                 operands.append(root)
                 roots.append(root)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
@@ -1235,10 +1267,22 @@ class NativeTextModulesLoweringMixin:
         method_name: str,
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
+        expr=None,
     ) -> Optional[ir.Value]:
         if kwargs or method_name not in _RE_ALIAS_METHODS or len(args) != 1:
             return None
         pattern, flags = alias_info
+        if method_name == "findall":
+            span = args[0].span
+            return self._emit_native_re_findall_call(
+                (
+                    StrLit(span=span, ty=StrType(name="str"), value=pattern),
+                    args[0],
+                    IntLit(span=span, ty=IntType(name="int"), value=flags),
+                ),
+                (),
+                expr,
+            )
         helper = {
             "match": "py_re_match_flags",
             "search": "py_re_search_flags",

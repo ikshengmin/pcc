@@ -45,11 +45,22 @@ def test_snapshot_kernel_remains_freestanding_and_semantic_entry_is_runtime_port
     assert '__pcc_runtime_port__ = True' in (runtime / 'py_binary_repeat_runtime.py').read_text()
 
 
-def test_locked_heap_copy_has_one_exact_cross_object_abi():
+def test_snapshot_uses_the_existing_exact_split_root_copy_abi():
     check = runtime_abi.is_freestanding_gc_cross_object_runtime_import
-    symbol = 'pcc_gc_copy_ptr_lease_commit_locked'
-    assert check(symbol, '(c_ptr,c_ptr,c_ptr,c_ptr)', 'c_int64')
+    symbol = 'pcc_gc_root_copy_lease_prepare_locked'
+    assert check(symbol, '(c_ptr,c_ptr,c_int64,c_ptr)', 'c_int64')
     assert not check(symbol, '(c_ptr,c_ptr,c_ptr)', 'c_int64')
-    assert not check(symbol, '(c_ptr,c_ptr,c_ptr,c_int64)', 'c_int64')
-    assert not check(symbol, '(c_ptr,c_ptr,c_ptr,c_ptr)', 'c_ptr')
+    assert not check(symbol, '(c_ptr,c_ptr,c_ptr,c_ptr)', 'c_int64')
+    assert not check(symbol, '(c_ptr,c_ptr,c_int64,c_ptr)', 'c_ptr')
     assert not check('pcc_gc_copy_unknown_pointer', '(c_ptr,c_ptr,c_ptr,c_ptr)', 'c_int64')
+
+
+def test_retired_heap_copy_has_no_runtime_definition_or_import_admission():
+    symbol = 'pcc_gc_copy_ptr_lease_commit_locked'
+    assert symbol not in (ROOT / 'pcc/runtime/py/py_obj.py').read_text()
+    assert symbol not in runtime_abi.RUNTIME_SIGNATURES
+    assert symbol not in (ROOT / 'pcc/runtime/src/py_internal.h').read_text()
+    assert symbol not in (ROOT / 'pcc/runtime/include/py_runtime.h').read_text()
+    assert not runtime_abi.is_freestanding_gc_cross_object_runtime_import(
+        symbol, '(c_ptr,c_ptr,c_ptr,c_ptr)', 'c_int64',
+    )

@@ -95,7 +95,10 @@ def test_scaffold_preserves_declared_machine_argument_and_return(tmp_path, monke
     assert emit_owned_object(text, 'x86_64-unknown-linux-gnu')[:4] == b'\x7fELF'
 
 
-def test_scaffold_constant_adapts_raw_value_with_imprecise_semantic_type_once(tmp_path, monkeypatch):
+@pytest.mark.parametrize("contextual", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("caller_sink", [False, True])
+def test_scaffold_constant_adapts_raw_value_with_imprecise_semantic_type_once(tmp_path, monkeypatch, contextual, nested, caller_sink):
     from pcc.frontends.python.py_ast import DynType, FuncDef, Return
 
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
@@ -104,17 +107,22 @@ def test_scaffold_constant_adapts_raw_value_with_imprecise_semantic_type_once(tm
     provider = Path(__file__).resolve().parents[2] / 'pcc/ir/ir.py'
     source = tmp_path / 'probe.py'
     source.write_text('from typing import Any\nfrom pcc.unsafe import null\nfrom pcc.ir.compat import ir\n'
+                      'def take(*, value):\n    return value\n'
                       'def probe(operand: Any, values: list[int]):\n'
-                      '    return ir.Constant(operand, len(values))\n')
+                      '    return ' + ('take(value=' if caller_sink else '') + ('[' if nested else '')
+                      + 'ir.Constant(operand, len(values))' + (']' if nested else '')
+                      + (')' if caller_sink else '') + '\n')
     modules, exports, derived = build_closed_world_context([str(provider), str(source)], ['pcc.ir.ir', 'probe'])
     typed = infer_module(modules[1], external_exports=exports, derived_class_map=derived)
     function = next(node for node in typed.body if isinstance(node, FuncDef) and node.name == 'probe')
     returned = next(node for node in function.body if isinstance(node, Return))
     # Model the admitted imprecise expression type while retaining the real
     # len emitter and its machine-return ABI; never rewrite the replay input.
-    object.__setattr__(returned.value.args[1], 'ty', DynType(name='dyn'))
+    result_expr = returned.value.kwargs[0][1] if caller_sink else returned.value
+    constant = result_expr.elems[0] if nested else result_expr
+    object.__setattr__(constant.args[1], 'ty', DynType(name='dyn'))
     codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode='on')
-    codegen._native_module_exports = exports
+    codegen._native_module_exports = exports if contextual else None
     codegen._strict_no_libpython = True
     codegen._prefer_native_callable_values = True
     text = str(codegen.generate(typed))
@@ -126,3 +134,70 @@ def test_scaffold_constant_adapts_raw_value_with_imprecise_semantic_type_once(tm
     boxes = re.findall(r'(%[^\s=]+) = call [^\n]*@py_int_from_i64\(i64 ' + re.escape(lengths[0]) + r'\)', body)
     assert len(boxes) == 1, body
     assert re.search(r'@user_pcc_ir_ir_scaffold_Constant_i64\(ptr [^,]+, ptr ' + re.escape(boxes[0]) + r'\)', body), body
+
+    calls = list(re.finditer(r"(%[^\s]+) = call ptr [^\n]*@user_pcc_ir_ir_scaffold_Constant_i64\([^\n]*\)\n", body))
+    assert len(calls) == 1, body
+    # The first instruction publishes the result before a lease, TLS check,
+    # unpin, release, or other operation that can park or report an error.
+    publication = body[calls[0].end():]
+    assert publication.lstrip().startswith("store ptr " + calls[0].group(1) + ", ptr "), body
+    cleanup_target = re.search(r"label %(call\.publication\.arguments\.cleanup[^,\s]+)", publication)
+    assert cleanup_target is not None, body
+    cleanup = re.search(r"^" + re.escape(cleanup_target.group(1)) + r":\n(.*?)(?=^\S|\Z)", body, re.M | re.S)
+    assert cleanup is not None and cleanup.group(1).count("@pcc_gc_unpin(") == 2, body
+    assert cleanup.group(1).count("@pcc_gc_release(") == 1, body
+    # Both publication failure and the provider's pending-error path release
+    # the two argument pins once and then enter the same output-root cleanup.
+    target = re.search(r"br label %([^\s]+)", cleanup.group(1)).group(1)
+    pending_target = re.search(r"br i1 [^\n]*label %(call\.err\.cleanup[^,\s]+)", publication)
+    assert pending_target is not None, body
+    pending_cleanup = re.search(r"^" + re.escape(pending_target.group(1)) + r":\n(.*?)(?=^\S|\Z)", body, re.M | re.S).group(1)
+    assert pending_cleanup.count("@pcc_gc_unpin(") == 2, body
+    assert pending_cleanup.count("@pcc_gc_release(") == 1, body
+    assert "br label %" + target in pending_cleanup, body
+    # On success, output reloading/taking happens only after both argument
+    # owners have been retired. The result remains in its registered slot.
+    ready = re.search(r"^call\.cont\.[^:]+:\n(  call void \(ptr\) @pcc_gc_unpin[\s\S]*?)(?=^\S|\Z)", publication, re.M)
+    assert ready is not None, body
+    assert ready.group(1).count("@pcc_gc_unpin(") == 2, body
+    assert "@pcc_gc_release(" in ready.group(1), body
+    assert "scaffold.current" in ready.group(1) if caller_sink else "call.slot.take.current" in ready.group(1)
+    assert not re.search(r"\bcall [^\n]*@py_cpy_", body)
+
+
+@pytest.mark.parametrize("manual", [False, True])
+def test_imprecise_constant_rejects_raw_or_manual_provider_result(tmp_path, monkeypatch, manual):
+    from pcc.frontends.python.codegen.errors import L1CodegenError
+    from pcc.frontends.python.py_ast import DynType, FuncDef, Return
+
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
+    provider = tmp_path / "provider.py"
+    provider.write_text("from pcc.extern import c_ptr\nfrom pcc.unsafe import int_to_ptr\n"
+                        + ("__pcc_runtime_port__ = True\n" if manual else "")
+                        + "def scaffold_Constant_i64(ty, value: int)"
+                        + ("" if manual else " -> c_ptr")
+                        + ":\n    return int_to_ptr(value)\n")
+    entry = tmp_path / "probe.py"
+    entry.write_text("from pcc.ir.compat import ir\n"
+                     "def take(*, value):\n    return value\n"
+                     "def probe(operand, values: list[int]):\n"
+                     "    return take(value=ir.Constant(operand, len(values)))\n")
+    modules, exports, derived = build_closed_world_context(
+        [str(provider), str(entry)], ["pcc.ir.ir", "probe"])
+    info = exports["pcc.ir.ir"]["scaffold_Constant_i64"]
+    assert info["return_ty"] == (("dyn",) if manual else ("raw_pointer",))
+    assert info["manual_pointer_abi"] is manual
+    typed = infer_module(modules[1], external_exports=exports, derived_class_map=derived)
+    function = next(node for node in typed.body if isinstance(node, FuncDef) and node.name == "probe")
+    returned = next(node for node in function.body if isinstance(node, Return))
+    constant = returned.value.kwargs[0][1]
+    object.__setattr__(constant.args[1], "ty", DynType(name="dyn"))
+    codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
+    codegen._native_module_exports = exports
+    codegen._strict_no_libpython = True
+    codegen._prefer_native_callable_values = True
+    with pytest.raises(L1CodegenError, match="scaffold call has no managed result contract"):
+        codegen.generate(typed)
+    assert not re.search(r"\bcall [^\n]*@user_pcc_ir_ir_scaffold_Constant_i64\(", str(codegen.module))

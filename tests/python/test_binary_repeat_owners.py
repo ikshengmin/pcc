@@ -31,6 +31,7 @@ class RepeatMemory(PercentMemory):
         self.allocation_failure = allocation_failure
         self.allocations = 0
         self.plans = {}
+        self.frame_stack = []
         self.barriers = []
         super().__init__(SOURCE, relocate=relocate, failure=failure,
                          copy_failure=copy_failure, lease_failure=lease_failure)
@@ -178,6 +179,8 @@ class RepeatMemory(PercentMemory):
             assert obj['children'][index] is None
             self.object(child)['refs'] += 1
             obj['children'][index] = child.identity
+            if self.failure == 'snapshot-store' and obj['role'] == 'snapshot' and index == 1:
+                self.pending = 'snapshot-store-error'
 
         def list_new(count):
             self.park()
@@ -240,7 +243,9 @@ class RepeatMemory(PercentMemory):
             self.park()
             self.snapshot_attempts += 1
             before = self.object(self.load(source))
-            after = self.object(self.load(output))
+            assert self.frames.get(output) == (length if length else -1)
+            borrowed = output + length * 8
+            assert self.frames.get(borrowed) == -1
             if self.mutation == 'retry' and self.snapshot_attempts == 1:
                 child = self.make(99, 'item')
                 before['children'].append(child.identity)
@@ -253,11 +258,13 @@ class RepeatMemory(PercentMemory):
                     status = -1
                     break
                 self.objects[identity]['refs'] += 1
-                after['children'][index] = identity
-                field = Field(self.load(output), ABI['PYTUPLEOBJECT_ITEMS_OFFSET'] + index * 8)
-                self.leases[field] = 1
+                self.store(borrowed, 0, self.current(identity))
+                self.store(output, index * 8, self.load(borrowed))
+                self.store(borrowed, 0, None)
+                self.leases[output + index * 8] = 1
                 self.store(tokens, index * 8, 1)
-                self.plans[plans + index * 128] = identity
+                self.plans[plans + index * 256] = identity
+            assert self.load(borrowed) is None
             self.locked = False
             if self.mutation == 'replace':
                 caller_error = self.pending
@@ -307,11 +314,24 @@ class RepeatMemory(PercentMemory):
                 assert slot in self.leases
             self.barriers.append(slot)
 
+        def enter(frame_map, base):
+            self.park()
+            count = 8 if frame_map == 8 else self.load(frame_map)
+            assert isinstance(count, int)
+            self.frames[base] = count
+            self.frame_stack.append(base)
+
+        def leave(base):
+            self.park()
+            assert self.frame_stack.pop() == base
+            assert all(self.load(base + offset) is None for offset in range(0, abs(self.frames[base]) * 8, 8))
+            del self.frames[base]
+
         env.update(
             c_ptr=object, null=lambda: None, ptr_add=self.ptr,
             ptr_eq=lambda a, b: int(a == b), is_tagged_int=lambda value: 0,
             load_i32=self.header, load_i64=self.header, load_i8=self.byte,
-            store_i64=self.store_scalar, store_i8=self.store_byte,
+            store_i32=self.store_scalar, store_i64=self.store_scalar, store_i8=self.store_byte,
             global_addr=lambda name: 8, cstr=lambda value: value,
             global_load_ptr=lambda name: self.current(self.not_implemented.identity),
             pcc_gc_root_copy_lease=self.copy, pcc_gc_root_move=move,
@@ -330,8 +350,8 @@ class RepeatMemory(PercentMemory):
             pcc_capi_is_cext_type_tag=lambda tag: 0,
             pcc_list_snapshot_commit_slots=snapshot,
             pcc_gc_backend=lambda: 4,
-            pcc_gc_store_ptr_plan_init=lambda plan, owner, backend: self.park(),
-            pcc_gc_store_ptr_plan_finish=finish,
+            pcc_gc_root_copy_lease_finish=finish,
+            pcc_gc_frame_enter=enter, pcc_gc_frame_leave=leave,
             pcc_gc_publish_initialized=lambda value: self.park(),
             malloc=memory_alloc, free=memory_free,
             py_exc_new=error, py_raise_owned=raise_owned,
@@ -432,7 +452,7 @@ def test_count_rejection_keeps_input_owners(count):
     model.close()
 
 
-@pytest.mark.parametrize('failure', ('snapshot-copy', 'append', 'result'))
+@pytest.mark.parametrize('failure', ('snapshot-copy', 'snapshot-store', 'append', 'result'))
 def test_partial_failure_cleanup_preserves_original_error(failure):
     model = RepeatMemory(failure=failure)
     status, _ = model.run([1, 2], 3)
@@ -490,8 +510,8 @@ def test_snapshot_failure_at_each_position_finishes_all_plans(position, mutate):
     model.close()
 
 
-@pytest.mark.parametrize('allocation', (1, 2))
-def test_snapshot_raw_allocation_failure_cleans_registered_tuple(allocation):
+@pytest.mark.parametrize('allocation', (1, 2, 3))
+def test_snapshot_raw_allocation_failure_cleans_unregistered_scratch(allocation):
     model = RepeatMemory(allocation_failure=allocation)
     status, _ = model.run([1, 2], 2)
     assert status == -1 and model.pending[0] == 19

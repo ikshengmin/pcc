@@ -1974,16 +1974,52 @@ class IrScaffoldLoweringMixin:
                 self._gc_pin(value)
                 cleanup = cleanup + ((value, True),)
                 self._emit_post_call_err_check(expr.span, pinned_release_on_error=cleanup)
-            result = self._call_user(
-                fn, [ty, value], self._fresh("scaffold.Constant"),
-                root_result=isinstance(fn.function_type.return_type, ir.PointerType),
-                pinned_arg_temps=cleanup,
+            # This known Constant producer returns an object owner, unless
+            # the defining provider explicitly declares a raw/manual or value
+            # payload ABI. A pointer-shaped return alone is not that contract.
+            semantic_result = decode_type(info.get("return_ty")) if isinstance(info, dict) else None
+            managed_result = (
+                isinstance(fn.function_type.return_type, ir.PointerType)
+                and fn.name not in self._manual_pointer_abi_functions
+                and not (isinstance(info, dict) and info.get("manual_pointer_abi", False))
+                and not isinstance(semantic_result, RawPointerType)
+                and not (semantic_result is not None and self._is_valueclass_payload_type(semantic_result))
             )
-            if boxed:
-                self._gc_unpin(value)
-                self._gc_release(value)
-            self._gc_unpin(ty)
-            return result
+            sink = self._slot_call_result_sink(expr)
+            if sink is not None and isinstance(fn.function_type.return_type, ir.PointerType) and not managed_result:
+                raise L1CodegenError("scaffold call has no managed result contract: " + fn.name)
+            output = sink if managed_result else None
+            previous = self._current_try_err_block()
+            saved_cpy = self._cpy_operand_cleanup_block
+            if managed_result:
+                # Both arguments are pinned before registering a local output.
+                # _call_user stores into it immediately, before publication's
+                # fallible lease checks, TLS checks, or argument retirement.
+                if output is None:
+                    output = self._new_slot_call_root("scaffold.result")
+                target = previous if previous is not None else self._ensure_fn_err_exit()
+                roots = (output,) if sink is None else ()
+                self._try_err_block = self._slot_call_cleanup_block(roots, target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                result = self._call_user(
+                    fn, [ty, value], self._fresh("scaffold.Constant"),
+                    root_result=managed_result,
+                    pinned_arg_temps=cleanup,
+                    result_slot=output,
+                )
+                if boxed:
+                    self._gc_unpin(value)
+                    self._gc_release(value)
+                self._gc_unpin(ty)
+                if managed_result:
+                    if sink is None:
+                        return self._take_slot_call_root(output)
+                    return self.builder.load(output, name=self._fresh("scaffold.current"))
+                return result
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         if isinstance(raw_value.type, ir.DoubleType):
             fn = self._declare_external_function(
                 f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_f64",

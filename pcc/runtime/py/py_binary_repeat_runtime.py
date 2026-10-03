@@ -53,6 +53,7 @@ from pcc.unsafe import (
     ptr_is_null,
     stack_alloc,
     store_i8,
+    store_i32,
     store_i64,
     store_ptr,
 )
@@ -69,8 +70,7 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_gc_store_ptr_plan_init = extern("pcc_gc_store_ptr_plan_init", (c_ptr, c_ptr, c_int64), c_void)
-pcc_gc_store_ptr_plan_finish = extern("pcc_gc_store_ptr_plan_finish", (c_ptr,), c_void)
+pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
 pcc_gc_publish_initialized = extern("pcc_gc_publish_initialized", (c_ptr,), c_void)
 pcc_list_snapshot_commit_slots = extern(
     "pcc_list_snapshot_commit_slots", (c_ptr, c_ptr, c_int64, c_ptr, c_ptr), c_int64
@@ -106,7 +106,7 @@ _MUL_RESULT = 5
 _MUL_TEMP = 6
 _MUL_ERROR = 7
 _MUL_SLOT_COUNT = 8
-_MUL_POINTER_PLAN_BYTES = 128
+_MUL_ROOT_COPY_PLAN_BYTES = 256
 _MUL_MAX_INDEX = 9223372036854775807
 
 define_global_i32("pcc_binary_mul_owned_map", _MUL_SLOT_COUNT)
@@ -167,58 +167,89 @@ def _mul_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
 
 
 def _mul_snapshot_list(slots: c_ptr, tokens: c_ptr, source_index: int) -> int:
-    """Prepare outside the graph lock, then copy exactly one list version."""
+    """Copy one list version into registered roots before heap publication.
+
+    Scratch storage and its owning/borrowed frames exist before locking.
+    Each split copy retains into an empty root and transfers a child lease.
+    Heap tuple stores and every plan finish occur after outermost unlock.
+    """
     source = ptr_add(slots, source_index * C_POINTER_SIZE)
     snapshot = ptr_add(slots, _MUL_SNAPSHOT * C_POINTER_SIZE)
+    error = ptr_add(slots, _MUL_ERROR * C_POINTER_SIZE)
+    frame_map = stack_alloc(8)
+    borrowed_map = ptr_add(frame_map, 4)
+    store_i32(borrowed_map, 0, -1)
     while True:
         length: int = load_i64(load_ptr(source, 0), PYLISTOBJECT_LENGTH_OFFSET)
-        if length < 0 or length > _MUL_MAX_INDEX // _MUL_POINTER_PLAN_BYTES:
+        # Keep the tuple constructor's admitted length and a signed i32 map.
+        if length < 0 or length > 134217728:
             return _mul_error(19, cstr("repeated list is too large"))
-        store_ptr(snapshot, 0, py_tuple_new(length))
-        if _mul_adopt(slots, tokens, _MUL_SNAPSHOT) != 0:
-            return -1
         plans = null()
+        children = malloc((length + 1) * C_POINTER_SIZE)
         child_tokens = null()
         if length > 0:
-            plans = malloc(length * _MUL_POINTER_PLAN_BYTES)
+            plans = malloc(length * _MUL_ROOT_COPY_PLAN_BYTES)
             child_tokens = malloc(length * C_POINTER_SIZE)
-            if ptr_is_null(plans) != 0 or ptr_is_null(child_tokens) != 0:
-                free(plans)
+            if ptr_is_null(plans) != 0 or ptr_is_null(children) != 0 or ptr_is_null(child_tokens) != 0:
                 free(child_tokens)
+                free(children)
+                free(plans)
                 return _mul_error(19, cstr("list snapshot allocation failed"))
+            memset(plans, 0, length * _MUL_ROOT_COPY_PLAN_BYTES)
             memset(child_tokens, 0, length * C_POINTER_SIZE)
-        backend: int = pcc_gc_backend()
+        elif ptr_is_null(children) != 0:
+            return _mul_error(19, cstr("list snapshot allocation failed"))
+        memset(children, 0, (length + 1) * C_POINTER_SIZE)
+        borrowed = ptr_add(children, length * C_POINTER_SIZE)
+        if length > 0:
+            store_i32(frame_map, 0, length)
+            pcc_gc_frame_enter(frame_map, children)
+        pcc_gc_frame_enter(borrowed_map, borrowed)
+        # Configuration is ready before any locked split-copy entry.
+        pcc_gc_backend()
+        status: int = pcc_list_snapshot_commit_slots(source, children, length, plans, child_tokens)
+        py_tls_exc_swap_slot(error)
         index: int = 0
         while index < length:
-            pcc_gc_store_ptr_plan_init(
-                ptr_add(plans, index * _MUL_POINTER_PLAN_BYTES),
-                load_ptr(snapshot, 0), backend,
-            )
-            index = index + 1
-        status: int = pcc_list_snapshot_commit_slots(source, snapshot, length, plans, child_tokens)
-        # Each successful item is owned by the tuple and independently leased.
-        # Finish every prepared plan before releasing that transferred lease;
-        # no raw child, plan value or tuple interior survives without owners.
-        error = ptr_add(slots, _MUL_ERROR * C_POINTER_SIZE)
+            pcc_gc_root_copy_lease_finish(ptr_add(plans, index * _MUL_ROOT_COPY_PLAN_BYTES))
+            index += 1
+        py_clear_exception()
         py_tls_exc_swap_slot(error)
-        index = 0
-        while index < length:
-            pcc_gc_store_ptr_plan_finish(ptr_add(plans, index * _MUL_POINTER_PLAN_BYTES))
-            child = ptr_add(load_ptr(snapshot, 0), PYTUPLEOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE)
+        if status == 0:
+            store_ptr(snapshot, 0, py_tuple_new(length))
+            if _mul_adopt(slots, tokens, _MUL_SNAPSHOT) != 0:
+                status = -1
+            index = 0
+            while index < length and status == 0:
+                py_tuple_set_item(load_ptr(snapshot, 0), index, load_ptr(children, index * C_POINTER_SIZE))
+                if py_err_occurred() != 0:
+                    status = -1
+                index += 1
+            if status == 0:
+                pcc_gc_publish_initialized(load_ptr(snapshot, 0))
+        # Independent roots remain registered through tuple allocation/stores,
+        # every partial failure and all potentially reentrant retirement.
+        py_tls_exc_swap_slot(error)
+        index = length
+        while index > 0:
+            index -= 1
+            child = ptr_add(children, index * C_POINTER_SIZE)
             if pcc_gc_foreign_lease_release(child, load_i64(child_tokens, index * C_POINTER_SIZE)) != 0:
                 pcc_platform_abort()
                 return -1
-            index = index + 1
+            pcc_gc_store_root(child, null())
+        pcc_gc_frame_leave(borrowed)
+        if length > 0:
+            pcc_gc_frame_leave(children)
         free(child_tokens)
+        free(children)
         free(plans)
         py_clear_exception()
         py_tls_exc_swap_slot(error)
         if status == 0:
-            pcc_gc_publish_initialized(load_ptr(snapshot, 0))
             return 0
         if status != -2:
             return _mul_error(7, cstr("list snapshot ownership failed"))
-        _mul_drop(slots, tokens, _MUL_SNAPSHOT)
     return -1
 
 

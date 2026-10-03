@@ -316,12 +316,6 @@ int64_t pcc_gc_store_ptr_plan_commit_sentinel_aware_locked(
     PyObject *sentinel
 );
 void pcc_gc_store_ptr_plan_finish(PccGcStoreRootPlan *plan);
-/* Caller holds the initialized graph transaction and an owner address lease.
- * Empty traced destination; stable owning source; finish plan after unlock. */
-int64_t pcc_gc_copy_ptr_lease_commit_locked(
-    PccGcStoreRootPlan *plan, PyObject *owner,
-    PyObject **destination, PyObject **source
-);
 int64_t pcc_gc_backend4_retarget_mutator_payload_locked(
     PyObject *owner,
     void *old_base,

@@ -514,142 +514,144 @@ def _part_42(out):
     _append_method(out, '_native_re_compile_argument_exprs', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_native_re_compile_call', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_native_re_findall_call', (('self', 'pos', False), ('args', 'pos', False), ('kwargs', 'pos', False), ('expr', 'pos', True)))
-    _append_method(out, '_native_re_class_compile_attr_string_value', (('self', 'pos', False), ('class_name', 'pos', False), ('attr_name', 'pos', False), ('value_expr', 'pos', False)))
+    _append_method(out, '_emit_native_re_compile_alias_method_call', (('self', 'pos', False), ('alias_info', 'pos', False), ('method_name', 'pos', False), ('args', 'pos', False), ('kwargs', 'pos', False), ('expr', 'pos', True)))
 
 
 def _part_43(out):
+    _append_method(out, '_native_re_flags_operand_expr', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_native_re_class_compile_attr_string_value', (('self', 'pos', False), ('class_name', 'pos', False), ('attr_name', 'pos', False), ('value_expr', 'pos', False)))
     _append_method(out, '_pooled_cstr_ptr', (('self', 'pos', False), ('payload', 'pos', False), ('prefix', 'pos', True)))
     _append_method(out, '_zero_of', (('self', 'pos', False), ('ir_ty', 'pos', False)))
     _append_method(out, '_begin_handled_exception_scope', (('self', 'pos', False), ('exception_slot', 'pos', False)))
     _append_method(out, '_emit_handled_exception_scope_exit', (('self', 'pos', False), ('entry', 'pos', False), ('clear_root', 'pos', True), ('binding_slot', 'pos', True), ('binding_name', 'pos', True)))
     _append_method(out, '_emit_suspend_handled_exception_scopes', (('self', 'pos', False),))
     _append_method(out, '_emit_resume_handled_exception_scopes', (('self', 'pos', False),))
-    _append_method(out, '_emit_chain_pending_handled_exception', (('self', 'pos', False),))
-    _append_method(out, '_exception_selection_owner_slot', (('self', 'pos', False), ('value', 'pos', False), ('label', 'pos', False), ('owner_name', 'pos', True)))
 
 
 def _part_44(out):
+    _append_method(out, '_emit_chain_pending_handled_exception', (('self', 'pos', False),))
+    _append_method(out, '_exception_selection_owner_slot', (('self', 'pos', False), ('value', 'pos', False), ('label', 'pos', False), ('owner_name', 'pos', True)))
     _append_method(out, '_clear_exception_selection_owner_slot', (('self', 'pos', False), ('slot', 'pos', False)))
     _append_method(out, '_emit_exception_class_match', (('self', 'pos', False), ('expr', 'pos', False), ('frame_slot', 'pos', True)))
     _append_method(out, '_generator_tuple_build_name', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_generator_expr_may_suspend', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_suspending_tuple_literal', (('self', 'pos', False), ('expr', 'pos', False), ('build_slot', 'pos', False), ('item_slot', 'pos', False)))
     _append_method(out, '_emit_cancel_pending_return_roots', (('self', 'pos', False), ('loop_exit', 'pos', True), ('root_base', 'pos', True)))
-    _append_method(out, '_emit_owned_return_through_finally', (('self', 'pos', False), ('value', 'pos', False), ('stmt', 'pos', False)))
-    _append_method(out, '_emit_generator_yield_expr', (('self', 'pos', False), ('expr', 'pos', False)))
 
 
 def _part_45(out):
+    _append_method(out, '_emit_owned_return_through_finally', (('self', 'pos', False), ('value', 'pos', False), ('stmt', 'pos', False)))
+    _append_method(out, '_emit_generator_yield_expr', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_builtin_exception_and_branch', (('self', 'pos', False), ('exc_name', 'pos', False), ('message', 'pos', False), ('span', 'pos', False), ('', 'kw_only', False), ('open_dead_continuation', 'pos', True)))
     _append_method(out, '_owned_release_needed', (('self', 'pos', False), ('obj', 'pos', False), ('source_expr', 'pos', False)))
     _append_method(out, '_extern_prior_pin', (('self', 'pos', False), ('value', 'pos', False)))
     _append_method(out, '_extern_enter_root', (('self', 'pos', False), ('value', 'pos', False), ('owned', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_extern_load_root', (('self', 'pos', False), ('root', 'pos', False)))
     _append_method(out, '_extern_repin_root', (('self', 'pos', False), ('root', 'pos', False)))
-    _append_method(out, '_extern_take_root', (('self', 'pos', False), ('root', 'pos', False)))
-    _append_method(out, '_extern_release_roots', (('self', 'pos', False), ('roots', 'pos', False)))
 
 
 def _part_46(out):
+    _append_method(out, '_extern_take_root', (('self', 'pos', False), ('root', 'pos', False)))
+    _append_method(out, '_extern_release_roots', (('self', 'pos', False), ('roots', 'pos', False)))
     _append_method(out, '_extern_cleanup_block', (('self', 'pos', False), ('roots', 'pos', False), ('target', 'pos', False), ('leases', 'pos', True)))
     _append_method(out, '_extern_release_foreign_leases', (('self', 'pos', False), ('leases', 'pos', False)))
     _append_method(out, '_extern_check_lease_cleanup', (('self', 'pos', False), ('failed', 'pos', False), ('roots', 'pos', False)))
     _append_method(out, '_new_slot_call_root', (('self', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_slot_call_root_record', (('self', 'pos', False), ('slot', 'pos', False)))
     _append_method(out, '_slot_call_result_sink', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_slot_call_note_published', (('self', 'pos', False), ('slot', 'pos', False)))
-    _append_method(out, '_release_slot_call_roots', (('self', 'pos', False), ('roots', 'pos', False)))
 
 
 def _part_47(out):
+    _append_method(out, '_slot_call_note_published', (('self', 'pos', False), ('slot', 'pos', False)))
+    _append_method(out, '_release_slot_call_roots', (('self', 'pos', False), ('roots', 'pos', False)))
     _append_method(out, '_slot_call_cleanup_block', (('self', 'pos', False), ('roots', 'pos', False), ('target', 'pos', False), ('leases', 'pos', True)))
     _append_method(out, '_slot_call_check_status', (('self', 'pos', False), ('status', 'pos', False), ('operation', 'pos', False), ('span', 'pos', True)))
     _append_method(out, '_slot_call_copy_source', (('self', 'pos', False), ('destination', 'pos', False), ('source', 'pos', False), ('borrowed', 'pos', True), ('span', 'pos', True)))
     _append_method(out, '_slot_call_name_source', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_publish_slot_call_owned', (('self', 'pos', False), ('slot', 'pos', False), ('value', 'pos', False), ('', 'kw_only', False), ('label', 'pos', True)))
     _append_method(out, '_emit_slot_call_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
-    _append_method(out, '_ordinary_call_needs_runtime_binding', (('self', 'pos', False), ('expr', 'pos', False), ('fd', 'pos', False), ('skip_self', 'pos', True), ('require_object_result', 'pos', True)))
-    _append_method(out, '_emit_runtime_bound_user_call', (('self', 'pos', False), ('expr', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False)))
 
 
 def _part_48(out):
+    _append_method(out, '_ordinary_call_needs_runtime_binding', (('self', 'pos', False), ('expr', 'pos', False), ('fd', 'pos', False), ('skip_self', 'pos', True), ('require_object_result', 'pos', True)))
+    _append_method(out, '_emit_runtime_bound_user_call', (('self', 'pos', False), ('expr', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False)))
     _append_method(out, '_native_class_method_def', (('self', 'pos', False), ('class_info', 'pos', False), ('method_name', 'pos', False)))
     _append_method(out, '_func_c_abi_export_symbol', (('self', 'pos', False), ('fd', 'pos', False)))
     _append_method(out, '_finish_native_callable_metadata', (('self', 'pos', False), ('output', 'pos', False), ('qualname', 'pos', False), ('span', 'pos', False)))
     _append_method(out, '_slot_call_published_module_ref', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_slot_call_module_value', (('self', 'pos', False), ('module_name', 'pos', False), ('attr_name', 'pos', False), ('span', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_conditional', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
-    _append_method(out, '_emit_slot_call_short_circuit', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('need_truth', 'pos', True)))
-    _append_method(out, '_take_slot_call_root', (('self', 'pos', False), ('slot', 'pos', False)))
 
 
 def _part_49(out):
+    _append_method(out, '_emit_slot_call_short_circuit', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('need_truth', 'pos', True)))
+    _append_method(out, '_take_slot_call_root', (('self', 'pos', False), ('slot', 'pos', False)))
     _append_method(out, '_slot_call_runtime_call', (('self', 'pos', False), ('runtime_name', 'pos', False), ('roots', 'pos', False), ('', 'kw_only', False), ('result_slot', 'pos', True), ('suffix_args', 'pos', True), ('argument_order', 'pos', True), ('span', 'pos', True)))
     _append_method(out, '_emit_slot_call_sequence', (('self', 'pos', False), ('elems', 'pos', False), ('label', 'pos', False), ('tuple_result', 'pos', False)))
     _append_method(out, '_emit_slot_call_args_tuple', (('self', 'pos', False), ('args', 'pos', False), ('label', 'pos', True)))
     _append_method(out, '_slot_call_deferred_star', (('self', 'pos', False), ('args', 'pos', False)))
     _append_method(out, '_finish_slot_call_deferred_star', (('self', 'pos', False), ('args_root', 'pos', False), ('span', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_set', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
-    _append_method(out, '_slot_call_split_operands', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_emit_slot_call_object', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', True), ('module_name', 'pos', True), ('attr_name', 'pos', True)))
 
 
 def _part_50(out):
+    _append_method(out, '_slot_call_split_operands', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_emit_slot_call_object', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', True), ('module_name', 'pos', True), ('attr_name', 'pos', True)))
     _append_method(out, '_emit_slot_call_dict', (('self', 'pos', False), ('pairs', 'pos', False), ('span', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_subscript', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_int_constructor', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_owned_text_conversion', (('self', 'pos', False), ('expr', 'pos', False), ('runtime_name', 'pos', False)))
     _append_method(out, '_emit_owned_unary_runtime_call', (('self', 'pos', False), ('expr', 'pos', False), ('runtime_name', 'pos', False)))
     _append_method(out, '_emit_owned_object_constructor', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_emit_owned_set_constructor', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_dict_get_uses_owned_slots', (('self', 'pos', False), ('expr', 'pos', False)))
 
 
 def _part_51(out):
+    _append_method(out, '_emit_owned_set_constructor', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_dict_get_uses_owned_slots', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_rooted_dict_get', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_os_getenv_call', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_dyn_list_count', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_maybe_emit_owned_str_result', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_bytes_decode', (('self', 'pos', False), ('expr', 'pos', False), ('dynamic', 'pos', False)))
     _append_method(out, '_emit_owned_os_runtime_call', (('self', 'pos', False), ('expr', 'pos', False), ('runtime_name', 'pos', False), ('arguments', 'pos', True), ('sequence', 'pos', True), ('field_index', 'pos', True)))
-    _append_method(out, '_emit_os_path_slot_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
-    _append_method(out, '_native_os_uname_attr_index', (('self', 'pos', False), ('expr', 'pos', False)))
 
 
 def _part_52(out):
+    _append_method(out, '_emit_os_path_slot_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
+    _append_method(out, '_native_os_uname_attr_index', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_slot_call_os_uname_attr', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_native_namespace_projection', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_slot_call_namespace_attribute', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_program_argv', (('self', 'pos', False), ('span', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_owned_native_join_call', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_format_call', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_slot_call_binary_runtime', (('self', 'pos', False), ('expr', 'pos', False), ('object_boundary', 'pos', True)))
-    _append_method(out, '_emit_slot_call_binary', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
 
 
 def _part_53(out):
+    _append_method(out, '_slot_call_binary_runtime', (('self', 'pos', False), ('expr', 'pos', False), ('object_boundary', 'pos', True)))
+    _append_method(out, '_emit_slot_call_binary', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
     _append_method(out, '_emit_slot_call_attribute', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_kwargs_object', (('self', 'pos', False), ('kwargs', 'pos', False), ('kwargs_expr', 'pos', False), ('span', 'pos', False), ('label', 'pos', True), ('callable_root', 'pos', True)))
     _append_method(out, '_foreign_super_initializer_base', (('self', 'pos', False), ('info', 'pos', False)))
     _append_method(out, '_emit_foreign_super_init_slots', (('self', 'pos', False), ('expr', 'pos', False), ('from_class', 'pos', False), ('super_args', 'pos', False), ('base', 'pos', False)))
     _append_method(out, '_slot_call_literal_integer_kind', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_slot_call_literal_integer', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
-    _append_method(out, '_emit_rooted_native_callable', (('self', 'pos', False), ('adapter', 'pos', False), ('original_args', 'pos', False), ('capture_exprs', 'pos', False), ('display_name_ptr', 'pos', False), ('qualname', 'pos', False), ('fd', 'pos', False), ('label', 'pos', False), ('cache_gv', 'pos', True)))
-    _append_method(out, '_emit_native_func_default_root', (('self', 'pos', False), ('expr', 'pos', False)))
 
 
 def _part_54(out):
+    _append_method(out, '_emit_rooted_native_callable', (('self', 'pos', False), ('adapter', 'pos', False), ('original_args', 'pos', False), ('capture_exprs', 'pos', False), ('display_name_ptr', 'pos', False), ('qualname', 'pos', False), ('fd', 'pos', False), ('label', 'pos', False), ('cache_gv', 'pos', True)))
+    _append_method(out, '_emit_native_func_default_root', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_class_namespace_name_root', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_slot_call_valueclass_field_source', (('self', 'pos', False), ('payload_slot', 'pos', False), ('path', 'pos', False), ('module_source', 'pos', False)))
     _append_method(out, '_emit_slot_call_valueclass_field', (('self', 'pos', False), ('payload_slot', 'pos', False), ('path', 'pos', False), ('field_ty', 'pos', False), ('module_source', 'pos', False), ('label', 'pos', False), ('span', 'pos', False)))
     _append_method(out, '_emit_slot_call_valueclass_attribute', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_lambda_adapter_name_root', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_slot_call_unary_runtime', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_emit_slot_call_unary', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
-    _append_method(out, '_set_call_operands', (('self', 'pos', False), ('expr', 'pos', False)))
 
 
 def _part_55(out):
+    _append_method(out, '_emit_slot_call_unary', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
+    _append_method(out, '_set_call_operands', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_set_algebra_call', (('self', 'pos', False), ('expr', 'pos', False), ('dynamic', 'pos', True), ('', 'kw_only', False), ('receiver_slot', 'pos', True), ('output_slot', 'pos', True)))
 
 

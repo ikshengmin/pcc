@@ -42,9 +42,13 @@ def test_file_read_publishes_before_error_checks(method, runtime, site):
 @pytest.mark.parametrize("expression,runtime", (
     ("re.compile(pattern)", "py_re_compile_obj"),
     ("re.compile(pattern, flags)", "py_re_compile_obj"),
+    ("re.compile(pattern, re.I)", "py_re_compile_obj"),
+    ("re.compile(pattern, re.I | re.M)", "py_re_compile_obj"),
     ("re.compile(flags=flags, pattern=pattern)", "py_re_compile_obj"),
     ("re.findall(pattern, text)", "py_re_findall_flags"),
     ("re.findall(pattern, text, flags)", "py_re_findall_flags"),
+    ("re.findall(pattern, text, re.I)", "py_re_findall_flags"),
+    ("re.findall(pattern, text, re.I | re.M)", "py_re_findall_flags"),
 ))
 @pytest.mark.parametrize("site", ("return", "argument", "default", "later-error"))
 def test_regex_result_publishes_before_operand_cleanup(expression, runtime, site):
@@ -175,7 +179,96 @@ def test_file_re_program_reference(tmp_path, monkeypatch):
 @pytest.mark.integration
 @pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
 def test_file_re_result_native_five_gc(python_program_compiler, request,
-                                      explicit_owned_runtime, tmp_path, capfd):
+                                      explicit_owned_runtime, tmp_path, capfd, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     mode = request.node.callspec.params["python_program_compiler"]
     assert_owned_program(PROGRAM, "FILE_RE_RESULT_OWNERS_OK\n", tmp_path,
                          python_program_compiler, mode, explicit_owned_runtime, capfd)
+
+
+@pytest.mark.parametrize("scope", ("global", "local"))
+def test_legacy_compiled_pattern_alias_findall_keeps_result_sink(scope):
+    # This valid Python pattern takes the existing legacy alias branch;
+    # the native engine reports its unsupported subset at runtime.
+    statement = "pattern = re.compile('a(?i:b)')\n"
+    prefix = "import re\ndef take(*, value):\n    return value\n"
+    if scope == "global":
+        source = prefix + statement + "text = 'ab'\nresult = take(value=pattern.findall(text))\n"
+    else:
+        source = (prefix + "def probe(text: str):\n    " + statement
+                  + "    return take(value=pattern.findall(text))\n")
+    _assert_immediate_publication(_emit(source), "py_re_findall_flags")
+
+
+@pytest.mark.parametrize("binding", ("parameter", "local", "global", "ordinary"))
+def test_flags_on_shadowed_or_ordinary_objects_keep_attribute_lookup(binding):
+    prefix = "import re as regex\n"
+    if binding == "global":
+        prefix += "import re\nclass Flags:\n    I = 8\nre = Flags()\n"
+    parameter = "holder" if binding == "local" else "re"
+    if binding == "ordinary":
+        parameter = "holder"
+    if binding == "global":
+        parameter = ""
+    receiver = "holder" if binding == "ordinary" else "re"
+    setup = "    re = holder\n" if binding == "local" else ""
+    signature = "pattern: str, text: str" + (", " + parameter if parameter else "")
+    text = _emit(prefix + "def probe(" + signature + "):\n" + setup
+                 + "    return regex.findall(pattern, text, " + receiver + ".I)\n")
+    _assert_immediate_publication(_function(text), "py_obj_getattr")
+    _assert_immediate_publication(text, "py_re_findall_flags")
+    assert "@py_index_i64_checked(" in _function(text)
+
+
+def test_imported_re_module_alias_flags_use_scalar_constant():
+    text = _function(_emit("import re as regex\ndef probe(pattern: str):\n"
+                           "    return regex.compile(pattern, regex.I | regex.M)\n"))
+    _assert_immediate_publication(text, "py_re_compile_obj")
+    assert "@py_obj_getattr(" not in text
+
+
+def test_ordinary_compiled_pattern_uses_managed_callable_binding():
+    text = _emit("import re\ndef take(*, value):\n    return value\n"
+                 "def probe(text: str):\n    pattern = re.compile('[a-z]+')\n"
+                 "    return take(value=pattern.findall(text))\n")
+    _assert_immediate_publication(text, "py_re_compile_obj")
+    assert "@py_obj_call_slots(" in _function(text)
+
+
+@pytest.mark.parametrize("name,parameters,defaults", (
+    ("_emit_native_re_findall_call", ("self", "args", "kwargs", "expr"), (False, False, False, True)),
+    ("_emit_native_re_compile_alias_method_call", ("self", "alias_info", "method_name", "args", "kwargs", "expr"), (False, False, False, False, False, True)),
+    ("_native_re_flags_operand_expr", ("self", "expr"), (False, False)),
+))
+def test_regex_helper_native_exports_and_callers(name, parameters, defaults):
+    from inspect import Parameter, signature
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.codegen.host_contract import L1_CODEGEN_HOST_METHODS
+    from pcc.frontends.python.codegen._l1_codegen_static_methods import L1_CODEGEN_STATIC_METHODS
+    from pcc.frontends.python.codegen.layer1_support import _default_native_module_exports
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.type_infer import infer_module
+
+    static = {entry["name"]: entry for entry in L1_CODEGEN_STATIC_METHODS}
+    exports = _default_native_module_exports("pcc.frontends.python.codegen.layer1")
+    native = {entry["name"]: entry for entry in exports["pcc.frontends.python.codegen.layer1"]["L1CodeGen"]["methods"]}
+    assert name in L1_CODEGEN_HOST_METHODS and static[name] == native[name]
+    assert tuple(item["name"] for item in static[name]["call_sig"]) == parameters
+    assert tuple(item["has_default"] for item in static[name]["call_sig"]) == defaults
+    actual = signature(getattr(L1CodeGen, name)).parameters
+    assert tuple(actual) == parameters
+    assert tuple(item.default is not Parameter.empty for item in actual.values()) == defaults
+    args = ", ".join(parameters[1:])
+    source = ("from pcc.frontends.python.codegen.layer1 import L1CodeGen\n"
+              + "def probe(codegen: L1CodeGen, " + args + "):\n"
+              + "    return codegen." + name + "(" + args + ")\n")
+    module = infer_module(parse_and_lift(source, "binding.py", "binding"), external_exports=exports)
+    codegen = L1CodeGen(module, ir_scaffold_mode="on")
+    codegen._strict_no_libpython = True
+    codegen._prefer_native_callable_values = True
+    codegen._native_module_exports = exports
+    body = _function(str(codegen.generate(module)))
+    symbol = "user_pcc_frontends_python_codegen_layer1_L1CodeGen_" + name
+    call = re.search(r"call [^\n]*@" + symbol + r"\(([^\n]*)\)", body)
+    assert call and len(call.group(1).split(",")) == len(parameters)
+    assert "@py_cpy_" not in body
