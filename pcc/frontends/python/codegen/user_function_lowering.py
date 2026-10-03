@@ -2166,6 +2166,152 @@ class UserFunctionLoweringMixin:
         self.builder = saved_builder
         return adapter_ir
 
+    def _emit_class_namespace_name_root(self, expr, label):
+        """Read an exact active class binding from its live namespace owner.
+
+        A cached class-global slot is only a compile-time binding identity.
+        Its contents are never used as the value or as an owning GC source.
+        """
+        context = getattr(self, "_class_namespace_context", None)
+        if context is None or not isinstance(expr, Name):
+            return None
+        owner_function, namespace_root, bindings, outer_env = context
+        if owner_function is not self.current_function:
+            return None
+        binding = bindings.get(expr.ident)
+        entry = self.env.get(expr.ident)
+        if binding is None or entry is None or binding[0] is not entry[0]:
+            return None
+
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        output = self._new_slot_call_root(label + ".class.name")
+        output_cleanup = self._slot_call_cleanup_block((output,), target)
+        self._try_err_block = output_cleanup
+        self._cpy_operand_cleanup_block = output_cleanup
+        try:
+            if binding[1] is None:
+                # Synthetic factory captures are explicit owning roots whose
+                # lexical lifetime is the surrounding class-definition body.
+                self._slot_call_copy_source(output, binding[0], False, expr.span)
+                return output
+
+            key = self._emit_slot_call_operand(
+                StrLit(span=expr.span, ty=StrType(name="str"), value=binding[1]),
+                label + ".class.key",
+            )
+            cleanup = self._slot_call_cleanup_block((output, key), target)
+            lookup_error = self.current_function.append_basic_block(
+                self._fresh("class.name.lookup.error"),
+            )
+            done = self.current_function.append_basic_block(self._fresh("class.name.done"))
+            self._try_err_block = lookup_error
+            self._cpy_operand_cleanup_block = lookup_error
+            self._slot_call_runtime_call(
+                "py_obj_getitem", (namespace_root, key),
+                result_slot=output, span=expr.span,
+            )
+            self._guard_cpy_value_not_null(self.builder.load(output))
+            self._release_slot_call_roots((key,))
+            self.builder.branch(done)
+
+            self.builder.position_at_end(lookup_error)
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            # This is an implementation catch of builtin KeyError, not a
+            # user-written except expression subject to lexical shadowing.
+            missing = object()
+            saved_key_env = self.env.pop("KeyError", missing)
+            saved_key_global = self._module_globals.pop("KeyError", missing)
+            try:
+                matches = self._emit_exception_class_match(
+                    Name(span=expr.span, ty=DynType(name="dyn"), ident="KeyError"),
+                )
+            finally:
+                if saved_key_env is not missing:
+                    self.env["KeyError"] = saved_key_env
+                if saved_key_global is not missing:
+                    self._module_globals["KeyError"] = saved_key_global
+            fallback = self.current_function.append_basic_block(self._fresh("class.name.fallback"))
+            self.builder.cbranch(
+                self.builder.icmp_signed("!=", matches, ir.Constant(_I64, 0)),
+                fallback, cleanup,
+            )
+            self.builder.position_at_end(fallback)
+            self.builder.call(self.runtime["py_clear_exception"], [])
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [self._as_gc_ptr(output), ir.Constant(_CSTR, None)],
+            )
+            self._release_slot_call_roots((key,))
+            self._try_err_block = output_cleanup
+            self._cpy_operand_cleanup_block = output_cleanup
+            saved_binding = self.env.pop(expr.ident, missing)
+            saved_context = self._class_namespace_context
+            self._class_namespace_context = None
+            if expr.ident in outer_env:
+                self.env[expr.ident] = outer_env[expr.ident]
+            try:
+                known = (
+                    expr.ident in self.env or expr.ident in self._module_globals
+                    or expr.ident in self.functions
+                    or expr.ident in getattr(self.class_lowering, "classes", {})
+                    or expr.ident in getattr(self, "_native_module_aliases", {})
+                    or expr.ident in getattr(self, "_native_module_constant_bindings", {})
+                    or expr.ident in getattr(self, "_cpy_module_env", {})
+                    or self._name_returns_native_builtin_callable_value(expr.ident)
+                    or expr.ident in ("__name__", "__file__", "__package__")
+                )
+                if known:
+                    value = self._emit_slot_call_operand(expr, label + ".outer")
+                    self._try_err_block = self._slot_call_cleanup_block((value,), output_cleanup)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    status = self.builder.call(
+                        self.runtime["pcc_gc_root_move"],
+                        [self._as_gc_ptr(output), self._as_gc_ptr(value)],
+                    )
+                    self._slot_call_check_status(status, "class name fallback move", expr.span)
+                    self._release_slot_call_roots((value,))
+                else:
+                    # Unknown module names still perform the ordinary dynamic
+                    # global lookup, but publish its NEW owner before checking.
+                    value = self.builder.call(
+                        self.runtime["py_module_attr_get"],
+                        [
+                            self._pooled_cstr_ptr(self.ast_module.name or "__main__", ".class.name.module"),
+                            self._attr_name_ptr(expr.ident),
+                        ],
+                    )
+                    self._publish_slot_call_owned(output, value, label="class name global lookup")
+                    absent = self.builder.icmp_unsigned(
+                        "==", self.builder.load(output), ir.Constant(_CSTR, None),
+                    )
+                    missing_name = self.current_function.append_basic_block(self._fresh("class.name.missing"))
+                    found = self.current_function.append_basic_block(self._fresh("class.name.global.found"))
+                    self.builder.cbranch(absent, missing_name, found)
+                    self.builder.position_at_end(missing_name)
+                    self._emit_builtin_exception_and_branch(
+                        "NameError", "name '" + expr.ident + "' is not defined", expr.span,
+                    )
+                    self.builder.position_at_end(found)
+            finally:
+                self._class_namespace_context = saved_context
+                if saved_binding is missing:
+                    self.env.pop(expr.ident, None)
+                else:
+                    self.env[expr.ident] = saved_binding
+            self._try_err_block = output_cleanup
+            self._cpy_operand_cleanup_block = output_cleanup
+            self._emit_post_call_err_check(expr.span)
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+
     def _emit_native_func_default_root(self, expr: Expr):
         """Keep an ordinary native default owned until signature insertion.
 

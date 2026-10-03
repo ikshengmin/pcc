@@ -214,6 +214,10 @@ class BuiltinTypeAttrLoweringMixin:
         ``py_cpy_getattr`` and tag the resulting CPython type as a cpy value
         (so ``type(x).__name__`` etc. also dispatch through libpython).
         Inert in no-libpython mode (``_cpy_values`` is empty)."""
+        if not self._expr_looks_cpython(expr.args[0]):
+            # py_obj_getattr's __class__ branch already delegates to this
+            # exact NEW-reference ABI before any user attribute override.
+            return self._emit_owned_unary_runtime_call(expr, "py_type_builtin")
         obj_val = self._emit_as_object(expr.args[0])
         if obj_val in getattr(self, "_cpy_values", ()):
             self._guard_cpy_value_not_null(obj_val)

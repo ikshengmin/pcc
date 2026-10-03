@@ -27,6 +27,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_box_int_locals",
     "_c_abi_export_symbols",
     "_class_aliases",
+    "_class_namespace_context",
     "_class_attr_mutation_in_loop_depth",
     "_class_attr_runtime_state",
     "_class_type_export_cache",
@@ -624,6 +625,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_slot_call_published_module_ref",
     "_emit_slot_call_module_value",
     "_emit_slot_call_conditional",
+    "_emit_slot_call_short_circuit",
     "_take_slot_call_root",
     "_slot_call_runtime_call",
     "_emit_slot_call_sequence",
@@ -637,6 +639,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_slot_call_subscript",
     "_emit_slot_call_int_constructor",
     "_emit_owned_text_conversion",
+    "_emit_owned_unary_runtime_call",
     "_emit_owned_format_call",
     "_slot_call_binary_runtime",
     "_emit_slot_call_binary",
@@ -648,6 +651,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_slot_call_literal_integer",
     "_emit_rooted_native_callable",
     "_emit_native_func_default_root",
+    "_emit_class_namespace_name_root",
 )
 
 

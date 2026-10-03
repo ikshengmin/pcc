@@ -482,7 +482,7 @@ bb0:
     assert "movsd xmm10, QWORD PTR x[rip]" in asm_text
     assert "ucomisd xmm10, xmm11" in asm_text
     assert "setb al" in asm_text
-    assert "movzx r10d, BYTE PTR [rbp -" in asm_text
+    assert "and r10b, 1\n  movzx r10d, r10b" in asm_text
     assert '.section .note.GNU-stack,"",@progbits' in asm_text
 
 
@@ -503,8 +503,8 @@ entry:
 """.strip()
 
     asm_text = emit_x86_64_linux_asm(ir_text)
-    assert "mov r10b, 1\n  movzx r10d, r10b" in asm_text
-    assert "mov r10b, 0\n  movzx r10d, r10b" in asm_text
+    assert "mov r10b, 1\n  and r10b, 1\n  movzx r10d, r10b" in asm_text
+    assert "mov r10b, 0\n  and r10b, 1\n  movzx r10d, r10b" in asm_text
 
 
 def test_self_backend_x86_64_linux_lowers_floor_and_sqrt_intrinsics():
@@ -855,7 +855,7 @@ declare void @llvm.va_end.p0(ptr)
 
 define i32 @probe(i32 %tag, ...) {
 entry:
-  %argp = alloca ptr
+  %argp = alloca { i32, i32, ptr, ptr }, align 8
   call void @llvm.va_start.p0(ptr %argp)
   %i = va_arg ptr %argp, i32
   call void @llvm.va_end.p0(ptr %argp)
@@ -872,7 +872,10 @@ entry:
     asm_text = emit_x86_64_linux_asm(ir_text)
     assert "llvm.va_start" not in asm_text
     assert "lea r10, [rbp + 16]" in asm_text
-    assert "mov DWORD PTR [rsp + 0], r10d" in asm_text
+    assert "mov DWORD PTR [r11], 8" in asm_text
+    assert "mov DWORD PTR [r11 + 4], 48" in asm_text
+    assert "cmp eax, 48" in asm_text
+    assert "mov esi, 7" in asm_text
     assert "call probe" in asm_text
 
 

@@ -9,6 +9,7 @@ from pcc.runtime.py.py_abi_constants import PY_TYPE_TUPLE
 from pcc.frontends.python.py_ast import (
     Attr,
     BinOp,
+    BoolExpr,
     BoolLit,
     Call,
     DictExpr,
@@ -337,6 +338,11 @@ class CallObjectLoweringMixin:
             raise L1CodegenError("suspending slot-call operand requires a persistent generator-frame output slot")
         if isinstance(expr, IfExpr):
             return self._emit_slot_call_conditional(expr, label)
+        class_value = self._emit_class_namespace_name_root(expr, label)
+        if class_value is not None:
+            return class_value
+        if isinstance(expr, BoolExpr):
+            return self._emit_slot_call_short_circuit(expr, label)[0]
         published = self._slot_call_published_module_ref(expr)
         if published is not None:
             return self._emit_slot_call_module_value(published[0], published[1], expr.span, label)
@@ -473,7 +479,11 @@ class CallObjectLoweringMixin:
         return output
 
     def _emit_owned_text_conversion(self, expr, runtime_name):
-        """Publish a unary text conversion NEW result before releasing its input owner."""
+        """Publish a unary text conversion through the shared NEW-result ABI."""
+        return self._emit_owned_unary_runtime_call(expr, runtime_name)
+
+    def _emit_owned_unary_runtime_call(self, expr, runtime_name):
+        """Keep one operand owned and publish the runtime's actual NEW result."""
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
@@ -496,7 +506,7 @@ class CallObjectLoweringMixin:
             self._release_slot_call_roots((argument,))
             if sink is None:
                 return self._take_slot_call_root(output)
-            return self.builder.load(output, name=self._fresh("text.conversion.current"))
+            return self.builder.load(output, name=self._fresh("unary.result.current"))
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
@@ -578,6 +588,84 @@ class CallObjectLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
         return output
+
+    def _emit_slot_call_short_circuit(self, expr, label, need_truth=False):
+        """Move the selected operand owner, preserving identity and order."""
+        if expr.op not in ("and", "or"):
+            raise L1CodegenError("unsupported slot-call boolean operation: " + expr.op)
+        output = self._new_slot_call_root(label + ".boolean")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if isinstance(expr.left, BoolExpr):
+                # Reuse the branch truth which selected this inner value.
+                # Re-testing it would invoke __bool__ twice in mixed chains.
+                left, condition = self._emit_slot_call_short_circuit(
+                    expr.left, label + ".left", True,
+                )
+            else:
+                left = self._emit_slot_call_operand(expr.left, label + ".left")
+                self._try_err_block = self._slot_call_cleanup_block((output, left), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                truth = self._slot_call_runtime_call("py_obj_truthy", (left,), span=expr.left.span)
+                condition = self.builder.icmp_signed("!=", truth, ir.Constant(_I64, 0))
+            self._try_err_block = self._slot_call_cleanup_block((output, left), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            short = self.current_function.append_basic_block(self._fresh("call.slot.bool.short"))
+            rhs = self.current_function.append_basic_block(self._fresh("call.slot.bool.rhs"))
+            done = self.current_function.append_basic_block(self._fresh("call.slot.bool.done"))
+            if expr.op == "and":
+                self.builder.cbranch(condition, rhs, short)
+            else:
+                self.builder.cbranch(condition, short, rhs)
+            self.builder.position_at_end(short)
+            moved = self.builder.call(
+                self.runtime["pcc_gc_root_move"],
+                [self._as_gc_ptr(output), self._as_gc_ptr(left)],
+                name=self._fresh("call.slot.bool.move"),
+            )
+            self._slot_call_check_status(moved, "boolean left owner move", expr.span)
+            self._release_slot_call_roots((left,))
+            short_exit = self.builder.block
+            self.builder.branch(done)
+            self.builder.position_at_end(rhs)
+            self._release_slot_call_roots((left,))
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            right_truth = None
+            if isinstance(expr.right, BoolExpr) and need_truth:
+                right, right_truth = self._emit_slot_call_short_circuit(
+                    expr.right, label + ".right", True,
+                )
+            else:
+                right = self._emit_slot_call_operand(expr.right, label + ".right")
+            self._try_err_block = self._slot_call_cleanup_block((output, right), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if need_truth and right_truth is None:
+                truth = self._slot_call_runtime_call("py_obj_truthy", (right,), span=expr.right.span)
+                right_truth = self.builder.icmp_signed("!=", truth, ir.Constant(_I64, 0))
+            moved = self.builder.call(
+                self.runtime["pcc_gc_root_move"],
+                [self._as_gc_ptr(output), self._as_gc_ptr(right)],
+                name=self._fresh("call.slot.bool.move"),
+            )
+            self._slot_call_check_status(moved, "boolean right owner move", expr.span)
+            self._release_slot_call_roots((right,))
+            right_exit = self.builder.block
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+            result_truth = None
+            if need_truth:
+                result_truth = self.builder.phi(_I1, name=self._fresh("call.slot.bool.truth"))
+                result_truth.add_incoming(ir.Constant(_I1, expr.op == "or"), short_exit)
+                result_truth.add_incoming(right_truth, right_exit)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output, result_truth
 
     def _slot_call_literal_integer_kind(self, expr):
         """Return 1 for a proven int tree, 2 for a bool literal, else 0.

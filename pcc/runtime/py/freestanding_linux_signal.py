@@ -13,6 +13,42 @@ __pcc_freestanding__ = True
 set_errno = extern("pcc_errno_set", (c_int32,), c_void)
 
 
+_KERNEL_SIGNAL_MASK_BYTES = 8
+_KERNEL_SIGNAL_ACTION_BYTES = 32
+
+
+@c_abi_export("abort")
+def abort() -> None:
+    # Public C abort is distinct from the runtime's internal fatal primitive.
+    # Deliver to this thread, including when the signal was initially blocked
+    # or ignored. A returning handler is followed by the default disposition.
+    arm: i64 = 1 if load_i8(target_platform_machine(), 0) == 97 else 0
+    mask_call: i64 = 135 if arm else 14
+    action_call: i64 = 134 if arm else 13
+    pid_call: i64 = 172 if arm else 39
+    tid_call: i64 = 178 if arm else 186
+    send_call: i64 = 131 if arm else 234
+    exit_call: i64 = 94 if arm else 231
+    abort_signal: i64 = 6
+    unblock: i64 = 1
+    mask = stack_alloc(_KERNEL_SIGNAL_MASK_BYTES)
+    store_i64(mask, 0, 1 << (abort_signal - 1))
+    pid: i64 = syscall6(pid_call, 0, 0, 0, 0, 0, 0)
+    tid: i64 = syscall6(tid_call, 0, 0, 0, 0, 0, 0)
+    syscall6(mask_call, unblock, mask, null(), _KERNEL_SIGNAL_MASK_BYTES, 0, 0)
+    syscall6(send_call, pid, tid, abort_signal, 0, 0, 0)
+    action = stack_alloc(_KERNEL_SIGNAL_ACTION_BYTES)
+    memset(action, 0, _KERNEL_SIGNAL_ACTION_BYTES)
+    syscall6(action_call, abort_signal, action, null(), _KERNEL_SIGNAL_MASK_BYTES, 0, 0)
+    syscall6(mask_call, unblock, mask, null(), _KERNEL_SIGNAL_MASK_BYTES, 0, 0)
+    syscall6(send_call, pid, tid, abort_signal, 0, 0, 0)
+    # If a concurrent disposition change prevents the second delivery from
+    # terminating, POSIX still forbids returning. Exit the entire thread group;
+    # repeat only if the kernel refuses that non-returning exit operation.
+    while True:
+        syscall6(exit_call, 134, 0, 0, 0, 0, 0)
+
+
 @c_abi_export("sigemptyset")
 def sigemptyset(mask) -> i64:
     if ptr_is_null(mask):

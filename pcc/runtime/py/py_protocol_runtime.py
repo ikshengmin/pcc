@@ -27,7 +27,15 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_USER_CLASS_START,
 )
 
-from pcc.extern import c_abi_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
+from pcc.extern import (
+    c_abi_export,
+    c_double,
+    c_int32,
+    c_int64,
+    c_ptr,
+    c_void,
+    extern,
+)
 from pcc.unsafe import (
     atomic_rmw_i32,
     call_ptr1,
@@ -36,6 +44,7 @@ from pcc.unsafe import (
     cstr,
     f64_div,
     f64_signbit,
+    define_global_i32,
     define_thread_local_i32,
     global_addr,
     global_load_ptr,
@@ -75,6 +84,17 @@ py_runtime_error_if_unset = extern(
     "py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr
 )
 py_err_occurred = extern("py_err_occurred", (), c_int64)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_obj_truthy = extern("py_obj_truthy", (c_ptr,), c_int64)
 py_int_to_i64 = extern("py_int_to_i64", (c_ptr, c_ptr), c_int64)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
@@ -206,69 +226,148 @@ def _call_unary(method, self_obj):
     )
 
 
+# Only the selected managed PyFunc branch enters these frames. Raw C method
+# addresses keep the separate call_ptr2 route below.
+_PROTOCOL_BINARY_METHOD = 0
+_PROTOCOL_BINARY_SELF = 1
+_PROTOCOL_BINARY_ARG = 2
+_PROTOCOL_BINARY_ARGS = 3
+_PROTOCOL_BINARY_RESULT = 4
+_PROTOCOL_BINARY_ERROR = 5
+_PROTOCOL_BINARY_SLOT_COUNT = 6
+_PROTOCOL_BINARY_BORROWED_COUNT = 3
+
+define_global_i32("pcc_protocol_binary_borrowed_map", -3)
+define_global_i32("pcc_protocol_binary_owned_map", 6)
+
+
+def _protocol_binary_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
+    # Every NEW producer has already stored into its registered owning slot.
+    offset: int = index * C_POINTER_SIZE
+    slot = ptr_add(slots, offset)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        py_runtime_error_if_unset(cstr("user protocol call"), cstr("binary result owner lease failed"))
+        return -1
+    store_i64(tokens, offset, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+def _protocol_binary_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
+    offset: int = index * C_POINTER_SIZE
+    slot = ptr_add(slots, offset)
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(tokens, offset, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _protocol_binary_body(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr) -> int:
+    index: int = 0
+    while index < _PROTOCOL_BINARY_BORROWED_COUNT:
+        offset: int = index * C_POINTER_SIZE
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, offset), ptr_add(borrowed, offset),
+        )
+        if token < 0:
+            py_runtime_error_if_unset(cstr("user protocol call"), cstr("binary input owner copy failed"))
+            return -1
+        store_i64(tokens, offset, token)
+        index += 1
+    store_ptr(slots, _PROTOCOL_BINARY_ARGS * C_POINTER_SIZE, py_tuple_new(2))
+    if _protocol_binary_adopt(slots, tokens, _PROTOCOL_BINARY_ARGS) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _PROTOCOL_BINARY_ARGS * C_POINTER_SIZE)) != 0:
+        _protocol_require_result(null(), cstr("py_tuple_new"), cstr("user protocol argument tuple allocation failed"))
+        return -1
+    py_tuple_set_item(
+        load_ptr(slots, _PROTOCOL_BINARY_ARGS * C_POINTER_SIZE), 0,
+        load_ptr(slots, _PROTOCOL_BINARY_SELF * C_POINTER_SIZE),
+    )
+    if py_err_occurred() != 0:
+        return -1
+    py_tuple_set_item(
+        load_ptr(slots, _PROTOCOL_BINARY_ARGS * C_POINTER_SIZE), 1,
+        load_ptr(slots, _PROTOCOL_BINARY_ARG * C_POINTER_SIZE),
+    )
+    if py_err_occurred() != 0:
+        return -1
+    store_ptr(slots, _PROTOCOL_BINARY_RESULT * C_POINTER_SIZE, py_func_call(
+        load_ptr(slots, _PROTOCOL_BINARY_METHOD * C_POINTER_SIZE),
+        load_ptr(slots, _PROTOCOL_BINARY_ARGS * C_POINTER_SIZE),
+    ))
+    if _protocol_binary_adopt(slots, tokens, _PROTOCOL_BINARY_RESULT) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _PROTOCOL_BINARY_RESULT * C_POINTER_SIZE)) != 0:
+        _protocol_require_result(null(), cstr("user protocol call"), cstr("user protocol callback returned NULL without an exception"))
+        return -1
+    return 0
+
+
+def _protocol_binary_pin_result(slot: c_ptr) -> int:
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), slot)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    return prior
+
+
+def _call_binary_function(method, self_obj, arg):
+    # Precondition: the selected managed method has a live external owner and
+    # a stable address through dispatch classification and this initial pin.
+    # A borrowed method-table entry alone does not establish that contract;
+    # lookup/replacement before this helper is a separate unresolved boundary.
+    # self_obj and arg are borrowed from live, address-stable caller roots.
+    method_pin: int = load_i32(method, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+    pcc_gc_pin(method)
+    borrowed = stack_alloc(_PROTOCOL_BINARY_BORROWED_COUNT * C_POINTER_SIZE)
+    store_ptr(borrowed, _PROTOCOL_BINARY_METHOD * C_POINTER_SIZE, method)
+    store_ptr(borrowed, _PROTOCOL_BINARY_SELF * C_POINTER_SIZE, self_obj)
+    store_ptr(borrowed, _PROTOCOL_BINARY_ARG * C_POINTER_SIZE, arg)
+    pcc_gc_frame_enter(global_addr("pcc_protocol_binary_borrowed_map"), borrowed)
+    slots = stack_alloc(_PROTOCOL_BINARY_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PROTOCOL_BINARY_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PROTOCOL_BINARY_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PROTOCOL_BINARY_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_protocol_binary_owned_map"), slots)
+    status: int = _protocol_binary_body(slots, tokens, borrowed)
+    py_tls_exc_swap_slot(ptr_add(slots, _PROTOCOL_BINARY_ERROR * C_POINTER_SIZE))
+    # The result has an independent counted owner even when it aliases method,
+    # either operand, or the argument tuple. Restore the temporary input pin
+    # before disposal; no unregistered raw result crosses this operation.
+    method_slot = ptr_add(borrowed, _PROTOCOL_BINARY_METHOD * C_POINTER_SIZE)
+    store_ptr(method_slot, 0, pcc_gc_take_pinned_slot(method_slot, method_pin))
+    memset(borrowed, 0, _PROTOCOL_BINARY_BORROWED_COUNT * C_POINTER_SIZE)
+    _protocol_binary_drop(slots, tokens, _PROTOCOL_BINARY_ARGS)
+    _protocol_binary_drop(slots, tokens, _PROTOCOL_BINARY_ARG)
+    _protocol_binary_drop(slots, tokens, _PROTOCOL_BINARY_SELF)
+    _protocol_binary_drop(slots, tokens, _PROTOCOL_BINARY_METHOD)
+    if status != 0:
+        _protocol_binary_drop(slots, tokens, _PROTOCOL_BINARY_RESULT)
+    py_clear_exception()
+    py_tls_exc_swap_slot(ptr_add(slots, _PROTOCOL_BINARY_ERROR * C_POINTER_SIZE))
+    result_slot = ptr_add(slots, _PROTOCOL_BINARY_RESULT * C_POINTER_SIZE)
+    prior: int = _protocol_binary_pin_result(result_slot)
+    if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _PROTOCOL_BINARY_RESULT * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result_slot, prior)
+
+
 def _call_binary(method, self_obj, arg):
     if ptr_is_null(method) != 0:
         return null()
     if _ptr_can_have_header(method) != 0 and _type_of(method) == PY_TYPE_FUNC:
-        method_pin: int = load_i32(method, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(method)
-        method_slot = stack_alloc(C_POINTER_SIZE)
-        store_ptr(method_slot, 0, null())
-        method_handle = pcc_gc_scheduler_root_register_handle(method_slot)
-        if ptr_is_null(method_handle) != 0:
-            pcc_gc_unpin(method)
-            if method_pin != 0:
-                atomic_rmw_i32("or", method, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
-            return _protocol_require_result(null(), cstr("user protocol call"), cstr("user method root registration failed"))
-        pcc_gc_store_root(method_slot, method)
-        args = py_tuple_new(2)
-        if ptr_is_null(args) != 0:
-            method = load_ptr(method_slot, 0)
-            pcc_gc_unpin(method)
-            if method_pin != 0:
-                atomic_rmw_i32("or", method, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
-            pcc_gc_store_root(method_slot, null())
-            pcc_gc_scheduler_root_unregister_handle(method_handle)
-            return _protocol_require_result(
-                null(),
-                cstr("py_tuple_new"),
-                cstr("user protocol argument tuple allocation failed"),
-            )
-        pcc_gc_pin(args)
-        py_tuple_set_item(args, 0, self_obj)
-        py_tuple_set_item(args, 1, arg)
-        result = py_func_call(load_ptr(method_slot, 0), args)
-        prior_result_pin: int = 0
-        if _ptr_can_have_header(result) != 0:
-            prior_result_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        if ptr_eq(result, args) != 0:
-            prior_result_pin = 0
-        if ptr_eq(result, load_ptr(method_slot, 0)) != 0:
-            prior_result_pin = method_pin
-        pcc_gc_pin(result)
-        result_slot = stack_alloc(C_POINTER_SIZE)
-        store_ptr(result_slot, 0, result)
-        if ptr_is_null(result) != 0:
-            _protocol_require_result(
-                result,
-                cstr("user protocol call"),
-                cstr("user protocol callback returned NULL without an exception"),
-            )
-        pcc_gc_unpin(args)
-        # The result can be the argument tuple. Restore its bit before tuple
-        # cleanup; this single-bit restoration does not acquire another pin.
-        if _ptr_can_have_header(result) != 0:
-            atomic_rmw_i32("or", result, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
-        py_decref(args)
-        method = load_ptr(method_slot, 0)
-        pcc_gc_unpin(method)
-        if method_pin != 0:
-            atomic_rmw_i32("or", method, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
-        if _ptr_can_have_header(result) != 0:
-            atomic_rmw_i32("or", result, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
-        pcc_gc_store_root(method_slot, null())
-        pcc_gc_scheduler_root_unregister_handle(method_handle)
-        return pcc_gc_take_pinned_slot(result_slot, prior_result_pin)
+        return _call_binary_function(method, self_obj, arg)
     return _protocol_require_result(
         call_ptr2(method, self_obj, arg),
         cstr("user protocol call"),

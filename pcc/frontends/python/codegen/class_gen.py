@@ -4919,6 +4919,30 @@ class ClassLowering:
             rooted_pcc_lifetimes=((class_body_root, True),),
         )
         class_body_cleanup = self.parent._try_err_block
+        saved_class_body_cpy = self.parent._cpy_operand_cleanup_block
+
+        # The class-local namespace remains a live owner throughout default
+        # evaluation. Cached attribute globals identify bindings only.
+        saved_namespace_context = getattr(self.parent, "_class_namespace_context", None)
+        namespace_bindings = {}
+        namespace_root = None
+        self.parent._class_namespace_context = None
+        if not annotation_targets_prepared:
+            namespace_root = self.parent._new_slot_call_root("class.definition.namespace")
+            namespace_cleanup = self.parent._slot_call_cleanup_block(
+                (namespace_root,), class_body_cleanup,
+            )
+            self.parent._try_err_block = namespace_cleanup
+            self.parent._cpy_operand_cleanup_block = namespace_cleanup
+            self.parent._slot_call_runtime_call(
+                "py_class_getattr", (class_body_root,), result_slot=namespace_root,
+                suffix_args=(self._cname_ptr("__dict__"),), span=cd.span,
+            )
+            self.parent._guard_cpy_value_not_null(self.parent.builder.load(namespace_root))
+            self.parent._class_namespace_context = (
+                self.parent.current_function, namespace_root,
+                namespace_bindings, dict(self.parent.env),
+            )
 
         # Execute attribute initializers and method definitions in source order.
         # A method's signature owns its evaluated default objects from this point.
@@ -4996,11 +5020,15 @@ class ClassLowering:
                         namespace_slot = self.parent._alloca_in_entry(_PTR, name=self._fresh("class.namespace.method"), init_null=True)
                         builder.store(namespace_obj, namespace_slot)
                         self.parent.env[attr_name] = (namespace_slot, _PTR, DynType(name="dyn"))
+                        namespace_bindings[attr_name] = (namespace_slot, attr_name)
                     continue
                 self._emit_class_attribute_initializer(info, cls_ptr, attr_name, value_expr, prepared_attr_objects)
+                namespace_bindings[attr_name] = (self.parent.env[attr_name][0], attr_name)
                 original_name = class_body_names.get(attr_name)
                 if original_name is not None and original_name != attr_name:
                     self.parent.env[original_name] = self.parent.env[attr_name]
+                    namespace_bindings[original_name] = (self.parent.env[original_name][0], attr_name)
+            self._emit_property_descriptor_class_attrs(cd, info, cls_ptr)
         finally:
             for method_obj in reversed(pinned_methods):
                 self.parent._gc_unpin(method_obj)
@@ -5014,13 +5042,16 @@ class ClassLowering:
                 self.parent._leave_container_temp_root(capture_root)
                 if owns_capture:
                     self.parent._gc_release(capture_value)
+            self.parent._class_namespace_context = saved_namespace_context
+            if namespace_root is not None:
+                self.parent._release_slot_call_roots((namespace_root,))
             self.parent._try_err_block = class_body_cleanup
+            self.parent._cpy_operand_cleanup_block = saved_class_body_cpy
             for attr_name, old_env in saved_class_attr_env.items():
                 if old_env is missing_env:
                     self.parent.env.pop(attr_name, None)
                 else:
                     self.parent.env[attr_name] = old_env
-        self._emit_property_descriptor_class_attrs(cd, info, cls_ptr)
         hash_attr = info.class_attr_values.get("__hash__")
         hash_is_none = _is_ast_node(hash_attr, NoneLit)
         eq_clears_hash = (
@@ -5160,6 +5191,9 @@ class ClassLowering:
             rooted_pcc_lifetimes=((root, owns_value),),
         )
         self.parent.env[capture.args[0].value] = (root, _PTR, DynType("dyn"))
+        context = getattr(self.parent, "_class_namespace_context", None)
+        if context is not None and context[0] is self.parent.current_function:
+            context[2][capture.args[0].value] = (root, None)
         return root, owns_value
 
     def has_definition_defaults(self, info, method_name: str) -> bool:

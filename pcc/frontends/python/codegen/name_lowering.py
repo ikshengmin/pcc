@@ -640,6 +640,9 @@ class NameLoweringMixin:
         return type(ann).__name__
 
     def _emit_name(self, expr: Name) -> ir.Value:
+        class_value = self._emit_class_namespace_name_root(expr, "class.name.value")
+        if class_value is not None:
+            return self._take_slot_call_root(class_value)
         check_local_bound(self, expr)
         slot = self.env.get(expr.ident)
         if slot is None:
