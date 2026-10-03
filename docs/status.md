@@ -1,6 +1,6 @@
 # Current status
 
-Updated October 3, 2026, 19:06 UTC. Maintain this page in place.
+Updated October 3, 2026, 20:10 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
@@ -20,8 +20,8 @@ V7 preserves 348 passes, restores 13 failures and the resource-limited module,
 and introduces two frontend regressions. Those are bytes.split feeding decode
 in macho_spec and abs feeding floor division in integer_fold_contract. Their
 shared producers now have separate causal passes on both original V6 and V7
-contexts. Current macho_spec encounters a newer earlier dict(zip(...)) producer
-gap, so those causal passes do not qualify the mutable whole module.
+contexts. A later zip-result repair also restores the complete original macho_spec
+context. These separate replays do not qualify the full current compiler graph.
 
 The earlier resource failure exposed quadratic IR expansion: short-lived call
 roots were enrolled in every function return cleanup. Lexical/LIFO lifetime
@@ -87,9 +87,35 @@ A staged scratch-root snapshot now moves tuple heap stores and retirement after
 unlock. The retry source `ffece4b8`, compiler `312d6631`, contains exactly five
 changes from the preceding freeze. Its seven-object preflight passes unchanged
 logical lock/ownership requirements, including restricted kernel calls, scratch
-clearing, no poll/allocation/indirect call and ordinary wrapper polls. The full
-186-member archive is building; original native controls and a real forced-STW
-held-lock probe are pending. The original failed gate remains retained.
+clearing, no poll/allocation/indirect call and ordinary wrapper polls. The fresh
+186-member archive is now admitted: SHA256
+`29bbd9cc130e6de0a56350de61aed1ec826e14b4e593df287761ec21e7b98caa`.
+Construction took 498.72 seconds with 439,934,976-byte peak tree RSS; this is
+source-matched correctness evidence, not an isolated performance measurement.
+The unchanged failed-class cleanup, mixed-numeric addition and division programs
+pass all five observed GC backends (15 witnesses), and both original C controls
+pass. The module-loop program now passes its earlier target-disposal and empty-loop
+checks, then fails the unchanged tuple-unpack disposal assertion under GC0.
+The remaining four settings are unrun for that group (16 of 20 total witnesses).
+
+A separate real two-thread forced-STW probe passes all five observed backends
+with nested graph/no-park depth, balanced leases, invalid/successful snapshot paths,
+held-lock completion and eventual parking/resume. Its generated ordinary-poll
+control remains active. The first probe attempt stopped at a public link-argument
+restriction; the successful retry uses maintained owned object emission and owned
+ELF linking. It does not establish full collector stability or throughput.
+The sealed five-backend proof is Library `libfile_d97ddc8325488191b995be439665a167`.
+
+The tuple-unpack fix ends only the synthetic tuple owner's lifetime immediately
+after unpack. Its error edge roots and restores the pending exception across
+weakref callbacks and reentrant finalizers. A causal overlay based on the admitted
+runtime, source `addad00416e5a8e9f35382212ea54c1c75c9f7fb8276a074ddc616546a44d63c`,
+passes 37 host checks and the original/lifetime/exception control IR verification.
+Six native cases remain unrun; a fresh matching runtime is required. Its recoverable
+source and evidence are Library `libfile_5095917afcc08191871ad1bb9fcfff75`.
+The later managed unary callback repair passes 107 host/model checks and the actual
+production optimized-library IR path. Native execution and pre-lookup method-table
+lifetime remain open. Those newer changes are outside the admitted runtime above.
 
 These binaries were produced by host pcc0. They do not establish native pcc1,
 Stage2/Stage3 fixed point, complete C/Python execution or final-source acceptance.
@@ -290,36 +316,37 @@ execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
 The last confirmed local source baseline is PCC
-`3f995a3dd73d901370c7cc5efed0bf6738ce40b0` (18:25 capture), GUI
+`f4d83e8c56a9ad468ab8b88a0c7324d468a3050f` (19:17 capture), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
 `83577bc41dc79d3ead2e217bfa04f0f500799012`. Promote a later capture only after its
 actual local application and commit are verified.
 
-The latest synchronized immutable capture is October 3 at 18:25:16 UTC,
-containing 31 PCC paths against `9290368`. Exact-source execution records 1,544
-distinct passes and six failures, with no resource-incomplete group. The original
+The latest synchronized immutable capture is October 3 at 19:17:33 UTC,
+containing 24 PCC paths against `3f995a3`. Exact-source execution records 1,685
+distinct passes and four failures, with no resource-incomplete group. The original
 47-target Stage1 context test completes with 37 IR outputs and ten codegen errors
-under the unchanged 1.5 GiB safety cap (275.41 seconds, 1,537,331,200-byte peak).
-It still fails its original assertion.
-
-The other failures are the attributed class_gen Call producer, boxed-int ABI
-expectation, pointer native test blocked by the missing matching runtime,
-incomplete re import alias and newly introduced ValueBox keyword-projection
-regression. Later alias/ValueBox repairs are outside this captured source.
+under the unchanged 1.5 GiB safety cap (265.746 seconds, 1,486,815,232-byte peak).
+It still fails its original assertion. The other three failures are the class_gen
+Call producer, boxed-int ABI expectation and an overbroad zip test assertion that
+matched an unrelated metadata tuple. The latter assertion was subsequently scoped
+to its target. The newer CPython bridge repair advances class_gen beyond its
+original helper to a separate format-result producer; the whole module still fails.
 Tests remaining after each first failure and native cases remain unqualified.
 
-Its full inventory contains 25,669 nodes: 25,444 selected and 225 capability or
-environment deselections. The independent integration inventory selects 5,547
+Its full inventory contains 25,894 nodes: 25,669 selected and 225 capability or
+environment deselections. The independent integration inventory selects 5,549
 from the same union. Both have zero collection errors/skips. Collection does
 not execute test bodies. The host phase explicitly excludes archive-dependent
 native cases, and the mixed backend file selects only its original AArch64
-peephole helpers.
+peephole helpers. The 37 large context IR files are separately backed up as
+Library `libfile_bae226d681b88191b84992386d5ebe52`; the small synchronization packet
+records their hashes and source identity.
 
-Historical captures remain separate: 17:21 recorded 1,780 passes, one completed
-failure and one resource-incomplete context node; 16:20 recorded 1,426 passes
-and a resource-incomplete context node. The earlier `71e15ea6` capture recorded
-1,189 passes and three failures. Later scoped repairs do not rewrite those
-receipts.
+Historical captures remain separate: 18:25 recorded 1,544 passes and six failures;
+17:21 recorded 1,780 passes, one completed failure and one resource-incomplete
+context node; 16:20 recorded 1,426 passes and a resource-incomplete context node.
+The earlier `71e15ea6` capture recorded 1,189 passes and three failures. Later
+scoped repairs do not rewrite those receipts.
 
 Recoverable code bytes, before/after patches and detailed historical receipts
 are retained in the external PCC recovery archives in Library. Code archive

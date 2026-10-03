@@ -9,7 +9,19 @@ import pytest
 
 from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from tests.python.test_shared_call_binding import _emit, _function
-from tests.python.test_slot_call_subscript_producers import _assert_immediate_publication
+
+
+def _assert_immediate_publication(text, runtime):
+    # Restrict this test to the transaction's runtime calls. Function default
+    # metadata also builds tuples through a separate, unchanged producer.
+    calls = list(re.finditer(r'^  (%call\.slot\.runtime[^ ]+) = call [^\n]*@'
+                            + runtime + r'\([^\n]*\)\n', text, re.M))
+    assert calls, runtime
+    for match in calls:
+        following = text[match.end():].splitlines()[0]
+        assert following.lstrip().startswith('store ptr ' + match.group(1) + ','), following
+    assert '@pcc_gc_foreign_lease_acquire(' in text
+    assert '@pcc_gc_foreign_lease_release(' in text
 
 
 EXPRESSIONS = (
@@ -91,7 +103,8 @@ def test_zip_actual_lowerer_supplies_registered_owners_to_every_boundary(monkeyp
     assert ('py_dict_keys', 1) in observed
     assert ('py_obj_type_tag', 1) in observed
     assert observed.count(('py_obj_getitem', 2)) == 2
-    assert observed.count(('py_tuple_set_item', 2)) == 2
+    zip_walk = observed[:observed.index(('py_list_append', 2))]
+    assert zip_walk.count(('py_tuple_set_item', 2)) == 2
     assert ('py_list_append', 2) in observed
     assert 'zip.scalar.bad' in function and 'zip.elem.bad' in function
     assert 'call.slot.cleanup' in function

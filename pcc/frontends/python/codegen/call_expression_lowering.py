@@ -1485,37 +1485,7 @@ class CallExpressionLoweringMixin:
         if name == "bool" and not expr.args:
             return ir.Constant(_I1, 0)
         if name == "format" and not expr.kwargs and 1 <= len(expr.args) <= 2:
-            if not any(self._expr_looks_cpython(argument) for argument in expr.args):
-                return self._emit_owned_format_call(expr)
-            value_obj = self._emit_expr_as_pcc_object(expr.args[0])
-            if len(expr.args) == 2:
-                if (
-                    isinstance(expr.args[0].ty, StrType)
-                    and isinstance(expr.args[1], StrLit)
-                    and expr.args[1].value == ""
-                ):
-                    # ``format(exact_str, "")`` is the bare-field f-string
-                    # path.  Preserve the owned-result contract with
-                    # ``py_obj_str`` while avoiding the generic formatter.
-                    # The latter can only add custom ``__format__`` behavior
-                    # for non-str/class values, which do not have StrType.
-                    result = self.builder.call(
-                        self.runtime["py_obj_str"],
-                        [value_obj],
-                        name=self._fresh("format.str.empty"),
-                    )
-                    self._emit_post_call_err_check(self._expr_span_or_none(expr))
-                    return result
-                spec_obj = self._emit_as_object(expr.args[1])
-            else:
-                spec_obj = self._emit_str_literal("")
-            result = self.builder.call(
-                self.runtime["py_obj_format"],
-                [value_obj, spec_obj],
-                name=self._fresh("format.obj"),
-            )
-            self._emit_post_call_err_check(self._expr_span_or_none(expr))
-            return result
+            return self._emit_owned_format_call(expr)
         if name == "chr" and len(expr.args) == 1 and not expr.kwargs:
             v = self._emit_expr(expr.args[0])
             ty = expr.args[0].ty

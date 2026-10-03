@@ -582,16 +582,41 @@ class CallObjectLoweringMixin:
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            value = self._emit_slot_call_operand(expr.args[0], "format.value")
-            roots.append(value)
-            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-            self._cpy_operand_cleanup_block = self._try_err_block
             spec_expr = (expr.args[1] if len(expr.args) == 2
                          else StrLit(span=expr.span, ty=StrType(name="str"), value=""))
-            spec = self._emit_slot_call_operand(spec_expr, "format.spec")
-            roots.append(spec)
-            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-            self._cpy_operand_cleanup_block = self._try_err_block
+            operands = []
+            for argument, label in ((expr.args[0], "format.value"), (spec_expr, "format.spec")):
+                if self._expr_looks_cpython(argument):
+                    # Preserve the selected foreign expression route. Its
+                    # native projection is the bridge's NEW owner, never the
+                    # raw CPython pointer or an annotation-based ownership
+                    # guess. Keep earlier operands alive while this runs.
+                    item = self._new_slot_call_root(label)
+                    roots.append(item)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    if not hasattr(self, "_slot_call_result_sinks"):
+                        self._slot_call_result_sinks = []
+                    self._slot_call_result_sinks.append((argument, item, False))
+                    try:
+                        result = self._emit_call_arg_object(argument)
+                    finally:
+                        _argument, _slot, published = self._slot_call_result_sinks.pop()
+                    if not published:
+                        # The lookahead is advisory; a native producer may
+                        # still win. Demand its existing ownership proof and
+                        # immediate handoff rather than evaluating it again.
+                        if (not self._owned_release_needed(result, argument)
+                                and not self._value_is_never_gc_object(result)):
+                            raise L1CodegenError("format operand has no authoritative owned result")
+                        self._publish_slot_call_owned(item, result, label="format operand")
+                else:
+                    item = self._emit_slot_call_operand(argument, label)
+                    roots.append(item)
+                operands.append(item)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            value, spec = operands
             self._slot_call_runtime_call("py_obj_format", (value, spec), result_slot=output, span=expr.span)
             self._release_slot_call_roots((value, spec))
             if sink is None:
@@ -1345,6 +1370,7 @@ class CallObjectLoweringMixin:
                 raw,
                 arg.ty,
                 "call.arg.bridge",
+                result_slot=self._slot_call_result_sink(arg),
             )
 
         boxed_valueclass = self._emit_valueclass_payload_to_object(raw, arg.ty)

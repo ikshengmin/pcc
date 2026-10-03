@@ -250,7 +250,7 @@ def _part_18(out):
     _append_method(out, '_emit_strict_no_libpython_import_error', (('self', 'pos', False), ('module_name', 'pos', False), ('span', 'pos', False)))
     _append_method(out, '_emit_str_literal', (('self', 'pos', False), ('value', 'pos', False)))
     _append_method(out, '_emit_unary', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_emit_value_as_pcc_object_or_bridge', (('self', 'pos', False), ('value', 'pos', False), ('value_ty', 'pos', False), ('name_hint', 'pos', False), ('', 'kw_only', False), ('consume_valueclass_payload_fields', 'pos', True), ('cpy_owned_on_error', 'pos', True), ('rooted_pcc_on_error', 'pos', True), ('pinned_pcc_on_error', 'pos', True), ('pcc_release_on_error', 'pos', True)))
+    _append_method(out, '_emit_value_as_pcc_object_or_bridge', (('self', 'pos', False), ('value', 'pos', False), ('value_ty', 'pos', False), ('name_hint', 'pos', False), ('', 'kw_only', False), ('consume_valueclass_payload_fields', 'pos', True), ('cpy_owned_on_error', 'pos', True), ('rooted_pcc_on_error', 'pos', True), ('pinned_pcc_on_error', 'pos', True), ('pcc_release_on_error', 'pos', True), ('result_slot', 'pos', True)))
 
 
 def _part_19(out):
@@ -653,6 +653,7 @@ def _part_55(out):
     _append_method(out, '_emit_slot_call_unary', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
     _append_method(out, '_set_call_operands', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_set_algebra_call', (('self', 'pos', False), ('expr', 'pos', False), ('dynamic', 'pos', True), ('', 'kw_only', False), ('receiver_slot', 'pos', True), ('output_slot', 'pos', True)))
+    _append_method(out, '_emit_for_unpack_assign', (('self', 'pos', False), ('stmt', 'pos', False), ('name', 'pos', False)))
 
 
 def _build_static_methods():

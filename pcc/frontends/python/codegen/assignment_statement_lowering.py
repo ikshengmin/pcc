@@ -390,9 +390,67 @@ class AssignmentStatementLoweringMixin:
                     else:
                         self._emit_expr_stmt(ExprStmt(stmt.span, target.idx))
             return
-        self._emit_assign_unchecked(stmt)
+        unpack_name = ""
+        if (
+            _assign_is_name(stmt.value)
+            and stmt.value.ident in self._for_unpack_temporary_names
+            and stmt.value.ident in getattr(self, "_owned_local_names", set())
+        ):
+            unpack_name = stmt.value.ident
+        if unpack_name:
+            self._emit_for_unpack_assign(stmt, unpack_name)
+        else:
+            self._emit_assign_unchecked(stmt)
         for target in stmt.targets:
             mark_bound_target(self, target)
+
+    def _emit_for_unpack_assign(self, stmt: Assign, name: str) -> None:
+        """End a normalized loop item's ownership after its unpack.
+
+        Keep the registered slot and flag for the next iteration. Both a
+        successful unpack and an exception caught outside the loop must drop
+        this compiler-only reference before user code continues.
+        """
+        slot = self.env[name]
+        outer_err = getattr(self, "_try_err_block", None)
+        error_bb = self.current_function.append_basic_block(
+            name=self._fresh("for.unpack.error")
+        )
+        done_bb = self.current_function.append_basic_block(
+            name=self._fresh("for.unpack.done")
+        )
+        self._try_err_block = error_bb
+        self._emit_assign_unchecked(stmt)
+        self._try_err_block = outer_err
+        if not self._builder_block_is_terminated():
+            self._emit_release_owned_local_if_flagged(name, slot[0])
+            self.builder.branch(done_bb)
+        self.builder.position_at_end(error_bb)
+        # Disposing the tuple can invoke a weakref callback or finalizer,
+        # whose unraisable boundary clears TLS. Keep the selecting exception
+        # in the existing rooted owner protocol while that cleanup runs.
+        pending = self.builder.call(
+            self.runtime["py_current_exception"],
+            [],
+            name=self._fresh("for.unpack.exception"),
+        )
+        exception_slot = self._exception_selection_owner_slot(
+            pending, "for.unpack.exception"
+        )
+        self.builder.call(self.runtime["py_clear_exception"], [])
+        self._emit_release_owned_local_if_flagged(name, slot[0])
+        self.builder.call(self.runtime["py_clear_exception"], [])
+        pending = self.builder.call(
+            self.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(exception_slot)],
+            name=self._fresh("for.unpack.exception.restore"),
+        )
+        self.builder.call(self.runtime["py_raise"], [pending])
+        self._clear_exception_selection_owner_slot(exception_slot)
+        self.builder.branch(
+            outer_err if outer_err is not None else self._ensure_fn_err_exit()
+        )
+        self.builder.position_at_end(done_bb)
 
     def _emit_assign_unchecked(self, stmt: Assign) -> None:
         if len(stmt.targets) != 1:

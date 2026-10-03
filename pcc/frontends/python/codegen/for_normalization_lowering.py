@@ -421,6 +421,10 @@ class ForNormalizationLoweringMixin:
         target = stmt.target
         assert _for_is_tuple_expr(target)
         tmp_name = self._fresh("foritem")
+        # Unlike a user loop target, this owner is needed only while the
+        # leading unpack publishes its elements. Keeping the final tuple in
+        # the synthetic slot extends every element's lifetime past the loop.
+        self._for_unpack_temporary_names.add(tmp_name)
         iter_ty = stmt.iter.ty
         elem_ty: Type = DynType(name="dyn")
         if isinstance(iter_ty, ListType):

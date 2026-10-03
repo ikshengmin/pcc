@@ -192,6 +192,7 @@ class CpyBridgeLoweringMixin:
         rooted_pcc_on_error: tuple[tuple[ir.Value, ir.Value], ...] = (),
         pinned_pcc_on_error: tuple[tuple[ir.Value, bool], ...] = (),
         pcc_release_on_error: tuple[ir.Value, ...] = (),
+        result_slot=None,
     ) -> ir.Value:
         if value in self._cpy_values:
             value_owned = self._cpy_value_is_owned(value)
@@ -206,6 +207,63 @@ class CpyBridgeLoweringMixin:
                 pinned_pcc_on_error,
                 pcc_release_on_error,
             )
+            if result_slot is not None:
+                # The bridge returns a new PCC owner, regardless of whether
+                # its CPython source is borrowed or owned. Publish at this
+                # producer boundary, before a null guard, source decref, or
+                # fallible lease operation can park. A CPython pointer itself
+                # never enters the managed output slot.
+                previous = self._current_try_err_block()
+                pcc_target = previous if previous is not None else self._ensure_fn_err_exit()
+                saved_cpy = self._cpy_operand_cleanup_block
+                cpy_target = saved_cpy if saved_cpy is not None else pcc_target
+                cleanups = []
+                for target in (pcc_target, cpy_target):
+                    if cleanups and target is pcc_target:
+                        cleanups.append(cleanups[0])
+                        continue
+                    cleanup = self.current_function.append_basic_block(
+                        name=self._fresh("cpy.bridge.output.cleanup"),
+                    )
+                    saved_block = self.builder.block
+                    self.builder.position_at_end(cleanup)
+                    for owned in cleanup_owned_tuple:
+                        self.builder.call(self.runtime["py_cpy_decref"], [owned])
+                    for pcc_value, root_slot in rooted_pcc_on_error:
+                        self._leave_container_temp_root(root_slot)
+                        self._gc_release(pcc_value)
+                    for pcc_value, release_owned in pinned_pcc_on_error:
+                        self._gc_unpin(pcc_value)
+                        if release_owned:
+                            self._gc_release(pcc_value)
+                    for pcc_value in pcc_release_on_error:
+                        self._gc_release(pcc_value)
+                    self.builder.branch(target)
+                    self.builder.position_at_end(saved_block)
+                    cleanups.append(cleanup)
+                self._try_err_block = cleanups[0]
+                self._cpy_operand_cleanup_block = cleanups[1]
+                try:
+                    bridged = self.builder.call(
+                        self.runtime["py_cpy_to_pcc_obj"], [value],
+                        name=self._fresh(name_hint),
+                    )
+                    self._publish_slot_call_owned(
+                        result_slot, bridged, label="CPython object bridge",
+                    )
+                    current = self.builder.load(
+                        result_slot, name=self._fresh(name_hint + ".current"),
+                    )
+                    self._guard_cpy_value_not_null(current)
+                    if value_owned:
+                        self.builder.call(self.runtime["py_cpy_decref"], [value])
+                        self._forget_owned_cpy_value(value)
+                finally:
+                    self._try_err_block = previous
+                    self._cpy_operand_cleanup_block = saved_cpy
+                return self.builder.load(
+                    result_slot, name=self._fresh(name_hint + ".result"),
+                )
             bridged = self.builder.call(
                 self.runtime["py_cpy_to_pcc_obj"],
                 [value],

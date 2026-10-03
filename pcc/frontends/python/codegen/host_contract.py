@@ -232,6 +232,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "loop_stack",
     "module",
     "runtime",
+    "_for_unpack_temporary_names",
 )
 L1_CODEGEN_HOST_METHODS = (
     "_alloca_in_entry",
@@ -685,6 +686,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_slot_call_unary",
     "_set_call_operands",
     "_emit_set_algebra_call",
+    "_emit_for_unpack_assign",
 )
 
 

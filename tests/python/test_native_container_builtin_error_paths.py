@@ -23,10 +23,9 @@ lands, the contract pinned here for dyn-held mappings is FAIL CLOSED — a
 clean catchable exception, never a silent wrong answer.  The dyn non-dict
 ``dict(x)`` case IS CPython-correct here (TypeError).
 
-Static-shape cost guard: sources whose static type proves the walk cannot
-raise (``ListType``/``TupleType``/``DictType``/``SetType``) must gain NO new
-``py_err_occurred`` checks — the fail-closed edges are emitted only for
-DynType sources, so pcc1's own hot shapes keep byte-stable IR.
+The any/all static-shape cost guard below avoids new error checks for
+proven built-in sources. Zip now uses registered owner transactions: even
+static shapes check lease/publication errors and clean up through root slots.
 """
 from __future__ import annotations
 
@@ -432,8 +431,13 @@ def test_zip_dyn_source_edges_check_and_release():
     body = _function_body(ir_text, "f")
     assert body is not None
     assert body.count("@py_err_occurred") >= 2, body
-    assert "call.err.cleanup" in body, body
-    assert "@pcc_gc_release" in body, body
+    assert "call.slot.cleanup" in body, body
+    # Cleanup clears authoritative owners before finalizers or frame leave.
+    # A raw pcc_gc_release(value) would reintroduce the stale-address gap.
+    assert "@pcc_gc_store_root" in body, body
+    assert "@pcc_gc_frame_leave_lifo" in body, body
+    assert "zip.arg.0.keys.operand" in body, body
+    assert "zip.row.operand" in body and "zip.index.operand" in body, body
 
 
 def test_any_over_static_dict_gains_no_err_checks():

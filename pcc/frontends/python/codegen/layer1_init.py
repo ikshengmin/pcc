@@ -245,6 +245,7 @@ class Layer1InitMixin:
         self._lambda_counter: list[str] = []
         self._class_type_export_cache: dict[tuple[str, str], Optional[str]] = {}
         self._tmp_counter = 0
+        self._for_unpack_temporary_names: set[str] = set()
         self._skip_program_main: bool = False
         self._python_library: bool = False
         self._freestanding_module: bool = False
