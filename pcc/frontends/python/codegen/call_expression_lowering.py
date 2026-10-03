@@ -1767,27 +1767,21 @@ class CallExpressionLoweringMixin:
         if name == "reversed" and len(expr.args) == 1 and not expr.kwargs:
             return self._emit_reversed_builtin(expr)
         if name == "repr" and len(expr.args) == 1:
+            if not self._expr_looks_cpython(expr.args[0]):
+                return self._emit_owned_text_conversion(expr, "py_obj_repr")
             arg_obj = self._emit_expr_as_pcc_object(expr.args[0])
             result = self.builder.call(
-                self.runtime["py_obj_repr"],
-                [arg_obj],
-                name=self._fresh("repr"),
+                self.runtime["py_obj_repr"], [arg_obj], name=self._fresh("repr"),
             )
-            # The runtime helper borrows its operand, so a temporary produced
-            # by the argument expression is consumed here.  A borrowed operand
-            # is left alone by the classifier.
             self._gc_release_if_owned(arg_obj, expr.args[0])
             return result
         if name == "ascii" and len(expr.args) == 1:
+            if not self._expr_looks_cpython(expr.args[0]):
+                return self._emit_owned_text_conversion(expr, "py_obj_ascii")
             arg_obj = self._emit_expr_as_pcc_object(expr.args[0])
             result = self.builder.call(
-                self.runtime["py_obj_ascii"],
-                [arg_obj],
-                name=self._fresh("ascii"),
+                self.runtime["py_obj_ascii"], [arg_obj], name=self._fresh("ascii"),
             )
-            # The runtime helper borrows its operand, so a temporary produced
-            # by the argument expression is consumed here.  A borrowed operand
-            # is left alone by the classifier.
             self._gc_release_if_owned(arg_obj, expr.args[0])
             return result
         if name == "hash" and len(expr.args) == 1:

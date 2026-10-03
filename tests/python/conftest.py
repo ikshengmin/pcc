@@ -41,7 +41,7 @@ def native_pcc1_compiler():
         skip_or_fail_no_current_pcc1("no current pcc1 for source-program regression")
     with compiler.open("rb") as stream:
         magic = stream.read(4)
-    assert magic in (b"\xcf\xfa\xed\xfe", b"\x7fELF", b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"), (
+    assert magic in (b"\xcf\xfa\xed\xfe", b"\x7fELF", b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf") or magic[:2] == b"MZ", (
         f"pcc1 regression requires a native executable, not a launcher: {compiler}"
     )
     return compiler

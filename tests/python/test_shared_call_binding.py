@@ -141,17 +141,29 @@ def test_imported_operand_publishes_once_before_keyword_merge(tmp_path):
 
 
 def test_function_metadata_uses_defining_namespace_and_rooted_setters():
-    module = infer_module(parse_and_lift("def target(value):\n    return value\n", "provider.py", "provider"))
+    source = "def target(value):\n    return value\npublished = target\n"
+    module = infer_module(parse_and_lift(source, "provider.py", "provider"))
     codegen = L1CodeGen(module, ir_scaffold_mode="on")
     codegen._skip_program_main = True
     codegen._strict_no_libpython = True
     text = str(codegen.generate(module))
-    for value in ("provider", "__module__", "__qualname__"):
+    for value in ("provider", "target"):
         encoded = 'c"' + "".join("\\" + format(byte, "02X") for byte in value.encode() + b"\0") + '"'
         assert encoded in text, value
-    # Each new callable is immediately stored to its registered metadata
-    # owner before any setter can allocate or invoke a callback.
-    assert re.search(r"(%[^ ]+) = call [^\n]*@py_func_new_named\([^\n]*\)\n\s+store ptr \1, ptr %function.metadata.result", text)
+    # Publication is the next instruction after the constructor, before any
+    # lease release, error check, construction cleanup or metadata allocation.
+    constructor = re.search(
+        r"(%[^ ]+) = call [^\n]*@py_func_new_named\([^\n]*\)\n\s+store ptr \1, ptr (%function\.metadata\.result[^ ,\n]*)",
+        text,
+    )
+    assert constructor is not None
+    aliases = dict(re.findall(r"(%[^ ]+) = bitcast ptr (%[^ ]+) to ptr", text))
+    calls = re.findall(r"call [^\n]*@py_func_init_metadata_slots\(([^\n]*)\)", text)
+    assert calls
+    first_argument = calls[0].split(",", 1)[0].split()[-1]
+    while first_argument in aliases:
+        first_argument = aliases[first_argument]
+    assert first_argument == constructor.group(2)
     assert "@pcc_gc_foreign_lease_acquire(" in text
 
 
@@ -167,7 +179,8 @@ def test_shared_call_method_registry_matches_live_signatures():
     for name in ("_ordinary_call_needs_runtime_binding", "_slot_call_published_module_ref",
                  "_emit_slot_call_module_value", "_emit_runtime_bound_user_call",
                  "_native_class_method_def", "_func_c_abi_export_symbol",
-                 "_finish_native_callable_metadata", "_emit_slot_call_object",
+                 "_finish_native_callable_metadata", "_emit_rooted_native_callable",
+                 "_emit_native_func_default_root", "_emit_slot_call_object",
                  "_emit_slot_call_kwargs_object", "_emit_slot_call_conditional"):
         assert name in L1_CODEGEN_HOST_METHODS
         assert static[name] == native[name]

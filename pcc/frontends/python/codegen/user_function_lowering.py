@@ -2166,7 +2166,42 @@ class UserFunctionLoweringMixin:
         self.builder = saved_builder
         return adapter_ir
 
+    def _emit_native_func_default_root(self, expr: Expr):
+        """Keep an ordinary native default owned until signature insertion.
+
+        Dataclass inheritance, value payload consumption and CPython bridges
+        retain their explicit producers below. They do not share the ordinary
+        call-operand marshalling contract.
+        """
+        if self._is_valueclass_payload_type(getattr(expr, "ty", None)):
+            return None
+        if self._expr_looks_cpython(expr):
+            return None
+        if (
+            isinstance(expr, Call)
+            and isinstance(expr.func, Name)
+            and (
+                (expr.func.ident == "__pcc_dataclass_inherited_factory__"
+                 and expr.span.file == "<pcc-dataclass-factory>")
+                or (expr.func.ident == "__pcc_dataclass_inherited_default__"
+                    and expr.span.file == "<pcc-dataclass-default>")
+            )
+            and len(expr.args) == 2
+        ):
+            return None
+        old_prefer_native = self._prefer_native_callable_values
+        self._prefer_native_callable_values = True
+        try:
+            return self._emit_slot_call_operand(expr, "func.default")
+        finally:
+            self._prefer_native_callable_values = old_prefer_native
+
     def _emit_native_func_default_object(self, expr: Expr) -> ir.Value:
+        # The dataclass capture caller still consumes one immediate raw owner.
+        # Signature construction keeps the authoritative root instead.
+        native_root = self._emit_native_func_default_root(expr)
+        if native_root is not None:
+            return self._take_slot_call_root(native_root)
         if (
             isinstance(expr, Call)
             and isinstance(expr.func, Name)
@@ -2248,6 +2283,13 @@ class UserFunctionLoweringMixin:
         )
 
     def _emit_native_func_signature(self, original_args: tuple) -> ir.Value:
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        result_root = self._new_slot_call_root("func.signature.result")
+        result_cleanup = self._slot_call_cleanup_block((result_root,), target)
+        self._try_err_block = result_cleanup
+        self._cpy_operand_cleanup_block = result_cleanup
         n = len(original_args)
         names = self.builder.call(
             self.runtime["py_tuple_new"],
@@ -2280,12 +2322,18 @@ class UserFunctionLoweringMixin:
             signature_cleanup_target = self._ensure_fn_err_exit()
         # Each tuple has one construction owner. Pin that owner while defaults
         # can invoke user code; centralized unwind drops partial tuple cells too.
-        self._try_err_block = self._make_cpy_operand_cleanup_block(
+        tuple_cleanup = self._make_cpy_operand_cleanup_block(
             (), (), signature_cleanup_target, "func.signature.tuples.unwind",
             pinned_pcc=((defaults, True), (has_defaults, True), (kinds, True), (names, True)),
         )
+        self._try_err_block = tuple_cleanup
+        self._cpy_operand_cleanup_block = tuple_cleanup
         try:
+            self._emit_post_call_err_check()
+            for value in (names, kinds, has_defaults, defaults):
+                self._guard_cpy_value_not_null(value)
             for i, ast_arg in enumerate(original_args):
+                default_root = None
                 has_default = bool(
                     getattr(ast_arg, "has_default", False)
                     and getattr(ast_arg, "default", None) is not None
@@ -2302,12 +2350,19 @@ class UserFunctionLoweringMixin:
                     )
                     if is_factory:
                         default_expr = default_expr.args[0]
-                    default_obj = self._emit_native_func_default_object(default_expr)
-                    default_is_owned = self._value_is_owned_object(default_obj) or self._container_store_temp_needs_release(
-                        default_expr,
-                        default_expr.ty,
-                        self._expr_looks_cpython(default_expr),
-                    )
+                    default_root = self._emit_native_func_default_root(default_expr)
+                    if default_root is not None:
+                        self._try_err_block = self._slot_call_cleanup_block(
+                            (default_root,), tuple_cleanup,
+                        )
+                        self._cpy_operand_cleanup_block = self._try_err_block
+                    else:
+                        default_obj = self._emit_native_func_default_object(default_expr)
+                        default_is_owned = self._value_is_owned_object(default_obj) or self._container_store_temp_needs_release(
+                            default_expr,
+                            default_expr.ty,
+                            self._expr_looks_cpython(default_expr),
+                        )
                 else:
                     is_factory = False
                     default_obj = self._emit_none_literal()
@@ -2342,21 +2397,48 @@ class UserFunctionLoweringMixin:
                     self.runtime["py_tuple_set_item"],
                     [has_defaults, ir.Constant(_I64, i), has_default_obj],
                 )
-                self.builder.call(
-                    self.runtime["py_tuple_set_item"],
-                    [defaults, ir.Constant(_I64, i), default_obj],
-                )
-                self._gc_release(name_obj)
-                self._gc_release(kind_obj)
-                self._gc_release(has_default_obj)
-                if default_is_owned:
-                    self._gc_release(default_obj)
+                if default_root is not None:
+                    self._gc_release(name_obj)
+                    self._gc_release(kind_obj)
+                    self._gc_release(has_default_obj)
+                    self._slot_call_runtime_call(
+                        "py_tuple_set_item", (default_root,),
+                        suffix_args=(defaults, ir.Constant(_I64, i)),
+                        argument_order=(1, 2, 0), span=default_expr.span,
+                    )
+                    self._release_slot_call_roots((default_root,))
+                    self._try_err_block = tuple_cleanup
+                    self._cpy_operand_cleanup_block = tuple_cleanup
+                else:
+                    self.builder.call(
+                        self.runtime["py_tuple_set_item"],
+                        [defaults, ir.Constant(_I64, i), default_obj],
+                    )
+                    self._gc_release(name_obj)
+                    self._gc_release(kind_obj)
+                    self._gc_release(has_default_obj)
+                    if default_is_owned:
+                        self._gc_release(default_obj)
 
             sig = self.builder.call(
                 self.runtime["py_tuple_new"],
                 [ir.Constant(_I64, 5)],
                 name=self._fresh("func.sig"),
             )
+            self._publish_slot_call_owned(result_root, sig, label="native signature")
+            self._emit_post_call_err_check()
+            self._guard_cpy_value_not_null(self.builder.load(result_root))
+            token = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_acquire"],
+                [self._as_gc_ptr(result_root)],
+                name=self._fresh("func.signature.fill.lease"),
+            )
+            self._slot_call_check_status(token, "signature fill lease")
+            self._try_err_block = self._slot_call_cleanup_block(
+                (), tuple_cleanup, ((result_root, token),),
+            )
+            self._cpy_operand_cleanup_block = self._try_err_block
+            sig = self.builder.load(result_root, name=self._fresh("func.signature.current"))
             self.builder.call(
                 self.runtime["py_tuple_set_item"],
                 [
@@ -2381,6 +2463,14 @@ class UserFunctionLoweringMixin:
                 self.runtime["py_tuple_set_item"],
                 [sig, ir.Constant(_I64, 4), defaults],
             )
+            released = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_release"],
+                [self._as_gc_ptr(result_root), token],
+                name=self._fresh("func.signature.fill.release"),
+            )
+            self._try_err_block = tuple_cleanup
+            self._cpy_operand_cleanup_block = tuple_cleanup
+            self._slot_call_check_status(released, "signature fill lease release")
             self._gc_unpin(defaults)
             self._gc_release(defaults)
             self._gc_unpin(has_defaults)
@@ -2389,10 +2479,13 @@ class UserFunctionLoweringMixin:
             self._gc_release(kinds)
             self._gc_unpin(names)
             self._gc_release(names)
-            return sig
+            self._try_err_block = result_cleanup
+            self._cpy_operand_cleanup_block = result_cleanup
+            return self._take_slot_call_root(result_root)
 
         finally:
-            self._try_err_block = signature_error_target
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _native_func_signature_has_defaults(self, original_args: tuple) -> bool:
         for ast_arg in original_args:
@@ -2461,39 +2554,130 @@ class UserFunctionLoweringMixin:
         result.add_incoming(created, create_exit)
         return result
 
-    def _finish_native_callable_metadata(self, output, value, qualname, span):
-        """Set defining-namespace metadata while the new callable is rooted.
+    def _finish_native_callable_metadata(self, output, qualname, span):
+        """Initialize metadata through the callable's authoritative output slot."""
+        module_name = "__main__"
+        if self._skip_program_main and self.ast_module.name:
+            module_name = self.ast_module.name
+        status = self.builder.call(
+            self.runtime["py_func_init_metadata_slots"],
+            [
+                self._as_gc_ptr(output),
+                self._pooled_cstr_ptr(module_name, ".pyfunc.module"),
+                self._pooled_cstr_ptr(qualname, ".pyfunc.qualname") if qualname else ir.Constant(_CSTR, None),
+            ],
+            name=self._fresh("function.metadata.status"),
+        )
+        self._slot_call_check_status(status, "callable metadata", span)
+        self._emit_post_call_err_check(span)
 
-        ``value`` is the immediately preceding function constructor. The
-        name strings and callable retain separate owners and address leases
-        through setattr; no diagnostic name lookup is added to normal calls.
-        """
+
+    def _emit_rooted_native_callable(
+        self, adapter, original_args, capture_exprs, display_name_ptr,
+        qualname, fd, label, cache_gv=None,
+    ):
+        """Construct, initialize and publish a callable under one output owner."""
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
-        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        output = self._new_slot_call_root(label + ".metadata.result")
+        roots = [output]
+        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
         self._cpy_operand_cleanup_block = self._try_err_block
         try:
-            self._publish_slot_call_owned(output, value, label="function constructor")
-            module_name = "__main__"
-            if self._skip_program_main and self.ast_module.name:
-                module_name = self.ast_module.name
-            pairs = [("__module__", module_name)]
-            if qualname:
-                pairs.append(("__qualname__", qualname))
-            for attribute, text in pairs:
-                value = self._emit_slot_call_operand(
-                    StrLit(span=span, ty=StrType(name="str"), value=text), "function.metadata",
-                )
-                self._try_err_block = self._slot_call_cleanup_block((output, value), target)
+            captures = self._new_slot_call_root(label + ".captures")
+            roots.append(captures)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            value = self.builder.call(
+                self.runtime["py_tuple_new"], [ir.Constant(_I64, len(capture_exprs))],
+                name=self._fresh(label + ".captures.new"),
+            )
+            self._publish_slot_call_owned(captures, value, label="callable captures")
+            self._emit_post_call_err_check(fd.span)
+            self._guard_cpy_value_not_null(self.builder.load(captures))
+            for index, expr in enumerate(capture_exprs):
+                item = self._emit_slot_call_operand(expr, label + ".capture")
+                roots.append(item)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_runtime_call(
-                    "py_obj_setattr", (output, value), suffix_args=(self._attr_name_ptr(attribute),),
-                    argument_order=(0, 2, 1), span=span,
+                    "py_tuple_set_item", (captures, item),
+                    suffix_args=(ir.Constant(_I64, index),),
+                    argument_order=(0, 2, 1), span=fd.span,
                 )
-                self._release_slot_call_roots((value,))
-                self._try_err_block = self._slot_call_cleanup_block((output,), target)
+                self._release_slot_call_roots((item,))
+                roots.pop()
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
+            signature = self._new_slot_call_root(label + ".signature")
+            roots.append(signature)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            value = self._emit_native_func_signature(original_args)
+            self._publish_slot_call_owned(signature, value, label="callable signature")
+            wrapped = self._new_slot_call_root(label + ".wrapper")
+            roots.append(wrapped)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            value = self.builder.call(
+                self.runtime["py_tuple_new"], [ir.Constant(_I64, 2)],
+                name=self._fresh(label + ".wrapper.new"),
+            )
+            self._publish_slot_call_owned(wrapped, value, label="callable wrapper")
+            self._emit_post_call_err_check(fd.span)
+            self._guard_cpy_value_not_null(self.builder.load(wrapped))
+            for index, item in enumerate((captures, signature)):
+                self._slot_call_runtime_call(
+                    "py_tuple_set_item", (wrapped, item),
+                    suffix_args=(ir.Constant(_I64, index),),
+                    argument_order=(0, 2, 1), span=fd.span,
+                )
+            self._slot_call_runtime_call(
+                "py_func_new_named", (wrapped,), result_slot=output,
+                suffix_args=(adapter, display_name_ptr),
+                argument_order=(1, 0, 2), span=fd.span,
+            )
+            self._guard_cpy_value_not_null(self.builder.load(output))
+            self._release_slot_call_roots(tuple(roots[1:]))
+            output_cleanup = self._slot_call_cleanup_block((output,), target)
+            self._try_err_block = output_cleanup
+            self._cpy_operand_cleanup_block = output_cleanup
+            self._finish_native_callable_metadata(output, qualname, fd.span)
+            if fd.body and isinstance(fd.body[0], ExprStmt) and isinstance(fd.body[0].expr, StrLit):
+                doc = self._emit_slot_call_operand(fd.body[0].expr, label + ".doc")
+                self._try_err_block = self._slot_call_cleanup_block((doc,), output_cleanup)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_setattr", (output, doc),
+                    suffix_args=(self._attr_name_ptr("__doc__"),),
+                    argument_order=(0, 2, 1), span=fd.span,
+                )
+                self._release_slot_call_roots((doc,))
+                self._try_err_block = output_cleanup
+                self._cpy_operand_cleanup_block = output_cleanup
+            token = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(output)],
+                name=self._fresh(label + ".publication.lease"),
+            )
+            self._slot_call_check_status(token, "callable publication lease", fd.span)
+            self._try_err_block = self._slot_call_cleanup_block(
+                (), output_cleanup, ((output, token),),
+            )
+            self._cpy_operand_cleanup_block = self._try_err_block
+            current = self.builder.load(output, name=self._fresh(label + ".current"))
+            emit_function_auto_park_role(self, fd, current)
+            if cache_gv is not None:
+                self.builder.call(self.runtime["py_incref"], [current])
+                self._gc_pin(current)
+                self.builder.store(current, cache_gv)
+            released = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(output), token],
+                name=self._fresh(label + ".publication.release"),
+            )
+            self._try_err_block = output_cleanup
+            self._cpy_operand_cleanup_block = output_cleanup
+            self._slot_call_check_status(released, "callable publication release", fd.span)
             return self._take_slot_call_root(output)
         finally:
             self._try_err_block = previous
@@ -2563,54 +2747,11 @@ class UserFunctionLoweringMixin:
             if fd.is_async
             else body_adapter
         )
-        captures = self.builder.call(
-            self.runtime["py_tuple_new"],
-            [ir.Constant(_I64, len(free_names))],
-            name=self._fresh("closure.captures"),
-        )
-        for i, fv in enumerate(free_names):
-            if (
-                fv == "__class__"
-                and getattr(self, "current_class", None) is not None
-                and self.env.get(fv) is None
-            ):
-                raw = self.builder.load(
-                    self.current_class.global_var,
-                    name=self._fresh(f"closure.cls.{self.current_class.name}"),
-                )
-            else:
-                raw = self._emit_name(
-                    Name(span=fd.span, ty=DynType(name="dyn"), ident=fv)
-                )
-            env_entry = self.env.get(fv)
-            capture_ty = (
-                env_entry[2]
-                if env_entry is not None and len(env_entry) >= 3
-                else DynType(name="dyn")
-            )
-            obj = self._emit_value_as_pcc_object_or_bridge(
-                raw,
-                capture_ty,
-                "closure.cap.bridge",
-            )
-            self.builder.call(
-                self.runtime["py_tuple_set_item"],
-                [captures, ir.Constant(_I64, i), obj],
-            )
-        signature = self._emit_native_func_signature(original_args)
-        wrapped_captures = self.builder.call(
-            self.runtime["py_tuple_new"],
-            [ir.Constant(_I64, 2)],
-            name=self._fresh("closure.signature.wrapper"),
-        )
-        self.builder.call(
-            self.runtime["py_tuple_set_item"],
-            [wrapped_captures, ir.Constant(_I64, 0), captures],
-        )
-        self.builder.call(
-            self.runtime["py_tuple_set_item"],
-            [wrapped_captures, ir.Constant(_I64, 1), signature],
-        )
+        capture_exprs = []
+        for name in free_names:
+            entry = self.env.get(name)
+            capture_ty = entry[2] if entry is not None and len(entry) >= 3 else DynType(name="dyn")
+            capture_exprs.append(Name(span=fd.span, ty=capture_ty, ident=name))
         # A hoisted nested def is emitted as ``__nested_<name>``; the function
         # object still reports CPython's ``__name__`` and ``__qualname__``
         # (``outer.<locals>.inner``), which reprs and argument errors show.
@@ -2626,37 +2767,12 @@ class UserFunctionLoweringMixin:
         else:
             # ``<lambda>`` is not a valid symbol suffix for ``.pyattr.*``.
             display_name_ptr = self._pooled_cstr_ptr(display_name, ".pyfunc.name")
-        metadata_root = self._new_slot_call_root("function.metadata.result")
-        fn_obj = self.builder.call(
-            self.runtime["py_func_new_named"],
-            [adapter, wrapped_captures, display_name_ptr],
-            name=self._fresh(f"{orig_name}.func"),
+        fn_obj = self._emit_rooted_native_callable(
+            adapter, original_args, tuple(capture_exprs), display_name_ptr,
+            qualname or display_name, fd, "function", cache_gv,
         )
-        fn_obj = self._finish_native_callable_metadata(
-            metadata_root, fn_obj, qualname or display_name, fd.span,
-        )
-        emit_function_auto_park_role(self, fd, fn_obj)
-        if (
-            fd.body
-            and isinstance(fd.body[0], ExprStmt)
-            and isinstance(fd.body[0].expr, StrLit)
-        ):
-            doc = self._emit_str_literal(str(fd.body[0].expr.value))
-            self.builder.call(
-                self.runtime["py_obj_setattr"],
-                [fn_obj, self._attr_name_ptr("__doc__"), doc],
-            )
-            self._emit_post_call_err_check(fd.span)
-        self._gc_release(captures)
-        self._gc_release(signature)
-        self._gc_release(wrapped_captures)
-
         if cache_gv is None:
-            self._note_owned_object_value(fn_obj)
             return fn_obj
-        self.builder.call(self.runtime["py_incref"], [fn_obj])
-        self._gc_pin(fn_obj)
-        self.builder.store(fn_obj, cache_gv)
         created_exit = self.builder.block
         self.builder.branch(value_done)
 

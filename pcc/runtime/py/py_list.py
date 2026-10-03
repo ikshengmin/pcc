@@ -24,6 +24,9 @@ from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYLISTOBJECT_SIZE, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_TUPLE
 from pcc.runtime.py.py_abi_constants import PY_TYPE_BYTEARRAY, PY_TYPE_DICT, PY_TYPE_SET
 from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
+from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
+)
 from pcc.unsafe import (
     cstr,
     free,
@@ -909,48 +912,137 @@ def _append_snapshot_items(
     return 0
 
 
+_LIST_CONCAT_LEFT = 0
+_LIST_CONCAT_RIGHT = 1
+_LIST_CONCAT_RESULT = 2
+_LIST_CONCAT_ITEM = 3
+_LIST_CONCAT_ERROR = 4
+_LIST_CONCAT_SLOT_COUNT = 5
+
+
+def _list_concat_pin_value(value) -> int:
+    prior_pin: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior_pin = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+        pcc_gc_pin(value)
+    return prior_pin
+
+
+def _list_concat_pin_slot(slot) -> int:
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), slot)
+    store_ptr(slot, 0, value)
+    prior_pin: int = _list_concat_pin_value(value)
+    pcc_py_gc_minor_graph_unlock()
+    return prior_pin
+
+
+def _list_concat_restore_slot(slot, prior_pin: int) -> None:
+    store_ptr(slot, 0, pcc_gc_take_pinned_slot(slot, prior_pin))
+
+
+def _list_concat_release_slot(slot) -> None:
+    prior_pin: int = _list_concat_pin_slot(slot)
+    py_decref(pcc_gc_take_pinned_slot(slot, prior_pin))
+
+
+def _list_concat_fill(slots) -> int:
+    left_slot = ptr_add(slots, _LIST_CONCAT_LEFT * C_POINTER_SIZE)
+    right_slot = ptr_add(slots, _LIST_CONCAT_RIGHT * C_POINTER_SIZE)
+    result_slot = ptr_add(slots, _LIST_CONCAT_RESULT * C_POINTER_SIZE)
+    item_slot = ptr_add(slots, _LIST_CONCAT_ITEM * C_POINTER_SIZE)
+    left_length: int = load_i64(pcc_gc_load_ptr(null(), left_slot), PYLISTOBJECT_LENGTH_OFFSET)
+    right_length: int = load_i64(pcc_gc_load_ptr(null(), right_slot), PYLISTOBJECT_LENGTH_OFFSET)
+    store_ptr(result_slot, 0, py_list_new(left_length + right_length))
+    if ptr_is_null(load_ptr(result_slot, 0)):
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("list concat: out of memory")))
+        return 0
+    position: int = 0
+    while position < left_length + right_length:
+        source_slot = left_slot
+        source_index: int = position
+        if position >= left_length:
+            source_slot = right_slot
+            source_index = position - left_length
+        source_pin: int = _list_concat_pin_slot(source_slot)
+        # The getter returns a new owner; publish it before restoring the
+        # borrowed source pin or polling errors.
+        store_ptr(item_slot, 0, py_list_get(load_ptr(source_slot, 0), source_index))
+        _list_concat_restore_slot(source_slot, source_pin)
+        if ptr_is_null(load_ptr(item_slot, 0)) or py_err_occurred() != 0:
+            if py_err_occurred() == 0:
+                py_raise_owned(py_exc_new(7, cstr("list changed during concatenation")))
+            return 0
+        result_pin: int = _list_concat_pin_slot(result_slot)
+        item_pin: int = _list_concat_pin_slot(item_slot)
+        py_list_append(load_ptr(result_slot, 0), load_ptr(item_slot, 0))
+        _list_concat_restore_slot(result_slot, result_pin)
+        _list_concat_restore_slot(item_slot, item_pin)
+        if py_err_occurred() != 0:
+            return 0
+        _list_concat_release_slot(item_slot)
+        position = position + 1
+    return 1
+
+
 @c_abi_export("py_list_concat")
 def py_list_concat(a, b):
     if not _list_is_sane(a, -106):
         return null()
     if not _list_is_sane(b, -106):
         return null()
-    la: int = load_i64(a, PYLISTOBJECT_LENGTH_OFFSET)
-    lb: int = load_i64(b, PYLISTOBJECT_LENGTH_OFFSET)
-    n: int = la + lb
-    cap_hint: int = n
-    if cap_hint <= 0:
-        cap_hint = 4
-    out = py_list_new(cap_hint)
-    if ptr_is_null(out):
+    slots = stack_alloc(_LIST_CONCAT_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_LIST_CONCAT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _LIST_CONCAT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(handles, 0, _LIST_CONCAT_SLOT_COUNT * C_POINTER_SIZE)
+    left_slot = ptr_add(slots, _LIST_CONCAT_LEFT * C_POINTER_SIZE)
+    right_slot = ptr_add(slots, _LIST_CONCAT_RIGHT * C_POINTER_SIZE)
+    result_slot = ptr_add(slots, _LIST_CONCAT_RESULT * C_POINTER_SIZE)
+    item_slot = ptr_add(slots, _LIST_CONCAT_ITEM * C_POINTER_SIZE)
+    error_slot = ptr_add(slots, _LIST_CONCAT_ERROR * C_POINTER_SIZE)
+    store_ptr(left_slot, 0, a)
+    store_ptr(right_slot, 0, b)
+    left_pin: int = _list_concat_pin_value(a)
+    right_pin: int = _list_concat_pin_value(b)
+    if ptr_eq(a, b):
+        right_pin = left_pin
+    count: int = 0
+    while count < _LIST_CONCAT_SLOT_COUNT:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        if ptr_is_null(handle):
+            while count > 0:
+                count = count - 1
+                pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * C_POINTER_SIZE))
+            _list_concat_restore_slot(left_slot, left_pin)
+            _list_concat_restore_slot(right_slot, right_pin)
+            py_raise_owned(py_exc_new(19, cstr("list concat: root allocation failed")))
+            return null()
+        store_ptr(handles, count * C_POINTER_SIZE, handle)
+        count = count + 1
+    _list_concat_restore_slot(left_slot, left_pin)
+    _list_concat_restore_slot(right_slot, right_pin)
+    success: int = _list_concat_fill(slots)
+    if success == 0:
+        store_ptr(error_slot, 0, py_current_exception())
+        error_pin: int = _list_concat_pin_slot(error_slot)
+        py_incref(load_ptr(error_slot, 0))
+        py_clear_exception()
+        _list_concat_restore_slot(error_slot, error_pin)
+        _list_concat_release_slot(item_slot)
+        _list_concat_release_slot(result_slot)
+        py_clear_exception()
+        result_slot = error_slot
+    result_pin: int = _list_concat_pin_slot(result_slot)
+    while count > 0:
+        count = count - 1
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * C_POINTER_SIZE))
+    result = pcc_gc_take_pinned_slot(result_slot, result_pin)
+    if success == 0:
+        if ptr_is_null(result) == 0:
+            py_raise_owned(result)
         return null()
-    if pcc_gc_backend() != 0:
-        out_slot = stack_alloc(8)
-        store_ptr(out_slot, 0, out)
-        if _append_snapshot_items(out_slot, a, la, 1) != 0:
-            py_decref(load_ptr(out_slot, 0))
-            return null()
-        if _append_snapshot_items(out_slot, b, lb, 1) != 0:
-            py_decref(load_ptr(out_slot, 0))
-            return null()
-        return load_ptr(out_slot, 0)
-    out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
-    a_items = load_ptr(a, PYLISTOBJECT_ITEMS_OFFSET)
-    i: int = 0
-    while i < la:
-        v = pcc_gc_load_ptr(a, ptr_add(a_items, i * 8))
-        py_incref(v)
-        store_ptr(out_items, i * 8, v)
-        i = i + 1
-    b_items = load_ptr(b, PYLISTOBJECT_ITEMS_OFFSET)
-    j: int = 0
-    while j < lb:
-        v = pcc_gc_load_ptr(b, ptr_add(b_items, j * 8))
-        py_incref(v)
-        store_ptr(out_items, (la + j) * 8, v)
-        j = j + 1
-    store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, n)
-    return out
+    return result
 
 
 @c_abi_export("py_list_copy")

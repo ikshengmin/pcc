@@ -24,13 +24,16 @@ from pcc.frontends.python.py_ast import (
     NoneLit,
     NoneType,
     RawPointerType,
+    Slice,
     SourceSpan,
     StrLit,
     StrType,
+    Subscript,
     TupleExpr,
     TupleType,
     Type,
     UnaryOp,
+    ValueArrayType,
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
@@ -349,12 +352,30 @@ class CallObjectLoweringMixin:
                 )
             # An explicit machine lane retains its pre-existing lowering and
             # ownership boundary; it never enters the exact-int producer.
+            if isinstance(expr, BinOp):
+                runtime_binary = self._slot_call_binary_runtime(expr)
+                if runtime_binary is not None:
+                    return self._emit_slot_call_binary(expr, label, runtime_binary)
         if isinstance(expr, (TupleExpr, ListExpr)):
             return self._emit_slot_call_sequence(expr.elems, label, isinstance(expr, TupleExpr))
         if isinstance(expr, DictExpr):
             return self._emit_slot_call_dict(expr.pairs, expr.span, label)
         if isinstance(expr, Attr):
             return self._emit_slot_call_attribute(expr, label)
+        if (isinstance(expr, Subscript)
+                and not self._expr_looks_cpython(expr.obj)
+                and not isinstance(expr.obj.ty, ValueArrayType)
+                and not self._is_valueclass_payload_type(expr.obj.ty)
+                and self._native_module_name_for_object_expr(expr) is None):
+            return self._emit_slot_call_subscript(expr, label)
+        if (isinstance(expr, Call) and isinstance(expr.func, Name)
+                and self._native_builtin_value_for_name(expr.func.ident) == "builtins.int"
+                and expr.func.ident not in self.functions
+                and expr.func.ident not in getattr(getattr(self, "class_lowering", None), "classes", {})
+                and len(expr.args) in (1, 2) and not expr.kwargs
+                and not self._has_starred_unpack(expr.args)
+                and not (isinstance(expr.ty, IntType) and expr.ty.name != "int")):
+            return self._emit_slot_call_int_constructor(expr, label)
         if isinstance(expr, Call) and expr.is_set_literal:
             return self._emit_slot_call_set(expr, label)
         if (isinstance(expr, Call) and isinstance(expr.func, Name)
@@ -394,6 +415,19 @@ class CallObjectLoweringMixin:
                 if published:
                     return slot
                 owned = self._owned_release_needed(value, expr)
+                if not owned:
+                    # A namespace Name can be produced by the same registered
+                    # static string pool as a StrLit. Prove that exact producer,
+                    # then retain a separate owner before publishing it. Never
+                    # infer this from a name's spelling or an arbitrary global:
+                    # shadowed names took the authoritative slot-copy path.
+                    for literal in self._str_obj_pool.values():
+                        if value is literal:
+                            self.builder.call(
+                                self.runtime["py_incref"], [self._as_gc_ptr(value)],
+                            )
+                            owned = True
+                            break
                 if not owned and not scalar and not self._value_is_never_gc_object(value):
                     raise L1CodegenError(
                         "slot-call operand has no authoritative source or owned result: "
@@ -404,6 +438,68 @@ class CallObjectLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
         return slot
+
+    def _emit_slot_call_int_constructor(self, expr, label):
+        """Convert to an integer object without passing through a scalar lane.
+
+        Runtime conversion owns type dispatch and returns a new reference,
+        including the identity case. An omitted base is NULL; an explicit
+        None remains an ordinary argument and must raise in the runtime.
+        """
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            arguments = []
+            for argument in expr.args:
+                item = self._emit_slot_call_operand(argument, label + ".int.argument")
+                arguments.append(item)
+                roots.append(item)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            omitted_base = (ir.Constant(_CSTR, None),) if len(arguments) == 1 else ()
+            self._slot_call_runtime_call(
+                "py_obj_as_int_object_args", tuple(arguments), result_slot=output,
+                suffix_args=omitted_base, span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(roots[1:]))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _emit_owned_text_conversion(self, expr, runtime_name):
+        """Publish a repr/ascii NEW result before releasing its input owner."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root(runtime_name + ".result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            argument = self._emit_slot_call_operand(expr.args[0], runtime_name + ".argument")
+            roots.append(argument)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                runtime_name, (argument,), result_slot=output, span=expr.span,
+            )
+            self._release_slot_call_roots((argument,))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("text.conversion.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_slot_call_conditional(self, expr, label):
         """Evaluate one selected branch into a shared authoritative owner.
@@ -787,22 +883,36 @@ class CallObjectLoweringMixin:
         return output
 
     def _slot_call_split_operands(self, expr):
+        # Hoisting carries closure operands as synthetic direct-ABI keywords.
+        # A callable already owns those captures; only its source operands
+        # belong to the public signature binder. Do not filter by spelling:
+        # an explicit keyword matching a capture must still bind or raise.
+        capture_indices = {
+            index for kind, index in expr.operand_order if kind == "capture"
+        }
+        source_keywords = tuple(
+            pair for index, pair in enumerate(expr.kwargs)
+            if index not in capture_indices
+        )
+        source_order = tuple(
+            entry for entry in expr.operand_order if entry[0] != "capture"
+        )
         unpack = self._split_starstar_kwargs_unpack(expr.args)
         if unpack is None:
-            return expr.args, expr.kwargs
+            return expr.args, source_keywords
         arguments, _merged = unpack
         keywords = []
-        if expr.operand_order:
-            for kind, index in expr.operand_order:
+        if source_order:
+            for kind, index in source_order:
                 if kind == "kw":
                     keywords.append(expr.kwargs[index])
-                else:
+                elif kind == "arg":
                     argument = expr.args[index]
                     if (isinstance(argument, Call) and isinstance(argument.func, Name)
                             and argument.func.ident == "**"):
                         keywords.append(("**", argument.args[0]))
         else:
-            if expr.kwargs:
+            if source_keywords:
                 raise L1CodegenError("slot-call unpack is missing keyword operand-order metadata")
             for argument in expr.args:
                 if (isinstance(argument, Call) and isinstance(argument.func, Name)
@@ -892,6 +1002,58 @@ class CallObjectLoweringMixin:
                 roots = [output]
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _emit_slot_call_subscript(self, expr, label):
+        """Publish native object indexing before cleanup; preserve separate bridge/payload routes."""
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            native_environ = self._is_os_environ_attr(expr.obj)
+            if not native_environ:
+                receiver = self._emit_slot_call_operand(expr.obj, label + ".receiver")
+                roots.append(receiver)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            if isinstance(expr.idx, Slice):
+                bounds = []
+                for part in (expr.idx.lo, expr.idx.hi, expr.idx.step):
+                    if part is None:
+                        part = NoneLit(span=expr.idx.span, ty=NoneType(name="None"))
+                    bound = self._emit_slot_call_operand(part, label + ".slice.bound")
+                    bounds.append(bound)
+                    roots.append(bound)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                key = self._new_slot_call_root(label + ".slice")
+                roots.append(key)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_slice_new", tuple(bounds), result_slot=key, span=expr.idx.span,
+                )
+            else:
+                key = self._emit_slot_call_operand(expr.idx, label + ".key")
+                roots.append(key)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            if native_environ:
+                self._slot_call_runtime_call(
+                    "py_os_environ_getitem", (key,), result_slot=output, span=expr.span,
+                )
+            else:
+                self._slot_call_runtime_call(
+                    "py_obj_subscript", (receiver, key), result_slot=output, span=expr.span,
+                )
+            self._release_slot_call_roots(tuple(roots[1:]))
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
@@ -1002,13 +1164,22 @@ class CallObjectLoweringMixin:
         if boxed_valueclass is not None:
             return boxed_valueclass
 
-        return marshal.marshal_to_object(
+        boxed = marshal.marshal_to_object(
             self.builder,
             self.module,
             self.runtime,
             raw,
             arg.ty,
         )
+        output = self._slot_call_result_sink(arg)
+        if output is not None and isinstance(raw.type, (ir.IntType, ir.FloatType, ir.DoubleType)):
+            # The actual scalar-to-object producer establishes this owner.
+            # Pointer pass-through and annotations alone provide no such
+            # evidence and retain the caller's strict provenance checks.
+            self._publish_slot_call_owned(output, boxed, label="scalar boxing")
+            if isinstance(arg, Call):
+                self._emit_post_call_err_check(arg.span)
+        return boxed
 
     def _emit_call_args_tuple(self, args: tuple[Expr, ...]) -> ir.Value:
         # Argument tuples have the same retaining slot contract as ordinary

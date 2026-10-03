@@ -46,10 +46,7 @@ _TSAN_PROBE_CACHE: dict[str, str | None] = {}
 
 import pytest  # noqa: E402
 
-from pcc.tools.runtime_archive_provenance import (  # noqa: E402
-    PRODUCTION_POLICY,
-    verify_runtime_archive_manifest,
-)
+from tests.runtime_fixture_provenance import _verified_test_runtime_archive  # noqa: E402
 from tests.runtime_build_cache import (  # noqa: E402
     cached_pcc_python_runtime,
     cached_threaded_pcc_python_runtime,
@@ -68,21 +65,7 @@ def pcc_runtime_archive(tmp_path_factory):
 
     explicit = os.environ.get("PCC_RUNTIME_ARCHIVE")
     if explicit:
-        archive = Path(explicit).resolve()
-        assert archive.name == "libpy_runtime_pcc_py.a"
-        manifest = Path(str(archive) + ".provenance.json")
-        records = verify_runtime_archive_manifest(
-            archive,
-            runtime_root=Path(__file__).resolve().parents[1] / "pcc" / "runtime",
-            manifest_path=manifest,
-        )
-        assert records["policy"] == PRODUCTION_POLICY
-        assert all(
-            member["source_kind"] == "pcc-python"
-            and member["producer_kind"] == "pcc-python-library-ir-to-obj"
-            and member["uses_host_cc"] is False
-            for member in records["members"]
-        )
+        archive, _manifest = _verified_test_runtime_archive(explicit)
         return archive
 
     require_native_provisioning_allowed()
@@ -105,8 +88,7 @@ def threaded_pcc_runtime_archive() -> Path:
 
     explicit = os.environ.get("PCC_THREADED_RUNTIME_ARCHIVE")
     if explicit:
-        archive = Path(explicit).resolve(strict=True)
-        assert archive.name == "libpy_runtime_pcc_py.a"
+        archive, _manifest = _verified_test_runtime_archive(explicit, threads=True)
         return archive
     require_native_provisioning_allowed()
     return cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"

@@ -3,7 +3,26 @@ from __future__ import annotations
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import BoolType, ByteArrayType, BytesType, Call, ClassType, ComplexType, DictType, DynType, Expr, FloatType, FuncType, IntType, ListType, MemoryViewType, SetType, StrType, TupleType, Type
+from pcc.frontends.python.py_ast import (
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    Call,
+    ClassType,
+    ComplexType,
+    DictType,
+    DynType,
+    Expr,
+    FloatType,
+    FuncType,
+    IntType,
+    ListType,
+    MemoryViewType,
+    SetType,
+    StrType,
+    TupleType,
+    Type,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
@@ -28,6 +47,67 @@ def _raw_int_name(ty: Type) -> str:
 
 class BinaryOpLoweringMixin:
     _INLINE_TAGGED_BINOPS = ("+", "-", "*", "&", "|", "^")
+
+    def _slot_call_binary_runtime(self, expr):
+        """Select an object protocol, never an annotation-derived int kernel.
+
+        Scalar and explicit machine projections retain their own lowering.
+        An ordinary integer slot operand still needs the existing literal
+        provenance proof before reaching this selector. Dynamic operands use
+        runtime dispatch, including reflected user methods and bignums.
+        """
+        if expr.op != "+" or getattr(self, "_freestanding_module", False):
+            return None
+        function = self.current_function
+        if (function is not None
+                and function.name in getattr(self, "_manual_pointer_abi_functions", ())):
+            return None
+        if isinstance(expr.ty, (IntType, BoolType, FloatType)):
+            return None
+        if self._expr_looks_cpython(expr) or self._expr_returns_unsafe_raw_pointer(expr):
+            return None
+        for operand in (expr.lhs, expr.rhs):
+            if (self._is_valueclass_payload_type(operand.ty)
+                    or _raw_int_name(operand.ty)
+                    or self._expr_returns_unsafe_raw_pointer(operand)):
+                return None
+        return "py_obj_add"
+
+    def _emit_slot_call_binary(self, expr, label, runtime_name):
+        """Publish the NEW binary result before checking or releasing inputs.
+
+        Both operands are independently rooted in source order. Counted
+        foreign leases expose their current pointers only during the runtime
+        call; that call's result is immediately stored into its empty output
+        root. Nested expressions and later-operand failures use the same
+        cleanup chain as calls, defaults and argument containers.
+        """
+        output = self._new_slot_call_root(label + ".result")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            left = self._emit_slot_call_operand(expr.lhs, label + ".left")
+            roots.append(left)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            right = self._emit_slot_call_operand(expr.rhs, label + ".right")
+            roots.append(right)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                runtime_name, (left, right), result_slot=output, span=expr.span,
+            )
+            current = self.builder.load(output, name=self._fresh("binary.slot.result"))
+            self._guard_cpy_value_not_null(current)
+            self._release_slot_call_roots((left, right))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
 
     def _binop_route_defers_pins(
         self,

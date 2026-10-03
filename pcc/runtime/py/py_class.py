@@ -95,6 +95,7 @@ from pcc.unsafe import (
     call_ptr3,
     call_ptr4,
     free,
+    function_addr,
     global_addr,
     global_load_ptr,
     global_store_ptr,
@@ -977,7 +978,8 @@ def _bound_entry_build(slots, pins) -> None:
             pcc_gc_note_write_barrier(null(), result)
 
 
-def _instance_bound_method_entry(captures, args):
+@c_abi_export("pcc_instance_bound_method_entry")
+def _instance_bound_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     slots = stack_alloc(88)
     pins = stack_alloc(88)
     memset(slots, 0, 88)
@@ -1038,7 +1040,7 @@ def py_instance_bind_method(method, self_obj, name):
             bound_name = method_name
     bound_captures = _wrap_bound_captures(method, captures)
     bound = py_func_new_bound(
-        _instance_bound_method_entry,
+        function_addr("pcc_instance_bound_method_entry"),
         bound_captures,
         bound_name,
         self_obj,
@@ -1058,7 +1060,7 @@ def _bound_method_function_slot_locked(bound):
         return null()
     if load_i32(bound, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
         return null()
-    if ptr_eq(load_ptr(bound, 56), _instance_bound_method_entry) == 0:
+    if ptr_eq(load_ptr(bound, 56), function_addr("pcc_instance_bound_method_entry")) == 0:
         return null()
     captures = pcc_gc_resolve_root_slot_unlocked(ptr_add(bound, 64), 0)
     if not _ptr_can_have_header(captures):

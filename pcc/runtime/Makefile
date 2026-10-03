@@ -37,6 +37,11 @@ CFLAGS   ?= -O2 -fPIC -Wall -Wextra -std=c11
 CPPFLAGS ?=
 INCLUDES  = -Iinclude
 PCC_WITH_THREADS ?= 0
+PCC_REFCOUNT_KIND ?= atomic
+# Bind the same effective settings at frontend compilation and receipt emission.
+# Make defaults are not exported automatically; command-line overrides still win.
+export PCC_WITH_THREADS PCC_REFCOUNT_KIND
+PCC_RUNTIME_CONFIG_ARGS = --runtime-threads "$(PCC_WITH_THREADS)" --runtime-refcount "$(PCC_REFCOUNT_KIND)"
 RUNTIME_HEADERS = Makefile include/py_runtime.h $(SRCDIR)/py_internal.h $(SRCDIR)/py_timer_heap.h $(SRCDIR)/py_io_waitset.h
 
 # Linux/glibc: -std=c11 defines __STRICT_ANSI__, which switches off glibc's
@@ -75,7 +80,21 @@ ifneq ($(PCC_WITH_THREADS),1)
 FREESTANDING_PY_MODULES += freestanding_thread_kernel
 endif
 FREESTANDING_OBJS_PY = $(patsubst %,$(OBJDIR_PY)/%.o,$(FREESTANDING_PY_MODULES))
-PCC_PY_OBJECTS = $(OBJS_PY) $(FREESTANDING_OBJS_PY)
+# Keep the explicit host/Make reference builder on the same target-specific
+# membership contract as the in-process owned builder. In particular Linux
+# startup/libc and optional platform thread modules are not in the common
+# source lists above. The helper reads those literal lists without running Make.
+PCC_RUNTIME_INVENTORY = PYTHONPATH="$(PCC_REPO_ROOT)" $(PYTHON) -m pcc.tools.runtime_module_inventory --runtime-root "$(CURDIR)"
+PCC_RUNTIME_TARGET ?= $(shell $(PCC_RUNTIME_INVENTORY) --field target)
+PCC_RUNTIME_TARGET := $(PCC_RUNTIME_TARGET)
+ifeq ($(strip $(PCC_RUNTIME_TARGET)),)
+$(error cannot determine the runtime target)
+endif
+PCC_RUNTIME_MODULES := $(shell $(PCC_RUNTIME_INVENTORY) --target "$(PCC_RUNTIME_TARGET)" --threads "$(PCC_WITH_THREADS)")
+ifeq ($(strip $(PCC_RUNTIME_MODULES)),)
+$(error cannot determine the target runtime module inventory)
+endif
+PCC_PY_OBJECTS = $(patsubst %,$(OBJDIR_PY)/%.o,$(PCC_RUNTIME_MODULES))
 PCC_PY_RECEIPTS = $(addsuffix .provenance.json,$(PCC_PY_OBJECTS))
 
 LIB_PCC_PY = libpy_runtime_pcc_py.a
@@ -225,10 +244,10 @@ $(OBJDIR_LIBPY):
 # into a full runtime rebuild. Compiler/target/config invalidation is owned by
 # pipeline._ensure_runtime's explicit full-rebuild decision.
 $(OBJDIR_PY)/%.o: $(PYDIR)/%.py | $(OBJDIR_PY)
-	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) $(PCC) --python-library --emit-llvm=$(OBJDIR_PY)/$*.ll $<
+	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) $(PCC) --python-library --target=$(PCC_RUNTIME_TARGET) --emit-llvm=$(OBJDIR_PY)/$*.ll $<
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.ir.optimization.driver "$(PCC_RUNTIME_IR_PASSES)" $(OBJDIR_PY)/$*.ll $(OBJDIR_PY)/$*.opt.ll
 	mv $(OBJDIR_PY)/$*.opt.ll $(OBJDIR_PY)/$*.ll
-	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/$*.ll $@ --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F)
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/$*.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
 
 # The receipt is a completion sidecar emitted with the object.  Give it an
 # explicit dependency edge so deleting or losing a receipt cannot leave an
@@ -245,8 +264,8 @@ $(OBJDIR_PY)/%.o.provenance.json: $(OBJDIR_PY)/%.o
 # causing immediate unbounded recursion. Its blocking loops already contain
 # the required explicit polls; disable automatic insertion for this one object.
 $(OBJDIR_PY)/freestanding_thread_kernel_pthread.o: $(PYDIR)/freestanding_thread_kernel_pthread.py | $(OBJDIR_PY)
-	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) PCC_WITH_THREADS=0 $(PCC) --python-library --emit-llvm=$(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $<
-	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $@ --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F)
+	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) PCC_WITH_THREADS=0 $(PCC) --python-library --target=$(PCC_RUNTIME_TARGET) --emit-llvm=$(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $<
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
 
 $(OBJDIR_PY):
 	mkdir -p $(OBJDIR_PY)

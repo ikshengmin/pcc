@@ -765,6 +765,22 @@ def py_obj_add(a, b):
         or pcc_capi_is_cext_type_tag(bt) != 0
     ):
         return pcc_capi_cext_binary_number(a, b, 0)
+    # A builtin numeric operand must not consume a user instance before
+    # its forward/reflected protocol gets a chance to answer. The
+    # numeric helpers below only implement builtin numeric pairs.
+    if (
+        at == PY_TYPE_INSTANCE
+        or at >= PY_TYPE_USER_CLASS_START
+        or bt == PY_TYPE_INSTANCE
+        or bt >= PY_TYPE_USER_CLASS_START
+    ):
+        return py_user_binop_dispatch(
+            a,
+            b,
+            cstr("__add__"),
+            cstr("__radd__"),
+            cstr("unsupported operand type(s) for +"),
+        )
     if (at == PY_TYPE_INT or at == PY_TYPE_BOOL) and (bt == PY_TYPE_INT or bt == PY_TYPE_BOOL):
         return py_int_add(a, b)
     if at == PY_TYPE_COMPLEX or bt == PY_TYPE_COMPLEX:
@@ -779,19 +795,6 @@ def py_obj_add(a, b):
         return py_list_concat(a, b)
     if at == PY_TYPE_TUPLE and bt == PY_TYPE_TUPLE:
         return py_tuple_concat(a, b)
-    if (
-        at == PY_TYPE_INSTANCE
-        or at >= PY_TYPE_USER_CLASS_START
-        or bt == PY_TYPE_INSTANCE
-        or bt >= PY_TYPE_USER_CLASS_START
-    ):
-        return py_user_binop_dispatch(
-            a,
-            b,
-            cstr("__add__"),
-            cstr("__radd__"),
-            cstr("unsupported operand type(s) for +"),
-        )
     py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for +")))
     return null()
 

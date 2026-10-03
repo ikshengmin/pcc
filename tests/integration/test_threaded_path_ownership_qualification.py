@@ -74,7 +74,7 @@ def _run(command, *, cwd, environment, label, timeout, identities, execution_cwd
 
 @pytest.fixture(scope="module")
 def path_toolchain():
-    from pcc.tools.runtime_archive_provenance import verify_runtime_archive_manifest
+    from tests.runtime_fixture_provenance import _verified_test_runtime_archive
 
     requested = os.environ.get("PCC_PATH_OWNERSHIP_COMPILER", "")
     assert requested, "set PCC_PATH_OWNERSHIP_COMPILER to the candidate native pcc1"
@@ -89,14 +89,14 @@ def path_toolchain():
     archive = Path(requested).resolve(strict=True)
     source_root = Path(os.environ.get("PCC_PATH_OWNERSHIP_SOURCE_ROOT", str(_ROOT))).resolve(strict=True)
     runtime_root = source_root / "pcc/runtime"
-    manifest = verify_runtime_archive_manifest(archive, runtime_root=runtime_root)
+    archive, manifest = _verified_test_runtime_archive(
+        archive, threads=True, runtime_root=runtime_root,
+    )
     members = {row["member"]: row for row in manifest["members"]}
     assert "freestanding_thread_kernel_pthread.o" in members, "requires real threaded runtime"
     assert "freestanding_thread_kernel.o" not in members, "stub thread kernel is not qualified"
     for row in members.values():
         assert row["object_emitter"] == "pcc-self-backend-object-writer", row["member"]
-        if "runtime_build_config" in row:
-            assert row["runtime_build_config"]["threads"] is True, row["member"]
     identities = {
         str(path): _sha256(path) for path in (
             compiler, archive, Path(str(archive) + ".provenance.json"),

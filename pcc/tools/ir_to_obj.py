@@ -231,6 +231,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="archive member basename; defaults to the output basename",
     )
+    parser.add_argument(
+        "--runtime-threads", choices=("0", "1"), default=None,
+        help="archive thread configuration recorded in the runtime receipt",
+    )
+    parser.add_argument(
+        "--runtime-refcount", default=None,
+        help="archive refcount configuration recorded with --runtime-threads",
+    )
     args = parser.parse_args(argv)
 
     output_path = Path(args.output)
@@ -244,6 +252,8 @@ def main(argv: list[str] | None = None) -> int:
             args.source,
             args.runtime_root,
             args.member,
+            args.runtime_threads,
+            args.runtime_refcount,
         )
         if any(value is not None for value in provenance_arguments):
             if any(
@@ -253,6 +263,16 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(
                     "--provenance, --source, and --runtime-root must be used together"
                 )
+        runtime_build_config = None
+        if args.runtime_threads is not None or args.runtime_refcount is not None:
+            if args.runtime_threads is None or args.runtime_refcount is None:
+                raise ValueError(
+                    "--runtime-threads and --runtime-refcount must be used together"
+                )
+            runtime_build_config = {
+                "threads": args.runtime_threads == "1",
+                "refcount": args.runtime_refcount.strip().lower() or "atomic",
+            }
         with open(args.input, "r", encoding="utf-8") as f:
             ir_text = f.read()
         obj, resolved_triple, resolved_emitter = _emit_object_with_triple(
@@ -284,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
                 object_bytes=obj,
                 output_path=pending_receipt,
                 member=args.member,
+                runtime_build_config=runtime_build_config,
             )
         os.replace(temporary_object, output_path)
         temporary_object = None

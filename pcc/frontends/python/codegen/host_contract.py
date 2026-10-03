@@ -634,12 +634,19 @@ L1_CODEGEN_HOST_METHODS = (
     "_slot_call_split_operands",
     "_emit_slot_call_object",
     "_emit_slot_call_dict",
+    "_emit_slot_call_subscript",
+    "_emit_slot_call_int_constructor",
+    "_emit_owned_text_conversion",
+    "_slot_call_binary_runtime",
+    "_emit_slot_call_binary",
     "_emit_slot_call_attribute",
     "_emit_slot_call_kwargs_object",
     "_foreign_super_initializer_base",
     "_emit_foreign_super_init_slots",
     "_slot_call_literal_integer_kind",
     "_emit_slot_call_literal_integer",
+    "_emit_rooted_native_callable",
+    "_emit_native_func_default_root",
 )
 
 

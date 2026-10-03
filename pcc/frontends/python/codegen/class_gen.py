@@ -5410,52 +5410,10 @@ class ClassLowering:
             if method_def.is_async
             else body_adapter
         )
-        captures = self.parent.builder.call(
-            self.parent.runtime["py_tuple_new"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh(f"{suffix}.{method_name}.captures"),
+        return self.parent._emit_rooted_native_callable(
+            adapter, runtime_args, (), method_name_ptr,
+            cd.name + "." + method_name, method_def, "method",
         )
-        captures_root = self.parent._enter_container_temp_root(captures, self._fresh("method.captures"))
-        signature_error_target = self.parent._current_try_err_block()
-        signature_cleanup_target = signature_error_target
-        if signature_cleanup_target is None:
-            signature_cleanup_target = self.parent._ensure_fn_err_exit()
-        self.parent._try_err_block = self.parent._make_cpy_operand_cleanup_block(
-            (), (), signature_cleanup_target, "method.signature.unwind",
-            rooted_pcc_lifetimes=((captures_root, True),),
-        )
-        try:
-            signature = self.parent._emit_native_func_signature(runtime_args)
-        finally:
-            self.parent._try_err_block = signature_error_target
-        wrapped_captures = self.parent.builder.call(
-            self.parent.runtime["py_tuple_new"],
-            [ir.Constant(_I64, 2)],
-            name=self._fresh(f"{suffix}.{method_name}.signature.wrapper"),
-        )
-        self.parent.builder.call(
-            self.parent.runtime["py_tuple_set_item"],
-            [wrapped_captures, ir.Constant(_I64, 0), captures],
-        )
-        self.parent.builder.call(
-            self.parent.runtime["py_tuple_set_item"],
-            [wrapped_captures, ir.Constant(_I64, 1), signature],
-        )
-        metadata_root = self.parent._new_slot_call_root("method.metadata.result")
-        func_obj = self.parent.builder.call(
-            self.parent.runtime["py_func_new_named"],
-            [adapter, wrapped_captures, method_name_ptr],
-            name=self._fresh(f"{suffix}.{method_name}.func"),
-        )
-        func_obj = self.parent._finish_native_callable_metadata(
-            metadata_root, func_obj, cd.name + "." + method_name, method_def.span,
-        )
-        emit_function_auto_park_role(self.parent, method_def, func_obj)
-        self.parent._gc_release(captures)
-        self.parent._gc_release(signature)
-        self.parent._gc_release(wrapped_captures)
-        self.parent._leave_container_temp_root(captures_root)
-        return func_obj
 
     def _emit_property_accessor_func_obj(
         self,
@@ -5484,25 +5442,10 @@ class ClassLowering:
             (),
             return_ty,
         )
-        captures = self.parent.builder.call(
-            self.parent.runtime["py_tuple_new"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh(
-                f"property.{info.name}.{prop_name}.{accessor_kind}.captures"
-            ),
+        return self.parent._emit_rooted_native_callable(
+            adapter, runtime_args, (), self.parent._attr_name_ptr(prop_name),
+            cd.name + "." + prop_name, accessor_def, "property",
         )
-        metadata_root = self.parent._new_slot_call_root("property.metadata.result")
-        func_obj = self.parent.builder.call(
-            self.parent.runtime["py_func_new_named"],
-            [adapter, captures, self.parent._attr_name_ptr(prop_name)],
-            name=self._fresh(f"property.{info.name}.{prop_name}.{accessor_kind}"),
-        )
-        func_obj = self.parent._finish_native_callable_metadata(
-            metadata_root, func_obj, cd.name + "." + prop_name, accessor_def.span,
-        )
-        emit_function_auto_park_role(self.parent, accessor_def, func_obj)
-        self.parent._gc_release(captures)
-        return func_obj
 
     def _class_header_kwargs(
         self,
@@ -5934,52 +5877,10 @@ class ClassLowering:
             if fd.is_async
             else body_adapter
         )
-        captures = self.parent.builder.call(
-            self.parent.runtime["py_tuple_new"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh("namespace.method.captures"),
+        return self.parent._emit_rooted_native_callable(
+            adapter, runtime_args, (), self.parent._attr_name_ptr(fd.name),
+            cd.name + "." + fd.name, fd, "namespace.method",
         )
-        captures_root = self.parent._enter_container_temp_root(captures, self._fresh("namespace.method.captures.root"))
-        signature_error_target = self.parent._current_try_err_block()
-        signature_cleanup_target = signature_error_target
-        if signature_cleanup_target is None:
-            signature_cleanup_target = self.parent._ensure_fn_err_exit()
-        self.parent._try_err_block = self.parent._make_cpy_operand_cleanup_block(
-            (), (), signature_cleanup_target, "namespace.method.signature.unwind",
-            rooted_pcc_lifetimes=((captures_root, True),),
-        )
-        try:
-            signature = self.parent._emit_native_func_signature(runtime_args)
-        finally:
-            self.parent._try_err_block = signature_error_target
-        wrapped_captures = self.parent.builder.call(
-            self.parent.runtime["py_tuple_new"],
-            [ir.Constant(_I64, 2)],
-            name=self._fresh(f"namespace.method.{fd.name}.signature.wrapper"),
-        )
-        self.parent.builder.call(
-            self.parent.runtime["py_tuple_set_item"],
-            [wrapped_captures, ir.Constant(_I64, 0), captures],
-        )
-        self.parent.builder.call(
-            self.parent.runtime["py_tuple_set_item"],
-            [wrapped_captures, ir.Constant(_I64, 1), signature],
-        )
-        metadata_root = self.parent._new_slot_call_root("namespace.method.metadata.result")
-        fn_obj = self.parent.builder.call(
-            self.parent.runtime["py_func_new_named"],
-            [adapter, wrapped_captures, self.parent._attr_name_ptr(fd.name)],
-            name=self._fresh(f"namespace.method.{fd.name}"),
-        )
-        fn_obj = self.parent._finish_native_callable_metadata(
-            metadata_root, fn_obj, cd.name + "." + fd.name, fd.span,
-        )
-        emit_function_auto_park_role(self.parent, fd, fn_obj)
-        self.parent._gc_release(captures)
-        self.parent._gc_release(signature)
-        self.parent._gc_release(wrapped_captures)
-        self.parent._leave_container_temp_root(captures_root)
-        return fn_obj
 
     def _emit_prepared_namespace_body_writes(
         self,

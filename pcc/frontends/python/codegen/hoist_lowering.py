@@ -85,6 +85,28 @@ def _hoist_lexical_scope_names(fd, body, inherited):
     return names
 
 
+def _hoist_nested_scope_funcdefs(body):
+    """List immediate lexical child functions, including control-flow bodies."""
+    children = []
+    for statement in body:
+        if isinstance(statement, _FuncDef):
+            children.append(statement)
+        elif isinstance(statement, (_If, _While, _For)):
+            children.extend(_hoist_nested_scope_funcdefs(statement.body))
+            children.extend(_hoist_nested_scope_funcdefs(statement.else_body))
+        elif isinstance(statement, _Try):
+            children.extend(_hoist_nested_scope_funcdefs(statement.body))
+            for handler in statement.handlers:
+                children.extend(_hoist_nested_scope_funcdefs(
+                    _dataclass_field_value(handler, "body", ()),
+                ))
+            children.extend(_hoist_nested_scope_funcdefs(statement.else_body))
+            children.extend(_hoist_nested_scope_funcdefs(statement.finally_body))
+        elif isinstance(statement, _With):
+            children.extend(_hoist_nested_scope_funcdefs(statement.body))
+    return tuple(children)
+
+
 def _hoist_decorator_name(dec):
     if isinstance(dec, _Name):
         return dec.ident
@@ -943,13 +965,11 @@ class _HoistLoweringPass:
                 outer_scope_names,
                 outer_local_bound,
             ):
-                """Captures needed by nested defs used as first-class values.
+                """Carry descendant captures through every lexical ancestor.
 
-                When ``fd`` returns or stores a nested def (instead of
-                calling it directly), the outer hoisted wrapper must carry
-                any outer-scope captures that nested def still needs. This
-                is the ``make_body_for -> body`` shape in layer1's own
-                comprehension helpers.
+                A direct child call needs its captures just as an escaped
+                callable does. Control flow does not introduce a new scope;
+                explicit global declarations still block lexical forwarding.
                 """
                 cache_key = _hoist_cache_key4(
                     "forwarded",
@@ -965,9 +985,7 @@ class _HoistLoweringPass:
                 child_scope = _hoist_lexical_scope_names(
                     fd, fd.body, outer_scope_names,
                 )
-                for inner_fd in fd.body:
-                    if not isinstance(inner_fd, _FuncDef):
-                        continue
+                for inner_fd in _hoist_nested_scope_funcdefs(fd.body):
                     inner_local_bound = locally_bound_names(inner_fd)
                     inner_free = analyze_names(
                         inner_fd,
@@ -985,12 +1003,10 @@ class _HoistLoweringPass:
                     for fv in inner_forwarded:
                         if not name_in(inner_local_bound, fv):
                             append_name_once(inner_needed, fv)
-                    if not body_uses_name_as_value(fd.body, inner_fd.name):
-                        continue
                     for fv in inner_needed:
-                        if name_in(outer_scope_names, fv) and not name_in(
-                            outer_local_bound, fv
-                        ):
+                        if (name_in(child_scope, fv)
+                                and name_in(outer_scope_names, fv)
+                                and not name_in(outer_local_bound, fv)):
                             append_name_once(out, fv)
                 result = tuple(out)
                 forwarded_value_capture_names_cache[cache_key] = (result, fd)
@@ -1859,11 +1875,15 @@ class _HoistLoweringPass:
                 else:
                     new_func = rewrite_expr(new_func, rename_map)
                     extra_kwargs = ()
+                capture_order = list(expr.operand_order)
+                for index in range(len(extra_kwargs)):
+                    capture_order.append(("capture", len(expr.kwargs) + index))
                 return _replace(
                     expr,
                     func=new_func,
                     args=rewrite_expr_tuple(expr.args, rename_map),
                     kwargs=rewrite_kwargs(expr.kwargs, rename_map) + extra_kwargs,
+                    operand_order=tuple(capture_order),
                 )
             # Bare Name at value position: if it matches a hoisted
             # nested def in rename_map, rewrite to the hoisted symbol

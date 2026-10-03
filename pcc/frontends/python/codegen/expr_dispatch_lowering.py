@@ -383,6 +383,12 @@ class ExprDispatchLoweringMixin:
             folded = _fold_str_literal_concat(expr)
             if folded is not None:
                 return self._emit_expr(folded)
+            runtime_binary = self._slot_call_binary_runtime(expr)
+            if runtime_binary is not None:
+                output = self._emit_slot_call_binary(
+                    expr, "binary.object", runtime_binary,
+                )
+                return self._take_slot_call_root(output)
             # Class-based arithmetic dunder fast path: ``a + b`` on a
             # hinted class with ``__add__`` dispatches there before
             # falling back to numeric coercion. Mirrors the compare

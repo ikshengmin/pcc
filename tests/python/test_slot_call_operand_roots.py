@@ -58,6 +58,14 @@ def _emit(source):
     return str(codegen.generate(module))
 
 
+def _probe_function(text):
+    # Callable/cache metadata is a separate emitted owner. These checks
+    # describe the user probe's operand contract, not whole-module counts.
+    body = re.search(r"^define [^\n]*@user_slot_operand_probe\([^\n]*\).*?^}", text, re.M | re.S)
+    assert body is not None
+    return body.group(0)
+
+
 def _calls(text, name):
     return re.findall(r"[^\n]*\bcall\b[^\n]*@" + re.escape(name) + r"\([^\n]*", text)
 
@@ -72,6 +80,7 @@ def test_parameter_operand_copies_authoritative_borrowed_root():
     text = _emit("""def probe(value):
     return slot_operand_probe(value)
 """)
+    text = _probe_function(text)
     copies = _calls(text, "pcc_gc_root_copy_borrowed_lease")
     assert len(copies) == 1
     assert "value.addr" in _with_slot_origins(text, copies[0])
@@ -81,6 +90,7 @@ def test_parameter_operand_copies_authoritative_borrowed_root():
     value = [1]
     return slot_operand_probe(value)
 """)
+    rebound = _probe_function(rebound)
     assert _calls(rebound, "pcc_gc_root_copy_lease")
     assert not _calls(rebound, "pcc_gc_root_copy_borrowed_lease")
 
@@ -93,6 +103,7 @@ def probe():
     first = slot_operand_probe(shared)
     return slot_operand_probe(Box)
 """)
+    text = _probe_function(text)
     copies = _calls(text, "pcc_gc_root_copy_lease")
     assert len(copies) == 2
     assert any("shared" in _with_slot_origins(text, call) for call in copies)
@@ -230,6 +241,7 @@ def test_keyword_mapping_merges_remain_owned_through_move():
     text = _emit("""def probe(mapping):
     return slot_kwargs_probe(first=1, **mapping, last=2)
 """)
+    text = _probe_function(text)
     assert len(_calls(text, "py_call_merge_kwargs_unique")) == 3
     assert len(_calls(text, "pcc_gc_root_move")) == 3
     assert _calls(text, "pcc_gc_root_copy_borrowed_lease")
@@ -377,6 +389,7 @@ def test_literal_integer_operator_errors_use_rooted_values():
 
 def test_literal_unary_bool_plus_produces_integer():
     text = _emit("def probe():\n    return slot_operand_probe(+True)\n")
+    text = _probe_function(text)
     # Identity-copying the bool would preserve the wrong runtime type.
     assert _calls(text, "py_int_add")
     assert not _calls(text, "pcc_gc_root_copy_lease")
@@ -401,6 +414,7 @@ def test_numeric_slot_provenance_rejects_annotations_callbacks_and_negative_powe
     # The restriction is on arithmetic provenance; direct names still copy
     # their independently authoritative source root.
     direct = _emit("def probe(value: int):\n    return slot_operand_probe(value)\n")
+    direct = _probe_function(direct)
     owned = re.search(r"%value\.owned[^ ]* = alloca i1", direct) is not None
     helper = "pcc_gc_root_copy_lease" if owned else "pcc_gc_root_copy_borrowed_lease"
     copies = [_with_slot_origins(direct, call) for call in _calls(direct, helper)]
@@ -409,14 +423,18 @@ def test_numeric_slot_provenance_rejects_annotations_callbacks_and_negative_powe
     assert not _calls(direct, other)
 
 
-def test_non_integer_binop_retains_existing_handoff_diagnostic():
+def test_non_integer_binop_publishes_before_operand_cleanup():
     # Use runtime strings: two string literals fold before concat lowering.
-    # The legacy concat producer still unpins its operands after returning
-    # its owner, so the existing immediate-publication guard rejects it.
-    with pytest.raises(L1CodegenError, match="lacks an immediate owned-result handoff"):
-        _emit("""def probe(left: str, right: str):
+    # Runtime object dispatch publishes its actual owner before releasing
+    # either operand. The independent stale-result test remains a rejection.
+    text = _emit("""def probe(left: str, right: str):
     return slot_operand_probe(left + right)
 """)
+    match = re.search(r"(%[^ ]+) = call ptr[^\n]*@py_obj_add\([^\n]*\n([^\n]+)", text)
+    assert match is not None
+    assert "store ptr " + match.group(1) in match.group(2)
+    assert _calls(text, "pcc_gc_foreign_lease_acquire")
+    assert _calls(text, "pcc_gc_foreign_lease_release")
 
 
 def test_literal_integer_producer_does_not_admit_machine_arithmetic():
@@ -499,6 +517,7 @@ def test_literal_bool_integer_leaves_preserve_kernel_preconditions():
         ("(True << 0) + 1", "py_int_add"),
     ):
         text = _emit("def probe():\n    return slot_operand_probe(" + expression + ")\n")
+        text = _probe_function(text)
         assert _calls(text, helper), expression
         # Primitive shift/power kernels require actual int operands, not
         # bool headers which only some bigint conversion paths understand.
@@ -506,6 +525,7 @@ def test_literal_bool_integer_leaves_preserve_kernel_preconditions():
         assert not _calls(text, "py_bool_from_i1"), expression
         assert re.search(r"inttoptr i64 (?:1|3) to ptr", text), expression
     bare = _emit("def probe():\n    return slot_operand_probe(True)\n")
+    bare = _probe_function(bare)
     assert _calls(bare, "py_bool_from_bit")
     assert not _calls(bare, "py_int_add")
     for expression in ("True & False", "True | False", "True ^ False",

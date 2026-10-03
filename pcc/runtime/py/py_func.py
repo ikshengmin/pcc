@@ -13,7 +13,19 @@ Function object layout (unchanged):
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_FLAG_FUNC_AUTO_PARK, PY_FLAG_FUNC_CONTINUATION_FACTORY, PY_FLAG_FUNC_TRANSPARENT_CALL, PY_TYPE_DICT, PY_TYPE_FUNC, PY_TYPE_INT, PY_TYPE_NONE, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_FLAG_FUNC_AUTO_PARK,
+    PY_FLAG_FUNC_CONTINUATION_FACTORY,
+    PY_FLAG_FUNC_TRANSPARENT_CALL,
+    PY_TYPE_DICT,
+    PY_TYPE_FUNC,
+    PY_TYPE_INT,
+    PY_TYPE_NONE,
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+)
 
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.unsafe import (
@@ -124,6 +136,136 @@ pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 py_gen_run_may_park_sync = extern("py_gen_run_may_park_sync", (c_ptr,), c_ptr)
 py_current_exception = extern("py_current_exception", (), c_ptr)
 py_bound_method_function = extern("py_bound_method_function", (c_ptr,), c_ptr)
+
+# Private frame layout for callable metadata initialization.
+_FUNC_METADATA_FUNCTION_SLOT = 0
+_FUNC_METADATA_VALUE_SLOT = 1
+_FUNC_METADATA_ERROR_SLOT = 2
+_FUNC_METADATA_SLOT_COUNT = 3
+
+
+def _func_metadata_close(
+    slots: c_ptr, tokens: c_ptr, handles: c_ptr, registered: int,
+) -> None:
+    if registered == _FUNC_METADATA_SLOT_COUNT:
+        # Save the actual TLS owner before cleanup can invoke a finalizer.
+        py_tls_exc_swap_slot(ptr_add(slots, _FUNC_METADATA_ERROR_SLOT * C_POINTER_SIZE))
+        index: int = _FUNC_METADATA_VALUE_SLOT
+        while index >= _FUNC_METADATA_FUNCTION_SLOT:
+            offset: int = index * C_POINTER_SIZE
+            slot = ptr_add(slots, offset)
+            if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
+                pcc_platform_abort()
+                return
+            store_i64(tokens, offset, 0)
+            pcc_gc_store_root(slot, null())
+            index = index - 1
+        py_clear_exception()
+        py_tls_exc_swap_slot(ptr_add(slots, _FUNC_METADATA_ERROR_SLOT * C_POINTER_SIZE))
+    index = registered - 1
+    while index >= 0:
+        pcc_gc_scheduler_root_unregister_handle(
+            load_ptr(handles, index * C_POINTER_SIZE)
+        )
+        index = index - 1
+
+
+def _func_metadata_set_text(
+    slots: c_ptr, tokens: c_ptr, attribute: c_ptr, text: c_ptr,
+) -> int:
+    value_slot = ptr_add(slots, _FUNC_METADATA_VALUE_SLOT * C_POINTER_SIZE)
+    # Publish NEW before lease acquisition, error checks or other callbacks.
+    store_ptr(value_slot, 0, py_str_new(text, strlen(text)))
+    token: int = pcc_gc_foreign_lease_acquire(value_slot)
+    if token < 0:
+        py_runtime_error_if_unset(
+            cstr("function metadata"), cstr("metadata value lease failed")
+        )
+        return -1
+    store_i64(tokens, _FUNC_METADATA_VALUE_SLOT * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), value_slot, load_ptr(value_slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    if py_err_occurred() != 0 or ptr_is_null(load_ptr(value_slot, 0)) != 0:
+        py_runtime_error_if_unset(
+            cstr("function metadata"), cstr("metadata string allocation failed")
+        )
+        return -1
+    status: int = py_obj_setattr(
+        load_ptr(slots, _FUNC_METADATA_FUNCTION_SLOT * C_POINTER_SIZE), attribute,
+        load_ptr(slots, _FUNC_METADATA_VALUE_SLOT * C_POINTER_SIZE),
+    )
+    if status != 0 or py_err_occurred() != 0:
+        py_runtime_error_if_unset(
+            cstr("function metadata"), cstr("metadata attribute assignment failed")
+        )
+        return -1
+    if pcc_gc_foreign_lease_release(value_slot, token) != 0:
+        pcc_platform_abort()
+        return -1
+    store_i64(tokens, _FUNC_METADATA_VALUE_SLOT * C_POINTER_SIZE, 0)
+    pcc_gc_store_root(value_slot, null())
+    return -1 if py_err_occurred() != 0 else 0
+
+
+@c_abi_export("py_func_init_metadata_slots")
+def py_func_init_metadata_slots(
+    callable_slot: c_ptr, module_name: c_ptr, qualname: c_ptr,
+) -> int:
+    """Borrow an authoritative callable slot; initialize namespace metadata."""
+    if py_err_occurred() != 0:
+        return -1
+    if ptr_is_null(callable_slot) != 0 or ptr_is_null(module_name) != 0:
+        py_runtime_error_if_unset(
+            cstr("function metadata"), cstr("invalid metadata source")
+        )
+        return -1
+    slots = stack_alloc(_FUNC_METADATA_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FUNC_METADATA_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_FUNC_METADATA_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _FUNC_METADATA_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _FUNC_METADATA_SLOT_COUNT * C_POINTER_SIZE)
+    memset(handles, 0, _FUNC_METADATA_SLOT_COUNT * C_POINTER_SIZE)
+    registered: int = 0
+    while registered < _FUNC_METADATA_SLOT_COUNT:
+        slot = ptr_add(slots, registered * C_POINTER_SIZE)
+        handle = pcc_gc_scheduler_root_register_handle(slot)
+        if ptr_is_null(handle) != 0:
+            break
+        store_ptr(handles, registered * C_POINTER_SIZE, handle)
+        registered = registered + 1
+    if registered != _FUNC_METADATA_SLOT_COUNT:
+        py_runtime_error_if_unset(
+            cstr("function metadata"), cstr("metadata root registration failed")
+        )
+        _func_metadata_close(slots, tokens, handles, registered)
+        return -1
+    token: int = pcc_gc_root_copy_lease(
+        ptr_add(slots, _FUNC_METADATA_FUNCTION_SLOT * C_POINTER_SIZE), callable_slot
+    )
+    status: int = -1
+    if token < 0:
+        py_runtime_error_if_unset(
+            cstr("function metadata"), cstr("callable owner transfer failed")
+        )
+    else:
+        store_i64(tokens, _FUNC_METADATA_FUNCTION_SLOT * C_POINTER_SIZE, token)
+        function = load_ptr(slots, _FUNC_METADATA_FUNCTION_SLOT * C_POINTER_SIZE)
+        if ptr_is_null(function) != 0 or is_tagged_int(function) != 0:
+            py_runtime_error_if_unset(
+                cstr("function metadata"), cstr("invalid callable metadata owner")
+            )
+        elif load_i32(function, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
+            py_runtime_error_if_unset(
+                cstr("function metadata"), cstr("metadata owner is not a function")
+            )
+        else:
+            status = _func_metadata_set_text(slots, tokens, cstr("__module__"), module_name)
+            if status == 0 and ptr_is_null(qualname) == 0:
+                status = _func_metadata_set_text(slots, tokens, cstr("__qualname__"), qualname)
+    _func_metadata_close(slots, tokens, handles, registered)
+    return status
+
 
 # A deferred request is consumed by the actual semantic callee. Ordinary
 # function bodies run with synchronous dynamic-call semantics. Transparent

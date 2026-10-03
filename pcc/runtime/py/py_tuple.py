@@ -23,6 +23,7 @@ __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
     PYLISTOBJECT_ITEMS_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
@@ -57,6 +58,7 @@ from pcc.unsafe import (
     memset,
     null,
     ptr_add,
+    ptr_eq,
     ptr_is_null,
     ptr_to_int,
     store_i32,
@@ -113,6 +115,10 @@ py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_store_root_take = extern("pcc_gc_store_root_take", (c_ptr, c_ptr), c_void)
+pcc_gc_retain_plan_prepare_locked = extern(
+    "pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr
+)
+pcc_gc_retain_plan_finish = extern("pcc_gc_retain_plan_finish", (c_ptr,), c_void)
 
 
 def _debug_bad_container(o, code: int) -> None:
@@ -731,26 +737,117 @@ def py_tuple_index_range(tuple_ptr, item, start, stop) -> int:
     return -1
 
 
+_TUPLE_CONCAT_LEFT = 0
+_TUPLE_CONCAT_RIGHT = 1
+_TUPLE_CONCAT_RESULT = 2
+_TUPLE_CONCAT_ITEM = 3
+_TUPLE_CONCAT_ERROR = 4
+_TUPLE_CONCAT_SLOT_COUNT = 5
+
+
+def _tuple_concat_fill(slots) -> int:
+    left_slot = ptr_add(slots, _TUPLE_CONCAT_LEFT * C_POINTER_SIZE)
+    right_slot = ptr_add(slots, _TUPLE_CONCAT_RIGHT * C_POINTER_SIZE)
+    result_slot = ptr_add(slots, _TUPLE_CONCAT_RESULT * C_POINTER_SIZE)
+    item_slot = ptr_add(slots, _TUPLE_CONCAT_ITEM * C_POINTER_SIZE)
+    left_length: int = py_tuple_len(pcc_gc_load_ptr(null(), left_slot))
+    right_length: int = py_tuple_len(pcc_gc_load_ptr(null(), right_slot))
+    # Register all slots before creating this NEW reference. A raw store is
+    # the first operation after the allocator returns, before any GC gate.
+    store_ptr(result_slot, 0, py_tuple_new(left_length + right_length))
+    if ptr_is_null(load_ptr(result_slot, 0)):
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("tuple concat: out of memory")))
+        return 0
+    retain_plan = stack_alloc(56)
+    position: int = 0
+    while position < left_length + right_length:
+        source_slot = left_slot
+        source_index: int = position
+        if position >= left_length:
+            source_slot = right_slot
+            source_index = position - left_length
+        # Selecting and retaining the child share one graph transaction.
+        # Neither a borrowed child nor an interior pointer crosses a park.
+        pcc_py_gc_minor_graph_lock()
+        source = pcc_gc_load_ptr(null(), source_slot)
+        item = pcc_gc_load_ptr(
+            source,
+            ptr_add(source, PYTUPLEOBJECT_ITEMS_OFFSET + source_index * C_POINTER_SIZE),
+        )
+        item = pcc_gc_retain_plan_prepare_locked(retain_plan, item)
+        store_ptr(item_slot, 0, item)
+        pcc_py_gc_minor_graph_unlock()
+        pcc_gc_retain_plan_finish(retain_plan)
+        result_pin: int = _tuple_conversion_pin_slot(result_slot)
+        item_pin: int = _tuple_conversion_pin_slot(item_slot)
+        py_tuple_set_item(load_ptr(result_slot, 0), position, load_ptr(item_slot, 0))
+        _tuple_conversion_restore_slot(result_slot, result_pin)
+        _tuple_conversion_restore_slot(item_slot, item_pin)
+        if py_err_occurred() != 0:
+            return 0
+        _tuple_conversion_release_slot(item_slot)
+        position = position + 1
+    return 1
+
+
 @c_abi_export("py_tuple_concat")
 def py_tuple_concat(a, b):
     if not _tuple_is_sane(a, -135):
         return null()
     if not _tuple_is_sane(b, -136):
         return null()
-    la: int = load_i64(a, PYTUPLEOBJECT_LEN_OFFSET)
-    lb: int = load_i64(b, PYTUPLEOBJECT_LEN_OFFSET)
-    out = py_tuple_new(la + lb)
-    i: int = 0
-    while i < la:
-        v = pcc_gc_load_ptr(a, ptr_add(a, PYTUPLEOBJECT_ITEMS_OFFSET + i * 8))
-        py_tuple_set_item(out, i, v)
-        i = i + 1
-    j: int = 0
-    while j < lb:
-        v = pcc_gc_load_ptr(b, ptr_add(b, PYTUPLEOBJECT_ITEMS_OFFSET + j * 8))
-        py_tuple_set_item(out, la + j, v)
-        j = j + 1
-    return out
+    slots = stack_alloc(_TUPLE_CONCAT_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_TUPLE_CONCAT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _TUPLE_CONCAT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(handles, 0, _TUPLE_CONCAT_SLOT_COUNT * C_POINTER_SIZE)
+    left_slot = ptr_add(slots, _TUPLE_CONCAT_LEFT * C_POINTER_SIZE)
+    right_slot = ptr_add(slots, _TUPLE_CONCAT_RIGHT * C_POINTER_SIZE)
+    result_slot = ptr_add(slots, _TUPLE_CONCAT_RESULT * C_POINTER_SIZE)
+    item_slot = ptr_add(slots, _TUPLE_CONCAT_ITEM * C_POINTER_SIZE)
+    error_slot = ptr_add(slots, _TUPLE_CONCAT_ERROR * C_POINTER_SIZE)
+    store_ptr(left_slot, 0, a)
+    store_ptr(right_slot, 0, b)
+    left_pin: int = _tuple_conversion_pin_value(a)
+    right_pin: int = _tuple_conversion_pin_value(b)
+    if ptr_eq(a, b):
+        right_pin = left_pin
+    count: int = 0
+    while count < _TUPLE_CONCAT_SLOT_COUNT:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        if ptr_is_null(handle):
+            while count > 0:
+                count = count - 1
+                pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * C_POINTER_SIZE))
+            _tuple_conversion_restore_slot(left_slot, left_pin)
+            _tuple_conversion_restore_slot(right_slot, right_pin)
+            py_raise_owned(py_exc_new(19, cstr("tuple concat: root allocation failed")))
+            return null()
+        store_ptr(handles, count * C_POINTER_SIZE, handle)
+        count = count + 1
+    _tuple_conversion_restore_slot(left_slot, left_pin)
+    _tuple_conversion_restore_slot(right_slot, right_pin)
+    success: int = _tuple_concat_fill(slots)
+    if success == 0:
+        store_ptr(error_slot, 0, py_current_exception())
+        error_pin: int = _tuple_conversion_pin_slot(error_slot)
+        py_incref(load_ptr(error_slot, 0))
+        py_clear_exception()
+        _tuple_conversion_restore_slot(error_slot, error_pin)
+        _tuple_conversion_release_slot(item_slot)
+        _tuple_conversion_release_slot(result_slot)
+        py_clear_exception()
+        result_slot = error_slot
+    result_pin: int = _tuple_conversion_pin_slot(result_slot)
+    while count > 0:
+        count = count - 1
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * C_POINTER_SIZE))
+    result = pcc_gc_take_pinned_slot(result_slot, result_pin)
+    if success == 0:
+        if ptr_is_null(result) == 0:
+            py_raise_owned(result)
+        return null()
+    return result
 
 
 @c_abi_export("py_tuple_repeat")

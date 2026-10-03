@@ -1356,6 +1356,10 @@ PyObject *py_native_extension_import_by_name(const char *module_name);
  */
 PyObject *py_func_new(void *entry, PyObject *captures_tuple);
 PyObject *py_func_new_named(void *entry, PyObject *captures_tuple, const char *name);
+/* Borrows the authoritative callable owner and preserves pending errors. */
+int64_t py_func_init_metadata_slots(
+    PyObject **callable_slot, const char *module_name, const char *qualname
+);
 /* Canonical builtin function values return one owner; the cache is a traced
  * global root shared by all compiled modules. */
 PyObject *py_builtin_function_value(void *entry, const char *name);
