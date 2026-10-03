@@ -12,6 +12,13 @@ Contracts:
   when the default mode is off.  These are the closed-world self-host core
   (runtime_abi, layer1, class_gen) whose lowering depends on the scaffold
   path; forcing it keeps the stage1/stage2/stage3 output identical.
+- IR_PROVIDER_BINDING_CONTRACT — the owned IR implementation supplies the
+  provider binding itself, without importing its own compat facade. This is
+  only binding admission; rebinding and receiver/type checks still apply.
+- CLASS_LOWERING_RECEIVER_CONTRACT — the class-lowering implementation has
+  verified ClassLowering.parent and helper-parameter receiver facts. The
+  field-contract tests check their constructors, writes and closed callers;
+  this does not grant arbitrary parameters an IR receiver type.
 - PY_AST_FIELD_OVERRIDE_MODULE — the py_ast dataclasses whose field ORDER is
   pinned by PY_AST_FIELD_NAME_OVERRIDES (see py_ast_contract.py); the pinned
   order must match the real dataclass field order byte-for-byte.
@@ -22,6 +29,8 @@ These are compile-time data; do not add runtime module-name branches here.
 """
 
 IR_SCAFFOLD_CONTRACT = "ir-scaffold-forced"
+IR_PROVIDER_BINDING_CONTRACT = "ir-provider-binding"
+CLASS_LOWERING_RECEIVER_CONTRACT = "class-lowering-receivers"
 PY_AST_FIELD_ORDER_CONTRACT = "py-ast-field-order"
 L1_CODEGEN_HOST_ATTR_CONTRACT = "l1-codegen-host-attrs"
 
@@ -29,12 +38,16 @@ PY_AST_FIELD_OVERRIDE_MODULE = "pcc.frontends.python.py_ast"
 L1_CODEGEN_HOST_ATTR_MODULE = "pcc.frontends.python.codegen.layer1"
 
 SELF_MODULE_CONTRACTS = {
+    "pcc.ir.ir": (IR_PROVIDER_BINDING_CONTRACT,),
     "pcc.frontends.python.codegen.runtime_abi": (IR_SCAFFOLD_CONTRACT,),
     "pcc.frontends.python.codegen.layer1": (
         IR_SCAFFOLD_CONTRACT,
         L1_CODEGEN_HOST_ATTR_CONTRACT,
     ),
-    "pcc.frontends.python.codegen.class_gen": (IR_SCAFFOLD_CONTRACT,),
+    "pcc.frontends.python.codegen.class_gen": (
+        IR_SCAFFOLD_CONTRACT,
+        CLASS_LOWERING_RECEIVER_CONTRACT,
+    ),
     PY_AST_FIELD_OVERRIDE_MODULE: (PY_AST_FIELD_ORDER_CONTRACT,),
 }
 

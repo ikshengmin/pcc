@@ -17,7 +17,9 @@ entry:
     result = rewrite_simple_void_self_tailcalls(src)
     assert result.rewritten is True
     assert "call void @spin" not in result.ir_text
-    assert "br label %entry ; pcc.tailcall.self" in result.ir_text
+    assert "; pcc.tailcall.self\n  br label %entry" in result.ir_text
+    assert "pcc.tailcall.preheader:" in result.ir_text
+    assert "%n = phi i64 [ %pcc.tailcall.arg.0, %pcc.tailcall.preheader ], [ %next, %entry ]" in result.ir_text
     assert result.candidates[0].rewritten is True
 
 

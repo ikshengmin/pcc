@@ -24,7 +24,8 @@ def test_tailcall_pass_rewrites_through_real_pipeline(monkeypatch):
         module_name="tailcall_only",
     )
 
-    assert "br label %entry ; pcc.tailcall.self" in out
+    assert "; pcc.tailcall.self\n  br label %entry" in out
+    assert "pcc.tailcall.preheader:" in out
     assert "call void @spin()" not in out
 
 

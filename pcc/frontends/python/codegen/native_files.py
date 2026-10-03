@@ -64,28 +64,55 @@ class NativeFilesLoweringMixin:
             return None
         if not self._native_file_env_flags.get(attr.obj.ident, False):
             return None
+        if attr.name in ("read", "readline") and len(expr.args) <= 1:
+            # These helpers return a NEW str/bytes owner. Keep the receiver
+            # authoritative across limit evaluation and publish the result
+            # before TLS checks, lease retirement or operand disposal.
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("file.read.result")
+                roots.append(output)
+            operands = []
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                receiver = self._emit_slot_call_operand(attr.obj, "file.read.receiver")
+                operands.append(receiver)
+                roots.append(receiver)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                limit = ir.Constant(_I64, -1)
+                if expr.args:
+                    argument = self._emit_slot_call_operand(expr.args[0], "file.read.limit")
+                    operands.append(argument)
+                    roots.append(argument)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    limit = self._slot_call_runtime_call(
+                        "py_index_i64_checked", (argument,), span=expr.args[0].span,
+                    )
+                runtime_name = "py_file_readline" if attr.name == "readline" else "py_file_read"
+                suffix = (limit,)
+                if attr.name == "read" and not expr.args:
+                    runtime_name = "py_file_read_all"
+                    suffix = ()
+                self._slot_call_runtime_call(
+                    runtime_name, (receiver,), result_slot=output,
+                    suffix_args=suffix, span=expr.span,
+                )
+                self._release_slot_call_roots(tuple(operands))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("file.read.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         recv = self._emit_expr(attr.obj)
-        if attr.name == "read":
-            if not expr.args:
-                result = self.builder.call(
-                    self.runtime["py_file_read_all"],
-                    [recv],
-                    name=self._fresh("file.read"),
-                )
-                self._note_owned_object_value(result)
-                self._emit_post_call_err_check(getattr(expr, "span", None))
-                return result
-            if len(expr.args) == 1:
-                limit_v = self._emit_expr(expr.args[0])
-                limit_i64 = self._to_int64(limit_v, expr.args[0].ty)
-                result = self.builder.call(
-                    self.runtime["py_file_read"],
-                    [recv, limit_i64],
-                    name=self._fresh("file.read"),
-                )
-                self._note_owned_object_value(result)
-                self._emit_post_call_err_check(getattr(expr, "span", None))
-                return result
         if attr.name == "write" and len(expr.args) == 1:
             text_v = self._emit_expr(expr.args[0])
             text_obj = self._emit_value_as_pcc_object_or_bridge(
@@ -98,21 +125,6 @@ class NativeFilesLoweringMixin:
                 [recv, text_obj],
                 name=self._fresh("file.write"),
             )
-        if attr.name == "readline" and len(expr.args) <= 1:
-            if expr.args:
-                limit_v = self._emit_expr(expr.args[0])
-                limit_i64 = self._to_int64(limit_v, expr.args[0].ty)
-            else:
-                limit_i64 = ir.Constant(_I64, -1)
-            result = self.builder.call(
-                self.runtime["py_file_readline"],
-                [recv, limit_i64],
-                name=self._fresh("file.readline"),
-            )
-            # Raises ValueError on a closed file.
-            self._note_owned_object_value(result)
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
         if attr.name == "seek" and 1 <= len(expr.args) <= 2:
             offset_v = self._emit_expr(expr.args[0])
             offset_i64 = self._to_int64(offset_v, expr.args[0].ty)

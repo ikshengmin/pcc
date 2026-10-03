@@ -9,6 +9,7 @@ constant".
 import pytest
 
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator, TranslationUnit
+from tests.owned_c_corpus import run_owned_c_corpus
 
 
 SOURCE = r"""
@@ -44,8 +45,8 @@ def test_integer_constant_pointer_initializers(tmp_path, backend):
         evaluator = CEvaluator(backend="self", allow_unimplemented_backend=True)
     else:
         evaluator = CEvaluator()
-    result = evaluator.run_translation_units_with_system_cc(
-        [unit], timeout=60, capture_output=True, text=True
+    result = run_owned_c_corpus(
+        evaluator, [unit], timeout=60
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == "5 1 1 21\n"

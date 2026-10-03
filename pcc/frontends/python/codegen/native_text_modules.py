@@ -296,55 +296,51 @@ class NativeTextModulesLoweringMixin:
         if arguments is None:
             return None
         pattern_expr, flags_expr = arguments
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
         roots = []
+        if output is None:
+            output = self._new_slot_call_root("re.compile.result")
+            roots.append(output)
+        operands = []
         values = {}
         order = expr.operand_order
         if not order:
             order = tuple(("arg", i) for i in range(len(expr.args))) + tuple(
                 ("kw", i) for i in range(len(expr.kwargs))
             )
-        for kind, index in order:
-            argument = expr.args[index] if kind == "arg" else expr.kwargs[index][1]
-            value = self._emit_expr_with_cpy_operand_cleanup(
-                argument, (), as_object=True, rooted_pcc_lifetimes=tuple(roots),
-            )
-            owned = self._owned_release_needed(value, argument)
-            root = self._enter_container_temp_root(value, self._fresh("re.compile.argument"))
-            roots.append((root, owned))
-            values[id(argument)] = root
-        old_target = self._current_try_err_block()
-        target = old_target if old_target is not None else self._ensure_fn_err_exit()
-        self._try_err_block = self._make_cpy_operand_cleanup_block(
-            (), (), target, "re.compile.cleanup", rooted_pcc_lifetimes=tuple(roots),
-        )
         try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            for kind, index in order:
+                argument = expr.args[index] if kind == "arg" else expr.kwargs[index][1]
+                root = self._emit_slot_call_operand(argument, "re.compile.argument")
+                operands.append(root)
+                roots.append(root)
+                values[id(argument)] = root
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
             flags = ir.Constant(_I64, 0)
             if flags_expr is not None:
-                flags_object = self.builder.call(
-                    self.runtime["pcc_gc_load_ptr"],
-                    [ir.Constant(_CSTR, None), self._as_gc_ptr(values[id(flags_expr)])],
+                flags = self._slot_call_runtime_call(
+                    "py_index_i64_checked", (values[id(flags_expr)],), span=flags_expr.span,
                 )
-                flags = self.builder.call(
-                    self.runtime["py_index_i64_checked"], [flags_object],
-                    name=self._fresh("re.compile.flags"),
-                )
-                self._emit_post_call_err_check(getattr(flags_expr, "span", None))
-            pattern = self.builder.call(
-                self.runtime["pcc_gc_load_ptr"],
-                [ir.Constant(_CSTR, None), self._as_gc_ptr(values[id(pattern_expr)])],
+            # The actual ABI returns a NEW pattern instance. Publish into the
+            # caller's root before checking TLS or retiring either argument.
+            self._slot_call_runtime_call(
+                "py_re_compile_obj", (values[id(pattern_expr)],),
+                result_slot=output, suffix_args=(flags,), span=expr.span,
             )
-            result = self.builder.call(
-                self.runtime["py_re_compile_obj"], [pattern, flags],
-                name=self._fresh("re.compile.obj"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
+            self._release_slot_call_roots(tuple(operands))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("re.compile.current"))
         finally:
-            self._try_err_block = old_target
-        self._gc_pin(result)
-        self._release_rooted_pcc_lifetimes(tuple(roots))
-        self._gc_unpin(result)
-        self._note_owned_object_value(result)
-        return result
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _native_re_compile_alias_for_name(
         self,
@@ -958,7 +954,7 @@ class NativeTextModulesLoweringMixin:
         if attr.name == "compile":
             return self._emit_native_re_compile_call(expr)
         if attr.name == "findall":
-            return self._emit_native_re_findall_call(expr.args, expr.kwargs)
+            return self._emit_native_re_findall_call(expr.args, expr.kwargs, expr)
         if attr.name == "finditer":
             return self._emit_native_re_finditer_call(expr.args, expr.kwargs)
         if attr.name == "split":
@@ -1061,25 +1057,49 @@ class NativeTextModulesLoweringMixin:
         self,
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
+        expr=None,
     ) -> Optional[ir.Value]:
         if kwargs or len(args) < 2 or len(args) > 3:
             return None
-        flags = (
-            ir.Constant(_I64, 0) if len(args) == 2 else self._emit_expr_as_i64(args[2])
-        )
-        result = self.builder.call(
-            self.runtime["py_re_findall_flags"],
-            [
-                self._emit_as_object(args[0]),
-                self._emit_as_object(args[1]),
-                flags,
-            ],
-            name=self._fresh("re.findall"),
-        )
-        # flags==0 routes through the faithful engine, which raises for
-        # patterns outside the native subset instead of mismatching.
-        self._emit_post_call_err_check(getattr(args[0], "span", None))
-        return result
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = None if expr is None else self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("re.findall.result")
+            roots.append(output)
+        operands = []
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Source order is pattern, text, optional flags. No raw operand
+            # survives evaluating the next expression or converting flags.
+            for argument in args:
+                root = self._emit_slot_call_operand(argument, "re.findall.argument")
+                operands.append(root)
+                roots.append(root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            flags = ir.Constant(_I64, 0)
+            if len(args) == 3:
+                flags = self._slot_call_runtime_call(
+                    "py_index_i64_checked", (operands[2],), span=args[2].span,
+                )
+            # Every supported route returns a NEW list (or NULL on error).
+            # Root it before error checks and temporary argument disposal.
+            self._slot_call_runtime_call(
+                "py_re_findall_flags", tuple(operands[:2]), result_slot=output,
+                suffix_args=(flags,), span=args[0].span,
+            )
+            self._release_slot_call_roots(tuple(operands))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("re.findall.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_native_re_split_call(
         self,

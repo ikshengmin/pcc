@@ -1670,17 +1670,11 @@ class LiteralLoweringMixin:
             raise NotImplementedError(
                 f"dict() takes at most 1 positional arg at L2; got {len(expr.args)}"
             )
-        if len(expr.args) == 1 and not expr.kwargs:
-            if isinstance(expr.args[0].ty, DictType):
-                # ``dict(mapping)`` is a shallow COPY, not a walk over
-                # (key, value) pairs.  The generic loop below indexes the
-                # source positionally, and for a dict that is a KEY lookup
-                # for 0, 1, 2 …, so ``dict(d)`` silently returned an EMPTY
-                # dict.  `_maybe_emit_dict_builtin` already implements the
-                # copy correctly via py_dict_keys + py_dict_get.
-                copied = self._maybe_emit_dict_builtin(expr)
-                if copied is not None:
-                    return copied
+        # Share the sink-aware owner for empty/keyword/mapping construction.
+        # It declines iterable/unpack forms before emitting any instruction.
+        constructed = self._maybe_emit_dict_builtin(expr)
+        if constructed is not None:
+            return constructed
         out = self.builder.call(
             self.runtime["py_dict_new"],
             [],

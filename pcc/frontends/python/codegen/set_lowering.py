@@ -77,7 +77,9 @@ class SetLoweringMixin:
                 keywords.append(("**", expr.args[index].args[0]))
         return tuple(positional), tuple(keywords)
 
-    def _emit_set_algebra_call(self, expr: Call, dynamic: bool = False):
+    def _emit_set_algebra_call(
+        self, expr: Call, dynamic: bool = False, *, receiver_slot=None, output_slot=None,
+    ):
         """Evaluate once, bind expanded arguments, and preserve slot ownership."""
         attr = expr.func
         assert isinstance(attr, Attr)
@@ -92,13 +94,24 @@ class SetLoweringMixin:
         saved_cpy = self._cpy_operand_cleanup_block
         # The output is the oldest root, so argument teardown also respects
         # module-scope LIFO frames. Runtime publishes into this empty slot.
-        result_root = self._new_slot_call_root("set.call.result")
-        roots = [result_root]
+        sink = output_slot if output_slot is not None else self._slot_call_result_sink(expr)
+        result_root = sink
+        roots = []
+        if result_root is None:
+            result_root = self._new_slot_call_root("set.call.result")
+            roots.append(result_root)
+        result_root_count = len(roots)
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            receiver_root = self._emit_slot_call_operand(attr.obj, "set.call.receiver")
-            roots.append(receiver_root)
+            receiver_root = receiver_slot
+            if receiver_root is None:
+                receiver_root = self._emit_slot_call_operand(attr.obj, "set.call.receiver")
+                roots.append(receiver_root)
+            else:
+                # The shared dict/set update owner already evaluated it. A
+                # registered slot, never its earlier raw load, crosses here.
+                self._slot_call_root_record(receiver_root)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             is_set = None
@@ -147,6 +160,7 @@ class SetLoweringMixin:
                     self._as_gc_ptr(method_root), self._as_gc_ptr(args_root),
                     self._as_gc_ptr(kwargs_root), self._as_gc_ptr(result_root),
                 ], name=self._fresh("set.call.generic.status"))
+                self._slot_call_note_published(result_root)
                 self._emit_post_call_err_check(expr.span)
                 self._slot_call_check_status(status, "generic method call", expr.span)
                 self.builder.branch(done)
@@ -157,6 +171,7 @@ class SetLoweringMixin:
                 self._as_gc_ptr(args_root), self._as_gc_ptr(kwargs_root),
                 self._as_gc_ptr(result_root),
             ], name=self._fresh("set.call.status"))
+            self._slot_call_note_published(result_root)
             self._emit_post_call_err_check(expr.span)
             self._slot_call_check_status(status, "set method call", expr.span)
             if done is not None:
@@ -165,7 +180,9 @@ class SetLoweringMixin:
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
-        self._release_slot_call_roots(tuple(roots[1:]))
+        self._release_slot_call_roots(tuple(roots[result_root_count:]))
+        if sink is not None:
+            return self.builder.load(result_root, name=self._fresh("set.call.current"))
         result = self._take_slot_call_root(result_root)
         self._note_owned_dynamic_call_value(result)
         return result

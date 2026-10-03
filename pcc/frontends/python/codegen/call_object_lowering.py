@@ -122,18 +122,26 @@ class CallObjectLoweringMixin:
     def _new_slot_call_root(self, label: str):
         """Register an empty owning operand slot before evaluating its value.
 
-        Function roots use the physical-slot registry and ordinary ownership
-        flags, including its retroactive error/early-return patching. Module
-        expressions have lexical LIFO roots; their caller must install a
-        ``_slot_call_cleanup_block`` before emitting any fallible operation.
-        Neither route registers a borrowed raw value as a new owner.
+        Operand roots have lexical LIFO lifetimes. Their caller must install
+        a ``_slot_call_cleanup_block`` before any fallible operation and leave
+        them through release or take on success. Enrolling each temporary in
+        function-wide ownership would duplicate its cleanup at every return,
+        including returns emitted before the operand exists.
+
+        Generator resume bodies retain the physical-slot/ownership registry:
+        their operands can span suspension and need the existing frame-save
+        protocol. Neither route treats a borrowed raw value as a new owner.
         """
         if getattr(self, "_freestanding_module", False):
             raise L1CodegenError("slot-call roots require the managed runtime")
         name = self._fresh(label + ".operand")
         slot = self._alloca_in_entry(_CSTR, name=name, init_null=True)
         flag = None
-        lifo = self.current_func_def is None
+        generator_contexts = getattr(self, "_generator_ctx_stack", ())
+        generator_resume = bool(generator_contexts) and (
+            generator_contexts[-1].get("resume_function") is self.current_function
+        )
+        lifo = not generator_resume
         if lifo:
             self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), slot)
         else:

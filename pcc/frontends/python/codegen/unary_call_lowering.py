@@ -744,20 +744,45 @@ class UnaryCallLoweringMixin:
             and 1 <= len(expr.args) <= 2
             and not expr.kwargs
         ):
-            # Native dict.fromkeys(iterable[, value]) — avoid the libpython
-            # fallback so it works under --python-libpython=off.
-            iter_obj = self._emit_as_object(expr.args[0])
-            if len(expr.args) == 2:
-                val_obj = self._emit_as_object(expr.args[1])
-            else:
-                val_obj = self._emit_none_literal()
-            result = self.builder.call(
-                self.runtime["py_dict_fromkeys"],
-                [iter_obj, val_obj],
-                name=self._fresh("dict.fromkeys"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
+            # Both runtime arguments stay in authoritative slots until the
+            # NEW dict is published, including an omitted immortal None.
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("dict.fromkeys.result")
+                roots.append(output)
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                iterable = self._emit_slot_call_operand(expr.args[0], "dict.fromkeys.iterable")
+                roots.append(iterable)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if len(expr.args) == 2:
+                    value = self._emit_slot_call_operand(expr.args[1], "dict.fromkeys.value")
+                    roots.append(value)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                else:
+                    value = self._new_slot_call_root("dict.fromkeys.value")
+                    roots.append(value)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._publish_slot_call_owned(value, self._emit_none_literal(), label="fromkeys default")
+                self._slot_call_runtime_call(
+                    "py_dict_fromkeys", (iterable, value), result_slot=output, span=expr.span,
+                )
+                self._release_slot_call_roots((iterable, value))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("dict.fromkeys.current"))
+            return self._take_slot_call_root(output)
         if builtin_name == "int" and attr.name == "from_bytes":
             if self._has_starred_unpack(expr.args):
                 return None

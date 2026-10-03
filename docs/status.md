@@ -1,52 +1,41 @@
 # Current status
 
-Updated October 3, 2026, 17:20 UTC. Maintain this page in place.
+Updated October 3, 2026, 17:55 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
 ## Current boundary
 
 There is no qualified current pcc1, pcc2 or pcc3, and no Stage2/Stage3 fixed point.
-The latest complete compiler-context diagnostic finished at 15:01 on source
-`b8aee32d012ae42c5ef87fef7ac20916f9bd39a00535158f5b7a4c0dafb91767`.
-It regenerated all 441 contexts: 278 lowered successfully and 163 stopped at
-their first frontend failure, with no timeouts or crashes. Source and context
-identities reverified. These are shared producer-contract failures, not 163
-independent bugs. The run took 1,388.22 seconds with 1.65 GB peak process-tree
-RSS while other bounded diagnostics and archival work overlapped; it is not a
-build-performance acceptance result.
+The latest frozen compiler-context census uses source
+`d396b3e1c42f84a313f3f099036bfb90f308b706a7cb3c5b8a51abf1ba2dc633`.
+All 441 original modules are accounted across the initial run and a continuation:
+350 pass, 90 fail in the frontend, and one is resource-incomplete. The original
+30-minute outer stop and 120-second module limit are preserved. Replaying that
+module, call_expression_lowering, reached the 2 GiB tree memory guard after
+134.90 seconds. A timeout or memory stop is neither a pass nor a semantic failure.
 
-Compared with the previous 214/227 diagnostic, 65 failures became passes,
-213 stayed passing, 162 stayed failing and one previously passing context
-failed. All 17 regressions from the earlier 190/251-to-214/227 transition and
-all 41 gains from that transition now pass on this single combined source.
-The one new regression was pipeline_import_scan: a dynamic count() call
-returned an unowned branch result before strict subtraction. Its producer is
-now repaired, with eight focused checks and an unchanged original-context PIDX
-pass. The validator remains unchanged. Remaining families
-include multiplication/repetition, OS/path result publication, imported
-constructors, namespace bindings and string-method result handoff.
+Compared with the preceding V5 census (278 passes, 163 frontend failures), V6
+has 75 new passes, 275 preserved passes, three frontend regressions and one
+resource transition. The three regressions are dataclass-factory call results,
+bytes.decode publication and floor division feeding repetition. Each now has a
+separate unchanged-original-context PIDX pass after its shared producer repair.
+Those newer overlays do not change the recorded V6 counts.
 
-The earlier 41-context preservation run used source `333f9be7`: 40 passed under
-a 512 MiB diagnostic cap, while py_parse passed a separately authorized 1.5 GiB
-recheck after its initial memory-limit stop. Its 1.35 GB peak and byte-identical
-v4 PIDX are retained; this is not memory-target acceptance.
+The resource failure exposed quadratic IR expansion: short-lived call roots
+were enrolled in every function return cleanup. A lexical/LIFO lifetime repair
+preserves exceptional cleanup and keeps generator-resume roots in their frame.
+Its final original-module replay passes under the same 2 GiB/120-second guards
+(35.04 seconds in the worker). Six growth/root-balance tests and 232 related
+host/IR/model checks pass; four native cases remain unrun. This is causal
+compiler evidence, not native execution or build-performance acceptance.
 
-The preceding complete diagnostic used source
-`c2b078540e55363d779beba964b8430460184cfb02844e50cf7addadbdaa6108`,
-frozen at 12:27, and produced 214 passes and 227 failures. Later mutable-source
-repairs have separate focused evidence. The next complete source was frozen at
-16:18 as `d396b3e1c42f84a313f3f099036bfb90f308b706a7cb3c5b8a51abf1ba2dc633`;
-its retained-source diagnostic accounts for all 441 modules across two phases:
-350 pass, 90 fail in the frontend, and one (call_expression_lowering) reaches
-the original 120-second worker limit. The initial 30-minute outer stop and all
-partial receipts are retained. A single-worker diagnostic recheck of that one
-module is pending. V5-to-V6 has 75 new passes and three frontend regressions:
-dataclass-factory callable, bytes.decode handoff and floor-division feeding
-repetition. The first two have separate repaired original-context proofs;
-floor-division repair is active. None of these counts proves native bootstrap. Neither complete diagnostic emits or
-executes a native compiler. The next compiler boundary requires a green fresh
-complete diagnostic and actual native bootstrap on the same final source.
+The remaining frozen V6 families include managed Call/BinOp publication, dynamic
+set-update receivers, arithmetic kind proof and authoritative Name/CPython
+bridges. Shared contract migration must retain strict validation. The next full
+census and native bootstrap must use a stable integrated source. Earlier V5
+restored all 17 regressions and 41 gains from the V3-to-V4 transition; those
+historical results do not qualify later source.
 
 ## Matched runtime and native evidence
 
@@ -82,9 +71,12 @@ layout repair removes reads beyond header-only singleton globals. An isolated
 two-member runtime comparison reproduces the old division failure and passes
 all five requested settings with the correction, using unchanged original IR.
 That comparison has no production receipt and does not qualify the combined
-candidate. Class mortality and full class/base/MRO/registry retirement remain
-open. The newer candidate also adds two repetition runtime modules and requires
-its own complete matching archive.
+candidate. A failed-class construction repair now detaches the unpublished definition's
+namespace owner while preserving the shell, MRO and escaped/metaclass behavior.
+Its 42 focused checks pass; the unchanged native Token-finalization assertion
+still requires the new archive. Full class/base/MRO/registry retirement remains
+open. The candidate also adds two repetition runtime modules and therefore
+requires its own complete matching 186-member archive.
 
 These binaries were produced by host pcc0. They do not establish native pcc1,
 Stage2/Stage3 fixed point, complete C/Python execution or final-source acceptance.
@@ -185,8 +177,12 @@ Its product adapter now feeds the original generated source and include director
 to PCC's own preprocessor; the external compiler remains the separate oracle.
 Twenty route checks pass. Two original SSA short-circuit programs also now use
 the owned helper, with their source, optimization, jobs, timeout and assertions
-preserved; 25 focused route/SSA checks pass. Their native executions await the
-new matching runtime and are not included in the older six executions above.
+preserved; 25 focused route/SSA checks pass. Both later execute successfully
+against the explicitly admitted V5 archive, as recorded above; they are not
+current-candidate native proof. The default and explicit-self pointer-initializer
+cases now use the same owned product route. Their exact C source, constructors,
+assertions, O2/jobs=1 and timeout are preserved. Two new route guards and 22
+existing guards pass; these pointer programs' native executions remain unrun.
 
 The Make fixture incorrectly paired Linux ELF probe objects with the host archive
 utilities on every platform. A target-aware host fixture and explicit NM override
@@ -200,57 +196,31 @@ failures are attributed, unresolved counts. A precise five-node ledger was not
 retained, and they are not current candidate totals. Full source-bound collection
 and execution must establish the actual remaining failures.
 
-## Thread diagnostics
+## Thread diagnostics and optimization
 
 Lifecycle, scheduler-lock, safepoint and stop-the-world events, plus an independent
-lock-held suspend tripwire, are integrated. Raw sink component checks exclude
-allocation, registration, implicit safepoints and indirect calls; explicit safe
-wait polls are retained. Actual per-module frontend settings were recorded in
-the complete runtime build.
+lock-held suspend tripwire, are integrated. Completion handoff, paired suspension
+records and complete-record buffering have source-bound causal tests. On the
+admitted historical Linux threaded/atomic 184-member runtime, the unchanged
+native matrix passes all 60 cases and an independent original-program GC2 stress
+passes 20/20. All 25 thread-enabled matrix cases contain 24 worker identities
+and at least 24 matched suspension pairs. The collector settings in that matrix
+lack event witnesses. Earlier timeouts and truncated-log failures are retained;
+the final source/configuration result does not qualify the newer candidate,
+logging overhead, all-GC concurrency or long-run stability.
 
-The first native attempt stopped before execution at an ambiguous raw getenv
-return declaration. After the fixture declared c_rawptr explicitly, compilation
-passed. Five GC0 mask cases passed; the sixth, thread+gc, produced the correct
-program output but failed the preserved suspension/resumption assertion. Its
-log contained four suspend records, zero resume records and 49 reported drops.
-The remaining 54 cases were not run.
+AArch64 peephole liveness now preserves MOVK/BFI/BFXIL destination inputs and
+W/X aliases, release-store operands and indirect-branch uses. The exact helper
+matrix changes from 81 mismatches in 84 cases to zero; 254 distinct host/helper,
+encoder and precise-stackmap tests pass. Existing MADD/MSUB eligibility and
+production routing are unchanged. Target execution remains open.
 
-Independent try-lock delivery can separate the two records of a completed
-suspension. A paired-delivery repair after world unlock, with zero no-park depth
-and reentrancy checks, has a separately rebuilt complete 184-member archive.
-All 18 GC0/GC1 mask/format cases pass, including the previously failing pair check.
-The first GC2 case, with logging disabled, timed out at the unchanged 20-second
-limit; 41 later cases were not run in that original matrix. Separate baseline and
-repaired binaries both pass a GC2 replay, so the intermittent timeout remains
-unattributed. Independent slices pass all 15 tripwire cases and all nine mask
-cases under each of GC3 and GC4. GC labels here are requested settings without
-an actual collector-event witness. The original stopped receipt is preserved.
-Potentially locked observation paths remain nonwaiting. Native concurrency,
-complete five-GC coverage and logging overhead remain unqualified.
-
-A later alternating GC2 stress stopped after seven passes at another 20-second
-timeout. Main-only phase markers then localized a baseline-pass/repaired-timeout
-comparison to the first join, after stop/resume completed. The observed futex/TID
-states match a source hazard where done is published before unregister/teardown
-finishes. A narrow completion-handoff repair has 72 host cases, including an
-old-source failure at the blocked-teardown interleaving. Its complete 184-member
-archive is now strictly admitted, including transitive proof that the raw tail
-after unregister cannot register, safepoint, allocate or make indirect calls.
-The original native matrix passed 22 cases, then failed strict parsing of a
-truncated final GC2/thread resume record after normal program completion; 37
-cases remain unrun in that receipt. A separate original uninstrumented stress
-slice passed 20/20 with requested GC2 and logging disabled at the unchanged
-20-second bound. Complete-record buffering has 93 host cases and a separately admitted complete
-184-member runtime. On that exact Linux threaded/atomic source, the unchanged
-native matrix passes all 60 cases and a separate original-program GC2 stress
-passes 20/20. All 25 thread-enabled matrix cases contain the 24 application
-worker identities and at least 24 matched suspension pairs. The earlier failed
-GC2/thread case now has complete JSON and 47 matched pairs. Both transitive raw
-tail and sink/batch IR checks pass. GC labels remain requested settings because
-no actual collector-event witness appeared. These results do not qualify the
-newer combined candidate, all-GC production behavior, performance or pcc1.
-Buffering does not promise transactional durability if forced termination occurs
-between actual partial OS writes. All predecessor failures are retained.
+The bounded tail-call helpers now create a preheader and simultaneous parameter
+PHIs, preserving changed arguments, swaps and non-entry labels. Frame/root,
+exception and unsupported ABI shapes remain unchanged. All 77 focused host
+checks pass, including the public opt-in route and independent semantic probes.
+The accumulator helper remains unwired. Native constant-stack behavior,
+production optimization performance and broader optimization goals remain open.
 
 ## GUI, gateway and remaining goals
 
@@ -291,36 +261,42 @@ bytes. Recoverable current code, before/after patches, source identities and
 execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
-The latest verified local synchronization used the immutable 15:19:46 capture:
-PCC `71e15ea62ceadbfeb716824ba0e7d5d8cdf95b10` (15 paths), GUI
+The last confirmed local source baseline is PCC
+`929036867df27190ef13d455bc665c7dfe95d976` (17:21 capture, verified at 17:54), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
-`83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact hashes, modes and diff checks
-passed. Its scoped execution records 1,189 passes and three failures: the
-original Stage1-context test (22 IR outputs, 25 codegen exceptions), sys.prefix
-passed to path join, and the first original C short-circuit native test blocked
-by the explicit no-provisioning guard. Its second native test was unrun. A later
-frozen V5 control proves those C programs through the owned route; it does not
-supply this capture's missing matching runtime.
+`83577bc41dc79d3ead2e217bfa04f0f500799012`. Promote a later capture only after its
+actual local application and commit are verified.
 
-The all-test inventory has 24,706 nodes, 24,481 selected and 225 capability or
-environment deselections. A separate integration inventory selects 5,529 from
-the same union. Both have zero collection errors/skips and retain per-node
-reasons. Neither inventory establishes test execution. Later namespace and
-fixture corrections pass all 224 affected OS host checks, with three native
-cases explicitly excluded. Those results belong to newer source.
+The latest validated immutable capture is October 3 at 17:21:44 UTC, containing
+50 cumulative PCC paths against the preceding `71e15ea6` baseline. Exact-source
+execution records
+1,780 distinct passes and one pre-existing scaffold capability-contract failure.
+A separate original 47-target Stage1-context node is resource-incomplete at the
+1.5 GiB diagnostic cap (220.00 seconds, 1,616,273,408 observed bytes), retaining
+19 IR outputs and six error records. The scaffold group stops after two passes
+and one failure, leaving its last test unrun. Later producer, tail-call and
+capability changes are outside this snapshot.
 
-The preceding 14:20:58 capture associated with `816fb03f` recorded 1,152 passes
-and one contextual failure, with 22 IR outputs and 25 exceptions. Its inventories
-contained 24,540 nodes, 24,315 selected by the all-test command and 5,521 selected
-by the integration command. The earlier 13:26 capture retained a default
-non-integration marker expression; its 5,742 deselections therefore combined
-marker selection and capability gates. Historical counts are not interchangeable.
+Its complete collection inventory contains 25,337 nodes: 25,112 selected and
+225 capability/environment deselections. A separate integration inventory
+selects 5,541 nodes from the same union. Both have zero collection errors/skips;
+per-node selection reasons are retained. Collection does not execute test bodies.
+The host phase excludes archive-dependent native cases explicitly, and the mixed
+backend file selects only its original AArch64 peephole helpers. This is not a
+full C/Python execution result.
 
-The 16:20 source capture contains 37 PCC paths and records 1,426 passing
-checks with one resource-incomplete contextual test. Its 47-target assertion
-stopped at the 1.5 GiB diagnostic cap, retaining 19 IR outputs and six error
-records. The recorded synchronized baseline remains `71e15ea6`; later source
-changes have separate manifests and scoped results.
+The preceding 16:20 capture recorded 1,426 passes and one resource-incomplete
+context node. Its source was not an applied baseline. The earlier 15:19 capture
+associated with `71e15ea6` recorded 1,189 passes and three failures. Those dated
+receipts remain distinct from later repairs and matched V5 native controls.
+
+Recoverable code bytes, before/after patches and detailed historical receipts
+are retained in the external PCC recovery archives in Library. Code archive
+`libfile_a5f7c11281008191be4ea89ea9611cbd`, version 41, contains the 17:35 code
+capture. The V6 census input/receipt archive
+`libfile_b31d99b80ce88191bb44580e4307ddcd` includes complete original generated
+AST/exports and all phase/failure/resource receipts; successful PIDX payloads
+are separately retained and are not included in that archive.
 
 Hourly synchronization includes legitimate integrated work even when failing or
 unqualified. Run collection and affected fast tests on the exact capture first;
@@ -336,5 +312,4 @@ compiler/runtime provisioning, and stop each independent diagnostic at its first
 real failure. Safety timeouts are not acceptance budgets. A pre-launch lock rejection now
 records a terminal receipt instead of leaving a stale RUNNING state; all 17
 watchdog tests pass, including owned-child reaping under the unchanged one-byte
-memory cap. Preserve failures and
-continue other independent authorized work.
+memory cap. Preserve failures and continue other independent authorized work.

@@ -1191,6 +1191,14 @@ class CallExpressionLoweringMixin:
             )
             if result is not None:
                 return result
+        if builtin_value == "re.compile":
+            result = self._emit_native_re_compile_call(expr)
+            if result is not None:
+                return result
+        if builtin_value == "re.findall":
+            result = self._emit_native_re_findall_call(expr.args, expr.kwargs, expr)
+            if result is not None:
+                return result
         if builtin_value in ("re.match", "re.search", "re.fullmatch"):
             result = self._emit_native_re_value_call(
                 builtin_value,

@@ -297,3 +297,61 @@ def test_gcc_product_rejects_unmodeled_link_dependency_without_fallback(tmp_path
         status, error = connection.payload["returncode"], connection.payload["stderr"]
     assert status == 1
     assert "unsupported owned corpus link dependency" in error and "-lcustom" in error
+
+
+@pytest.mark.parametrize("backend", [None, "self"], ids=["default-self", "explicit-self"])
+def test_pointer_initializer_product_uses_owned_frontend_and_emitter(tmp_path, monkeypatch, backend):
+    from tests.c import test_pointer_constant_initializers as module
+
+    constructors = []
+    compilations = []
+    emissions = []
+    executions = []
+    monkeypatch.setenv("PCC_DISABLE_COMPILE_CACHE", "1")
+
+    def external_forbidden(*args, **kwargs):
+        pytest.fail("pointer initializer product requested an external compiler/preprocessor")
+
+    monkeypatch.setattr(CEvaluator, "_system_cpp", external_forbidden)
+    monkeypatch.setattr(CEvaluator, "_system_cc", external_forbidden)
+    monkeypatch.setattr(CEvaluator, "run_translation_units_with_system_cc", external_forbidden)
+
+    class ObservedEvaluator(CEvaluator):
+        def __init__(self, **options):
+            constructors.append(options)
+            super().__init__(**options)
+            assert self.backend == "self"
+
+        def compile_translation_units(self, units, **options):
+            compiled = super().compile_translation_units(units, **options)
+            compilations.append((units, options, compiled))
+            return compiled
+
+        def emit_executable(self, compiled, output, **options):
+            assert compiled is compilations[0][2]
+            emissions.append((output, options))
+            Path(output).write_bytes(b"owned pointer initializer emission model; never executed")
+
+    def execute(argv, **options):
+        assert len(argv) == 1 and argv[0] == emissions[0][0]
+        assert Path(argv[0]).read_bytes() == b"owned pointer initializer emission model; never executed"
+        executions.append(options)
+        return subprocess.CompletedProcess(argv, 0, "5 1 1 21\n", "")
+
+    monkeypatch.setattr(module, "CEvaluator", ObservedEvaluator)
+    monkeypatch.setattr(subprocess, "run", execute)
+    module.test_integer_constant_pointer_initializers(tmp_path, backend)
+
+    assert constructors == ([{}] if backend is None else [{"backend": "self", "allow_unimplemented_backend": True}])
+    assert len(compilations) == 1
+    units, options, compiled = compilations[0]
+    assert len(units) == 1
+    assert (units[0].name, units[0].path, units[0].source) == ("main.c", str(tmp_path / "main.c"), module.SOURCE)
+    assert options == {
+        "base_dir": None, "use_system_cpp": False, "include_dirs": None,
+        "cpp_args": None, "frontend_opt_level": 2, "jobs": 1,
+    }
+    assert len(compiled) == 1
+    assert emissions == [(emissions[0][0], {"optimize": 2, "link_args": None})]
+    assert executions == [{"cwd": str(Path.cwd()), "timeout": 60, "capture_output": True, "text": True}]
+    assert not Path(emissions[0][0]).exists()

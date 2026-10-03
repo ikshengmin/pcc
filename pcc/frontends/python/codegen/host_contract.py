@@ -581,6 +581,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_instrument_python_activation",
     "_native_re_compile_argument_exprs",
     "_emit_native_re_compile_call",
+    "_emit_native_re_findall_call",
     "_native_re_class_compile_attr_string_value",
     "_pooled_cstr_ptr",
     "_zero_of",
@@ -680,6 +681,8 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_lambda_adapter_name_root",
     "_slot_call_unary_runtime",
     "_emit_slot_call_unary",
+    "_set_call_operands",
+    "_emit_set_algebra_call",
 )
 
 

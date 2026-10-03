@@ -57,7 +57,7 @@ class BinaryOpLoweringMixin:
         never admit a primitive integer kernel or prove overflow impossible.
         Explicit machine projections retain their own lowering.
         """
-        if (expr.op not in ("+", "-", "*", "/", "%", "<<", ">>") or getattr(self, "_freestanding_module", False)
+        if (expr.op not in ("+", "-", "*", "/", "//", "%", "<<", ">>") or getattr(self, "_freestanding_module", False)
                 or getattr(self, "_runtime_port_module", False)):
             return None
         function = self.current_function
@@ -103,6 +103,14 @@ class BinaryOpLoweringMixin:
             # checks actual types and count sign/size; annotations prove no
             # fixed-width arithmetic property.
             return "py_obj_lshift" if expr.op == "<<" else "py_obj_rshift"
+        if expr.op == "//":
+            # Preserve the existing generic floor-division runtime route.
+            # Its inputs are leased managed objects and its return is NEW;
+            # integer zero is the existing NULL-without-TLS caller contract.
+            # Typed scalar lanes still require their own arithmetic proof.
+            if any(isinstance(ty, DynType) for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty)):
+                return "py_obj_floordiv"
+            return None
         if expr.op == "/":
             # Match the existing dynamic division route exactly. Its runtime
             # numeric/dunder dispatch is unchanged; only NEW publication moves
@@ -158,8 +166,8 @@ class BinaryOpLoweringMixin:
                     runtime_name, (left, right), result_slot=output, span=expr.span,
                 )
             current = self.builder.load(output, name=self._fresh("binary.slot.result"))
-            if runtime_name == "py_obj_mod":
-                # The existing integer modulo ABI leaves zero-divisor raising
+            if runtime_name in ("py_obj_mod", "py_obj_floordiv"):
+                # The existing integer modulo/floor ABI leaves zero-divisor raising
                 # to this caller after the pending-error check. Publication
                 # already happened, so both success and error cleanup own it.
                 self._emit_zero_division_if_null(current, "division by zero")

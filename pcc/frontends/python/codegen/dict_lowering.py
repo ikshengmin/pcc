@@ -10,7 +10,7 @@ from pcc.frontends.python.py_ast import (
     StrLit, StrType,
 )
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_DICT, PY_TYPE_LIST, PY_TYPE_SET
+from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_DICT, PY_TYPE_LIST
 
 
 _I1 = ir.IntType(1)
@@ -228,11 +228,8 @@ class DictLoweringMixin:
                 and not expr.kwargs and not self._expr_looks_cpython(attr.obj)):
             return _emit_rooted_dict_view(self, expr)
         if attr.name == "update" and len(expr.args) == 1 and not expr.kwargs:
-            return self._emit_dyn_container_method_with_tag_guard(
-                expr, (PY_TYPE_DICT, PY_TYPE_SET),
-                lambda recv: self._emit_shared_container_update(expr, recv),
-                "dyn.update",
-            )
+            if not self._has_starred_unpack(expr.args):
+                return self._emit_shared_container_update(expr)
         if attr.name not in _DYN_DICT_METHOD_NATIVE:
             return None
         if attr.name == "pop":
@@ -254,26 +251,65 @@ class DictLoweringMixin:
             "dyn.dict",
         )
 
-    def _emit_shared_container_update(self, expr: Call, recv: ir.Value) -> ir.Value:
-        """The one-source update shape shared by dict and set receivers."""
-        tag = self.builder.call(self.runtime["py_obj_type_tag"], [recv])
-        is_dict = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_DICT))
-        fn = self.current_function
-        dict_bb = fn.append_basic_block(self._fresh("update.dict"))
-        set_bb = fn.append_basic_block(self._fresh("update.set"))
-        done_bb = fn.append_basic_block(self._fresh("update.done"))
-        self.builder.cbranch(is_dict, dict_bb, set_bb)
-        self.builder.position_at_end(dict_bb)
-        dict_ty = DictType(name="dict", key=DynType(name="dyn"), value=DynType(name="dyn"))
-        result = self._maybe_emit_dict_method(expr, dict_ty, recv=recv, recv_borrowed=True)
-        assert result is not None
-        self.builder.branch(done_bb)
-        self.builder.position_at_end(set_bb)
-        result = self._maybe_emit_set_method(expr, recv=recv, recv_borrowed=True)
-        assert result is not None
-        self.builder.branch(done_bb)
-        self.builder.position_at_end(done_bb)
-        return self._emit_none_literal()
+    def _emit_shared_container_update(self, expr: Call) -> ir.Value:
+        """Own a one-source dict/set update, preserving other method results."""
+        if self._expr_looks_cpython(expr.func.obj):
+            return self._emit_cpy_method_call_src(
+                self._emit_expr(expr.func.obj), "update", expr.args,
+                kwargs=expr.kwargs, operand_order=expr.operand_order,
+            )
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("update.result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(expr.func.obj, "update.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            tag = self._slot_call_runtime_call("py_obj_type_tag", (receiver,), span=expr.span)
+            is_dict = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_DICT))
+            fn = self.current_function
+            dict_bb = fn.append_basic_block(self._fresh("update.dict"))
+            other_bb = fn.append_basic_block(self._fresh("update.other"))
+            done_bb = fn.append_basic_block(self._fresh("update.done"))
+            self.builder.cbranch(is_dict, dict_bb, other_bb)
+            self.builder.position_at_end(dict_bb)
+            source = self._emit_slot_call_operand(expr.args[0], "update.source")
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (source,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(self.runtime["py_dict_update_slots"],
+                [self._as_gc_ptr(receiver), self._as_gc_ptr(source)],
+                name=self._fresh("update.dict.status"))
+            self._slot_call_check_status(status, "dictionary update", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._publish_slot_call_owned(output, self._emit_none_literal(), label="dictionary update")
+            self._release_slot_call_roots((source,))
+            self.builder.branch(done_bb)
+            self.builder.position_at_end(other_bb)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Set dispatch or ordinary getattr happens before arguments. The
+            # child borrows these slots, leaving their retirement to this owner.
+            self._emit_set_algebra_call(
+                expr, dynamic=True, receiver_slot=receiver, output_slot=output,
+            )
+            self.builder.branch(done_bb)
+            self.builder.position_at_end(done_bb)
+            self._release_slot_call_roots((receiver,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("update.current"))
+        return self._take_slot_call_root(output)
 
     def _emit_dyn_pop_method_with_runtime_guard(
         self,
@@ -720,182 +756,119 @@ class DictLoweringMixin:
         self,
         expr: Call,
     ) -> Optional[ir.Value]:
-        """``dict()`` → empty dict. ``dict(k1=v1, k2=v2)`` → set
-        each kwarg. ``dict(another_dict)`` where arg is DictType
-        → shallow copy via iterator-over-keys.
-        Iterable-of-pairs form isn't supported yet."""
-        new_dict = self.builder.call(
-            self.runtime["py_dict_new"],
-            [],
-            name=self._fresh("dict.new"),
-        )
-        # kwargs form
-        if not expr.args and expr.kwargs:
-            for kw_name, kw_expr in expr.kwargs:
-                k_obj = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    self._emit_str_literal(kw_name),
-                    StrType(name="str"),
-                )
-                v = self._emit_expr(kw_expr)
-                v_obj = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    v,
-                    kw_expr.ty,
-                )
-                self.builder.call(
-                    self.runtime["py_dict_set"],
-                    [new_dict, k_obj, v_obj],
-                )
-                self._emit_post_call_err_check(expr.span)
-            return new_dict
-        if not expr.args:
-            return new_dict
-        arg = expr.args[0]
-        arg_ty = arg.ty
-        if isinstance(arg_ty, DictType) or isinstance(arg_ty, DynType):
-            # Shallow copy of a dict — iterate keys, get values,
-            # insert into the new dict.
-            src_val = self._emit_expr(arg)
-            src_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                src_val,
-                arg_ty,
-            )
-            keys_list = self.builder.call(
-                self.runtime["py_dict_keys"],
-                [src_obj],
-                name=self._fresh("dict.copy.keys"),
-            )
-            fn = self.current_function
-            if isinstance(arg_ty, DynType):
-                # py_dict_keys on a NON-dict returns NULL without raising
-                # (py_dict.c), so a dyn-held non-mapping silently produced an
-                # empty dict here.  CPython raises TypeError; fail closed.
-                keys_null = self.builder.icmp_unsigned(
-                    "==",
-                    keys_list,
-                    ir.Constant(keys_list.type, None),
-                    name=self._fresh("dict.copy.keys.null"),
-                )
-                bad_bb = fn.append_basic_block(
-                    name=self._fresh("dict.copy.notmapping")
-                )
-                ok_bb = fn.append_basic_block(
-                    name=self._fresh("dict.copy.keys.ok")
-                )
-                self.builder.cbranch(keys_null, bad_bb, ok_bb)
-                self.builder.position_at_end(bad_bb)
-                message = self._ptr_to_cstr(
-                    self._cstr_global(
-                        "dict() argument is not iterable",
-                        ".dict.copy.typeerror",
+        """Build an empty/keyword dict or shallow mapping copy in owned slots."""
+        # Decide eligibility before evaluating or allocating anything. The
+        # separate iterable/unpack lowering owns forms outside this helper.
+        if len(expr.args) > 1 or self._has_starred_unpack(expr.args):
+            return None
+        if any(name == "**" for name, _value in expr.kwargs):
+            return None
+        if expr.args and not isinstance(expr.args[0].ty, (DictType, DynType)):
+            return None
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("dict.constructor.result")
+            roots.append(output)
+        operands = []
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            source = None
+            if expr.args:
+                source = self._emit_slot_call_operand(expr.args[0], "dict.constructor.source")
+                roots.append(source)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            # Python evaluates every argument before invoking the constructor.
+            # Keep keyword values live even while a mapping key invokes __hash__.
+            for keyword, operand in expr.kwargs:
+                key_expr = StrLit(span=expr.span, ty=StrType(name="str"), value=keyword)
+                key = self._emit_slot_call_operand(key_expr, "dict.constructor.keyword")
+                roots.append(key)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                value = self._emit_slot_call_operand(operand, "dict.constructor.value")
+                roots.append(value)
+                operands.append((key, value))
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call("py_dict_new", (), result_slot=output, span=expr.span)
+            if source is not None:
+                keys = self._new_slot_call_root("dict.copy.keys")
+                roots.append(keys)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call("py_dict_keys", (source,), result_slot=keys, span=expr.span)
+                fn = self.current_function
+                if isinstance(expr.args[0].ty, DynType):
+                    # A non-mapping returns NULL without setting exception TLS.
+                    current_keys = self.builder.load(keys, name=self._fresh("dict.copy.keys.current"))
+                    missing = self.builder.icmp_unsigned("==", current_keys, ir.Constant(_CSTR, None))
+                    bad_bb = fn.append_basic_block(self._fresh("dict.copy.notmapping"))
+                    ready_bb = fn.append_basic_block(self._fresh("dict.copy.keys.ok"))
+                    self.builder.cbranch(missing, bad_bb, ready_bb)
+                    self.builder.position_at_end(bad_bb)
+                    self._emit_builtin_exception_and_branch(
+                        "TypeError", "dict() argument is not iterable", expr.span,
                     )
+                    self.builder.position_at_end(ready_bb)
+                count = self._slot_call_runtime_call("py_obj_len", (keys,), span=expr.span)
+                index = self._alloca_in_entry(_I64, name="dict.copy.idx.addr")
+                self.builder.store(ir.Constant(_I64, 0), index)
+                cond_bb = fn.append_basic_block(self._fresh("dict.copy.cond"))
+                body_bb = fn.append_basic_block(self._fresh("dict.copy.body"))
+                end_bb = fn.append_basic_block(self._fresh("dict.copy.end"))
+                self.builder.branch(cond_bb)
+                self.builder.position_at_end(cond_bb)
+                current = self.builder.load(index, name=self._fresh("dict.copy.index"))
+                self.builder.cbranch(self.builder.icmp_signed("<", current, count), body_bb, end_bb)
+                self.builder.position_at_end(body_bb)
+                key = self._new_slot_call_root("dict.copy.key")
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (key,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_list_get", (keys,), result_slot=key, suffix_args=(current,), span=expr.span,
                 )
-                exc = self.builder.call(
-                    self.runtime["py_exc_new"],
-                    [ir.Constant(_I64, 3), message],
-                    name=self._fresh("dict.copy.exc"),
+                value = self._new_slot_call_root("dict.copy.value")
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (key, value), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_dict_get", (source, key), result_slot=value, span=expr.span,
                 )
-                self.builder.call(self.runtime["py_raise"], [exc])
-                err_target = (
-                    self._current_try_err_block()
-                    or self._ensure_fn_err_exit()
+                status = self.builder.call(
+                    self.runtime["py_dict_set_slots"],
+                    [self._as_gc_ptr(output), self._as_gc_ptr(key), self._as_gc_ptr(value)],
+                    name=self._fresh("dict.copy.set.status"),
                 )
-                self.builder.branch(err_target)
-                self.builder.position_at_end(ok_bb)
-            n_val = self.builder.call(
-                self.runtime["py_obj_len"],
-                [keys_list],
-                name=self._fresh("dict.copy.len"),
-            )
-            idx_slot = self._alloca_in_entry(
-                _I64,
-                name="dict.copy.idx.addr",
-            )
-            self.builder.store(ir.Constant(_I64, 0), idx_slot)
-            cond_bb = fn.append_basic_block(
-                name=self._fresh("dict.copy.cond"),
-            )
-            body_bb = fn.append_basic_block(
-                name=self._fresh("dict.copy.body"),
-            )
-            step_bb = fn.append_basic_block(
-                name=self._fresh("dict.copy.step"),
-            )
-            end_bb = fn.append_basic_block(
-                name=self._fresh("dict.copy.end"),
-            )
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(cond_bb)
-            cur = self.builder.load(idx_slot, name=self._fresh("idx"))
-            cond = self.builder.icmp_signed(
-                "<",
-                cur,
-                n_val,
-                name=self._fresh("cond.i1"),
-            )
-            self.builder.cbranch(cond, body_bb, end_bb)
-            self.builder.position_at_end(body_bb)
-            k_elem = self.builder.call(
-                self.runtime["py_list_get"],
-                [keys_list, cur],
-                name=self._fresh("dict.copy.key"),
-            )
-            v_elem = self.builder.call(
-                self.runtime["py_dict_get"],
-                [src_obj, k_elem],
-                name=self._fresh("dict.copy.val"),
-            )
-            # On this edge v_elem is the raising call's own NULL return
-            # (pcc_gc_release is NULL-safe); k_elem and the keys view are
-            # live owned references that the error exit must drop.
-            self._emit_post_call_err_check(
-                expr.span,
-                release_on_error=(v_elem, k_elem, keys_list),
-            )
-            self.builder.call(
-                self.runtime["py_dict_set"],
-                [new_dict, k_elem, v_elem],
-            )
-            # py_list_get and py_dict_get both return NEW refs
-            # (py_runtime.h), and py_dict_set retains what it stores rather
-            # than stealing.  Without these two releases every entry of the
-            # copy leaked one key and one value.
-            #
-            # Released BEFORE the error check, not after: pcc_gc_release does
-            # not touch the exception TLS, so doing it first makes the
-            # raising edge out of py_dict_set drop these references too.
-            self._gc_release(
-                v_elem, self._release_context_label("dict.copy.val")
-            )
-            self._gc_release(
-                k_elem, self._release_context_label("dict.copy.key")
-            )
-            self._emit_post_call_err_check(
-                expr.span,
-                release_on_error=(keys_list,),
-            )
-            self.builder.branch(step_bb)
-            self.builder.position_at_end(step_bb)
-            nxt = self.builder.add(
-                cur,
-                ir.Constant(_I64, 1),
-                name=self._fresh("idx.next"),
-            )
-            self.builder.store(nxt, idx_slot)
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(end_bb)
-            # py_dict_keys returns a NEW list ref; end_bb is this loop's only
-            # exit.
-            self._gc_release(
-                keys_list, self._release_context_label("dict.copy.keys")
-            )
-            return new_dict
-        return None
+                self._slot_call_check_status(status, "dictionary copy insertion", expr.span)
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots((key, value))
+                self.builder.store(self.builder.add(current, ir.Constant(_I64, 1)), index)
+                self.builder.branch(cond_bb)
+                self.builder.position_at_end(end_bb)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._release_slot_call_roots((keys,))
+                roots.pop()
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            for key, value in operands:
+                status = self.builder.call(
+                    self.runtime["py_dict_set_slots"],
+                    [self._as_gc_ptr(output), self._as_gc_ptr(key), self._as_gc_ptr(value)],
+                    name=self._fresh("dict.constructor.set.status"),
+                )
+                self._slot_call_check_status(status, "dictionary keyword insertion", expr.span)
+                self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots(tuple(roots if sink is not None else roots[1:]))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("dict.constructor.current"))
+        return self._take_slot_call_root(output)

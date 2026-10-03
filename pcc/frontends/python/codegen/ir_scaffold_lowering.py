@@ -9,7 +9,12 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.codegen.self_module_contracts import IR_SCAFFOLD_CONTRACT, module_has_contract
+from pcc.frontends.python.codegen.self_module_contracts import (
+    CLASS_LOWERING_RECEIVER_CONTRACT,
+    IR_PROVIDER_BINDING_CONTRACT,
+    IR_SCAFFOLD_CONTRACT,
+    module_has_contract,
+)
 from pcc.frontends.python.export_meta import decode_type
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.py_ast import (
@@ -696,7 +701,9 @@ class IrScaffoldLoweringMixin:
         cached = self._ir_scaffold_source_provider_binding
         if cached is not None:
             return cached
-        found = self.ast_module.name == "pcc.ir.ir"
+        found = module_has_contract(
+            self.ast_module.name, IR_PROVIDER_BINDING_CONTRACT
+        )
         unstable = False
         for statement in self.ast_module.body:
             owned_import = False
@@ -728,7 +735,9 @@ class IrScaffoldLoweringMixin:
             return fact
         function = getattr(self, "current_func_def", None)
         if (
-            self.ast_module.name == "pcc.frontends.python.codegen.class_gen"
+            module_has_contract(
+                self.ast_module.name, CLASS_LOWERING_RECEIVER_CONTRACT
+            )
             and function is not None
         ):
             owner = self._scaffold_current_class_owner()
@@ -787,7 +796,10 @@ class IrScaffoldLoweringMixin:
             return ""
         module = getattr(info, "owning_module", None) or self.ast_module.name
         name = getattr(info, "export_class_name", None) or info.name
-        if (module, name) == ("pcc.frontends.python.codegen.class_gen", "ClassLowering"):
+        if (
+            name == "ClassLowering"
+            and module_has_contract(module, CLASS_LOWERING_RECEIVER_CONTRACT)
+        ):
             return "ClassLowering"
         if module != self.ast_module.name:
             return ""

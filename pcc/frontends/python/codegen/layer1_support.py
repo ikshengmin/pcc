@@ -1383,6 +1383,12 @@ def _populate_static_native_exports_5(out):
     }
     out["pcc.frontends.python.codegen.self_module_contracts"] = {
         "IR_SCAFFOLD_CONTRACT": _str_constant_export("ir-scaffold-forced"),
+        "IR_PROVIDER_BINDING_CONTRACT": _str_constant_export(
+            "ir-provider-binding"
+        ),
+        "CLASS_LOWERING_RECEIVER_CONTRACT": _str_constant_export(
+            "class-lowering-receivers"
+        ),
         "PY_AST_FIELD_ORDER_CONTRACT": _str_constant_export(
             "py-ast-field-order"
         ),
