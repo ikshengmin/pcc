@@ -108,6 +108,8 @@ class KernelModel:
             pcc_mutex_free=self.free, load_ptr=self.load, load_i32=self.load,
             store_ptr=self.store, store_i32=self.store,
             pcc_mutex_lock=self.lock, pcc_mutex_unlock=self.unlock,
+            pthread_mutex_lock=self.raw_lock, pthread_mutex_unlock=self.raw_unlock,
+            pthread_mutex_destroy=self.raw_destroy,
             function_addr=lambda name: name, pthread_create=self.create,
             pthread_join=self.join, pthread_detach=lambda handle: 0,
             stack_alloc=lambda size: "stack", call_ptr1=self.callback,
@@ -141,13 +143,28 @@ class KernelModel:
         self.memory[pointer, offset] = value
 
     def lock(self, pointer):
+        assert self.registered
+        return self.raw_lock(pointer)
+
+    def raw_lock(self, pointer):
         assert pointer not in self.freed and not self.locked
         self.locked = True
+        self.actions.append(("raw_lock", pointer))
         return 0
 
     def unlock(self, pointer):
+        assert self.registered
+        return self.raw_unlock(pointer)
+
+    def raw_unlock(self, pointer):
         assert pointer not in self.freed and self.locked
         self.locked = False
+        self.actions.append(("raw_unlock", pointer))
+        return 0
+
+    def raw_destroy(self, pointer):
+        assert pointer not in self.freed and not self.locked
+        self.actions.append(("raw_destroy", pointer))
         return 0
 
     def register(self):
@@ -192,7 +209,10 @@ class KernelModel:
     def run_child(self):
         self.registered = False
         result = self.namespace["_thread_trampoline"](self.start_record)
-        assert self.actions[-1] == ("unregister",)
+        retired = max(index for index, action in enumerate(self.actions)
+                      if action == ("unregister",))
+        assert all(action[0] in {"raw_lock", "raw_unlock", "raw_destroy", "free"}
+                   for action in self.actions[retired + 1:])
         assert not self.registered
         self.registered = True  # Restore the separately registered caller.
         return result
@@ -659,7 +679,7 @@ def test_actual_suspend_boundary_rechecks_no_park_and_unlocks_before_abort():
 def test_raw_sink_transitive_helpers_have_no_allocations_or_safepoints():
     tree = ast.parse((RUNTIME / "py_runtime_log.py").read_text())
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
-    pending = ["_write_event_unlocked"]
+    pending = ["_write_event_unlocked", "_write_thread_batch_unlocked"]
     seen = set()
     calls = set()
     while pending:
@@ -780,7 +800,14 @@ def test_pair_sink_recursion_does_not_split_delivered_records():
     model.on_write = lambda: model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 18, 1)
     model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 17, 3)
     assert [(row["event"], row["value0"]) for row in model.records()] == [
-        ("safepoint_suspend_deferred", 17), ("safepoint_resume_deferred", 17), ("trace_dropped", 2)]
+        ("safepoint_suspend_deferred", 17), ("safepoint_resume_deferred", 17)]
+    # Loss arriving during the raw write stays counted for the next complete
+    # batch, rather than opening a trailing fragment at process exit.
+    assert model.state["pcc_log_thread_trace_dropped"] == 2
+    model.namespace["pcc_diagnostics_runtime_log_suspension_pair"](41, 19, 1)
+    assert [(row["event"], row["value0"]) for row in model.records()][-3:] == [
+        ("safepoint_suspend_deferred", 19), ("safepoint_resume_deferred", 19), ("trace_dropped", 2)]
+    assert model.state["pcc_log_thread_trace_dropped"] == 0
     assert model.state["pcc_log_emitting"] == model.state["pcc_log_write_lock"] == 0
 
 

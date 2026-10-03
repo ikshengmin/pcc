@@ -399,12 +399,35 @@ def test_literal_unary_bool_plus_produces_integer():
             _emit("def probe():\n    return slot_operand_probe(" + expression + ")\n")
 
 
-def test_numeric_slot_provenance_rejects_annotations_callbacks_and_negative_power():
+@pytest.mark.parametrize("source", (
+    "def probe(value: int):\n    return slot_operand_probe(-value)\n",
+    "def value() -> int:\n    return 4\ndef probe():\n    return slot_operand_probe(-value())\n",
+    "class Value:\n    def __neg__(self):\n        return 4\ndef probe(value: Value):\n    return slot_operand_probe(-value)\n",
+    "def probe(value):\n    return slot_operand_probe(-value)\n",
+))
+def test_generic_unary_uses_owned_dispatch_without_literal_integer_proof(source):
+    module = type_infer.infer_module(parse_and_lift(source, "slot_operand.py", "slot_operand"))
+    expression = module.body[-1].body[0].value.args[0]
+    codegen = SlotProbeCodegen(module, ir_scaffold_mode="on")
+    # An annotation, callback return annotation or user __neg__ does not
+    # establish an exact integer. The primitive producer still rejects it.
+    assert codegen._slot_call_literal_integer_kind(expression) == 0
+    with pytest.raises(L1CodegenError, match="integer producer requires literal provenance"):
+        codegen._emit_slot_call_literal_integer(expression, "unproven.integer")
+
+    text = _probe_function(_emit(source))
+    produced = re.search(r"(%[^ ]+) = call ptr[^\n]*@py_obj_neg\([^\n]*\n([^\n]+)", text)
+    assert produced is not None
+    assert "store ptr " + produced.group(1) in produced.group(2)
+    assert "probe.operand" in produced.group(2)
+    assert _calls(text, "pcc_gc_foreign_lease_acquire")
+    assert _calls(text, "pcc_gc_foreign_lease_release")
+    assert not _calls(text, "py_int_neg")
+    assert not _calls(text, "py_int_to_i64_lane")
+
+
+def test_numeric_slot_provenance_rejects_negative_power():
     for source in (
-        "def probe(value: int):\n    return slot_operand_probe(-value)\n",
-        "def value() -> int:\n    return 4\ndef probe():\n    return slot_operand_probe(-value())\n",
-        "class Value:\n    def __neg__(self):\n        return 4\ndef probe(value: Value):\n    return slot_operand_probe(-value)\n",
-        "def probe(value):\n    return slot_operand_probe(-value)\n",
         "def probe():\n    return slot_operand_probe(2 ** -1)\n",
         "def probe():\n    return slot_operand_probe((2 ** -1) + 1)\n",
     ):

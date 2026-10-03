@@ -17,6 +17,11 @@ __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_EXC_UNICODE_PAYLOAD,
+    PY_FLAG_GC_PINNED,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PYMEMORYVIEWOBJECT_BASE_OFFSET,
+    PYBYTESOBJECT_DATA_OFFSET,
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
@@ -47,6 +52,7 @@ from pcc.extern import extern, c_abi_export, c_ptr, c_double, c_int32, c_int64, 
 from pcc.unsafe import (
     atomic_load_i64,
     atomic_rmw_i64,
+    define_global_i32,
     define_global_i64_array,
     global_addr,
     global_load_ptr,
@@ -747,6 +753,281 @@ def py_float_fromhex(text):
     return py_float_from_f64(sign * parsed)
 
 
+# Conversion owns input, unwrapped payload base, element/index temporaries,
+# output and suspended error independently, including aliases among them.
+_BUFFER_SOURCE = 0
+_BUFFER_LEAF = 1
+_BUFFER_ITEM = 2
+_BUFFER_INDEX = 3
+_BUFFER_RESULT = 4
+_BUFFER_ERROR = 5
+_BUFFER_COUNT = 6
+_BUFFER_BYTES = 8
+
+define_global_i32("pcc_buffer_borrowed_map", -1)
+define_global_i32("pcc_buffer_owned_map", 6)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_obj_index_slots = extern("py_obj_index_slots", (c_ptr, c_ptr), c_int64)
+
+
+def _buffer_error(kind: int, message) -> int:
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(kind, message))
+    return -1
+
+
+def _buffer_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * _BUFFER_BYTES)
+    token: int = load_i64(tokens, index * _BUFFER_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) < 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * _BUFFER_BYTES, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _buffer_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * _BUFFER_BYTES)
+    if ptr_is_null(load_ptr(slot, 0)) != 0:
+        return _buffer_error(19, cstr("buffer conversion: out of memory"))
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    store_i64(tokens, index * _BUFFER_BYTES, token)
+    if token < 0:
+        return _buffer_error(19, cstr("buffer conversion: cannot lease owner"))
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    if py_err_occurred() != 0:
+        return -1
+    return 0
+
+
+def _buffer_copy(slots, tokens, index: int, source, borrowed: int) -> int:
+    destination = ptr_add(slots, index * _BUFFER_BYTES)
+    token: int = -1
+    if borrowed != 0:
+        token = pcc_gc_root_copy_borrowed_lease(destination, source)
+    else:
+        token = pcc_gc_root_copy_lease(destination, source)
+    store_i64(tokens, index * _BUFFER_BYTES, token)
+    if token < 0:
+        return _buffer_error(19, cstr("buffer conversion: cannot retain owner"))
+    return 0
+
+
+def _buffer_new_raw(slots, tokens, data, count: int, mutable: int) -> int:
+    result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
+    if mutable != 0:
+        store_ptr(result, 0, _bytearray_new_raw(data, count))
+    else:
+        store_ptr(result, 0, py_bytes_new(data, count))
+    return _buffer_adopt(slots, tokens, _BUFFER_RESULT)
+
+
+def _buffer_count_fill(slots, tokens, mutable: int) -> int:
+    source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
+    index = ptr_add(slots, _BUFFER_INDEX * _BUFFER_BYTES)
+    if py_obj_index_slots(source, index) != 0:
+        return -1
+    if _buffer_adopt(slots, tokens, _BUFFER_INDEX) != 0:
+        return -1
+    overflow = stack_alloc(4)
+    store_i32(overflow, 0, 0)
+    count: int = py_int_to_i64(load_ptr(index, 0), overflow)
+    if py_err_occurred() != 0:
+        return -1
+    if load_i32(overflow, 0) != 0:
+        return _buffer_error(15, cstr("byte count does not fit in an index-sized integer"))
+    if count < 0:
+        return _buffer_error(2, cstr("negative count"))
+    if count > 9223372036854775782:
+        kind: int = 15
+        if mutable != 0:
+            kind = 19
+        return _buffer_error(kind, cstr("byte count is too large"))
+    status: int = _buffer_new_raw(slots, tokens, null(), count, mutable)
+    if status == 0 and count > 0:
+        result = load_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES)
+        memset(ptr_add(result, PYBYTESOBJECT_DATA_OFFSET), 0, count)
+    return status
+
+
+def _buffer_sequence_fill(slots, tokens, mutable: int) -> int:
+    source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
+    item = ptr_add(slots, _BUFFER_ITEM * _BUFFER_BYTES)
+    index = ptr_add(slots, _BUFFER_INDEX * _BUFFER_BYTES)
+    tag: int = _type_of(load_ptr(source, 0))
+    count: int = 0
+    if tag == PY_TYPE_LIST:
+        count = py_list_len(load_ptr(source, 0))
+    else:
+        count = py_tuple_len(load_ptr(source, 0))
+    if py_err_occurred() != 0:
+        return -1
+    if count <= 0:
+        return _buffer_new_raw(slots, tokens, null(), 0, mutable)
+    data = py_mem_alloc(count)
+    if ptr_is_null(data) != 0:
+        return _buffer_error(19, cstr("byte sequence: out of memory"))
+    status: int = 0
+    current: int = 0
+    overflow = stack_alloc(4)
+    while current < count and status == 0:
+        if tag == PY_TYPE_LIST:
+            store_ptr(item, 0, py_list_get(load_ptr(source, 0), current))
+        else:
+            store_ptr(item, 0, py_tuple_get(load_ptr(source, 0), current))
+        status = _buffer_adopt(slots, tokens, _BUFFER_ITEM)
+        if status == 0:
+            status = py_obj_index_slots(item, index)
+        if status == 0:
+            status = _buffer_adopt(slots, tokens, _BUFFER_INDEX)
+        if status == 0:
+            store_i32(overflow, 0, 0)
+            byte: int = py_int_to_i64(load_ptr(index, 0), overflow)
+            if py_err_occurred() != 0:
+                status = -1
+            elif load_i32(overflow, 0) != 0 or byte < 0 or byte > 255:
+                status = _buffer_error(2, cstr("bytes must be in range(0, 256)"))
+            else:
+                store_i8(data, current, byte)
+        if status == 0:
+            _buffer_drop(slots, tokens, _BUFFER_INDEX)
+            _buffer_drop(slots, tokens, _BUFFER_ITEM)
+        current = current + 1
+    if status == 0:
+        status = _buffer_new_raw(slots, tokens, data, count, mutable)
+    # Result/error remains in an owning root when freeing the unmanaged copy
+    # buffer parks or runs diagnostics; a raw result never crosses this call.
+    error = ptr_add(slots, _BUFFER_ERROR * _BUFFER_BYTES)
+    py_tls_exc_swap_slot(error)
+    py_mem_free(data)
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    return status
+
+
+def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
+    source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
+    leaf = ptr_add(slots, _BUFFER_LEAF * _BUFFER_BYTES)
+    item = ptr_add(slots, _BUFFER_ITEM * _BUFFER_BYTES)
+    if _buffer_copy(slots, tokens, _BUFFER_LEAF, source, 0) != 0:
+        return -1
+    while _type_of(load_ptr(leaf, 0)) == PY_TYPE_MEMORYVIEW:
+        # The current view's address is leased, so its actual managed base
+        # field remains an authoritative source slot throughout the retain.
+        base_slot = ptr_add(load_ptr(leaf, 0), PYMEMORYVIEWOBJECT_BASE_OFFSET)
+        if _buffer_copy(slots, tokens, _BUFFER_ITEM, base_slot, 1) != 0:
+            return -1
+        if ptr_is_null(load_ptr(item, 0)) != 0:
+            return _buffer_error(3, cstr("memoryview has no buffer owner"))
+        _buffer_drop(slots, tokens, _BUFFER_LEAF)
+        if pcc_gc_root_move(leaf, item) != 0:
+            return _buffer_error(7, cstr("cannot transfer memoryview buffer owner"))
+        token: int = load_i64(tokens, _BUFFER_ITEM * _BUFFER_BYTES)
+        store_i64(tokens, _BUFFER_ITEM * _BUFFER_BYTES, -1)
+        store_i64(tokens, _BUFFER_LEAF * _BUFFER_BYTES, token)
+    # This is the payload's actual owner, not just an outer memoryview. Its
+    # independent address lease covers data/length reads and allocating copy.
+    current = load_ptr(leaf, 0)
+    data = _bytes_data(current)
+    count: int = py_bytes_len(load_ptr(leaf, 0))
+    if py_err_occurred() != 0:
+        return -1
+    return _buffer_new_raw(slots, tokens, data, count, mutable)
+
+
+def _buffer_fill(slots, tokens, mode: int) -> int:
+    source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
+    result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
+    if mode == 2:
+        store_ptr(result, 0, pcc_gc_alloc(32, PY_TYPE_MEMORYVIEW, 0))
+        if ptr_is_null(load_ptr(result, 0)) != 0:
+            return _buffer_error(19, cstr("memoryview: out of memory"))
+        # Finish the traceable empty layout before acquiring a parking lease.
+        view = load_ptr(result, 0)
+        store_i64(view, 0, 1)
+        store_i32(view, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_MEMORYVIEW)
+        store_ptr(view, PYMEMORYVIEWOBJECT_BASE_OFFSET, null())
+        store_ptr(view, 24, null())
+        if _buffer_adopt(slots, tokens, _BUFFER_RESULT) != 0:
+            return -1
+        view = load_ptr(result, 0)
+        pcc_gc_store_ptr(view, ptr_add(view, PYMEMORYVIEWOBJECT_BASE_OFFSET), load_ptr(source, 0))
+        if py_err_occurred() != 0:
+            return -1
+        pcc_gc_publish_initialized(load_ptr(result, 0))
+        return 0
+    if ptr_is_null(load_ptr(source, 0)) != 0:
+        return _buffer_new_raw(slots, tokens, null(), 0, mode)
+    tag: int = _type_of(load_ptr(source, 0))
+    if tag == PY_TYPE_BYTES and mode == 0:
+        # Exact immutable bytes retain identity with a separate result owner.
+        return _buffer_copy(slots, tokens, _BUFFER_RESULT, source, 0)
+    if tag == PY_TYPE_INT or tag == PY_TYPE_BOOL:
+        return _buffer_count_fill(slots, tokens, mode)
+    if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE:
+        return _buffer_sequence_fill(slots, tokens, mode)
+    return _buffer_payload_fill(slots, tokens, mode)
+
+
+def _buffer_convert_owned(obj, mode: int):
+    borrowed = stack_alloc(_BUFFER_BYTES)
+    store_ptr(borrowed, 0, obj)
+    pcc_gc_frame_enter(global_addr("pcc_buffer_borrowed_map"), borrowed)
+    slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    memset(slots, 0, _BUFFER_COUNT * _BUFFER_BYTES)
+    index: int = 0
+    while index < _BUFFER_COUNT:
+        store_i64(tokens, index * _BUFFER_BYTES, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_buffer_owned_map"), slots)
+    status: int = _buffer_copy(slots, tokens, _BUFFER_SOURCE, borrowed, 1)
+    if status == 0:
+        status = _buffer_fill(slots, tokens, mode)
+    result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
+    error = ptr_add(slots, _BUFFER_ERROR * _BUFFER_BYTES)
+    py_tls_exc_swap_slot(error)
+    store_ptr(borrowed, 0, null())
+    if status != 0:
+        _buffer_drop(slots, tokens, _BUFFER_RESULT)
+    index = _BUFFER_INDEX
+    while index >= 0:
+        _buffer_drop(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), result)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    token = load_i64(tokens, _BUFFER_RESULT * _BUFFER_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(result, token) < 0:
+            pcc_platform_abort()
+            return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result, prior)
+
+
 @c_abi_export("py_bytes_new")
 def py_bytes_new(data, byte_len: int):
     if byte_len < 0:
@@ -1087,39 +1368,10 @@ def _byte_from_obj(obj) -> int:
 
 
 def _bytes_from_int_sequence(seq, as_bytearray: int):
-    tag: int = _type_of(seq)
-    if tag == PY_TYPE_LIST:
-        n: int = py_list_len(seq)
-    elif tag == PY_TYPE_TUPLE:
-        n: int = py_tuple_len(seq)
-    else:
-        return null()
-    if n <= 0:
-        return (
-            _bytearray_new_raw(null(), 0) if as_bytearray else py_bytes_new(null(), 0)
-        )
-    tmp = py_mem_alloc(n)
-    if ptr_is_null(tmp):
-        return null()
-    i: int = 0
-    while i < n:
-        if tag == PY_TYPE_LIST:
-            item = py_list_get(seq, i)
-        else:
-            item = py_tuple_get(seq, i)
-        if ptr_is_null(item):
-            py_mem_free(tmp)
-            return null()
-        byte: int = _byte_from_obj(item)
-        py_decref(item)
-        if byte < 0 or byte > 255:
-            py_mem_free(tmp)
-            return null()
-        store_i8(tmp, i, byte)
-        i = i + 1
-    out = _bytearray_new_raw(tmp, n) if as_bytearray != 0 else py_bytes_new(tmp, n)
-    py_mem_free(tmp)
-    return out
+    mode: int = 0
+    if as_bytearray != 0:
+        mode = 1
+    return _buffer_convert_owned(seq, mode)
 
 
 def _bytes_is_none_or_null(obj) -> int:
@@ -1725,71 +1977,20 @@ def py_bytes_partition(src, sep):
 
 
 def _bytes_from_integer_count(o, mutable: int):
-    count: int = 0
-    if _type_of(o) == PY_TYPE_BOOL:
-        if ptr_eq(o, global_load_ptr("py_True")) != 0:
-            count = 1
-    else:
-        overflow = stack_alloc(4)
-        store_i32(overflow, 0, 0)
-        count = py_int_to_i64(o, overflow)
-        if load_i32(overflow, 0) != 0:
-            py_raise_owned(py_exc_new(15, cstr("byte count does not fit in an index-sized integer")))
-            return null()
-    if count < 0:
-        py_raise_owned(py_exc_new(2, cstr("negative count")))
-        return null()
-    # Both byte layouts have a 24-byte header plus one trailing NUL. Do not
-    # let allocation-size arithmetic wrap before entering the allocator.
-    if count > 9223372036854775782:
-        error: int = 15
-        if mutable != 0:
-            error = 19
-        py_raise_owned(py_exc_new(error, cstr("byte count is too large")))
-        return null()
-    result = null()
+    mode: int = 0
     if mutable != 0:
-        result = _bytearray_new_raw(null(), count)
-    else:
-        result = py_bytes_new(null(), count)
-    if ptr_is_null(result) != 0:
-        if py_err_occurred() == 0:
-            py_raise_owned(py_exc_new(19, cstr("byte allocation failed")))
-        return null()
-    if count > 0:
-        memset(ptr_add(result, 24), 0, count)
-    return result
+        mode = 1
+    return _buffer_convert_owned(o, mode)
 
 
 @c_abi_export("py_bytearray_from_obj")
 def py_bytearray_from_obj(o):
-    if ptr_is_null(o):
-        return _bytearray_new_raw(null(), 0)
-    if _type_of(o) == PY_TYPE_INT or _type_of(o) == PY_TYPE_BOOL:
-        return _bytes_from_integer_count(o, 1)
-    if _type_of(o) == PY_TYPE_LIST or _type_of(o) == PY_TYPE_TUPLE:
-        out = _bytes_from_int_sequence(o, 1)
-        if not ptr_is_null(out):
-            return out
-    return _bytearray_new_raw(_bytes_data(o), py_bytes_len(o))
+    return _buffer_convert_owned(o, 1)
 
 
 @c_abi_export("py_bytes_from_obj")
 def py_bytes_from_obj(o):
-    if ptr_is_null(o):
-        return py_bytes_new(null(), 0)
-    if _type_of(o) == PY_TYPE_BYTES:
-        # Exact bytes are immutable. The caller still receives a new owner,
-        # so sharing storage must retain the existing object.
-        py_incref(o)
-        return o
-    if _type_of(o) == PY_TYPE_INT or _type_of(o) == PY_TYPE_BOOL:
-        return _bytes_from_integer_count(o, 0)
-    if _type_of(o) == PY_TYPE_LIST or _type_of(o) == PY_TYPE_TUPLE:
-        out = _bytes_from_int_sequence(o, 0)
-        if not ptr_is_null(out):
-            return out
-    return py_bytes_new(_bytes_data(o), py_bytes_len(o))
+    return _buffer_convert_owned(o, 0)
 
 
 @c_abi_export("py_bytearray_extend")
@@ -1810,6 +2011,8 @@ def py_bytearray_extend(o, iterable):
         tag: int = _type_of(iterable)
         if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE:
             tmp = _bytes_from_int_sequence(iterable, 1)
+            if py_err_occurred() != 0:
+                return null()
             if ptr_is_null(tmp) == 0:
                 bd = _bytes_data(tmp)
                 bn = py_bytes_len(tmp)
@@ -2022,23 +2225,7 @@ def py_bytearray_pop(o, index):
 
 @c_abi_export("py_memoryview_new")
 def py_memoryview_new(o):
-    # PyMemoryViewObject prefix:
-    #   header@0, base@16, per-memoryview-owned Py_buffer allocation@24.
-    # The buffer allocation is populated lazily by
-    # pcc_PyMemoryView_GET_BUFFER so the core object constructor does not
-    # depend on the C-API module during archive extraction.
-    p = pcc_gc_alloc(32, PY_TYPE_MEMORYVIEW, 0)
-    if ptr_is_null(p):
-        if py_err_occurred() == 0:
-            py_raise_owned(py_exc_new(19, cstr("memoryview: out of memory")))
-        return null()
-    store_i64(p, 0, 1)
-    store_i32(p, 8, PY_TYPE_MEMORYVIEW)  # PY_TYPE_MEMORYVIEW
-    store_ptr(p, 16, null())
-    store_ptr(p, 24, null())
-    pcc_gc_store_ptr(p, ptr_add(p, 16), o)
-    pcc_gc_publish_initialized(p)
-    return p
+    return _buffer_convert_owned(o, 2)
 
 
 @c_abi_export("py_dealloc_memoryview")
@@ -2859,6 +3046,8 @@ def py_bytearray_set_slice(o, lo, hi, step, replacement) -> int:
         tag: int = _type_of(replacement)
         if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE:
             tmp = _bytes_from_int_sequence(replacement, 1)
+            if py_err_occurred() != 0:
+                return -1
             if ptr_is_null(tmp) == 0:
                 src = _bytes_data(tmp)
                 src_n = py_bytes_len(tmp)

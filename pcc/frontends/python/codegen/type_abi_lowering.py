@@ -497,8 +497,8 @@ class TypeAbiLoweringMixin:
         )
         for path in paths:
             already_registered = False
-            for registered_alloca, registered_path in registry:
-                if registered_alloca is payload_alloca and registered_path == path:
+            for record in registry:
+                if record[0] is payload_alloca and record[1] == path:
                     already_registered = True
                     break
             if already_registered:
@@ -509,7 +509,7 @@ class TypeAbiLoweringMixin:
                 path,
                 self._fresh(f"{name}.value.root.{path_suffix}"),
             )
-            registry.append((payload_alloca, path))
+            registry.append((payload_alloca, path, field_slot, borrowed))
             root_name = f"{name}.$valuefield.{path_suffix}"
             self._ensure_local_gc_frame_root(root_name, field_slot, _CSTR, frame_map)
 

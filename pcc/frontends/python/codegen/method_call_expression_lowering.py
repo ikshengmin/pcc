@@ -284,8 +284,11 @@ class MethodCallExpressionLoweringMixin:
         args: tuple[Expr, ...],
         kwargs: tuple,
         span,
+        call_expr: Optional[Call] = None,
     ) -> ir.Value:
         """The override fallback: one MRO lookup when that is provably enough."""
+        if call_expr is not None and self._slot_call_result_sink(call_expr) is not None:
+            return self._emit_slot_call_object(call_expr, "method." + attr_name)
         if (
             self._direct_virtual_dispatch_enabled()
             and not kwargs
@@ -309,7 +312,13 @@ class MethodCallExpressionLoweringMixin:
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
         span,
+        call_expr: Optional[Call] = None,
     ) -> ir.Value:
+        if call_expr is not None and self._slot_call_result_sink(call_expr) is not None:
+            # Preserve the original Call identity through lookup and invocation.
+            # The shared object-call ABI roots the callable before its arguments
+            # and publishes the NEW result before retiring any of those owners.
+            return self._emit_slot_call_object(call_expr, "method." + attr_name)
         obj_val = self._emit_expr(obj_expr)
         return self._emit_callable_attribute_call_on_value(
             obj_val, attr_name, args, kwargs, span
@@ -1323,6 +1332,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         expr.kwargs,
                         expr.span,
+                        call_expr=expr,
                     )
                 receiver_info = self.class_lowering.classes.get(
                     receiver_class_name
@@ -1355,6 +1365,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         expr.kwargs,
                         expr.span,
+                        call_expr=expr,
                     )
                 if current_class is not None and current_class is not receiver_info:
                     lexical_info = self._resolve_method_mro(
@@ -1367,6 +1378,7 @@ class MethodCallExpressionLoweringMixin:
                             expr.args,
                             expr.kwargs,
                             expr.span,
+                            call_expr=expr,
                         )
                 kind = method_info.method_kinds.get(attr.name, "instance")
                 if kind == "static":
@@ -1452,6 +1464,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         expr.kwargs,
                         expr.span,
+                        call_expr=expr,
                     )
                 kind = method_info.method_kinds.get(attr.name, "instance")
                 if kind == "instance":
@@ -1579,6 +1592,7 @@ class MethodCallExpressionLoweringMixin:
                     expr.args,
                     expr.kwargs,
                     expr.span,
+                    call_expr=expr,
                 )
             call_receiver = None
             if info is None:
@@ -1672,6 +1686,7 @@ class MethodCallExpressionLoweringMixin:
                 expr.args,
                 expr.kwargs,
                 expr.span,
+                call_expr=expr,
             )
 
         native_external = self._maybe_emit_class_lowering_extern_method(expr)
@@ -1744,6 +1759,7 @@ class MethodCallExpressionLoweringMixin:
                             expr.args,
                             expr.kwargs,
                             expr.span,
+                            call_expr=expr,
                         )
                     receiver_info = self.class_lowering.classes.get(hint)
                     if (
@@ -1758,6 +1774,7 @@ class MethodCallExpressionLoweringMixin:
                             expr.args,
                             expr.kwargs,
                             expr.span,
+                            call_expr=expr,
                         )
                     kind = info.method_kinds.get(attr.name, "instance")
                     if kind == "static":
@@ -1795,6 +1812,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         expr.kwargs,
                         expr.span,
+                        call_expr=expr,
                     )
 
         receiver_hint = self._class_hint_for_expr(attr.obj)
@@ -1808,6 +1826,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         expr.kwargs,
                         expr.span,
+                        call_expr=expr,
                     )
                 receiver_info = self.class_lowering.classes.get(receiver_hint)
                 if (
@@ -1822,6 +1841,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         expr.kwargs,
                         expr.span,
+                        call_expr=expr,
                     )
                 kind = info.method_kinds.get(attr.name, "instance")
                 if kind == "static":
@@ -1860,6 +1880,7 @@ class MethodCallExpressionLoweringMixin:
                     expr.args,
                     expr.kwargs,
                     expr.span,
+                    call_expr=expr,
                 )
 
         if isinstance(attr.obj, Name):
@@ -1942,6 +1963,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         expr.kwargs,
                         expr.span,
+                        call_expr=expr,
                     )
                 if candidate_info is not None:
                     kind = candidate_info.method_kinds.get(
@@ -2202,6 +2224,8 @@ class MethodCallExpressionLoweringMixin:
                     [obj],
                     name=self._fresh("dyn.bit_count"),
                 )
+            if self._slot_call_result_sink(expr) is not None:
+                return self._emit_slot_call_object(expr, "method." + attr.name)
             recv_obj = self._emit_as_object(attr.obj)
             if not expr.kwargs and self._split_starstar_kwargs_unpack(expr.args) is None:
                 return self._emit_loaded_method_call(
@@ -2653,6 +2677,7 @@ class MethodCallExpressionLoweringMixin:
                     expr.args,
                     expr.kwargs,
                     expr.span,
+                    call_expr=expr,
                 )
             # Flow-insensitive inference can leave a guarded Optional[str]
             # receiver as ``NoneType`` inside branches like
@@ -2793,9 +2818,13 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         expr.kwargs,
                         expr.span,
+                        call_expr=expr,
                     )
             # An unresolved imported annotation shell still uses the explicit
             # compatibility path; it supplies no native class/domain evidence.
+            if (self._slot_call_result_sink(expr) is not None
+                    and not self._expr_looks_cpython(attr.obj)):
+                return self._emit_slot_call_object(expr, "method." + attr.name)
             raw_val = self._emit_expr(attr.obj)
             if raw_val not in getattr(self, "_cpy_values", ()) and (
                 getattr(self, "_strict_no_libpython", False)
@@ -2833,6 +2862,7 @@ class MethodCallExpressionLoweringMixin:
             expr.args,
             expr.kwargs,
             expr.span,
+            call_expr=expr,
         )
 
     def _foreign_super_initializer_base(self, info):

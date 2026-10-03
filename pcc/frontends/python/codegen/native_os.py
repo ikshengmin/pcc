@@ -425,11 +425,7 @@ class NativeOsLoweringMixin:
             self._emit_post_call_err_check(getattr(expr, "span", None))
             return result
         if name == "listdir" and len(expr.args) == 1:
-            return self.builder.call(
-                self.runtime["py_os_listdir"],
-                [self._emit_as_object(expr.args[0])],
-                name=self._fresh("os.listdir"),
-            )
+            return self._emit_owned_unary_runtime_call(expr, "py_os_listdir")
         if name == "write" and len(expr.args) == 2:
             fd_i64 = self._emit_expr_as_i64(expr.args[0])
             fd_val = self.builder.trunc(

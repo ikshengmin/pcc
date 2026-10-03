@@ -1219,6 +1219,9 @@ class CallObjectLoweringMixin:
         return output
 
     def _emit_slot_call_attribute(self, expr, label):
+        projected = self._emit_slot_call_valueclass_attribute(expr, label)
+        if projected is not None:
+            return projected
         if self._is_valueclass_payload_type(expr.obj.ty):
             raise L1CodegenError("slot-call valueclass attribute requires a payload-slot producer")
         output = self._new_slot_call_root(label)

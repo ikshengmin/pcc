@@ -572,6 +572,153 @@ def _note_thread_trace_drop() -> None:
     _note_thread_trace_drop_count(1)
 
 
+def _append_trace_text(buffer: c_ptr, offset: int, limit: int, text: c_ptr) -> int:
+    if offset < 0 or offset > limit:
+        return -1
+    length: int = strlen(text)
+    if length < 0 or length > limit - offset:
+        return -1
+    index: int = 0
+    while index < length:
+        store_i8(buffer, offset + index, load_i8(text, index))
+        index = index + 1
+    return offset + length
+
+
+def _append_trace_i64(buffer: c_ptr, offset: int, limit: int, value: int) -> int:
+    digits = stack_alloc(32)
+    end: int = 31
+    store_i8(digits, end, 0)
+    negative: int = 0
+    magnitude: int = value
+    if value < 0:
+        negative = 1
+        magnitude = 0 - value
+    if magnitude == 0:
+        end = end - 1
+        store_i8(digits, end, 48)
+    while magnitude != 0:
+        end = end - 1
+        store_i8(digits, end, 48 + unsigned_rem_i64(magnitude, 10))
+        magnitude = unsigned_div_i64(magnitude, 10)
+    if negative:
+        end = end - 1
+        store_i8(digits, end, 45)
+    return _append_trace_text(buffer, offset, limit, ptr_add(digits, end))
+
+
+def _append_trace_pointer(buffer: c_ptr, offset: int, limit: int, value: c_ptr) -> int:
+    if ptr_is_null(value):
+        return _append_trace_text(buffer, offset, limit, cstr("0x0"))
+    slot = stack_alloc(8)
+    store_ptr(slot, 0, value)
+    bits: int = load_i64(slot, 0)
+    digits = stack_alloc(32)
+    end: int = 31
+    store_i8(digits, end, 0)
+    while bits != 0:
+        digit: int = unsigned_rem_i64(bits, 16)
+        end = end - 1
+        if digit < 10:
+            store_i8(digits, end, 48 + digit)
+        else:
+            store_i8(digits, end, 87 + digit)
+        bits = unsigned_div_i64(bits, 16)
+    end = end - 1
+    store_i8(digits, end, 120)
+    end = end - 1
+    store_i8(digits, end, 48)
+    return _append_trace_text(buffer, offset, limit, ptr_add(digits, end))
+
+
+def _append_thread_record(
+    buffer: c_ptr, offset: int, limit: int, event: int,
+    value0: int, value1: int, pointer: c_ptr, thread_id: int,
+) -> int:
+    timestamp: int = unsigned_div_i64(pcc_runtime_now_us(), 1000000)
+    event_text = _event_from_code(9, event)
+    if load_i32(global_addr("pcc_log_json"), 0) != 0:
+        offset = _append_trace_text(buffer, offset, limit, cstr("{\"schema\":\"pcc.diagnostics.runtime_log.v1\",\"ts\":"))
+        offset = _append_trace_i64(buffer, offset, limit, timestamp)
+        offset = _append_trace_text(buffer, offset, limit, cstr(",\"thread\":"))
+        offset = _append_trace_i64(buffer, offset, limit, thread_id)
+        offset = _append_trace_text(buffer, offset, limit, cstr(",\"category\":\"thread\",\"event\":\""))
+        offset = _append_trace_text(buffer, offset, limit, event_text)
+        offset = _append_trace_text(buffer, offset, limit, cstr("\",\"value0\":"))
+        offset = _append_trace_i64(buffer, offset, limit, value0)
+        offset = _append_trace_text(buffer, offset, limit, cstr(",\"value1\":"))
+        offset = _append_trace_i64(buffer, offset, limit, value1)
+        offset = _append_trace_text(buffer, offset, limit, cstr(",\"ptr\":\""))
+        offset = _append_trace_pointer(buffer, offset, limit, pointer)
+        return _append_trace_text(buffer, offset, limit, cstr("\"}\n"))
+    offset = _append_trace_text(buffer, offset, limit, cstr("[pcc.thread] ts="))
+    offset = _append_trace_i64(buffer, offset, limit, timestamp)
+    offset = _append_trace_text(buffer, offset, limit, cstr(" thread="))
+    offset = _append_trace_i64(buffer, offset, limit, thread_id)
+    offset = _append_trace_text(buffer, offset, limit, cstr(" event="))
+    offset = _append_trace_text(buffer, offset, limit, event_text)
+    offset = _append_trace_text(buffer, offset, limit, cstr(" value0="))
+    offset = _append_trace_i64(buffer, offset, limit, value0)
+    offset = _append_trace_text(buffer, offset, limit, cstr(" value1="))
+    offset = _append_trace_i64(buffer, offset, limit, value1)
+    offset = _append_trace_text(buffer, offset, limit, cstr(" ptr="))
+    offset = _append_trace_pointer(buffer, offset, limit, pointer)
+    return _append_trace_text(buffer, offset, limit, cstr("\n"))
+
+
+def _write_trace_bytes(stream: int, buffer: c_ptr, length: int) -> int:
+    offset: int = 0
+    while offset < length:
+        written: int = write(stream, ptr_add(buffer, offset), length - offset)
+        if written == -4:
+            continue
+        if written <= 0 or written > length - offset:
+            return 0
+        offset = offset + written
+    return 1
+
+
+def _write_thread_batch_unlocked(
+    thread_id: int, first_event: int, second_event: int,
+    value0: int, value1: int, pointer: c_ptr,
+) -> None:
+    # Fixed thread event names plus bounded integers/pointers fit below 512
+    # bytes per record. Build the complete one/two-record delivery and its
+    # pending loss notice before any I/O, while owning only the sink lock.
+    # A normal full write commits the whole batch in one syscall. Short writes
+    # retry the exact suffix; fatal I/O or termination between partial writes
+    # retains the sink's existing possible-prefix/error semantics.
+    capacity: int = 1536
+    buffer = stack_alloc(1536)
+    count: int = 1
+    offset: int = _append_thread_record(
+        buffer, 0, capacity, first_event, value0, value1, pointer, thread_id
+    )
+    if second_event != 0:
+        count = 2
+        offset = _append_thread_record(
+            buffer, offset, capacity, second_event, value0, value1, pointer, thread_id
+        )
+    dropped: int = atomic_rmw_i64(
+        "xchg", global_addr("pcc_log_thread_trace_dropped"), 0, 0, "acq_rel"
+    )
+    if dropped > 0:
+        offset = _append_thread_record(
+            buffer, offset, capacity, 24, dropped, 0, null(), thread_id
+        )
+    if offset < 0:
+        _note_thread_trace_drop_count(count + dropped)
+        return
+    close_slot = stack_alloc(4)
+    stream = _open_stream(close_slot)
+    if _write_trace_bytes(stream, buffer, offset) == 0:
+        _note_thread_trace_drop_count(count + dropped)
+    if load_i32(close_slot, 0) != 0:
+        close(stream)
+    # Recursive/concurrent losses arriving during this write remain counted
+    # for the next delivery; do not start a vulnerable trailing fragment.
+
+
 def _write_thread_trace_drops(thread_id: int) -> None:
     dropped: int = atomic_rmw_i64(
         "xchg", global_addr("pcc_log_thread_trace_dropped"), 0, 0, "acq_rel"
@@ -626,10 +773,7 @@ def _thread_transition_event(
         _note_thread_trace_drop()
         store_i32(global_addr("pcc_log_emitting"), 0, 0)
         return
-    _write_event_unlocked(
-        cstr("thread"), _event_from_code(9, event), value0, value1, pointer, thread_id
-    )
-    _write_thread_trace_drops(thread_id)
+    _write_thread_batch_unlocked(thread_id, event, 0, value0, value1, pointer)
     _write_lock_release()
     store_i32(global_addr("pcc_log_emitting"), 0, 0)
 
@@ -667,15 +811,9 @@ def pcc_diagnostics_runtime_log_suspension_pair(
     # allocate: its emitted closure is raw and implicit polls are disabled.
     store_i32(global_addr("pcc_log_emitting"), 0, 1)
     _write_lock_acquire()
-    # Contention cannot split the pair or steal the sink between records.
-    # OS write failures retain the ordinary sink's error semantics.
-    _write_event_unlocked(
-        cstr("thread"), cstr("safepoint_suspend_deferred"), epoch, waits, null(), thread_id
-    )
-    _write_event_unlocked(
-        cstr("thread"), cstr("safepoint_resume_deferred"), epoch, waits, null(), thread_id
-    )
-    _write_thread_trace_drops(thread_id)
+    # Contention cannot split the pair; normal I/O commits complete records
+    # together, including any pending drop notice, before releasing the sink.
+    _write_thread_batch_unlocked(thread_id, 14, 15, epoch, waits, null())
     _write_lock_release()
     store_i32(global_addr("pcc_log_emitting"), 0, 0)
 

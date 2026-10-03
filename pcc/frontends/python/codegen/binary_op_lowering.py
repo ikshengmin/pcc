@@ -57,7 +57,7 @@ class BinaryOpLoweringMixin:
         never admit a primitive integer kernel or prove overflow impossible.
         Explicit machine projections retain their own lowering.
         """
-        if (expr.op != "+" or getattr(self, "_freestanding_module", False)
+        if (expr.op not in ("+", "-", "/") or getattr(self, "_freestanding_module", False)
                 or getattr(self, "_runtime_port_module", False)):
             return None
         function = self.current_function
@@ -83,6 +83,20 @@ class BinaryOpLoweringMixin:
         for operand in (expr.lhs, expr.rhs):
             if self._expr_returns_unsafe_raw_pointer(operand):
                 return None
+        if expr.op == "/":
+            # Match the existing dynamic division route exactly. Its runtime
+            # numeric/dunder dispatch is unchanged; only NEW publication moves
+            # ahead of caller error checks and operand cleanup. Fully typed
+            # scalar and complex division retain their separate lowering.
+            if any(isinstance(ty, DynType) for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty)):
+                return "py_obj_truediv"
+            return None
+        if expr.op == "-":
+            # Complex subtraction has its own typed ABI. Keep that route
+            # until its generic dispatch and output publication are qualified.
+            if any(isinstance(ty, ComplexType) for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty)):
+                return None
+            return "py_obj_sub"
         return "py_obj_add"
 
     def _emit_slot_call_binary(self, expr, label, runtime_name):

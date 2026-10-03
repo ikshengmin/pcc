@@ -1,7 +1,6 @@
 """Bytes-family constructor owners publish before operand cleanup."""
 from __future__ import annotations
 
-from pathlib import Path
 import textwrap
 
 import pytest
@@ -11,7 +10,6 @@ from tests.python.owned_regression_support import (
     assert_reference_program,
     explicit_owned_runtime,
 )
-from tests.python.test_foreign_address_leases import _functions
 from tests.python.test_shared_call_binding import _emit
 from tests.python.test_slot_call_subscript_producers import _assert_immediate_publication
 
@@ -41,32 +39,36 @@ def test_buffer_constructor_immediate_publication(expression, runtime, site):
 
 
 def test_bytes_alias_runtime_retains_separate_result_owner():
-    class Value:
-        refs = 2  # Original owner plus the caller's independent source slot.
-    value = Value()
-    def retain(pointer):
-        assert pointer is value
-        pointer.refs += 1
-    namespace = {
-        'ptr_is_null': lambda pointer: pointer is None,
-        '_type_of': lambda pointer: 6,
-        'PY_TYPE_BYTES': 6,
-        'py_incref': retain,
-    }
-    _functions(Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_obj_stubs.py',
-               {'py_bytes_from_obj'}, namespace)
-    result = namespace['py_bytes_from_obj'](value)
-    assert result is value and result.refs == 3
-    value.refs -= 1  # Caller releases source after publishing the result.
-    value.refs -= 1  # Original owner may also be disposed independently.
-    assert result.refs == 1
-    result.refs -= 1
-    assert result.refs == 0
+    from tests.python.test_buffer_factory_ownership import BufferModel
+
+    model = BufferModel('bytes', relocate=True, initial_refs=2)
+    # Original and caller-source slots hold independent aliases before the
+    # runtime acquires its own source owner and publishes a third result owner.
+    model.frames[model.external] = 3
+    model.store(model.external, 16, model.source)
+    result = model.run()
+    assert result[0] is model.source[0] and result[0].refs == 3
+    model.clear_root(model.external, None)
+    model.clear_root(model.external + 16, None)
+    result = model.load(model.external, 8)
+    assert result[0].refs == 1
+    model.clear_root(model.external + 8, None)
+    assert all(value.refs == 0 for value in model.objects)
 
 
 PROGRAM = textwrap.dedent('''\
     import gc
     events = []
+    class Indexed:
+        def __init__(self, value):
+            self.value = value
+        def __index__(self):
+            gc.collect()
+            return self.value
+    class BadIndex:
+        def __index__(self):
+            gc.collect()
+            raise ValueError('index-error')
     def source():
         events.append('source')
         return bytearray([65, 66])
@@ -91,6 +93,20 @@ PROGRAM = textwrap.dedent('''\
         viewed = take(value=memoryview(source()), other=later())
         gc.collect()
         assert bytes(viewed) == b'AB'
+        assert bytes(memoryview(memoryview(bytearray([65, 66])))) == b'AB'
+        assert bytes([Indexed(65), Indexed(66)]) == b'AB'
+        try:
+            bytes([Indexed(65), BadIndex()])
+        except ValueError as error:
+            assert str(error) == 'index-error'
+        else:
+            raise AssertionError('index callback error was lost')
+        try:
+            bytearray([1 << 100])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('arbitrary-precision byte overflow was lost')
         assert events == ['later', 'source', 'later']
         def default(value=bytes(copied)):
             gc.collect()

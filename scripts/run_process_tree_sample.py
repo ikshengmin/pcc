@@ -473,7 +473,22 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         if args.max_tree_rss_bytes > 0
         else _PROCESS_TABLE_TIMEOUTS_S
     )
-    with lock_context:
+    with contextlib.ExitStack() as launch_context:
+        try:
+            launch_context.enter_context(lock_context)
+        except Exception as exc:
+            payload.update(
+                {
+                    "status": "LOCK_REJECTED",
+                    "completed_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "elapsed_s": time.monotonic() - started,
+                    "error": type(exc).__name__ + ": " + str(exc),
+                }
+            )
+            _persist(result_path, payload)
+            raise ProcessTreeSampleError(
+                "performance lock rejected before target launch: " + str(exc)
+            ) from exc
         with stdout_path.open("wb") as stdout_stream, stderr_path.open(
             "wb"
         ) as stderr_stream, samples_path.open("w", encoding="utf-8") as samples_stream:

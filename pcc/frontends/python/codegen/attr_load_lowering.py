@@ -8,6 +8,8 @@ from pcc.driver.python_target import PYTHON_TARGET_FULL_VERSION
 from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, BytesType, Call, ClassType, DictType, DynType, Expr, FloatType, IntType, ListType, MemoryViewType, Name, NoneType, StrType, Subscript, TupleType, Type
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
+from pcc.frontends.python.py_ast import RawPointerType
 from pcc.frontends.python.codegen.generator_lowering import emit_function_auto_park_role
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
@@ -38,6 +40,145 @@ class AttrLoadLoweringMixin:
                 if field_info is not None:
                     return field_info[1]
         return getattr(expr, "ty", None)
+
+    def _slot_call_valueclass_field_source(self, payload_slot, path, module_source):
+        """Find the physical root already registered for one payload field."""
+        if module_source:
+            # The exact aggregate global and declared field path were matched
+            # by the caller. Module lifecycle registers these same fields.
+            return self._module_global_valueclass_payload_field_slot(
+                payload_slot, path, name="value.attribute.module.source",
+            ), False
+        registry = getattr(self, "_fn_valueclass_payload_root_slots", {}).get(
+            self.current_function.name, (),
+        )
+        roots = getattr(self, "_fn_gc_root_slot_registry", {}).get(
+            self.current_function.name, (),
+        )
+        for record in registry:
+            if record[0] is payload_slot and record[1] == path:
+                source, borrowed = record[2], record[3]
+                if any(root[1] is source for root in roots):
+                    return source, borrowed
+        raise L1CodegenError("valueclass pointer field has no authoritative registered payload slot")
+
+    def _emit_slot_call_valueclass_field(self, payload_slot, path, field_ty, module_source, label, span):
+        if isinstance(field_ty, RawPointerType):
+            raise L1CodegenError("raw valueclass field cannot be a managed slot-call operand")
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cleanup = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            if self._is_valueclass_payload_type(field_ty):
+                class_name = self._ensure_class_type_registered(field_ty)
+                info = self.class_lowering.classes.get(class_name)
+                if info is None:
+                    raise L1CodegenError("valueclass field boxing requires its registered class")
+                cls = self._new_slot_call_root(label + ".class")
+                self._try_err_block = self._slot_call_cleanup_block((output, cls), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_copy_source(cls, info.global_var, span=span)
+                self._slot_call_runtime_call("py_valuebox_new", (cls,), result_slot=output, span=span)
+                self._release_slot_call_roots((cls,))
+                self._try_err_block = self._slot_call_cleanup_block((output,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                for index, (_name, item_ty) in enumerate(field_ty.fields):
+                    item = self._emit_slot_call_valueclass_field(
+                        payload_slot, path + (index,), item_ty, module_source,
+                        label + ".field", span,
+                    )
+                    self._try_err_block = self._slot_call_cleanup_block((output, item), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_runtime_call(
+                        "py_valuebox_set_field", (output, item),
+                        suffix_args=(ir.Constant(_I32, index),), argument_order=(0, 2, 1), span=span,
+                    )
+                    self._release_slot_call_roots((item,))
+                    self._try_err_block = self._slot_call_cleanup_block((output,), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+            else:
+                field_ir_ty = self._valueclass_field_payload_ir_type(field_ty)
+                if isinstance(field_ir_ty, ir.PointerType):
+                    source, borrowed = self._slot_call_valueclass_field_source(
+                        payload_slot, path, module_source,
+                    )
+                    self._slot_call_copy_source(output, source, borrowed, span)
+                elif isinstance(field_ir_ty, (ir.IntType, ir.FloatType, ir.DoubleType)):
+                    indices = [ir.Constant(_I32, 0)]
+                    indices.extend(ir.Constant(_I32, index) for index in path)
+                    source = self.builder.gep(payload_slot, indices, inbounds=True,
+                                              name=self._fresh("value.attribute.scalar.slot"))
+                    scalar = self.builder.load(source, name=self._fresh("value.attribute.scalar"))
+                    boxed = marshal.marshal_to_object(self.builder, self.module, self.runtime, scalar, field_ty)
+                    self._publish_slot_call_owned(output, boxed, label="valueclass scalar field boxing")
+                else:
+                    raise L1CodegenError("valueclass field has no supported object projection")
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cleanup
+        return output
+
+    def _emit_slot_call_valueclass_attribute(self, expr, label):
+        owner_ty = self._valueclass_payload_expr_type(expr.obj)
+        if owner_ty is None or not self._is_valueclass_payload_type(owner_ty):
+            return None
+        field = self._valueclass_field_info(owner_ty, expr.name)
+        if field is None:
+            return None
+        if self._expr_looks_cpython(expr):
+            raise L1CodegenError("CPython valueclass field requires an explicit output-slot bridge")
+        field_ty = field[1]
+        base = expr
+        path = ()
+        while isinstance(base, Attr):
+            enclosing = self._valueclass_payload_expr_type(base.obj)
+            item = self._valueclass_field_info(enclosing, base.name)
+            if item is None:
+                break
+            path = (item[0],) + path
+            base = base.obj
+        payload_ty = self._valueclass_payload_expr_type(base)
+        payload_ir_ty = self._valueclass_payload_ir_type(payload_ty)
+        payload_slot = None
+        module_source = False
+        if isinstance(base, Name):
+            check_local_bound(self, base)
+            entry = self.env.get(base.ident)
+            global_entry = self._module_globals.get(base.ident)
+            if entry is not None:
+                payload_slot, actual_ir_ty, payload_ty = entry
+                if getattr(self, "_cpy_env_flags", {}).get(base.ident, False):
+                    raise L1CodegenError("CPython valueclass binding requires an explicit output-slot bridge")
+                module_source = global_entry is not None and global_entry[0] is payload_slot
+            elif global_entry is not None:
+                payload_slot, payload_ty = global_entry
+                actual_ir_ty = payload_slot.value_type
+                module_source = True
+            if payload_slot is not None:
+                if not isinstance(actual_ir_ty, ir.LiteralStructType) or str(actual_ir_ty) != str(payload_ir_ty):
+                    raise L1CodegenError("valueclass attribute requires its actual aggregate payload slot")
+                if module_source:
+                    if getattr(self, "_cpy_module_flags", {}).get(base.ident, False):
+                        raise L1CodegenError("CPython valueclass global requires an explicit output-slot bridge")
+                    if self._module_global_needs_bound_check(base.ident):
+                        self._emit_module_global_bound_check(base.ident, base)
+        if payload_slot is None:
+            if self._valueclass_payload_pointer_field_paths(payload_ty):
+                raise L1CodegenError("temporary valueclass pointer payload requires a producer-owned output slot")
+            # A scalar-only aggregate carries no heap references across the
+            # materialization below. Evaluate it once and preserve its layout.
+            payload = self._maybe_emit_valueclass_constructor_payload(payload_ty, base)
+            if payload is None:
+                payload = self._emit_expr(base)
+            if not isinstance(payload.type, ir.LiteralStructType) or str(payload.type) != str(payload_ir_ty):
+                raise L1CodegenError("valueclass attribute requires an actual aggregate result")
+            payload_slot = self._alloca_in_entry(payload_ir_ty, name=self._fresh("value.attribute.payload"))
+            self.builder.store(payload, payload_slot)
+        return self._emit_slot_call_valueclass_field(payload_slot, path, field_ty,
+                                                     module_source, label, expr.span)
 
     def _metaclass_data_descriptor_info(self, class_info, attr_name: str):
         metaclass_name = getattr(class_info, "metaclass_name", None)

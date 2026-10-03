@@ -147,7 +147,63 @@ class BuiltinTypeAttrLoweringMixin:
             name=self._fresh(label),
         )
 
+    def _emit_owned_literal_attribute_mutation(self, expr, runtime_name):
+        """Keep mutation operands owned, then publish its ordinary None value."""
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("attribute.mutation.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            obj = self._emit_slot_call_operand(expr.args[0], "attribute.mutation.target")
+            roots.append(obj)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Literal names are immutable static C strings. Dynamic names
+            # retain their explicit existing route until its string owner and
+            # runtime type validation have an equivalent slot contract.
+            name_ptr = self._attr_name_ptr(expr.args[1].value)
+            operands = (obj,)
+            order = ()
+            if runtime_name == "py_obj_setattr":
+                value = self._emit_slot_call_operand(expr.args[2], "attribute.mutation.value")
+                roots.append(value)
+                operands = (obj, value)
+                order = (0, 2, 1)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            status = self._slot_call_runtime_call(
+                runtime_name, operands, suffix_args=(name_ptr,),
+                argument_order=order, span=expr.span,
+            )
+            self._emit_attribute_error_if_status_failed(status, "attribute", expr.span)
+            # None is a borrowed canonical singleton at its literal producer.
+            # Acquire this expression's owner explicitly, and publish it before
+            # operand cleanup can run arbitrary finalizers or relocate values.
+            result = self._gc_retain(self._emit_none_literal())
+            self._publish_slot_call_owned(output, result, label="attribute mutation None")
+            self._slot_call_note_published(output)
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("attribute.mutation.none"))
+            return self._take_slot_call_root(output)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_setattr_builtin(self, expr: Call) -> ir.Value:
+        if (isinstance(expr.args[1], StrLit)
+                and not self._expr_looks_cpython(expr.args[0])
+                and not self._is_valueclass_payload_type(expr.args[0].ty)
+                and not (isinstance(expr.args[0], Name)
+                         and expr.args[0].ident in getattr(self, "_native_module_aliases", {}))):
+            return self._emit_owned_literal_attribute_mutation(expr, "py_obj_setattr")
         target = expr.args[0]
         if isinstance(target, Name):
             module_name = getattr(self, "_native_module_aliases", {}).get(target.ident)
@@ -193,6 +249,12 @@ class BuiltinTypeAttrLoweringMixin:
         return self._emit_none_literal()
 
     def _emit_delattr_builtin(self, expr: Call) -> ir.Value:
+        if (isinstance(expr.args[1], StrLit)
+                and not self._expr_looks_cpython(expr.args[0])
+                and not self._is_valueclass_payload_type(expr.args[0].ty)
+                and not (isinstance(expr.args[0], Name)
+                         and expr.args[0].ident in getattr(self, "_native_module_aliases", {}))):
+            return self._emit_owned_literal_attribute_mutation(expr, "py_obj_delattr")
         obj = self._emit_as_object(expr.args[0])
         name_ptr = self._emit_attr_name_ptr_arg(
             expr.args[1],

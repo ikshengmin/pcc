@@ -1,6 +1,6 @@
 # Current status
 
-Updated October 3, 2026, 12:24 UTC. Maintain this page in place.
+Updated October 3, 2026, 13:25 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
@@ -8,15 +8,25 @@ remain authoritative. Focused repairs do not replace the original ten goals.
 
 There is no qualified current pcc1, pcc2 or pcc3, and no Stage2/Stage3 fixed point.
 The latest complete compiler-context diagnostic regenerated all 441 module
-contexts: 190 lowered successfully and 251 stopped at their first frontend
+contexts: 214 lowered successfully and 227 stopped at their first frontend
 failure. It had no timeouts or crashes, and reverified every source/context
-identity. These are shared producer-contract failures, not 251 independent bugs.
-Relative to the previous 167/274 diagnostic, 27 modules advanced to passing,
-163 stayed passing, 247 stayed failing and four gained a strict failure.
+identity. These are shared producer-contract failures, not 227 independent bugs.
+Relative to the previous 190/251 diagnostic, 41 modules advanced to passing,
+173 stayed passing, 210 stayed failing and 17 previously passing contexts now
+fail. Those 17 integration regressions are the next producer gate, with exact
+old/new module identities retained. Preserve the 41 gains while repairing the
+newly exposed input-call, subtraction/division, set-difference, lambda-return and
+module-loop ownership paths.
+The unchanged lambda/setattr and closure-cell contexts, plus both subtraction
+contexts, now reach production PIDX on their repaired frozen compilers. Ten
+collection-input contexts pass under qualified proposals; their integrated gate
+is running. The division context advances to a following modulo producer, and
+set-difference/module-loop repairs remain unfinished. These scoped results do
+not close the combined 17-context or complete fresh-source gate.
 
 That diagnostic used source
-`c81cfd1f1731f5e438d244ddf60bdaaacf3049b11752202268d1e0be6d751842`,
-frozen at 10:20. Later mutable-source changes have separate focused evidence.
+`c2b078540e55363d779beba964b8430460184cfb02844e50cf7addadbdaa6108`,
+frozen at 12:27. Later mutable-source changes have separate focused evidence.
 The next compiler boundary requires another complete fresh-context diagnostic
 and then actual native bootstrap on the same final source.
 
@@ -75,8 +85,10 @@ through those roots after relocation boundaries.
   runtime must be rejected. Native proof requires a rebuilt matching runtime.
 - List/tuple constructors, iterator ownership, bytes caller publication, sorting
   and factory-allocation failure handling now have 250 host/model/reference
-  checks. Sorting preserves stable reverse order and roots comparator inputs;
-  the bytes runtime still has interior-buffer and post-result cleanup hazards.
+  checks. Sorting preserves stable reverse order and roots comparator inputs.
+  A later buffer-owner repair has 134 host/model/reference passes and production
+  library IR proof. It repairs memoryview base ownership and publishes sequence
+  results before temporary-buffer disposal; native five-GC proof remains open.
   Dict.get now publishes through caller output roots and has 87 integrated
   checks. These source batches are newer than the last matched runtime.
 - The later exception-class Name regression is reproduced on unchanged Linux
@@ -97,7 +109,8 @@ through those roots after relocation boundaries.
   C-extension-range overflow and duplicate allocation under controlled
   interleaving. Four source-matched runtime components now emit the required i32
   tag ABI and metaclass/namespace operations. Later metaclass retirement changes
-  have 27 body-model checks; their two-component replay and native contention,
+  have 27 body-model checks. Their two changed runtime components now emit the
+  required lock, retirement-plan and unlock sequence. Native contention,
   exhaustion and lifetime qualification remain pending.
 - Namespace transaction support has a freestanding component with zero calls in
   its locked helpers. The later namespace writer API has 36 body-model checks;
@@ -106,8 +119,10 @@ through those roots after relocation boundaries.
   support-only tests.
 
 Off-tree proposals and integrated but unqualified work remain distinguishable
-in the retained code batches. Strict lambda adapter scope checks are progressing
-separately; they do not qualify unsupported callback semantics.
+in the retained code batches. Lambda adapters and generic unary operands now have 35 strict scope/CFG checks.
+The existing operand-root file is corrected to distinguish generic dispatch from
+exact-int proof, and all 24 cases pass, including the unchanged constructor
+pipeline. Runtime callback cleanup and unsupported callback semantics remain open.
 
 ## C and ABI work
 
@@ -178,6 +193,23 @@ an actual collector-event witness. The original stopped receipt is preserved.
 Potentially locked observation paths remain nonwaiting. Native concurrency,
 complete five-GC coverage and logging overhead remain unqualified.
 
+A later alternating GC2 stress stopped after seven passes at another 20-second
+timeout. Main-only phase markers then localized a baseline-pass/repaired-timeout
+comparison to the first join, after stop/resume completed. The observed futex/TID
+states match a source hazard where done is published before unregister/teardown
+finishes. A narrow completion-handoff repair has 72 host cases, including an
+old-source failure at the blocked-teardown interleaving. Its complete 184-member
+archive is now strictly admitted, including transitive proof that the raw tail
+after unregister cannot register, safepoint, allocate or make indirect calls.
+The original native matrix passed 22 cases, then failed strict parsing of a
+truncated final GC2/thread resume record after normal program completion; 37
+cases remain unrun in that receipt. A separate original uninstrumented stress
+slice passed 20/20 with requested GC2 and logging disabled at the unchanged
+20-second bound. Complete-record buffering now has 93 host cases; its matched
+rebuild and unchanged native matrix remain pending. This buffering does not
+promise transactional durability under forced termination between partial OS
+writes.
+
 ## GUI, gateway and remaining goals
 
 The pinned Harness reference is restored at
@@ -217,14 +249,16 @@ bytes. Recoverable current code, before/after patches, source identities and
 execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
-The latest verified local synchronization used the immutable 11:32:28 capture:
-PCC `97b6bcedb0c01995a0468b068aa1157b3b54ab84` (47 paths), GUI
+The latest verified local synchronization used the immutable 12:29:27 capture:
+PCC `8abe50a3738fd95e1f21c2ac76d8654bca8e3fc6` (28 paths), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
 `83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact bytes, modes and diff checks
-passed. That capture recorded 493 fast passes and no failures; collection selected
-18,194 nodes and gate-deselected 5,734, with no errors or skips. Collection executed
-no test bodies. These results qualify that capture's scoped checks only; later
-source changes require their own validation.
+passed. That capture recorded 945 passes and two failures across 28 independent
+affected-file groups. The original contextual test produced 14 IR outputs and
+33 codegen exceptions; the other failure was the older generic-unary rejection
+assertion, corrected only in later source. Collection selected 18,360 nodes and
+gate-deselected 5,740, with no errors or skips. Collection executed no test bodies.
+These results qualify the capture's scoped checks only.
 
 Hourly synchronization includes legitimate integrated work even when failing or
 unqualified. Run collection and affected fast tests on the exact capture first;
@@ -237,5 +271,8 @@ Later mutable changes remain separate until the next capture.
 Use the qualified CPython 3.15.0rc1 environment, isolated outputs, source/config
 identities and resource watchdogs. Coordinate heavy runs, forbid surprise
 compiler/runtime provisioning, and stop each independent diagnostic at its first
-real failure. Safety timeouts are not acceptance budgets. Preserve failures and
+real failure. Safety timeouts are not acceptance budgets. A pre-launch lock rejection now
+records a terminal receipt instead of leaving a stale RUNNING state; all 17
+watchdog tests pass, including owned-child reaping under the unchanged one-byte
+memory cap. Preserve failures and
 continue other independent authorized work.

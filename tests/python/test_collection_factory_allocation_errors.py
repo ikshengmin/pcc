@@ -202,6 +202,18 @@ def test_list_factory_success_transfers_current_owner_after_frame_leave(relocate
     ('py_obj_stubs.py', 'py_memoryview_new', ('source',), 'memoryview: out of memory'),
 ))
 def test_single_allocation_factories_raise_only_when_no_error_pending(module, function, args, message, pending):
+    if function == 'py_memoryview_new':
+        from tests.python.test_buffer_factory_ownership import BufferModel
+
+        model = BufferModel('bytes', failure='allocation', pending=pending)
+        assert model.run(2) is None
+        assert model.pending[0].message == (pending or message)
+        assert model.allocations == 1 and model.raises == int(pending is None)
+        assert not model.leases and not model.pins
+        model.clear_root(model.external, None)
+        model.clear_error()
+        assert all(value.refs == 0 for value in model.objects)
+        return
     state = {'pending': pending, 'allocations': 0, 'raises': 0}
     def allocate(size, tag, flags):
         state['allocations'] += 1

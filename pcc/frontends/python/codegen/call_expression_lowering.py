@@ -705,66 +705,78 @@ class CallExpressionLoweringMixin:
         else:
             raise L1CodegenError(f"range() takes 1-3 args; got {len(expr.args)}")
 
-        out = self.builder.call(
-            self.runtime["py_list_new"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh("range.list"),
-        )
-        idx_slot = self._alloca_in_entry(_I64, name="range.value.idx.addr")
-        self.builder.store(start_val, idx_slot)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("range.result")
+            roots.append(output)
+        item = self._new_slot_call_root("range.item")
+        roots.append(item)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
 
-        fn = self.current_function
-        cond_bb = fn.append_basic_block(name=self._fresh("range.value.cond"))
-        body_bb = fn.append_basic_block(name=self._fresh("range.value.body"))
-        step_bb = fn.append_basic_block(name=self._fresh("range.value.step"))
-        end_bb = fn.append_basic_block(name=self._fresh("range.value.end"))
-        self.builder.branch(cond_bb)
+            self._slot_call_runtime_call(
+                "py_list_new", (), result_slot=output,
+                suffix_args=(ir.Constant(_I64, 0),), span=expr.span,
+            )
+            idx_slot = self._alloca_in_entry(_I64, name="range.value.idx.addr")
+            self.builder.store(start_val, idx_slot)
 
-        self.builder.position_at_end(cond_bb)
-        cur = self.builder.load(idx_slot, name=self._fresh("range.value.i"))
-        zero64 = ir.Constant(_I64, 0)
-        step_pos = self.builder.icmp_signed(
-            ">", step_val, zero64, name=self._fresh("range.value.step.pos")
-        )
-        cond_pos = self.builder.icmp_signed(
-            "<", cur, stop_val, name=self._fresh("range.value.fwd")
-        )
-        cond_neg = self.builder.icmp_signed(
-            ">", cur, stop_val, name=self._fresh("range.value.bwd")
-        )
-        keep = self.builder.select(
-            step_pos, cond_pos, cond_neg, name=self._fresh("range.value.keep")
-        )
-        self.builder.cbranch(keep, body_bb, end_bb)
+            fn = self.current_function
+            cond_bb = fn.append_basic_block(name=self._fresh("range.value.cond"))
+            body_bb = fn.append_basic_block(name=self._fresh("range.value.body"))
+            step_bb = fn.append_basic_block(name=self._fresh("range.value.step"))
+            end_bb = fn.append_basic_block(name=self._fresh("range.value.end"))
+            self.builder.branch(cond_bb)
 
-        self.builder.position_at_end(body_bb)
-        item = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [cur],
-            name=self._fresh("range.value.item"),
-        )
-        self.builder.call(
-            self.runtime["py_list_append"],
-            [out, item],
-            name=self._fresh("range.value.append"),
-        )
-        self.builder.branch(step_bb)
+            self.builder.position_at_end(cond_bb)
+            cur = self.builder.load(idx_slot, name=self._fresh("range.value.i"))
+            zero64 = ir.Constant(_I64, 0)
+            step_pos = self.builder.icmp_signed(
+                ">", step_val, zero64, name=self._fresh("range.value.step.pos")
+            )
+            cond_pos = self.builder.icmp_signed(
+                "<", cur, stop_val, name=self._fresh("range.value.fwd")
+            )
+            cond_neg = self.builder.icmp_signed(
+                ">", cur, stop_val, name=self._fresh("range.value.bwd")
+            )
+            keep = self.builder.select(
+                step_pos, cond_pos, cond_neg, name=self._fresh("range.value.keep")
+            )
+            self.builder.cbranch(keep, body_bb, end_bb)
 
-        self.builder.position_at_end(step_bb)
-        next_val = self.builder.add(
-            cur,
-            step_val,
-            name=self._fresh("range.value.next"),
-        )
-        self.builder.store(next_val, idx_slot)
-        self.builder.branch(cond_bb)
+            self.builder.position_at_end(body_bb)
+            self._slot_call_runtime_call(
+                "py_int_from_i64", (), result_slot=item,
+                suffix_args=(cur,), span=expr.span,
+            )
+            self._slot_call_runtime_call("py_list_append", (output, item), span=expr.span)
+            self._release_slot_call_roots((item,))
+            self.builder.branch(step_bb)
 
-        self.builder.position_at_end(end_bb)
-        # This helper is also called directly for resumable generator loops,
-        # bypassing expression-shape ownership inference. The iterator retains
-        # the list; its caller must consume this independent construction owner.
-        self._note_owned_object_value(out)
-        return out
+            self.builder.position_at_end(step_bb)
+            next_val = self.builder.add(
+                cur,
+                step_val,
+                name=self._fresh("range.value.next"),
+            )
+            self.builder.store(next_val, idx_slot)
+            self.builder.branch(cond_bb)
+
+            self.builder.position_at_end(end_bb)
+            self._release_slot_call_roots((item,))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("range.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _name_binds_cpy_returning_callable(self, name: str) -> bool:
         """True if ``name`` is bound (in the current function or module scope)

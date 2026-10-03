@@ -175,3 +175,19 @@ def test_sorted_keeps_explicit_valueclass_comparator_adapter(keyword):
     alias = re.search(re.escape(comparator) + r' = bitcast ptr (%sorted\.compare\.operand[^ ]+) to ptr', body)
     assert comparator.startswith('%sorted.compare.operand') or alias is not None
     assert 'strict.nolib.stub' not in text
+
+
+@pytest.mark.parametrize('key', (
+    'lambda value: value',
+    'lambda value: value[0]',
+    'lambda value: -value',
+    'lambda value: (lookup[value], value)',
+))
+def test_sorted_inline_keys_use_owned_callable_producers(key):
+    text = _emit('def probe(item, lookup):\n    return sorted(item, key=' + key + ')\n')
+    body = _function(text)
+    assert '@py_obj_sorted_slots(' in body
+    assert '@py_obj_sorted(' not in body
+    assert 'strict.nolib.stub' not in text
+    call = re.search(r'@py_obj_sorted_slots\(ptr [^,]+, ptr (%[^,]+), ptr ', body)
+    assert call is not None

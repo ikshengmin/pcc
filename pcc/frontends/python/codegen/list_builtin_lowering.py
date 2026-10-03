@@ -23,81 +23,71 @@ _CSTR = ir.IntType(8).as_pointer()
 
 class ListBuiltinLoweringMixin:
     def _emit_reversed_builtin(self, expr: Call) -> ir.Value:
-        src_val = self._emit_expr(expr.args[0])
-        src_obj = marshal.marshal_to_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            src_val,
-            expr.args[0].ty,
-        )
-        if isinstance(expr.args[0].ty, DictType):
-            # reversed(dict) iterates the KEYS in reverse insertion order.
-            # py_obj_getitem on a dict is key lookup (dict[i]), not positional,
-            # so the positional reverse loop below would index by integer and
-            # return <null>. Reverse the insertion-ordered keys list instead.
-            src_obj = self.builder.call(
-                self.runtime["py_dict_keys"],
-                [src_obj],
-                name=self._fresh("reversed.dict.keys"),
+        """Publish the existing materialized reverse before fill or teardown."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("reversed.result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            source = self._emit_slot_call_operand(expr.args[0], "reversed.source")
+            roots.append(source)
+            index = self._new_slot_call_root("reversed.index")
+            item = self._new_slot_call_root("reversed.item")
+            roots.extend((index, item))
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if isinstance(expr.args[0].ty, DictType):
+                keys = self._new_slot_call_root("reversed.keys")
+                roots.append(keys)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_dict_keys", (source,), result_slot=keys, span=expr.span,
+                )
+                source = keys
+            length = self._slot_call_runtime_call("py_obj_len", (source,), span=expr.span)
+            self._slot_call_runtime_call(
+                "py_list_new", (), result_slot=output,
+                suffix_args=(length,), span=expr.span,
             )
-        fn = self.current_function
-        n_val = self.builder.call(
-            self.runtime["py_obj_len"],
-            [src_obj],
-            name=self._fresh("reversed.len"),
-        )
-        out = self.builder.call(
-            self.runtime["py_list_new"],
-            [n_val],
-            name=self._fresh("reversed.list"),
-        )
-        idx_slot = self._alloca_in_entry(_I64, name="reversed.idx.addr")
-        start = self.builder.sub(
-            n_val,
-            ir.Constant(_I64, 1),
-            name=self._fresh("reversed.start"),
-        )
-        self.builder.store(start, idx_slot)
-        cond_bb = fn.append_basic_block(name=self._fresh("reversed.cond"))
-        body_bb = fn.append_basic_block(name=self._fresh("reversed.body"))
-        step_bb = fn.append_basic_block(name=self._fresh("reversed.step"))
-        end_bb = fn.append_basic_block(name=self._fresh("reversed.end"))
-        self.builder.branch(cond_bb)
-        self.builder.position_at_end(cond_bb)
-        cur = self.builder.load(idx_slot, name=self._fresh("reversed.idx"))
-        keep_going = self.builder.icmp_signed(
-            ">=",
-            cur,
-            ir.Constant(_I64, 0),
-            name=self._fresh("reversed.keep"),
-        )
-        self.builder.cbranch(keep_going, body_bb, end_bb)
-        self.builder.position_at_end(body_bb)
-        idx_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [cur],
-            name=self._fresh("reversed.idx.box"),
-        )
-        elem = self.builder.call(
-            self.runtime["py_obj_getitem"],
-            [src_obj, idx_box],
-            name=self._fresh("reversed.elem"),
-        )
-        self.builder.call(self.runtime["py_list_append"], [out, elem])
-        self._gc_release(idx_box)
-        self._gc_release(elem)
-        self.builder.branch(step_bb)
-        self.builder.position_at_end(step_bb)
-        next_idx = self.builder.sub(
-            cur,
-            ir.Constant(_I64, 1),
-            name=self._fresh("reversed.next"),
-        )
-        self.builder.store(next_idx, idx_slot)
-        self.builder.branch(cond_bb)
-        self.builder.position_at_end(end_bb)
-        return out
+            counter = self._alloca_in_entry(_I64, name="reversed.index.addr")
+            self.builder.store(self.builder.sub(length, ir.Constant(_I64, 1)), counter)
+            cond = self.current_function.append_basic_block(self._fresh("reversed.cond"))
+            body = self.current_function.append_basic_block(self._fresh("reversed.body"))
+            done = self.current_function.append_basic_block(self._fresh("reversed.done"))
+            self.builder.branch(cond)
+            self.builder.position_at_end(cond)
+            current = self.builder.load(counter)
+            self.builder.cbranch(
+                self.builder.icmp_signed(">=", current, ir.Constant(_I64, 0)), body, done,
+            )
+            self.builder.position_at_end(body)
+            self._slot_call_runtime_call(
+                "py_int_from_i64", (), result_slot=index,
+                suffix_args=(current,), span=expr.span,
+            )
+            self._slot_call_runtime_call(
+                "py_obj_getitem", (source, index), result_slot=item, span=expr.span,
+            )
+            self._slot_call_runtime_call("py_list_append", (output, item), span=expr.span)
+            self._release_slot_call_roots((item, index))
+            self.builder.store(self.builder.sub(current, ir.Constant(_I64, 1)), counter)
+            self.builder.branch(cond)
+            self.builder.position_at_end(done)
+            self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("reversed.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _maybe_emit_list_builtin(
         self,

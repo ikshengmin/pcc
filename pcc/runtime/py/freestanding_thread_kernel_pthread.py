@@ -731,24 +731,36 @@ def _thread_trampoline(start):
     pcc_thread_safepoint()
     _thread_log(thread_enter_event, 0, handle)
     result = call_ptr1(entry, arg)
-    # Callback return precedes done publication, disposal and TLS teardown.
+    # Callback return precedes result publication and TLS teardown.
     _thread_log(thread_exit_event, 0, handle)
     state_lock = load_ptr(handle, 8)
     if pcc_mutex_lock(state_lock) != 0:
         pcc_platform_abort()
         return result
     store_ptr(handle, 24, result)
-    store_i32(handle, 16, 1)
-    detached = load_i32(handle, 20)
     if pcc_mutex_unlock(state_lock) != 0:
         pcc_platform_abort()
         return result
-    if detached != 0:
-        pcc_mutex_free(state_lock)
-        free(handle)
-    # Keep teardown as the final runtime action.  A later mutex/safepoint call
-    # could register this pthread again and strand it in the live count.
+    # Keep done clear while cleanup can park: join must keep polling until
+    # this pthread leaves the live set.  Publishing done earlier lets join
+    # block in pthread_join while teardown and a collector wait for its poll.
     pcc_thread_unregister_current()
+    # Final handoff uses only the raw platform lock and allocator.  No logger,
+    # safepoint-aware mutex wrapper, callback or registration may run here.
+    # A detacher that sees done == 0 leaves the handle for this tail; otherwise
+    # the same lock transfers disposal to it.  Both cannot own the handle.
+    if pthread_mutex_lock(state_lock) != 0:
+        pcc_platform_abort()
+        return result
+    store_i32(handle, 16, 1)
+    detached = load_i32(handle, 20)
+    if pthread_mutex_unlock(state_lock) != 0:
+        pcc_platform_abort()
+        return result
+    if detached != 0:
+        pthread_mutex_destroy(state_lock)
+        free(state_lock)
+        free(handle)
     return result
 
 

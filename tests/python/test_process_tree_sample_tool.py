@@ -414,6 +414,47 @@ def test_preflight_rejection_persists_receipt_without_starting_target(
     assert "insufficient reclaimable memory" in receipt["error"]
 
 
+def test_performance_lock_rejection_records_no_started_target(tmp_path, monkeypatch):
+    import contextlib
+
+    tool = _load_tool_module()
+    result = tmp_path / "result.json"
+    started = []
+
+    @contextlib.contextmanager
+    def held_lock():
+        raise tool.compile_ab.CompileABError("performance lock is already held")
+        yield  # pragma: no cover
+
+    def forbidden_start(*args, **kwargs):
+        started.append((args, kwargs))
+        raise AssertionError("a rejected lock must not launch the target")
+
+    monkeypatch.setattr(tool.compile_ab, "_performance_lock", held_lock)
+    monkeypatch.setattr(tool.subprocess, "Popen", forbidden_start)
+    args = tool._parser().parse_args([
+        "--result", str(result),
+        "--samples", str(tmp_path / "samples.tsv"),
+        "--stdout", str(tmp_path / "stdout"),
+        "--stderr", str(tmp_path / "stderr"),
+        "--cwd", str(ROOT),
+        "--timeout", "5",
+        "--", sys.executable, "-c", "print('must-not-run')",
+    ])
+    with pytest.raises(tool.ProcessTreeSampleError, match="performance lock"):
+        tool.run(args)
+
+    receipt = json.loads(result.read_text())
+    assert receipt["status"] == "LOCK_REJECTED"
+    assert receipt["completed_at_utc"] >= receipt["started_at_utc"]
+    assert receipt["elapsed_s"] >= 0
+    assert "CompileABError: performance lock is already held" in receipt["error"]
+    assert "returncode" not in receipt
+    assert not started
+    assert not (tmp_path / "stdout").exists()
+    assert not (tmp_path / "samples.tsv").exists()
+
+
 def test_process_tree_sampler_persists_terminal_receipt_after_ps_retries_fail(
     tmp_path: Path,
     monkeypatch,
@@ -508,7 +549,13 @@ def test_process_tree_sampler_memory_limit_cleans_target_and_records_receipt(
     assert receipt["peak_tree_rss_bytes"] > 1
     assert receipt["largest_process_observed"]["command"]
     assert receipt["terminal_processes"]
-    target_pid = int(stdout.read_text(encoding="utf-8").strip())
+    # A one-byte cap may stop the interpreter before it can print its PID.
+    # The sampler already identifies the owned target before enforcing it.
+    target_pid = receipt["largest_process_observed"]["pid"]
+    assert target_pid in {row["pid"] for row in receipt["terminal_processes"]}
+    printed_pid = stdout.read_text(encoding="utf-8").strip()
+    if printed_pid:
+        assert int(printed_pid) == target_pid
     with pytest.raises(ProcessLookupError):
         os.kill(target_pid, 0)
 
