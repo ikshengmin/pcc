@@ -21,7 +21,7 @@ def test_native_type_result_publishes_before_operand_cleanup(site):
     elif site == 'return':
         body = '    return type(item)\n'
     elif site == 'attribute':
-        body = '    return type(item).__name__\n'
+        body = '    return take(value=type(item).__name__)\n'
     elif site == 'later-error':
         body = '    return take(value=type(item), later=fail())\n'
     else:

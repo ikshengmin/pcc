@@ -1801,7 +1801,7 @@ def _format_callback_body(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr) -> int:
     return 0
 
 
-def _call_object_format(value: c_ptr, spec: c_ptr) -> c_ptr:
+def _call_object_format(value, spec):
     # Register incoming addresses before any callback or owner-copy operation.
     borrowed = stack_alloc(2 * C_POINTER_SIZE)
     store_ptr(borrowed, 0, value)
@@ -1847,7 +1847,7 @@ def py_obj_format(value, spec):
     return _format_value(value, spec)
 
 
-def _format_value(value: c_ptr, spec: c_ptr) -> c_ptr:
+def _format_value(value, spec):
     # Ordinary scalar formatting and the existing object fallback.
     tag: int = _type_of(value)
     text = cstr("")

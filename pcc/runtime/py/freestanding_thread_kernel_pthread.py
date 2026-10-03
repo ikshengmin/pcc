@@ -85,6 +85,20 @@ pcc_gc_thread_unregister_buffers = extern(
     "pcc_gc_thread_unregister_buffers", (), c_void
 )
 py_clear_exception = extern("py_clear_exception", (), c_void)
+pcc_diagnostics_runtime_log_event_code = extern(
+    "pcc_diagnostics_runtime_log_event_code",
+    (c_int64, c_int64, c_int64, c_int64, c_ptr),
+    c_void,
+)
+
+
+def _thread_log(event: int, status: int, handle) -> None:
+    # Local raw constants avoid runtime module-initialization dependencies.
+    # Never call this under world/state locks or after thread unregister.
+    thread_category: int = 9
+    pcc_diagnostics_runtime_log_event_code(
+        thread_category, event, status, 0, handle
+    )
 
 
 def _tls_i64(slot) -> int:
@@ -580,13 +594,18 @@ def pcc_thread_unregister_current() -> None:
 
 @c_abi_export("pcc_thread_trampoline_py")
 def _thread_trampoline(start):
+    thread_enter_event: int = 2
+    thread_exit_event: int = 3
     entry = load_ptr(start, 0)
     arg = load_ptr(start, 8)
     handle = load_ptr(start, 16)
     free(start)
     pcc_current_thread_id()
     pcc_thread_safepoint()
+    _thread_log(thread_enter_event, 0, handle)
     result = call_ptr1(entry, arg)
+    # Callback return precedes done publication, disposal and TLS teardown.
+    _thread_log(thread_exit_event, 0, handle)
     state_lock = load_ptr(handle, 8)
     if pcc_mutex_lock(state_lock) != 0:
         pcc_platform_abort()
@@ -608,14 +627,23 @@ def _thread_trampoline(start):
 
 @c_abi_export("pcc_thread_start")
 def pcc_thread_start(out, entry, arg) -> int:
+    thread_start_event: int = 1
+    thread_start_failed_event: int = 6
+    invalid_argument: int = -1
+    handle_allocation_failed: int = -2
+    state_lock_allocation_failed: int = -3
+    start_allocation_failed: int = -4
     if ptr_is_null(out) or ptr_is_null(entry):
+        _thread_log(thread_start_failed_event, invalid_argument, null())
         return -1
     handle = malloc(32)
     if ptr_is_null(handle):
+        _thread_log(thread_start_failed_event, handle_allocation_failed, null())
         return -1
     state_lock = pcc_mutex_new()
     if ptr_is_null(state_lock):
         free(handle)
+        _thread_log(thread_start_failed_event, state_lock_allocation_failed, null())
         return -1
     store_ptr(handle, 0, null())
     store_ptr(handle, 8, state_lock)
@@ -626,13 +654,18 @@ def pcc_thread_start(out, entry, arg) -> int:
     if ptr_is_null(start):
         pcc_mutex_free(state_lock)
         free(handle)
+        _thread_log(thread_start_failed_event, start_allocation_failed, null())
         return -1
     store_ptr(start, 0, entry)
     store_ptr(start, 8, arg)
     store_ptr(start, 16, handle)
-    if pthread_create(
+    # Attempt is logged before creation, even when the child runs immediately.
+    _thread_log(thread_start_event, 0, handle)
+    status = pthread_create(
         handle, null(), function_addr("pcc_thread_trampoline_py"), start
-    ) != 0:
+    )
+    if status != 0:
+        _thread_log(thread_start_failed_event, status, handle)
         free(start)
         pcc_mutex_free(state_lock)
         free(handle)
@@ -643,8 +676,14 @@ def pcc_thread_start(out, entry, arg) -> int:
 
 @c_abi_export("pcc_thread_join")
 def pcc_thread_join(handle, result_out) -> int:
+    thread_join_event: int = 4
+    thread_joined_event: int = 5
+    thread_join_failed_event: int = 7
+    invalid_argument: int = -1
     if ptr_is_null(handle):
+        _thread_log(thread_join_failed_event, invalid_argument, null())
         return -1
+    _thread_log(thread_join_event, 0, handle)
     state_lock = load_ptr(handle, 8)
     while True:
         pcc_mutex_lock(state_lock)
@@ -660,6 +699,11 @@ def pcc_thread_join(handle, result_out) -> int:
                 if result == 0:
                     value = load_ptr(joined, 0)
                 store_ptr(result_out, 0, value)
+            # Correlation handle remains valid until the following free.
+            if result == 0:
+                _thread_log(thread_joined_event, 0, handle)
+            else:
+                _thread_log(thread_join_failed_event, result, handle)
             pcc_mutex_free(state_lock)
             free(handle)
             if result == 0:
@@ -672,8 +716,11 @@ def pcc_thread_join(handle, result_out) -> int:
 
 @c_abi_export("pcc_thread_detach")
 def pcc_thread_detach(handle) -> None:
+    thread_detach_event: int = 8
     if ptr_is_null(handle):
         return
+    # This void API records a request; the child may free handle after unlock.
+    _thread_log(thread_detach_event, 0, handle)
     pthread_detach(load_ptr(handle, 0))
     state_lock = load_ptr(handle, 8)
     pcc_mutex_lock(state_lock)

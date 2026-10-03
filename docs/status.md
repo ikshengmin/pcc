@@ -24,6 +24,11 @@ capture: PCC `208f806c40e5b3b79deb926b761bf038e44d711a` (23 paths), with GUI and
 gateway unchanged. All before/after hashes and modes were verified; there was no
 push. Later candidate changes remain unsynchronized until the next capture.
 
+The third hourly sync completed at 06:45 UTC from the immutable 06:36:46
+capture: PCC `62c0bdad8fc4fabf9da795759dde1dec1a31a144` (17 paths), with GUI and
+gateway unchanged. Before/after bytes and modes were verified locally. This exact
+capture is the current baseline for the next hourly delta.
+
 The exact PCC base `1a59d09df54cc0b7b46219395d3419cab8543675` was verified
 across 29,601 Git blob bytes and modes, followed by all 154 paths in the backed-up
 forward delta. This restores source content, not Git history or qualification.
@@ -51,8 +56,8 @@ later changes require the affected checks again:
 - Callable metadata: 20 host/source-model checks passed, covering rooted
   construction, default lifetimes, callback representation and helper contracts.
   The corrected py_func and py_class components emitted strict owned objects
-  in 38.98s / 339 MB with the codegen checksum unchanged. A whole matched archive
-  and native execution remain pending.
+  in 38.98s / 339 MB with the codegen checksum unchanged. The subsequent matched
+  whole archive passed strict admission; native execution remains pending.
 - Installed-wheel isolation/provenance: 15 checks passed, including a real
   isolated interpreter import fixture. This does not qualify a native wheel.
 - Runtime receipt producers: 25 focused/controlled Make cases passed, including
@@ -101,24 +106,57 @@ unchanged original contexts advanced to separate os.uname/join producer failures
 Ordinary class-namespace lookup passed nine focused cases and fully generated
 LLVM text for original py_ast module116. That replay did not enable the audit's
 PIDX environment; it establishes host IR lowering only. Prepared custom namespaces
-remain unchanged and unqualified. The one-argument type producer is integrated
-with its focused/component gate still pending.
+remain unchanged and unqualified. The one-argument type producer passed 19
+focused checks, with four native cases still pending. Original type contexts
+advanced to separate dict.get and constructor-handoff producer failures.
 
 The managed binary-call result owner repair passes 33 host models. Component
 lowering exposed a map-literal and then managed-versus-raw helper-signature error;
-those narrow corrections are integrated and its current component retry is active.
+those narrow corrections are integrated. The exact optimized IR emitted an
+owned 1,881,160-byte object with SHA256
+e86035918c8d21f4aef023780807dd01cc70139dc3d3e1384b847c2d32acada6.
 Incoming method lookup/replacement ownership remains a separate known gap, so
 native overloaded arithmetic is not qualified by these models. Public Linux abort
 is integrated after two syscall models and two owned cross-object checks; six
 native signal-state cases remain pending. Four standalone owned-linked x86_64
 varargs programs passed; these do not qualify a complete runtime or C suite.
 
-The next approved execution boundary is one immutable compiler/runtime freeze,
-a fresh threaded atomic Linux runtime, and native format, BoolExpr, type,
-ordinary class-default lifetime and original C controls. Source-matched CPython
-oracles for the three producer programs pass. No current pcc1 or pcc2 exists;
-there is no Stage2 to Stage3 fixed point. Further complete PIDX censuses and the
-full native/compiler gates remain required on the final combined candidate.
+A fresh threaded atomic Linux x86_64 runtime finished at 07:09 UTC from frozen
+source c3ade842a23fa0863027d7cb7d3f56b223d8b155296366c9965274e04bd47fe2.
+All 183 ordered members and the real threads=true/refcount=atomic configuration
+passed strict source, policy, codegen and archive admission. Build watchdog time
+was 431.33 seconds and peak tree RSS 428,994,560 bytes. Archive SHA256 is
+61ff10c984181c233b92e5eb224ff3dbe5d23df39af5cfc73de6df4bd571da58.
+The first staging attempt failed because its directory was not recognized as a
+runtime library source; a byte-identical recognized staging path passed. Both
+receipts are preserved and the compiler/runtime inputs remained unchanged.
+
+All six prepared Python controls compiled and linked against the frozen runtime.
+Format, type, ordinary class-default identity/lifetime and the exact restored
+indexed_payload.py each passed GC0 through GC4 with exact output and empty
+stderr: 20 native passes. BoolExpr temporary disposal order failed GC0 at the
+unchanged event-order assertion; class-construction failure cleanup failed GC0
+at the unchanged weakref-release assertion. Their other eight collector runs
+remain unobserved. Retained original IR is being traced for the owners that keep
+these objects alive. Assertions and original source programs remain unchanged.
+The original GCC 20000223-1.c also compiled, linked and executed with exit 0 and
+empty output. Other original C and abort signal-state controls remain pending.
+
+Earlier format attempts stopped at test-harness guards rejecting host PCC export
+and object worker subprocesses. Exact-target dispatch preserves the full source
+closure. Eight narrow guard checks passed before allowing only verified frozen
+PCC object workers, rejecting arbitrary subprocesses and external tool fallback.
+All results here are host-pcc0-produced native programs. No current pcc1 or pcc2
+exists and there is no Stage2 to Stage3 fixed point. Further complete PIDX
+censuses and native/compiler gates remain required on the combined candidate.
+
+PCC_LOG=thread instrumentation has been reconstructed in the logger and pthread
+kernel, with 22 fresh host-body checks passing and all three tested file hashes
+unchanged. Tests exercise filtering, disabled fast path, event codes, allocation
+and platform errors, lock/TLS order, join and both detach disposal orders. Native
+component/thread/five-GC execution and overhead remain unqualified. Property
+accessor construction owners are also integrated with their separate focused
+gate pending; these later candidate changes are outside the frozen runtime above.
 
 ## Qualification order
 
@@ -167,13 +205,13 @@ raw-byte equality establishes the fixed point. See [validation workflow](validat
 
 The recoverable base delta is Library `libfile_85beb2beb8f88191b47144ac4fa719ea`.
 Reconstruction code and receipts are versioned under
-`libfile_a5f7c11281008191be4ea89ea9611cbd`; version 18 contains the October 3,
-06:30 code checkpoint. Archives contain recoverable code bytes and a verified
+`libfile_a5f7c11281008191be4ea89ea9611cbd`; version 20 contains the October 3,
+07:24 code checkpoint. Archives contain recoverable code bytes and a verified
 baseline/incremental chain, not only recipes or remembered hashes. The cloud
 recovery directory is pcc-reset-recovery-20261003 outside the source repositories.
 Save every coherent batch before heavy tests and preserve failure evidence.
-Old generated binaries, runtimes and the 441-module graph must be rebuilt;
-historical hashes do not recover bytes.
+Old generated binaries and graphs were lost; newly regenerated graph and runtime
+bytes are preserved below. Historical hashes alone do not recover bytes.
 
 The fresh graph inputs are preserved as Library
 `libfile_e4d21adda870819187f2218b0924cb1c`; all 3,975 terminal node/guard/artifact
@@ -187,3 +225,11 @@ V2 inputs are Library `libfile_b94df145020c819185824ff43dc3e8b6`; the complete
 The verified second hourly delta is `libfile_ef1cd16a09148191b6898141b26678db`.
 Current backups also contain an exact integrated-source delta separately from
 unapplied proposals, so an off-tree proposal cannot be mistaken for candidate code.
+
+The verified third hourly delta is `libfile_c3a466e41e9c8191a95f9d2f2732be8b`.
+The admitted matched runtime and its frozen compiler/runtime source, all 183
+member objects and IR/provenance, and build receipts are recoverable from
+`libfile_bc542c184fa48191a0d8bb964e443e3a`: 2,005 files, 55,383,935 archive bytes,
+SHA256 77ee0582d6adeafdc2c55de729899710345c831eed136cdc26e0dfcc0e4951b3.
+Archive readback verified every included file hash and mode. Native execution
+receipts remain a separate boundary.

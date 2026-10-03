@@ -128,6 +128,8 @@ def _parse_tokens(tokens: c_ptr) -> int:
         mask = mask | 64
     if _token_enabled(tokens, cstr("runtime")):
         mask = mask | 128
+    if _token_enabled(tokens, cstr("thread")):
+        mask = mask | 256
     return mask
 
 
@@ -188,6 +190,8 @@ def _category_mask(category: c_ptr) -> int:
         return 64
     if _cstr_equal(category, cstr("runtime")):
         return 128
+    if _cstr_equal(category, cstr("thread")):
+        return 256
     return 0
 
 
@@ -233,6 +237,8 @@ def _code_enabled(category: int) -> int:
         return mask & 32
     if category == 7:
         return mask & 64
+    if category == 9:
+        return mask & 256
     return mask & 128
 
 
@@ -333,6 +339,8 @@ def _category_from_code(category: int) -> c_ptr:
         return cstr("exception")
     if category == 7:
         return cstr("dispatch")
+    if category == 9:
+        return cstr("thread")
     return cstr("runtime")
 
 
@@ -424,6 +432,24 @@ def _event_from_code(category: int, event: int) -> c_ptr:
             # caller invents a message. value0 carries the type tag.
             return cstr("call_unmatched")
         return cstr("dispatch_event")
+    if category == 9:
+        if event == 1:
+            return cstr("start")
+        if event == 2:
+            return cstr("enter")
+        if event == 3:
+            return cstr("exit")
+        if event == 4:
+            return cstr("join")
+        if event == 5:
+            return cstr("joined")
+        if event == 6:
+            return cstr("start_failed")
+        if event == 7:
+            return cstr("join_failed")
+        if event == 8:
+            return cstr("detach")
+        return cstr("thread_event")
     return cstr("event")
 
 

@@ -197,6 +197,12 @@ class _CallbackModel:
 def test_actual_format_callback_owner_disposal_and_error(failure, relocate):
     path = Path(__file__).parents[2] / 'pcc/runtime/py/py_format_runtime.py'
     tree = ast.parse(path.read_text())
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    for name in ('_call_object_format', '_format_value'):
+        # Managed PyObject values use the runtime's object-pointer ABI;
+        # explicit c_ptr is reserved for the slot-address helper parameters.
+        assert all(arg.annotation is None for arg in functions[name].args.args)
+        assert functions[name].returns is None
     names = {'_format_callback_adopt', '_format_callback_drop',
              '_format_callback_body', '_call_object_format'}
     selected = ast.Module(body=[node for node in tree.body

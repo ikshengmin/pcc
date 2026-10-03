@@ -5028,7 +5028,7 @@ class ClassLowering:
                 if original_name is not None and original_name != attr_name:
                     self.parent.env[original_name] = self.parent.env[attr_name]
                     namespace_bindings[original_name] = (self.parent.env[original_name][0], attr_name)
-            self._emit_property_descriptor_class_attrs(cd, info, cls_ptr)
+            self._emit_property_descriptor_class_attrs(cd, info, class_body_root)
         finally:
             for method_obj in reversed(pinned_methods):
                 self.parent._gc_unpin(method_obj)
@@ -5347,60 +5347,77 @@ class ClassLowering:
         self,
         cd: ClassDef,
         info: ClassInfo,
-        cls_ptr: ir.Value,
+        class_root: ir.Value,
     ) -> None:
+        parent = self.parent
         for prop_name, getter_fn in info.properties.items():
             getter_def = self._find_method_def(info.name, prop_name)
             if getter_def is None:
                 continue
-            getter_obj = self._emit_property_accessor_func_obj(
-                cd,
-                info,
-                prop_name,
-                "getter",
-                getter_fn,
-                getter_def.return_ty,
-            )
-            null_obj = ir.Constant(_PTR, None)
-            setter_obj = null_obj
-            setter_fn = info.property_setters.get(prop_name)
-            if setter_fn is not None:
-                setter_def = self._find_property_accessor_def(
-                    cd, info, prop_name, "setter"
+            previous = parent._current_try_err_block()
+            target = previous if previous is not None else parent._ensure_fn_err_exit()
+            saved_cpy = parent._cpy_operand_cleanup_block
+            roots = []
+            named_roots = {}
+            try:
+                # Each accessor hands off a NEW callable. Register its caller
+                # owner before producing it, then publish immediately so a
+                # later accessor's signature/metadata allocations cannot leave
+                # an earlier callable in an unrooted SSA temporary.
+                for role in ("descriptor", "getter", "setter", "deleter"):
+                    root = parent._new_slot_call_root("class.property." + role)
+                    roots.append(root)
+                    named_roots[role] = root
+                    parent._try_err_block = parent._slot_call_cleanup_block(tuple(roots), target)
+                    parent._cpy_operand_cleanup_block = parent._try_err_block
+                getter_obj = self._emit_property_accessor_func_obj(
+                    cd, info, prop_name, "getter", getter_fn, getter_def.return_ty,
                 )
-                if setter_def is not None:
-                    setter_obj = self._emit_property_accessor_func_obj(
-                        cd,
-                        info,
-                        prop_name,
-                        "setter",
-                        setter_fn,
-                        setter_def.return_ty,
-                    )
-            deleter_obj = null_obj
-            deleter_fn = info.property_deleters.get(prop_name)
-            if deleter_fn is not None:
-                deleter_def = self._find_property_accessor_def(
-                    cd, info, prop_name, "deleter"
+                parent._publish_slot_call_owned(
+                    named_roots["getter"], getter_obj, label="property getter",
                 )
-                if deleter_def is not None:
-                    deleter_obj = self._emit_property_accessor_func_obj(
-                        cd,
-                        info,
-                        prop_name,
-                        "deleter",
-                        deleter_fn,
-                        deleter_def.return_ty,
+                setter_fn = info.property_setters.get(prop_name)
+                if setter_fn is not None:
+                    setter_def = self._find_property_accessor_def(
+                        cd, info, prop_name, "setter",
                     )
-            prop_obj = self.parent.builder.call(
-                self.parent.runtime["py_property_new"],
-                [getter_obj, setter_obj, deleter_obj],
-                name=self._fresh(f"property.{info.name}.{prop_name}"),
-            )
-            self.parent.builder.call(
-                self.parent.runtime["py_class_setattr_raw"],
-                [cls_ptr, self._cname_ptr(prop_name), prop_obj],
-            )
+                    if setter_def is not None:
+                        setter_obj = self._emit_property_accessor_func_obj(
+                            cd, info, prop_name, "setter", setter_fn, setter_def.return_ty,
+                        )
+                        parent._publish_slot_call_owned(
+                            named_roots["setter"], setter_obj, label="property setter",
+                        )
+                deleter_fn = info.property_deleters.get(prop_name)
+                if deleter_fn is not None:
+                    deleter_def = self._find_property_accessor_def(
+                        cd, info, prop_name, "deleter",
+                    )
+                    if deleter_def is not None:
+                        deleter_obj = self._emit_property_accessor_func_obj(
+                            cd, info, prop_name, "deleter", deleter_fn, deleter_def.return_ty,
+                        )
+                        parent._publish_slot_call_owned(
+                            named_roots["deleter"], deleter_obj, label="property deleter",
+                        )
+                parent._slot_call_runtime_call(
+                    "py_property_new",
+                    (named_roots["getter"], named_roots["setter"], named_roots["deleter"]),
+                    result_slot=named_roots["descriptor"], span=cd.span,
+                )
+                parent._guard_cpy_value_not_null(parent.builder.load(named_roots["descriptor"]))
+                status = parent._slot_call_runtime_call(
+                    "py_class_setattr_raw", (class_root, named_roots["descriptor"]),
+                    suffix_args=(self._cname_ptr(prop_name),), argument_order=(0, 2, 1),
+                    span=cd.span,
+                )
+                parent._slot_call_check_status(status, "property namespace publication", cd.span)
+                # The descriptor and class namespace have acquired their own
+                # references. Drop all construction owners in reverse order.
+                parent._release_slot_call_roots(tuple(roots))
+            finally:
+                parent._try_err_block = previous
+                parent._cpy_operand_cleanup_block = saved_cpy
 
     def _find_property_accessor_def(
         self,
