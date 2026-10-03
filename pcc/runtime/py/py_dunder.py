@@ -2,7 +2,20 @@
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PYINSTANCEOBJECT_CLS_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PY_TYPE_CLASS, PY_TYPE_FUNC, PY_TYPE_GEN, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_STATICMETHOD, PY_TYPE_STR, PY_TYPE_USER_CLASS_START, PY_TYPE_WEAKREF
+from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
+    PYINSTANCEOBJECT_CLS_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_TYPE_CLASS,
+    PY_TYPE_FUNC,
+    PY_TYPE_GEN,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_STATICMETHOD,
+    PY_TYPE_STR,
+    PY_TYPE_USER_CLASS_START,
+    PY_TYPE_WEAKREF,
+)
 
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.unsafe import (
@@ -27,6 +40,7 @@ from pcc.unsafe import (
     store_i8,
     store_i32,
     store_i64,
+    store_ptr,
     untag_int,
 )
 
@@ -69,6 +83,50 @@ pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_tls_exc_set = extern("py_tls_exc_set", (c_ptr,), c_void)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+# One temporary owner keeps self alive if the finalizer drops every ordinary
+# reference. Counted address leases are also collector roots: the production
+# pcc_gc_gray_current_roots walk seeds pinned object-index entries. Keep this
+# lease across the whole callback and its cleanup, independently of legacy
+# pin-bit changes in nested calls. No frame retirement transfers this owner.
+
+
+def _finalizer_owner_enter(slot: c_ptr) -> int:
+    pcc_py_gc_minor_graph_lock()
+    value = load_ptr(slot, 0)
+    pcc_refcount_incref(value)
+    flags: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET)
+    # Match py_gen_finalize_from_dealloc: a real temporary owner revives the
+    # terminal object for its callback. Ordinary terminal leases still fail.
+    store_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~524288)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    pcc_py_gc_minor_graph_unlock()
+    if token < 0:
+        pcc_platform_abort()
+    return token
+
+
+def _finalizer_owner_leave(slot: c_ptr, token: int, was_deallocating: int) -> None:
+    pcc_py_gc_minor_graph_lock()
+    value = load_ptr(slot, 0)
+    status: int = pcc_gc_foreign_lease_release(slot, token)
+    if status != 0:
+        pcc_py_gc_minor_graph_unlock()
+        pcc_platform_abort()
+        return
+    # Avoid recursive deallocation. Zero resumes the enclosing deallocator;
+    # a positive count belongs to a real resurrection owner.
+    remaining: int = pcc_refcount_decref(value)
+    if was_deallocating != 0 and remaining == 0:
+        flags: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET)
+        store_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, flags | 524288)
+    store_ptr(slot, 0, null())
+    pcc_py_gc_minor_graph_unlock()
 
 
 def _type_of(obj) -> int:
@@ -585,6 +643,9 @@ def py_user_del_dispatch(o) -> None:
     if ptr_is_null(func):
         return
     store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags | 4)
+    finalizer_owner = stack_alloc(C_POINTER_SIZE)
+    store_ptr(finalizer_owner, 0, o)
+    finalizer_lease: int = _finalizer_owner_enter(finalizer_owner)
     saved_exc = py_current_exception()
     saved_exc_pin: int = 0
     if ptr_is_null(saved_exc) == 0:
@@ -595,19 +656,9 @@ def py_user_del_dispatch(o) -> None:
         saved_exc_pin = load_i32(saved_exc, PYOBJECTHEADER_FLAGS_OFFSET) & 64
         pcc_gc_pin(saved_exc)
         py_tls_exc_set(null())
-    # CPython's PyObject_CallFinalizerFromDealloc: resurrect the object for
-    # the call.  py_instance_dealloc runs this at refcount 0, and __del__'s
-    # argument tuple takes and drops a reference to self; without the extra
-    # count that drop hit zero and freed self inside the call, and the outer
-    # dealloc then re-tracked the freed cell (GC0's cycle collector later
-    # visited it).  Undo with the raw counter, not py_decref: returning to
-    # zero here is the caller's normal dealloc path, not a second one.
-    refcount_slot = ptr_add(o, PYOBJECTHEADER_REFCOUNT_OFFSET)
-    pcc_refcount_incref(refcount_slot)
     pcc_diagnostics_runtime_log_event_code(5, 2, tag, 0, o)
     _call_user_unary_method_void(func, o)
     pcc_diagnostics_runtime_log_event_code(5, 3, tag, 0, o)
-    pcc_refcount_decref(refcount_slot)
     py_clear_exception()
     if ptr_is_null(saved_exc) == 0:
         py_tls_exc_set(saved_exc)
@@ -615,3 +666,4 @@ def py_user_del_dispatch(o) -> None:
         if saved_exc_pin != 0:
             atomic_rmw_i32("or", saved_exc, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
         py_decref(saved_exc)
+    _finalizer_owner_leave(finalizer_owner, finalizer_lease, flags & 524288)

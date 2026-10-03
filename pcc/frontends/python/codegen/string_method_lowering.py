@@ -331,6 +331,39 @@ class StringMethodLoweringMixin:
         return self.builder.icmp_signed("!=", result, ir.Constant(_I64, 0),
                                         name=self._fresh("str.tailmatch.bit"))
 
+    def _emit_owned_native_join_call(self, expr: Call):
+        """Publish str.join's NEW result before releasing either input owner."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("str.join.result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            separator = self._emit_slot_call_operand(expr.func.obj, "str.join.separator")
+            roots.append(separator)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            items = self._emit_slot_call_operand(expr.args[0], "str.join.items")
+            roots.append(items)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_str_join", (separator, items), result_slot=output, span=expr.span,
+            )
+            self._release_slot_call_roots((separator, items))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("str.join.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_native_str_join(self, recv: ir.Value, arg_expr: Expr, prefix: str):
         """Call ``py_str_join`` while its temporary sequence stays rooted.
 
@@ -491,6 +524,9 @@ class StringMethodLoweringMixin:
             or attr.name == "encode"
         ):
             return None
+        if (attr.name == "join" and len(expr.args) == 1
+                and not self._expr_looks_cpython(attr.obj)):
+            return self._emit_owned_native_join_call(expr)
         # Re-use the StrType fast path by recovering the StrType
         # marshal for the receiver. The dyn value is already a
         # PyObject*; marshal_to_object is a no-op when it already
@@ -1036,6 +1072,9 @@ class StringMethodLoweringMixin:
             or attr.name in ("format", "encode")
         ):
             return None
+        if (attr.name == "join" and len(expr.args) == 1
+                and not self._expr_looks_cpython(attr.obj)):
+            return self._emit_owned_native_join_call(expr)
         name = attr.name
         recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):

@@ -18,7 +18,17 @@ come from the generated C-header-derived py_abi_constants module.
 
 __pcc_runtime_port__ = True
 
-from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
+from pcc import (
+    i64,
+)
+from pcc.extern import (
+    extern,
+    c_abi_export,
+    c_ptr,
+    c_int32,
+    c_int64,
+    c_void,
+)
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     DICTENTRY_HASH_OFFSET,
@@ -45,6 +55,7 @@ from pcc.unsafe import (
     cstr,
     free,
     global_addr,
+    int_to_ptr,
     is_tagged_int,
     load_i32,
     ptr_add,
@@ -61,6 +72,15 @@ from pcc.unsafe import (
     store_i64,
     store_ptr,
     untag_int,
+)
+
+# Fixed internal C ABI notification. Its implementation only updates native
+# class metadata and the cache epoch while the dictionary commit lock is held.
+py_class_namespace_validate_locked = extern(
+    "py_class_namespace_validate_locked", (c_ptr, c_ptr), c_int64,
+)
+py_class_namespace_commit_locked = extern(
+    "py_class_namespace_commit_locked", (c_ptr, c_ptr), c_void,
 )
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -352,6 +372,8 @@ def _dict_insert_fast0(d, key, value, slot: int, hash_val: int) -> int:
     return 1
 
 
+
+
 def _dict_insert_rooted_slot(
     dict_slot,
     dict_handle,
@@ -365,6 +387,7 @@ def _dict_insert_rooted_slot(
     entries_used: int,
     slot: int,
     hash_val: int,
+    namespace_commit_context: i64 = 0,
 ) -> int:
     # Publish key, value, index and size under one graph lock.  A store plan
     # commits exactly one slot, so key and value need one plan each; both are
@@ -381,7 +404,12 @@ def _dict_insert_rooted_slot(
     key = _dict_read_reload_root(key_slot, key_handle)
     value = _dict_read_reload_root(value_slot, value_handle)
     committed: int = 0
-    if _ptr_is_dict(d):
+    namespace_valid: i64 = 1
+    if namespace_commit_context != 0:
+        namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), d)
+    if namespace_valid == 0:
+        committed = -2
+    elif _ptr_is_dict(d):
         if (
             ptr_eq(load_ptr(d, PYDICTOBJECT_INDICES_OFFSET), indices) != 0
             and ptr_eq(load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET), entries) != 0
@@ -416,6 +444,8 @@ def _dict_insert_rooted_slot(
                 size: int = load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET)
                 store_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET, size + 1)
                 committed = 1
+                if namespace_commit_context != 0:
+                    py_class_namespace_commit_locked(int_to_ptr(namespace_commit_context), d)
             else:
                 # The entry was never indexed, so it stays unreachable; plan
                 # finish still balances any partial store.
@@ -423,7 +453,7 @@ def _dict_insert_rooted_slot(
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(key_plan)
     pcc_gc_store_ptr_plan_finish(value_plan)
-    if committed != 0:
+    if committed > 0:
         d = _dict_read_reload_root(dict_slot, dict_handle)
         if _ptr_is_dict(d):
             _maybe_grow(d)
@@ -441,6 +471,7 @@ def _dict_replace_value_rooted_slot(
     slot: int,
     ix: int,
     hash_val: int,
+    namespace_commit_context: i64 = 0,
 ) -> int:
     # `d[k] = v` keeps the original stored key object, so this never writes the
     # key slot.  The displaced value is released in plan finish, after unlock.
@@ -451,7 +482,12 @@ def _dict_replace_value_rooted_slot(
     d = _dict_read_reload_root(dict_slot, dict_handle)
     value = _dict_read_reload_root(value_slot, value_handle)
     committed: int = 0
-    if _ptr_is_dict(d):
+    namespace_valid: i64 = 1
+    if namespace_commit_context != 0:
+        namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), d)
+    if namespace_valid == 0:
+        committed = -2
+    elif _ptr_is_dict(d):
         entry_off: int = ix * DICTENTRY_SIZE
         if (
             ptr_eq(load_ptr(d, PYDICTOBJECT_INDICES_OFFSET), indices) != 0
@@ -471,6 +507,9 @@ def _dict_replace_value_rooted_slot(
                 ptr_add(entries, entry_off + DICTENTRY_VALUE_OFFSET),
                 value,
             )
+    if committed > 0:
+        if namespace_commit_context != 0:
+            py_class_namespace_commit_locked(int_to_ptr(namespace_commit_context), d)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
     return committed
@@ -484,6 +523,7 @@ def _dict_del_rooted_slot(
     capacity: int,
     slot: int,
     ix: int,
+    namespace_commit_context: i64 = 0,
 ) -> int:
     # Key, value, index tombstone and size all publish under one graph lock;
     # both releases run in plan finish after unlock.  The legacy path decref'd
@@ -498,7 +538,12 @@ def _dict_del_rooted_slot(
     pcc_py_gc_minor_graph_lock()
     d = _dict_read_reload_root(dict_slot, dict_handle)
     committed: int = 0
-    if _ptr_is_dict(d):
+    namespace_valid: i64 = 1
+    if namespace_commit_context != 0:
+        namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), d)
+    if namespace_valid == 0:
+        committed = -2
+    elif _ptr_is_dict(d):
         entry_off: int = ix * DICTENTRY_SIZE
         if (
             ptr_eq(load_ptr(d, PYDICTOBJECT_INDICES_OFFSET), indices) != 0
@@ -528,13 +573,15 @@ def _dict_del_rooted_slot(
                 size: int = load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET)
                 store_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET, size - 1)
                 committed = 1
+                if namespace_commit_context != 0:
+                    py_class_namespace_commit_locked(int_to_ptr(namespace_commit_context), d)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(key_plan)
     pcc_gc_store_ptr_plan_finish(value_plan)
     return committed
 
 
-def _dict_rooted_op(d, key, value, mode: int, status_slot):
+def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_context: i64 = 0):
     # mode 0: get, returning an owned value.  mode 1: delete.  mode 2: set -
     # fresh insert or value replacement.  Modes 1 and 2 return null() and
     # report through status_slot when it is non-null.
@@ -687,8 +734,14 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot):
                                     capacity,
                                     j,
                                     ix,
+                                    namespace_commit_context,
                                 )
-                                if removed == 0:
+                                if removed < 0:
+                                    if ptr_is_null(status_slot) == 0:
+                                        store_i64(status_slot, 0, -2)
+                                    mutated = 1
+                                    done = 1
+                                elif removed == 0:
                                     restart = 1
                                 else:
                                     if ptr_is_null(status_slot) == 0:
@@ -707,8 +760,14 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot):
                                     j,
                                     ix,
                                     hash_val,
+                                    namespace_commit_context,
                                 )
-                                if replaced == 0:
+                                if replaced < 0:
+                                    if ptr_is_null(status_slot) == 0:
+                                        store_i64(status_slot, 0, -2)
+                                    mutated = 1
+                                    done = 1
+                                elif replaced == 0:
                                     restart = 1
                                 else:
                                     if ptr_is_null(status_slot) == 0:
@@ -743,8 +802,13 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot):
                     entries_used,
                     target,
                     hash_val,
+                    namespace_commit_context,
                 )
-                if inserted == 0:
+                if inserted < 0:
+                    if ptr_is_null(status_slot) == 0:
+                        store_i64(status_slot, 0, -2)
+                    done = 1
+                elif inserted == 0:
                     done = 0
                     restart = 1
                 elif ptr_is_null(status_slot) == 0:
@@ -1692,7 +1756,7 @@ def _dict_slot_close(slots, tokens, handles, count: int, suspended: int) -> None
         index = index + 1
 
 
-def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_existing: int) -> int:
+def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_existing: int, namespace_commit_context: i64 = 0) -> int:
     # 1 destination, 2 key, 3 value, 4 collision candidate. All four own
     # independently counted address leases whenever nonempty.
     if not _ptr_is_dict(load_ptr(slots, C_POINTER_SIZE)):
@@ -1763,8 +1827,10 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
                     ptr_add(slots, C_POINTER_SIZE), null(),
                     ptr_add(slots, 2 * C_POINTER_SIZE), null(),
                     ptr_add(slots, 3 * C_POINTER_SIZE), null(),
-                    indices, entries, capacity, used, target, hash_value)
-                if inserted != 0:
+                    indices, entries, capacity, used, target, hash_value, namespace_commit_context)
+                if inserted < 0:
+                    return -2
+                if inserted > 0:
                     if py_err_occurred() != 0:
                         return -1
                     if keep_existing != 0:
@@ -1783,7 +1849,12 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
                 committed: int = 0
                 pcc_py_gc_minor_graph_lock()
                 owner = load_ptr(slots, C_POINTER_SIZE)
-                if (ptr_eq(load_ptr(owner, PYDICTOBJECT_ENTRIES_OFFSET), entries) == 0
+                namespace_valid: i64 = 1
+                if namespace_commit_context != 0:
+                    namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), owner)
+                if namespace_valid == 0:
+                    committed = -2
+                elif (ptr_eq(load_ptr(owner, PYDICTOBJECT_ENTRIES_OFFSET), entries) == 0
                     or ptr_eq(load_ptr(owner, PYDICTOBJECT_INDICES_OFFSET), indices) == 0
                     or load_i64(owner, PYDICTOBJECT_CAPACITY_OFFSET) != capacity
                     or load_i64(indices, bucket * 8) != entry):
@@ -1807,12 +1878,16 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
                             load_ptr(slots, 3 * C_POINTER_SIZE))
                     if committed == 0:
                         restart = 1
+                if committed > 0 and keep_existing == 0 and namespace_commit_context != 0:
+                    py_class_namespace_commit_locked(int_to_ptr(namespace_commit_context), owner)
                 pcc_py_gc_minor_graph_unlock()
                 if copied != 0:
                     pcc_gc_root_copy_lease_finish(write_plan)
                 else:
                     pcc_gc_store_ptr_plan_finish(write_plan)
                 _dict_slot_drop(slots, tokens, 4)
+                if committed < 0:
+                    return -2
                 if copied != 0 and committed == 0:
                     return _dict_slot_error(cstr("dictionary existing value transfer failed"))
                 if committed != 0:
@@ -1830,7 +1905,7 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
     return -1
 
 
-def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_value: int, keep_existing: int, result_slot) -> int:
+def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_value: int, keep_existing: int, result_slot, namespace_commit_context: i64 = 0) -> int:
     slots = stack_alloc(16 * C_POINTER_SIZE)
     tokens = stack_alloc(16 * C_POINTER_SIZE)
     handles = stack_alloc(16 * C_POINTER_SIZE)
@@ -1846,7 +1921,7 @@ def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_
         if status == 0:
             status = _dict_slot_copy(slots, tokens, 3, value_slot)
         if status == 0:
-            status = _dict_slot_set_core(slots, tokens, known_hash, hash_value, keep_existing)
+            status = _dict_slot_set_core(slots, tokens, known_hash, hash_value, keep_existing, namespace_commit_context)
         if status == 0 and keep_existing != 0:
             status = pcc_gc_root_move(result_slot, ptr_add(slots, 5 * C_POINTER_SIZE))
             if status == 0:
@@ -1855,7 +1930,7 @@ def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_
                 if pcc_gc_foreign_lease_release(result_slot, token) != 0:
                     pcc_platform_abort()
                     status = -1
-    if status != 0:
+    if status != 0 and status != -2:
         _dict_slot_error(cstr("dictionary set failed without an exception"))
     _dict_slot_close(slots, tokens, handles, count, suspended)
     return status
@@ -1864,6 +1939,37 @@ def _dict_slot_set_bound(dict_slot, key_slot, value_slot, known_hash: int, hash_
 @c_abi_export("py_dict_set_slots")
 def py_dict_set_slots(dict_slot, key_slot, value_slot) -> int:
     return _dict_slot_set_bound(dict_slot, key_slot, value_slot, 0, 0, 0, null())
+
+
+@c_abi_export("py_dict_namespace_set_slots")
+def py_dict_namespace_set_slots(dict_slot, key_slot, value_slot, commit_context) -> int:
+    """Internal class writer: sources own leases; context is raw stack data.
+
+    The fixed notification runs only after a successful insertion/replacement,
+    inside that commit's graph transaction and before displaced-owner disposal.
+    """
+    return _dict_slot_set_bound(
+        dict_slot, key_slot, value_slot, 0, 0, 0, null(), ptr_to_int(commit_context),
+    )
+
+
+@c_abi_export("py_dict_namespace_del_slots")
+def py_dict_namespace_del_slots(dict_slot, key_slot, commit_context) -> int:
+    # Caller holds counted leases for these actual owning input slots. There
+    # is no NEW result in delete mode to cross the legacy probe's cleanup.
+    status = stack_alloc(C_POINTER_SIZE)
+    store_i64(status, 0, 0)
+    _dict_rooted_op(
+        load_ptr(dict_slot, 0), load_ptr(key_slot, 0), null(), 1, status,
+        ptr_to_int(commit_context),
+    )
+    if py_err_occurred() != 0:
+        return -1
+    if load_i64(status, 0) == -2:
+        return -2
+    if load_i64(status, 0) == 0:
+        return 1
+    return 0
 
 
 def _dict_slot_next(slots, tokens, iterator_index: int, output_index: int) -> int:

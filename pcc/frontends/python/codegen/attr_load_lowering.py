@@ -734,6 +734,20 @@ class AttrLoadLoweringMixin:
                 lexical_class,
                 expr.name,
             )
+        if isinstance(expr.obj, Name) and hasattr(self, "class_lowering"):
+            info = self.class_lowering.classes.get(expr.obj.ident)
+            if info is None:
+                hint = self._class_hint_for_expr(expr.obj)
+                if hint is not None:
+                    info = self.class_lowering.classes.get(hint)
+            if info is None and expr.obj.ident == "self":
+                info = self.current_class
+            if (
+                info is not None
+                and self.class_lowering.lookup_class_attr(info, runtime_attr_name) is not None
+                and self.class_lowering.uses_live_class_attribute(info, runtime_attr_name)
+            ):
+                return self.class_lowering.emit_live_class_attribute(expr)
         if (
             expr.name == "__new__"
             and isinstance(expr.obj, Name)

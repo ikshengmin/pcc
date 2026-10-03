@@ -67,7 +67,61 @@ from pcc.ir.ir import (
 from pcc.frontends.python.export_meta import decode_type
 from pcc.frontends.python.codegen.class_override_index import build_export_method_overrides
 from pcc.frontends.python.codegen.ownership_lowering import prepare_rebound_object_parameters
-from pcc.frontends.python.py_ast import Arg, Assign, Attr, AugAssign, BinOp, BoolExpr, BoolLit, BoolType, ByteArrayType, BytesType, Call, ClassDef, ClassType, ComplexType, Compare, Delete, DictType, DictExpr, DynType, Expr, ExprStmt, FloatLit, FloatType, For, FuncDef, FuncType, If, IfExpr, IntLit, IntType, ListExpr, ListType, MemoryViewType, Module as AstModule, Name, NoneLit, NoneType, SetType, Pass, Return, SourceSpan, StrLit, StrType, Subscript, Try, TupleExpr, TupleType, Type, UnaryOp, While, With
+from pcc.frontends.python.py_ast import (
+    Arg,
+    Assign,
+    Attr,
+    AugAssign,
+    BinOp,
+    BoolExpr,
+    BoolLit,
+    BoolType,
+    ByteArrayType,
+    BytesType,
+    Call,
+    ClassDef,
+    ClassType,
+    ComplexType,
+    Compare,
+    Delete,
+    DictType,
+    DictExpr,
+    DynType,
+    Expr,
+    ExprStmt,
+    FloatLit,
+    FloatType,
+    For,
+    FuncDef,
+    FuncType,
+    If,
+    IfExpr,
+    IntLit,
+    IntType,
+    ListExpr,
+    ListType,
+    MemoryViewType,
+    Module as AstModule,
+    Name,
+    NoneLit,
+    NoneType,
+    SetType,
+    Pass,
+    Return,
+    SourceSpan,
+    StrLit,
+    StrType,
+    Subscript,
+    Try,
+    TupleExpr,
+    TupleType,
+    Type,
+    UnaryOp,
+    While,
+    With,
+    RawPointerType,
+    ValueArrayType,
+)
 from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
 from pcc.frontends.python.py_ast import assignment_storage_annotation
 from pcc.frontends.python.pipeline_closed_world import resolve_class_base_export
@@ -5022,7 +5076,7 @@ class ClassLowering:
                         self.parent.env[attr_name] = (namespace_slot, _PTR, DynType(name="dyn"))
                         namespace_bindings[attr_name] = (namespace_slot, attr_name)
                     continue
-                self._emit_class_attribute_initializer(info, cls_ptr, attr_name, value_expr, prepared_attr_objects)
+                self._emit_class_attribute_initializer(info, cls_ptr, attr_name, value_expr, prepared_attr_objects, class_body_root)
                 namespace_bindings[attr_name] = (self.parent.env[attr_name][0], attr_name)
                 original_name = class_body_names.get(attr_name)
                 if original_name is not None and original_name != attr_name:
@@ -5249,7 +5303,159 @@ class ClassLowering:
         parent._gc_release(result)
         return unboxed
 
-    def _emit_class_attribute_initializer(self, info, cls_ptr, attr_name, value_expr, prepared_attr_objects):
+    def uses_live_class_attribute(self, info, attr_name, value_ty=None) -> bool:
+        """Ordinary object attributes live in the actual class namespace.
+
+        Prepared/metaclass, valueclass and raw-runtime layouts retain their
+        explicit existing routes. A declaration global is only a binding
+        identity on this ordinary path; it never owns a cached value.
+        """
+        if info.valueclass or _classgen_has_dynamic_field_layout(self, info):
+            return False
+        if getattr(self.parent, "_runtime_port_module", False) or getattr(self.parent, "_freestanding_module", False):
+            return False
+        if info.expanded_cd is not None and self._class_metaclass_expr(info.expanded_cd) is not None:
+            return False
+        if attr_name in info.enum_members or attr_name in info.enum_string_members:
+            return False
+        found = self.lookup_class_attr(info, attr_name)
+        declared_ty = found[1] if found is not None else None
+        for candidate_ty in (value_ty, declared_ty):
+            if _is_ast_node(candidate_ty, (RawPointerType, ValueArrayType)):
+                return False
+            if candidate_ty is not None and self.parent._is_valueclass_payload_type(candidate_ty):
+                return False
+        return True
+
+    def emit_live_class_attribute(self, expr):
+        """Read from the real receiver and keep a NEW result through unboxing."""
+        parent = self.parent
+        attr_name = expr.name
+        if parent.current_class is not None:
+            attr_name = self.mangle_private_attr_name(parent.current_class, attr_name)
+        lookup = Attr(span=expr.span, ty=expr.ty, obj=expr.obj, name=attr_name)
+        output = parent._emit_slot_call_attribute(lookup, "class.attribute.value")
+        previous = parent._current_try_err_block()
+        target = previous if previous is not None else parent._ensure_fn_err_exit()
+        saved_cpy = parent._cpy_operand_cleanup_block
+        cleanup = parent._slot_call_cleanup_block((output,), target)
+        parent._try_err_block = cleanup
+        parent._cpy_operand_cleanup_block = cleanup
+        try:
+            parent._emit_attribute_error_if_null(parent.builder.load(output), attr_name, expr.span)
+            if not _is_ast_node(expr.ty, (IntType, FloatType, BoolType)):
+                return parent._take_slot_call_root(output)
+            token = parent.builder.call(
+                parent.runtime["pcc_gc_foreign_lease_acquire"], [parent._as_gc_ptr(output)],
+            )
+            parent._slot_call_check_status(token, "class attribute unbox lease", expr.span)
+            parent._try_err_block = parent._slot_call_cleanup_block((), cleanup, ((output, token),))
+            parent._cpy_operand_cleanup_block = parent._try_err_block
+            current = parent.builder.load(output, name=self._fresh("class.attribute.current"))
+            result = marshal.marshal_from_object(
+                parent.builder, parent.module, parent.runtime, current, expr.ty,
+            )
+            parent._emit_post_call_err_check(expr.span)
+            released = parent.builder.call(
+                parent.runtime["pcc_gc_foreign_lease_release"], [parent._as_gc_ptr(output), token],
+            )
+            parent._try_err_block = cleanup
+            parent._cpy_operand_cleanup_block = cleanup
+            parent._slot_call_check_status(released, "class attribute unbox release", expr.span)
+            parent._release_slot_call_roots((output,))
+        finally:
+            parent._try_err_block = previous
+            parent._cpy_operand_cleanup_block = saved_cpy
+        return result
+
+    def emit_live_class_attribute_store(self, target_expr, value_expr, info):
+        """Evaluate assignment RHS before receiver, then publish with leases."""
+        parent = self.parent
+        previous = parent._current_try_err_block()
+        target = previous if previous is not None else parent._ensure_fn_err_exit()
+        saved_cpy = parent._cpy_operand_cleanup_block
+        roots = []
+        try:
+            value = parent._emit_slot_call_operand(value_expr, "class.attribute.store.value")
+            roots.append(value)
+            parent._try_err_block = parent._slot_call_cleanup_block(tuple(roots), target)
+            parent._cpy_operand_cleanup_block = parent._try_err_block
+            receiver = parent._emit_slot_call_operand(target_expr.obj, "class.attribute.store.receiver")
+            roots.append(receiver)
+            parent._try_err_block = parent._slot_call_cleanup_block(tuple(roots), target)
+            parent._cpy_operand_cleanup_block = parent._try_err_block
+            attr_name = target_expr.name
+            if parent.current_class is not None:
+                attr_name = self.mangle_private_attr_name(parent.current_class, attr_name)
+            status = parent._slot_call_runtime_call(
+                "py_obj_setattr", (receiver, value),
+                suffix_args=(parent._attr_name_ptr(attr_name),), argument_order=(0, 2, 1),
+                span=target_expr.span,
+            )
+            parent._slot_call_check_status(status, "class attribute assignment", target_expr.span)
+            parent._release_slot_call_roots(tuple(roots))
+        finally:
+            parent._try_err_block = previous
+            parent._cpy_operand_cleanup_block = saved_cpy
+        if not hasattr(parent, "_class_attr_runtime_state"):
+            parent._class_attr_runtime_state = {}
+        state = "unknown" if getattr(parent, "_class_attr_mutation_in_loop_depth", 0) else "live"
+        parent._class_attr_runtime_state[(info.name, target_expr.name)] = state
+
+    def _emit_live_class_attribute_initializer(self, info, class_root, attr_name, value_expr):
+        parent = self.parent
+        previous = parent._current_try_err_block()
+        target = previous if previous is not None else parent._ensure_fn_err_exit()
+        saved_cpy = parent._cpy_operand_cleanup_block
+        re_pattern = parent._native_re_class_compile_attr_string_value(info.name, attr_name, value_expr)
+        source_expr = value_expr
+        if re_pattern is not None:
+            source_expr = StrLit(span=value_expr.span, ty=StrType(name="str"), value=re_pattern)
+        value = parent._emit_slot_call_operand(source_expr, "class.attribute.initializer")
+        cleanup = parent._slot_call_cleanup_block((value,), target)
+        parent._try_err_block = cleanup
+        parent._cpy_operand_cleanup_block = cleanup
+        try:
+            status = parent._slot_call_runtime_call(
+                "py_class_setattr_raw", (class_root, value),
+                suffix_args=(self._cname_ptr(attr_name),), argument_order=(0, 2, 1),
+                span=value_expr.span,
+            )
+            parent._slot_call_check_status(status, "class attribute initialization", value_expr.span)
+            # Keep the declaration address for exact lexical binding identity,
+            # without publishing any object into that module-lifetime slot.
+            parent.env[attr_name] = (info.class_attrs[attr_name][0], _PTR, value_expr.ty)
+            leases = []
+            for source_root in (class_root, value):
+                parent._try_err_block = parent._slot_call_cleanup_block((), cleanup, tuple(leases))
+                parent._cpy_operand_cleanup_block = parent._try_err_block
+                token = parent.builder.call(
+                    parent.runtime["pcc_gc_foreign_lease_acquire"], [parent._as_gc_ptr(source_root)],
+                )
+                parent._slot_call_check_status(token, "class set-name argument lease", value_expr.span)
+                leases.append((source_root, token))
+            parent._try_err_block = parent._slot_call_cleanup_block((), cleanup, tuple(leases))
+            parent._cpy_operand_cleanup_block = parent._try_err_block
+            self._maybe_emit_set_name(
+                info, attr_name, parent.builder.load(value), parent.builder.load(class_root),
+            )
+            while leases:
+                source_root, token = leases.pop()
+                released = parent.builder.call(
+                    parent.runtime["pcc_gc_foreign_lease_release"], [parent._as_gc_ptr(source_root), token],
+                )
+                parent._try_err_block = parent._slot_call_cleanup_block((), cleanup, tuple(leases))
+                parent._cpy_operand_cleanup_block = parent._try_err_block
+                parent._slot_call_check_status(released, "class set-name argument release", value_expr.span)
+            parent._release_slot_call_roots((value,))
+        finally:
+            parent._try_err_block = previous
+            parent._cpy_operand_cleanup_block = saved_cpy
+
+    def _emit_class_attribute_initializer(self, info, cls_ptr, attr_name, value_expr, prepared_attr_objects, class_root):
+        if attr_name not in prepared_attr_objects and self.uses_live_class_attribute(info, attr_name, value_expr.ty):
+            self._emit_live_class_attribute_initializer(info, class_root, attr_name, value_expr)
+            return
         builder = self.parent.builder
         runtime = self.parent.runtime
         gv, _attr_ty = info.class_attrs[attr_name]
@@ -6706,6 +6912,8 @@ class ClassLowering:
         found = self.lookup_class_attr(info, attr_name)
         if found is None:
             return None
+        if self.uses_live_class_attribute(info, attr_name):
+            return None
         gv, _ty = found
         if gv is None:
             # dict-subclass runtime-served method sentinel — there is no
@@ -6745,7 +6953,9 @@ class ClassLowering:
             value,
             value_ty,
         )
-        self.parent.builder.store(obj, gv)
+        live_namespace = self.uses_live_class_attribute(info, attr_name, value_ty)
+        if not live_namespace:
+            self.parent.builder.store(obj, gv)
         cls_ptr = self._load_class_object(
             info,
             f".cls.{info.name}.setattr",
@@ -6755,6 +6965,8 @@ class ClassLowering:
             [cls_ptr, self._cname_ptr(attr_name), obj],
             name=self._fresh(f"classattr.{info.name}.{attr_name}.setattr.rc"),
         )
+        if live_namespace and not _classgen_ir_type_is_pointer(value.type):
+            self.parent._gc_release(obj, "class.attribute.box")
         return True
 
     def class_global(self, class_name: str) -> Optional[ir.GlobalVariable]:

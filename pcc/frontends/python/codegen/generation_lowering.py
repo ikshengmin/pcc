@@ -91,6 +91,22 @@ def _iter_module_block_decls(stmt: Stmt, static_bool_condition=None):
             yield from _iter_module_block_decls(child, static_bool_condition)
 
 
+def _iter_module_handler_names(stmt: Stmt):
+    """Except-as binds/deletes a module name, without entering child scopes."""
+    pending = [stmt]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, (FuncDef, ClassDef)):
+            continue
+        if isinstance(current, Try):
+            for handler in current.handlers:
+                if handler.name is not None:
+                    yield handler.name
+                pending.extend(handler.body)
+        for field in ("body", "else_body", "finally_body"):
+            pending.extend(getattr(current, field, ()))
+
+
 def _iter_module_block_name_assigns(stmt: Stmt):
     """Yield simple Name assignments nested in a module-scope block."""
     if isinstance(stmt, (FuncDef, ClassDef)):
@@ -365,6 +381,16 @@ class GenerationLoweringMixin:
         module_block_decls: list[Stmt] = []
         declared_module_func_ids: set[int] = set()
         declared_module_classes: set[str] = set()
+
+        # A handler binding has object storage even if an earlier assignment
+        # used a scalar. Declare it before module roots and function bodies,
+        # so called functions read the same binding and observe its deletion.
+        for stmt in self.ast_module.body:
+            for binding_name in _iter_module_handler_names(stmt):
+                self._ensure_module_global_name(binding_name, DynType(name="dyn"))
+                if getattr(self, "_module_del_target_names", None) is None:
+                    self._module_del_target_names = set()
+                self._module_del_target_names.add(binding_name)
 
         stmt_index = 0
         for stmt in self.ast_module.body:

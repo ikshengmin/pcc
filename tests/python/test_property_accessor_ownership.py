@@ -45,11 +45,14 @@ def _source(accessors, failing_default=False):
     return source
 
 
-def _property_body(text):
+def _property_bodies(text):
     bodies = re.findall(r"^define [^\n]*\{\n.*?^}", text, re.M | re.S)
     selected = [body for body in bodies if re.search(r"\bcall [^\n]*@py_property_new\(", body)]
-    assert len(selected) == 1
-    return selected[0]
+    headers = [body.splitlines()[0] for body in selected]
+    assert len(headers) == 2, headers
+    assert any("@_pcc_py_module_init_property_owner(" in line for line in headers), headers
+    assert any("@main(" in line for line in headers), headers
+    return selected
 
 
 def _owners_and_cfg(body, expected):
@@ -131,7 +134,6 @@ def _owners_and_cfg(body, expected):
         queue.extend((successor, state) for successor in successors)
     assert constructor_states and return_states
     for role in expected + ("descriptor",):
-        root = re.escape(roots[role])
         # Resolve lease operands through the same physical alias map.
         leases = re.findall(r"@pcc_gc_foreign_lease_acquire\(ptr (%[-\w.]+)\)", body)
         assert any(original(slot) == roots[role] for slot in leases), role
@@ -145,5 +147,5 @@ def _owners_and_cfg(body, expected):
     (("getter", "setter"), True),
 ])
 def test_property_assembly_preserves_accessor_roots_and_cleanup(accessors, failing_default):
-    body = _property_body(_emit(_source(accessors, failing_default)))
-    _owners_and_cfg(body, accessors)
+    for body in _property_bodies(_emit(_source(accessors, failing_default))):
+        _owners_and_cfg(body, accessors)

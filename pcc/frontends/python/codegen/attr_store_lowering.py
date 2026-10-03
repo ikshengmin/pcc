@@ -436,6 +436,11 @@ class AttrStoreLoweringMixin:
             self._class_attr_runtime_state[(info.name, runtime_attr_name)] = state
 
     def _emit_attr_store(self, target: Attr, value_expr: Expr) -> None:
+        if isinstance(target.obj, Name) and hasattr(self, "class_lowering"):
+            info = self.class_lowering.classes.get(target.obj.ident)
+            if info is not None and self.class_lowering.uses_live_class_attribute(info, target.name, value_expr.ty):
+                self.class_lowering.emit_live_class_attribute_store(target, value_expr, info)
+                return
         if (
             isinstance(target.obj, Name)
             and target.obj.ident in getattr(self, "_native_module_aliases", {})

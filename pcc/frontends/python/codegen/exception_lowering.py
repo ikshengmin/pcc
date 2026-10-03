@@ -700,6 +700,13 @@ class ExceptionLoweringMixin:
                         self.runtime["pcc_gc_store_root"],
                         [self._as_gc_ptr(binding_slot), handler_exc],
                     )
+                elif (self.current_func_def is None
+                      and getattr(self, "_class_namespace_context", None) is None):
+                    binding_slot, binding_ty = self._module_globals[h.name]
+                    self._store_module_global_root_value(
+                        binding_slot, handler_exc, declared_ty=binding_ty,
+                    )
+                    self._publish_module_global_assignment(h.name, handler_exc, binding_ty)
                 else:
                     binding_slot = self._exception_selection_owner_slot(
                         handler_exc, "except.binding", h.name,
@@ -1154,6 +1161,29 @@ class ExceptionLoweringMixin:
         return slot
 
     def _clear_exception_selection_owner_slot(self, slot: ir.Value) -> None:
+        if self.current_func_def is None:
+            for name, (global_slot, _declared_ty) in self._module_globals.items():
+                if global_slot is not slot:
+                    continue
+                # Automatic except-as deletion is idempotent, including when
+                # user code already deleted/rebound the name. Publish the
+                # unbound state before releasing either namespace owner.
+                flag = self._module_global_init_flags[name]
+                self.builder.store(ir.Constant(_I1, 0), flag)
+                module_name = self._pooled_cstr_ptr(
+                    self.ast_module.name or "__main__", ".pcc.except.binding.module",
+                )
+                self.builder.call(
+                    self.runtime["py_module_attr_del"],
+                    [module_name, self._attr_name_ptr(name)],
+                )
+                value = self.builder.load(slot, name=self._fresh("except.global.current"))
+                self._gc_unpin(value)
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
+                )
+                return
         if self._generator_ctx_stack:
             ctx = self._generator_ctx_stack[-1]
             for _name, (index, saved_slot) in ctx["frame_slots"].items():

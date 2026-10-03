@@ -158,6 +158,27 @@ component/thread/five-GC execution and overhead remain unqualified. Property
 accessor construction owners are also integrated with their separate focused
 gate pending; these later candidate changes are outside the frozen runtime above.
 
+The October 3 review reproduced a real exception-binding regression: all four
+unchanged module-handler object-emission cases pass on the 04:33 synchronized
+source and fail on the 05:35 source. The module except-as binding repair now
+uses its registered module-global slot and clears it on handler exits; its fresh
+checks are pending. The two ordinary native lifetime failures above are separate
+preexisting behaviors and are not attributed to that regression.
+
+Lazy named-type parser state is still module-global and its reentrant/interleaved
+module ownership is under repair. Explicit Darwin stdio declarations/header macros
+still need the new review coverage. Thread lifecycle logging is only part of the
+requested deadlock diagnostics: scheduler-lock, safepoint suspend/resume, stop-the-
+world events and a lock-held suspend tripwire remain open.
+
+Full C/Python collection on the immutable 08:08 capture completed without errors:
+23,354 discovered nodes, 3,027 C and 14,605 Python selected, and 5,722 gate-deselected.
+No test body executed in that collection. All 29,634 source identities stayed
+unchanged. Every later hourly source capture must run its own collection and fast
+affected regressions before the local commit. Preserve failing work in the sync,
+report exact failures and unexecuted cases, and use commit subjects describing the
+actual changes rather than synchronization workflow labels.
+
 ## Qualification order
 
 Use the checked-in Python version, isolated outputs, durable node logs, the shared
