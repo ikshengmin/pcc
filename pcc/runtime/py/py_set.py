@@ -871,26 +871,7 @@ def py_set_intersection(a, b):
 
 @c_abi_export("py_set_difference")
 def py_set_difference(a, b):
-    out = py_set_new()
-    if ptr_is_null(out) != 0:
-        return null()
-    if not _ptr_is_set(a):
-        return out
-    b_is_set: bool = _ptr_is_set(b)
-    entries = load_ptr(a, 40)
-    capacity: int = load_i64(a, 24)
-    dummy = global_load_ptr("py_set_dummy")
-    i: int = 0
-    while i < capacity:
-        key = _entry_key(a, entries, i * 16)
-        if ptr_is_null(key) == 0:
-            if ptr_eq(key, dummy) == 0:
-                if not b_is_set:
-                    py_set_add(out, key)
-                elif py_set_contains(b, key) == 0:
-                    py_set_add(out, key)
-        i = i + 1
-    return out
+    return _set_binary_owned(a, b, 2)
 
 
 @c_abi_export("py_set_symmetric_difference")
@@ -1646,7 +1627,8 @@ def _set_call_replace(slots, target: int, source: int) -> int:
 
 
 def _set_call_apply(slots, tokens, target: int, source: int, mode: int, match: int = 3) -> int:
-    # Modes: add, discard, intersection into target (against match), xor.
+    # Modes: add, discard, intersection into target (against match), xor,
+    # difference into target (against match).
     # Exact sets carry cached hashes. Other iterables invoke __hash__ once
     # for each delivered item, and preserve errors/partial mutation.
     is_set: int = 1 if _ptr_is_set(_set_call_load(slots, source)) else 0
@@ -1710,9 +1692,10 @@ def _set_call_apply(slots, tokens, target: int, source: int, mode: int, match: i
                 _set_call_lookup(slots, tokens, target, hash_value, 2)
             elif mode == 1:
                 _set_call_lookup(slots, tokens, target, hash_value, 1)
-            elif mode == 2:
+            elif mode == 2 or mode == 4:
                 found: int = _set_call_lookup(slots, tokens, match, hash_value, 0)
-                if found != 0 and py_err_occurred() == 0:
+                selected_match: int = found if mode == 2 else 1 - found
+                if selected_match != 0 and py_err_occurred() == 0:
                     _set_call_lookup(slots, tokens, target, hash_value, 2)
                     matched = 1
             else:
@@ -1860,3 +1843,87 @@ def py_set_call_method_slots(receiver_slot, method: int, args_slot, kwargs_slot,
         pcc_gc_store_root(result_slot, null())
         return -1
     return 0
+
+
+# Reuse the algebra core's first ten slots. The pending exception has its own
+# extra owner so candidate-key cleanup cannot overwrite the saved exception.
+_SET_BINARY_LEFT = 0
+_SET_BINARY_RIGHT = 4
+_SET_BINARY_RESULT = 3
+_SET_BINARY_ERROR = 10
+_SET_BINARY_SLOT_COUNT = 11
+_SET_BINARY_INCOMING_COUNT = 2
+_SET_BINARY_SLOT_BYTES = 8
+
+define_global_i32("pcc_set_binary_borrowed_map", -2)
+define_global_i32("pcc_set_binary_owned_map", 11)
+
+
+def _set_binary_owned(a, b, operation: int):
+    borrowed = stack_alloc(_SET_BINARY_INCOMING_COUNT * _SET_BINARY_SLOT_BYTES)
+    store_ptr(borrowed, 0, a)
+    store_ptr(borrowed, _SET_BINARY_SLOT_BYTES, b)
+    pcc_gc_frame_enter(global_addr("pcc_set_binary_borrowed_map"), borrowed)
+    slots = stack_alloc(_SET_BINARY_SLOT_COUNT * _SET_BINARY_SLOT_BYTES)
+    tokens = stack_alloc(_SET_BINARY_SLOT_COUNT * _SET_BINARY_SLOT_BYTES)
+    memset(slots, 0, _SET_BINARY_SLOT_COUNT * _SET_BINARY_SLOT_BYTES)
+    index: int = 0
+    while index < _SET_BINARY_SLOT_COUNT:
+        store_i64(tokens, index * _SET_BINARY_SLOT_BYTES, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_set_binary_owned_map"), slots)
+    left_slot = ptr_add(slots, _SET_BINARY_LEFT * _SET_BINARY_SLOT_BYTES)
+    right_slot = ptr_add(slots, _SET_BINARY_RIGHT * _SET_BINARY_SLOT_BYTES)
+    result_slot = ptr_add(slots, _SET_BINARY_RESULT * _SET_BINARY_SLOT_BYTES)
+    error_slot = ptr_add(slots, _SET_BINARY_ERROR * _SET_BINARY_SLOT_BYTES)
+    token: int = pcc_gc_root_copy_borrowed_lease(left_slot, borrowed)
+    store_i64(tokens, _SET_BINARY_LEFT * _SET_BINARY_SLOT_BYTES, token)
+    ok: int = 1
+    if token < 0:
+        _set_call_error(7, cstr("cannot retain left set operand"))
+        ok = 0
+    if ok != 0:
+        token = pcc_gc_root_copy_borrowed_lease(right_slot,
+            ptr_add(borrowed, _SET_BINARY_SLOT_BYTES))
+        store_i64(tokens, _SET_BINARY_RIGHT * _SET_BINARY_SLOT_BYTES, token)
+        if token < 0:
+            _set_call_error(7, cstr("cannot retain right set operand"))
+            ok = 0
+    # Other algebra operations can use this owner transaction after their own
+    # semantics are qualified. Do not route them here implicitly.
+    if ok != 0 and operation != 2:
+        _set_call_error(7, cstr("unknown binary set operation"))
+        ok = 0
+    if ok != 0:
+        ok = _set_call_new(slots, tokens, _SET_BINARY_RESULT)
+    if ok != 0 and _ptr_is_set(_set_call_load(slots, _SET_BINARY_LEFT)):
+        if _ptr_is_set(_set_call_load(slots, _SET_BINARY_RIGHT)):
+            # Preserve binary difference's left iteration/right lookup order,
+            # including the direction of user equality callbacks.
+            ok = _set_call_apply(slots, tokens, _SET_BINARY_RESULT,
+                                 _SET_BINARY_LEFT, 4, _SET_BINARY_RIGHT)
+        else:
+            ok = _set_call_replace(slots, _SET_BINARY_RESULT, _SET_BINARY_LEFT)
+    if py_err_occurred() != 0:
+        ok = 0
+    py_tls_exc_swap_slot(error_slot)
+    store_ptr(borrowed, 0, null())
+    store_ptr(borrowed, _SET_BINARY_SLOT_BYTES, null())
+    index = _SET_BINARY_ERROR - 1
+    while index >= 0:
+        if index != _SET_BINARY_RESULT:
+            _set_constructor_drop(slots, tokens, index)
+        index = index - 1
+    if ok == 0:
+        _set_constructor_drop(slots, tokens, _SET_BINARY_RESULT)
+    py_clear_exception()
+    py_tls_exc_swap_slot(error_slot)
+    prior: int = _set_constructor_pin(result_slot)
+    token = load_i64(tokens, _SET_BINARY_RESULT * _SET_BINARY_SLOT_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(result_slot, token) < 0:
+            pcc_platform_abort()
+            return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result_slot, prior)

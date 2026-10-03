@@ -1,6 +1,6 @@
 # Current status
 
-Updated October 3, 2026, 13:25 UTC. Maintain this page in place.
+Updated October 3, 2026, 13:58 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
@@ -17,12 +17,14 @@ fail. Those 17 integration regressions are the next producer gate, with exact
 old/new module identities retained. Preserve the 41 gains while repairing the
 newly exposed input-call, subtraction/division, set-difference, lambda-return and
 module-loop ownership paths.
-The unchanged lambda/setattr and closure-cell contexts, plus both subtraction
-contexts, now reach production PIDX on their repaired frozen compilers. Ten
-collection-input contexts pass under qualified proposals; their integrated gate
-is running. The division context advances to a following modulo producer, and
-set-difference/module-loop repairs remain unfinished. These scoped results do
-not close the combined 17-context or complete fresh-source gate.
+Sixteen of those 17 original contexts now reach production PIDX on repaired
+frozen compilers. The remaining canonicalize module advances past division to
+later modulo/shift producers; their runtime owner repair is still in progress.
+The 41 previous gains also pass on frozen source `333f9be7`: 40 under a 512 MiB
+diagnostic cap, and py_parse in a separately authorized 1.5 GiB recheck after
+its initial memory-limit stop. Its 1.35 GB peak and byte-identical v4 PIDX are
+recorded; this is not memory-target acceptance. Later loop changes and the
+complete combined current-source audit remain outside that preservation proof.
 
 That diagnostic used source
 `c2b078540e55363d779beba964b8430460184cfb02844e50cf7addadbdaa6108`,
@@ -205,10 +207,17 @@ The original native matrix passed 22 cases, then failed strict parsing of a
 truncated final GC2/thread resume record after normal program completion; 37
 cases remain unrun in that receipt. A separate original uninstrumented stress
 slice passed 20/20 with requested GC2 and logging disabled at the unchanged
-20-second bound. Complete-record buffering now has 93 host cases; its matched
-rebuild and unchanged native matrix remain pending. This buffering does not
-promise transactional durability under forced termination between partial OS
-writes.
+20-second bound. Complete-record buffering has 93 host cases and a separately admitted complete
+184-member runtime. On that exact Linux threaded/atomic source, the unchanged
+native matrix passes all 60 cases and a separate original-program GC2 stress
+passes 20/20. All 25 thread-enabled matrix cases contain the 24 application
+worker identities and at least 24 matched suspension pairs. The earlier failed
+GC2/thread case now has complete JSON and 47 matched pairs. Both transitive raw
+tail and sink/batch IR checks pass. GC labels remain requested settings because
+no actual collector-event witness appeared. These results do not qualify the
+newer combined candidate, all-GC production behavior, performance or pcc1.
+Buffering does not promise transactional durability if forced termination occurs
+between actual partial OS writes. All predecessor failures are retained.
 
 ## GUI, gateway and remaining goals
 
@@ -249,16 +258,15 @@ bytes. Recoverable current code, before/after patches, source identities and
 execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
-The latest verified local synchronization used the immutable 12:29:27 capture:
-PCC `8abe50a3738fd95e1f21c2ac76d8654bca8e3fc6` (28 paths), GUI
+The latest verified local synchronization used the immutable 13:26:05 capture:
+PCC `1ef656e38dd4ca6a5d420bb8e1b029ab2cd3f9e1` (33 paths), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
 `83577bc41dc79d3ead2e217bfa04f0f500799012`. Exact bytes, modes and diff checks
-passed. That capture recorded 945 passes and two failures across 28 independent
-affected-file groups. The original contextual test produced 14 IR outputs and
-33 codegen exceptions; the other failure was the older generic-unary rejection
-assertion, corrected only in later source. Collection selected 18,360 nodes and
-gate-deselected 5,740, with no errors or skips. Collection executed no test bodies.
-These results qualify the capture's scoped checks only.
+passed. That capture recorded 1,192 passes and one failure across 37 independent
+affected-file groups. The failed original contextual test produced 22 IR outputs
+and 25 codegen exceptions. Collection selected 18,593 nodes and gate-deselected
+5,742, with no errors or skips; it executed no test bodies. These results qualify
+the capture's scoped checks only. Later source changes remain separate.
 
 Hourly synchronization includes legitimate integrated work even when failing or
 unqualified. Run collection and affected fast tests on the exact capture first;

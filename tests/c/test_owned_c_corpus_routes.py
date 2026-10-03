@@ -182,6 +182,74 @@ def test_gcc_reference_keeps_its_external_compiler_and_math_linkage(tmp_path, mo
     assert "-lm" in calls[0] and str(path) in calls[0]
 
 
+def test_csmith_seed_passes_identical_generated_source_to_product_and_reference(monkeypatch):
+    from tests.c import test_csmith as module
+
+    original = '#include "csmith.h"\nint main(void) { return CSMITH_VALUE; }\n'
+    observed = []
+
+    def generate(seed, path):
+        assert seed == 23
+        Path(path).write_text(original)
+
+    def reference(path):
+        observed.append(("reference", path, Path(path).read_text()))
+        return subprocess.CompletedProcess(["external reference oracle"], 0, "checksum\n", "")
+
+    def product(path):
+        observed.append(("product", path, Path(path).read_text()))
+        return 0, "checksum\n", ""
+
+    monkeypatch.setattr(module, "_generate", generate)
+    monkeypatch.setattr(module, "_run_native", reference)
+    monkeypatch.setattr(module, "_run_pcc", product)
+    result = module._run_seed(23)
+    assert observed[0][0] == "reference" and observed[1][0] == "product"
+    assert observed[0][1:] == observed[1][1:]
+    assert observed[1][2] == original
+    assert (result.seed, result.native_returncode, result.pcc_returncode) == (23, 0, 0)
+    assert result.native_stdout == result.pcc_stdout == "checksum"
+
+
+def test_csmith_product_uses_owned_preprocessor_with_original_header_path(tmp_path, monkeypatch):
+    from tests.c import test_csmith as module
+
+    headers = tmp_path / "generator-headers"
+    headers.mkdir()
+    (headers / "csmith.h").write_text("#define CSMITH_VALUE 42\n")
+    original = '#include "csmith.h"\nint main(void) { return CSMITH_VALUE; }\n'
+    source = tmp_path / "original.c"
+    source.write_text(original)
+    monkeypatch.setattr(module, "CSMITH_INCLUDE", str(headers))
+
+    def external_forbidden(*args, **kwargs):
+        pytest.fail("Csmith product requested an external compiler/preprocessor")
+
+    monkeypatch.setattr(module, "_host_cc", external_forbidden)
+    monkeypatch.setattr(CEvaluator, "_system_cpp", external_forbidden)
+    monkeypatch.setattr(CEvaluator, "_system_cc", external_forbidden)
+    emissions = []
+
+    def emit(self, units, output, **options):
+        emissions.append(units)
+        assert any("42" in unit[1] for unit in units)
+        assert all("CSMITH_VALUE" not in unit[1] for unit in units)
+        Path(output).write_bytes(b"owned emission model; never executed")
+
+    def execute(argv, **options):
+        assert len(argv) == 1
+        assert Path(argv[0]).read_bytes() == b"owned emission model; never executed"
+        return subprocess.CompletedProcess(argv, 42, "", "")
+
+    monkeypatch.setattr(CEvaluator, "emit_executable", emit)
+    monkeypatch.setattr(subprocess, "run", execute)
+    connection = ConnectionModel()
+    module._pcc_worker_entry(str(source), 19, connection)
+    assert connection.payload == {"returncode": 42, "stdout": "", "stderr": ""}
+    assert len(emissions) == 1
+    assert source.read_text() == original
+
+
 @pytest.mark.parametrize("module_name", ["tests.gcc_torture_cases", "tests.c.test_gcc_torture_self"])
 def test_gcc_product_rejects_unmodeled_link_dependency_without_fallback(tmp_path, monkeypatch, module_name):
     from tests.gcc_torture_cases import GccTortureComparisonOptions

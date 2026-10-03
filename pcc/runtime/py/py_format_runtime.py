@@ -11,6 +11,7 @@ from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
     PYCLASSOBJECT_NAME_OFFSET,
+    PYTUPLEOBJECT_ITEMS_OFFSET,
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
@@ -1885,6 +1886,147 @@ _PCT_BLANK = 4
 _PCT_ALT = 8
 _PCT_ZERO = 16
 
+# Percent-format conversions share an explicit layout in every nested frame.
+# Both incoming values are borrowed from live caller owners; a returned NEW
+# value is always stored into one of the registered owning slots first.
+_PERCENT_INPUT = 0
+_PERCENT_OTHER = 1
+_PERCENT_ARGUMENT = 2
+_PERCENT_TEMP = 3
+_PERCENT_METHOD = 4
+_PERCENT_CALL_ARGS = 5
+_PERCENT_RESULT = 6
+_PERCENT_ERROR = 7
+_PERCENT_SLOT_COUNT = 8
+
+define_global_i32("pcc_percent_borrowed_map", -2)
+define_global_i32("pcc_percent_owned_map", _PERCENT_SLOT_COUNT)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+py_dict_get_default_slots = extern(
+    "py_dict_get_default_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
+)
+py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
+
+
+def _percent_frame_copy_inputs(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr) -> int:
+    index: int = 0
+    while index < 2:
+        offset: int = index * C_POINTER_SIZE
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, offset), ptr_add(borrowed, offset),
+        )
+        if token < 0:
+            py_runtime_error_if_unset(cstr("percent format"), cstr("input owner copy failed"))
+            return -1
+        store_i64(tokens, offset, token)
+        index = index + 1
+    return 0
+
+
+def _percent_copy(slots: c_ptr, tokens: c_ptr, index: int, source: c_ptr) -> int:
+    offset: int = index * C_POINTER_SIZE
+    token: int = pcc_gc_root_copy_lease(ptr_add(slots, offset), source)
+    if token < 0:
+        py_runtime_error_if_unset(cstr("percent format"), cstr("argument owner copy failed"))
+        return -1
+    store_i64(tokens, offset, token)
+    return 0
+
+
+def _percent_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
+    # A conversion error survives finalizers from any temporary retirement.
+    py_tls_exc_swap_slot(ptr_add(slots, _PERCENT_ERROR * C_POINTER_SIZE))
+    _format_callback_drop(slots, tokens, index)
+    py_clear_exception()
+    py_tls_exc_swap_slot(ptr_add(slots, _PERCENT_ERROR * C_POINTER_SIZE))
+
+
+def _percent_frame_finish(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr, keep: int):
+    py_tls_exc_swap_slot(ptr_add(slots, _PERCENT_ERROR * C_POINTER_SIZE))
+    store_ptr(borrowed, 0, null())
+    store_ptr(borrowed, C_POINTER_SIZE, null())
+    index: int = _PERCENT_SLOT_COUNT - 1
+    while index >= 0:
+        if index != _PERCENT_ERROR and index != keep:
+            _format_callback_drop(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(ptr_add(slots, _PERCENT_ERROR * C_POINTER_SIZE))
+    if keep < 0:
+        pcc_gc_frame_leave(slots)
+        pcc_gc_frame_leave(borrowed)
+        return null()
+    result_slot = ptr_add(slots, keep * C_POINTER_SIZE)
+    prior: int = _unicode_format_pin(result_slot)
+    if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, keep * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result_slot, prior)
+
+
+def _percent_next_argument_slots(slots: c_ptr, tokens: c_ptr, cursor: c_ptr) -> int:
+    arguments = load_ptr(slots, _PERCENT_INPUT * C_POINTER_SIZE)
+    if load_i64(cursor, _ARG_TUPLE) != 0:
+        index: int = load_i64(cursor, _ARG_INDEX)
+        count: int = py_tuple_len(arguments)
+        if index >= count:
+            _percent_not_enough(count)
+            return -1
+        # The input tuple is leased and immutable. Its traced owning field is
+        # copied under the root-copy transaction before any conversion parks.
+        if _percent_copy(slots, tokens, _PERCENT_ARGUMENT,
+                ptr_add(arguments, PYTUPLEOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE)) != 0:
+            return -1
+        store_i64(cursor, _ARG_INDEX, index + 1)
+        store_i64(cursor, _ARG_LABEL, 1)
+        store_i64(cursor, _ARG_NUMBER, index + 1)
+    else:
+        if load_i64(cursor, _ARG_SINGLE_USED) != 0:
+            _percent_not_enough(1)
+            return -1
+        if _percent_copy(slots, tokens, _PERCENT_ARGUMENT,
+                ptr_add(slots, _PERCENT_INPUT * C_POINTER_SIZE)) != 0:
+            return -1
+        store_i64(cursor, _ARG_SINGLE_USED, 1)
+        store_i64(cursor, _ARG_LABEL, 0)
+    store_i64(cursor, _ARG_OWNED, 1)
+    return 0
+
+
+def _percent_release_argument_slots(slots: c_ptr, tokens: c_ptr, cursor: c_ptr) -> None:
+    _percent_drop(slots, tokens, _PERCENT_ARGUMENT)
+    store_i64(cursor, _ARG_OWNED, 0)
+
+
+def _percent_mapping_argument_slots(slots: c_ptr, tokens: c_ptr, data: c_ptr,
+                                    key_start: int, key_length: int, bytes_key: int) -> int:
+    key_slot = ptr_add(slots, _PERCENT_TEMP * C_POINTER_SIZE)
+    if bytes_key != 0:
+        store_ptr(key_slot, 0, py_bytes_new(ptr_add(data, key_start), key_length))
+    else:
+        store_ptr(key_slot, 0, py_str_new(ptr_add(data, key_start), key_length))
+    if _format_callback_adopt(slots, tokens, _PERCENT_TEMP) != 0:
+        return -1
+    if ptr_is_null(load_ptr(key_slot, 0)) != 0:
+        return -1
+    # An empty registered owner supplies the old silent-NULL miss default.
+    # The actual dict probe publishes its protected value directly to ARGUMENT.
+    status: int = py_dict_get_default_slots(
+        ptr_add(slots, _PERCENT_INPUT * C_POINTER_SIZE), key_slot,
+        ptr_add(slots, _PERCENT_METHOD * C_POINTER_SIZE),
+        ptr_add(slots, _PERCENT_ARGUMENT * C_POINTER_SIZE),
+    )
+    if _format_callback_adopt(slots, tokens, _PERCENT_ARGUMENT) != 0:
+        status = -1
+    if status == 0 and ptr_is_null(load_ptr(slots, _PERCENT_ARGUMENT * C_POINTER_SIZE)) != 0:
+        py_raise_owned(py_exc_new_with_value(4, load_ptr(key_slot, 0)))
+        status = -1
+    _percent_drop(slots, tokens, _PERCENT_TEMP)
+    return status
+
+
 # Argument cursor slots.  The label names the argument in error messages:
 # 0 = the single non-tuple argument, 1 = tuple position, 2 = mapping key.
 _ARG_INDEX = 0
@@ -1917,10 +2059,28 @@ def _buffer_decimal(state, value: int) -> None:
 
 
 def _append_type_name(state, value) -> None:
-    name = py_obj_type_name(value)
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, value)
+    store_ptr(borrowed, C_POINTER_SIZE, null())
+    pcc_gc_frame_enter(global_addr("pcc_percent_borrowed_map"), borrowed)
+    slots = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_percent_owned_map"), slots)
+    status: int = _percent_frame_copy_inputs(slots, tokens, borrowed)
+    if status == 0:
+        _append_type_name_body(state, load_ptr(slots, _PERCENT_INPUT * C_POINTER_SIZE), slots, tokens)
+    _percent_frame_finish(slots, tokens, borrowed, -1)
+
+
+def _append_type_name_body(state, value, slots: c_ptr, tokens: c_ptr) -> None:
+    store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, py_obj_type_name(value))
+    if _format_callback_adopt(slots, tokens, _PERCENT_RESULT) != 0:
+        return
+    name = load_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE)
     if ptr_is_null(name) == 0:
         _append_pystr(state, name)
-        py_decref(name)
 
 
 def _percent_not_enough(count: int) -> None:
@@ -1976,46 +2136,40 @@ def _percent_type_error(data, cursor, conversion: int, requirement, value) -> in
     return _percent_arg_error(3, data, cursor, message)
 
 
-def _percent_next_argument(arguments, cursor):
-    # The next positional argument; owned when cursor[_ARG_OWNED] is set.
-    store_i64(cursor, _ARG_OWNED, 0)
-    if load_i64(cursor, _ARG_TUPLE) != 0:
-        index: int = load_i64(cursor, _ARG_INDEX)
-        count: int = py_tuple_len(arguments)
-        if index >= count:
-            _percent_not_enough(count)
-            return null()
-        item = py_tuple_get(arguments, index)
-        store_i64(cursor, _ARG_INDEX, index + 1)
-        store_i64(cursor, _ARG_OWNED, 1)
-        store_i64(cursor, _ARG_LABEL, 1)
-        store_i64(cursor, _ARG_NUMBER, index + 1)
-        return item
-    if load_i64(cursor, _ARG_SINGLE_USED) != 0:
-        _percent_not_enough(1)
-        return null()
-    store_i64(cursor, _ARG_SINGLE_USED, 1)
-    store_i64(cursor, _ARG_LABEL, 0)
-    return arguments
 
 
-def _percent_release_argument(argument, cursor) -> None:
-    if load_i64(cursor, _ARG_OWNED) != 0 and ptr_is_null(argument) == 0:
-        py_decref(argument)
-    store_i64(cursor, _ARG_OWNED, 0)
 
 
-def _percent_star(arguments, cursor, data, spec, slot: int) -> int:
+
+
+def _percent_star(arguments, cursor: c_ptr, data, spec, slot: int) -> int:
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, arguments)
+    store_ptr(borrowed, C_POINTER_SIZE, null())
+    pcc_gc_frame_enter(global_addr("pcc_percent_borrowed_map"), borrowed)
+    slots = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_percent_owned_map"), slots)
+    status: int = _percent_frame_copy_inputs(slots, tokens, borrowed)
+    if status == 0:
+        status = _percent_star_body(load_ptr(slots, _PERCENT_INPUT * C_POINTER_SIZE), cursor, data, spec, slot, slots, tokens)
+    _percent_frame_finish(slots, tokens, borrowed, -1)
+    return status
+
+
+def _percent_star_body(arguments, cursor: c_ptr, data, spec, slot: int, slots: c_ptr, tokens: c_ptr) -> int:
     # A '*' width (slot 8) or precision (slot 16) from the next argument.
-    argument = _percent_next_argument(arguments, cursor)
-    if ptr_is_null(argument) != 0:
+    if _percent_next_argument_slots(slots, tokens, cursor) != 0:
         return -1
+    argument = load_ptr(slots, _PERCENT_ARGUMENT * C_POINTER_SIZE)
     tag: int = _type_of(argument)
     if tag != PY_TYPE_INT and tag != PY_TYPE_BOOL:
         message = _buffer_new(64)
         _buffer_cstr(message, cstr("* requires int, not "))
         _append_type_name(message, argument)
-        _percent_release_argument(argument, cursor)
+        _percent_release_argument_slots(slots, tokens, cursor)
         return _percent_arg_error(3, data, cursor, message)
     value: int = 0
     too_big: int = 0
@@ -2030,7 +2184,7 @@ def _percent_star(arguments, cursor, data, spec, slot: int) -> int:
             too_big = 1
         elif slot == 16 and (value > 2147483647 or value < -2147483648):
             too_big = 1
-    _percent_release_argument(argument, cursor)
+    _percent_release_argument_slots(slots, tokens, cursor)
     if too_big != 0:
         message = _buffer_new(32)
         if slot == 8:
@@ -2120,6 +2274,23 @@ def _percent_output_text(output, text, byte_len: int, flags: int, width: int, pr
 
 
 def _percent_integer(output, argument, data, cursor, conversion: int, flags: int, width: int, precision: int) -> int:
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, argument)
+    store_ptr(borrowed, C_POINTER_SIZE, null())
+    pcc_gc_frame_enter(global_addr("pcc_percent_borrowed_map"), borrowed)
+    slots = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_percent_owned_map"), slots)
+    status: int = _percent_frame_copy_inputs(slots, tokens, borrowed)
+    if status == 0:
+        status = _percent_integer_body(output, load_ptr(slots, _PERCENT_INPUT * C_POINTER_SIZE), data, cursor, conversion, flags, width, precision, slots, tokens)
+    _percent_frame_finish(slots, tokens, borrowed, -1)
+    return status
+
+
+def _percent_integer_body(output, argument, data, cursor, conversion: int, flags: int, width: int, precision: int, slots: c_ptr, tokens: c_ptr) -> int:
     # mainformatlong + _PyUnicode_FormatLong.
     hexish: int = 0
     if conversion == 120 or conversion == 88 or conversion == 111:
@@ -2128,7 +2299,11 @@ def _percent_integer(output, argument, data, cursor, conversion: int, flags: int
     value = argument
     owned: int = 0
     if tag == PY_TYPE_FLOAT and hexish == 0:
-        value = py_int_from_f64_exact(py_float_to_f64(argument))
+        store_ptr(slots, _PERCENT_TEMP * C_POINTER_SIZE,
+                  py_int_from_f64_exact(py_float_to_f64(argument)))
+        if _format_callback_adopt(slots, tokens, _PERCENT_TEMP) != 0:
+            return -1
+        value = load_ptr(slots, _PERCENT_TEMP * C_POINTER_SIZE)
         if ptr_is_null(value) != 0:
             return -1
         owned = 1
@@ -2144,7 +2319,7 @@ def _percent_integer(output, argument, data, cursor, conversion: int, flags: int
     meta = stack_alloc(24)
     digits_text = _int_digit_text(value, base, meta)
     if owned != 0:
-        py_decref(value)
+        _percent_drop(slots, tokens, _PERCENT_TEMP)
     if ptr_is_null(digits_text) != 0:
         py_raise_owned(py_exc_new(19, cstr("out of memory")))
         return -1
@@ -2199,11 +2374,34 @@ def _percent_float(output, argument, data, cursor, conversion: int, flags: int, 
 
 
 def _percent_char(output, argument, data, cursor, flags: int, width: int, bytes_mode: int) -> int:
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, argument)
+    store_ptr(borrowed, C_POINTER_SIZE, null())
+    pcc_gc_frame_enter(global_addr("pcc_percent_borrowed_map"), borrowed)
+    slots = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_percent_owned_map"), slots)
+    status: int = _percent_frame_copy_inputs(slots, tokens, borrowed)
+    if status == 0:
+        status = _percent_char_body(output, load_ptr(slots, _PERCENT_INPUT * C_POINTER_SIZE), data, cursor, flags, width, bytes_mode, slots, tokens)
+    _percent_frame_finish(slots, tokens, borrowed, -1)
+    return status
+
+
+def _percent_char_body(output, argument, data, cursor, flags: int, width: int, bytes_mode: int, slots: c_ptr, tokens: c_ptr) -> int:
     tag: int = _type_of(argument)
     if bytes_mode != 0:
-        payload = _bytes_payload(argument)
-        if ptr_is_null(payload) == 0 and tag != PY_TYPE_MEMORYVIEW:
-            payload_length: int = _bytes_payload_length(argument)
+        if tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY:
+            store_ptr(slots, _PERCENT_TEMP * C_POINTER_SIZE, py_bytes_from_obj(argument))
+            if _format_callback_adopt(slots, tokens, _PERCENT_TEMP) != 0:
+                return -1
+            copied = load_ptr(slots, _PERCENT_TEMP * C_POINTER_SIZE)
+            if ptr_is_null(copied) != 0:
+                return -1
+            payload = _bytes_payload(copied)
+            payload_length: int = _bytes_payload_length(copied)
             if payload_length != 1:
                 message = _buffer_new(96)
                 _buffer_cstr(
@@ -2249,40 +2447,85 @@ def _percent_char(output, argument, data, cursor, flags: int, width: int, bytes_
         message = _buffer_new(48)
         _buffer_cstr(message, cstr("%c argument not in range(0x110000)"))
         return _percent_arg_error(15, data, cursor, message)
-    character = py_chr_from_i64(point)
+    store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, py_chr_from_i64(point))
+    if _format_callback_adopt(slots, tokens, _PERCENT_RESULT) != 0:
+        return -1
+    character = load_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE)
     if ptr_is_null(character) != 0:
         return -1
     rc: int = _percent_output_text(
         output, py_str_utf8(character), py_str_byte_len(character), flags, width, -1, 1
     )
-    py_decref(character)
+    _percent_drop(slots, tokens, _PERCENT_RESULT)
     return rc
 
 
 def _percent_text(output, argument, data, cursor, conversion: int, flags: int, width: int, precision: int, bytes_mode: int) -> int:
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, argument)
+    store_ptr(borrowed, C_POINTER_SIZE, null())
+    pcc_gc_frame_enter(global_addr("pcc_percent_borrowed_map"), borrowed)
+    slots = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_percent_owned_map"), slots)
+    status: int = _percent_frame_copy_inputs(slots, tokens, borrowed)
+    if status == 0:
+        status = _percent_text_body(output, load_ptr(slots, _PERCENT_INPUT * C_POINTER_SIZE), data, cursor, conversion, flags, width, precision, bytes_mode, slots, tokens)
+    _percent_frame_finish(slots, tokens, borrowed, -1)
+    return status
+
+
+def _percent_text_body(output, argument, data, cursor, conversion: int, flags: int, width: int, precision: int, bytes_mode: int, slots: c_ptr, tokens: c_ptr) -> int:
     if bytes_mode != 0 and (conversion == 115 or conversion == 98):
-        payload = _bytes_payload(argument)
-        if ptr_is_null(payload) == 0:
+        argument_tag: int = _type_of(argument)
+        if argument_tag == PY_TYPE_BYTES or argument_tag == PY_TYPE_BYTEARRAY or argument_tag == PY_TYPE_MEMORYVIEW:
+            # Materialize through the rooted buffer constructor. A view owner
+            # alone cannot keep an interior base-object address from moving.
+            store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, py_bytes_from_obj(argument))
+            if _format_callback_adopt(slots, tokens, _PERCENT_RESULT) != 0:
+                return -1
+            copied = load_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE)
+            if ptr_is_null(copied) != 0:
+                return -1
             return _percent_output_text(
-                output, payload, _bytes_payload_length(argument), flags, width, precision, 0
+                output, _bytes_payload(copied), _bytes_payload_length(copied), flags, width, precision, 0
             )
         # Only an object with __bytes__ converts; bytes(5) would be five NULs.
         converted = null()
         tag: int = _type_of(argument)
         if tag == PY_TYPE_INSTANCE or tag >= PY_TYPE_USER_CLASS_START:
-            method = py_obj_getattr(argument, cstr("__bytes__"))
+            store_ptr(slots, _PERCENT_METHOD * C_POINTER_SIZE,
+                      py_obj_getattr(argument, cstr("__bytes__")))
+            if _format_callback_adopt(slots, tokens, _PERCENT_METHOD) != 0:
+                return -1
+            method = load_ptr(slots, _PERCENT_METHOD * C_POINTER_SIZE)
             if ptr_is_null(method) == 0:
-                empty = py_tuple_new(0)
-                converted = py_obj_call(method, empty, global_load_ptr("py_None"))
-                py_decref(empty)
-                py_decref(method)
+                store_ptr(slots, _PERCENT_CALL_ARGS * C_POINTER_SIZE, py_tuple_new(0))
+                if _format_callback_adopt(slots, tokens, _PERCENT_CALL_ARGS) != 0:
+                    return -1
+                if ptr_is_null(load_ptr(slots, _PERCENT_CALL_ARGS * C_POINTER_SIZE)) != 0:
+                    return -1
+                store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, py_obj_call(
+                    load_ptr(slots, _PERCENT_METHOD * C_POINTER_SIZE),
+                    load_ptr(slots, _PERCENT_CALL_ARGS * C_POINTER_SIZE), global_load_ptr("py_None"),
+                ))
+                if _format_callback_adopt(slots, tokens, _PERCENT_RESULT) != 0:
+                    return -1
+                _percent_drop(slots, tokens, _PERCENT_CALL_ARGS)
+                _percent_drop(slots, tokens, _PERCENT_METHOD)
+                converted = load_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE)
                 if ptr_is_null(converted) != 0:
                     return -1
             elif py_err_occurred() != 0:
                 py_clear_exception()
-        if ptr_is_null(converted) != 0 or _bytes_payload_length(converted) < 0:
+        converted_tag: int = -1
+        if ptr_is_null(converted) == 0:
+            converted_tag = _type_of(converted)
+        if converted_tag != PY_TYPE_BYTES and converted_tag != PY_TYPE_BYTEARRAY and converted_tag != PY_TYPE_MEMORYVIEW:
             if ptr_is_null(converted) == 0:
-                py_decref(converted)
+                _percent_drop(slots, tokens, _PERCENT_RESULT)
             message = _buffer_new(96)
             _buffer_cstr(
                 message,
@@ -2290,27 +2533,39 @@ def _percent_text(output, argument, data, cursor, conversion: int, flags: int, w
             )
             _append_type_name(message, argument)
             return _percent_arg_error(3, data, cursor, message)
+        # Preserve the existing accepted bytes-like custom-result set, but
+        # never traverse an unleased memoryview base before taking its copy.
+        store_ptr(slots, _PERCENT_TEMP * C_POINTER_SIZE, py_bytes_from_obj(converted))
+        if _format_callback_adopt(slots, tokens, _PERCENT_TEMP) != 0:
+            return -1
+        copied_result = load_ptr(slots, _PERCENT_TEMP * C_POINTER_SIZE)
+        if ptr_is_null(copied_result) != 0:
+            return -1
         rc: int = _percent_output_text(
             output,
-            _bytes_payload(converted),
-            _bytes_payload_length(converted),
+            _bytes_payload(copied_result),
+            _bytes_payload_length(copied_result),
             flags,
             width,
             precision,
             0,
         )
-        py_decref(converted)
+        _percent_drop(slots, tokens, _PERCENT_RESULT)
         return rc
-    rendered = null()
     if conversion == 115 and _type_of(argument) == PY_TYPE_STR:
-        py_incref(argument)
-        rendered = argument
-    elif conversion == 115:
-        rendered = py_obj_str(argument)
-    elif conversion == 114 and bytes_mode == 0:
-        rendered = py_obj_repr(argument)
+        if _percent_copy(slots, tokens, _PERCENT_RESULT,
+                ptr_add(slots, _PERCENT_INPUT * C_POINTER_SIZE)) != 0:
+            return -1
     else:
-        rendered = py_obj_ascii(argument)
+        if conversion == 115:
+            store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, py_obj_str(argument))
+        elif conversion == 114 and bytes_mode == 0:
+            store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, py_obj_repr(argument))
+        else:
+            store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, py_obj_ascii(argument))
+        if _format_callback_adopt(slots, tokens, _PERCENT_RESULT) != 0:
+            return -1
+    rendered = load_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE)
     if ptr_is_null(rendered) != 0 or _type_of(rendered) != PY_TYPE_STR:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(3, cstr("format argument cannot be converted to string")))
@@ -2324,7 +2579,7 @@ def _percent_text(output, argument, data, cursor, conversion: int, flags: int, w
         precision,
         1 - bytes_mode,
     )
-    py_decref(rendered)
+    _percent_drop(slots, tokens, _PERCENT_RESULT)
     return rc2
 
 
@@ -2348,27 +2603,33 @@ def _bytes_payload_length(value) -> int:
     return -1
 
 
-def _mapping_argument(arguments, data, key_start: int, key_length: int, bytes_key: int):
-    key = null()
-    if bytes_key != 0:
-        key = py_bytes_new(ptr_add(data, key_start), key_length)
-    else:
-        key = py_str_new(ptr_add(data, key_start), key_length)
-    if ptr_is_null(key) != 0:
-        return null()
-    value = py_dict_get(arguments, key)
-    if ptr_is_null(value) != 0:
-        # KeyError('a'): the missing key itself, as CPython raises it.
-        py_raise_owned(py_exc_new_with_value(4, key))
-    py_decref(key)
-    return value
 
 
-def _format_percent(data, length: int, arguments, bytes_mode: int):
+
+def _format_percent(data: c_ptr, length: int, arguments, bytes_mode: int):
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, arguments)
+    store_ptr(borrowed, C_POINTER_SIZE, null())
+    pcc_gc_frame_enter(global_addr("pcc_percent_borrowed_map"), borrowed)
+    slots = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_percent_owned_map"), slots)
+    status: int = _percent_frame_copy_inputs(slots, tokens, borrowed)
+    if status == 0:
+        status = _format_percent_body(data, length, load_ptr(slots, _PERCENT_INPUT * C_POINTER_SIZE), bytes_mode, slots, tokens)
+    keep: int = -1
+    if status == 0:
+        keep = _PERCENT_RESULT
+    return _percent_frame_finish(slots, tokens, borrowed, keep)
+
+
+def _format_percent_body(data: c_ptr, length: int, arguments, bytes_mode: int, slots: c_ptr, tokens: c_ptr):
     output = _buffer_new(length + 64)
     if ptr_is_null(output) != 0:
         py_raise_owned(py_exc_new(19, cstr("out of memory")))
-        return null()
+        return -1
     cursor = stack_alloc(_ARG_BYTES)
     offset: int = 0
     while offset < _ARG_BYTES:
@@ -2423,12 +2684,11 @@ def _format_percent(data, length: int, arguments, bytes_mode: int):
                 _percent_error_at(cstr("stray % or incomplete format key"), percent)
                 failed = 1
                 break
-            argument = _mapping_argument(
-                arguments, data, key_start, scan - 1 - key_start, bytes_mode
-            )
-            if ptr_is_null(argument) != 0:
+            if _percent_mapping_argument_slots(
+                    slots, tokens, data, key_start, scan - 1 - key_start, bytes_mode) != 0:
                 failed = 1
                 break
+            argument = load_ptr(slots, _PERCENT_ARGUMENT * C_POINTER_SIZE)
             store_i64(cursor, _ARG_OWNED, 1)
             store_i64(cursor, _ARG_LABEL, 2)
             store_i64(cursor, _ARG_KEY, key_start)
@@ -2458,7 +2718,7 @@ def _format_percent(data, length: int, arguments, bytes_mode: int):
         store_i64(spec, 16, -1)
         if position < length and load_i8(data, position) == 42:
             if keyed != 0:
-                _percent_release_argument(argument, cursor)
+                _percent_release_argument_slots(slots, tokens, cursor)
                 _percent_error_at(cstr("* cannot be used with a parenthesised mapping key"), percent)
                 failed = 1
                 break
@@ -2476,7 +2736,7 @@ def _format_percent(data, length: int, arguments, bytes_mode: int):
             position = position + 1
             if position < length and load_i8(data, position) == 42:
                 if keyed != 0:
-                    _percent_release_argument(argument, cursor)
+                    _percent_release_argument_slots(slots, tokens, cursor)
                     _percent_error_at(cstr("* cannot be used with a parenthesised mapping key"), percent)
                     failed = 1
                     break
@@ -2494,7 +2754,7 @@ def _format_percent(data, length: int, arguments, bytes_mode: int):
             if modifier == 104 or modifier == 108 or modifier == 76:
                 position = position + 1
         if position >= length:
-            _percent_release_argument(argument, cursor)
+            _percent_release_argument_slots(slots, tokens, cursor)
             _percent_error_at(cstr("stray %"), percent)
             failed = 1
             break
@@ -2505,10 +2765,10 @@ def _format_percent(data, length: int, arguments, bytes_mode: int):
                 _percent_error_at(cstr("format requires a parenthesised mapping key"), percent)
                 failed = 1
                 break
-            argument = _percent_next_argument(arguments, cursor)
-            if ptr_is_null(argument) != 0:
+            if _percent_next_argument_slots(slots, tokens, cursor) != 0:
                 failed = 1
                 break
+            argument = load_ptr(slots, _PERCENT_ARGUMENT * C_POINTER_SIZE)
         width: int = load_i64(spec, 8)
         precision: int = load_i64(spec, 16)
         rc: int = 0
@@ -2547,7 +2807,7 @@ def _format_percent(data, length: int, arguments, bytes_mode: int):
             _buffer_decimal(message, percent)
             _raise_buffer_error(message, 2)
             rc = -1
-        _percent_release_argument(argument, cursor)
+        _percent_release_argument_slots(slots, tokens, cursor)
         if rc != 0:
             failed = 1
     if failed == 0 and is_mapping == 0:
@@ -2571,40 +2831,78 @@ def _format_percent(data, length: int, arguments, bytes_mode: int):
             _buffer_char(message, 41)
             _raise_buffer_error(message, 3)
             failed = 1
-    result = null()
     if failed == 0:
         if bytes_mode != 0:
-            result = _buffer_bytes(output)
+            store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, _buffer_bytes(output))
         else:
-            result = _buffer_string(output)
+            store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, _buffer_string(output))
+        if _format_callback_adopt(slots, tokens, _PERCENT_RESULT) != 0:
+            failed = 1
     _buffer_free(output)
-    return result
+    return -1 if failed != 0 else 0
+
+
+def _percent_format_entry(format_obj, arguments, bytes_mode: int):
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, format_obj)
+    store_ptr(borrowed, C_POINTER_SIZE, arguments)
+    pcc_gc_frame_enter(global_addr("pcc_percent_borrowed_map"), borrowed)
+    slots = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _PERCENT_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_percent_owned_map"), slots)
+    status: int = _percent_frame_copy_inputs(slots, tokens, borrowed)
+    keep: int = -1
+    if status == 0:
+        keep = _percent_format_entry_body(load_ptr(slots, _PERCENT_INPUT * C_POINTER_SIZE), load_ptr(slots, _PERCENT_OTHER * C_POINTER_SIZE), bytes_mode, slots, tokens)
+    return _percent_frame_finish(slots, tokens, borrowed, keep)
+
+
+def _percent_format_entry_body(format_obj, arguments, bytes_mode: int,
+                               slots: c_ptr, tokens: c_ptr) -> int:
+    format_tag: int = _type_of(format_obj)
+    if bytes_mode == 0:
+        if ptr_is_null(format_obj) != 0 or format_tag != PY_TYPE_STR:
+            py_raise_owned(py_exc_new(3, cstr("left operand of % must be str")))
+            return -1
+        store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, _format_percent(
+            py_str_utf8(format_obj), py_str_byte_len(format_obj), arguments, 0,
+        ))
+    else:
+        if format_tag != PY_TYPE_BYTES and format_tag != PY_TYPE_BYTEARRAY:
+            py_raise_owned(py_exc_new(3, cstr("left operand of % must be bytes or bytearray")))
+            return -1
+        if format_tag == PY_TYPE_BYTEARRAY:
+            store_ptr(slots, _PERCENT_ARGUMENT * C_POINTER_SIZE, py_bytes_from_obj(format_obj))
+            if _format_callback_adopt(slots, tokens, _PERCENT_ARGUMENT) != 0:
+                return -1
+            format_obj = load_ptr(slots, _PERCENT_ARGUMENT * C_POINTER_SIZE)
+            if ptr_is_null(format_obj) != 0:
+                return -1
+        store_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE, _format_percent(
+            ptr_add(format_obj, 24), load_i64(format_obj, 16), arguments, 1,
+        ))
+    if _format_callback_adopt(slots, tokens, _PERCENT_RESULT) != 0:
+        return -1
+    if bytes_mode != 0 and format_tag == PY_TYPE_BYTEARRAY:
+        if ptr_is_null(load_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE)) == 0:
+            store_ptr(slots, _PERCENT_TEMP * C_POINTER_SIZE,
+                      py_bytearray_from_obj(load_ptr(slots, _PERCENT_RESULT * C_POINTER_SIZE)))
+            if _format_callback_adopt(slots, tokens, _PERCENT_TEMP) != 0:
+                return -1
+            return _PERCENT_TEMP
+    return _PERCENT_RESULT
 
 
 @c_abi_export("py_str_mod")
 def py_str_mod(format_obj, arguments):
-    if ptr_is_null(format_obj) != 0 or _type_of(format_obj) != PY_TYPE_STR:
-        py_raise_owned(py_exc_new(3, cstr("left operand of % must be str")))
-        return null()
-    return _format_percent(
-        py_str_utf8(format_obj), py_str_byte_len(format_obj), arguments, 0
-    )
+    return _percent_format_entry(format_obj, arguments, 0)
 
 
 @c_abi_export("py_bytes_mod")
 def py_bytes_mod(format_obj, arguments):
-    format_tag: int = _type_of(format_obj)
-    if format_tag != PY_TYPE_BYTES and format_tag != PY_TYPE_BYTEARRAY:
-        py_raise_owned(py_exc_new(3, cstr("left operand of % must be bytes or bytearray")))
-        return null()
-    result = _format_percent(
-        ptr_add(format_obj, 24), load_i64(format_obj, 16), arguments, 1
-    )
-    if ptr_is_null(result) == 0 and format_tag == PY_TYPE_BYTEARRAY:
-        bytearray = py_bytearray_from_obj(result)
-        py_decref(result)
-        return bytearray
-    return result
+    return _percent_format_entry(format_obj, arguments, 1)
 
 
 py_unicode_error_get_field = extern("py_unicode_error_get_field", (c_ptr, c_int64), c_ptr)

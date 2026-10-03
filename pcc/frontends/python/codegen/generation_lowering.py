@@ -11,6 +11,7 @@ from pcc.frontends.c.codegen.c_varargs import postprocess_varargs_ir
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Assign, AugAssign, ClassDef, Delete, Raise, DynType, ExprStmt, For, FuncDef, If, ImportFrom, Module, Name, Stmt, StrLit, Try, While, With
+from pcc.frontends.python.py_ast import Call, ListExpr, TupleExpr
 from pcc.frontends.python.codegen.layer1_support import _import_from_module_or_empty, _import_names_from_stmt, _is_import_from_stmt, _is_import_stmt
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.hoist_lowering import hoist_nested_funcdefs
@@ -102,6 +103,31 @@ def _iter_module_handler_names(stmt: Stmt):
             for handler in current.handlers:
                 if handler.name is not None:
                     yield handler.name
+                pending.extend(handler.body)
+        for field in ("body", "else_body", "finally_body"):
+            pending.extend(getattr(current, field, ()))
+
+
+def _iter_module_for_target_names(stmt: Stmt):
+    """Loop targets bind the module namespace, including unpacked leaves."""
+    pending = [stmt]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, (FuncDef, ClassDef)):
+            continue
+        if isinstance(current, For):
+            targets = [current.target]
+            while targets:
+                target = targets.pop()
+                if isinstance(target, Name):
+                    yield target.ident
+                elif isinstance(target, (TupleExpr, ListExpr)):
+                    targets.extend(target.elems)
+                elif (isinstance(target, Call) and isinstance(target.func, Name)
+                      and target.func.ident in ("*", "__starred__")):
+                    targets.extend(target.args)
+        if isinstance(current, Try):
+            for handler in current.handlers:
                 pending.extend(handler.body)
         for field in ("body", "else_body", "finally_body"):
             pending.extend(getattr(current, field, ()))
@@ -387,6 +413,16 @@ class GenerationLoweringMixin:
         # so called functions read the same binding and observe its deletion.
         for stmt in self.ast_module.body:
             for binding_name in _iter_module_handler_names(stmt):
+                self._ensure_module_global_name(binding_name, DynType(name="dyn"))
+                if getattr(self, "_module_del_target_names", None) is None:
+                    self._module_del_target_names = set()
+                self._module_del_target_names.add(binding_name)
+
+        # Reserve loop bindings before an earlier scalar assignment can
+        # choose narrower storage. Zero iterations must leave the prior binding
+        # unchanged, or leave an absent name unbound.
+        for stmt in self.ast_module.body:
+            for binding_name in _iter_module_for_target_names(stmt):
                 self._ensure_module_global_name(binding_name, DynType(name="dyn"))
                 if getattr(self, "_module_del_target_names", None) is None:
                     self._module_del_target_names = set()

@@ -39,6 +39,8 @@ from pcc.runtime.py.py_abi_constants import (
     PYDICTOBJECT_ITEM_COUNT_OFFSET,
     PYDICTOBJECT_SIZE,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_FLAG_GC_PINNED,
     PYLISTOBJECT_ITEMS_OFFSET,
     PYLISTOBJECT_LENGTH_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
@@ -50,6 +52,7 @@ from pcc.runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     cstr,
+    define_global_i32,
     free,
     global_addr,
     int_to_ptr,
@@ -1565,80 +1568,17 @@ def py_dict_entry_value_at(d, i: int):
 
 @c_abi_export("py_dict_keys")
 def py_dict_keys(d):
-    if not _ptr_is_dict(d):
-        return null()
-    size: int = load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET)
-    cap_hint: int = size
-    if cap_hint <= 0:
-        cap_hint = 4
-    out = py_list_new(cap_hint)
-    if ptr_is_null(out) != 0:
-        return null()
-    entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
-    entries_used: int = load_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET)
-    i: int = 0
-    while i < entries_used:
-        off: int = i * DICTENTRY_SIZE
-        k = _entry_key(d, entries, off)
-        if ptr_is_null(k) == 0:
-            py_list_append(out, k)
-        i = i + 1
-    return out
+    return _dict_materialize_raw(d, _DICT_MATERIALIZE_KEYS)
 
 
 @c_abi_export("py_dict_values")
 def py_dict_values(d):
-    if not _ptr_is_dict(d):
-        return null()
-    size: int = load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET)
-    cap_hint: int = size
-    if cap_hint <= 0:
-        cap_hint = 4
-    out = py_list_new(cap_hint)
-    if ptr_is_null(out) != 0:
-        return null()
-    entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
-    entries_used: int = load_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET)
-    i: int = 0
-    while i < entries_used:
-        off: int = i * DICTENTRY_SIZE
-        k = _entry_key(d, entries, off)
-        if ptr_is_null(k) == 0:
-            v = _entry_value(d, entries, off)
-            py_list_append(out, v)
-        i = i + 1
-    return out
+    return _dict_materialize_raw(d, _DICT_MATERIALIZE_VALUES)
 
 
 @c_abi_export("py_dict_items")
 def py_dict_items(d):
-    if not _ptr_is_dict(d):
-        return null()
-    size: int = load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET)
-    cap_hint: int = size
-    if cap_hint <= 0:
-        cap_hint = 4
-    out = py_list_new(cap_hint)
-    if ptr_is_null(out) != 0:
-        return null()
-    entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
-    entries_used: int = load_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET)
-    i: int = 0
-    while i < entries_used:
-        off: int = i * DICTENTRY_SIZE
-        k = _entry_key(d, entries, off)
-        if ptr_is_null(k) == 0:
-            v = _entry_value(d, entries, off)
-            pair = py_tuple_new(2)
-            if ptr_is_null(pair) != 0:
-                py_decref(out)
-                return null()
-            py_tuple_set_item(pair, 0, k)
-            py_tuple_set_item(pair, 1, v)
-            py_list_append(out, pair)
-            py_decref(pair)
-        i = i + 1
-    return out
+    return _dict_materialize_raw(d, _DICT_MATERIALIZE_ITEMS)
 
 
 @c_abi_export("py_dict_update")
@@ -2252,3 +2192,170 @@ def py_dict_update_slots(dict_slot, source_slot) -> int:
 @c_abi_export("py_dict_setdefault_slots")
 def py_dict_setdefault_slots(dict_slot, key_slot, default_slot, result_slot) -> int:
     return _dict_slot_set_bound(dict_slot, key_slot, default_slot, 0, 0, 1, result_slot)
+
+
+# Materialization reuses the existing dictionary slot frame and its TLS/error
+# cleanup protocol. Each role has one owner and independently counted lease.
+_DICT_MATERIALIZE_RECEIVER = 1
+_DICT_MATERIALIZE_OUTPUT = 2
+_DICT_MATERIALIZE_KEY = 3
+_DICT_MATERIALIZE_VALUE = 4
+_DICT_MATERIALIZE_PAIR = 5
+_DICT_MATERIALIZE_KEYS = 0
+_DICT_MATERIALIZE_VALUES = 1
+_DICT_MATERIALIZE_ITEMS = 2
+_DICT_MATERIALIZE_SLOT_COUNT = 16
+
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+define_global_i32("pcc_dict_materialize_borrowed_map", -1)
+define_global_i32("pcc_dict_materialize_result_map", 2)
+
+
+def _dict_materialize_entry(slots, tokens, index: int, key_plan, value_plan) -> int:
+    # Select a key/value pair from the actual current owning table under one
+    # graph transaction. No table address or borrowed child crosses unlock.
+    key_slot = ptr_add(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE)
+    value_slot = ptr_add(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE)
+    prepared: int = 0
+    key_token: int = 0
+    value_token: int = 0
+    pcc_py_gc_minor_graph_lock()
+    receiver = load_ptr(slots, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE)
+    if index < load_i64(receiver, PYDICTOBJECT_ENTRIES_USED_OFFSET):
+        entries = load_ptr(receiver, PYDICTOBJECT_ENTRIES_OFFSET)
+        offset: int = index * DICTENTRY_SIZE
+        key_source = ptr_add(entries, offset + DICTENTRY_KEY_OFFSET)
+        if ptr_is_null(load_ptr(key_source, 0)) == 0:
+            key_token = pcc_gc_root_copy_lease_prepare_locked(key_slot, key_source, 0, key_plan)
+            prepared = 1
+            if key_token >= 0:
+                store_i64(tokens, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE, key_token)
+                value_token = pcc_gc_root_copy_lease_prepare_locked(
+                    value_slot, ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET), 0, value_plan)
+                prepared = 2
+                if value_token >= 0:
+                    store_i64(tokens, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE, value_token)
+    pcc_py_gc_minor_graph_unlock()
+    if prepared > 0:
+        pcc_gc_root_copy_lease_finish(key_plan)
+    if prepared > 1:
+        pcc_gc_root_copy_lease_finish(value_plan)
+    if key_token < 0 or value_token < 0:
+        return _dict_slot_error(cstr("dictionary materialization item transfer failed"))
+    return 1 if prepared != 0 else 0
+
+
+def _dict_materialize_body(slots, tokens, kind: int) -> int:
+    receiver = load_ptr(slots, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE)
+    capacity: int = load_i64(receiver, PYDICTOBJECT_ITEM_COUNT_OFFSET)
+    if capacity <= 0:
+        capacity = 4
+    store_ptr(slots, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE, py_list_new(capacity))
+    if _dict_slot_adopt(slots, tokens, _DICT_MATERIALIZE_OUTPUT) != 0:
+        return -1
+    # Preserve the existing eager materialization's bounded entry count. Each
+    # later selection reloads the current table instead of retaining a stale
+    # payload pointer across list/tuple allocation or an append callback.
+    pcc_py_gc_minor_graph_lock()
+    limit: int = load_i64(load_ptr(slots, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE), PYDICTOBJECT_ENTRIES_USED_OFFSET)
+    pcc_py_gc_minor_graph_unlock()
+    key_plan = stack_alloc(256)
+    value_plan = stack_alloc(256)
+    index: int = 0
+    while index < limit:
+        selected: int = _dict_materialize_entry(slots, tokens, index, key_plan, value_plan)
+        if selected < 0:
+            return -1
+        if selected != 0:
+            item: int = _DICT_MATERIALIZE_KEY
+            if kind == _DICT_MATERIALIZE_VALUES:
+                item = _DICT_MATERIALIZE_VALUE
+            elif kind == _DICT_MATERIALIZE_ITEMS:
+                store_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE, py_tuple_new(2))
+                if _dict_slot_adopt(slots, tokens, _DICT_MATERIALIZE_PAIR) != 0:
+                    return -1
+                py_tuple_set_item(load_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE), 0,
+                    load_ptr(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE))
+                if py_err_occurred() != 0:
+                    return -1
+                py_tuple_set_item(load_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE), 1,
+                    load_ptr(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE))
+                if py_err_occurred() != 0:
+                    return -1
+                item = _DICT_MATERIALIZE_PAIR
+            py_list_append(load_ptr(slots, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE),
+                load_ptr(slots, item * C_POINTER_SIZE))
+            if py_err_occurred() != 0:
+                return -1
+            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_PAIR)
+            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_VALUE)
+            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_KEY)
+        index = index + 1
+    return 0
+
+
+def _dict_materialize_bound(source_slot, result_slot, kind: int) -> int:
+    slots = stack_alloc(_DICT_MATERIALIZE_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_DICT_MATERIALIZE_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_DICT_MATERIALIZE_SLOT_COUNT * C_POINTER_SIZE)
+    count: int = _dict_slot_open(slots, tokens, handles)
+    suspended: int = 0
+    status: int = -1
+    if count == _DICT_MATERIALIZE_SLOT_COUNT:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE), source_slot)
+        if token >= 0:
+            store_i64(tokens, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE, token)
+            status = _dict_materialize_body(slots, tokens, kind)
+        if status == 0:
+            status = pcc_gc_root_move(result_slot, ptr_add(slots, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE))
+            if status == 0:
+                token = load_i64(tokens, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE)
+                store_i64(tokens, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE, 0)
+                if pcc_gc_foreign_lease_release(result_slot, token) != 0:
+                    pcc_platform_abort()
+                    return -1
+    if status != 0:
+        _dict_slot_error(cstr("dictionary materialization failed without an exception"))
+    _dict_slot_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+def _dict_materialize_raw(receiver, kind: int):
+    # Existing raw ABI: the caller keeps this borrowed input alive and stable
+    # through entry. Once linked, the borrowed frame is the authoritative input
+    # across scratch registration; it is never relabeled as a NEW reference.
+    if not _ptr_is_dict(receiver):
+        return null()
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, receiver)
+    pcc_gc_frame_enter(global_addr("pcc_dict_materialize_borrowed_map"), borrowed)
+    result_slot = stack_alloc(2 * C_POINTER_SIZE)
+    memset(result_slot, 0, 2 * C_POINTER_SIZE)
+    error_slot = ptr_add(result_slot, C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_dict_materialize_result_map"), result_slot)
+    _dict_materialize_bound(borrowed, result_slot, kind)
+    token: int = pcc_gc_foreign_lease_acquire(result_slot)
+    if token < 0:
+        _dict_slot_error(cstr("dictionary result return lease failed"))
+        py_tls_exc_swap_slot(error_slot)
+        pcc_gc_store_root(result_slot, null())
+        py_clear_exception()
+        py_tls_exc_swap_slot(error_slot)
+        token = 0
+    prior: int = 0
+    result = load_ptr(result_slot, 0)
+    if ptr_is_null(result) == 0:
+        prior = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+        pcc_gc_pin(result)
+    pcc_gc_frame_leave(result_slot)
+    pcc_gc_frame_leave(borrowed)
+    if pcc_gc_foreign_lease_release(result_slot, token) != 0:
+        pcc_platform_abort()
+        return null()
+    return pcc_gc_take_pinned_slot(result_slot, prior)

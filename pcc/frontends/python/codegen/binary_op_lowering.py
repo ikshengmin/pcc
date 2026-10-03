@@ -57,7 +57,7 @@ class BinaryOpLoweringMixin:
         never admit a primitive integer kernel or prove overflow impossible.
         Explicit machine projections retain their own lowering.
         """
-        if (expr.op not in ("+", "-", "/") or getattr(self, "_freestanding_module", False)
+        if (expr.op not in ("+", "-", "/", "<<", ">>") or getattr(self, "_freestanding_module", False)
                 or getattr(self, "_runtime_port_module", False)):
             return None
         function = self.current_function
@@ -83,6 +83,11 @@ class BinaryOpLoweringMixin:
         for operand in (expr.lhs, expr.rhs):
             if self._expr_returns_unsafe_raw_pointer(operand):
                 return None
+        if expr.op in ("<<", ">>"):
+            # Keep arbitrary-precision values and counts boxed. The runtime
+            # checks actual types and count sign/size; annotations prove no
+            # fixed-width arithmetic property.
+            return "py_obj_lshift" if expr.op == "<<" else "py_obj_rshift"
         if expr.op == "/":
             # Match the existing dynamic division route exactly. Its runtime
             # numeric/dunder dispatch is unchanged; only NEW publication moves

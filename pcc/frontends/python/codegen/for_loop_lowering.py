@@ -7,6 +7,7 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Assign, Attr, BoolLit, BoolType, Break, Call, DictType, DynType, Expr, For, FuncDef, If, IntType, Lambda, ListType, Name, SetType, StrType, Try, TupleExpr, TupleType, Type, While
+from pcc.frontends.python.py_ast import ListExpr
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
 from pcc.frontends.python.codegen.errors import L1CodegenError
@@ -285,6 +286,23 @@ def _for_prepare_owned_object_target(host, target_ident: str, target_ty: Type):
     resulting runtime flag distinguishes an actually bound value from an
     unexecuted loop whose target had no pre-loop binding.
     """
+    global_entry = host._module_globals.get(target_ident)
+    if (host.current_func_def is None and global_entry is not None
+            and getattr(host, "_class_namespace_context", None) is None):
+        alloca, declared_ty = global_entry
+        if not isinstance(alloca.value_type, ir.PointerType):
+            raise L1CodegenError("module loop binding requires object storage: " + target_ident)
+        if (getattr(host, "_cpy_env_flags", {}).get(target_ident, False)
+                or getattr(host, "_cpy_module_flags", {}).get(target_ident, False)):
+            raise L1CodegenError("cannot join a CPython module loop target with a native object binding")
+        host.env[target_ident] = (alloca, _CSTR, target_ty)
+        if isinstance(target_ty, IntType):
+            host._exact_int_env_flags[target_ident] = True
+        else:
+            host._exact_int_env_flags.pop(target_ident, None)
+        host._clear_cpy_for_target_binding(target_ident)
+        return host.env[target_ident]
+
     existing = host.env.get(target_ident)
     if (
         existing is not None
@@ -413,6 +431,20 @@ def _for_store_owned_target(host, target_ident: str, slot, value: ir.Value) -> N
         host.runtime["pcc_gc_store_root_take"],
         [host._as_gc_ptr(alloca), value],
     )
+    global_entry = host._module_globals.get(target_ident)
+    if (host.current_func_def is None and global_entry is not None
+            and global_entry[0] is alloca
+            and getattr(host, "_class_namespace_context", None) is None):
+        host._mark_module_global_initialized(alloca)
+        # Read the current owner under a counted lease: replacing the old
+        # value can run a finalizer that rebinds this same module name.
+        module_name = host._pooled_cstr_ptr(host.ast_module.name or "__main__", ".pcc.for.binding.module")
+        host._slot_call_runtime_call(
+            "py_module_attr_set", (alloca,),
+            suffix_args=(module_name, host._attr_name_ptr(target_ident)),
+            argument_order=(1, 2, 0),
+        )
+        return
     owned_flag = host._ensure_owned_local_flag(target_ident, alloca)
     host.builder.store(ir.Constant(_I1, 1), owned_flag)
 
@@ -2060,6 +2092,17 @@ class ForLoopLoweringMixin:
     def _emit_for(self, stmt: For) -> None:
         """Push the loop under lowering so the for-target join analysis can
         locate its position in the enclosing function body, then lower it."""
+        if (self.current_func_def is None
+                and getattr(self, "_class_namespace_context", None) is None):
+            targets = [stmt.target]
+            while targets:
+                target = targets.pop()
+                if isinstance(target, (TupleExpr, ListExpr)):
+                    targets.extend(target.elems)
+                elif isinstance(target, Name):
+                    entry = self._module_globals.get(target.ident)
+                    if entry is not None:
+                        self.env[target.ident] = (entry[0], entry[0].value_type, entry[1])
         self._for_join_stmt_stack.append(stmt)
         try:
             self._emit_for_body(stmt)
