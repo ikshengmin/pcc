@@ -191,7 +191,7 @@ def test_raw_difference_preserves_existing_invalid_input_contract(left, right, e
 
 def test_unqualified_algebra_operation_is_rejected():
     memory = BinaryMemory('drop')
-    assert memory.binary({1}, {2}, operation=1) is None
+    assert memory.binary({1}, {2}, operation=7) is None
     assert memory.error[0] == 7
 
 

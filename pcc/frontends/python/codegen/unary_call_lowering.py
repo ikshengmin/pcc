@@ -519,6 +519,18 @@ class UnaryCallLoweringMixin:
             if isinstance(param_ir_ty, ir.IntType) and param_ir_ty.width == 1:
                 raw = self._emit_expr(ast_arg)
                 return self._truthy(raw, ast_arg.ty)
+        if (self._is_valueclass_payload_type(target_ty)
+                and not self._valueclass_payload_pointer_field_paths(target_ty)
+                and str(param_ir_ty) == str(self._valueclass_payload_ir_type(target_ty))):
+            # A direct aggregate parameter needs the initialized payload,
+            # not an ordinary instance followed by valuebox field reads.
+            # Pointer-bearing fields need owners across later operands; do
+            # not apply this scalar (possibly nested) shortcut to that shape.
+            payload = self._maybe_emit_valueclass_constructor_payload(
+                target_ty, ast_arg,
+            )
+            if payload is not None:
+                return payload
         if self._is_object(target_ty) and isinstance(ast_arg, Call):
             payload = self._maybe_emit_valueclass_constructor_payload(
                 ast_arg.ty,

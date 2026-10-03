@@ -846,27 +846,14 @@ def py_set_update(dst, src) -> None:
     _set_read_finish_root(dst_handle)
 
 
+@c_abi_export("py_set_union")
+def py_set_union(a, b):
+    return _set_binary_owned(a, b, 0)
+
+
 @c_abi_export("py_set_intersection")
 def py_set_intersection(a, b):
-    out = py_set_new()
-    if ptr_is_null(out) != 0:
-        return null()
-    if not _ptr_is_set(a):
-        return out
-    if not _ptr_is_set(b):
-        return out
-    entries = load_ptr(a, 40)
-    capacity: int = load_i64(a, 24)
-    dummy = global_load_ptr("py_set_dummy")
-    i: int = 0
-    while i < capacity:
-        key = _entry_key(a, entries, i * 16)
-        if ptr_is_null(key) == 0:
-            if ptr_eq(key, dummy) == 0:
-                if py_set_contains(b, key) != 0:
-                    py_set_add(out, key)
-        i = i + 1
-    return out
+    return _set_binary_owned(a, b, 1)
 
 
 @c_abi_export("py_set_difference")
@@ -876,40 +863,7 @@ def py_set_difference(a, b):
 
 @c_abi_export("py_set_symmetric_difference")
 def py_set_symmetric_difference(a, b):
-    # a ^ b = (a - b) | (b - a); mirrors py_set.c::py_set_symmetric_difference.
-    out = py_set_new()
-    if ptr_is_null(out) != 0:
-        return null()
-    a_is_set: bool = _ptr_is_set(a)
-    b_is_set: bool = _ptr_is_set(b)
-    dummy = global_load_ptr("py_set_dummy")
-    if a_is_set:
-        entries_a = load_ptr(a, 40)
-        capacity_a: int = load_i64(a, 24)
-        i: int = 0
-        while i < capacity_a:
-            key = _entry_key(a, entries_a, i * 16)
-            if ptr_is_null(key) == 0:
-                if ptr_eq(key, dummy) == 0:
-                    if not b_is_set:
-                        py_set_add(out, key)
-                    elif py_set_contains(b, key) == 0:
-                        py_set_add(out, key)
-            i = i + 1
-    if b_is_set:
-        entries_b = load_ptr(b, 40)
-        capacity_b: int = load_i64(b, 24)
-        j: int = 0
-        while j < capacity_b:
-            key2 = _entry_key(b, entries_b, j * 16)
-            if ptr_is_null(key2) == 0:
-                if ptr_eq(key2, dummy) == 0:
-                    if not a_is_set:
-                        py_set_add(out, key2)
-                    elif py_set_contains(a, key2) == 0:
-                        py_set_add(out, key2)
-            j = j + 1
-    return out
+    return _set_binary_owned(a, b, 6)
 
 
 def _replace_contents(dst, result) -> None:
@@ -1628,7 +1582,7 @@ def _set_call_replace(slots, target: int, source: int) -> int:
 
 def _set_call_apply(slots, tokens, target: int, source: int, mode: int, match: int = 3) -> int:
     # Modes: add, discard, intersection into target (against match), xor,
-    # difference into target (against match).
+    # difference into target (against match), full-scan binary intersection.
     # Exact sets carry cached hashes. Other iterables invoke __hash__ once
     # for each delivered item, and preserve errors/partial mutation.
     is_set: int = 1 if _ptr_is_set(_set_call_load(slots, source)) else 0
@@ -1692,9 +1646,9 @@ def _set_call_apply(slots, tokens, target: int, source: int, mode: int, match: i
                 _set_call_lookup(slots, tokens, target, hash_value, 2)
             elif mode == 1:
                 _set_call_lookup(slots, tokens, target, hash_value, 1)
-            elif mode == 2 or mode == 4:
+            elif mode == 2 or mode == 4 or mode == 5:
                 found: int = _set_call_lookup(slots, tokens, match, hash_value, 0)
-                selected_match: int = found if mode == 2 else 1 - found
+                selected_match: int = 1 - found if mode == 4 else found
                 if selected_match != 0 and py_err_occurred() == 0:
                     _set_call_lookup(slots, tokens, target, hash_value, 2)
                     matched = 1
@@ -1889,21 +1843,42 @@ def _set_binary_owned(a, b, operation: int):
         if token < 0:
             _set_call_error(7, cstr("cannot retain right set operand"))
             ok = 0
-    # Other algebra operations can use this owner transaction after their own
-    # semantics are qualified. Do not route them here implicitly.
-    if ok != 0 and operation != 2:
+    # IDs match the slot-based algebra binder. Each operation keeps the
+    # original operand owners; callback mutation must not swap source aliases.
+    if ok != 0 and operation != 0 and operation != 1 and operation != 2 and operation != 6:
         _set_call_error(7, cstr("unknown binary set operation"))
         ok = 0
     if ok != 0:
         ok = _set_call_new(slots, tokens, _SET_BINARY_RESULT)
-    if ok != 0 and _ptr_is_set(_set_call_load(slots, _SET_BINARY_LEFT)):
-        if _ptr_is_set(_set_call_load(slots, _SET_BINARY_RIGHT)):
-            # Preserve binary difference's left iteration/right lookup order,
-            # including the direction of user equality callbacks.
-            ok = _set_call_apply(slots, tokens, _SET_BINARY_RESULT,
-                                 _SET_BINARY_LEFT, 4, _SET_BINARY_RIGHT)
+    if ok != 0 and operation == 0:
+        # The dispatcher admits two exact sets. Keep update order and retain
+        # both original source owners across every insertion callback.
+        if not _ptr_is_set(_set_call_load(slots, _SET_BINARY_LEFT)) or not _ptr_is_set(_set_call_load(slots, _SET_BINARY_RIGHT)):
+            _set_call_error(3, cstr("set union requires set operands"))
+            ok = 0
         else:
+            ok = _set_call_apply(slots, tokens, _SET_BINARY_RESULT,
+                                 _SET_BINARY_LEFT, 0)
+            if ok != 0:
+                ok = _set_call_apply(slots, tokens, _SET_BINARY_RESULT,
+                                     _SET_BINARY_RIGHT, 0)
+    elif ok != 0 and _ptr_is_set(_set_call_load(slots, _SET_BINARY_LEFT)):
+        if _ptr_is_set(_set_call_load(slots, _SET_BINARY_RIGHT)):
+            # Preserve left iteration/right lookup and the left key identity.
+            # Binary intersection visits the whole left table, even after the
+            # result reaches the right set's size. XOR then scans the right
+            # against the original left, rather than toggling a copied result.
+            mode: int = 5 if operation == 1 else 4
+            ok = _set_call_apply(slots, tokens, _SET_BINARY_RESULT,
+                                 _SET_BINARY_LEFT, mode, _SET_BINARY_RIGHT)
+        elif operation != 1:
             ok = _set_call_replace(slots, _SET_BINARY_RESULT, _SET_BINARY_LEFT)
+    if ok != 0 and operation == 6 and _ptr_is_set(_set_call_load(slots, _SET_BINARY_RIGHT)):
+        if _ptr_is_set(_set_call_load(slots, _SET_BINARY_LEFT)):
+            ok = _set_call_apply(slots, tokens, _SET_BINARY_RESULT,
+                                 _SET_BINARY_RIGHT, 4, _SET_BINARY_LEFT)
+        else:
+            ok = _set_call_replace(slots, _SET_BINARY_RESULT, _SET_BINARY_RIGHT)
     if py_err_occurred() != 0:
         ok = 0
     py_tls_exc_swap_slot(error_slot)

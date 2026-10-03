@@ -196,6 +196,26 @@ class CallObjectLoweringMixin:
         cleanup = self.current_function.append_basic_block(self._fresh("call.slot.cleanup"))
         saved = self.builder._block
         self.builder.position_at_end(cleanup)
+        exception_slot = None
+        swap_exception = None
+        if roots:
+            # Register an empty cleanup-local owner before touching TLS. The
+            # swap transfers its owned reference under the graph lock; no
+            # borrowed exception pointer crosses registration or disposal.
+            # This error edge cannot suspend, including in a generator resume.
+            exception_slot = self._alloca_in_entry(
+                _CSTR, name=self._fresh("call.slot.exception"), init_null=True,
+            )
+            self._emit_current_gc_frame_enter_lifo(
+                self._gc_one_slot_frame_map(), exception_slot,
+            )
+            swap_exception = self.module.globals.get("py_tls_exc_swap_slot")
+            if swap_exception is None:
+                swap_exception = ir.Function(
+                    self.module, ir.FunctionType(ir.VoidType(), [_CSTR]),
+                    name="py_tls_exc_swap_slot",
+                )
+            self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
         for slot, token in reversed(leases):
             # Cleanup must preserve the exception which selected this edge.
             self.builder.call(
@@ -203,6 +223,14 @@ class CallObjectLoweringMixin:
                 [self._as_gc_ptr(slot), token],
             )
         self._release_slot_call_roots(roots)
+        if exception_slot is not None:
+            # Weakref callbacks can clear TLS; finalizers can replace it. Drop
+            # those errors before returning the original owner to TLS. The
+            # second swap leaves this slot empty, so retiring its frame cannot
+            # decref the restored exception or run another finalizer.
+            self.builder.call(self.runtime["py_clear_exception"], [])
+            self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
+            self._emit_gc_frame_leave_lifo_for_slot(exception_slot)
         self.builder.branch(target)
         self.builder.position_at_end(saved)
         return cleanup

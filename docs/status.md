@@ -1,129 +1,94 @@
 # Current status
 
-Updated October 3, 2026, 20:10 UTC. Maintain this page in place.
+Updated October 3, 2026, 21:15 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
 ## Current boundary
 
 There is no qualified current pcc1, pcc2 or pcc3, and no Stage2/Stage3 fixed point.
-The latest complete compiler-context census uses source
-`28828d463503cc4cac9bbdf5e525ed8f30cceb9846b8e852324b5a099ba5de1f`.
-All 441 freshly exported original contexts are accounted: 362 pass and 79 fail
-in the frontend, with no timeout or memory stop. Source and generated input
-identities reverified. The run took 1,746.84 seconds with 1,715,986,432-byte peak
-process-tree RSS while other diagnostics overlapped; this is not build-performance
-acceptance or native execution.
+The latest complete compiler-context census, V8, uses the immutable 20:15 capture,
+Stage1 source `90bb894ee2b5ee9dc0b4cbed2543679dfb0dde85cd79e1bda64d21e8b83d4ecb`.
+All 441 freshly exported contexts are accounted: 383 pass, 57 fail in the
+frontend, and one reaches its worker timeout. Source, graph, original indices,
+receipts and output hashes were independently reverified. Graph SHA256 is
+`4ed613cc0ad947858ad8642bfe864517a8abe3f37fafdec18c23c409dbdce43a`.
+Elapsed time is 1,705.50 seconds and peak process-tree RSS is 3,160,305,664 bytes.
+Other diagnostics overlapped; these are diagnostic observations, not build
+performance or native acceptance.
 
-Compared with V6 (350 passes, 90 frontend failures, one resource-incomplete),
-V7 preserves 348 passes, restores 13 failures and the resource-limited module,
-and introduces two frontend regressions. Those are bytes.split feeding decode
-in macho_spec and abs feeding floor division in integer_fold_contract. Their
-shared producers now have separate causal passes on both original V6 and V7
-contexts. A later zip-result repair also restores the complete original macho_spec
-context. These separate replays do not qualify the full current compiler graph.
+Compared with V7, 361 passes remain passes, 22 failures pass, 56 failures remain,
+one pass becomes a failure and one prior failure reaches its 120-second worker
+cap. The single new regression is native_text_modules: the added regex flag
+helper's lhs.value | rhs.value reaches the unchanged arithmetic ownership gate.
+It is the first regression target for the shared bitwise producer/callee repair.
+The timed-out cli_bootstrap module advances beyond its old frontend error into
+__nested_read_labeled_report; its partial output is preserved, not classified
+as a semantic failure. Both prior V7 regressions, macho_spec and
+integer_fold_contract, now pass in the fresh V8 graph.
 
-The earlier resource failure exposed quadratic IR expansion: short-lived call
-roots were enrolled in every function return cleanup. Lexical/LIFO lifetime
-repair preserves exceptional cleanup and keeps generator-resume roots in their
-frame. The final original-module replay passes under the same 2 GiB/120-second
-guards (35.04 seconds in the worker), and module 242 passes in V7. Six growth/root
-balance checks and 232 related host/IR/model cases pass; native qualification is
-separate. Strict ownership validation remains enabled.
+Later sum, valueclass, receiver, cleanup and runtime-algebra repairs are outside
+V8 and require another integrated census. The original classgen field-contract
+file passes unchanged on the 20:15 source plus its one-file receiver repair;
+175 distinct focused and adjacent host/IR cases pass. Sum has stable paired
+fail-before/pass-after results for both original affected module contexts.
+These scoped results do not qualify the current full compiler.
 
-Remaining families include managed Call/BinOp publication, iterator producers,
-source bindings and CPython/native bridges. Newer dict/file/regex and Constant
-repairs have bounded original-context evidence but are outside V7. The next
-complete census and native bootstrap require another stable integrated source.
-No earlier source's passing result qualifies later bytes.
+The earlier quadratic cleanup expansion is repaired with lexical/LIFO owners,
+while generator-resume roots stay in their frames. Original module 242 passes
+in both V7 and V8. The generic pending-exception cleanup repair must preserve
+that linear-growth contract. Strict ownership validators remain enabled; the
+three principal source/result admission gates are unchanged in V8.
+
+Remaining families include bitwise and other managed-result publication,
+iterator/call producers, source bindings and ownership across compatibility
+bridges. No earlier source's passing result qualifies later bytes. Complete
+C/Python execution, native bootstrap, all-five-GC production/performance and
+actual four-platform qualification remain open.
 
 ## Matched runtime and native evidence
 
-The Linux x86-64 runtime for source
-`b8aee32d012ae42c5ef87fef7ac20916f9bd39a00535158f5b7a4c0dafb91767`
-is admitted with all 184 members, threads enabled and atomic refcounts. Its
-compiler checksum is `2da4f0c36d8bd6402630a86aed3ea9965a2beb61b92f2d8cb38001dbf241d0b4`
-and archive hash is `126a3c35f178b1e74fc1d99d59e628e23dcc4f469365f25639efd1867eb18d3d`.
-Input identities remained stable. Construction took 510.41 seconds with
-439.8 MB observed process-tree peak; overlapping diagnostics prevent a build
-performance claim.
+The latest completed native control boundary uses Linux x86-64 source
+`addad00416e5a8e9f35382212ea54c1c75c9f7fb8276a074ddc616546a44d63c`
+and compiler `74eeb69090b34c658d65db675c392d15342ec086f510f050c09c5ead9704240b`.
+All 186 fresh runtime members are admitted, with threads enabled and atomic
+refcounts. Archive SHA256 is
+`5a3ef5ba0e2198e3aa9feb387bd1a7b0192e500717891ab994f4fd040559a17e`.
+Source, target, configuration, inventory and compiler checks passed.
 
-Its native controller is terminal. Twenty-seven of 31 Python groups pass all
-five requested GC settings. The four failing groups are retained: failed-class
-mortality under GC0, a zero-iteration module-loop target that fails to raise
-NameError under GC0, mixed-numeric addition blocked by ComplexLit publication
-at compile time, and division's zero-divisor assertion under GC0. The later four
-GC variants in each runtime-failing group remain unrun. Original C controls (2),
-abort cases (6) and thread cases (60) pass. Separate collector observations
-record 112 verified selections, 26 unobservable cases, 12 skipped variants and
-five compile-failed variants. These observations do not replace program outcomes
-or establish all-GC production, concurrency or performance qualification.
+The four unchanged original Python programs (failed-class cleanup, mixed-numeric
+addition, division and module-loop binding) plus the unpack lifetime and
+weakref/finalizer exception-identity controls pass all 30 program/backend pairs.
+A separate sidecar verifies the actual GC identities 0 through 4 for every pair.
+Both unchanged C controls pass. There are no failed, skipped or missing variants
+in this bounded run. Its complete source, runtime, executables, raw GC logs and
+receipts are Library `libfile_35d6618ab21c8191bf05200582840b16`, archive SHA256
+`e26831b8514a2d7d8d921614ee8e4dee6d07ea60ffca42875f750f542080b54a`.
 
-Two additional unchanged SSA short-circuit C tests pass through their migrated
-owned helper with optimize=True and the same admitted source/runtime. Their
-executables exit zero with empty stdout/stderr. The wrapper's two existing
-TYPEOF parser warnings are recorded separately.
+This causal source differs from its admitted predecessor by five compiler files
+that retire synthetic tuple-unpack owners and preserve pending exceptions during
+reentrant cleanup. The unchanged original module-loop assertion fails on that
+predecessor and passes here. The predecessor source `ffece4b8` independently
+passes the real two-thread forced-STW/held-lock probe on all five observed
+backends, with nested no-park depth, balanced leases, invalid/successful snapshot
+paths and eventual parking/resume. That separate proof is Library
+`libfile_d97ddc8325488191b995be439665a167`. It does not establish full collector
+stability or throughput, and is not silently attributed to later source.
 
-The newer ComplexLit repair passes 88 host checks and makes the unchanged
-mixed-numeric source emit an owned ELF object. The module-loop bound check
-passes 14 host/reference cases; its native fixture remains unchanged. A bool
-layout repair removes reads beyond header-only singleton globals. An isolated
-two-member runtime comparison reproduces the old division failure and passes
-all five requested settings with the correction, using unchanged original IR.
-That comparison has no production receipt and does not qualify the combined
-candidate. A failed-class construction repair now detaches the unpublished definition's
-namespace owner while preserving the shell, MRO and escaped/metaclass behavior.
-Its 42 focused checks pass; the unchanged native Token-finalization assertion
-still requires the new archive. Full class/base/MRO/registry retirement remains
-open. The candidate also adds two repetition runtime modules and therefore
-requires its own complete matching 186-member archive.
+Historical V5 source `b8aee32d` admitted 184 runtime members and recorded 27 of
+31 Python groups passing all five requested settings, with four original failures
+and explicit witness limits. It also passed two original C controls, six abort
+cases, 60 thread cases and two migrated SSA short-circuit C controls. Detailed
+outcomes and collector observations remain in its dated recovery archive;
+these historical totals do not qualify the current candidate. Earlier mixed
+replacement-object experiments likewise remain diagnostics, not matched-source
+causal proof.
 
-A newer diagnostic freeze, source `243185b2` with compiler `2be03662`, emitted
-all seven changed/new runtime components. Its preflight then rejected an injected
-safepoint poll in the new locked heap-copy helper; no full 186-member archive or
-native controls ran. Counted no-park handling may suppress parking, but source-body
-witnesses also reach GC3/GC4 heap-barrier allocation under nested graph lock.
-A staged scratch-root snapshot now moves tuple heap stores and retirement after
-unlock. The retry source `ffece4b8`, compiler `312d6631`, contains exactly five
-changes from the preceding freeze. Its seven-object preflight passes unchanged
-logical lock/ownership requirements, including restricted kernel calls, scratch
-clearing, no poll/allocation/indirect call and ordinary wrapper polls. The fresh
-186-member archive is now admitted: SHA256
-`29bbd9cc130e6de0a56350de61aed1ec826e14b4e593df287761ec21e7b98caa`.
-Construction took 498.72 seconds with 439,934,976-byte peak tree RSS; this is
-source-matched correctness evidence, not an isolated performance measurement.
-The unchanged failed-class cleanup, mixed-numeric addition and division programs
-pass all five observed GC backends (15 witnesses), and both original C controls
-pass. The module-loop program now passes its earlier target-disposal and empty-loop
-checks, then fails the unchanged tuple-unpack disposal assertion under GC0.
-The remaining four settings are unrun for that group (16 of 20 total witnesses).
-
-A separate real two-thread forced-STW probe passes all five observed backends
-with nested graph/no-park depth, balanced leases, invalid/successful snapshot paths,
-held-lock completion and eventual parking/resume. Its generated ordinary-poll
-control remains active. The first probe attempt stopped at a public link-argument
-restriction; the successful retry uses maintained owned object emission and owned
-ELF linking. It does not establish full collector stability or throughput.
-The sealed five-backend proof is Library `libfile_d97ddc8325488191b995be439665a167`.
-
-The tuple-unpack fix ends only the synthetic tuple owner's lifetime immediately
-after unpack. Its error edge roots and restores the pending exception across
-weakref callbacks and reentrant finalizers. A causal overlay based on the admitted
-runtime, source `addad00416e5a8e9f35382212ea54c1c75c9f7fb8276a074ddc616546a44d63c`,
-passes 37 host checks and the original/lifetime/exception control IR verification.
-Six native cases remain unrun; a fresh matching runtime is required. Its recoverable
-source and evidence are Library `libfile_5095917afcc08191871ad1bb9fcfff75`.
-The later managed unary callback repair passes 107 host/model checks and the actual
-production optimized-library IR path. Native execution and pre-lookup method-table
-lifetime remain open. Those newer changes are outside the admitted runtime above.
-
-These binaries were produced by host pcc0. They do not establish native pcc1,
-Stage2/Stage3 fixed point, complete C/Python execution or final-source acceptance.
-
-Earlier replacement-object experiments are retained as mixed diagnostics.
-Their compiler/source closure differed from the original archive; one early
-finalizer experiment also used the wrong threading setting. Observed passes
-from those experiments are not source-only causal or matched-runtime proof.
+All these programs were emitted by host pcc0. There is still no qualified
+current pcc1, pcc2 or pcc3, fixed point, complete C/Python execution or final-source
+acceptance. Later unary, sum, valueclass, receiver and generic cleanup changes
+require their own integrated runtime/native qualification. Strict archive
+provenance must reject the older archive for those newer compiler bytes.
 
 ## Active repairs
 
@@ -316,37 +281,49 @@ execution artifacts are retained outside the repositories and backed up durably.
 No generated backups, scratch tests or work-in-progress directory belong here.
 
 The last confirmed local source baseline is PCC
-`f4d83e8c56a9ad468ab8b88a0c7324d468a3050f` (19:17 capture), GUI
+`5c72b625c927205d2d868bfbd479a10744b852fd` (20:15 capture), GUI
 `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
-`83577bc41dc79d3ead2e217bfa04f0f500799012`. Promote a later capture only after its
-actual local application and commit are verified.
+`83577bc41dc79d3ead2e217bfa04f0f500799012`. All 14 PCC paths passed local
+before/after hash, mode and diff checks. Later cloud repairs remain unsynchronized.
 
-The latest synchronized immutable capture is October 3 at 19:17:33 UTC,
-containing 24 PCC paths against `3f995a3`. Exact-source execution records 1,685
-distinct passes and four failures, with no resource-incomplete group. The original
-47-target Stage1 context test completes with 37 IR outputs and ten codegen errors
-under the unchanged 1.5 GiB safety cap (265.746 seconds, 1,486,815,232-byte peak).
-It still fails its original assertion. The other three failures are the class_gen
-Call producer, boxed-int ABI expectation and an overbroad zip test assertion that
-matched an unrelated metadata tuple. The latter assertion was subsequently scoped
-to its target. The newer CPython bridge repair advances class_gen beyond its
-original helper to a separate format-result producer; the whole module still fails.
-Tests remaining after each first failure and native cases remain unqualified.
+The latest synchronized immutable capture is October 3 at 20:15:06 UTC,
+containing 14 PCC paths against `f4d83e8`. Exact-source execution records 1,413
+distinct passes, four completed failures and one separate resource-incomplete
+attempt. The original 47-target Stage1 context test completes with 37 IR outputs
+and ten codegen errors under the unchanged 1.5 GiB safety cap (298.032 seconds,
+1,539,309,568-byte peak). No targets newly fail or recover compared with 19:17;
+all ten error texts are byte-identical. The original assertion still fails.
 
-Its full inventory contains 25,894 nodes: 25,669 selected and 225 capability or
-environment deselections. The independent integration inventory selects 5,549
-from the same union. Both have zero collection errors/skips. Collection does
-not execute test bodies. The host phase explicitly excludes archive-dependent
-native cases, and the mixed backend file selects only its original AArch64
-peephole helpers. The 37 large context IR files are separately backed up as
-Library `libfile_bae226d681b88191b84992386d5ebe52`; the small synchronization packet
+The other completed failures are class_gen's direct append_basic_block dispatch
+assertion, the imported valueclass aggregate ABI assertion, and an existing
+dict-copy cleanup IR assertion reached by a separately selected host subset.
+Class_gen now completes lowering beyond both repaired bridge/format failures.
+The valueclass failure has a later separate repair for constructor payloads and
+exported class identity, with 38 focused checks; one larger original case remains
+resource-limited and native qualification remains open.
+
+The changed container test module contains unmarked native cases. Its first
+native case unexpectedly started owned runtime construction despite the test
+provisioning flags, then reached its 300-second guard without a native outcome.
+The remaining 17 cases were unexecuted in that attempt. The separate five-case
+host subset passed one case and failed the next cleanup assertion; three remained
+unexecuted. All original captured source bytes and modes stayed unchanged.
+Generated runtime artifacts and its stopped lock owner were retained outside the
+source snapshot, and the complete source inventory was reverified. The provisioning
+bypass is being repaired; no partial runtime admission or native pass is inferred.
+
+The complete inventory contains 25,962 nodes: 25,737 selected and 225 capability
+or environment deselections. The independent integration inventory selects 5,553
+from the same union. Both have zero collection errors/skips. Collection does not
+execute test bodies. All 37 contextual IR files are separately backed up as
+Library `libfile_9d741b07b8a08191b7bf92ffd9c95fc3`; the synchronization packet
 records their hashes and source identity.
 
-Historical captures remain separate: 18:25 recorded 1,544 passes and six failures;
-17:21 recorded 1,780 passes, one completed failure and one resource-incomplete
-context node; 16:20 recorded 1,426 passes and a resource-incomplete context node.
-The earlier `71e15ea6` capture recorded 1,189 passes and three failures. Later
-scoped repairs do not rewrite those receipts.
+Historical captures remain separate: 19:17 recorded 1,685 passes and four failures;
+18:25 recorded 1,544 passes and six failures; 17:21 recorded 1,780 passes, one
+completed failure and one resource-incomplete context node. Later scoped repairs
+do not rewrite those receipts, and differing selected groups prevent a simple
+comparison of passing totals.
 
 Recoverable code bytes, before/after patches and detailed historical receipts
 are retained in the external PCC recovery archives in Library. Code archive

@@ -29,30 +29,34 @@ static shapes check lease/publication errors and clean up through root slots.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import tempfile
 import textwrap
 from pathlib import Path
 
+from tests.native_provisioning import require_native_provisioning_allowed
+from tests.runtime_fixture_provenance import _verified_test_runtime_archive
+
 _REPO_ROOT = Path(__file__).absolute().parents[2]
-_BUILD = _REPO_ROOT / "build"
-_BUILD.mkdir(parents=True, exist_ok=True)
 
 
 def _compile_to_ll(source: str, name: str) -> str:
     from pcc.frontends.python.pipeline import compile_python
 
-    src = _BUILD / f"{name}.py"
-    out = _BUILD / f"{name}.ll"
-    src.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
-    compile_python(
-        str(src),
-        str(out),
-        emit_llvm_only=True,
-        ir_scaffold_mode="on",
-        libpython_mode="off",
-    )
-    return out.read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="pcc-container-ir-") as temporary:
+        src = Path(temporary) / f"{name}.py"
+        out = Path(temporary) / f"{name}.ll"
+        src.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
+        compile_python(
+            str(src),
+            str(out),
+            emit_llvm_only=True,
+            ir_scaffold_mode="on",
+            libpython_mode="off",
+        )
+        return out.read_text(encoding="utf-8")
 
 
 def _function_body(ir_text: str, fn_name_suffix: str) -> str | None:
@@ -67,6 +71,14 @@ def _function_body(ir_text: str, fn_name_suffix: str) -> str | None:
 
 
 def _run_native(tmp_path: Path, source: str) -> subprocess.CompletedProcess:
+    explicit = os.environ.get("PCC_RUNTIME_ARCHIVE")
+    runtime_options = {}
+    if explicit:
+        archive, _manifest = _verified_test_runtime_archive(explicit)
+        runtime_options["runtime_archive"] = str(archive)
+    else:
+        require_native_provisioning_allowed(_REPO_ROOT)
+
     from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "prog.py"
@@ -78,6 +90,7 @@ def _run_native(tmp_path: Path, source: str) -> subprocess.CompletedProcess:
         ir_scaffold_mode="on",
         libpython_mode="off",
         backend="self",
+        **runtime_options,
     )
     return subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=60
@@ -400,9 +413,9 @@ def test_dict_pairs_walk_releases_loop_temps():
 
 
 def test_dict_copy_error_edges_release_owned_temps():
-    """The two existing err checks in the dict-copy walk must release the
-    owned keys view (and the loop temps on the first edge) before jumping
-    to the error exit — i.e. they carry ``call.err.cleanup`` blocks."""
+    """Both dict-copy error edges retire their owners and restore original TLS."""
+    from tests.python.test_slot_call_exception_cleanup import assert_dict_copy_error_cleanup
+
     ir_text = _compile_to_ll(
         """
         def f(d: dict) -> dict:
@@ -412,10 +425,7 @@ def test_dict_copy_error_edges_release_owned_temps():
     )
     body = _function_body(ir_text, "f")
     assert body is not None
-    assert "call.err.cleanup" in body, body
-    # 3 normal-path releases (v, k, keys) + first-edge (v, k, keys) +
-    # second-edge (keys) = at least 7 release sites in the walk.
-    assert body.count("@pcc_gc_release") >= 7, body.count("@pcc_gc_release")
+    assert_dict_copy_error_cleanup(body)
 
 
 def test_zip_dyn_source_edges_check_and_release():

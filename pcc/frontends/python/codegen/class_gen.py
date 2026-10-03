@@ -3847,6 +3847,8 @@ class ClassLowering:
         # both for inherited field layout and for deciding whether a hinted
         # receiver can dispatch directly without skipping a subclass override.
         extern_bases_ast = ()
+        has_valueclass_export = False
+        extern_valueclass = False
         native_table = getattr(self.parent, "_native_module_exports", None)
         if isinstance(native_table, dict):
             module_exports = native_table.get(owning_module)
@@ -3856,6 +3858,11 @@ class ClassLowering:
                     isinstance(class_export, dict)
                     and class_export.get("kind") == "class"
                 ):
+                    if (class_export.get("owning_module", owning_module) == owning_module
+                            and class_export.get("class_name", class_name) == class_name
+                            and "valueclass" in class_export):
+                        has_valueclass_export = True
+                        extern_valueclass = bool(class_export["valueclass"])
                     raw_base_names = class_export.get("base_names", ())
                     if isinstance(raw_base_names, (tuple, list)):
                         base_nodes = []
@@ -3900,11 +3907,15 @@ class ClassLowering:
             # Already declared correctly — return existing.
             if not existing.bases_ast and extern_bases_ast:
                 existing.bases_ast = extern_bases_ast
+            if has_valueclass_export:
+                existing.valueclass = extern_valueclass
             return existing
         qualified_existing = self.classes.get(qualified)
         if qualified_existing is not None:
             if not qualified_existing.bases_ast and extern_bases_ast:
                 qualified_existing.bases_ast = extern_bases_ast
+            if has_valueclass_export:
+                qualified_existing.valueclass = extern_valueclass
             if existing is None:
                 self.classes[local] = qualified_existing
             return qualified_existing
@@ -3928,6 +3939,8 @@ class ClassLowering:
             primary_existing = self.classes[primary_key]
             if not primary_existing.bases_ast and extern_bases_ast:
                 primary_existing.bases_ast = extern_bases_ast
+            if has_valueclass_export:
+                primary_existing.valueclass = extern_valueclass
             return primary_existing
 
         effective_field_names, synth_defs, method_plans = _extern_class_decl_plan(
@@ -3944,6 +3957,10 @@ class ClassLowering:
         )
         info.owning_module = owning_module
         info.export_class_name = class_name
+        # Methodless valueclasses have no receiver signature from which the
+        # legacy method loop can recover their projection. The defining
+        # module's class export owns this flag, including through local aliases.
+        info.valueclass = extern_valueclass
         info.field_names = list(effective_field_names)
         if not isinstance(field_types, tuple):
             field_types = ()
@@ -4004,7 +4021,8 @@ class ClassLowering:
                         _is_ast_node(decoded_receiver_ty, ClassType)
                         and decoded_receiver_ty.valueclass
                     ):
-                        info.valueclass = True
+                        if not has_valueclass_export:
+                            info.valueclass = True
                         payload_ty = _classgen_valueclass_payload_ir_type(
                             decoded_receiver_ty
                         )

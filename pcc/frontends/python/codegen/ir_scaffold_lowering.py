@@ -831,6 +831,26 @@ class IrScaffoldLoweringMixin:
             if _is_scaffold_name(base)
             else self._scaffold_field_receiver_kind(base)
         )
+        if not base_kind and _is_scaffold_call(base):
+            from pcc.frontends.python.codegen.hoist_boxing import CELL_READ
+
+            function = getattr(self, "current_func_def", None)
+            captures = (() if function is None else
+                        self._hoisted_capture_params.get(function.name, ()))
+            if (_is_scaffold_name(base.func) and base.func.ident == CELL_READ
+                    and len(base.args) == 3 and not base.kwargs
+                    and _is_scaffold_name(base.args[0])
+                    and _scaffold_node_kind_name(base.args[1]) == "StrLit"
+                    and base.args[1].value == base.args[0].ident
+                    and _scaffold_node_kind_name(base.args[2]) == "BoolLit"
+                    and base.args[2].value
+                    and base.args[0].ident in captures):
+                # Hoisting changes a verified captured value into an internal
+                # free-cell read. Preserve only its existing receiver fact;
+                # the impossible source identifier, exact intrinsic shape,
+                # and hoister's capture table must all agree. The original
+                # expression is still emitted, including bound/owner checks.
+                base_kind = self._scaffold_local_kind(base.args[0].ident)
         if receiver.name == "builder" and base_kind == "L1CodeGen":
             return "IRBuilder"
         if receiver.name == "current_function" and base_kind == "L1CodeGen":
@@ -919,11 +939,23 @@ class IrScaffoldLoweringMixin:
         """
         ty = getattr(receiver, "ty", None)
         module = getattr(ty, "module", "")
-        return (
-            _scaffold_node_kind_name(ty) == "ClassType"
-            and bool(module)
-            and module not in ("pcc.ir.ir", "pcc.ir.compat")
-        )
+        if _scaffold_node_kind_name(ty) != "ClassType" or not module:
+            return False
+        if module not in ("pcc.ir.ir", "pcc.ir.compat"):
+            # Single-module inference can preserve a qualified annotation as
+            # a lexical shell (e.g. module="ir" for ir.Function) when provider
+            # export schemas are absent. Resolve only its source-verified
+            # namespace here; an alias is not receiver or class-existence
+            # proof. Admission still requires the independent local/field
+            # facts and capability checks above. Rebindings invalidate this
+            # shared alias map, and ordinary foreign classes remain rejected.
+            from pcc.frontends.python.pipeline_exports import annotation_module_bindings
+
+            root, separator, suffix = module.partition(".")
+            imported = annotation_module_bindings(self.ast_module).get(root)
+            if imported is not None:
+                module = imported + (separator + suffix if separator else "")
+        return module not in ("pcc.ir.ir", "pcc.ir.compat")
 
     # Method names so specific to LLVM IR types that any receiver
     # passing the same name should route through scaffold dispatch.
@@ -991,6 +1023,13 @@ class IrScaffoldLoweringMixin:
 
     def _ir_scaffold_target(self, attr: Attr) -> Optional[str]:
         candidate = self._ir_scaffold_candidate(attr)
+        if (candidate is None and _is_scaffold_attr(attr)
+                and attr.name in _IR_BUILDER_METHODS
+                and self._scaffold_field_receiver_kind(attr.obj) == "IRBuilder"):
+            # Representation-preserving field proofs can outlive the legacy
+            # Name/Attr spelling (notably captured receivers in cells). The
+            # caller still checks provider binding and receiver admission.
+            candidate = attr.name
         if candidate is None or self._scaffold_receiver_has_nonprovider_class(attr.obj):
             return None
         return candidate

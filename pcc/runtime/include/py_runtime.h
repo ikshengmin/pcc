@@ -1151,6 +1151,8 @@ void      py_set_update(PyObject *dst, PyObject *src);
 int64_t   py_set_call_method_slots(PyObject **receiver_slot, int64_t method,
                                   PyObject **args_slot, PyObject **kwargs_slot,
                                   PyObject **result_slot);
+/* Binary algebra borrows its inputs and returns a new owning reference. */
+PyObject *py_set_union(PyObject *a, PyObject *b);
 PyObject *py_set_intersection(PyObject *a, PyObject *b);
 PyObject *py_set_difference(PyObject *a, PyObject *b);
 PyObject *py_set_symmetric_difference(PyObject *a, PyObject *b);

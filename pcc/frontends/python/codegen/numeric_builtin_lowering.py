@@ -45,6 +45,35 @@ def _is_class_type_for_numeric_builtin(ty) -> bool:
     return type(ty).__name__ in ("ClassType", "ValueClassType")
 
 
+def _sum_exception_swap(host):
+    """Use the existing owned TLS/slot exchange without a raw exception copy."""
+    helper = host.module.globals.get("py_tls_exc_swap_slot")
+    if helper is None:
+        helper = ir.Function(
+            host.module, ir.FunctionType(ir.VoidType(), [_CSTR]),
+            name="py_tls_exc_swap_slot",
+        )
+    return helper
+
+
+def _sum_cleanup_block(host, roots, target):
+    """The first root holds the selecting exception while operands retire."""
+    saved = host.builder._block
+    cleanup = host.current_function.append_basic_block(host._fresh("sum.cleanup"))
+    host.builder.position_at_end(cleanup)
+    swap = _sum_exception_swap(host)
+    host.builder.call(swap, [host._as_gc_ptr(roots[0])])
+    host._release_slot_call_roots(tuple(roots[1:]))
+    # Reentrant finalizers/weakref callbacks may replace or clear TLS. Restore
+    # the selecting exception only after all potentially finalizing releases.
+    host.builder.call(host.runtime["py_clear_exception"], [])
+    host.builder.call(swap, [host._as_gc_ptr(roots[0])])
+    host._release_slot_call_roots((roots[0],))
+    host.builder.branch(target)
+    host.builder.position_at_end(saved)
+    return cleanup
+
+
 class NumericBuiltinLoweringMixin:
     def emit_int_builtin_as_object(self, expr) -> Optional[ir.Value]:
         """Produce int's object projection before any lossy scalar conversion.
@@ -555,229 +584,236 @@ class NumericBuiltinLoweringMixin:
             return phi
         return None
     def _emit_sum_start_object(self, start):
-        if start is None:
-            return self.builder.call(
-                self.runtime["py_int_from_i64"],
-                [ir.Constant(_I64, 0)],
-                name=self._fresh("sum.start.zero"),
+        """Return an independently owned, registered accumulator slot."""
+        if start is not None:
+            return self._emit_slot_call_operand(start, "sum.start")
+        output = self._new_slot_call_root("sum.start")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            self._slot_call_runtime_call(
+                "py_int_from_i64", (), result_slot=output,
+                suffix_args=(ir.Constant(_I64, 0),),
             )
-        raw = self._emit_expr(start)
-        return marshal.marshal_to_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            raw,
-            start.ty,
-        )
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
 
     def _emit_sum_add_objects(self, acc_obj, elem_obj):
-        return self.builder.call(
-            self.runtime["py_int_add"],
-            [acc_obj, elem_obj],
-            name=self._fresh("sum.obj.next"),
-        )
+        """Replace an accumulator owner only after publishing the NEW sum."""
+        output = self._new_slot_call_root("sum.next")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((output,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            self._slot_call_runtime_call(
+                "py_int_add", (acc_obj, elem_obj), result_slot=output,
+            )
+            self._guard_cpy_value_not_null(self.builder.load(output))
+            # root_move requires an empty destination. The new accumulator
+            # is already rooted while the prior owner runs its finalizer.
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [self._as_gc_ptr(acc_obj), ir.Constant(_CSTR, None)],
+            )
+            moved = self.builder.call(
+                self.runtime["pcc_gc_root_move"],
+                [self._as_gc_ptr(acc_obj), self._as_gc_ptr(output)],
+                name=self._fresh("sum.acc.move"),
+            )
+            self._slot_call_check_status(moved, "sum accumulator move")
+            self._release_slot_call_roots((output,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_sum_via_iter(self, src_obj, start, span):
-        """``sum(<iterable>)`` over a DynType source via the iterator protocol
-        (py_obj_iter/py_obj_next), accumulating with Python int semantics. Used
-        for iterator-only objects such as generators (no length / __getitem__).
-        Mirrors the for-loop / list-builtin iterator path; clears a terminal
-        StopIteration (tag 8) and propagates any other exception."""
-        cstr = ir.IntType(8).as_pointer()
-        fn = self.current_function
-        acc_slot = self._alloca_in_entry(_CSTR, name="sum.iter.acc.addr")
-        self.builder.store(self._emit_sum_start_object(start), acc_slot)
-        iterator = self.builder.call(
-            self.runtime["py_obj_iter"],
-            [src_obj],
-            name=self._fresh("sum.iter.obj"),
-        )
-        self._emit_post_call_err_check(span)
-        header_bb = fn.append_basic_block(name=self._fresh("sum.iter.next"))
-        body_bb = fn.append_basic_block(name=self._fresh("sum.iter.body"))
-        maybe_end_bb = fn.append_basic_block(name=self._fresh("sum.iter.maybe_end"))
-        clear_bb = fn.append_basic_block(name=self._fresh("sum.iter.clear"))
-        propagate_bb = fn.append_basic_block(name=self._fresh("sum.iter.propagate"))
-        end_bb = fn.append_basic_block(name=self._fresh("sum.iter.end"))
-        self.builder.branch(header_bb)
-        self.builder.position_at_end(header_bb)
-        item = self.builder.call(
-            self.runtime["py_obj_next"],
-            [iterator],
-            name=self._fresh("sum.iter.item"),
-        )
-        is_null = self.builder.icmp_unsigned(
-            "==", item, ir.Constant(cstr, None), name=self._fresh("sum.iter.null")
-        )
-        self.builder.cbranch(is_null, maybe_end_bb, body_bb)
-        self.builder.position_at_end(body_bb)
-        acc_cur = self.builder.load(acc_slot, name=self._fresh("sum.iter.acc"))
-        self.builder.store(self._emit_sum_add_objects(acc_cur, item), acc_slot)
-        self.builder.branch(header_bb)
-        self.builder.position_at_end(maybe_end_bb)
-        current_exc = self.builder.call(
-            self.runtime["py_current_exception"], [], name=self._fresh("sum.iter.cur_exc")
-        )
-        stop_cls = self.builder.call(
-            self.runtime["py_exc_builtin_class"],
-            [ir.Constant(_I64, 8)],            # StopIteration
-            name=self._fresh("sum.iter.stop_cls"),
-        )
-        match_i64 = self.builder.call(
-            self.runtime["py_exc_matches"],
-            [current_exc, stop_cls],
-            name=self._fresh("sum.iter.stop_match"),
-        )
-        is_stop = self.builder.icmp_signed(
-            "!=", match_i64, ir.Constant(_I64, 0), name=self._fresh("sum.iter.stop_i1")
-        )
-        self.builder.cbranch(is_stop, clear_bb, propagate_bb)
-        self.builder.position_at_end(clear_bb)
-        self.builder.call(self.runtime["py_clear_exception"], [])
-        self.builder.branch(end_bb)
-        self.builder.position_at_end(propagate_bb)
-        err_target = getattr(self, "_try_err_block", None)
-        if err_target is None:
-            err_target = self._ensure_fn_err_exit()
-        self.builder.branch(err_target)
-        self.builder.position_at_end(end_bb)
-        return self.builder.load(acc_slot, name=self._fresh("sum.iter.result"))
+        """Consume an owned source into an owned accumulator through next()."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        error = self._new_slot_call_root("sum.iter.error")
+        iterator = self._new_slot_call_root("sum.iterator")
+        stop_class = self._new_slot_call_root("sum.stop.class")
+        pending = self._new_slot_call_root("sum.iter.pending")
+        roots = [error, iterator, stop_class, pending]
+        try:
+            cleanup = _sum_cleanup_block(self, roots, target)
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            # Prime and copy the authoritative builtin cache, independent of
+            # a user's binding named StopIteration.
+            self.builder.call(self.runtime["py_exc_builtin_class"], [ir.Constant(_I64, 8)])
+            self._emit_post_call_err_check(span)
+            cache = self.builder.call(self.runtime["py_subs_exc_cache_slot"], [ir.Constant(_I64, 8)])
+            self._slot_call_copy_source(stop_class, cache, span=span)
+            self._slot_call_runtime_call("py_obj_iter", (src_obj,), result_slot=iterator, span=span)
+            self._guard_cpy_value_not_null(self.builder.load(iterator))
+            fn = self.current_function
+            header = fn.append_basic_block(self._fresh("sum.iter.next"))
+            failed = fn.append_basic_block(self._fresh("sum.iter.failed"))
+            exhausted = fn.append_basic_block(self._fresh("sum.iter.exhausted"))
+            propagate = fn.append_basic_block(self._fresh("sum.iter.propagate"))
+            done = fn.append_basic_block(self._fresh("sum.iter.done"))
+            self.builder.branch(header)
+            self.builder.position_at_end(header)
+            item = self._new_slot_call_root("sum.iter.item")
+            roots.append(item)
+            cleanup = _sum_cleanup_block(self, roots, target)
+            # next()'s error edge keeps the item root (possibly NULL) alive
+            # until StopIteration has been distinguished from other errors.
+            self._try_err_block = failed
+            self._cpy_operand_cleanup_block = failed
+            self._slot_call_runtime_call("py_obj_next", (iterator,), result_slot=item, span=span)
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            self._guard_cpy_value_not_null(self.builder.load(item))
+            self._emit_sum_add_objects(start, item)
+            self._release_slot_call_roots((item,))
+            self.builder.branch(header)
+
+            self.builder.position_at_end(failed)
+            self.builder.call(_sum_exception_swap(self), [self._as_gc_ptr(pending)])
+            matched = self._slot_call_runtime_call(
+                "py_exc_matches", (pending, stop_class), span=span,
+            )
+            self.builder.cbranch(
+                self.builder.icmp_signed("!=", matched, ir.Constant(_I64, 0)),
+                exhausted, propagate,
+            )
+            self.builder.position_at_end(propagate)
+            self.builder.call(_sum_exception_swap(self), [self._as_gc_ptr(pending)])
+            self.builder.branch(cleanup)
+            self.builder.position_at_end(exhausted)
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [self._as_gc_ptr(pending), ir.Constant(_CSTR, None)],
+            )
+            self._release_slot_call_roots((item,))
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+            roots.pop()
+            self._release_slot_call_roots(tuple(roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _maybe_emit_sum_literal(self, expr: Call) -> Optional[ir.Value]:
-        """``sum([a, b, c])`` / ``sum((a, b), start)`` for numeric
-        literal containers — fold element-wise add, seeded with the
-        start value if given else 0.
+        """Keep the existing numeric sum paths inside an owned transaction.
 
-        Also handles the runtime case ``sum(iterable)`` when the
-        iterable's static type is ``ListType`` / ``TupleType`` /
-        ``DynType`` — assumes int elements and uses the generic
-        ``py_obj_len`` / ``py_obj_getitem`` loop.
+        Evaluate the complete source before start, as an ordinary Python call
+        does. Integer arithmetic retains py_int_add's existing semantics; this
+        migration does not introduce dynamic numeric protocol dispatch.
         """
         arg = expr.args[0]
         start = expr.args[1] if len(expr.args) == 2 else None
-        if not isinstance(arg, (TupleExpr, ListExpr)):
-            if not isinstance(
-                arg.ty,
-                (ListType, TupleType, DynType, ClassType),
-            ):
+        literal = isinstance(arg, (TupleExpr, ListExpr))
+        if literal:
+            if not all(isinstance(e.ty, (IntType, FloatType, BoolType)) for e in arg.elems):
                 return None
-            # Runtime iteration path — always int-result; float
-            # sum(iterable) falls through to NotImplementedError.
-            src_val = self._emit_expr(arg)
-            src_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                src_val,
-                arg.ty,
-            )
-            if isinstance(arg.ty, (DynType, ClassType)):
-                # DynType / a user-class instance may be iterator-only
-                # (generator, or a custom __iter__/__next__ class) with no
-                # length / __getitem__. Consume via the iterator protocol.
-                # Without this, sum(CustomIterable()) bailed to a generic name
-                # lookup ("name 'sum' is not defined"). See
-                # docs/investigations/sequence-builtins-len-getitem-not-iterator-protocol.md
-                return self._emit_sum_via_iter(
-                    src_obj, start, getattr(arg, "span", None)
-                )
-            n_val = self.builder.call(
-                self.runtime["py_obj_len"],
-                [src_obj],
-                name=self._fresh("sum.src.len"),
-            )
-            fn_ = self.current_function
-            idx_slot = self._alloca_in_entry(_I64, name="sum.idx.addr")
-            acc_slot = self._alloca_in_entry(_CSTR, name="sum.acc.addr")
-            self.builder.store(ir.Constant(_I64, 0), idx_slot)
-            self.builder.store(self._emit_sum_start_object(start), acc_slot)
-            cond_bb = fn_.append_basic_block(name=self._fresh("sum.cond"))
-            body_bb = fn_.append_basic_block(name=self._fresh("sum.body"))
-            step_bb = fn_.append_basic_block(name=self._fresh("sum.step"))
-            end_bb = fn_.append_basic_block(name=self._fresh("sum.end"))
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(cond_bb)
-            cur = self.builder.load(idx_slot, name=self._fresh("sum.idx"))
-            cond = self.builder.icmp_signed(
-                "<",
-                cur,
-                n_val,
-                name=self._fresh("sum.cond.i1"),
-            )
-            self.builder.cbranch(cond, body_bb, end_bb)
-            self.builder.position_at_end(body_bb)
-            idx_box = self.builder.call(
-                self.runtime["py_int_from_i64"],
-                [cur],
-                name=self._fresh("sum.idx.box"),
-            )
-            elem_obj = self.builder.call(
-                self.runtime["py_obj_getitem"],
-                [src_obj, idx_box],
-                name=self._fresh("sum.elem"),
-            )
-            acc_cur = self.builder.load(
-                acc_slot,
-                name=self._fresh("sum.acc"),
-            )
-            new_acc = self._emit_sum_add_objects(acc_cur, elem_obj)
-            self.builder.store(new_acc, acc_slot)
-            self.builder.branch(step_bb)
-            self.builder.position_at_end(step_bb)
-            nxt = self.builder.add(
-                cur,
-                ir.Constant(_I64, 1),
-                name=self._fresh("sum.idx.next"),
-            )
-            self.builder.store(nxt, idx_slot)
-            self.builder.branch(cond_bb)
-            self.builder.position_at_end(end_bb)
-            return self.builder.load(
-                acc_slot,
-                name=self._fresh("sum.result"),
-            )
-        elems = arg.elems
-        start = expr.args[1] if len(expr.args) == 2 else None
-        any_float = any(isinstance(e.ty, FloatType) for e in elems)
-        if start is not None and isinstance(start.ty, FloatType):
-            any_float = True
-        if not all(isinstance(e.ty, (IntType, FloatType, BoolType)) for e in elems):
+            if start is not None and not isinstance(start.ty, (IntType, FloatType, BoolType)):
+                return None
+        elif not isinstance(arg.ty, (ListType, TupleType, DynType, ClassType)):
             return None
-        if start is not None and not isinstance(
-            start.ty,
-            (IntType, FloatType, BoolType),
-        ):
-            return None
-        if any_float:
-            if start is not None:
-                acc = self._emit_expr(start)
-                if not isinstance(start.ty, FloatType):
-                    acc = self._to_double(acc, start.ty)
+        any_float = literal and (
+            any(isinstance(e.ty, FloatType) for e in arg.elems)
+            or start is not None and isinstance(start.ty, FloatType)
+        )
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        if output is None:
+            output = self._new_slot_call_root("sum.result")
+            target = self._slot_call_cleanup_block((output,), target)
+        error = self._new_slot_call_root("sum.error")
+        roots = [error]
+        try:
+            self._try_err_block = _sum_cleanup_block(self, roots, target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            source = self._emit_slot_call_operand(arg, "sum.source")
+            roots.append(source)
+            self._try_err_block = _sum_cleanup_block(self, roots, target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            accumulator = self._emit_sum_start_object(start)
+            roots.append(accumulator)
+            self._try_err_block = _sum_cleanup_block(self, roots, target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if isinstance(arg.ty, (DynType, ClassType)) and not literal:
+                self._emit_sum_via_iter(source, accumulator, expr.span)
             else:
-                acc = ir.Constant(_DOUBLE, 0.0)
-            for e in elems:
-                v = self._emit_expr(e)
-                if not isinstance(e.ty, FloatType):
-                    v = self._to_double(v, e.ty)
-                acc = self.builder.fadd(
-                    acc,
-                    v,
-                    name=self._fresh("sum"),
+                length = self._slot_call_runtime_call("py_obj_len", (source,), span=expr.span)
+                index = self._alloca_in_entry(_I64, name="sum.index.addr")
+                self.builder.store(ir.Constant(_I64, 0), index)
+                float_acc = None
+                if any_float:
+                    float_acc = self._alloca_in_entry(_DOUBLE, name="sum.float.addr")
+                    value = self._slot_call_runtime_call("py_float_to_f64", (accumulator,), span=expr.span)
+                    self.builder.store(value, float_acc)
+                fn = self.current_function
+                cond = fn.append_basic_block(self._fresh("sum.cond"))
+                body = fn.append_basic_block(self._fresh("sum.body"))
+                done = fn.append_basic_block(self._fresh("sum.done"))
+                self.builder.branch(cond)
+                self.builder.position_at_end(cond)
+                current = self.builder.load(index)
+                self.builder.cbranch(self.builder.icmp_signed("<", current, length), body, done)
+                self.builder.position_at_end(body)
+                # These frames enter and leave on each actual iteration.
+                boxed_index = self._new_slot_call_root("sum.index")
+                item = self._new_slot_call_root("sum.item")
+                roots.extend((boxed_index, item))
+                self._try_err_block = _sum_cleanup_block(self, roots, target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_int_from_i64", (), result_slot=boxed_index,
+                    suffix_args=(current,), span=expr.span,
                 )
-            return acc
-        # All-int path.
-        acc = self._emit_sum_start_object(start)
-        for e in elems:
-            v = self._emit_expr(e)
-            v_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                v,
-                e.ty,
-            )
-            acc = self._emit_sum_add_objects(acc, v_obj)
-        return acc
+                self._slot_call_runtime_call(
+                    "py_obj_getitem", (source, boxed_index), result_slot=item, span=expr.span,
+                )
+                self._guard_cpy_value_not_null(self.builder.load(item))
+                if any_float:
+                    value = self._slot_call_runtime_call("py_float_to_f64", (item,), span=expr.span)
+                    self.builder.store(self.builder.fadd(self.builder.load(float_acc), value), float_acc)
+                else:
+                    self._emit_sum_add_objects(accumulator, item)
+                self._release_slot_call_roots((boxed_index, item))
+                roots.pop()
+                roots.pop()
+                self.builder.store(self.builder.add(current, ir.Constant(_I64, 1)), index)
+                self.builder.branch(cond)
+                self.builder.position_at_end(done)
+                self._try_err_block = _sum_cleanup_block(self, roots, target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            if any_float:
+                self._slot_call_runtime_call(
+                    "py_float_from_f64", (), result_slot=output,
+                    suffix_args=(self.builder.load(float_acc),), span=expr.span,
+                )
+            else:
+                moved = self.builder.call(
+                    self.runtime["pcc_gc_root_move"],
+                    [self._as_gc_ptr(output), self._as_gc_ptr(accumulator)],
+                    name=self._fresh("sum.result.move"),
+                )
+                self._slot_call_check_status(moved, "sum result move", expr.span)
+                self._slot_call_note_published(output)
+            self._release_slot_call_roots(tuple(roots))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("sum.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _maybe_emit_any_all_literal(
         self,
         expr: Call,
