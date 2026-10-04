@@ -7,6 +7,9 @@ from pathlib import Path
 
 
 def _compile_and_run(tmp_path: Path, source: str, *, backend: str = "0") -> list[str]:
+    from tests.native_provisioning import native_test_runtime_options
+
+    runtime_options = native_test_runtime_options()
     from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "probe.py"
@@ -17,6 +20,7 @@ def _compile_and_run(tmp_path: Path, source: str, *, backend: str = "0") -> list
         str(exe),
         ir_scaffold_mode="on",
         libpython_mode="off",
+        **runtime_options,
     )
     env = os.environ.copy()
     env["PCC_GC_BACKEND"] = backend

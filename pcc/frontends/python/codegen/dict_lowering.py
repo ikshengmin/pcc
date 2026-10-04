@@ -10,7 +10,11 @@ from pcc.frontends.python.py_ast import (
     StrLit, StrType,
 )
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_DICT, PY_TYPE_LIST
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_DICT,
+    PY_TYPE_LIST,
+    PY_TYPE_TUPLE,
+)
 
 
 _I1 = ir.IntType(1)
@@ -805,6 +809,7 @@ class DictLoweringMixin:
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_runtime_call("py_dict_keys", (source,), result_slot=keys, span=expr.span)
                 fn = self.current_function
+                end_bb = fn.append_basic_block(name=self._fresh("dict.copy.end"))
                 if isinstance(expr.args[0].ty, DynType):
                     # A non-mapping returns NULL without setting exception TLS.
                     current_keys = self.builder.load(keys, name=self._fresh("dict.copy.keys.current"))
@@ -813,6 +818,27 @@ class DictLoweringMixin:
                     ready_bb = fn.append_basic_block(self._fresh("dict.copy.keys.ok"))
                     self.builder.cbranch(missing, bad_bb, ready_bb)
                     self.builder.position_at_end(bad_bb)
+                    # Dynamic list/tuple sources are pair sequences, not
+                    # failed mapping copies. The existing runtime update
+                    # transaction owns their iterator/items and error TLS.
+                    tag = self._slot_call_runtime_call("py_obj_type_tag", (source,), span=expr.span)
+                    pairs = self.builder.or_(
+                        self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_LIST)),
+                        self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_TUPLE)),
+                    )
+                    pairs_bb = fn.append_basic_block(self._fresh("dict.constructor.pairs"))
+                    invalid_bb = fn.append_basic_block(self._fresh("dict.constructor.notiterable"))
+                    self.builder.cbranch(pairs, pairs_bb, invalid_bb)
+                    self.builder.position_at_end(pairs_bb)
+                    status = self.builder.call(
+                        self.runtime["py_dict_update_slots"],
+                        [self._as_gc_ptr(output), self._as_gc_ptr(source)],
+                        name=self._fresh("dict.constructor.pairs.status"),
+                    )
+                    self._slot_call_check_status(status, "dictionary pair insertion", expr.span)
+                    self._emit_post_call_err_check(expr.span)
+                    self.builder.branch(end_bb)
+                    self.builder.position_at_end(invalid_bb)
                     self._emit_builtin_exception_and_branch(
                         "TypeError", "dict() argument is not iterable", expr.span,
                     )
@@ -822,7 +848,6 @@ class DictLoweringMixin:
                 self.builder.store(ir.Constant(_I64, 0), index)
                 cond_bb = fn.append_basic_block(self._fresh("dict.copy.cond"))
                 body_bb = fn.append_basic_block(self._fresh("dict.copy.body"))
-                end_bb = fn.append_basic_block(self._fresh("dict.copy.end"))
                 self.builder.branch(cond_bb)
                 self.builder.position_at_end(cond_bb)
                 current = self.builder.load(index, name=self._fresh("dict.copy.index"))

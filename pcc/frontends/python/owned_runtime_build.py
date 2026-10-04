@@ -9,6 +9,7 @@ import os
 import json
 from pathlib import Path
 from pcc.backend.self_backend_target_match import target_os_name
+from pcc.driver.native_provisioning import require_native_provisioning_allowed
 
 
 # Runtime construction requests library IR, even when its caller is building
@@ -113,6 +114,7 @@ def _compile_runtime_module(name, source, ir_path, target):
 
 
 def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
+    require_native_provisioning_allowed()
     from pcc.frontends.python.pipeline_runtime_archive import _acquire_runtime_build_lock, _remove_runtime_build_lock
     from pcc.backend.owned_object_emit import emit_owned_object
     from pcc.backend.ar_writer import write_archive, _defined_symbols
@@ -260,6 +262,7 @@ def ensure_target_runtime(runtime_dir: str, target: str, *, packaged_archive: st
                 raise
         if explicit:
             raise ValueError("explicit runtime archive does not match the target/source configuration")
+    require_native_provisioning_allowed()
     os.makedirs(os.path.dirname(output), exist_ok=True)
     build_runtime_archive(runtime_dir, output, target)
     receipt = verify_runtime_archive_manifest(Path(output), runtime_root=Path(runtime_dir))
@@ -278,6 +281,7 @@ def main(argv=None):
     parser.add_argument("--output", required=True)
     parser.add_argument("--runtime-dir", default=str(Path(__file__).resolve().parents[2] / "runtime"))
     args = parser.parse_args(argv)
+    require_native_provisioning_allowed()
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     build_runtime_archive(args.runtime_dir, os.path.abspath(args.output), args.target)
 

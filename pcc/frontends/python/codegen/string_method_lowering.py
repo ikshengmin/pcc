@@ -469,7 +469,10 @@ class StringMethodLoweringMixin:
                                         name=self._fresh("str.tailmatch.bit"))
 
     def _emit_owned_native_join_call(self, expr: Call):
-        """Publish str.join's NEW result before releasing either input owner."""
+        """Publish a native join result before releasing either input owner."""
+        binary = isinstance(expr.func.obj.ty, (BytesType, ByteArrayType))
+        runtime_name = "py_bytes_join" if binary else "py_str_join"
+        label = "bytes.join" if binary else "str.join"
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
@@ -477,26 +480,26 @@ class StringMethodLoweringMixin:
         output = sink
         roots = []
         if output is None:
-            output = self._new_slot_call_root("str.join.result")
+            output = self._new_slot_call_root(label + ".result")
             roots.append(output)
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            separator = self._emit_slot_call_operand(expr.func.obj, "str.join.separator")
+            separator = self._emit_slot_call_operand(expr.func.obj, label + ".separator")
             roots.append(separator)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            items = self._emit_slot_call_operand(expr.args[0], "str.join.items")
+            items = self._emit_slot_call_operand(expr.args[0], label + ".items")
             roots.append(items)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             self._slot_call_runtime_call(
-                "py_str_join", (separator, items), result_slot=output, span=expr.span,
+                runtime_name, (separator, items), result_slot=output, span=expr.span,
             )
             self._release_slot_call_roots((separator, items))
             if sink is None:
                 return self._take_slot_call_root(output)
-            return self.builder.load(output, name=self._fresh("str.join.current"))
+            return self.builder.load(output, name=self._fresh(label + ".current"))
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy

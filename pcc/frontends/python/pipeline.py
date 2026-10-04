@@ -799,7 +799,8 @@ def _ensure_runtime(
             logger=_log,
             target_triple=target_triple,
         )
-    except (_pipeline_runtime_archive.RuntimeArchiveError, ValueError, OSError) as exc:
+    except (_pipeline_runtime_archive.RuntimeArchiveError,
+            _pipeline_runtime_archive.NativeProvisioningError, ValueError, OSError) as exc:
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
 
 

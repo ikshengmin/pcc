@@ -27,7 +27,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from .macho_exec import link_prepared_executable, prepare_executable_object
+from .macho_exec import (
+    link_prepared_executable, prepare_executable_object, validate_executable_imports,
+)
 from .macho_link import LinkInput
 from .native_object import (
     NativeObject,
@@ -116,6 +118,7 @@ def _hash_native_shape(digest, native: NativeObject) -> None:
             b"symbol-private-external",
             b"1" if symbol.private_external else b"0",
         )
+        _feed(digest, b"symbol-weak-reference", b"1" if symbol.weak_reference else b"0")
     for section in native.sections:
         _feed_text(digest, b"segment-name", section.segname)
         _feed_text(digest, b"section-name", section.sectname)
@@ -179,6 +182,7 @@ def _hash_packed_native_shape(
             b"symbol-private-external",
             b"1" if symbol.private_external else b"0",
         )
+        _feed(digest, b"symbol-weak-reference", b"1" if symbol.weak_reference else b"0")
     for section_index, section in enumerate(native.sections):
         _feed_text(digest, b"segment-name", section.segname)
         _feed_text(digest, b"section-name", section.sectname)
@@ -666,6 +670,7 @@ class IncrementalMachOLinker:
             cached_image = _checked_cache_read(image_path)
             if cached_image is not None:
                 try:
+                    validate_executable_imports(cached_image)
                     if validate is not None:
                         validate(cached_image)
                 except MemoryError:

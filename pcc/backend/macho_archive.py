@@ -57,7 +57,7 @@ def _member_symbols(data: bytes) -> tuple[frozenset[str], frozenset[str]]:
             continue
         if kind == spec.N_SECT:
             defines.add(sym["name"])
-        elif kind == spec.N_UNDF:
+        elif kind == spec.N_UNDF and not (sym["n_desc"] & spec.N_WEAK_REF):
             undefined.add(sym["name"])
     return frozenset(defines), frozenset(undefined)
 

@@ -101,7 +101,7 @@ def _check_imports(merged):
     dlsym.argtypes = (ctypes.c_void_p, ctypes.c_char_p)
     dlsym.restype = ctypes.c_void_p
     for symbol in merged.symbols:
-        if symbol.section_index:
+        if symbol.section_index or symbol.weak_reference:
             continue
         name = symbol.name[1:] if symbol.name.startswith("_") else symbol.name
         if not dlsym(library._handle, name.encode("utf-8")):

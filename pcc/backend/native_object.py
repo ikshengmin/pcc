@@ -85,6 +85,7 @@ _DATA_IN_CODE = struct.Struct("<QII")
 
 _SYMBOL_EXTERNAL = 1
 _SYMBOL_PRIVATE_EXTERNAL = 2
+_SYMBOL_WEAK_REFERENCE = 4
 _UINT64_MAX = (1 << 64) - 1
 _RELOCATION_SCALAR_COUNT = 9
 _FINAL_LINK_RELOCATION_SCALAR_COUNT = 6
@@ -178,6 +179,7 @@ class NativeSymbol:
     offset: int
     external: bool
     private_external: bool = False
+    weak_reference: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +230,7 @@ class NativeObject:
         sections: list[Section] | tuple[Section, ...],
         *,
         undefined: list[str] | tuple[str, ...] = (),
+        weak_undefined: tuple[str, ...] = (),
         _consume_relocations: bool = False,
     ) -> "NativeObject":
         """Build the indexed object; normally borrow all source containers.
@@ -240,6 +243,9 @@ class NativeObject:
         """
         source_sections = tuple(sections)
         undefined_names = tuple(undefined)
+        weak_names = set(weak_undefined)
+        if not weak_names.issubset(undefined_names):
+            raise NativeObjectError("weak references must name undefined symbols")
         _validate_source_sections(source_sections, undefined_names)
         if _consume_relocations:
             for section in source_sections:
@@ -273,6 +279,7 @@ class NativeObject:
                 section_index=0,
                 offset=0,
                 external=True,
+                weak_reference=name in weak_names,
             ))
 
         symbol_index = {symbol.name: index for index, symbol in enumerate(symbols)}
@@ -396,7 +403,10 @@ class NativeObject:
     def to_macho(self) -> bytes:
         """Materialise a standard MH_OBJECT at an explicit external boundary."""
         sections, undefined = self.to_sections()
-        return emit_object(sections, undefined=undefined)
+        return emit_object(
+            sections, undefined=undefined,
+            weak_undefined=tuple(s.name for s in self.symbols if s.weak_reference),
+        )
 
     def link_view(self) -> "NativeObjectView":
         """Return the cached-table interface consumed by the Mach-O linker."""
@@ -419,6 +429,10 @@ class PackedNativeSymbol:
     @property
     def private_external(self) -> bool:
         return bool(self.flags & _SYMBOL_PRIVATE_EXTERNAL)
+
+    @property
+    def weak_reference(self) -> bool:
+        return bool(self.flags & _SYMBOL_WEAK_REFERENCE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -670,6 +684,10 @@ def _validate_native_object(obj: NativeObject) -> None:
             symbol.private_external, bool
         ):
             raise NativeObjectError("symbol visibility flags must be boolean")
+        if not isinstance(symbol.weak_reference, bool):
+            raise NativeObjectError("weak reference flag must be boolean")
+        if symbol.weak_reference and symbol.section_index:
+            raise NativeObjectError("weak reference must be undefined")
         if symbol.section_index == 0:
             saw_undefined = True
             if not symbol.external or symbol.private_external or symbol.offset != 0:
@@ -950,7 +968,7 @@ class NativeObjectView:
                 "name": symbol.name,
                 "n_type": n_type,
                 "n_sect": symbol.section_index,
-                "n_desc": 0,
+                "n_desc": spec.N_WEAK_REF if symbol.weak_reference else 0,
                 "n_value": n_value,
             })
 
@@ -1243,6 +1261,7 @@ def encode_native_object(obj: NativeObject) -> bytes:
                 _SYMBOL_PRIVATE_EXTERNAL
                 if symbol.private_external else 0
             )
+            | (_SYMBOL_WEAK_REFERENCE if symbol.weak_reference else 0)
         )
         out.append(_SYMBOL.pack(symbol.section_index, symbol.offset, flags))
     for section in obj.sections:
@@ -1300,9 +1319,12 @@ class OwnedMergedSourceView:
     seven-million-record relocation graph before executable layout.
     """
 
-    def __init__(self, sections, *, undefined=(), proven_relocations=None) -> None:
+    def __init__(self, sections, *, undefined=(), weak_undefined=(), proven_relocations=None) -> None:
         source_sections = tuple(sections)
         undefined_names = tuple(undefined)
+        weak_names = set(weak_undefined)
+        if not weak_names.issubset(undefined_names):
+            raise NativeObjectError("weak references must name undefined symbols")
         _validate_source_sections(
             source_sections, undefined_names,
             proven_relocations=proven_relocations,
@@ -1410,7 +1432,7 @@ class OwnedMergedSourceView:
                 "name": name,
                 "n_type": spec.N_UNDF | spec.N_EXT,
                 "n_sect": 0,
-                "n_desc": 0,
+                "n_desc": spec.N_WEAK_REF if name in weak_names else 0,
                 "n_value": 0,
             })
         self._symbol_index = {
@@ -1732,7 +1754,7 @@ def decode_native_object(data: bytes) -> NativeObject:
     for _index in range(symbol_count):
         name = reader.name("symbol")
         section_index, offset, flags = reader.unpack(_SYMBOL)
-        if flags & ~(_SYMBOL_EXTERNAL | _SYMBOL_PRIVATE_EXTERNAL):
+        if flags & ~(_SYMBOL_EXTERNAL | _SYMBOL_PRIVATE_EXTERNAL | _SYMBOL_WEAK_REFERENCE):
             raise NativeObjectError("native symbol has unknown flag bits")
         symbols.append(NativeSymbol(
             name=name,
@@ -1740,6 +1762,7 @@ def decode_native_object(data: bytes) -> NativeObject:
             offset=offset,
             external=bool(flags & _SYMBOL_EXTERNAL),
             private_external=bool(flags & _SYMBOL_PRIVATE_EXTERNAL),
+            weak_reference=bool(flags & _SYMBOL_WEAK_REFERENCE),
         ))
 
     sections: list[NativeSection] = []
@@ -1818,7 +1841,7 @@ def decode_packed_native_object(data: bytes) -> PackedNativeObject:
     for _index in range(symbol_count):
         name = reader.name("symbol")
         section_index, offset, flags = reader.unpack(_SYMBOL)
-        if flags & ~(_SYMBOL_EXTERNAL | _SYMBOL_PRIVATE_EXTERNAL):
+        if flags & ~(_SYMBOL_EXTERNAL | _SYMBOL_PRIVATE_EXTERNAL | _SYMBOL_WEAK_REFERENCE):
             raise NativeObjectError("native symbol has unknown flag bits")
         symbols.append(PackedNativeSymbol(name, section_index, offset, flags))
 
@@ -1992,6 +2015,10 @@ def _validate_packed_native_object(
         seen_names.add(symbol.name)
         if not 0 <= symbol.offset <= _UINT64_MAX:
             raise NativeObjectError("symbol offset is outside uint64 range")
+        if not isinstance(symbol.weak_reference, bool):
+            raise NativeObjectError("weak reference flag must be boolean")
+        if symbol.weak_reference and symbol.section_index:
+            raise NativeObjectError("weak reference must be undefined")
         if symbol.section_index == 0:
             saw_undefined = True
             if (

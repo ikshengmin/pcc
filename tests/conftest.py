@@ -204,6 +204,7 @@ def _provision_pcc1() -> None:
     global _PCC1_PROVISIONED
     if _PCC1_PROVISIONED or os.environ.get("PCC_NO_AUTO_PCC1", "").strip():
         return
+    require_native_provisioning_allowed()
     _PCC1_PROVISIONED = True
     repo = Path(__file__).resolve().parent.parent
     if str(repo) not in _gate_sys.path:

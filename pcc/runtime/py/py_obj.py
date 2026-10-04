@@ -1548,7 +1548,11 @@ def _py_decref_finish(prepared) -> None:
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(3, 3, 0, tag_dbg, o)
 
-    py_weakref_invalidate(o)
+    # Native instances finalize while their weakrefs still identify them.
+    # Their deallocator invalidates only after resurrection has been ruled
+    # out. C-extension objects keep their existing generic dealloc boundary.
+    if delay_instance_metadata == 0 or pcc_capi_is_cext_type_tag(tag_dbg) != 0:
+        py_weakref_invalidate(o)
     if delay_zpage_freeing_note == 0 and delay_instance_metadata == 0:
         pcc_gc_note_object_freeing(o)
     if delay_instance_metadata == 0:

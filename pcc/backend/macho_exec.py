@@ -30,7 +30,10 @@ import struct
 import sys
 from dataclasses import dataclass
 
-from pcc.unsafe import abi_constant, load_i8, load_i32, null, ptr_is_null, store_i32
+from pcc.unsafe import (
+    abi_constant, darwin_libsystem_symbol, free, load_i8, load_i32, malloc,
+    null, ptr_is_null, store_i8, store_i32,
+)
 
 from . import macho_spec as spec
 from .macho_codesign import _CD_HEADER_SIZE as _CD_FIXED
@@ -42,6 +45,7 @@ from .macho_link import (
     LinkError,
     _coerce_link_object,
     _coerce_link_objects,
+    _symbol_is_weak_reference,
     link_relocatable_native,
 )
 from .macho_parallel import (
@@ -106,6 +110,63 @@ def _native_patch_words_available() -> bool:
 
 
 _NATIVE_PATCH_WORDS = _native_patch_words_available()
+
+
+def _libsystem_exports_symbol(symbol: str) -> bool:
+    """Resolve only against the dylib ordinal this image actually loads.
+
+    Native compilers use the owned loader intrinsic; CPython uses its standard
+    library FFI. No compiler, assembler, linker or symbol-list subprocess is used.
+    A different host cannot establish the target library's exported symbols.
+    """
+    name = symbol[1:] if symbol.startswith("_") else symbol
+    if _NATIVE_PATCH_WORDS:
+        encoded = name.encode("ascii")
+        buffer = malloc(len(encoded) + 1)
+        if ptr_is_null(buffer):
+            raise MemoryError("libSystem symbol name allocation failed")
+        try:
+            for index in range(len(encoded)):
+                store_i8(buffer, index, encoded[index])
+            store_i8(buffer, len(encoded), 0)
+            return not ptr_is_null(darwin_libsystem_symbol(buffer))
+        finally:
+            free(buffer)
+    if sys.platform != "darwin":
+        raise LinkError(
+            "cannot resolve undefined Mach-O symbol " + repr(symbol)
+            + ": target libSystem is unavailable on this host"
+        )
+    import ctypes
+    try:
+        library = ctypes.CDLL(LIBSYSTEM.decode("ascii"))
+        lookup = library.dlsym
+        lookup.argtypes = (ctypes.c_void_p, ctypes.c_char_p)
+        lookup.restype = ctypes.c_void_p
+        return bool(lookup(library._handle, name.encode("ascii")))
+    except OSError as exc:
+        raise LinkError("cannot load target libSystem to resolve " + repr(symbol)) from exc
+
+
+def _validate_import_names(imports, weak_imports) -> None:
+    missing = [name for name in imports
+               if name not in weak_imports and not _libsystem_exports_symbol(name)]
+    if missing:
+        raise LinkError(
+            "undefined Mach-O symbol(s): " + ", ".join(repr(name) for name in missing)
+            + " (not exported by " + LIBSYSTEM.decode("ascii") + ")"
+        )
+
+
+def validate_executable_imports(image: bytes) -> None:
+    """Recheck target providers before publishing a cached executable."""
+    symbols = spec.parse_object(image).symbols()
+    imports = sorted(s["name"] for s in symbols
+                     if (s["n_type"] & spec.N_TYPE) == spec.N_UNDF)
+    weak_imports = {s["name"] for s in symbols
+                    if (s["n_type"] & spec.N_TYPE) == spec.N_UNDF
+                    and s["n_desc"] & spec.N_WEAK_REF}
+    _validate_import_names(imports, weak_imports)
 
 
 def _read_patch_word(data: bytearray, offset: int) -> int:
@@ -277,21 +338,21 @@ def _external_symbol_state(
             for symbol in obj.symbols:
                 if symbol.section_index and symbol.external:
                     defined.add(symbol.name)
-                elif not symbol.section_index and symbol.external:
+                elif not symbol.section_index and symbol.external and not symbol.weak_reference:
                     undefined.add(symbol.name)
             continue
         if isinstance(obj, NativeObject):
             for symbol in obj.symbols:
                 if symbol.section_index and symbol.external:
                     defined.add(symbol.name)
-                elif not symbol.section_index and symbol.external:
+                elif not symbol.section_index and symbol.external and not symbol.weak_reference:
                     undefined.add(symbol.name)
             continue
         for sym in obj.symbols():
             kind = sym["n_type"] & spec.N_TYPE
             if kind == spec.N_SECT and (sym["n_type"] & spec.N_EXT):
                 defined.add(sym["name"])
-            elif kind == spec.N_UNDF and (sym["n_type"] & spec.N_EXT):
+            elif kind == spec.N_UNDF and (sym["n_type"] & spec.N_EXT) and not _symbol_is_weak_reference(sym):
                 undefined.add(sym["name"])
     return defined, undefined - defined
 
@@ -469,27 +530,10 @@ def _prepare_executable_image(
         s["name"] for s in symbols
         if (s["n_type"] & spec.N_TYPE) == spec.N_UNDF
     )
-    # An undefined symbol is bound as a dylib import.  A pcc-generated name
-    # can only come from the image itself, so importing one produces a binary
-    # that links and then dies at startup with a dyld "Symbol not found"
-    # instead of a link error naming the gap.  That is exactly what a missing
-    # ``user_pcc_ir_ir_LiteralStructType___init__0`` did to the first
-    # pcc1 carrying the C frontend.
-    internal_undefined = sorted(
-        name for name in imports
-        if name.lstrip("_").startswith(("user_", "pcc_", "py_"))
-    )
-    if internal_undefined:
-        raise LinkError(
-            "undefined pcc-internal symbol(s) would be bound as dylib "
-            "imports: "
-            + ", ".join(repr(name) for name in internal_undefined[:8])
-            + (
-                " (and " + str(len(internal_undefined) - 8) + " more)"
-                if len(internal_undefined) > 8
-                else ""
-            )
-        )
+    weak_imports = {
+        s["name"] for s in symbols
+        if (s["n_type"] & spec.N_TYPE) == spec.N_UNDF and s["n_desc"] & spec.N_WEAK_REF
+    }
     if entry not in defined:
         raise LinkError(f"entry symbol {entry!r} is not defined by the inputs")
     entry_symbol = defined[entry]
@@ -574,6 +618,7 @@ def _prepare_executable_image(
             "undefined symbol(s) have no relocation naming an import: "
             + ", ".join(repr(name) for name in unreferenced_imports)
         )
+    _validate_import_names(imports, weak_imports)
     code_imports = [n for n in imports if n in code_imports_set]
 
     # Thread block: __thread_data then __thread_bss, concatenated with each
@@ -1251,7 +1296,9 @@ def _prepare_executable_image(
     for name in imports:
         if len(sym_blob) >= (1 << 23):
             raise LinkError("chained-import symbol string offset exceeds 23 bits")
-        import_entries.append((1 << 0) | (len(sym_blob) << 9))
+        import_entries.append(
+            1 | ((1 if name in weak_imports else 0) << 8) | (len(sym_blob) << 9)
+        )
         sym_blob += name.encode() + b"\0"
     while len(sym_blob) % 8:
         sym_blob += b"\0"
@@ -1333,7 +1380,9 @@ def _prepare_executable_image(
         strx = string_offsets[name]
         nlist_parts.append(spec.NLIST_64.pack({
             "n_strx": strx, "n_type": spec.N_UNDF | spec.N_EXT,
-            "n_sect": spec.NO_SECT, "n_desc": 1 << 8, "n_value": 0,
+            "n_sect": spec.NO_SECT,
+            "n_desc": (1 << 8) | (spec.N_WEAK_REF if name in weak_imports else 0),
+            "n_value": 0,
         }))
     nlists = b"".join(nlist_parts)
     nlist_parts.clear()

@@ -19,7 +19,26 @@ import textwrap
 
 import pytest
 
-PROGRAM = textwrap.dedent("""
+PUBLISHED_JOIN_PROGRAM = textwrap.dedent("""
+    class Packet:
+        def __init__(self, data):
+            self.data = data
+
+    def check_published_joins():
+        chunks = [b"first", b"second"]
+        packet = Packet(data=b"|".join(chunks))
+        assert packet.data == b"first|second"
+        mutable = Packet(data=bytearray(b"+").join(chunks))
+        assert mutable.data == bytearray(b"first+second")
+        try:
+            Packet(data=b"".join([b"valid", "invalid"]))
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("invalid join item was accepted")
+""").lstrip()
+
+PROGRAM = PUBLISHED_JOIN_PROGRAM + textwrap.dedent("""
     def chunks(n: int) -> list:
         out = []
         i = 0
@@ -29,6 +48,7 @@ PROGRAM = textwrap.dedent("""
         return out
 
     def main() -> None:
+        check_published_joins()
         print(b"".join([b"ab", b"c", b"", b"def"]))
         print(b", ".join((b"x", b"y", b"z")))
         print(b"-".join([]))
@@ -47,6 +67,26 @@ PROGRAM = textwrap.dedent("""
     if __name__ == "__main__":
         main()
     """).lstrip()
+
+
+@pytest.mark.parametrize("target", (
+    "arm64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+))
+def test_join_results_reach_keyword_constructor_owned_objects(tmp_path, target):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.python.pipeline import compile_python
+
+    source = tmp_path / "join_publication.py"
+    output = tmp_path / "join_publication.ll"
+    source.write_text(PUBLISHED_JOIN_PROGRAM, encoding="utf-8")
+    compile_python(
+        str(source), str(output), backend="self", libpython_mode="off",
+        ir_scaffold_mode="on", target_triple=target, emit_llvm_only=True,
+    )
+    assert emit_owned_object(output.read_text(encoding="utf-8"), target)
 
 
 def _compile(tmp_path, monkeypatch, runtime_cc):

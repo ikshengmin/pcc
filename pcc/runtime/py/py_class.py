@@ -3365,7 +3365,6 @@ def py_descriptor_dealloc(o) -> None:
 def py_instance_dealloc(o) -> None:
     if ptr_is_null(o) != 0:
         return
-    py_weakref_invalidate(o)
     py_user_del_dispatch(o)
     if load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET) > 0:
         py_gc_track(o)
@@ -3381,6 +3380,9 @@ def py_instance_dealloc(o) -> None:
         flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
         store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~524288)
         return
+    # A resurrected instance keeps its live weakrefs. Only the terminal
+    # path clears them, after __del__ and before dropping owned fields.
+    py_weakref_invalidate(o)
     if _dealloc_ptr_is_instance(o):
         cls = pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
         n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)

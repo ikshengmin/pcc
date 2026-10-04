@@ -2458,6 +2458,9 @@ class MethodCallExpressionLoweringMixin:
             and not expr.kwargs
         ):
             # b"sep".join(list_or_tuple_of_bytes) -> one O(n) allocation.
+            # Publish into the consumer's root before retiring the input owners.
+            if not self._expr_looks_cpython(attr.obj):
+                return self._emit_owned_native_join_call(expr)
             recv = self._emit_expr(attr.obj)
             return self._emit_native_bytes_join(recv, expr.args[0], "bytes")
         if (

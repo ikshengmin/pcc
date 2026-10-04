@@ -200,6 +200,9 @@ def _provision_stage1_pcc1(repo: Path) -> bool:
     global _PROVISION_ATTEMPTED
     if _PROVISION_ATTEMPTED or os.environ.get("PCC_NO_AUTO_PCC1", "").strip():
         return False
+    from tests.native_provisioning import require_native_provisioning_allowed
+
+    require_native_provisioning_allowed(repo)
     _PROVISION_ATTEMPTED = True
     root = str(repo)
     if root not in sys.path:

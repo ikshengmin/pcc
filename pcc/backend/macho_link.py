@@ -165,6 +165,14 @@ class _InspectedLinkInput:
 # link consumes.
 
 
+def _symbol_is_weak_reference(symbol) -> bool:
+    if isinstance(symbol, PackedNativeSymbol):
+        return symbol.weak_reference
+    if isinstance(symbol, NativeSymbol):
+        return symbol.weak_reference
+    return bool(symbol["n_desc"] & spec.N_WEAK_REF)
+
+
 def _symbol_name(symbol) -> str:
     if isinstance(symbol, PackedNativeSymbol):
         return symbol.name
@@ -828,6 +836,8 @@ def link_relocatable_native(
     order: list[tuple[str, str]] = []
     defined: dict[str, tuple[str, str]] = {}
     referenced: set[str] = set()
+    weak_references: set[str] = set()
+    strong_references: set[str] = set()
     # Dedicated stack-map sections are semantic tables, not byte streams:
     # concatenating two versioned headers would produce an apparently valid
     # first table followed by trailing garbage.  Decode each input and rebuild
@@ -1102,6 +1112,10 @@ def link_relocatable_native(
             sym_type = _symbol_type(sym)
             if (sym_type & spec.N_TYPE) == spec.N_UNDF:
                 referenced.add(name)
+                if _symbol_is_weak_reference(sym):
+                    weak_references.add(name)
+                else:
+                    strong_references.add(name)
                 continue
             if (sym_type & spec.N_TYPE) != spec.N_SECT:
                 raise LinkError(f"symbol {name!r} has an unsupported type")
@@ -1186,6 +1200,7 @@ def link_relocatable_native(
     # An unresolved symbol is valid in an MH_OBJECT: preserve it for the
     # eventual final link rather than guessing a definition.
     unresolved = sorted(referenced - set(defined))
+    weak_unresolved = tuple(sorted(set(unresolved) & (weak_references - strong_references)))
 
     # Segment order decides every symbol's address; within a segment,
     # zerofill sections must come last (ld rejects content after zerofill).
@@ -1300,11 +1315,12 @@ def link_relocatable_native(
     try:
         if _source_view:
             return OwnedMergedSourceView(
-                out_sections, undefined=unresolved,
+                out_sections, undefined=unresolved, weak_undefined=weak_unresolved,
                 proven_relocations=tuple(proven_relocations),
             )
         return NativeObject.from_sections(
-            out_sections, undefined=unresolved, _consume_relocations=True,
+            out_sections, undefined=unresolved, weak_undefined=weak_unresolved,
+            _consume_relocations=True,
         )
     except (MachOEmitError, NativeObjectError) as exc:
         raise LinkError(f"merged object is outside the proven subset: {exc}") from exc

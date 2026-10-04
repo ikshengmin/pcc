@@ -12,6 +12,10 @@ import time
 from typing import Optional
 
 from pcc.driver.paths import join_strings
+from pcc.driver.native_provisioning import (
+    NativeProvisioningError,
+    require_native_provisioning_allowed,
+)
 
 
 RUNTIME_PYTHON_IR_PASSES_ENV = "PCC_RUNTIME_PYTHON_IR_PASSES"
@@ -412,6 +416,7 @@ def _acquire_runtime_build_lock(lock_dir: str) -> None:
 
 def run_runtime_make(runtime_dir: str, make_cmd, *, verbose: bool) -> None:
     del verbose
+    require_native_provisioning_allowed()
     lock_dir = os.path.join(runtime_dir, ".pcc-runtime-build.lock")
     owner_path = os.path.join(lock_dir, "owner")
     _acquire_runtime_build_lock(lock_dir)
@@ -538,7 +543,7 @@ def ensure_runtime(
                 runtime_dir_default, target, packaged_archive=archive_pcc_py,
                 wheel_matches=wheel_matches if target == host_target else None,
             )
-        except (ValueError, OSError) as exc:
+        except (NativeProvisioningError, ValueError, OSError) as exc:
             raise RuntimeArchiveError(str(exc)) from exc
         logger(verbose, "runtime archive (in-process owned): " + archive)
         return archive
@@ -644,6 +649,7 @@ def _ensure_runtime_make_reference(
         logger(verbose, "runtime archive: " + archive)
         return archive
 
+    require_native_provisioning_allowed()
     makefile = os.path.join(runtime_dir, "Makefile")
     if debug:
         try:

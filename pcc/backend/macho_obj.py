@@ -789,6 +789,7 @@ def emit_object(
     sections: list[Section],
     *,
     undefined: list[str] = (),
+    weak_undefined: tuple[str, ...] = (),
     minos: tuple[int, int] = (12, 0),
 ) -> bytes:
     """Emit an arm64 MH_OBJECT with the given sections."""
@@ -827,6 +828,10 @@ def emit_object(
         if name in seen:
             raise MachOEmitError(f"symbol {name!r} both defined and undefined")
         seen.add(name)
+
+    weak_names = set(weak_undefined)
+    if not weak_names.issubset(undefined):
+        raise MachOEmitError("weak references must name undefined symbols")
 
     # Section addresses: one unnamed segment, vmaddr accumulates across
     # sections with each section's alignment (matches as(1)); zerofill
@@ -1158,7 +1163,7 @@ def emit_object(
             "n_strx": strx[name],
             "n_type": spec.N_UNDF | spec.N_EXT,
             "n_sect": spec.NO_SECT,
-            "n_desc": 0,
+            "n_desc": spec.N_WEAK_REF if name in weak_names else 0,
             "n_value": 0,
         })
         for name in undef_ordered

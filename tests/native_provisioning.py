@@ -1,27 +1,27 @@
-"""Fail fast when an orchestrated run has reserved native build capacity."""
+"""Test-facing admission for the shared native provisioning reservation."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
+from pcc.driver.native_provisioning import (
+    GUARD_NAME,
+    require_native_provisioning_allowed,
+)
 
-GUARD_NAME = ".pcc-test-no-native-provisioning"
 
+def native_test_runtime_options(repo_root: Path | None = None) -> dict:
+    """Admit an explicit runtime, or reject provisioning before test outputs.
 
-def require_native_provisioning_allowed(repo_root: Path | None = None) -> None:
-    """Reject automatic builds, without skipping or weakening any test.
-
-    Explicitly selected prebuilt archives can still be verified and reused.
-    A coordinator owns the guard file's lifecycle; an interrupted reservation
-    stays fail-closed until that coordinator clears it.
+    This does not skip tests or prohibit compiling their own source. Archives
+    must satisfy source, compiler, target, inventory and configuration checks.
     """
-    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[1]
-    guard = root / "build" / GUARD_NAME
-    disabled = os.environ.get("PCC_TEST_NO_NATIVE_PROVISIONING", "").strip().lower()
-    if disabled in {"1", "true", "yes", "on"} or guard.exists():
-        raise RuntimeError(
-            "automatic native test provisioning is disabled; select an explicitly "
-            "verified prebuilt runtime or wait for the active build reservation "
-            f"to finish ({guard})"
-        )
+    explicit = os.environ.get("PCC_RUNTIME_ARCHIVE", "").strip()
+    if explicit:
+        from tests.runtime_fixture_provenance import _verified_test_runtime_archive
+
+        archive, _manifest = _verified_test_runtime_archive(explicit)
+        return {"runtime_archive": str(archive)}
+    require_native_provisioning_allowed(repo_root)
+    return {}
