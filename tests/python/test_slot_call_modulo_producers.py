@@ -94,13 +94,14 @@ def test_modulo_preserves_explicit_machine_operand_exclusion(numeric):
 
 
 @pytest.mark.parametrize('numeric', (IntType(name='int'), FloatType(name='float')))
-def test_numeric_static_modulo_keeps_its_existing_route(numeric):
+def test_ordinary_numeric_modulo_object_boundary_uses_runtime(numeric):
     module = type_infer.infer_module(parse_and_lift('', 'typed_mod.py', 'typed_mod'))
     codegen = SlotProbeCodegen(module, ir_scaffold_mode='on')
     left = Name(span=None, ty=numeric, ident='left')
     right = Name(span=None, ty=numeric, ident='right')
     expr = BinOp(span=None, ty=numeric, op='%', lhs=left, rhs=right)
-    assert codegen._slot_call_binary_runtime(expr, object_boundary=True) is None
+    assert codegen._slot_call_binary_runtime(expr, object_boundary=True) == "py_obj_mod"
+    assert codegen._slot_call_binary_runtime(expr) is None
 
 
 PROGRAM = '''\

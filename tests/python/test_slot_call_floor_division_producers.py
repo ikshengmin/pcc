@@ -95,13 +95,15 @@ def test_dynamic_floor_division_does_not_capture_an_explicit_machine_operand(num
 
 
 @pytest.mark.parametrize("numeric", (IntType(name="int"), FloatType(name="float"), ComplexType(name="complex")))
-def test_fully_typed_division_retains_its_separate_route(numeric):
+def test_ordinary_numeric_object_boundary_uses_runtime_and_complex_keeps_its_route(numeric):
     module = type_infer.infer_module(parse_and_lift("", "typed_division.py", "typed_division"))
     codegen = SlotProbeCodegen(module, ir_scaffold_mode="on")
     left = Name(span=None, ty=numeric, ident="left")
     right = Name(span=None, ty=numeric, ident="right")
     expr = BinOp(span=None, ty=numeric, op="//", lhs=left, rhs=right)
-    assert codegen._slot_call_binary_runtime(expr, object_boundary=True) is None
+    expected = None if isinstance(numeric, ComplexType) else "py_obj_floordiv"
+    assert codegen._slot_call_binary_runtime(expr, object_boundary=True) == expected
+    assert codegen._slot_call_binary_runtime(expr) is None
 
 
 PROGRAM = '''\

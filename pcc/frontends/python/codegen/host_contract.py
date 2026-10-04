@@ -235,6 +235,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_for_unpack_temporary_names",
 )
 L1_CODEGEN_HOST_METHODS = (
+    "_store_unpack_root_target",
     "_alloca_in_entry",
     "_as_gc_ptr",
     "_attr_expr_returns_owned_object",

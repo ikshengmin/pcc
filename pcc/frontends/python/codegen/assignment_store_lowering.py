@@ -87,6 +87,79 @@ class AssignmentStoreLoweringMixin:
             ident=ident,
         )
 
+    def _store_unpack_root_target(self, lhs: Expr, root, value_ty: Type) -> None:
+        """Publish a retained literal element without exposing a stale SSA value."""
+        lhs = self._coerce_unpack_name_like(lhs)
+        local_name = isinstance(lhs, Name) and not (
+            lhs.ident in self._module_globals
+            and (self.current_func_def is None or lhs.ident in self._current_global_names)
+        )
+        if local_name:
+            slot = self.env.get(lhs.ident)
+            ir_ty = slot[1] if slot is not None else self._local_slot_ir_type(lhs.ident, lhs.ty)
+            if isinstance(ir_ty, ir.PointerType) and self._ir_type_matches(ir_ty, _CSTR):
+                if slot is None:
+                    alloca = self._alloca_in_entry(_CSTR, name=lhs.ident + ".addr", init_null=True)
+                    declared_ty = self._local_slot_decl_type(lhs.ident, lhs.ty)
+                    self.env[lhs.ident] = (alloca, _CSTR, declared_ty)
+                else:
+                    alloca, _ir_ty, declared_ty = slot
+                # A borrowed parameter's registration has a different tracing
+                # contract. Rebound parameters normally have a prepared owned
+                # slot already; keep that distinction physical if one remains.
+                if (lhs.ident in getattr(self, "_borrowed_gc_rooted_local_names", ())
+                        and self._owned_local_flag_for(lhs.ident, alloca) is None):
+                    alloca = self._alloca_in_entry(_CSTR, name=lhs.ident + ".unpack.addr", init_null=True)
+                    self.env[lhs.ident] = (alloca, _CSTR, declared_ty)
+                self._ensure_local_gc_frame_root(lhs.ident, alloca, _CSTR)
+                self._emit_release_owned_local_if_flagged(lhs.ident, alloca)
+                # An unowned prior binding is borrowed: empty the destination
+                # without consuming its source owner's reference.
+                self.builder.store(ir.Constant(_CSTR, None), alloca)
+                moved = self.builder.call(
+                    self.runtime["pcc_gc_root_move"],
+                    [self._as_gc_ptr(alloca), self._as_gc_ptr(root)],
+                    name=self._fresh("unpack.literal.move"),
+                )
+                self._slot_call_check_status(moved, "literal assignment move", lhs.span)
+                self._cpy_env_flags.pop(lhs.ident, None)
+                self.env_class_hint.pop(lhs.ident, None)
+                self._owned_local_names.add(lhs.ident)
+                self._owned_local_has_value.add(lhs.ident)
+                if lhs.ident in getattr(self, "_current_param_names", set()):
+                    self._for_target_owned_names.add(lhs.ident)
+                flag = self._ensure_owned_local_flag(lhs.ident, alloca)
+                self.builder.store(ir.Constant(_I1, 1), flag)
+                if lhs.ident in getattr(self, "_planned_exact_int_local_names", set()):
+                    self._exact_int_env_flags[lhs.ident] = True
+                mark_local_bound(self, lhs.ident)
+                return
+        # Scalar conversion and container/global stores can run arbitrary
+        # callbacks. A counted address lease keeps their raw operand valid;
+        # the temporary root continues owning it through success or failure.
+        token = self.builder.call(
+            self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(root)],
+            name=self._fresh("unpack.literal.lease"),
+        )
+        self._slot_call_check_status(token, "literal assignment lease", lhs.span)
+        previous = self._current_try_err_block()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((), previous, ((root, token),))
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            value = self.builder.load(root, name=self._fresh("unpack.literal.current"))
+            self._store_unpack_target(lhs, value, value_ty, value_is_owned=False)
+            released = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(root), token],
+                name=self._fresh("unpack.literal.release"),
+            )
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+            self._slot_call_check_status(released, "literal assignment lease release", lhs.span)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _store_unpack_target(
         self,
         lhs: Expr,

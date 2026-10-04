@@ -7,10 +7,20 @@ import sys
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import DynType, IntType, Name, RawPointerType, Return
+from pcc.frontends.python.py_ast import (
+    BinOp,
+    DynType,
+    IntType,
+    Name,
+    RawPointerType,
+    Return,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
+
+
+_CSTR = ir.IntType(8).as_pointer()
 
 
 class ReturnLoweringMixin:
@@ -25,12 +35,40 @@ class ReturnLoweringMixin:
             "[pcc.frontends.c.codegen] " + mod_name + ":" + func_name + ":return " + label + "\n"
         )
 
-    def _emit_cancel_pending_return_roots(self, loop_exit: bool = False, root_base: int = 0) -> None:
-        for owner, slot, loop_depth in reversed(self._return_cleanup_roots[root_base:]):
-            if owner is self.current_function and (
-                not loop_exit or len(self.loop_stack) <= loop_depth
-            ):
-                self._clear_exception_selection_owner_slot(slot)
+    def _emit_cancel_pending_return_roots(self, loop_exit: bool = False, root_base: int = 0, only_slot=None) -> None:
+        slots = []
+        if only_slot is not None:
+            slots.append(only_slot)
+        else:
+            for owner, slot, loop_depth in reversed(self._return_cleanup_roots[root_base:]):
+                if owner is self.current_function and (
+                    not loop_exit or len(self.loop_stack) <= loop_depth
+                ):
+                    slots.append(slot)
+        if not slots:
+            return
+        # Abandoning a result can run finalizers or weakref callbacks. Keep
+        # the pending exception in an independent authoritative owner until
+        # every abandoned result has been cleared, including normal exits
+        # whose original TLS value is empty.
+        exception_slot = self._alloca_in_entry(
+            _CSTR, name=self._fresh("return.cancel.exception"), init_null=True,
+        )
+        self._emit_current_gc_frame_enter_lifo(
+            self._gc_one_slot_frame_map(), exception_slot,
+        )
+        swap_exception = self.module.globals.get("py_tls_exc_swap_slot")
+        if swap_exception is None:
+            swap_exception = ir.Function(
+                self.module, ir.FunctionType(ir.VoidType(), [_CSTR]),
+                name="py_tls_exc_swap_slot",
+            )
+        self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
+        for slot in slots:
+            self._clear_exception_selection_owner_slot(slot)
+        self.builder.call(self.runtime["py_clear_exception"], [])
+        self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
+        self._emit_gc_frame_leave_lifo_for_slot(exception_slot)
 
     def _emit_finally_entry(self, entry) -> None:
         if callable(entry):
@@ -255,17 +293,61 @@ class ReturnLoweringMixin:
         self._emit_gc_frame_leave_lifo_for_slot(slot)
         return current
 
-    def _emit_owned_return_through_finally(self, value, stmt: Return) -> None:
+    def _emit_owned_return_through_finally(self, value, stmt: Return, source_slot=None) -> None:
         # Only non-resumable activations use this path. Generator returns use
         # their preplanned managed heap-frame slots in generator_lowering.
-        hidden = self._fresh("return.cleanup.owner")
-        slot = self._exception_selection_owner_slot(value, "return.cleanup", hidden)
-        owned = self.builder.call(
-            self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(value.type, None), self._as_gc_ptr(slot)],
-            name=self._fresh("return.cleanup.transfer"),
-        )
-        self._gc_release(owned)
+        # Alternative returns never coexist at runtime. Reuse one function
+        # owner per simultaneously pending return depth, instead of enrolling
+        # a fresh permanent local in every earlier/later return's cleanup.
+        depth = 0
+        for owner, _pending_slot, _loop_depth in self._return_cleanup_roots:
+            if owner is self.current_function:
+                depth += 1
+        hidden = ".pcc.return.cleanup.owner." + self.current_function.name + "." + str(depth)
+        cached = self.env.get(hidden)
+        if cached is not None:
+            slot = cached[0]
+            # An earlier lexical branch may never have executed. Every site
+            # acquiring this owner must publish its own cleanup flag.
+            flag = self._ensure_owned_local_flag(hidden, slot)
+            self.builder.store(ir.Constant(ir.IntType(1), 1), flag)
+        if source_slot is None:
+            if cached is None:
+                slot = self._exception_selection_owner_slot(value, "return.cleanup", hidden)
+            else:
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(slot), value],
+                )
+            owned = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(value.type, None), self._as_gc_ptr(slot)],
+                name=self._fresh("return.cleanup.transfer"),
+            )
+            self._gc_release(owned)
+        else:
+            # The producer already published its NEW result before any poll.
+            # Register the pending-return owner empty, then transfer between
+            # authoritative roots. Never take a raw result before registration.
+            if cached is None:
+                slot = self._exception_selection_owner_slot(
+                    ir.Constant(value.type, None), "return.cleanup", hidden,
+                )
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((source_slot,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                moved = self.builder.call(
+                    self.runtime["pcc_gc_root_move"],
+                    [self._as_gc_ptr(slot), self._as_gc_ptr(source_slot)],
+                    name=self._fresh("return.cleanup.move"),
+                )
+                self._slot_call_check_status(moved, "return result transfer", stmt.span)
+                self._release_slot_call_roots((source_slot,))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         error = self.current_function.append_basic_block(name=self._fresh("return.cleanup.error"))
         saved_error = self._push_try_err_block(error)
         saved_roots = self._return_cleanup_roots
@@ -276,6 +358,10 @@ class ReturnLoweringMixin:
             self._return_cleanup_roots = saved_roots
             self._restore_try_err_block(saved_error)
         if not self._builder_block_is_terminated():
+            if source_slot is not None:
+                # Reload, inspect and pin under the graph transaction. The
+                # registered owner remains live through the lock's entry poll.
+                self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
             value = self.builder.call(
                 self.runtime["pcc_gc_load_ptr"],
                 [ir.Constant(value.type, None), self._as_gc_ptr(slot)],
@@ -306,6 +392,8 @@ class ReturnLoweringMixin:
             prior.add_incoming(ir.Constant(ir.IntType(64), 0), empty)
             prior.add_incoming(prior_value, previous)
             self._gc_pin(value)
+            if source_slot is not None:
+                self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
             self._emit_owned_local_cleanup(skip_name=hidden)
             result = self.builder.call(
                 self.runtime["pcc_gc_take_pinned_slot"], [self._as_gc_ptr(slot), prior],
@@ -317,9 +405,7 @@ class ReturnLoweringMixin:
             self.builder.ret(result)
         continuation = self.builder._block
         self.builder.position_at_end(error)
-        self.builder.call(
-            self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(slot), ir.Constant(value.type, None)],
-        )
+        self._emit_cancel_pending_return_roots(only_slot=slot)
         self.builder.branch(saved_error or self._ensure_fn_err_exit())
         self.builder.position_at_end(continuation)
 
@@ -386,6 +472,21 @@ class ReturnLoweringMixin:
             self._return_log("value void ret")
             self.builder.ret_void()
             self._return_log("value void end")
+            return
+        if (
+            isinstance(ret_ty, ir.PointerType)
+            and not isinstance(self.current_func_def.return_ty, RawPointerType)
+            and not getattr(self, "_generator_ctx_stack", ())
+            and isinstance(stmt.value, BinOp)
+            and self._slot_call_binary_runtime(stmt.value, object_boundary=True) is not None
+        ):
+            # A pointer-return ABI is an owning object consumer. Ordinary
+            # numeric annotations do not authorize a scalar/exact-int shortcut
+            # before the actual runtime protocol has selected the result kind.
+            source_slot = self._emit_slot_call_operand(stmt.value, "return.binary")
+            self._emit_owned_return_through_finally(
+                ir.Constant(ret_ty, None), stmt, source_slot,
+            )
             return
         if isinstance(ret_ty, ir.PointerType) and isinstance(
             self.current_func_def.return_ty, IntType

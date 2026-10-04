@@ -1,12 +1,25 @@
 # Current status
 
-Updated October 4, 2026, 03:58 UTC. Maintain this page in place.
+Updated October 4, 2026, 04:48 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
 ## Current boundary
 
 There is no qualified current pcc1, pcc2 or pcc3, and no Stage2/Stage3 fixed point.
+The candidate now includes the numeric-return and literal-unpack repairs,
+including unfinished qualifications, for the authorized source synchronization.
+Managed numeric results move into pending-return owners before cleanup; cancelled
+returns preserve the original exception across reentrant disposal. Pending owners
+are reused by function and nested-return depth. The first draft grew to 43
+permanent roots and 1,763 frame leaves for 40 flat returns; the current follow-on
+keeps four roots and 164 leaves. Full combined-source validation and native proof
+remain pending. Literal unpack now stages all managed RHS owners before writing
+targets, preserving aliases, later-RHS exceptions and moving-root lifetimes.
+Its retained original arm64 replay clears the seg/sect ownership error and reaches
+a separate keyword-dict publication failure at b"".join(buf.chunks). That replay
+is causal evidence on retained context, not a fresh whole-module pass.
+
 The latest complete compiler-context census, V8, uses the immutable 20:15 capture,
 Stage1 source `90bb894ee2b5ee9dc0b4cbed2543679dfb0dde85cd79e1bda64d21e8b83d4ecb`.
 All 441 freshly exported contexts are accounted: 383 pass, 57 fail in the
@@ -49,6 +62,18 @@ C/Python execution, native bootstrap, all-five-GC production/performance and
 actual four-platform qualification remain open.
 
 ## Matched runtime and native evidence
+
+The October 4 rebuilt runtime on frozen compiler closure
+`833cebfea0df6caa9522f67b0d4d3adfaff01f1e8d3c4c80ad8d955f89411877`
+is strictly admitted with all 186 threaded/atomic members. Archive SHA256 is
+`7414929986c3181d2432a2259ad857adc72a27e17fa3e282d89385a6ffce8015`.
+The build completed in 392.774 seconds at a 454,881,280-byte peak; these are
+controlled diagnostic observations, not build-performance acceptance. Source,
+configuration, codegen, input stability and native-test fixture admission pass.
+The complete archive, frozen source/tests and receipts are durably saved as
+Library `libfile_b84914f806c88191a9aa4475f7294e5c`. Its native controls are in
+progress. It excludes the later numeric-return and literal-unpack changes and
+cannot qualify those newer candidate bytes.
 
 The latest completed native control boundary uses Linux x86-64 source
 `addad00416e5a8e9f35382212ea54c1c75c9f7fb8276a074ddc616546a44d63c`
@@ -277,14 +302,25 @@ platform execution must remain explicit until a suitable environment is arranged
 ## Source recovery and synchronization
 
 The October 4 environment refresh removed the cloud filesystem. The latest
-verified local baseline is PCC `0388601df8f69109bb967824e79bef1a611d8202`,
+verified local baseline is PCC `519476af9a2869b4ff67dc5279aeb7274aba212b`,
 GUI `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
 `83577bc41dc79d3ead2e217bfa04f0f500799012`. All 29,724 PCC, 560 gateway and
 130 GUI paths were restored from durable bytes and independently compared with
 the complete 22:22 capture identities. There are no missing or extra source
 paths, hash mismatches or executable-mode/type mismatches.
 
-The last synchronized capture is October 3 at 22:22:34 UTC. It contains eight
+The last synchronized capture is October 4 at 04:00:53 UTC. Its fresh exact-source
+run recorded 1,336 distinct passes, two failures and no resource-incomplete
+groups. The original context completed all 47 targets with 40 zero-fallback IR
+outputs and seven codegen errors at a 1,429,393,408-byte peak under the unchanged
+cap. Its zero-fallback assertion remains failed. The other failure is the explicit
+native-provisioning reservation, before compilation. The affected context and
+lifetime files pass all 31 cases; both original LIFO regression files pass.
+Collection inventories 26,361 nodes, with 26,136 selected and 225 environment
+or capability deselections; the integration inventory selects 5,561. Both have
+zero collection errors/skips. These results qualify that immutable capture only.
+
+The preceding October 3 capture at 22:22:34 UTC It contains eight
 PCC paths against `65044e8`, including the LIFO cleanup correction and managed
 bitwise results. Its historical exact-source run records 1,473 distinct passes,
 one explicit native-provisioning failure and one memory-incomplete original
@@ -310,21 +346,27 @@ with 40 verified IR outputs and seven preserved codegen errors at a
 Fresh-source module 56 also passed the production singleton lowering route.
 Source/test identities and these historical receipts are in Library
 `libfile_99fb91a2b68c81918f27309392888b73`; recoverable production code and tests
-are separately in `libfile_87e7e7aedbfc8191994e300fcae9a87e`. Fresh validation
-on the restored source is required and is being run before the next sync packet.
+are separately in `libfile_87e7e7aedbfc8191994e300fcae9a87e`. Fresh restored-source validation is recorded above for the 04:00 capture;
+newer integrated source must be checked independently.
 
 The last runtime attempt was observed completing all 186 member receipts before
 the limit interruption, but its finished archive and final admission evidence
 were not saved durably. No native execution followed it. Its frozen source/tests
 and tooling are recoverable as `libfile_b5ddccfc9a5481918b0eec9505ee3366`;
-the runtime must be rebuilt and requalified. The older 30 witnessed native
+that historical archive remains unavailable. A new complete runtime has now
+been rebuilt and admitted on the frozen same compiler source, as recorded above.
+The older 30 witnessed native
 Python/backend passes and two original C controls remain separate historical
 proof on source addad004, as described above.
 
-The typed numeric return proposal remains outside the candidate. Its recoverable
-patch and retained observations are being reconciled; the 12 consumer and 32
-helper-body model passes need fresh execution after reconstruction. They are
-not included as current integrated or native success. No new complete V9 census,
+The reconstructed typed numeric return and literal-unpack source repairs are now
+integrated, including their explicitly unfinished qualifications. The numeric
+tranche passes 178 host cases, 38 return/cleanup cases and 62 affected-file cases
+before the owner-reuse follow-on. The follow-on passes its three formal growth,
+flag and nesting guards; combined whole-file validation is pending. Literal
+unpack has 133 focused/whole-file host passes and a prepared, unrun native matrix.
+Selected/reflected method replacement with parking or moving GC remains an open
+runtime ownership boundary. No earlier snapshot's pass is transferred silently. No new complete V9 census,
 current pcc1, native five-GC qualification, full C/Python execution, or Stage2/3
 fixed point is claimed.
 

@@ -100,11 +100,12 @@ class BinaryOpLoweringMixin:
                 return None
             return "py_obj_mul_slots"
         if expr.op == "%":
-            # Match the existing generic modulo/percent-format route. Fully
-            # numeric static operands keep their existing integer/float lane;
-            # no annotation establishes a literal integer provenance proof.
+            # An object consumer needs actual runtime dispatch even when
+            # inference says int/float. The numeric and formatting branches
+            # publish the runtime result without annotation-derived kernels.
             numeric = (IntType, BoolType, FloatType)
-            if isinstance(expr.lhs.ty, numeric) and isinstance(expr.rhs.ty, numeric):
+            if (not object_boundary and isinstance(expr.lhs.ty, numeric)
+                    and isinstance(expr.rhs.ty, numeric)):
                 return None
             return "py_obj_mod"
         if expr.op in ("<<", ">>"):
@@ -116,16 +117,22 @@ class BinaryOpLoweringMixin:
             # Preserve the existing generic floor-division runtime route.
             # Its inputs are leased managed objects and its return is NEW;
             # integer zero is the existing NULL-without-TLS caller contract.
-            # Typed scalar lanes still require their own arithmetic proof.
-            if any(isinstance(ty, DynType) for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty)):
+            # Ordinary numeric annotations do not prove an integer kernel.
+            # An explicit complex projection retains its existing route.
+            if ((object_boundary and not any(isinstance(ty, ComplexType)
+                    for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty)))
+                    or any(isinstance(ty, DynType) for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty))):
                 return "py_obj_floordiv"
             return None
         if expr.op == "/":
             # Match the existing dynamic division route exactly. Its runtime
             # numeric/dunder dispatch is unchanged; only NEW publication moves
-            # ahead of caller error checks and operand cleanup. Fully typed
-            # scalar and complex division retain their separate lowering.
-            if any(isinstance(ty, DynType) for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty)):
+            # ahead of caller error checks and operand cleanup. At an object
+            # boundary ordinary numeric annotations use the same protocol;
+            # explicitly complex projections keep their separate lowering.
+            if ((object_boundary and not any(isinstance(ty, ComplexType)
+                    for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty)))
+                    or any(isinstance(ty, DynType) for ty in (expr.ty, expr.lhs.ty, expr.rhs.ty))):
                 return "py_obj_truediv"
             return None
         if expr.op == "-":

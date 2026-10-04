@@ -1354,84 +1354,57 @@ class AssignmentStatementLoweringMixin:
                     f"tuple unpack arity mismatch: {len(target.elems)} "
                     f"targets, {len(rhs.elems)} values"
                 )
-            safe_fresh_names = True
-            i = 0
-            while i < len(target.elems):
-                lhs = target.elems[i]
-                if not _assign_is_name(lhs):
-                    safe_fresh_names = False
-                    break
-                ident = lhs.ident
-                if ident in self.env:
-                    safe_fresh_names = False
-                    break
-                if ident in getattr(self, "_current_global_names", set()):
-                    safe_fresh_names = False
-                    break
-                if ident in getattr(self, "_current_param_names", set()):
-                    safe_fresh_names = False
-                    break
-                j = 0
-                while j < i:
-                    prev = target.elems[j]
-                    if _assign_is_name(prev) and prev.ident == ident:
-                        safe_fresh_names = False
-                        break
-                    j += 1
-                if not safe_fresh_names:
-                    break
-                i += 1
-            if safe_fresh_names:
-                i = 0
-                while i < len(target.elems):
-                    elem = rhs.elems[i]
-                    elem_value, elem_owned = self._emit_destructured_literal_element(
-                        elem
+            # Python evaluates the complete RHS before publishing any target,
+            # including fresh names. A later evaluation can allocate, relocate
+            # earlier results, or raise, so managed elements remain independent
+            # authoritative owners until the assignment phase finishes.
+            previous = self._current_try_err_block()
+            error_target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            roots = []
+            rhs_vals = []
+            rhs_roots = []
+            rhs_owned = []
+            try:
+                for index, elem in enumerate(rhs.elems):
+                    lhs = target.elems[index]
+                    planned_exact_int = (
+                        isinstance(lhs, Name)
+                        and lhs.ident in getattr(self, "_planned_exact_int_local_names", set())
+                        and isinstance(elem.ty, (IntType, BoolType))
                     )
-                    self._store_unpack_target(
-                        target.elems[i],
-                        elem_value,
-                        elem.ty,
-                        value_is_owned=elem_owned,
+                    managed = (
+                        (self._is_object(elem.ty) or planned_exact_int)
+                        and not getattr(self, "_freestanding_module", False)
+                        and not self._expr_returns_unsafe_raw_pointer(elem)
+                        and not self._expr_looks_cpython(elem)
                     )
-                    i += 1
-                return
-
-            rhs_vals: list = []
-            rhs_tys: list = []
-            rhs_owned: list[bool | None] = []
-            for index, e in enumerate(rhs.elems):
-                lhs = target.elems[index]
-                planned_exact_int = (
-                    isinstance(lhs, Name)
-                    and lhs.ident
-                    in getattr(self, "_planned_exact_int_local_names", set())
-                    and isinstance(lhs.ty, IntType)
-                    and isinstance(e.ty, (IntType, BoolType))
-                )
-                if planned_exact_int:
-                    # Destructuring evaluates every RHS before publishing any
-                    # target.  Preserve that ordering, but evaluate an element
-                    # destined for a planned exact-int slot directly in the
-                    # object projection.  Emitting the generic scalar value
-                    # first (for example ``1 << 70``) would overflow in i64
-                    # before the later store had a chance to box it.
-                    rhs_vals.append(self._emit_exact_int_operand_object(e))
-                    rhs_owned.append(self._pcc_pointer_source_is_owned(e))
-                else:
-                    elem_value, elem_owned = self._emit_destructured_literal_element(e)
-                    rhs_vals.append(elem_value)
-                    rhs_owned.append(elem_owned)
-                rhs_tys.append(e.ty)
-            i = 0
-            while i < len(target.elems):
-                self._store_unpack_target(
-                    target.elems[i],
-                    rhs_vals[i],
-                    rhs_tys[i],
-                    value_is_owned=rhs_owned[i],
-                )
-                i += 1
+                    if managed:
+                        root = self._emit_slot_call_operand(elem, "unpack.literal")
+                        roots.append(root)
+                        rhs_roots.append(root)
+                        rhs_vals.append(None)
+                        rhs_owned.append(True)
+                        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
+                        self._cpy_operand_cleanup_block = self._try_err_block
+                    else:
+                        value, owned = self._emit_destructured_literal_element(elem)
+                        rhs_vals.append(value)
+                        rhs_roots.append(None)
+                        rhs_owned.append(owned)
+                for index, lhs in enumerate(target.elems):
+                    root = rhs_roots[index]
+                    if root is not None:
+                        self._store_unpack_root_target(lhs, root, rhs.elems[index].ty)
+                    else:
+                        self._store_unpack_target(
+                            lhs, rhs_vals[index], rhs.elems[index].ty,
+                            value_is_owned=rhs_owned[index],
+                        )
+                self._release_slot_call_roots(tuple(roots))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
             return
 
         rhs_ty = rhs.ty

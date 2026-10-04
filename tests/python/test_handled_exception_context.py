@@ -185,9 +185,13 @@ def test_handled_cleanup_helpers_have_native_static_method_exports():
         assert name in L1_CODEGEN_HOST_METHODS
         assert static[name] == native[name]
     assert tuple(parameter["name"] for parameter in static["_emit_cancel_pending_return_roots"]["call_sig"]) == (
-        "self", "loop_exit", "root_base",
+        "self", "loop_exit", "root_base", "only_slot",
     )
-    assert tuple(parameter["has_default"] for parameter in static["_emit_cancel_pending_return_roots"]["call_sig"]) == (False, True, True)
+    assert tuple(parameter["has_default"] for parameter in static["_emit_cancel_pending_return_roots"]["call_sig"]) == (False, True, True, True)
+    assert tuple(parameter["name"] for parameter in static["_emit_owned_return_through_finally"]["call_sig"]) == (
+        "self", "value", "stmt", "source_slot",
+    )
+    assert tuple(parameter["has_default"] for parameter in static["_emit_owned_return_through_finally"]["call_sig"]) == (False, False, False, True)
 
 
 def test_exception_suppression_flag_has_one_c_python_export_identity():
