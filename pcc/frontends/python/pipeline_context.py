@@ -1236,10 +1236,25 @@ def _contextual_host_params_for_module(ast_mod, module_name: str):
 
 
 def count_py_cpy_fallback_calls(ir_text: str) -> int:
+    # Preserve the splitlines per-line predicate without a full line list.
+    # Marker-bearing lines are sparse in native IR; inspect each at most once.
     count = 0
-    for line in ir_text.splitlines():
-        if line.find("@py_cpy_") >= 0 and line.find("call ") >= 0:
+    size = len(ir_text)
+    position = 0
+    line_breaks = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+    while position < size:
+        marker = ir_text.find("@py_cpy_", position)
+        if marker < 0:
+            break
+        line_start = marker
+        while line_start > 0 and ir_text[line_start - 1] not in line_breaks:
+            line_start -= 1
+        line_end = marker + len("@py_cpy_")
+        while line_end < size and ir_text[line_end] not in line_breaks:
+            line_end += 1
+        if ir_text.find("call ", line_start, line_end) >= 0:
             count += 1
+        position = line_end + 1
     return count
 
 
@@ -1339,6 +1354,8 @@ def compile_contextual_per_module_fallback_counts(
                 native_exports, mod_name,
             )
             ir_text = str(codegen.generate(typed_mod))
+            # The serialized text is independent of the completed frontend.
+            codegen = None
             out[mod_name] = count_py_cpy_fallback_calls(ir_text)
             if emit_ir_dir is not None:
                 # ponytail: caller must pre-create emit_ir_dir. os.makedirs has
@@ -1362,4 +1379,8 @@ def compile_contextual_per_module_fallback_counts(
                 error_name = mod_name.replace(".", "_") + ".error.txt"
                 with open(os.path.join(emit_ir_dir, error_name), "w", encoding="utf-8") as stream:
                     stream.write(detail + "\n")
+        finally:
+            # Do not overlap the next module with obsolete frontend/text owners.
+            codegen = None
+            ir_text = ""
     return out

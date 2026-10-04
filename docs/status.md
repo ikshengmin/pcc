@@ -1,6 +1,6 @@
 # Current status
 
-Updated October 3, 2026, 22:22 UTC. Maintain this page in place.
+Updated October 4, 2026, 03:58 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
@@ -276,83 +276,79 @@ platform execution must remain explicit until a suitable environment is arranged
 
 ## Source recovery and synchronization
 
-The reset recovery restored verified source bytes from the last backed-up
-October 2 boundary. Historical passing results never qualify reconstructed
-bytes. Recoverable current code, before/after patches, source identities and
-execution artifacts are retained outside the repositories and backed up durably.
-No generated backups, scratch tests or work-in-progress directory belong here.
+The October 4 environment refresh removed the cloud filesystem. The latest
+verified local baseline is PCC `0388601df8f69109bb967824e79bef1a611d8202`,
+GUI `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
+`83577bc41dc79d3ead2e217bfa04f0f500799012`. All 29,724 PCC, 560 gateway and
+130 GUI paths were restored from durable bytes and independently compared with
+the complete 22:22 capture identities. There are no missing or extra source
+paths, hash mismatches or executable-mode/type mismatches.
 
-The last confirmed local source baseline is PCC
-`65044e8893965e8122a4e2296409de22076bbd83` (21:17 capture), GUI
-`45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
-`83577bc41dc79d3ead2e217bfa04f0f500799012`. All 17 PCC paths passed local
-before/after hash, mode and diff checks. Later cloud changes remain unsynchronized.
+The last synchronized capture is October 3 at 22:22:34 UTC. It contains eight
+PCC paths against `65044e8`, including the LIFO cleanup correction and managed
+bitwise results. Its historical exact-source run records 1,473 distinct passes,
+one explicit native-provisioning failure and one memory-incomplete original
+context. Both original LIFO-regression whole files pass. The context stopped
+at the unchanged cap after 20 IR outputs and five errors, before its assertion.
+Collection covered 26,347 nodes: 26,122 selected and 225 environment/capability
+deselections; the separate integration inventory selected 5,561. Both had zero
+collection errors/skips. These are dated receipts, not newly executed tests.
 
-The latest synchronized immutable capture is October 3 at 21:17:27 UTC,
-containing 17 PCC paths against `5c72b625`. Exact-source execution records 1,539
-distinct passes, three completed failures and one memory-incomplete context test.
-Two new failures are non-LIFO cleanup in the unchanged method-publication and
-lambda-adapter checks: the exception frame remained above operand frames being
-retired. The third is the native reservation correctly rejecting an unadmitted
-runtime request before compilation. All five original host container IR cases
-pass, and the original native program strings remain unchanged.
+The later compiler memory repair and new lifetime regression file were recovered
+byte-for-byte from the production code archive. The maintained pipeline-context
+test file in that archive already matches the synchronized baseline.
+The compiler closure is
+`833cebfea0df6caa9522f67b0d4d3adfaff01f1e8d3c4c80ad8d955f89411877`.
+The repair releases the previous diagnostic IR/codegen references and counts
+fallback-bearing lines without materializing a full splitlines list. It keeps
+the original per-line predicate, strict ownership gates and resource cap.
 
-The LIFO correction is now in the cloud candidate. It clears owners while keeping
-their frames registered, restores TLS and removes the exception frame, then
-retires empty operand frames in reverse order. The original whole-file failures
-reproduce before correction; after correction the method, lambda adapter,
-lambda constructor and frame suites pass 14, 12, 9 and 6 cases respectively.
-The broader matrix passes 239 checks. Native execution of this correction remains
-pending on a matching source/runtime.
+Before the interruption, this repair passed 17 focused checks; its line predicate
+matched 10,077 reference comparisons. The unchanged 47-target test completed
+with 40 verified IR outputs and seven preserved codegen errors at a
+1,561,223,168-byte peak. The zero-fallback assertion still failed on those errors.
+Fresh-source module 56 also passed the production singleton lowering route.
+Source/test identities and these historical receipts are in Library
+`libfile_99fb91a2b68c81918f27309392888b73`; recoverable production code and tests
+are separately in `libfile_87e7e7aedbfc8191994e300fcae9a87e`. Fresh validation
+on the restored source is required and is being run before the next sync packet.
 
-The original 47-target context test on the synchronized snapshot reached its
-unchanged 1.5 GiB memory guard after 19 IR outputs and six errors, before its
-assertion. A same-input A/B isolates the added cleanup protocol: the old body
-completes all 47 targets at a 1,569,239,040-byte peak, while the new body reaches
-the same cap at 1,618,747,392 bytes. The added exception owners contribute exactly
-12 instructions each, with unchanged CFG block counts, permanent-root counts
-and return-cleanup sites. This is linear overhead, not the earlier quadratic
-root-enrollment defect. Failure occurs after class_gen string generation and
-before its output file is created, at whole-string line-list counting. No
-nonexistent partial class_gen output is claimed. Releasing the previous IR string
-and codegen object alone still reaches the unchanged cap at 1,626,624,000 bytes.
-A separate lifetime-plus-streaming-counter experiment is running; its line
-predicate matches the original counter in 10,077 reference comparisons. It has
-not yet qualified the original full context, and remains outside current source.
+The last runtime attempt was observed completing all 186 member receipts before
+the limit interruption, but its finished archive and final admission evidence
+were not saved durably. No native execution followed it. Its frozen source/tests
+and tooling are recoverable as `libfile_b5ddccfc9a5481918b0eec9505ee3366`;
+the runtime must be rebuilt and requalified. The older 30 witnessed native
+Python/backend passes and two original C controls remain separate historical
+proof on source addad004, as described above.
 
-The complete inventory contains 26,210 nodes: 25,985 selected and 225 capability
-or environment deselections. The independent integration inventory selects 5,559
-from the same union. Both have zero collection errors/skips. Collection does not
-execute test bodies. The 19 context IR outputs are separately backed up as
-Library `libfile_0814369c2a308191986aa055294a2971`; the source packet records their
-hashes and source identity.
+The typed numeric return proposal remains outside the candidate. Its recoverable
+patch and retained observations are being reconciled; the 12 consumer and 32
+helper-body model passes need fresh execution after reconstruction. They are
+not included as current integrated or native success. No new complete V9 census,
+current pcc1, native five-GC qualification, full C/Python execution, or Stage2/3
+fixed point is claimed.
 
-Historical captures remain separate: 20:15 recorded 1,413 passes, four failures
+Historical captures remain distinct: 21:17 recorded 1,539 passes, three failures
+and one memory-incomplete context; 20:15 recorded 1,413 passes, four failures
 and one resource-incomplete native attempt; 19:17 recorded 1,685 passes and four
-failures; 18:25 recorded 1,544 passes and six failures. Later scoped repairs do
-not rewrite those receipts, and differing selected groups prevent a simple
-comparison of passing totals.
+failures. Different selected groups prevent comparing these totals as a score.
+Detailed source-bound receipts and restore chains remain in the external recovery
+archives. Code archive `libfile_a5f7c11281008191be4ea89ea9611cbd`, version 41,
+contains the 17:35 source changes; later source packets preserve the full chain.
 
-Recoverable code bytes, before/after patches and detailed historical receipts
-are retained in the external PCC recovery archives in Library. Code archive
-`libfile_a5f7c11281008191be4ea89ea9611cbd`, version 41, contains the 17:35 code
-capture. The V6 census input/receipt archive
-`libfile_b31d99b80ce88191bb44580e4307ddcd` includes complete original generated
-AST/exports and all phase/failure/resource receipts; successful PIDX payloads
-are separately retained and are not included in that archive.
+Hourly synchronization includes all legitimate integrated changes even when
+failing or unqualified. Collection and affected whole regression files run on the
+exact immutable capture first. Failures, resource limits and unexecuted native
+cases are reported explicitly. Local work is limited to applying the verified
+delta and one change-based commit per changed repository, preserving user edits.
+There is no local development, test execution, push or history rewrite. Promote
+only a capture whose actual local commit is verified. The future push/CI loop
+requires all ten goals and a separate explicit user instruction to start.
 
-Hourly synchronization includes legitimate integrated work even when failing or
-unqualified. Run collection and affected fast tests on the exact capture first;
-report failures and unexecuted cases instead of treating sync as acceptance.
-The local executor only applies and commits one change-based commit per changed
-repository, preserves user edits, and does not develop, test or push. Promote a
-capture to the next baseline only after its actual local commit is verified.
-Later mutable changes remain separate until the next capture.
-
-Use the qualified CPython 3.15.0rc1 environment, isolated outputs, source/config
-identities and resource watchdogs. Coordinate heavy runs, forbid surprise
-compiler/runtime provisioning, and stop each independent diagnostic at its first
-real failure. Safety timeouts are not acceptance budgets. A pre-launch lock rejection now
-records a terminal receipt instead of leaving a stale RUNNING state; all 17
-watchdog tests pass, including owned-child reaping under the unchanged one-byte
-memory cap. Preserve failures and continue other independent authorized work.
+Use exact CPython 3.15.0rc1 and the recovered dependency pins, isolated outputs,
+source/configuration identities and process-tree watchdogs. The test environment
+was reinstalled and verified after the reset. Safety timeouts are not acceptance
+budgets. Restore historical compressed artifacts before replay, and make private
+copies before editing immutable source views. Keep generated backups, scratch
+tests and recovery records outside the repositories; maintain this single status
+page in place.
