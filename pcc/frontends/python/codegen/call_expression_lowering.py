@@ -1222,6 +1222,7 @@ class CallExpressionLoweringMixin:
                 builtin_value,
                 expr.args,
                 expr.kwargs,
+                expr,
             )
             if result is not None:
                 return result

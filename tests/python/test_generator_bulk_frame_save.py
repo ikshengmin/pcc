@@ -42,7 +42,7 @@ print(next(iterator))
     assert calls == [0, 0], "the rejected experiment must not alter application codegen"
 
 
-def test_bulk_save_keeps_aliases_and_falls_back_without_mutation(tmp_path):
+def test_bulk_save_keeps_aliases_and_falls_back_without_mutation(tmp_path, pcc_runtime_archive):
     source = tmp_path / "bulk_save.c"
     source.write_text('''#include "py_runtime.h"
 #include <stdio.h>
@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
 }
 ''')
     executable = tmp_path / "bulk_save"
-    compile_owned_c_with_runtime(source, executable)
+    compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
     for backend in range(5):
         ran = subprocess.run([str(executable), str(backend)], capture_output=True, text=True, timeout=15)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr

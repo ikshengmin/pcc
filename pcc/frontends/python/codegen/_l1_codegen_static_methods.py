@@ -662,7 +662,7 @@ def _part_55(out):
 
 def _part_56(out):
     _append_method(out, '_emit_native_re_sub_call', (('self', 'pos', False), ('args', 'pos', False), ('kwargs', 'pos', False), ('expr', 'pos', True)))
-    _append_method(out, '_emit_generator_yield_value', (('self', 'pos', False), ('value', 'pos', False), ('', 'kw_only', False), ('resume_err_target', 'pos', True), ('result_slot', 'pos', True)))
+    _append_method(out, '_emit_generator_yield_value', (('self', 'pos', False), ('value', 'pos', False), ('', 'kw_only', False), ('resume_err_target', 'pos', True), ('resume_args_target', 'pos', True), ('result_slot', 'pos', True)))
     _append_method(out, '_emit_generator_take_send', (('self', 'pos', False),))
     _append_method(out, '_generator_frame_helper', (('self', 'pos', False), ('operation', 'pos', False)))
     _append_method(out, '_iterator_builtin_is_shadowed', (('self', 'pos', False), ('name', 'pos', False)))
@@ -674,6 +674,7 @@ def _part_56(out):
 def _part_57(out):
     _append_method(out, '_emit_next_pending_or_default', (('self', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('exhausted', 'pos', False)))
     _append_method(out, '_emit_next_filter_truth', (('self', 'pos', False), ('output', 'pos', False), ('predicate', 'pos', False), ('call_args', 'pos', False), ('pred_result', 'pos', False), ('none_obj', 'pos', False), ('span', 'pos', False)))
+    _append_method(out, '_emit_owned_padding_method', (('self', 'pos', False), ('expr', 'pos', False)))
 
 
 def _build_static_methods():

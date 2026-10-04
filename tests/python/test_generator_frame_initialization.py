@@ -6,7 +6,7 @@ import subprocess
 from tests.owned_c_execution import compile_owned_c_with_runtime
 
 
-def test_generator_frame_none_slots_survive_each_collector(tmp_path: Path):
+def test_generator_frame_none_slots_survive_each_collector(tmp_path: Path, pcc_runtime_archive):
     source = tmp_path / "frame_init.c"
     source.write_text('''#include "py_runtime.h"
 #include <stdint.h>
@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
 }
 ''')
     executable = tmp_path / "frame_init"
-    compile_owned_c_with_runtime(source, executable)
+    compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
     for backend in range(5):
         ran = subprocess.run([str(executable), str(backend)], capture_output=True,
                              text=True, timeout=15)

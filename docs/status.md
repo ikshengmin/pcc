@@ -1,22 +1,36 @@
 # PCC current status
 
-Updated 2026-10-04 at 15:25 UTC. None of the ten requested goals is fully qualified. Results below belong to their stated source; the new joined source still requires its own matched runtime and original execution gates.
+Updated 2026-10-04 at 16:31 UTC. None of the ten requested goals is fully qualified. Results below belong to their stated source; the new joined source still requires its own matched runtime and original execution gates.
 
 ## Verified synchronization and recovery
 
-The latest completed local synchronization is PCC `e1e360ae325a84233ba88be11350499c3fb4eeea`, gateway `05fe10b57897dfcff19a75b41b7c9630436b32d8`, and GUI `6c61696c2ca54f4afd3f53c60f4e8a2e8bd7e3a3`. It applied the 13:01:19 capture: 54 PCC paths, with all 2,950 packet checksums, before/after hashes, modes and diff-check verified. No local development, tests or push occurred.
+The latest completed local synchronization is PCC `c21f5a096ff1550c132a2ad9a054f96126c100f7`, gateway `05fe10b57897dfcff19a75b41b7c9630436b32d8`, and GUI `6c61696c2ca54f4afd3f53c60f4e8a2e8bd7e3a3`. It applied the 15:26:24 capture: 49 PCC paths, with all 1,453 packet checksums, before/after hashes, modes and diff-check verified. No local development, tests or push occurred.
 
-The applied packet is Library `libfile_e19354430f148191990d6fbfcdbc55ca`, version 1, SHA256 `de5e773c3b11d177f50c45590d5c40912482e84a002772ff16121f83838dc66f`. Source manifest: `61aa09dd148c6ebbba835b50dd2e6b02e19f0437b254d38f2e0f5cb0c3cb5579`. Restore the self-contained 09:18 backup `libfile_0b5da8dbb25c81919b7de213f74fac3c` version 1, then the 10:52 packet `libfile_1fd3f36fa2508191a9982ea45b42f7f7` version 1 and this packet in order.
+The applied packet is Library `libfile_a121092d6ea88191af9dc66628f138ca`, version 1, SHA256 `96e98452a468386dc30b822d5df602caade85c69219640bfcea542ef4cccf092`. Its immutable precommit observation was 1,442 PASS, 16 FAIL and two SKIP, with 772 host nodes still pending. The same source later completed at 2,213 PASS, 17 FAIL and two original SKIP, zero unattempted host nodes or resource stops. Four failures were runtime-fixture admission, twelve imported-constructor assertions still expecting the retired registration spelling, and one virtual-thread source-spelling assertion. These later results do not rewrite the earlier packet. Terminal receipts are Library `libfile_e0260d0ce7108191b047de1b54a02901`, version 0.
+
+A self-contained full source restoration point is Library `libfile_39cf854663248191b9cf64c4193c41c5`, version 0, SHA256 `a00147fd809afeb7bc3ddfa9fe79c8211002f7e2ddf7391d2ecf51bba60e31ec`: all 30,483 source entries, types, modes and hashes verified. Its source manifest is `9ecc73736a43c74fbc8a2453d5540db476de53427114df8f6c8811241f52f61f`.
 
 Cloud development and recoverable source backups continue. Local synchronization is every two hours, with one change-based commit per changed repository. Push and the later CI repair loop require both the ten-goal prerequisite and an explicit future instruction to start.
 
 ## Current joined source awaiting qualification
 
-The next candidate joins managed stored-method/interception results, coroutine throw/close protocol state, C frame lifetime accounting and owned C test execution, nine Linux POSIX exports, ordinary managed TemporaryDirectory objects, and streaming UTF-8/ASCII text decoding with structured UnicodeDecodeError payloads. Strict root validation and native archive provenance remain enabled. The text-file and exception payload layouts changed; this candidate requires a complete matched runtime rebuild.
+After that capture, the candidate now joins owned dynamic text/bytes padding, the missing generator resume-argument registry entry, owned copy/deepcopy publication, boxed arithmetic-local roots, phase-aware GCC/C-testsuite comparisons, explicit generator runtime fixtures, and the owned self-vector assembly/link test route. The arithmetic repair checks both pending exceptions and allocation NULL before replacing the previous local. Component host/IR checks and original selected contexts are preserved separately; the new compiler requires its own matched qualification.
 
-The first four joined batches passed 325 bounded host tests. The later TempDir and codec batches have component model, owned IR and object receipts; those are not native behavior proof. A TempDir Path-containing single-file compile initially emitted a capability stub, so its successful compiler exit is explicitly excluded as a semantic pass. The unchanged whole-compiler class-schema test, original async file, gateway execution, original coroutine failures, stored-method controls and five-GC cases remain required on the final source.
+An actual gateway socket failure exposed a C local-value-numbering defect: a call mutated `ready` through its address, but the cached zero expression was later reused as `sent = ready`, so the sender began at byte one and sent `orld`. The unchanged child exited 24 and the parent returned 27. The candidate now invalidates this cache at calls and indirect writes. The unchanged socket program passes with only that compiler pass substituted, but this is explicitly a mixed-compiler causal diagnostic; a final source-matched rebuild and replay remain required. Original failure artifacts are retained.
 
-The original string-subclass format failure remains unresolved. General dynamic interception, coroutine warning/traceback parity, multithreaded fork lifecycle, non-Linux file/codec behavior and the whole compiler graph remain unqualified. Method-selection/factory alternatives with unsafe ownership remain outside the candidate with actual source bytes preserved.
+The test-fixture changes preserve original C programs and assertions while separating compile, link and execution. Four original generator C controls passed their existing GC loops with explicit fixture-provided runtime admission on the 15:26 compiler. The self-vector route is coherent but not natively qualified. A proposed TempDir test narrowing is retained outside the candidate because it would remove existing Path and recreated-directory behavior checks; the broader original control remains intact.
+
+The original string-subclass format failure and public mutable sys.modules/import-registry semantics remain open. The full compiler graph, native pcc1, all-platform behavior and performance targets are not complete.
+
+## Exact 15:26 execution and selected compiler evidence
+
+The frozen 15:26 compiler built all 187 production runtime members with threads enabled and atomic refcount and passed strict archive/configuration/ABI admission. Archive SHA256: `d3384fd50da1a883f9c9e04d2bb81ed2c34d7e80133838da0024f56de0535b71`. Build time was 452.07 seconds during bounded diagnostic work; it is not a performance acceptance result. Runtime proof is Library `libfile_1e8c9946ac948191a65921243e1e3d06`, version 0.
+
+All 16 unchanged original async tests passed through actual native execution. Their artifact proofs are `libfile_776199f15e0c8191b90743146bdf8d6e` and `libfile_4f46957430a08191a1e4bdb388292fc5`, version 0. Eighty same-binary GC0–4 replays matched their baseline output/exit, but emitted no collection witnesses; this is not five-GC qualification. The original gateway controller recorded 390 PASS, 15 FAIL, one dashboard compilation timeout at 300.27 seconds and four not-yet-attempted examples. Fourteen failures require pcc1; the remaining owned C failure is the LVN defect above. The four examples are continuing individually. Counts mix host/reference checks and owned C execution; no completed PCC Python live-network example is claimed. Two continuation launches were rejected by a diagnostic's performance lock before target execution and remain infrastructure receipts.
+
+Three complete original C files passed all 77 tests: 21 actual native executions and 56 owned-object/rejection controls, including signed/unsigned 8/16-bit atomics and overflow results. Two earlier missing-archive/configuration attempts are preserved as infrastructure failures. Exact proof is Library `libfile_00b3e0b3e97c8191b4b3c27e03162465`, version 0.
+
+Fresh selected replay closes all four V12 regressions: pipeline_runtime_archive, pipeline_self_backend_cache, driver.project and pathlib. Source/export capture took 76.36 seconds and the four-module replay 18.03 seconds at 722 MB peak RSS. The other 18 V12 failures were not covered. Proof: Library `libfile_1ec00f079e1881918a017fbb22682dcf`, version 0. The unchanged whole-compiler class-schema gate remains queued under its justified 4 GiB compiler envelope.
 
 ## Exact 13:01 validation and compiler graph
 
@@ -36,7 +50,7 @@ Gateway outcomes were 390 PASS, 15 FAIL, one attempted resource-incomplete dashb
 
 ## Storage cleanup
 
-User-authorized cleanup retired obsolete completed builds, successful generated IR and their older local archive copies, while preserving current source, the current runtime, C continuation inputs, needed failing reproductions and compact provenance. The latest batch removed 2,184,773,632 allocated bytes of V9/V10 generated-output archive parts after verifying hashes and retaining all archive metadata. Sources, input contexts and rebuild commands remain; Library versions are untouched. Older local-archive restoration instructions for those generated outputs are superseded by the retirement receipts. Disk capacity remains an explicit build-admission check.
+User-authorized cleanup retired obsolete completed builds, successful generated IR and their older local archive copies, while preserving current source, the current runtime, C continuation inputs, needed failing reproductions and compact provenance. Further cleanup retired completed V9/V10/V12 generated products, old successful executables and redundant local output archives. Compact replacements retain unique source, commands, metadata, receipts and failed binaries; only proven regenerable successful products were removed. Sources, input contexts and rebuild commands remain; Library versions are untouched. Older local-archive restoration instructions for those generated outputs are superseded by the retirement receipts. Disk capacity remains an explicit build-admission check.
 
 ## Full C continuation and accounting
 

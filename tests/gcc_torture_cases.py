@@ -9,7 +9,7 @@ import sys
 import tempfile
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +17,9 @@ from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 from pcc.driver.project import TranslationUnit
 from tests.owned_c_corpus import run_owned_c_corpus
 from tests.worker_process import run_worker_process
+from tests.corpus_execution_phases import (
+    CStageResult, ExecutionPhases, PccCompileResult, run_reference_stages,
+)
 
 # GCC torture cases run under pytest-xdist and then spawn an extra worker
 # process per case. A 10s budget is too tight under load and causes flaky
@@ -170,13 +173,6 @@ def gcc_torture_case_options(case_path: Path) -> GccTortureComparisonOptions:
     return options
 
 
-@dataclass(frozen=True)
-class PccCompileResult:
-    returncode: int
-    stdout: str
-    stderr: str
-
-
 def subprocess_env():
     env = os.environ.copy()
     env.pop("LC_ALL", None)
@@ -221,28 +217,17 @@ def run_native(case_path: Path, repo_root: Path, timeout: int = DEFAULT_TIMEOUT)
     cc = _host_cc()
     options = gcc_torture_case_options(case_path)
     with tempfile.TemporaryDirectory(prefix="gcc_torture_native_") as tmpdir:
+        object_path = Path(tmpdir) / "a.o"
         binary = Path(tmpdir) / "a.out"
-        compile_result = subprocess.run(
-            [
-                cc, options.standard, *_NATIVE_CC_FLAGS, str(case_path),
-                "-o", str(binary), *options.link_args,
-            ],
-            cwd=repo_root,
-            env=subprocess_env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        commands = (
+            ("compile", [cc, options.standard, *_NATIVE_CC_FLAGS,
+                         "-c", str(case_path), "-o", str(object_path)]),
+            ("link", [cc, options.standard, str(object_path), "-o", str(binary),
+                      *options.link_args]),
+            ("run", [str(binary)]),
         )
-        if compile_result.returncode != 0:
-            return compile_result
-        return subprocess.run(
-            [str(binary)],
-            cwd=repo_root,
-            env=subprocess_env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        return run_reference_stages(commands, cwd=repo_root,
+                                    env=subprocess_env(), timeout=timeout)
 
 
 @lru_cache(maxsize=None)
@@ -282,56 +267,55 @@ def _run_pcc_worker(mode: str, case_path: Path, timeout: int) -> PccCompileResul
         timeout,
     )
     if result.timed_out:
-        return PccCompileResult(124, "", "timeout")
+        return PccCompileResult.from_stages((
+            CStageResult("worker", 124, stderr="timeout", completed=False),
+        ))
     payload = result.payload
     if payload is None:
-        return PccCompileResult(
-            1,
-            "",
-            f"pcc worker exited without result (exitcode={result.exitcode})",
-        )
-    return PccCompileResult(
-        payload["returncode"],
-        payload["stdout"],
-        payload["stderr"],
+        return PccCompileResult.from_stages((CStageResult(
+            "worker", 1,
+            stderr=f"pcc worker exited without result (exitcode={result.exitcode})",
+            completed=False,
+        ),))
+    return PccCompileResult.from_stages(
+        CStageResult(**stage) for stage in payload["stages"]
     )
 
 
 def _pcc_worker_entry(mode: str, case_path_str: str, timeout: int, conn) -> None:
-    case_path = Path(case_path_str)
-    unit = TranslationUnit(case_path.name, str(case_path), _read_case_source(case_path))
+    phases = ExecutionPhases()
     try:
+        case_path = Path(case_path_str)
+        unit = TranslationUnit(case_path.name, str(case_path), _read_case_source(case_path))
         options = gcc_torture_case_options(case_path)
         # The oracle's host -lm is supplied by PCC's own runtime in this lane.
-        # Do not silently discard any future caller-selected link dependency.
         if options.link_args not in ((), ("-lm",)):
             raise RuntimeError("unsupported owned corpus link dependency: " + repr(options.link_args))
+        cpp_args = [options.standard]
         evaluator = CEvaluator()
         if mode == "compile":
+            phases.begin("compile")
             evaluator.compile_translation_units(
-                [unit],
-                base_dir=str(case_path.parent),
-                include_dirs=[str(case_path.parent)],
-                cpp_args=[options.standard],
+                [unit], base_dir=str(case_path.parent),
+                include_dirs=[str(case_path.parent)], cpp_args=cpp_args,
             )
-            conn.send({"returncode": 0, "stdout": "", "stderr": ""})
-            return
-
-        result = run_owned_c_corpus(evaluator,
-            [unit],
-            base_dir=str(case_path.parent),
-            include_dirs=[str(case_path.parent)],
-            timeout=timeout,
-            cpp_args=[options.standard],
-        )
-        conn.send(
-            {
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-        )
+            outcome = phases.complete()
+        else:
+            result = run_owned_c_corpus(
+                evaluator, [unit], base_dir=str(case_path.parent),
+                include_dirs=[str(case_path.parent)], cpp_args=cpp_args,
+                timeout=timeout, on_stage=phases.begin,
+            )
+            outcome = phases.complete(result)
     except Exception as exc:
-        conn.send({"returncode": 1, "stdout": "", "stderr": str(exc)})
+        outcome = phases.fail(exc)
     finally:
-        conn.close()
+        try:
+            conn.send({
+                "returncode": outcome.returncode,
+                "stdout": outcome.stdout,
+                "stderr": outcome.stderr,
+                "stages": [asdict(stage) for stage in outcome.stages],
+            })
+        finally:
+            conn.close()

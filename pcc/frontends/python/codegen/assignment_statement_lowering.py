@@ -1029,17 +1029,56 @@ class AssignmentStatementLoweringMixin:
             and isinstance(ir_ty, ir.PointerType)
             and self._ir_type_matches(ir_ty, _CSTR)
         ):
-            # The slot is the object one on every edge, so a scalar RHS is
-            # boxed rather than coerced into a shape the slot does not have.
-            if not isinstance(value.type, ir.PointerType):
-                value = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    value,
-                    stmt.value.ty,
-                )
             self._exact_int_env_flags.pop(target.ident, None)
+            if not isinstance(value.type, ir.PointerType):
+                # The planner selected an object slot, so scalar boxing is a
+                # real object producer even though the RHS still has its
+                # float/bool semantic type. Publish that owner before old-local
+                # cleanup can collect, then move it into the registered local.
+                output = self._new_slot_call_root(target.ident + ".scalar.box")
+                previous = self._current_try_err_block()
+                error = previous if previous is not None else self._ensure_fn_err_exit()
+                saved_cpy = self._cpy_operand_cleanup_block
+                self._try_err_block = self._slot_call_cleanup_block((output,), error)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                try:
+                    value = marshal.marshal_to_object(
+                        self.builder, self.module, self.runtime, value, stmt.value.ty,
+                    )
+                    self._publish_slot_call_owned(output, value, label="local scalar box")
+                    # A successful lease does not establish that allocation
+                    # succeeded. Preserve the previous binding on boxing error.
+                    self._emit_post_call_err_check(stmt.span)
+                    current = self.builder.load(output, name=self._fresh("local.scalar.current"))
+                    failed = self.builder.icmp_unsigned("==", current, ir.Constant(_CSTR, None))
+                    error_bb = self.current_function.append_basic_block(self._fresh("local.scalar.error"))
+                    ready_bb = self.current_function.append_basic_block(self._fresh("local.scalar.ready"))
+                    self.builder.cbranch(failed, error_bb, ready_bb)
+                    self.builder.position_at_end(error_bb)
+                    self._emit_builtin_exception_and_branch(
+                        "MemoryError", "out of memory boxing local scalar", stmt.span,
+                    )
+                    self.builder.position_at_end(ready_bb)
+                    self._ensure_owned_local_gc_root(target.ident, alloca, ir_ty)
+                    self._emit_release_owned_local_if_flagged(target.ident, alloca)
+                    # A prior borrowed binding owns no reference to release.
+                    # Clear that alias before the owning root move.
+                    self.builder.store(ir.Constant(_CSTR, None), alloca)
+                    status = self.builder.call(
+                        self.runtime["pcc_gc_root_move"],
+                        [self._as_gc_ptr(alloca), self._as_gc_ptr(output)],
+                        name=self._fresh(target.ident + ".scalar.move"),
+                    )
+                    self._owned_local_names.add(target.ident)
+                    self._owned_local_has_value.add(target.ident)
+                    flag = self._ensure_owned_local_flag(target.ident, alloca)
+                    self.builder.store(ir.Constant(_I1, 1), flag)
+                    self._slot_call_check_status(status, "local scalar owner move", stmt.span)
+                    self._release_slot_call_roots((output,))
+                finally:
+                    self._try_err_block = previous
+                    self._cpy_operand_cleanup_block = saved_cpy
+                return
         else:
             if not forced_exact_int_target:
                 self._exact_int_env_flags.pop(target.ident, None)

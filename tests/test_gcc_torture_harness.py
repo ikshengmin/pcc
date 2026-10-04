@@ -11,6 +11,12 @@ from unittest.mock import Mock, patch
 from tests import gcc_torture_cases as harness
 
 
+def owned_compiler_mock():
+    compiler = Mock(backend="self", is_cross=False)
+    compiler._normalize_opt_level.return_value = 2
+    return compiler
+
+
 class GccTortureOptionPolicyTests(unittest.TestCase):
     def test_modern_default_and_linux_math_linkage(self):
         options = harness.gcc_torture_comparison_options("int main(void) {}", platform="linux")
@@ -131,16 +137,21 @@ class GccTortureMockedCallTests(unittest.TestCase):
 
     def test_reference_run_only_after_successful_compile(self):
         compiled = subprocess.CompletedProcess([], 0, "", "")
+        linked = subprocess.CompletedProcess([], 0, "", "")
         executed = subprocess.CompletedProcess([], 7, "program output", "program stderr")
         with patch.object(harness, "_host_cc", return_value="reference-cc"), \
              patch.object(harness.sys, "platform", "linux"), \
-             patch.object(harness.subprocess, "run", side_effect=[compiled, executed]) as run:
+             patch.object(harness.subprocess, "run", side_effect=[compiled, linked, executed]) as run:
             result = harness.run_native(self.case, self.root)
-        self.assertIs(result, executed)
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual((result.returncode, result.stdout, result.stderr),
+                         (executed.returncode, executed.stdout, executed.stderr))
+        self.assertTrue(result.executed)
+        self.assertEqual([stage.stage for stage in result.stages], ["compile", "link", "run"])
+        self.assertEqual(run.call_count, 3)
         self.assertIn("-std=gnu89", run.call_args_list[0].args[0])
-        self.assertEqual(run.call_args_list[0].args[0][-1], "-lm")
-        self.assertEqual(len(run.call_args_list[1].args[0]), 1)
+        self.assertIn("-c", run.call_args_list[0].args[0])
+        self.assertEqual(run.call_args_list[1].args[0][-1], "-lm")
+        self.assertEqual(len(run.call_args_list[2].args[0]), 1)
 
     def test_reference_unsupported_option_failure_is_unchanged(self):
         self.case.write_text('/* { dg-options "-std=unavailable-dialect" } */')
@@ -148,7 +159,10 @@ class GccTortureMockedCallTests(unittest.TestCase):
         with patch.object(harness, "_host_cc", return_value="reference-cc"), \
              patch.object(harness.subprocess, "run", return_value=rejected) as run:
             result = harness.run_native(self.case, self.root)
-        self.assertIs(result, rejected)
+        self.assertEqual((result.returncode, result.stdout, result.stderr),
+                         (rejected.returncode, rejected.stdout, rejected.stderr))
+        self.assertFalse(result.executed)
+        self.assertEqual(result.stages[-1].stage, "compile")
         self.assertEqual(run.call_count, 1)
         self.assertIn("-std=unavailable-dialect", run.call_args.args[0])
 
@@ -162,22 +176,29 @@ class GccTortureMockedCallTests(unittest.TestCase):
             ["-std=gnu89"],
         )
         compiler.run_translation_units_with_system_cc.assert_not_called()
-        connection.send.assert_called_once_with({"returncode": 0, "stdout": "", "stderr": ""})
+        connection.send.assert_called_once_with({"returncode": 0, "stdout": "", "stderr": "", "stages": [
+            {"stage": "compile", "returncode": 0, "stdout": "", "stderr": "", "completed": True},
+        ]})
         connection.close.assert_called_once()
 
     def test_pcc_explicit_system_link_receives_matching_standard_and_libm(self):
-        compiler = Mock()
-        compiler.run_translation_units_with_system_cc.return_value = (
-            subprocess.CompletedProcess([], 9, "out", "err")
-        )
+        # Retain the original node identity while checking the migrated owner.
+        compiler = owned_compiler_mock()
+        executed = subprocess.CompletedProcess([], 9, "out", "err")
         connection = Mock()
         with patch.object(harness, "CEvaluator", return_value=compiler), \
-             patch.object(harness.sys, "platform", "linux"):
+             patch.object(harness.sys, "platform", "linux"), \
+             patch.dict(harness.os.environ, {"PCC_RUNTIME_ARCHIVE": "/model/runtime.a"}), \
+             patch.object(harness.subprocess, "run", return_value=executed):
             harness._pcc_worker_entry("run", str(self.case), 20, connection)
-        kwargs = compiler.run_translation_units_with_system_cc.call_args.kwargs
+        kwargs = compiler.compile_translation_units.call_args.kwargs
         self.assertEqual(kwargs["cpp_args"], ["-std=gnu89"])
-        self.assertEqual(kwargs["link_args"], ["-lm"])
-        connection.send.assert_called_once_with({"returncode": 9, "stdout": "out", "stderr": "err"})
+        self.assertFalse(kwargs["use_system_cpp"])
+        self.assertIsNone(compiler.emit_executable.call_args.kwargs["link_args"])
+        compiler.run_translation_units_with_system_cc.assert_not_called()
+        payload = connection.send.call_args.args[0]
+        self.assertEqual((payload["returncode"], payload["stdout"], payload["stderr"]), (9, "out", "err"))
+        self.assertEqual([stage["stage"] for stage in payload["stages"]], ["compile", "link", "run"])
         connection.close.assert_called_once()
 
     def test_pcc_unsupported_option_remains_a_failure(self):
@@ -219,44 +240,51 @@ class GccTortureSelfLaneMockedTests(unittest.TestCase):
         self.addCleanup(self.lane._run_backend.cache_clear)
 
     def test_explicit_self_lane_receives_shared_dialect_and_linux_libm(self):
-        compiler = Mock()
-        compiler.run_translation_units_with_system_cc.return_value = (
-            subprocess.CompletedProcess([], 13, "out", "err")
-        )
+        compiler = owned_compiler_mock()
+        executed = subprocess.CompletedProcess([], 13, "out", "err")
         with patch.object(self.lane, "CEvaluator", return_value=compiler) as factory, \
-             patch.object(harness.sys, "platform", "linux"):
+             patch.object(harness.sys, "platform", "linux"), \
+             patch.dict(harness.os.environ, {"PCC_RUNTIME_ARCHIVE": "/model/runtime.a"}), \
+             patch.object(harness.subprocess, "run", return_value=executed) as run:
             result = self.lane._run_self_backend(self.case, timeout=17)
         factory.assert_called_once_with(backend="self", allow_unimplemented_backend=True)
-        kwargs = compiler.run_translation_units_with_system_cc.call_args.kwargs
+        kwargs = compiler.compile_translation_units.call_args.kwargs
         self.assertEqual(kwargs["cpp_args"], ["-std=c99"])
-        self.assertEqual(kwargs["link_args"], ["-lm"])
-        self.assertEqual(kwargs["timeout"], 17)
-        self.assertEqual(result, harness.PccCompileResult(13, "out", "err"))
+        self.assertFalse(kwargs["use_system_cpp"])
+        self.assertIsNone(compiler.emit_executable.call_args.kwargs["link_args"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 17)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (13, "out", "err"))
+        self.assertTrue(result.executed)
+        compiler.run_translation_units_with_system_cc.assert_not_called()
 
     def test_non_linux_self_lane_has_no_added_math_library(self):
-        compiler = Mock()
-        compiler.run_translation_units_with_system_cc.return_value = (
-            subprocess.CompletedProcess([], 0, "", "")
-        )
+        compiler = owned_compiler_mock()
         with patch.object(self.lane, "CEvaluator", return_value=compiler), \
-             patch.object(harness.sys, "platform", "darwin"):
+             patch.object(harness.sys, "platform", "darwin"), \
+             patch.dict(harness.os.environ, {"PCC_RUNTIME_ARCHIVE": "/model/runtime.a"}), \
+             patch.object(harness.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
             self.lane._run_self_backend(self.case)
-        kwargs = compiler.run_translation_units_with_system_cc.call_args.kwargs
+        kwargs = compiler.compile_translation_units.call_args.kwargs
         self.assertEqual(kwargs["cpp_args"], ["-std=c99"])
-        self.assertEqual(kwargs["link_args"], [])
+        self.assertIsNone(compiler.emit_executable.call_args.kwargs["link_args"])
+        compiler.run_translation_units_with_system_cc.assert_not_called()
 
     def test_self_lane_does_not_mask_unsupported_standard(self):
         self.case.write_text('/* { dg-options "-std=unavailable-dialect" } */')
-        compiler = Mock()
-        compiler.run_translation_units_with_system_cc.side_effect = ValueError(
+        compiler = owned_compiler_mock()
+        compiler.compile_translation_units.side_effect = ValueError(
             "unsupported owned preprocessor option: -std=unavailable-dialect"
         )
-        with patch.object(self.lane, "CEvaluator", return_value=compiler):
+        with patch.object(self.lane, "CEvaluator", return_value=compiler), \
+             patch.dict(harness.os.environ, {"PCC_RUNTIME_ARCHIVE": "/model/runtime.a"}):
             result = self.lane._run_self_backend(self.case)
-        kwargs = compiler.run_translation_units_with_system_cc.call_args.kwargs
+        kwargs = compiler.compile_translation_units.call_args.kwargs
         self.assertEqual(kwargs["cpp_args"], ["-std=unavailable-dialect"])
         self.assertEqual(result.returncode, 1)
         self.assertIn("unsupported owned preprocessor", result.stderr)
+        self.assertFalse(result.executed)
+        self.assertEqual(result.stages[-1].stage, "compile")
+        compiler.run_translation_units_with_system_cc.assert_not_called()
 
     def test_conditional_standard_blocks_before_compiler_construction(self):
         self.case.write_text(

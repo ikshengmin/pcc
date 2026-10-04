@@ -53,6 +53,9 @@ if GCC_TORTURE_RUNTIME_RETURNCODE_CASES:
 
         native_result, pcc_result = run_native_and_pcc(case_path, REPO_ROOT)
 
+        native_result.require_execution("host reference")
+        pcc_result.require_execution("owned pcc")
+
         assert (
             pcc_result.returncode == native_result.returncode
         ), f"{relative_path} return code mismatch:\nnative={native_result.returncode}\npcc={pcc_result.returncode}\npcc stderr:\n{pcc_result.stderr}"
@@ -68,6 +71,9 @@ if GCC_TORTURE_RUNTIME_EXACT_MATCH_CASES:
         assert case_path.is_file(), f"missing gcc torture case: {case_path}"
 
         native_result, pcc_result = run_native_and_pcc(case_path, REPO_ROOT)
+
+        native_result.require_execution("host reference")
+        pcc_result.require_execution("owned pcc")
 
         assert (
             pcc_result.returncode == native_result.returncode

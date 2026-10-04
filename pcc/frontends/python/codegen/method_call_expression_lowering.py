@@ -2511,6 +2511,15 @@ class MethodCallExpressionLoweringMixin:
             )
         if (
             isinstance(obj_ty, (BytesType, ByteArrayType))
+            and attr.name in ("ljust", "rjust")
+            and len(expr.args) in (1, 2)
+            and not expr.kwargs
+        ):
+            padding = self._emit_owned_padding_method(expr)
+            if padding is not None:
+                return padding
+        if (
+            isinstance(obj_ty, (BytesType, ByteArrayType))
             and not expr.kwargs
             and (
                 (attr.name in ("strip", "lstrip", "rstrip") and len(expr.args) <= 1)

@@ -436,6 +436,12 @@ class _LocalValueNumbering(ASTTransformer):
         expr_to_var: dict[str, tuple[str, set[str]]] = {}
 
         for item in compound.block_items:
+            # A call or indirect store may change a cached result variable or
+            # one of its operands through an alias. This AST pass has no
+            # memory-effect proof, including for calls nested in conditions.
+            if self._may_write_aliased_memory(item):
+                expr_to_var.clear()
+                continue
             target_name, expr, assign_back = self._extract_assignment_like(item)
             if expr is not None:
                 key = self._expr_key(expr)
@@ -505,6 +511,26 @@ class _LocalValueNumbering(ASTTransformer):
                 lambda new_expr: setattr(item, "rvalue", new_expr),
             )
         return None, None, lambda new_expr: None
+
+    @staticmethod
+    def _may_write_aliased_memory(node) -> bool:
+        if node is None:
+            return False
+        if isinstance(node, c_ast.FuncCall):
+            return True
+        if isinstance(node, c_ast.Assignment) and not isinstance(node.lvalue, c_ast.ID):
+            return True
+        if (
+            isinstance(node, c_ast.UnaryOp)
+            and node.op in ("++", "--", "p++", "p--")
+            and not isinstance(node.expr, c_ast.ID)
+        ):
+            return True
+        return any(
+            _LocalValueNumbering._may_write_aliased_memory(child)
+            for _, child in node.children()
+            if isinstance(child, c_ast.Node)
+        )
 
     @staticmethod
     def _assigned_names(node) -> set[str]:

@@ -82,7 +82,7 @@ print(next(iterator))
     assert counts == [0, 0], "the unaccepted experiment must not change application codegen"
 
 
-def test_frame_restore_and_save_move_one_owner(tmp_path):
+def test_frame_restore_and_save_move_one_owner(tmp_path, pcc_runtime_archive):
     source = tmp_path / "frame_roundtrip.c"
     source.write_text('''#include "py_runtime.h"
 #include <stdio.h>
@@ -128,18 +128,18 @@ int main(int argc, char **argv) {
 ''')
     executable = tmp_path / "frame_roundtrip"
     compile_owned_c_with_runtime(
-        source, executable, cpp_args=["-Dpy_list_get_for_frame=py_list_get"],
+        source, executable, runtime_archive=pcc_runtime_archive, cpp_args=["-Dpy_list_get_for_frame=py_list_get"],
     )
     ran = subprocess.run([str(executable), "0"], capture_output=True, text=True, timeout=15)
     assert ran.returncode == 2, "the ordinary retaining getter must leave the frame slot occupied"
-    compile_owned_c_with_runtime(source, executable)
+    compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
     for backend in range(5):
         ran = subprocess.run([str(executable), str(backend)], capture_output=True, text=True, timeout=15)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
         assert ran.stdout.strip() == "frame-owner-roundtrip-ok"
 
 
-def test_frame_store_transfers_only_owned_sources(tmp_path):
+def test_frame_store_transfers_only_owned_sources(tmp_path, pcc_runtime_archive):
     source = tmp_path / "frame_owners.c"
     source.write_text('''#include "py_runtime.h"
 #include <stdio.h>
@@ -203,7 +203,7 @@ int main(int argc, char **argv) {
 }
 ''')
     executable = tmp_path / "frame_owners"
-    compile_owned_c_with_runtime(source, executable)
+    compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
     for backend in range(5):
         ran = subprocess.run([str(executable), str(backend)], capture_output=True, text=True, timeout=15)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr

@@ -39,7 +39,9 @@ def compile_and_run_owned_c(source: str, *, timeout: int = 30):
         )
 
 
-def compile_owned_c_with_runtime(source: Path, executable: Path, *, cpp_args=()):
+def compile_owned_c_with_runtime(
+    source: Path, executable: Path, *, runtime_archive: Path, cpp_args=(),
+):
     """Emit a C runtime control using an explicitly admitted current archive.
 
     Unlike the general C helper, this path never provisions a runtime. The
@@ -51,10 +53,8 @@ def compile_owned_c_with_runtime(source: Path, executable: Path, *, cpp_args=())
     from tests.runtime_fixture_provenance import _verified_test_runtime_archive
 
     root = Path(pcc.__file__).resolve().parents[1]
-    explicit = os.environ.get("PCC_RUNTIME_ARCHIVE")
-    assert explicit, "provide a source-matching PCC_RUNTIME_ARCHIVE; this test does not build one"
     archive, _manifest = _verified_test_runtime_archive(
-        explicit, runtime_root=root / "pcc/runtime",
+        runtime_archive, runtime_root=root / "pcc/runtime",
     )
     original_import = builtins.__import__
 

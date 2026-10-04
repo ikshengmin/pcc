@@ -7,6 +7,7 @@ import pytest
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 from pcc.driver.project import TranslationUnit
 from tests.owned_c_corpus import run_owned_c_corpus
+from tests.corpus_execution_phases import ExecutionPhases
 from tests.c_testsuite_cases import (
     PccCompileResult,
     _default_timeout,
@@ -62,6 +63,7 @@ def _run_backend(
         timeout = _default_timeout()
     config = case_config(case_path)
     unit = TranslationUnit(case_path.name, str(case_path), _read_case_source(case_path))
+    phases = ExecutionPhases()
     try:
         evaluator = CEvaluator(
             backend=backend,
@@ -73,10 +75,11 @@ def _run_backend(
             include_dirs=[str(case_path.parent)],
             cpp_args=config.cpp_args,
             timeout=timeout,
+            on_stage=phases.begin,
         )
-        return PccCompileResult(result.returncode, result.stdout, result.stderr)
+        return phases.complete(result)
     except Exception as exc:
-        return PccCompileResult(1, "", str(exc))
+        return phases.fail(exc)
 
 
 @pytest.mark.parametrize(
@@ -89,6 +92,10 @@ def test_c_testsuite_self_backend_matches_native_llvm_and_expected(filename):
     native_result = run_native(case_path, REPO_ROOT)
     llvm_result = _run_llvm_backend(case_path)
     self_result = _run_self_backend(case_path)
+
+    native_result.require_execution("host reference")
+    llvm_result.require_execution("default owned pcc")
+    self_result.require_execution("explicit owned self")
 
     assert_result_triplet_matches(
         filename, "self", self_result, "native", native_result

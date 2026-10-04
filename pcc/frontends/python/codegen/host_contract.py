@@ -702,6 +702,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_next_owned_step",
     "_emit_next_pending_or_default",
     "_emit_next_filter_truth",
+    "_emit_owned_padding_method",
 )
 
 

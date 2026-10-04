@@ -50,6 +50,9 @@ if C_TESTSUITE_RUNTIME_RETURNCODE_CASES:
         native_result = run_native(case_path, REPO_ROOT)
         pcc_result = run_pcc(case_path, REPO_ROOT)
 
+        native_result.require_execution("host reference")
+        pcc_result.require_execution("owned pcc")
+
         assert (
             pcc_result.returncode == native_result.returncode
         ), f"{filename} return code mismatch:\nnative={native_result.returncode}\npcc={pcc_result.returncode}\npcc stderr:\n{pcc_result.stderr}"
@@ -64,6 +67,9 @@ def test_c_testsuite_runtime_matches_native_exactly(filename):
 
     native_result = run_native(case_path, REPO_ROOT)
     pcc_result = run_pcc(case_path, REPO_ROOT)
+
+    native_result.require_execution("host reference")
+    pcc_result.require_execution("owned pcc")
 
     assert (
         pcc_result.returncode == native_result.returncode

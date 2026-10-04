@@ -9,6 +9,7 @@ import pytest
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 from pcc.driver.project import TranslationUnit
 from tests.owned_c_corpus import run_owned_c_corpus
+from tests.corpus_execution_phases import ExecutionPhases
 from tests.gcc_torture_cases import (
     DEFAULT_TIMEOUT,
     PccCompileResult,
@@ -62,6 +63,7 @@ def _run_backend(
     allow_unimplemented_backend: bool = False,
 ):
     unit = TranslationUnit(case_path.name, str(case_path), _read_case_source(case_path))
+    phases = ExecutionPhases()
     try:
         options = gcc_torture_case_options(case_path)
         # The oracle's host -lm is supplied by PCC's own runtime in this lane.
@@ -78,10 +80,11 @@ def _run_backend(
             include_dirs=[str(case_path.parent)],
             timeout=timeout,
             cpp_args=[options.standard],
+            on_stage=phases.begin,
         )
-        return PccCompileResult(result.returncode, result.stdout, result.stderr)
+        return phases.complete(result)
     except Exception as exc:
-        return PccCompileResult(1, "", str(exc))
+        return phases.fail(exc)
 
 
 def _run_self_backend(case_path: Path, timeout: int = DEFAULT_TIMEOUT):
@@ -114,6 +117,10 @@ def test_gcc_torture_self_backend_matches_native_and_llvm_exactly(relative_path)
     llvm_result = _run_llvm_backend(case_path)
     self_result = _run_self_backend(case_path)
 
+    native_result.require_execution("host reference")
+    llvm_result.require_execution("default owned pcc")
+    self_result.require_execution("explicit owned self")
+
     assert_result_triplet_matches(
         relative_path, "self", self_result, "native", native_result
     )
@@ -132,6 +139,10 @@ def test_gcc_torture_self_backend_returncode_matches_native_and_llvm(relative_pa
     native_result = run_native(case_path, REPO_ROOT)
     llvm_result = _run_llvm_backend(case_path)
     self_result = _run_self_backend(case_path)
+
+    native_result.require_execution("host reference")
+    llvm_result.require_execution("default owned pcc")
+    self_result.require_execution("explicit owned self")
 
     assert self_result.returncode == native_result.returncode, (
         f"{relative_path} return code mismatch:\n"

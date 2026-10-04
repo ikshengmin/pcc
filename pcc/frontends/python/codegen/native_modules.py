@@ -442,6 +442,7 @@ class NativeModuleAliasMixin:
         builtin_value: str,
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
+        expr: Call,
     ) -> Optional[ir.Value]:
         if builtin_value == "builtins.range":
             if kwargs:
@@ -484,6 +485,7 @@ class NativeModuleAliasMixin:
                 builtin_value,
                 args,
                 kwargs,
+                expr,
             )
         if builtin_value == "functools.partial":
             return self._emit_native_functools_partial_call(args, kwargs)
@@ -554,12 +556,14 @@ class NativeModuleAliasMixin:
                 "copy." + attr.name,
                 expr.args,
                 expr.kwargs,
+                expr,
             )
         if module_name == "pickle" and attr.name in ("dumps", "loads"):
             return self._emit_native_copy_pickle_call(
                 "pickle." + attr.name,
                 expr.args,
                 expr.kwargs,
+                expr,
             )
         if module_name == "functools" and attr.name == "partial":
             return self._emit_native_functools_partial_call(expr.args, expr.kwargs)
@@ -919,21 +923,17 @@ class NativeModuleAliasMixin:
         kind: str,
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
+        expr: Call,
     ) -> Optional[ir.Value]:
         if kwargs:
             return None
         if kind == "copy.copy" and len(args) == 1:
-            return self.builder.call(
-                self.runtime["py_copy_copy"],
-                [self._emit_as_object(args[0])],
-                name=self._fresh("copy.copy"),
-            )
+            # Preserve the original Call identity: its caller may already own
+            # an output slot. The shared unary path leases the operand and
+            # publishes the NEW result before any parking/error cleanup.
+            return self._emit_owned_unary_runtime_call(expr, "py_copy_copy")
         if kind == "copy.deepcopy" and len(args) == 1:
-            return self.builder.call(
-                self.runtime["py_copy_deepcopy"],
-                [self._emit_as_object(args[0])],
-                name=self._fresh("copy.deepcopy"),
-            )
+            return self._emit_owned_unary_runtime_call(expr, "py_copy_deepcopy")
         if kind == "pickle.dumps" and 1 <= len(args) <= 2:
             protocol = (
                 self._emit_as_object(args[1])

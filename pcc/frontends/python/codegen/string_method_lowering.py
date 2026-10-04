@@ -24,6 +24,7 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
+    PY_TYPE_STR,
 )
 
 _I1 = ir.IntType(1)
@@ -573,6 +574,144 @@ class StringMethodLoweringMixin:
                 return True
         return None
 
+    def _emit_owned_padding_method(self, expr):
+        """Publish text/byte padding before retiring any input owner.
+
+        Dynamic receivers need an actual type check: encode() and imported
+        returns can lose their static bytes type, while user methods sharing
+        these names must retain ordinary attribute lookup and call binding.
+        """
+        attr = expr.func
+        if (attr.name not in ("ljust", "rjust") or len(expr.args) not in (1, 2)
+                or expr.kwargs or self._has_starred_unpack(expr.args)
+                or self._expr_looks_cpython(attr.obj)):
+            return None
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("padding.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(attr.obj, "padding.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            dynamic = isinstance(attr.obj.ty, DynType)
+            generic_block = None
+            done_block = None
+            byte_family = isinstance(attr.obj.ty, (BytesType, ByteArrayType))
+            if dynamic:
+                tag = self._slot_call_runtime_call("py_obj_type_tag", (receiver,), span=expr.span)
+                is_bytes = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_BYTES))
+                is_bytearray = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_BYTEARRAY))
+                byte_family = self.builder.or_(is_bytes, is_bytearray)
+                is_string = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_STR))
+                is_native = self.builder.or_(byte_family, is_string)
+                native_block = self.current_function.append_basic_block(self._fresh("padding.native"))
+                generic_block = self.current_function.append_basic_block(self._fresh("padding.generic"))
+                done_block = self.current_function.append_basic_block(self._fresh("padding.done"))
+                self.builder.cbranch(is_native, native_block, generic_block)
+                self.builder.position_at_end(native_block)
+
+            branch_roots = list(roots)
+            operands = []
+            for argument in expr.args:
+                operand = self._emit_slot_call_operand(argument, "padding.argument")
+                operands.append(operand)
+                branch_roots.append(operand)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            # Evaluate fill before __index__, just as ordinary Python calls do.
+            # Each argument and the receiver remain independent owning roots.
+            width = self.builder.call(
+                self.runtime["py_index_i64_checked_slots"],
+                [self._as_gc_ptr(operands[0])], name=self._fresh("padding.width"),
+            )
+            self._emit_post_call_err_check(expr.span)
+            arguments = (receiver,)
+            suffix = (width, ir.Constant(_CSTR, None))
+            order = ()
+            if len(operands) == 2:
+                arguments = (receiver, operands[1])
+                suffix = (width,)
+                order = (0, 2, 1)
+            if dynamic:
+                bytes_block = self.current_function.append_basic_block(self._fresh("padding.bytes"))
+                text_block = self.current_function.append_basic_block(self._fresh("padding.text"))
+                ready_block = self.current_function.append_basic_block(self._fresh("padding.ready"))
+                self.builder.cbranch(byte_family, bytes_block, text_block)
+                self.builder.position_at_end(bytes_block)
+                self._slot_call_runtime_call(
+                    "py_bytes_" + attr.name, arguments, result_slot=output,
+                    suffix_args=suffix, argument_order=order, span=expr.span,
+                )
+                self.builder.branch(ready_block)
+                self.builder.position_at_end(text_block)
+                self._slot_call_runtime_call(
+                    "py_str_" + attr.name, arguments, result_slot=output,
+                    suffix_args=suffix, argument_order=order, span=expr.span,
+                )
+                self.builder.branch(ready_block)
+                self.builder.position_at_end(ready_block)
+            else:
+                self._slot_call_runtime_call(
+                    ("py_bytes_" if byte_family else "py_str_") + attr.name,
+                    arguments, result_slot=output, suffix_args=suffix,
+                    argument_order=order, span=expr.span,
+                )
+            self._release_slot_call_roots(tuple(operands))
+            if dynamic:
+                self.builder.branch(done_block)
+                self.builder.position_at_end(generic_block)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                method = self._new_slot_call_root("padding.method")
+                branch_roots = list(roots) + [method]
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_getattr", (receiver,), result_slot=method,
+                    suffix_args=(self._attr_name_ptr(attr.name),), span=expr.span,
+                )
+                current = self.builder.load(method, name=self._fresh("padding.callable"))
+                self._emit_attribute_error_if_null(current, attr.name, attr.span)
+                positional, keywords = self._slot_call_split_operands(expr)
+                args = self._emit_slot_call_args_tuple(positional, "padding.args")
+                branch_roots.append(args)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                kwargs = self._emit_slot_call_kwargs_object(keywords, None, expr.span, "padding.kwargs", method)
+                branch_roots.append(kwargs)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                status = self.builder.call(
+                    self.runtime["py_obj_call_slots"],
+                    [self._as_gc_ptr(method), self._as_gc_ptr(args), self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                    name=self._fresh("padding.invoke"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "padding method call", expr.span)
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots(tuple(branch_roots[len(roots):]))
+                self.builder.branch(done_block)
+                self.builder.position_at_end(done_block)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_note_published(output)
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("padding.output"))
+        return self._take_slot_call_root(output)
+
     def _maybe_emit_owned_str_result(self, expr):
         """Evaluate native string operands in roots and publish before cleanup.
 
@@ -586,6 +725,8 @@ class StringMethodLoweringMixin:
         if self._expr_looks_cpython(attr.obj):
             return None
         name = attr.name
+        if name in ("ljust", "rjust"):
+            return self._emit_owned_padding_method(expr)
         runtime_name = None
         object_count = len(expr.args)
         scalar_index = -1
