@@ -76,6 +76,10 @@
 #define O_LARGEFILE 0
 #endif
 
+#ifndef F_DUPFD
+#define F_DUPFD 0
+#endif
+
 #ifndef F_GETFD
 #define F_GETFD 1
 #endif

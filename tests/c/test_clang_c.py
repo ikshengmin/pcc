@@ -52,6 +52,9 @@ if CLANG_C_RUNTIME_SUCCESS_CASES:
         native_result = run_native(case_path, REPO_ROOT)
         pcc_result = run_pcc(case_path, REPO_ROOT)
 
+        native_result.require_execution(f"host reference {filename}")
+        pcc_result.require_execution(f"owned pcc {filename}")
+
         assert (
             pcc_result.returncode == native_result.returncode
         ), f"{filename} return code mismatch:\nnative={native_result.returncode}\npcc={pcc_result.returncode}\npcc stderr:\n{pcc_result.stderr}"
@@ -66,6 +69,9 @@ if CLANG_C_RUNTIME_EXACT_MATCH_CASES:
 
         native_result = run_native(case_path, REPO_ROOT)
         pcc_result = run_pcc(case_path, REPO_ROOT)
+
+        native_result.require_execution(f"host reference {filename}")
+        pcc_result.require_execution(f"owned pcc {filename}")
 
         assert (
             pcc_result.returncode == native_result.returncode

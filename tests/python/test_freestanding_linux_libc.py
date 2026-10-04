@@ -1,4 +1,4 @@
-"""Owned ELF leaf probes; no runtime archive, host linker, libc, or libm."""
+"""Owned ELF probes with a real admitted runtime closure; no host linker/libc."""
 from __future__ import annotations
 
 import platform
@@ -14,6 +14,7 @@ import pytest
 from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable, parse_static_executable
 from pcc.backend.owned_object_emit import emit_owned_object
 from pcc.frontends.python import pipeline
+from tests.owned_runtime_c_fixture import admitted_runtime, runtime_ir
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "pcc/runtime/py/freestanding_linux_libc.py"
@@ -22,10 +23,7 @@ TARGETS = ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu")
 
 def _object(source: Path, directory: Path, target: str) -> tuple[str, bytes]:
     output = directory / (source.stem + "." + target + ".ll")
-    pipeline.compile_python(
-        str(source), str(output), emit_llvm_only=True, libpython_mode="off",
-        python_library=True, backend="self", target_triple=target,
-    )
+    runtime_ir(source, output, target)
     text = output.read_text()
     data = emit_owned_object(text, target)
     output.with_suffix(".o").write_bytes(data)
@@ -63,7 +61,13 @@ def _run_leaf(tmp_path: Path, source: Path, harness_text: str) -> bytes:
         _LEAF_BOUNDARIES.replace("__pcc_freestanding__ = True", "") + "\n" +
         harness_text.replace("__pcc_freestanding__ = True", ""))
     objects = [_object(harness, tmp_path, target)[1]]
-    image = link_static_executable([parse_relocatable(data) for data in objects])
+    # The original errno sink remains a publication boundary control, not a
+    # replacement runtime. New allocator/stdio/environment dependencies come
+    # exclusively from the admitted owned archive; no test stubs satisfy them.
+    image = link_static_executable(
+        [parse_relocatable(data) for data in objects],
+        archives=[admitted_runtime().read_bytes()],
+    )
     parse_static_executable(image)
     executable = tmp_path / "leaf"
     executable.write_bytes(image)
@@ -85,7 +89,10 @@ def test_linux_file_exports_have_owned_cross_target_abi(tmp_path, target):
     defined = {symbol.name for symbol in obj.symbols if symbol.section_index != 0}
     undefined = {symbol.name for symbol in obj.symbols if symbol.section_index == 0 and symbol.name}
     assert {"chmod", "utime"} <= defined
-    assert undefined <= {"pcc_errno_set", "pcc_platform_abort"}
+    assert undefined == {
+        "pcc_errno_set", "pcc_platform_abort", "malloc", "free", "fflush",
+        "__fini_array_start", "__fini_array_end",
+    }
     assert "freestanding_linux_libc" in runtime_modules(str(ROOT / "pcc/runtime"), target)
 
 

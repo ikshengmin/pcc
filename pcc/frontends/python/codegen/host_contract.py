@@ -279,6 +279,9 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_comprehension_generator",
     "_emit_comprehension_innermost",
     "_emit_coroutine_from_adapter",
+    "_emit_extern_call",
+    "_emit_extern_call_impl",
+    "_emit_c_string_extern_call",
     "_emit_cpy_attr",
     "_emit_cpy_attr_with_cleanup",
     "_emit_cpy_method_call1_value",
@@ -693,6 +696,12 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_generator_yield_value",
     "_emit_generator_take_send",
     "_generator_frame_helper",
+    "_iterator_builtin_is_shadowed",
+    "_emit_iterator_callable_operand",
+    "_iterator_install_cleanup",
+    "_emit_next_owned_step",
+    "_emit_next_pending_or_default",
+    "_emit_next_filter_truth",
 )
 
 

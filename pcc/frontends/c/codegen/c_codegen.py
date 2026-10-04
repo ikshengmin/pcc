@@ -2013,15 +2013,13 @@ class CCodeGenerator(
             )
 
     def codegen_StaticAssert(self, node):
-        # Evaluate the condition as a compile-time constant
+        # Assertions are unevaluated at runtime, including at block scope.
+        # Use the same typed constant evaluator as enum values and initializers;
+        # runtime codegen may need a builder even to promote two constants.
         try:
-            cond_val, _ = self.codegen(node.cond)
-            if not isinstance(cond_val, ir.Constant):
-                raise SemanticError(
-                    "_Static_assert condition is not an integer constant expression"
-                )
-            val = self._constant_raw_value(cond_val)
-            if not isinstance(val, int):
+            self._validate_integer_constant_operands(node.cond)
+            val = self._eval_const_expr(node.cond, integer_constant=True)
+            if not isinstance(val, ConstIntValue):
                 raise SemanticError(
                     "_Static_assert condition is not an integer constant expression"
                 )
@@ -7146,8 +7144,76 @@ class CCodeGenerator(
             self.env[self._enum_tag_key(node.name)] = enum_range
         return None, None
 
-    def _eval_const_expr(self, node):
-        """Evaluate a constant expression at compile time (for enum values)."""
+    def _validate_integer_constant_operands(self, node, *, evaluated=True):
+        """Check ICE operands even where short circuiting suppresses evaluation.
+
+        Nonconstant identifiers/calls do not become integer constant operands
+        merely by being unselected. Undefined arithmetic in an unselected arm
+        is different: its integer operands are valid and need not be evaluated.
+        """
+        if isinstance(node, c_ast.Constant):
+            if node.type in ("string", "wstring", "float", "double"):
+                raise CodegenError("non-integer operand in integer constant expression")
+            self._eval_const_expr(node, integer_constant=True)
+            return
+        if isinstance(node, c_ast.ID):
+            self._eval_const_expr(node, integer_constant=True)
+            return
+        if isinstance(node, c_ast.Cast):
+            target = self._resolve_ast_type(node.to_type.type)
+            if not isinstance(target, ir.IntType):
+                raise CodegenError("non-integer cast in integer constant expression")
+            if isinstance(node.expr, c_ast.Constant) and node.expr.type in ("float", "double"):
+                return
+            self._validate_integer_constant_operands(node.expr, evaluated=evaluated)
+            return
+        if isinstance(node, c_ast.GenericSelection):
+            selected = self._select_generic_association(node)
+            if selected is None:
+                raise SemanticError("no matching association in _Generic selection")
+            self._validate_integer_constant_operands(selected, evaluated=evaluated)
+            return
+        if isinstance(node, c_ast.UnaryOp):
+            if node.op in ("sizeof", "_Alignof", "__alignof", "__alignof__"):
+                return
+            if node.op == "&" and isinstance(node.expr, c_ast.StructRef) and self._is_offsetof_like_structref(node.expr):
+                return
+            if node.op in ("+", "-", "~", "!"):
+                self._validate_integer_constant_operands(node.expr, evaluated=evaluated)
+                return
+        if isinstance(node, c_ast.BinaryOp):
+            self._validate_integer_constant_operands(node.left, evaluated=evaluated)
+            rhs_evaluated = evaluated
+            if evaluated and node.op in ("&&", "||"):
+                lhs = self._eval_const_expr(node.left, integer_constant=True)
+                rhs_evaluated = bool(lhs) if node.op == "&&" else not bool(lhs)
+            self._validate_integer_constant_operands(node.right, evaluated=rhs_evaluated)
+            return
+        if isinstance(node, c_ast.TernaryOp):
+            self._validate_integer_constant_operands(node.cond, evaluated=evaluated)
+            selected_true = bool(self._eval_const_expr(node.cond, integer_constant=True)) if evaluated else False
+            self._validate_integer_constant_operands(node.iftrue, evaluated=evaluated and selected_true)
+            self._validate_integer_constant_operands(node.iffalse, evaluated=evaluated and not selected_true)
+            return
+        if isinstance(node, c_ast.ExprList) and not evaluated:
+            for expr in node.exprs:
+                self._validate_integer_constant_operands(expr, evaluated=False)
+            return
+        if isinstance(node, c_ast.FuncCall) and isinstance(node.name, c_ast.ID):
+            if node.name.name == "offsetof" and "offsetof" not in self.env:
+                self._offsetof_keyword_value(node)
+                return
+        raise CodegenError("invalid operand in integer constant expression: " + type(node).__name__)
+
+    def _eval_const_expr(self, node, *, integer_constant=False):
+        """Evaluate without runtime IR, preserving C integer widths/signs.
+
+        Integer constant expressions additionally restrict floating operands
+        and casts; ordinary arithmetic initializers may contain floating values.
+        """
+        def evaluate(expr):
+            return self._eval_const_expr(expr, integer_constant=integer_constant)
+
         def is_float_value(value):
             return isinstance(value, float)
 
@@ -7221,14 +7287,69 @@ class CCodeGenerator(
             if isinstance(target_ir_type, ir.IntType):
                 if target_ir_type.width == 1:
                     return make_int(int(numeric_value(value) != 0), 1, True)
-                return make_int(
-                    numeric_value(value),
-                    target_ir_type.width,
-                    self._is_unsigned_scalar_decl_type(target_decl_type),
-                )
+                is_unsigned = self._is_unsigned_scalar_decl_type(target_decl_type)
+                if is_float_value(value):
+                    width = target_ir_type.width
+                    lower = 0 if is_unsigned else -(1 << (width - 1))
+                    upper = (1 << (width if is_unsigned else width - 1)) - 1
+                    if not math.isfinite(value) or not lower <= int(value) <= upper:
+                        raise CodegenError("floating constant is outside integer cast range")
+                return make_int(numeric_value(value), target_ir_type.width, is_unsigned)
             if self._is_floating_ir_type(target_ir_type):
                 return float(numeric_value(value))
-            return value
+            raise CodegenError("Not a constant expression: non-arithmetic cast")
+
+        def arithmetic_type_value(expr):
+            # A conditional expression converts its selected value to the
+            # common type of BOTH arms, without evaluating the unselected arm.
+            if isinstance(expr, c_ast.GenericSelection):
+                selected = self._select_generic_association(expr)
+                if selected is None:
+                    raise SemanticError("no matching association in _Generic selection")
+                return arithmetic_type_value(selected)
+            if isinstance(expr, c_ast.BinaryOp):
+                if expr.op in ("&&", "||", "==", "!=", "<", "<=", ">", ">="):
+                    return make_int(0)
+                lhs = arithmetic_type_value(expr.left)
+                if expr.op in ("<<", ">>"):
+                    return integer_promotion(lhs)
+                rhs = arithmetic_type_value(expr.right)
+                if is_float_value(lhs) or is_float_value(rhs):
+                    return 0.0
+                return usual_arithmetic_conversion(lhs, rhs)[0]
+            if isinstance(expr, c_ast.TernaryOp):
+                lhs = arithmetic_type_value(expr.iftrue)
+                rhs = arithmetic_type_value(expr.iffalse)
+                if is_float_value(lhs) or is_float_value(rhs):
+                    return 0.0
+                return usual_arithmetic_conversion(lhs, rhs)[0]
+            if isinstance(expr, c_ast.UnaryOp):
+                if expr.op == "!":
+                    return make_int(0)
+                if expr.op in ("sizeof", "_Alignof", "__alignof", "__alignof__"):
+                    return make_int(0, 64, True)
+                if expr.op in ("+", "-", "~"):
+                    value = arithmetic_type_value(expr.expr)
+                    return value if is_float_value(value) else integer_promotion(value)
+            if isinstance(expr, c_ast.Constant):
+                value = self._eval_const_expr(expr)
+                return 0.0 if is_float_value(value) else make_int(0, value.width, value.is_unsigned)
+            if isinstance(expr, c_ast.ID) and expr.name in self.env:
+                _, binding = self.env[expr.name]
+                if isinstance(binding, ir.Constant) and isinstance(binding.type, ir.IntType):
+                    return make_int(0, binding.type.width, self._is_unsigned_val(binding))
+            if isinstance(expr, c_ast.FuncCall) and isinstance(expr.name, c_ast.ID):
+                if expr.name.name == "offsetof" and "offsetof" not in self.env:
+                    return make_int(0, 64, True)
+            ir_type = self._infer_sizeof_operand_ir_type(expr)
+            if self._is_floating_ir_type(ir_type):
+                return 0.0
+            if isinstance(ir_type, ir.IntType):
+                key = self._generic_expr_type_key(expr)
+                if not self._generic_is_base_key(key):
+                    raise CodegenError("cannot determine constant-expression integer signedness")
+                return make_int(0, ir_type.width, "unsigned" in key[2])
+            raise CodegenError("non-arithmetic conditional constant expression")
 
         def c_float_div(lhs, rhs):
             if rhs == 0.0:
@@ -7240,8 +7361,10 @@ class CCodeGenerator(
 
         if isinstance(node, c_ast.Constant):
             if node.type in ("string", "wstring"):
-                return 0  # string constants can't be int-evaluated
+                raise CodegenError("Not a constant expression: string operand")
             if node.type in ("float", "double"):
+                if integer_constant:
+                    raise CodegenError("floating operand in integer constant expression")
                 return self._parse_float_constant(node.value)
             if node.type == "char":
                 value, type_name = decode_c_character_constant(node.value, str(self.module.triple))
@@ -7249,17 +7372,15 @@ class CCodeGenerator(
                 return make_int(value, width, type_name.startswith("unsigned"))
             try:
                 return parse_int_constant(node.value)
-            except ValueError:
-                return make_int(0)
+            except ValueError as exc:
+                raise CodegenError("invalid integer constant: " + node.value) from exc
         elif isinstance(node, c_ast.UnaryOp):
             if node.op == "sizeof":
-                if isinstance(node.expr, c_ast.Typename):
-                    ir_t = self._resolve_ast_type(node.expr.type)
-                    return make_int(self._ir_type_size(ir_t), 64, True)
-                if self._is_string_constant(node.expr):
-                    return make_int(len(self._string_literal_data(node.expr)), 64, True)
-                ir_t = self._infer_sizeof_operand_ir_type(node.expr)
-                return make_int(self._ir_type_size(ir_t), 64, True)
+                value = self._codegen_sizeof(node.expr)
+                return make_int(self._constant_raw_value(value), value.type.width, True)
+            if node.op in ("_Alignof", "__alignof", "__alignof__"):
+                value = self._codegen_alignof(node.expr)
+                return make_int(self._constant_raw_value(value), value.type.width, True)
             if (
                 node.op == "&"
                 and isinstance(node.expr, c_ast.StructRef)
@@ -7267,7 +7388,7 @@ class CCodeGenerator(
             ):
                 offset, _ = self._eval_offsetof_structref(node.expr)
                 return make_int(offset, 64, True)
-            val = self._eval_const_expr(node.expr)
+            val = evaluate(node.expr)
             if node.op in ("-", "+", "~", "!") and is_int_value(val):
                 promoted = integer_promotion(val)
                 status, folded = _fold_c_integer_unary(
@@ -7297,12 +7418,12 @@ class CCodeGenerator(
             if node.op == "~":
                 raise CodegenError("bitwise complement requires an integer operand")
         elif isinstance(node, c_ast.BinaryOp):
-            l = self._eval_const_expr(node.left)
+            l = evaluate(node.left)
             if node.op == "&&" and not numeric_value(l):
                 return make_int(0)
             if node.op == "||" and numeric_value(l):
                 return make_int(1)
-            r = self._eval_const_expr(node.right)
+            r = evaluate(node.right)
             if node.op == "&&":
                 return make_int(1 if numeric_value(r) else 0)
             if node.op == "||":
@@ -7365,10 +7486,13 @@ class CCodeGenerator(
                 return make_int(folded)
             return make_int(folded, result_width, result_unsigned)
         elif isinstance(node, c_ast.TernaryOp):
-            cond = self._eval_const_expr(node.cond)
-            if numeric_value(cond):
-                return self._eval_const_expr(node.iftrue)
-            return self._eval_const_expr(node.iffalse)
+            cond = evaluate(node.cond)
+            selected = node.iftrue if numeric_value(cond) else node.iffalse
+            value = evaluate(selected)
+            common = arithmetic_type_value(node)
+            if is_float_value(common):
+                return float(numeric_value(value))
+            return convert_int_value(value, common.width, common.is_unsigned)
         elif isinstance(node, c_ast.ID):
             # Only true integer constant bindings (for example enum values)
             # participate in constant-expression evaluation. Ordinary locals
@@ -7386,34 +7510,53 @@ class CCodeGenerator(
                     )
             raise CodegenError(f"Not a constant expression: identifier '{node.name}'")
         elif isinstance(node, c_ast.Cast):
-            value = self._eval_const_expr(node.expr)
+            target_type = self._resolve_ast_type(node.to_type.type)
+            if integer_constant and not isinstance(target_type, ir.IntType):
+                raise CodegenError("non-integer cast in integer constant expression")
+            # C permits a floating literal only as the immediate operand of an
+            # integer cast in an integer constant expression (C11 6.6p6).
+            if (
+                isinstance(target_type, ir.IntType)
+                and isinstance(node.expr, c_ast.Constant)
+                and node.expr.type in ("float", "double")
+            ):
+                value = self._eval_const_expr(node.expr)
+            elif (
+                not integer_constant
+                and isinstance(target_type, ir.IntType)
+                and isinstance(node.expr, c_ast.Cast)
+                and isinstance(self._resolve_ast_type(node.expr.to_type.type), ir.PointerType)
+            ):
+                # Numeric address constants can round-trip through a pointer
+                # in static initializers. Do not treat general pointer
+                # arithmetic or symbol addresses as arithmetic constants.
+                address = node.expr
+                while isinstance(address, c_ast.Cast) and isinstance(
+                    self._resolve_ast_type(address.to_type.type), ir.PointerType
+                ):
+                    address = address.expr
+                value = evaluate(address)
+                if not is_int_value(value):
+                    raise CodegenError("pointer constant requires an integer address")
+                value = make_int(value, pointer_scalar_layout().size * 8, True)
+            else:
+                value = evaluate(node.expr)
             return cast_const_value(value, node.to_type.type)
+        elif isinstance(node, c_ast.GenericSelection):
+            selected = self._select_generic_association(node)
+            if selected is None:
+                raise SemanticError("no matching association in _Generic selection")
+            return evaluate(selected)
         elif isinstance(node, c_ast.FuncCall):
             if isinstance(node.name, c_ast.ID):
                 callee = node.name.name
                 if callee == "offsetof" and "offsetof" not in self.env:
                     return make_int(self._offsetof_keyword_value(node), 64, True)
-                if callee in ("__builtin_inf", "__builtin_inff", "__builtin_infl"):
+                if not integer_constant and callee in ("__builtin_inf", "__builtin_inff", "__builtin_infl"):
                     return float("inf")
-                if callee in ("__builtin_nan", "__builtin_nanf", "__builtin_nanl"):
+                if not integer_constant and callee in ("__builtin_nan", "__builtin_nanf", "__builtin_nanl"):
                     return float("nan")
             raise CodegenError(f"Not a constant expression: {type(node).__name__}")
-        elif isinstance(node, c_ast.Typename):
-            return 0
-        elif isinstance(node, c_ast.ID):
-            try:
-                _, binding = self.lookup(node.name)
-            except Exception:
-                raise CodegenError(
-                    f"Not a constant expression: {type(node).__name__} {node.name!r}"
-                )
-            if isinstance(binding, ir.Constant):
-                width = getattr(binding.type, "width", 32)
-                is_unsigned = bool(getattr(binding.type, "is_unsigned", False))
-                return make_int(int(binding.value), width, is_unsigned)
-            raise CodegenError(
-                f"Not a constant expression: {type(node).__name__} {node.name!r}"
-            )
         raise CodegenError(f"Not a constant expression: {type(node).__name__}")
 
     def codegen_InitList(self, node):

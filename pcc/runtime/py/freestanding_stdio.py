@@ -10,12 +10,19 @@ from pcc.extern import (
     c_abi_typed_export,
     c_abi_variadic_export,
     c_ptr,
+    c_int32,
+    c_void,
+    extern,
 )
 from pcc.unsafe import (
     abi_constant,
+    atomic_cas_i32,
+    atomic_store_i32,
     close,
     cstr,
     define_global_i64_array,
+    define_global_i32,
+    define_global_ptr_null,
     define_global_ptr_to_global,
     free,
     f64_bits,
@@ -59,6 +66,14 @@ from pcc.unsafe import (
 )
 
 __pcc_freestanding__ = True
+
+pcc_errno_set = extern("pcc_errno_set", (c_int32,), c_void)
+
+# Registry nodes are separate from the public 64-byte owned FILE layout:
+# next@0, stream@8. The lock protects registry traversal and stream lifetime,
+# not concurrent operations on a single FILE (that remains a separate scope).
+define_global_ptr_null("pcc_stdio_registry_head")
+define_global_i32("pcc_stdio_registry_lock", 0)
 
 
 define_global_i64_array(
@@ -114,6 +129,34 @@ def remove(path) -> i64:
     return -1
 
 
+@c_abi_export("pcc_stdio_registry_acquire")
+def _registry_acquire() -> None:
+    lock = global_addr("pcc_stdio_registry_lock")
+    while atomic_cas_i32(lock, 0, 0, 1, "acquire", "relaxed") != 0:
+        pass
+
+
+@c_abi_export("pcc_stdio_registry_release")
+def _registry_release() -> None:
+    atomic_store_i32(global_addr("pcc_stdio_registry_lock"), 0, 0, "release")
+
+
+@c_abi_export("pcc_stdio_stream_unregister")
+def _stream_unregister(stream) -> None:
+    _registry_acquire()
+    link = global_addr("pcc_stdio_registry_head")
+    node = load_ptr(link, 0)
+    while not ptr_is_null(node):
+        if ptr_diff(load_ptr(node, 8), stream) == 0:
+            store_ptr(link, 0, load_ptr(node, 0))
+            _registry_release()
+            free(node)
+            return
+        link = node
+        node = load_ptr(node, 0)
+    _registry_release()
+
+
 @c_abi_export("pcc_stdio_stream_new")
 def _stream_new(fd: i64, flags: i64, aux: i64):
     stream = malloc(abi_constant("stdio.file.size"))
@@ -143,6 +186,17 @@ def _stream_new(fd: i64, flags: i64, aux: i64):
     )
     store_i64(stream, abi_constant("stdio.file.buffer_length_offset"), 0)
     store_i64(stream, abi_constant("stdio.file.buffer_position_offset"), 0)
+    node = malloc(16)
+    if ptr_is_null(node):
+        if not ptr_is_null(buffer):
+            free(buffer)
+        free(stream)
+        return null()
+    store_ptr(node, 8, stream)
+    _registry_acquire()
+    store_ptr(node, 0, load_ptr(global_addr("pcc_stdio_registry_head"), 0))
+    store_ptr(global_addr("pcc_stdio_registry_head"), 0, node)
+    _registry_release()
     return stream
 
 
@@ -235,6 +289,8 @@ def _flush_output(stream) -> i64:
         while written == -4:
             written = write(fd, ptr_add(buffer, offset), length - offset)
         if written <= 0:
+            if load_i8(target_sys_platform(), 0) == 108:
+                pcc_errno_set(0 - written if written < 0 else 5)
             remaining = length - offset
             move_index: i64 = 0
             while move_index < remaining:
@@ -332,6 +388,8 @@ def fwrite(input_buffer, size: i64, count: i64, stream) -> i64:
                     fd, ptr_add(input_buffer, consumed), total - consumed
                 )
             if written <= 0:
+                if load_i8(target_sys_platform(), 0) == 108:
+                    pcc_errno_set(0 - written if written < 0 else 5)
                 store_i64(
                     stream,
                     abi_constant("stdio.file.flags_offset"),
@@ -371,6 +429,23 @@ def fwrite(input_buffer, size: i64, count: i64, stream) -> i64:
         if buffered >= capacity and _flush_output(stream) != 0:
             return unsigned_div_i64(consumed, size)
     return count
+
+
+@c_abi_typed_export("puts", "i32", ("ptr",))
+def puts(text) -> i64:
+    # stdout is an owned FILE. Reuse fwrite's short-write/EINTR handling and
+    # error flag; successful puts returns a nonnegative value, not a length.
+    stream = load_ptr(global_addr("stdout"), 0)
+    if load_i8(target_sys_platform(), 0) == 100:
+        stream = load_ptr(global_addr("__stdoutp"), 0)
+    length: i64 = 0
+    while load_i8(text, length) != 0:
+        length = length + 1
+    if fwrite(text, 1, length, stream) != length:
+        return -1
+    if fwrite(cstr("\n"), 1, 1, stream) != 1:
+        return -1
+    return 0
 
 
 @c_abi_export("fread")
@@ -559,10 +634,31 @@ def ftell(stream) -> i64:
     return position
 
 
-@c_abi_export("fflush")
+@c_abi_typed_export("fflush", "i32", ("ptr",))
 def fflush(stream) -> i64:
     if ptr_is_null(stream):
-        return 0
+        # Flush all owned output streams, retaining EOF if any one fails.
+        result: i64 = 0
+        standard_output = load_ptr(global_addr("stdout"), 0)
+        standard_error = load_ptr(global_addr("stderr"), 0)
+        if load_i8(target_sys_platform(), 0) == 100:
+            standard_output = load_ptr(global_addr("__stdoutp"), 0)
+            standard_error = load_ptr(global_addr("__stderrp"), 0)
+        if _flush_output(standard_output) != 0:
+            result = -1
+        if _flush_output(standard_error) != 0:
+            result = -1
+        _registry_acquire()
+        node = load_ptr(global_addr("pcc_stdio_registry_head"), 0)
+        while not ptr_is_null(node):
+            registered = load_ptr(node, 8)
+            flags: i64 = load_i64(registered, abi_constant("stdio.file.flags_offset"))
+            if (flags & abi_constant("stdio.flag.writable")) != 0:
+                if _flush_output(registered) != 0:
+                    result = -1
+            node = load_ptr(node, 0)
+        _registry_release()
+        return result
     if load_i64(
         stream, abi_constant("stdio.file.magic_offset")
     ) != abi_constant("stdio.file.magic"):
@@ -596,6 +692,7 @@ def fclose(stream) -> i64:
     flags = load_i64(stream, abi_constant("stdio.file.flags_offset"))
     if (flags & abi_constant("stdio.flag.standard")) != 0:
         return fflush(stream)
+    _stream_unregister(stream)
     flush_result: i64 = 0
     if (flags & abi_constant("stdio.flag.writable")) != 0:
         flush_result = _flush_output(stream)
@@ -1555,6 +1652,7 @@ def pclose(stream) -> i64:
     pid = load_i64(stream, abi_constant("stdio.file.aux_offset"))
     if (flags & abi_constant("stdio.flag.standard")) != 0 or pid <= 0:
         return -1
+    _stream_unregister(stream)
     fd = load_i64(stream, abi_constant("stdio.file.fd_offset"))
     flush_result: i64 = 0
     if (flags & abi_constant("stdio.flag.writable")) != 0:

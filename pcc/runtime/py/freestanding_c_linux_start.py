@@ -2,12 +2,12 @@
 
 The self backend receives the kernel's original stack pointer, reconstructs
 the SysV ``argc``/``argv``/``envp`` values, initializes pcc's owned environment
-table, calls the C translation unit's ``main``, and terminates with a raw
-``exit_group`` syscall.  No C or assembly startup source participates.
+table, calls the C translation unit's ``main``, and uses the owned C exit
+lifecycle (callbacks, finalizers, stream flush, then ``exit_group``).  No C or assembly startup source participates.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int, c_ptr, extern
+from pcc.extern import c_abi_export, c_int, c_int32, c_ptr, c_void, extern
 from pcc.unsafe import (
     define_global_null_ptr_array,
     define_global_i64_array,
@@ -42,6 +42,7 @@ define_global_i64_array("pcc_linux_tls_image", 0, 0, 0, 1)
 
 c_main = extern("main", (c_int, c_ptr, c_ptr), c_int)
 platform_env_init = extern("pcc_platform_env_init", (c_ptr,), c_int)
+c_exit = extern("exit", (c_int32,), c_void)
 
 
 @c_abi_export("pcc_linux_initial_tls_setup")
@@ -191,11 +192,7 @@ def pcc_c_linux_start(initial_stack: c_ptr) -> None:
                 call_void_ptr0(load_ptr(initializers, index * 8))
                 index = index + 1
             status = c_main(argc, argv, envp)
-            finalizers = global_addr("__fini_array_start")
-            fini_count: i64 = ptr_diff(global_addr("__fini_array_end"), finalizers) // 8
-            while fini_count > 0:
-                fini_count = fini_count - 1
-                call_void_ptr0(load_ptr(finalizers, fini_count * 8))
+            c_exit(status)
         else:
             status: i64 = 70
     process_exit(status)

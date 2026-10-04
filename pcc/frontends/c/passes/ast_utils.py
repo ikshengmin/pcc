@@ -379,6 +379,11 @@ class ASTTransformer:
                     table[node_cls] = attr_val
         return table
 
+    def visit_StaticAssert(self, node):
+        # Assertions must reach semantic checking with their original operands.
+        # Optimizations may otherwise erase invalid operands or signed overflow.
+        return node
+
     def generic_visit(self, node):
         """Recursively visit children, then return the node."""
         self._visit_children(node)

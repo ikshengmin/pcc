@@ -6,6 +6,9 @@ bindings. Runtime implementation and platform linking remain separate checks.
 """
 
 PLATFORM_MACHINE_ABIS = {
+    # Owned C startup/lifecycle: exact finite raw-pointer and i32 boundaries.
+    "exit": ("(c_int32,)", "c_void"),
+    "fflush": ("(c_ptr,)", "c_int32"),
     'LockFileEx': ('(c_ptr,c_int,c_int,c_int,c_int,c_ptr)', 'c_int'),
     'UnlockFileEx': ('(c_ptr,c_int,c_int,c_int,c_ptr)', 'c_int'),
     "CompareStringOrdinal": ("(c_ptr,c_int,c_ptr,c_int,c_int)", "c_int"),

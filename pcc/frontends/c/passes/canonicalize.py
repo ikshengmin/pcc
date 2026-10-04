@@ -83,6 +83,12 @@ class _Canonicalizer(ASTTransformer):
         self._visit_children(node)
         return node
 
+    def visit_StaticAssert(self, node):
+        # Only the typed evaluator can prove an integer constant expression.
+        # Untyped identities/folds can erase nonconstant operands or change
+        # signedness before the assertion's semantic constraints are checked.
+        return node
+
     # ── 1. Constant Folding ─────────────────────────────────────────────
 
     def _try_fold_binary_int(self, node):
@@ -366,18 +372,10 @@ class _Canonicalizer(ASTTransformer):
 
         return node
 
-    # ── TernaryOp: fold constant condition ──────────────────────────────
-
     def visit_TernaryOp(self, node):
         self._visit_children(node)
-        cv = get_safe_int_value(node.cond)
-        if cv is not None:
-            if cv != 0:
-                self._mark("ternary_true", node)
-                return node.iftrue
-            else:
-                self._mark("ternary_false", node)
-                return node.iffalse
+        # The result has the common type of both arms even with a constant
+        # condition. Keep that conversion for typed lowering (e.g. 1 ? -1 : 1U).
         return node
 
     # ── Cast: fold cast of constant ─────────────────────────────────────

@@ -706,6 +706,9 @@ class MethodCallExpressionLoweringMixin:
         native_sys_stream_call = self._emit_native_sys_stream_call(expr)
         if native_sys_stream_call is not None:
             return native_sys_stream_call
+        native_open = self._emit_native_open_call(expr)
+        if native_open is not None:
+            return native_open
         native_file_method = self._emit_native_file_method(expr)
         if native_file_method is not None:
             return native_file_method

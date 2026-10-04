@@ -1260,6 +1260,7 @@ class NativeModuleAliasMixin:
                 attr_name
                 in (
                     "valueclass",
+                    "virtual_thread",
                     "i64",
                     "u64",
                     "i64_buffer",
@@ -1476,6 +1477,16 @@ class NativeModuleAliasMixin:
                 self._register_native_builtin_value_alias(
                     local_name,
                     "math.pow",
+                )
+                continue
+            if attr_name == "virtual_thread" and import_module == "pcc":
+                # Match the existing ``import pcc.virtual_thread as name``
+                # route, including a compiled sibling's initialization.
+                if "pcc.virtual_thread" in getattr(self, "_sibling_module_inits", ()):
+                    self._emit_compiled_module_ensure_initialized("pcc.virtual_thread")
+                self._register_native_builtin_module_alias(
+                    local_name,
+                    "pcc.virtual_thread",
                 )
                 continue
             if attr_name == "valueclass" and import_module == "pcc":

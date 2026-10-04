@@ -262,9 +262,20 @@ def main():
 main()
 """)
     output=tmp_path/"c3_exception.ll"
-    compile_python(str(source),str(output),emit_llvm_only=True,backend="self",
-                   libpython_mode="off",ir_scaffold_mode="on")
-    assert len(emit_owned_object(output.read_text(),"arm64-apple-darwin"))>64
+    target_triple = "arm64-apple-darwin"
+    compile_python(
+        str(source),
+        str(output),
+        emit_llvm_only=True,
+        backend="self",
+        libpython_mode="off",
+        ir_scaffold_mode="on",
+        target_triple=target_triple,
+    )
+    object_bytes = emit_owned_object(output.read_text(), target_triple)
+    assert len(object_bytes) > 64
+    assert object_bytes[:4] == b"\xcf\xfa\xed\xfe"
+    assert int.from_bytes(object_bytes[4:8], "little") == 0x0100000C
 
 
 @pytest.mark.parametrize("triple", ["arm64-apple-darwin", "aarch64-unknown-linux-gnu",

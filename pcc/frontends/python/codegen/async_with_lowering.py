@@ -5,10 +5,12 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Call, ClassType, DynType, Expr, Name, NoneType, Type, With
+from pcc.frontends.python.py_ast import Call, ClassType, DynType, Expr, Name, NoneType, RawPointerType, Type, With
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
+_I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
 _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
@@ -55,15 +57,59 @@ class AsyncWithLoweringMixin:
         if self._emit_native_user_context_with(stmt):
             return
         ctx_expr, as_expr = stmt.items[0]
-        ctx_val = self._emit_expr(ctx_expr)
-        if ctx_val not in getattr(self, "_cpy_values", ()):
-            enter_val = self.builder.call(
-                self.runtime["py_context_enter"],
-                [ctx_val],
-                name=self._fresh("with.dynamic.enter"),
-            )
-            self._emit_post_call_err_check()
-            self._emit_native_context_body(stmt, ctx_val, enter_val)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = []
+        native_context = False
+        try:
+            if not isinstance(ctx_expr, Call) and not self._expr_looks_cpython(ctx_expr):
+                context_root = self._emit_slot_call_operand(ctx_expr, "with.dynamic.manager")
+                roots.append(context_root)
+                native_context = True
+            elif isinstance(ctx_expr, Call):
+                # Let the actual producer select its domain. A known foreign
+                # call keeps its existing refcount route; a native call must
+                # publish into this pre-existing root, never get rooted late.
+                context_root = self._new_slot_call_root("with.dynamic.manager")
+                roots.append(context_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if not hasattr(self, "_slot_call_result_sinks"):
+                    self._slot_call_result_sinks = []
+                self._slot_call_result_sinks.append((ctx_expr, context_root, False))
+                try:
+                    ctx_val = self._emit_expr(ctx_expr)
+                finally:
+                    _expr, _root, published = self._slot_call_result_sinks.pop()
+                if ctx_val in getattr(self, "_cpy_values", ()):
+                    if published:
+                        raise L1CodegenError("context producer mixed native and CPython ownership")
+                    self._release_slot_call_roots(tuple(roots))
+                    roots = []
+                elif published:
+                    native_context = True
+                else:
+                    raise L1CodegenError("native context producer requires an output-slot handoff")
+            else:
+                ctx_val = self._emit_expr(ctx_expr)
+                if ctx_val not in getattr(self, "_cpy_values", ()):
+                    raise L1CodegenError("native context binding requires an authoritative source")
+            if native_context:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                enter_root = self._new_slot_call_root("with.dynamic.enter")
+                roots.append(enter_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_context_enter", (context_root,), result_slot=enter_root, span=stmt.span,
+                )
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if native_context:
+            self._emit_native_context_body(stmt, context_root, enter_root)
             return
         ctx_owned = self._cpy_value_is_owned(ctx_val)
         self._guard_cpy_value_not_null(ctx_val)
@@ -345,23 +391,57 @@ class AsyncWithLoweringMixin:
         if enter_fn is None or exit_info.methods.get("__exit__") is None:
             return False
 
-        ctx_val = self._emit_expr(ctx_expr)
-        enter_val = self._emit_direct_method_call(
-            enter_fn,
-            ctx_val,
-            enter_info,
-            "__enter__",
-            (),
-        )
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        context_root = self._emit_slot_call_operand(ctx_expr, "with.user.manager")
+        roots = [context_root]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            enter_root = self._new_slot_call_root("with.user.enter")
+            roots.append(enter_root)
+            cleanup = self._slot_call_cleanup_block(tuple(roots), target)
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            token = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(context_root)],
+                name=self._fresh("with.user.manager.lease"),
+            )
+            self._slot_call_check_status(token, "context manager lease", stmt.span)
+            self._try_err_block = self._slot_call_cleanup_block((), cleanup, ((context_root, token),))
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if not hasattr(self, "_slot_call_result_sinks"):
+                self._slot_call_result_sinks = []
+            self._slot_call_result_sinks.append((None, enter_root, False))
+            try:
+                self._emit_direct_method_call(
+                    enter_fn, self.builder.load(context_root), enter_info, "__enter__", (),
+                    result_slot=enter_root,
+                )
+            finally:
+                _expr, _root, published = self._slot_call_result_sinks.pop()
+            if not published:
+                raise L1CodegenError("native __enter__ producer requires an output-slot handoff")
+            released = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(context_root), token],
+                name=self._fresh("with.user.manager.release"),
+            )
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            self._slot_call_check_status(released, "context manager lease release", stmt.span)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        self._emit_native_context_body(stmt, context_root, enter_root)
 
-        self._emit_native_context_body(stmt, ctx_val, enter_val)
         return True
 
     def _emit_native_context_body(
         self,
         stmt: With,
-        ctx_val: ir.Value,
-        enter_val: ir.Value,
+        context_root: ir.Value,
+        enter_root: ir.Value,
         cleanup_runtime: Optional[str] = None,
     ) -> None:
         """Emit the body/exit control flow for a pcc-native manager.
@@ -377,22 +457,63 @@ class AsyncWithLoweringMixin:
             if self._generator_ctx_stack else self._fresh("with.context")
         )
         context_target = Name(span=ctx_expr.span, ty=DynType(name="dyn"), ident=context_name)
-        # A private owned local is independent of the user's `as` binding.
-        # The generator collector reserves this same name before emission.
-        retained_context = self._gc_retain(ctx_val)
-        self._store_unpack_target(context_target, retained_context, context_target.ty,
-                                  value_is_owned=True)
-        self._gc_release_if_owned(ctx_val, ctx_expr)
-        if as_expr is not None:
-            if not isinstance(as_expr, Name):
-                raise NotImplementedError(
-                    "Layer 1 native with: as-clause must be a bare name"
-                    f" at {stmt.span.file}:{stmt.span.line}:{stmt.span.col}"
-                    f" (got {type(as_expr).__name__})"
+        if self.current_func_def is None and getattr(self, "_class_namespace_context", None) is None:
+            # Module root entry has already been emitted. Late context slots
+            # need the same registration, guarded so loop iterations and
+            # separate conditional bindings do not register the slot twice.
+            module_targets = [context_target]
+            if isinstance(as_expr, Name):
+                module_targets.append(as_expr)
+            for binding in module_targets:
+                new_global = binding.ident not in self._module_globals
+                slot, _declared = self._ensure_module_global_name(binding.ident, binding.ty)
+                marker_name = self._module_global_symbol_name(
+                    self.ast_module.name or "__main__", binding.ident + ".context.rooted",
                 )
-            self._store_unpack_target(as_expr, enter_val, as_expr.ty, value_is_owned=True)
-        else:
-            self._gc_release(enter_val)
+                marker = self.module.globals.get(marker_name)
+                if not new_global and marker is None:
+                    continue
+                if marker is None:
+                    marker = ir.GlobalVariable(self.module, _I1, name=marker_name)
+                    marker.initializer = ir.Constant(_I1, 0)
+                register = self.current_function.append_basic_block(self._fresh("with.module.root"))
+                ready = self.current_function.append_basic_block(self._fresh("with.module.ready"))
+                self.builder.cbranch(self.builder.load(marker), ready, register)
+                self.builder.position_at_end(register)
+                self.builder.store(ir.Constant(_I1, 1), marker)
+                self._emit_current_gc_frame_enter(self._gc_one_slot_frame_map(), slot)
+                self.builder.branch(ready)
+                self.builder.position_at_end(ready)
+        # Producers must already own both values in registered slots. Even
+        # when __enter__ returns its manager, these are independent owners.
+        # Rebinding an as-target can release its previous value and collect;
+        # the rooted handoff moves the current pointer after that callback.
+        self._slot_call_root_record(context_root)
+        self._slot_call_root_record(enter_root)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = (context_root, enter_root)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(roots, target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._store_unpack_root_target(context_target, context_root, context_target.ty)
+            if as_expr is not None:
+                if not isinstance(as_expr, Name):
+                    raise NotImplementedError(
+                        "Layer 1 native with: as-clause must be a bare name"
+                        f" at {stmt.span.file}:{stmt.span.line}:{stmt.span.col}"
+                        f" (got {type(as_expr).__name__})"
+                    )
+                prior = self.env.get(as_expr.ident)
+                if (getattr(self, "_cpy_env_flags", {}).get(as_expr.ident, False)
+                        or prior is not None and isinstance(prior[2], RawPointerType)):
+                    raise L1CodegenError("native context target cannot reuse a foreign/raw pointer slot")
+                self._store_unpack_root_target(as_expr, enter_root, as_expr.ty)
+            self._release_slot_call_roots(roots)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
         def clear_context():
             self._store_unpack_target(context_target, self._emit_none_literal(), context_target.ty,

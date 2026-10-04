@@ -39,6 +39,13 @@ def _classify_runtime(case_path):
     except Exception:
         return "runtime_timeout"
 
+    # A compiler/linker/worker status is never a program exit status. Keep
+    # rejected fixtures visible without promoting them to runtime matches.
+    if not native.executed or not pcc.executed:
+        if native.returncode == 124 or pcc.returncode == 124:
+            return "runtime_timeout"
+        return "runtime_build_or_execution_failure"
+
     if native.returncode == 0 and pcc.returncode == 0:
         if pcc.stdout == native.stdout and pcc.stderr == native.stderr:
             return "runtime_exact_match"

@@ -1994,7 +1994,7 @@ class CallExpressionLoweringMixin:
                 raise NotImplementedError(
                     "Layer 1 extern-C calls do not accept keyword args"
                 )
-            return self._emit_extern_call(extern_decls[name], expr.args)
+            return self._emit_extern_call(extern_decls[name], expr.args, expr)
 
         # User class instantiation: ``MyClass(args)``.
         class_name = (

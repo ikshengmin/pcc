@@ -70,6 +70,31 @@ def _is_space(value: i64) -> bool:
     )
 
 
+@c_abi_typed_export("atoi", "i32", ("ptr",))
+def atoi(text) -> i64:
+    # The runtime's fixed C locale. ISO C leaves out-of-int-range inputs
+    # undefined; accumulate negatively so INT_MIN itself never overflows.
+    # This function deliberately does not promise strtol's errno behavior.
+    offset: i64 = 0
+    byte: i64 = load_i8(text, offset) & 255
+    while _is_space(byte):
+        offset = offset + 1
+        byte = load_i8(text, offset) & 255
+    negative: i64 = 0
+    if byte == 45 or byte == 43:
+        negative = 1 if byte == 45 else 0
+        offset = offset + 1
+        byte = load_i8(text, offset) & 255
+    value: i64 = 0
+    while byte >= 48 and byte <= 57:
+        value = value * 10 - (byte - 48)
+        offset = offset + 1
+        byte = load_i8(text, offset) & 255
+    if negative != 0:
+        return value
+    return 0 - value
+
+
 @c_abi_export("pcc_numeric_match_word")
 def _match_word(text, word, length: i64) -> bool:
     index: i64 = 0

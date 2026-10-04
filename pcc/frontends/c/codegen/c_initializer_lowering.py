@@ -742,8 +742,16 @@ class CInitializerLoweringMixin:
             if init_node.exprs:
                 return self._build_pointer_const(init_node.exprs[0], ir_type)
             return ir.Constant(ir_type, None)
+        if isinstance(init_node, c_ast.TernaryOp):
+            condition = self._eval_const_expr(init_node.cond)
+            chosen = init_node.iftrue if condition else init_node.iffalse
+            return self._build_pointer_const(chosen, ir_type)
         if isinstance(init_node, c_ast.Cast):
-            return self._build_pointer_const(init_node.expr, ir_type)
+            cast_type = self._resolve_ast_type(init_node.to_type.type)
+            if isinstance(cast_type, ir.PointerType):
+                return self._build_pointer_const(init_node.expr, ir_type)
+            # Arithmetic casts carry width/sign semantics; let the typed
+            # evaluator apply them before converting the integer to an address.
         if self._is_string_constant(init_node):
             gv = self._make_global_string_literal_constant(init_node)
             return self._const_pointer_to_first_elem(gv, ir_type)

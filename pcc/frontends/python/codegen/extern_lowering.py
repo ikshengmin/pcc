@@ -120,10 +120,33 @@ class ExternScaffoldMixin:
         self,
         decl: tuple[str, list[str], str, bool],
         args: tuple,
+        call_expr: Call | None = None,
     ) -> ir.Value:
+        # Only application c_obj declares a new managed owner. Runtime/port
+        # pointer lanes and c_rawptr retain their existing raw ABI contract.
+        if decl[2] != "c_obj" or not self._raw_addresses_are_ints():
+            return self._emit_extern_call_impl(decl, args)
+        sink = self._slot_call_result_sink(call_expr) if call_expr is not None else None
+        output = sink if sink is not None else self._new_slot_call_root("extern.object.result")
+        previous = self._current_try_err_block()
+        saved_cpy = self._cpy_operand_cleanup_block
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        if sink is None:
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            self._emit_extern_call_impl(decl, args, result_slot=output)
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("extern.object.result.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
+    def _emit_extern_call_impl(self, decl, args, result_slot=None) -> ir.Value:
         symbol, argtype_names, restype_name, variadic = decl
         if ("c_str" in argtype_names or "c_obj" in argtype_names) and self._raw_addresses_are_ints():
-            return self._emit_c_string_extern_call(decl, args)
+            return self._emit_c_string_extern_call(decl, args, result_slot=result_slot)
         if (
             symbol in _GC_BACKEND_QUERY_SYMBOLS
             and not args
@@ -220,6 +243,26 @@ class ExternScaffoldMixin:
             if isinstance(ret_ty, ir.VoidType)
             else self._fresh(f"extern.{symbol}.ret")
         )
+        if result_slot is not None:
+            previous = self._current_try_err_block()
+            saved_cpy = self._cpy_operand_cleanup_block
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            if object_roots:
+                self._try_err_block = self._make_cpy_operand_cleanup_block(
+                    (), (), target, "extern.result.cleanup",
+                    rooted_pcc_lifetimes=tuple(object_roots),
+                )
+                self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                result = self.builder.call(fn, ir_args, name=call_name)
+                # The declaration, not an annotation or symbol name, proves
+                # NEW ownership. Publish before argument cleanup can park.
+                self._publish_slot_call_owned(result_slot, result, label="extern c_obj result")
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            self._release_rooted_pcc_lifetimes(tuple(object_roots))
+            return self.builder.load(result_slot, name=self._fresh("extern.object.result.current"))
         result = self.builder.call(fn, ir_args, name=call_name)
         if object_roots:
             if restype_name == "c_obj":
@@ -374,7 +417,7 @@ class ExternScaffoldMixin:
             self._try_err_block = previous
         self.builder.position_at_end(ready)
 
-    def _emit_c_string_extern_call(self, decl, args):
+    def _emit_c_string_extern_call(self, decl, args, result_slot=None):
         """Keep managed c_str/c_obj arguments stable for one foreign call.
 
         c_str is a Python str argument in application modules. Raw addresses
@@ -491,6 +534,24 @@ class ExternScaffoldMixin:
             elif ctype in ("c_ptr", "c_rawptr"):
                 value = self._coerce_to_extern(value, args[index].ty, _CSTR, ctype)
             arguments[index] = value
+        if result_slot is not None:
+            previous = self._current_try_err_block()
+            saved_cpy = self._cpy_operand_cleanup_block
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            self._try_err_block = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                result = self.builder.call(fn, arguments, name=self._fresh("extern.result"))
+                # Result ownership is independent even when it aliases an
+                # argument. Its root survives all alias unpins and callbacks.
+                self._publish_slot_call_owned(result_slot, result, label="extern c_obj result")
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            release_failed = self._extern_release_foreign_leases(tuple(leases))
+            self._extern_check_lease_cleanup(release_failed, tuple(roots))
+            self._extern_release_roots(tuple(roots))
+            return self.builder.load(result_slot, name=self._fresh("extern.result.current"))
         result = self.builder.call(fn, arguments,
                                    name="" if isinstance(ret_ty, ir.VoidType) else self._fresh("extern.result"))
         if restype == "c_obj":

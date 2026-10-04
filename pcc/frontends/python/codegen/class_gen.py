@@ -4144,6 +4144,9 @@ class ClassLowering:
         saved_loops = parent.loop_stack
         saved_box_int_locals = parent._box_int_locals
         saved_exact_int_flags = parent._exact_int_env_flags
+        saved_cpy_env_flags = parent._cpy_env_flags
+        saved_cpy_values = parent._cpy_values
+        saved_owned_cpy_values = parent._owned_cpy_values
         saved_planned_exact_int_local_names = (
             parent._planned_exact_int_local_names
         )
@@ -4220,6 +4223,14 @@ class ClassLowering:
         kind = info.method_kinds.get(fd.name, "instance")
 
         try:
+            # Foreign-local tags and SSA ownership belong to one function's
+            # bindings, just like env. A prior method's local must not retag
+            # this method's same-named native parameter. Explicit captures
+            # establish their own provenance when their bindings are emitted;
+            # module-level foreign bindings retain their separate metadata.
+            parent._cpy_env_flags = {}
+            parent._cpy_values = set()
+            parent._owned_cpy_values = set()
             if not parent._funcdef_is_continuation_factory(fd) and (
                 parent._funcdef_has_yield_sentinel(fd)
                 or cd.name + "." + fd.name
@@ -4634,6 +4645,9 @@ class ClassLowering:
             parent.loop_stack = saved_loops
             parent._box_int_locals = saved_box_int_locals
             parent._exact_int_env_flags = saved_exact_int_flags
+            parent._cpy_env_flags = saved_cpy_env_flags
+            parent._cpy_values = saved_cpy_values
+            parent._owned_cpy_values = saved_owned_cpy_values
             parent._planned_exact_int_local_names = (
                 saved_planned_exact_int_local_names
             )

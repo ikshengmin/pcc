@@ -325,8 +325,12 @@ def _collect_binding_target_names(target, names: set[str]) -> None:
 
 def _function_scope_nodes(fd: FuncDef) -> list[object]:
     """Return nodes evaluated in ``fd`` without entering nested scopes."""
+    return _lexical_scope_nodes(fd.body)
+
+
+def _lexical_scope_nodes(body) -> list[object]:
     nodes: list[object] = []
-    work = list(fd.body)
+    work = list(body)
     index = 0
     while index < len(work):
         node = work[index]
@@ -363,6 +367,14 @@ def _function_lexical_binding_kinds(
     nodes = scope_nodes
     if nodes is None:
         nodes = _function_scope_nodes(fd)
+    return _lexical_binding_kinds(nodes, fd.args)
+
+
+def _lexical_binding_kinds(
+    nodes: list[object],
+    args,
+) -> tuple[dict[str, set[str]], set[str], set[str]]:
+    """Collect binding sources within one already isolated lexical scope."""
     global_names: set[str] = set()
     nonlocal_names: set[str] = set()
     for node in nodes:
@@ -372,7 +384,7 @@ def _function_lexical_binding_kinds(
             nonlocal_names.update(node.names)
 
     bindings: dict[str, set[str]] = {}
-    for arg in fd.args:
+    for arg in args:
         _record_binding_kind(bindings, arg.name, _BINDING_DYNAMIC)
 
     for node in nodes:
@@ -421,6 +433,12 @@ def _function_lexical_binding_kinds(
                 kind = _BINDING_DYNAMIC
                 if (
                     node.level == 0
+                    and node.module == "pcc"
+                    and imported_name == "virtual_thread"
+                ):
+                    kind = _BINDING_VTHREAD_MODULE
+                elif (
+                    node.level == 0
                     and node.module == "pcc.virtual_thread"
                     and imported_name in _VTHREAD_VALUE_EXPORTS
                 ):
@@ -441,11 +459,21 @@ def _function_vthread_bindings(
     edges.  The final two sets identify virtual-thread spellings whose runtime
     value became ambiguous and therefore require a fail-closed boundary.
     """
-    effective_modules = dict(module_aliases)
-    effective_values = dict(value_aliases)
+    effective_modules: dict[str, str] = {}
+    effective_values: dict[str, str] = {}
     blocked_names: set[str] = set()
     uncertain_modules: set[str] = set()
     uncertain_values: set[str] = set()
+    for name, target in module_aliases.items():
+        if target == _BINDING_DYNAMIC:
+            uncertain_modules.add(name)
+        else:
+            effective_modules[name] = target
+    for name, target in value_aliases.items():
+        if target == _BINDING_DYNAMIC:
+            uncertain_values.add(name)
+        else:
+            effective_values[name] = target
     bindings, global_names, nonlocal_names = _function_lexical_binding_kinds(
         fd,
         scope_nodes,
@@ -477,11 +505,15 @@ def _function_vthread_bindings(
         effective_modules.pop(name, None)
         effective_values.pop(name, None)
         if len(kinds) == 1 and _BINDING_VTHREAD_MODULE in kinds:
+            uncertain_modules.discard(name)
+            uncertain_values.discard(name)
             effective_modules[name] = "pcc.virtual_thread"
             continue
         if len(kinds) == 1:
             only_kind = next(iter(kinds))
             if only_kind.startswith(_BINDING_VTHREAD_VALUE_PREFIX):
+                uncertain_modules.discard(name)
+                uncertain_values.discard(name)
                 effective_values[name] = only_kind[
                     len(_BINDING_VTHREAD_VALUE_PREFIX) :
                 ]
@@ -518,47 +550,55 @@ def _function_vthread_bindings(
 def _vthread_import_aliases(
     module: Module,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Collect proven module-scope virtual-thread import bindings."""
+    """Collect module bindings, retaining ambiguous aliases for diagnostics.
+
+    A binding with another possible source is not a native-call proof. Keep a
+    dynamic marker for an imported virtual-thread spelling so callers still
+    fail closed at a possible suspension boundary. Function/class bodies are
+    separate scopes and cannot introduce module import aliases.
+    """
+    nodes = _lexical_scope_nodes(module.body)
+    bindings, _globals, _nonlocals = _lexical_binding_kinds(nodes, ())
     module_aliases: dict[str, str] = {}
     value_aliases: dict[str, str] = {}
-    work = []
-    for stmt in module.body:
-        work.append(stmt)
-    index = 0
-    while index < len(work):
-        node = work[index]
-        index += 1
-        if isinstance(node, tuple):
-            for item in node:
-                work.append(item)
-            continue
-        if isinstance(node, (FuncDef, ClassDef)):
-            continue
-        if isinstance(node, Import):
-            for module_name, as_name in node.names:
-                if module_name == "pcc.virtual_thread":
-                    # ``import pcc.virtual_thread`` binds ``pcc`` and needs
-                    # nested attribute resolution, which the current native
-                    # virtual-thread lowering does not claim.  The explicit
-                    # alias form is closed and supported.
-                    if as_name is not None:
-                        module_aliases[as_name] = module_name
-            continue
-        if isinstance(node, ImportFrom):
-            if node.level == 0 and node.module == "pcc.virtual_thread":
-                for imported_name, as_name in node.names:
-                    if imported_name in _VTHREAD_VALUE_EXPORTS:
-                        value_aliases[as_name or imported_name] = imported_name
-            continue
-        for field_name in _dataclass_field_names(node):
-            if field_name in _NON_SYNTAX_FIELDS:
+    for name, kinds in bindings.items():
+        if _BINDING_VTHREAD_MODULE in kinds:
+            module_aliases[name] = (
+                "pcc.virtual_thread" if len(kinds) == 1 else _BINDING_DYNAMIC
+            )
+        for kind in kinds:
+            if not kind.startswith(_BINDING_VTHREAD_VALUE_PREFIX):
                 continue
-            value = _dataclass_field_value(node, field_name, None)
-            if isinstance(value, tuple):
-                for item in value:
-                    work.append(item)
-            else:
-                work.append(value)
+            export = kind[len(_BINDING_VTHREAD_VALUE_PREFIX) :]
+            if len(kinds) == 1:
+                value_aliases[name] = export
+            elif export in _SUSPENSION_EXPORTS:
+                value_aliases[name] = _BINDING_DYNAMIC
+    if not module_aliases and not value_aliases:
+        return module_aliases, value_aliases
+
+    # A global write in another callable can replace the module binding before
+    # this function runs. Inspect those writes without treating local imports
+    # or class attributes as module bindings.
+    scopes = [node for node in nodes if isinstance(node, (FuncDef, ClassDef))]
+    index = 0
+    while index < len(scopes):
+        scope = scopes[index]
+        index += 1
+        scope_nodes = _lexical_scope_nodes(scope.body)
+        nested_bindings, global_names, _nonlocals = _lexical_binding_kinds(
+            scope_nodes, ()
+        )
+        for name in global_names:
+            if name not in nested_bindings:
+                continue
+            if name in module_aliases:
+                module_aliases[name] = _BINDING_DYNAMIC
+            if value_aliases.get(name) in _SUSPENSION_EXPORTS:
+                value_aliases[name] = _BINDING_DYNAMIC
+        scopes.extend(
+            node for node in scope_nodes if isinstance(node, (FuncDef, ClassDef))
+        )
     return module_aliases, value_aliases
 
 

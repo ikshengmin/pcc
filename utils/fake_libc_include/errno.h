@@ -106,3 +106,15 @@
 #define ECONNREFUSED 61
 #endif
 #endif
+
+/* The owned Linux errno cell is native TLS, shared with the runtime wrappers.
+ * Darwin keeps the system accessor. This does not define a Windows CRT ABI. */
+#ifndef errno
+#if defined(__linux__)
+int *pcc_errno_location(void);
+#define errno (*pcc_errno_location())
+#elif defined(__APPLE__) || defined(__PCC_HOST_DARWIN__)
+int *__error(void);
+#define errno (*__error())
+#endif
+#endif
