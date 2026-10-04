@@ -73,7 +73,8 @@ def _body(text, name='probe'):
     'provider.Required(1, 2, c=3, **{"c": 4})',
 ])
 def test_imported_constructor_uses_one_published_binder(tmp_path, monkeypatch, expression):
-    body = _body(_compile(tmp_path, monkeypatch, 'def probe():\n    return ' + expression + '\n'))
+    text = _compile(tmp_path, monkeypatch, 'def probe():\n    return ' + expression + '\n')
+    body = _body(text)
     calls = list(re.finditer(r'\bcall [^\n]*@py_obj_call_slots\(([^\n)]*)\)', body))
     assert len(calls) == 1
     assert not re.search(r'\bcall [^\n]*@py_obj_call\(', body)
@@ -92,7 +93,9 @@ def test_imported_constructor_uses_one_published_binder(tmp_path, monkeypatch, e
     assert len(slots) == len(set(slots)) == 4
     class_name = expression.split('provider.', 1)[1].split('(', 1)[0]
     registrations = list(re.finditer(
-        r'\bcall [^\n]*@pcc_gc_frame_enter\(ptr [^,\n]+, ptr ([^\n)]+)\)', body))
+        r'\bcall [^\n]*@pcc_gc_frame_enter_lifo\(ptr [^,\n]+, ptr ([^\n)]+)\)', body))
+    # Each distinct owning cell uses the lexical LIFO protocol, including
+    # the result cell that survives operand cleanup until the final take.
     for role, slot in zip(('callable', 'args', 'kwargs', 'result'), slots):
         assert slot.startswith('%compiled.module.call.' + class_name + '.' + role + '.operand.')
         allocation = re.search(re.escape(slot) + r' = alloca ptr\b', body)
@@ -107,6 +110,39 @@ def test_imported_constructor_uses_one_published_binder(tmp_path, monkeypatch, e
     assert len(takes) == 1
     assert root_slot(takes[0].group(1)) == slots[3]
     assert calls[0].start() < takes[0].start()
+    # Follow successful CFG edges, since error cleanup blocks can appear
+    # between the invocation and take in textual order.
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    function = next(fn for fn in parse_self_backend_module(text).functions
+                    if fn.name == 'user_entry_probe')
+    blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
+    by_name = {block.name: block for block in blocks}
+    block = next(block for block in blocks if any(
+        ins.kind == 'call' and ins.data[2] == 'py_obj_call_slots' for ins in block.instructions))
+    left, cleared, seen = [], [], set()
+    finished = False
+    while not finished:
+        assert block.name not in seen
+        seen.add(block.name)
+        for ins in block.instructions:
+            if ins.kind != 'call':
+                continue
+            runtime = ins.data[2]
+            if runtime == 'pcc_gc_take_pinned_slot':
+                finished = True
+                break
+            if runtime in ('pcc_gc_frame_leave_lifo', 'pcc_gc_store_root'):
+                owner = root_slot('%' + ins.data[4][0][1])
+                if owner in slots:
+                    (left if runtime == 'pcc_gc_frame_leave_lifo' else cleared).append(owner)
+        if not finished:
+            term = block.terminator
+            assert term.kind in ('br', 'br_cond')
+            block = by_name[term.data[0] if term.kind == 'br' else term.data[2]]
+    assert left == [slots[2], slots[1], slots[0], slots[3]]
+    assert slots[3] not in cleared, 'result owner must survive operand cleanup until take'
+
 
 
 @pytest.mark.parametrize('expression,order', [

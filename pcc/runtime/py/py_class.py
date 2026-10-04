@@ -2421,6 +2421,16 @@ def _instance_missing_field_lookup(inst, idx: int, default_only: int = 0):
     semantic lookup handle class defaults, descriptors, __getattr__, and the
     missing-attribute exception. Invalid indices never enter this helper.
     """
+    return _instance_lookup_rooted(inst, idx, null(), default_only)
+
+
+def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
+    """Keep lookup inputs current while the rooted callback path runs.
+
+    A nonnegative index resolves an unbound physical field's stable name;
+    otherwise the caller supplies the attribute name. Lookup kinds are normal
+    (0), default (1), and custom __getattribute__ (2).
+    """
     roots = stack_alloc(3 * C_POINTER_SIZE)
     handles = stack_alloc(3 * C_POINTER_SIZE)
     pins = stack_alloc(2 * C_POINTER_SIZE)
@@ -2448,11 +2458,12 @@ def _instance_missing_field_lookup(inst, idx: int, default_only: int = 0):
     pcc_py_gc_minor_graph_unlock()
     if index == 3:
         cls = pcc_gc_load_ptr(null(), ptr_add(roots, C_POINTER_SIZE))
-        names = load_ptr(cls, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
-        name = load_ptr(names, idx * C_POINTER_SIZE)
-        if default_only != 0:
+        if idx >= 0:
+            names = load_ptr(cls, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
+            name = load_ptr(names, idx * C_POINTER_SIZE)
+        if lookup_kind != 0:
             result = _instance_getattr_default_rooted(
-                pcc_gc_load_ptr(null(), roots), cls, name, default_only - 1,
+                pcc_gc_load_ptr(null(), roots), cls, name, lookup_kind - 1,
             )
         else:
             result = py_obj_getattr(pcc_gc_load_ptr(null(), roots), name)
@@ -3006,42 +3017,10 @@ def py_instance_getattr(inst, name):
     if ptr_is_null(getattribute_method) != 0:
         _no_getattribute_store(cls, probe_epoch)
     if ptr_is_null(getattribute_method) == 0:
-        index: int = _lookup_field_index(cls, name)
-        if index >= 0:
-            inst = pcc_gc_note_relocation_read(inst)
-            value = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + index * C_POINTER_SIZE))
-            if ptr_is_null(value) != 0:
-                return _instance_missing_field_lookup(inst, index, 2)
-        key = py_str_new(name, strlen(name))
-        if ptr_is_null(key) != 0:
-            return null()
-        got = call_ptr2(getattribute_method, inst, key)
-        _class_require_result(
-            got,
-            cstr("__getattribute__"),
-            cstr("class callback returned NULL without setting an exception"),
-        )
-        if ptr_is_null(got) == 0:
-            py_decref(key)
-            return got
-        if py_err_occurred() != 0:
-            cur = py_current_exception()
-            attr_cls = py_exc_builtin_class(6)  # PY_EXC_ATTRIBUTEERROR
-            if ptr_is_null(attr_cls) == 0:
-                if py_exc_matches(cur, attr_cls) != 0:
-                    getattr_method = _class_lookup_in_mro(cls, cstr("__getattr__"))
-                    if ptr_is_null(getattr_method) == 0:
-                        py_clear_exception()
-                        fallback = call_ptr2(getattr_method, inst, key)
-                        _class_require_result(
-                            fallback,
-                            cstr("__getattr__"),
-                            cstr("class callback returned NULL without setting an exception"),
-                        )
-                        py_decref(key)
-                        return fallback
-        py_decref(key)
-        return null()
+        # Method-table entries can be native code pointers or PY_TYPE_FUNC
+        # objects. The shared callback path distinguishes their ABIs and
+        # protects the receiver, callback, key, result and exception owners.
+        return _instance_lookup_rooted(inst, -1, name, 2)
     return _instance_getattr_default(inst, cls, name)
 
 

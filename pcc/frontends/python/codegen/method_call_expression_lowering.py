@@ -652,11 +652,9 @@ class MethodCallExpressionLoweringMixin:
             and not expr.args
             and not expr.kwargs
         ):
-            return self.builder.call(
-                self.runtime["py_coroutine_close"],
-                [self._emit_as_object(attr.obj)],
-                name=self._fresh("coroutine.close"),
-            )
+            # Keep the receiver owned through close and publish its actual
+            # return value before checking errors or retiring that owner.
+            return self._emit_owned_unary_runtime_call(expr, "py_coroutine_close")
         native_threading_method = self._maybe_emit_threading_instance_method(expr)
         if native_threading_method is not None:
             return native_threading_method

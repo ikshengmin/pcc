@@ -631,7 +631,14 @@ class CallObjectLoweringMixin:
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            argument = self._emit_slot_call_operand(expr.args[0], runtime_name + ".argument")
+            # A zero-argument method supplies its receiver as the unary ABI
+            # operand. Keep the original Call for its output-slot sink.
+            argument_expr = (
+                expr.func.obj
+                if isinstance(expr.func, Attr) and not expr.args
+                else expr.args[0]
+            )
+            argument = self._emit_slot_call_operand(argument_expr, runtime_name + ".argument")
             roots.append(argument)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block

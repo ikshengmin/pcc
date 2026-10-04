@@ -175,6 +175,49 @@ def test_manifest_refresh_keeps_executed_nonzero_exact_match(monkeypatch):
     assert refresh._classify_runtime(Path("case.c")) == "runtime_exact_match"
 
 
+@pytest.mark.parametrize("native,pcc,expected", [
+    pytest.param(outcome("compile", completed=False), outcome("run", 124),
+                 "runtime_build_or_execution_failure", id="native-compile-failure"),
+    pytest.param(outcome("run", 124), outcome("link", completed=False),
+                 "runtime_build_or_execution_failure", id="pcc-link-failure"),
+    pytest.param(outcome("run", 124), outcome("worker", completed=False),
+                 "runtime_build_or_execution_failure", id="pcc-worker-failure"),
+    pytest.param(outcome("compile", 124), outcome("run", 124),
+                 "runtime_build_or_execution_failure", id="completed-compiler-exit-124"),
+    pytest.param(outcome("run", 124), outcome("worker", 124, completed=False),
+                 "runtime_timeout", id="incomplete-worker-timeout"),
+    pytest.param(outcome("run", 124), outcome("run", 124),
+                 "runtime_exact_match", id="completed-program-exit-124"),
+])
+def test_manifest_refresh_distinguishes_exit_124_from_timeout(
+    monkeypatch, native, pcc, expected,
+):
+    monkeypatch.setattr(refresh, "run_native", lambda *args: native)
+    monkeypatch.setattr(refresh, "run_pcc", lambda *args: pcc)
+    assert refresh._classify_runtime(Path("case.c")) == expected
+
+
+@pytest.mark.parametrize("runner,error,expected", [
+    pytest.param("run_native", OSError("cannot launch reference"),
+                 "runtime_build_or_execution_failure", id="native-launch-error"),
+    pytest.param("run_pcc", RuntimeError("worker failed"),
+                 "runtime_build_or_execution_failure", id="pcc-runner-error"),
+    pytest.param("run_native", subprocess.TimeoutExpired("reference", 20),
+                 "runtime_timeout", id="native-timeout"),
+    pytest.param("run_pcc", subprocess.TimeoutExpired("worker", 20),
+                 "runtime_timeout", id="pcc-timeout"),
+])
+def test_manifest_refresh_classifies_runner_exceptions(monkeypatch, runner, error, expected):
+    monkeypatch.setattr(refresh, "run_native", lambda *args: outcome("run", 124))
+    monkeypatch.setattr(refresh, "run_pcc", lambda *args: outcome("run", 124))
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr(refresh, runner, fail)
+    assert refresh._classify_runtime(Path("case.c")) == expected
+
+
 def test_compile_rejection_category_keeps_original_intent(tmp_path, monkeypatch):
     (tmp_path / "case.c").write_text("invalid fixture\n")
     monkeypatch.setattr(corpus, "CLANG_C_TESTS_DIR", tmp_path)
