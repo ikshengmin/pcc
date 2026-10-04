@@ -206,6 +206,13 @@ class NativeOsLoweringMixin:
         assert isinstance(attr, Attr)
         if expr.kwargs or not self._is_os_environ_attr(attr.obj):
             return None
+        if attr.name == "copy" and not expr.args:
+            # The mapping snapshot is a PCC-owned NEW dict. Publish it before
+            # any error check or cleanup so assignment records a native owner
+            # and later keyword binding can copy its authoritative root.
+            return self._emit_owned_os_runtime_call(
+                expr, "py_os_environ_snapshot", arguments=(),
+            )
         if attr.name in ("keys", "values", "items") and not expr.args:
             # The snapshot is a real dict, so its own method lowering takes
             # it from here; every caller of these wants a materialised view.
@@ -283,7 +290,9 @@ class NativeOsLoweringMixin:
             return None
         if not self._is_os_environ_attr(expr.args[0]):
             return None
-        return self._emit_native_os_environ_snapshot()
+        return self._emit_owned_os_runtime_call(
+            expr, "py_os_environ_snapshot", arguments=(),
+        )
 
     def _emit_native_os_environ_subscript(self,
         expr: Subscript,

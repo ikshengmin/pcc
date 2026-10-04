@@ -612,7 +612,7 @@ def _host_find_spec_origin(mod_name: str) -> str:
         # Native discovery uses owned providers and configured source roots.
         # An unavailable provider must not be discovered by another Python.
         return ""
-    py_cmd = str(os.environ.get("PCC_HOST_PYTHON", "") or "python3").strip()
+    py_cmd = str(os.environ.get("PCC_HOST_PYTHON", "") or sys.executable).strip()
     # A Stage1 closure walk asked the same 32 names 2,125 times (`pcc` alone
     # 1,366 times), each a new interpreter: 49 s of serial coordinator time.
     key_parts = [py_cmd, os.getcwd()]
@@ -649,7 +649,7 @@ _HOST_SITE_ROOTS_CACHE: Optional[list[str]] = None
 def _host_sysconfig_roots(keys: list[str]) -> list[str]:
     if sys.implementation.name == "pcc":
         return []
-    py_cmd = str(os.environ.get("PCC_HOST_PYTHON", "") or "python3").strip()
+    py_cmd = str(os.environ.get("PCC_HOST_PYTHON", "") or sys.executable).strip()
     probe = (
         "import os,sys,sysconfig\n"
         "paths=sysconfig.get_paths()\n"

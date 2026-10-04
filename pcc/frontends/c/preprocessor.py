@@ -202,7 +202,8 @@ def _eval_cpp_expr(src: str) -> int:
 
     Accepts the subset the preprocessor produces after macro expansion
     and unknown-identifier→0 replacement: integer literals (decimal,
-    hex, octal, binary, with optional L/U/LL suffix), parens, unary
+    hex, octal, binary, with optional L/U/LL suffix), character constants,
+    parens, unary
     ``+ - ~ !``, binary ``* / %``, ``+ -``, shifts ``<< >>``, compare
     ``< <= > >= == !=``, bitwise ``& ^ |``, logical ``&& ||``, ternary
     ``a ? b : c``. No function calls, no names. C semantics for
@@ -416,7 +417,68 @@ class _CppExprParser:
             v = self.parse_ternary()
             self._expect(")")
             return v
+        if (self.src[self.pos:self.pos + 1] == "'"
+                or self.src[self.pos:self.pos + 2] in ("L'", "u'", "U'")):
+            return ("lit", self.parse_character())
         return ("lit", self.parse_number())
+
+    def parse_character(self) -> int:
+        """Decode C character constants without Python literal/eval semantics."""
+        start = self.pos
+        if self.src[self.pos] != "'":
+            self.pos += 1
+        self.pos += 1
+        values = []
+        escapes = {
+            "a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12,
+            "r": 13, "'": 39, '"': 34, "?": 63, "\\": 92,
+        }
+        while self.pos < len(self.src) and self.src[self.pos] != "'":
+            char = self.src[self.pos]
+            self.pos += 1
+            if char == "\\":
+                if self.pos >= len(self.src):
+                    raise _CppExprError(f"unterminated character constant at pos {start}")
+                char = self.src[self.pos]
+                self.pos += 1
+                if char in escapes:
+                    value = escapes[char]
+                elif char in "01234567":
+                    digits = char
+                    while (len(digits) < 3 and self.pos < len(self.src)
+                           and self.src[self.pos] in "01234567"):
+                        digits += self.src[self.pos]
+                        self.pos += 1
+                    value = int(digits, 8)
+                elif char in "xuU":
+                    digits_start = self.pos
+                    count = 4 if char == "u" else 8 if char == "U" else len(self.src)
+                    while (self.pos < len(self.src) and self.pos - digits_start < count
+                           and self.src[self.pos] in "0123456789abcdefABCDEF"):
+                        self.pos += 1
+                    digits = self.src[digits_start:self.pos]
+                    if not digits or (char != "x" and len(digits) != count):
+                        raise _CppExprError(f"invalid character escape at pos {digits_start}")
+                    value = int(digits, 16)
+                    if char != "x" and (
+                        value > 0x10ffff or 0xd800 <= value <= 0xdfff
+                        or (value < 0xa0 and value not in (0x24, 0x40, 0x60))
+                    ):
+                        raise _CppExprError(f"invalid universal character at pos {digits_start}")
+                else:
+                    raise _CppExprError(f"invalid character escape at pos {self.pos - 1}")
+            else:
+                if char in "\r\n":
+                    raise _CppExprError(f"unterminated character constant at pos {start}")
+                value = ord(char)
+            values.append(value)
+        if not values or self.pos >= len(self.src):
+            raise _CppExprError(f"invalid character constant at pos {start}")
+        self.pos += 1
+        value = values[0]
+        for char in values[1:]:
+            value = (value << 8) | (char & 0xff)
+        return value
 
     def parse_number(self) -> int:
         self.skip_ws()
@@ -1010,25 +1072,39 @@ class Preprocessor:
 
     def _eval_condition(self, expr):
         """Evaluate a #if / #elif expression. Returns True/False."""
-        # Strip C comments from expression
-        expr = re.sub(r"/\*.*?\*/", "", expr).strip()
-        expr = re.sub(r"//.*$", "", expr).strip()
-        # Handle defined(NAME) and defined NAME BEFORE macro expansion
-        # to avoid expanding the name away
-        expanded = re.sub(
-            r"\bdefined\s*\(\s*(\w+)\s*\)",
-            lambda m: "1" if m.group(1) in self.macros else "0",
-            expr,
-        )
-        expanded = re.sub(
-            r"\bdefined\s+(\w+)",
-            lambda m: "1" if m.group(1) in self.macros else "0",
-            expanded,
+        # Comments were removed by translation-phase processing. Handle
+        # defined before expanding its operand, without editing literal text.
+        tokens = self._macro_tokens(expr)
+        index = 0
+        while index < len(tokens):
+            if tokens[index].text != "defined":
+                index += 1
+                continue
+            end = index + 1
+            parenthesized = end < len(tokens) and tokens[end].text == "("
+            if parenthesized:
+                end += 1
+            if end >= len(tokens) or not IDENTIFIER_RE.fullmatch(tokens[end].text):
+                raise RuntimeError("owned preprocessor: invalid defined operand")
+            value = "1" if tokens[end].text in self.macros else "0"
+            end += 1
+            if parenthesized:
+                if end >= len(tokens) or tokens[end].text != ")":
+                    raise RuntimeError("owned preprocessor: invalid defined operand")
+                end += 1
+            tokens[index:end] = [_MacroToken(tokens[index].leading, value)]
+            index += 1
+        expanded = self._serialize_macro_fragments(
+            [token.leading + token.text for token in tokens]
         )
         # Now expand macros
         expanded = self._expand_line(expanded)
-        # Replace any remaining identifiers with 0 (C standard behavior)
-        expanded = re.sub(r"\b[a-zA-Z_]\w*\b", "0", expanded)
+        # Replace identifier tokens only: letters and escapes inside character
+        # constants have already survived macro expansion and must stay intact.
+        expanded = "".join(
+            token.leading + ("0" if IDENTIFIER_RE.fullmatch(token.text) else token.text)
+            for token in self._macro_tokens(expanded)
+        )
         # Evaluate using a narrow integer-only expression evaluator.
         # eval() is out of scope for the self-host target (see
         # scripts/audit_selfhost.py banned-builtin list).
@@ -1186,12 +1262,10 @@ class Preprocessor:
     @staticmethod
     def _stringify_argument(argument):
         pieces = []
-        end = 0
-        for token in _CPP_TOKEN_RE.finditer(argument):
-            if pieces and argument[end:token.start()]:
+        for token in argument:
+            if pieces and token.leading:
                 pieces.append(" ")
-            pieces.append(token.group())
-            end = token.end()
+            pieces.append(token.text)
         spelling = "".join(pieces).replace("\\", "\\\\").replace('"', '\\"')
         return '"' + spelling + '"'
 
@@ -1225,9 +1299,10 @@ class Preprocessor:
             paste = spelling == "##"
             if spelling == "#" and index + 1 < len(body) and body[index + 1].text in raw:
                 index += 1
-                argument = self._serialize_macro_fragments(
-                    [part.leading + part.text for part in raw[body[index].text]]
-                )
+                # Stringification preserves source whitespace. Serialization
+                # adds protective token separators for reparsing, which would
+                # incorrectly turn expanded version tokens into "1 . 10 . 0".
+                argument = raw[body[index].text]
                 replacement = [_MacroToken(token.leading, self._stringify_argument(argument))]
             elif parameter is not None:
                 pasted = ((index > 0 and body[index - 1].text == "##")

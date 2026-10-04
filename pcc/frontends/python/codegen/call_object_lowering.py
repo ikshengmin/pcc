@@ -4,7 +4,14 @@ from __future__ import annotations
 from typing import Optional
 
 from pcc.ir.compat import ir
-from pcc.runtime.py.py_abi_constants import PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_LIST,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+)
 
 from pcc.frontends.python.py_ast import (
     Attr,
@@ -1316,9 +1323,43 @@ class CallObjectLoweringMixin:
                     "py_os_environ_getitem", (key,), result_slot=output, span=expr.span,
                 )
             else:
-                self._slot_call_runtime_call(
-                    "py_obj_subscript", (receiver, key), result_slot=output, span=expr.span,
-                )
+                if isinstance(expr.idx, Slice):
+                    # Built-in sequence getitem helpers expect integer keys.
+                    # Select their existing slice ABI by the actual receiver
+                    # tag; mappings and user instances keep the slice key and
+                    # ordinary __getitem__ dispatch, including custom errors.
+                    tag = self._slot_call_runtime_call(
+                        "py_obj_type_tag", (receiver,), span=expr.span,
+                    )
+                    sequence = ir.Constant(_I1, 0)
+                    for sequence_tag in (
+                        PY_TYPE_LIST, PY_TYPE_TUPLE, PY_TYPE_STR,
+                        PY_TYPE_BYTES, PY_TYPE_BYTEARRAY, PY_TYPE_MEMORYVIEW,
+                    ):
+                        sequence = self.builder.or_(sequence, self.builder.icmp_signed(
+                            "==", tag, ir.Constant(_I64, sequence_tag),
+                        ))
+                    sliced = self.current_function.append_basic_block(self._fresh("call.slice.sequence"))
+                    indexed = self.current_function.append_basic_block(self._fresh("call.slice.mapping"))
+                    ready = self.current_function.append_basic_block(self._fresh("call.slice.ready"))
+                    self.builder.cbranch(sequence, sliced, indexed)
+                    self.builder.position_at_end(sliced)
+                    self._slot_call_runtime_call(
+                        "py_obj_slice", (receiver,) + tuple(bounds),
+                        result_slot=output, span=expr.span,
+                    )
+                    self.builder.branch(ready)
+                    self.builder.position_at_end(indexed)
+                    self._slot_call_runtime_call(
+                        "py_obj_subscript", (receiver, key),
+                        result_slot=output, span=expr.span,
+                    )
+                    self.builder.branch(ready)
+                    self.builder.position_at_end(ready)
+                else:
+                    self._slot_call_runtime_call(
+                        "py_obj_subscript", (receiver, key), result_slot=output, span=expr.span,
+                    )
             self._release_slot_call_roots(tuple(roots[1:]))
         finally:
             self._try_err_block = previous

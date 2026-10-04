@@ -69,3 +69,43 @@ def test_explicit_native_compiler_reaches_both_existing_selector_contracts(tmp_p
     environment = _execution_environment(args)
     assert environment["PCC_TEST_PCC1"] == str(compiler)
     assert environment["PCC_CURRENT_PCC1"] == str(compiler)
+
+
+def test_gateway_file_continues_untouched_nodes_without_retrying_failure(monkeypatch):
+    from scripts.qualification import async_gateway
+
+    calls = []
+
+    def run(args, name, repo, nodes, environment):
+        calls.append(list(nodes))
+        cases = {node: {"state": "UNRUN"} for node in nodes}
+        if "failed" in nodes:
+            cases["failed"] = {"state": "FAIL"}
+        else:
+            cases.update({node: {"state": "PASS"} for node in nodes})
+        return {"cases": cases, "watchdog": {"status": "COMPLETE"}}
+
+    monkeypatch.setattr(async_gateway, "_run", run)
+    rows = list(async_gateway._execute_file_nodes(None, "file", None,
+                                                  ["failed", "later_a", "later_b"], {}))
+    assert calls == [["failed", "later_a", "later_b"], ["later_a", "later_b"]]
+    assert rows[0]["cases"]["failed"]["state"] == "FAIL"
+    assert rows[1]["cases"]["later_b"]["state"] == "PASS"
+
+
+def test_gateway_resource_stop_does_not_retry_unreported_nodes(monkeypatch):
+    from scripts.qualification import async_gateway
+
+    calls = []
+
+    def run(args, name, repo, nodes, environment):
+        calls.append(list(nodes))
+        return {"cases": {"first": {"state": "PASS"}, "later": {"state": "UNRUN"}},
+                "watchdog": {"status": "MEMORY_LIMIT"}}
+
+    monkeypatch.setattr(async_gateway, "_run", run)
+    rows = list(async_gateway._execute_file_nodes(None, "file", None,
+                                                  ["first", "later"], {}))
+    assert len(rows) == 1
+    assert calls == [["first", "later"]]
+    assert rows[0]["cases"]["later"]["state"] == "UNRUN"

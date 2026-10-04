@@ -26,7 +26,10 @@ from pcc.frontends.python.py_ast import (
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_LIST
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_LIST,
+    PY_TYPE_TUPLE,
+)
 
 _I1 = ir.IntType(1)
 _I32 = ir.IntType(32)
@@ -472,6 +475,132 @@ class ListMethodLoweringMixin:
             return None
         if attr.name == "count" and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_dyn_list_count(expr)
+
+        if (attr.name == "index" and len(expr.args) == 1
+                and not self._expr_looks_cpython(attr.obj)):
+            # The native index(x) producer publishes both built-in sequence
+            # results and arbitrary user-method results into the same owner.
+            attr = expr.func
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("dyn.index.result")
+                roots.append(output)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                receiver = self._emit_slot_call_operand(attr.obj, "dyn.index.receiver")
+                roots.append(receiver)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                tag = self._slot_call_runtime_call(
+                    "py_obj_type_tag", (receiver,), span=expr.span,
+                )
+                is_list = self.builder.icmp_signed(
+                    "==", tag, ir.Constant(_I64, PY_TYPE_LIST),
+                    name=self._fresh("dyn.index.is_list"),
+                )
+                is_tuple = self.builder.icmp_signed(
+                    "==", tag, ir.Constant(_I64, PY_TYPE_TUPLE),
+                    name=self._fresh("dyn.index.is_tuple"),
+                )
+                is_sequence = self.builder.or_(is_list, is_tuple)
+                function = self.current_function
+                list_block = function.append_basic_block(self._fresh("dyn.index.list"))
+                generic_block = function.append_basic_block(self._fresh("dyn.index.generic"))
+                done_block = function.append_basic_block(self._fresh("dyn.index.done"))
+                self.builder.cbranch(is_sequence, list_block, generic_block)
+
+                self.builder.position_at_end(list_block)
+                item = self._emit_slot_call_operand(expr.args[0], "dyn.index.item")
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                list_search = function.append_basic_block(self._fresh("dyn.index.list.search"))
+                tuple_search = function.append_basic_block(self._fresh("dyn.index.tuple.search"))
+                found_block = function.append_basic_block(self._fresh("dyn.index.found"))
+                self.builder.cbranch(is_list, list_search, tuple_search)
+                self.builder.position_at_end(list_search)
+                # The range helper raises ValueError when absent. The old scalar
+                # py_list_index helper instead returns -1 for that ordinary miss.
+                list_index = self._slot_call_runtime_call(
+                    "py_list_index_range", (receiver, item), span=expr.span,
+                    suffix_args=(
+                        ir.Constant(_I64, 0),
+                        ir.Constant(_I64, _LIST_INDEX_END_SENTINEL),
+                    ),
+                )
+                list_exit = self.builder.block
+                self.builder.branch(found_block)
+                self.builder.position_at_end(tuple_search)
+                tuple_index = self._slot_call_runtime_call(
+                    "py_tuple_index", (receiver, item), span=expr.span,
+                )
+                tuple_exit = self.builder.block
+                self.builder.branch(found_block)
+                self.builder.position_at_end(found_block)
+                index = self.builder.phi(_I64, name=self._fresh("dyn.index.scalar"))
+                index.add_incoming(list_index, list_exit)
+                index.add_incoming(tuple_index, tuple_exit)
+                boxed = self.builder.call(
+                    self.runtime["py_int_from_i64"], [index],
+                    name=self._fresh("dyn.index.boxed"),
+                )
+                self._publish_slot_call_owned(output, boxed, label="sequence index")
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots((item,))
+                self.builder.branch(done_block)
+
+                self.builder.position_at_end(generic_block)
+                # Attribute resolution precedes argument evaluation. In particular,
+                # user descriptors retain their existing binding and validation
+                # behavior through the ordinary callable protocol.
+                method = self._new_slot_call_root("dyn.index.method")
+                branch_roots = list(roots) + [method]
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_getattr", (receiver,), result_slot=method,
+                    suffix_args=(self._attr_name_ptr(attr.name),), span=expr.span,
+                )
+                current = self.builder.load(method, name=self._fresh("dyn.index.callable"))
+                self._emit_attribute_error_if_null(current, attr.name, attr.span)
+                args = self._emit_slot_call_args_tuple(expr.args, "dyn.index.args")
+                branch_roots.append(args)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                kwargs = self._emit_slot_call_kwargs_object(
+                    (), None, expr.span, "dyn.index.kwargs", method,
+                )
+                branch_roots.append(kwargs)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                status = self.builder.call(
+                    self.runtime["py_obj_call_slots"],
+                    [self._as_gc_ptr(method), self._as_gc_ptr(args),
+                     self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                    name=self._fresh("dyn.index.invoke"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "index method call", expr.span)
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots(tuple(branch_roots[len(roots):]))
+                self.builder.branch(done_block)
+
+                self.builder.position_at_end(done_block)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_note_published(output)
+                self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("dyn.index.output"))
+            return self._take_slot_call_root(output)
 
         recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):

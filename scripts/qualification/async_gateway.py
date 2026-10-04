@@ -1,8 +1,8 @@
 """Execute the mandatory async and gateway regressions with durable accounting.
 
 Every async node runs separately so one compiler failure cannot hide the other
-original cases. Gateway files run independently with first-failure stopping;
-their remaining nodes are explicitly UNRUN. Collection never counts as execution.
+original cases. Gateway files resume untouched nodes after first-failure stopping. Resource
+stops preserve remaining nodes as UNRUN and never count as successful execution. Collection never counts as execution.
 """
 from __future__ import annotations
 
@@ -100,6 +100,22 @@ def _run(args, name, repo, nodes, environment, *, collect=False):
             "live_report": str(live)}
 
 
+def _execute_file_nodes(args, name, repo, nodes, environment):
+    """Continue after a terminal test failure without retrying any reported node."""
+    pending = list(nodes)
+    attempt = 0
+    while pending:
+        suffix = "" if attempt == 0 else "-continue-" + str(attempt).zfill(3)
+        row = _run(args, name + suffix, repo, pending, environment)
+        yield row
+        completed = {node for node, case in row["cases"].items()
+                     if case["state"] != "UNRUN"}
+        if not completed or row["watchdog"].get("status") != "COMPLETE":
+            break
+        pending = [node for node in pending if node not in completed]
+        attempt += 1
+
+
 def _execution_environment(args):
     environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTEST_ADDOPTS="",
                        PCC_NO_AUTO_PCC1="1", PCC_TEST_NO_NATIVE_PROVISIONING="1",
@@ -170,18 +186,27 @@ def main(argv=None):
             [node for node in nodes if node.split("::", 1)[0] == file]
             for file in sorted({node.split("::", 1)[0] for node in nodes})]
         for index, group in enumerate(groups):
-            row = _run(args, area + "-" + str(index).zfill(3), repo, group, environment)
-            report["groups"].append(row)
-            _write(args.output / "summary.json", report)
+            name = area + "-" + str(index).zfill(3)
+            for row in _execute_file_nodes(args, name, repo, group, environment):
+                report["groups"].append(row)
+                _write(args.output / "summary.json", report)
     _verify_source(args.core, identities["pcc"])
     _verify_source(args.gateway, identities["pcc-gateway"])
     report["source_stable"] = True
-    report["complete_execution"] = bool(report["groups"]) and all(
+    final_cases = {}
+    for row in report["groups"]:
+        for node, case in row["cases"].items():
+            if node not in final_cases or case["state"] != "UNRUN":
+                final_cases[node] = case
+    report["final_cases"] = final_cases
+    inventories_complete = all(
         report.get(area + "_inventory", {}).get("returncode") == 0
         and not report[area + "_inventory"]["deselected"]
-        for area in ("async", "gateway")) and all(
-        row["returncode"] == 0 and all(case["state"] == "PASS" for case in row["cases"].values())
-        for row in report["groups"])
+        for area in ("async", "gateway"))
+    report["all_nodes_reported"] = bool(final_cases) and inventories_complete and all(
+        case["state"] != "UNRUN" for case in final_cases.values())
+    report["complete_execution"] = report["all_nodes_reported"] and all(
+        case["state"] == "PASS" for case in final_cases.values())
     _write(args.output / "summary.json", report)
     return 0 if report["complete_execution"] else 1
 

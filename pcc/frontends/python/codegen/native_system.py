@@ -209,6 +209,48 @@ class NativeSystemLoweringMixin:
                 return None
         elif expr.kwargs:
             return None
+        if attr.name == "check_output":
+            # A bytes result and its optional decoded string are independent
+            # NEW owners. Keep argv and bytes authoritative until the next
+            # producer publishes, including its error and cleanup edges.
+            if self._expr_looks_cpython(expr.args[0]):
+                return None
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("subprocess.output.result")
+                roots.append(output)
+            temporary_start = len(roots)
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                argv_root = self._emit_slot_call_operand(expr.args[0], "subprocess.output.argv")
+                roots.append(argv_root)
+                produced = output
+                if text_mode:
+                    produced = self._new_slot_call_root("subprocess.output.bytes")
+                    roots.append(produced)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_subprocess_check_output", (argv_root,),
+                    result_slot=produced, span=expr.span,
+                )
+                if text_mode:
+                    self._slot_call_runtime_call(
+                        "py_bytes_decode", (produced,), result_slot=output, span=expr.span,
+                    )
+                self._release_slot_call_roots(tuple(roots[temporary_start:]))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("subprocess.output.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         argv = self._emit_expr(expr.args[0])
         if argv in getattr(self, "_cpy_values", ()):
             return None
@@ -219,20 +261,6 @@ class NativeSystemLoweringMixin:
             argv,
             expr.args[0].ty,
         )
-        if attr.name == "check_output":
-            res = self.builder.call(
-                self.runtime["py_subprocess_check_output"],
-                [argv_obj],
-                name=self._fresh("subprocess.check_output"),
-            )
-            self._emit_post_call_err_check(expr.span)
-            if text_mode:
-                res = self.builder.call(
-                    self.runtime["py_bytes_decode"],
-                    [res],
-                    name=self._fresh("subprocess.check_output.text"),
-                )
-            return res
         rc = self.builder.call(
             self.runtime["py_subprocess_run"],
             [argv_obj, ir.Constant(_I32, 0)],
@@ -464,11 +492,10 @@ class NativeSystemLoweringMixin:
                 return None
             if not isinstance(kw_value, BoolLit) or not kw_value.value:
                 return None
-        return self.builder.call(
-            self.runtime["py_shlex_split"],
-            [self._emit_as_object(expr.args[0])],
-            name=self._fresh("shlex.split"),
-        )
+        # The runtime returns a NEW list, including the empty case. The
+        # unary producer owns its argument and publishes that result before
+        # either the caller's next operand or operand cleanup can park.
+        return self._emit_owned_unary_runtime_call(expr, "py_shlex_split")
 
     def _emit_native_sysconfig_call(self, expr: Call) -> Optional[ir.Value]:
         attr = expr.func
