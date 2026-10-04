@@ -11,6 +11,7 @@ from pcc.frontends.python.export_meta import decode_type
 from pcc.frontends.python.py_ast import Attr, Call, ClassDef, DynType, Expr, For, FuncDef, If, Import, ImportFrom, IntType, IntLit, Lambda, Name, NoneLit, NoneType, SourceSpan, StrLit, Subscript, Try, While, With
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call
 from pcc.frontends.python.codegen.vthread_effect_analysis import vthread_proven_suspension_module_alias, vthread_proven_value_alias
 
@@ -287,6 +288,10 @@ class NativeModuleAliasMixin:
         return None
 
     def _native_builtin_value_kind_for_expr(self, expr: Expr) -> Optional[str]:
+        if (isinstance(expr, Attr) and isinstance(expr.obj, Name)
+                and self._native_builtin_module_for_name(expr.obj.ident) == "os"
+                and expr.name in ("fdopen", "open", "close")):
+            return "os." + expr.name
         if isinstance(expr, Name):
             return self._native_builtin_value_for_name(expr.ident)
         if (
@@ -346,7 +351,7 @@ class NativeModuleAliasMixin:
             isinstance(expr, Attr)
             and isinstance(expr.obj, Name)
             and self._native_builtin_module_for_name(expr.obj.ident) == "tempfile"
-            and expr.name in ("TemporaryDirectory", "mkdtemp")
+            and expr.name in ("TemporaryDirectory", "mkdtemp", "NamedTemporaryFile")
         ):
             return "tempfile." + expr.name
         if (
@@ -672,10 +677,20 @@ class NativeModuleAliasMixin:
         module_name: str,
         attr_name: str,
     ) -> Optional[ir.Value]:
+        if module_name == "os":
+            provider = {"fdopen": "py_file_fdopen_function", "open": "py_os_open_function",
+                        "close": "py_os_close_function"}.get(attr_name)
+            if provider is not None:
+                return self._emit_owned_namespace_runtime_value(provider, ())
+            flag = native_os_descriptor_constant(attr_name, self._target_sys_platform_text())
+            if flag is not None:
+                return self._emit_native_module_constant({"value_kind": "int", "value": flag})
         if module_name == "tempfile" and attr_name == "TemporaryDirectory":
             return self._emit_owned_namespace_runtime_value("py_tempdir_type", ())
         if module_name == "tempfile" and attr_name == "mkdtemp":
             return self._emit_owned_namespace_runtime_value("py_tempfile_mkdtemp_function", ())
+        if module_name == "tempfile" and attr_name == "NamedTemporaryFile":
+            return self._emit_owned_namespace_runtime_value("py_namedtempfile_function", ())
         if module_name == "math":
             constants = {
                 "pi": 3.141592653589793,
@@ -1227,7 +1242,8 @@ class NativeModuleAliasMixin:
             )
         if import_module == "os":
             return all(
-                attr_name in ("path", "name", "sep", "linesep", "altsep", "pathsep", "urandom")
+                attr_name in ("path", "name", "sep", "linesep", "altsep", "pathsep", "urandom", "fdopen", "open", "close")
+                or native_os_descriptor_constant(attr_name, self._target_sys_platform_text()) is not None
                 for attr_name, _as_name in stmt.names
             )
         if import_module == "time":
@@ -1241,7 +1257,7 @@ class NativeModuleAliasMixin:
                 for attr_name, _as_name in stmt.names
             )
         if import_module == "tempfile":
-            return all(attr_name in ("TemporaryDirectory", "mkdtemp") for attr_name, _as_name in stmt.names)
+            return all(attr_name in ("TemporaryDirectory", "mkdtemp", "NamedTemporaryFile") for attr_name, _as_name in stmt.names)
         if import_module == "dataclasses":
             return all(attr_name == "replace" for attr_name, _as_name in stmt.names)
         if import_module == "functools":
@@ -1402,11 +1418,15 @@ class NativeModuleAliasMixin:
                     "builtins." + attr_name,
                 )
                 continue
-            if import_module == "tempfile" and attr_name in ("TemporaryDirectory", "mkdtemp"):
+            if import_module == "tempfile" and attr_name in ("TemporaryDirectory", "mkdtemp", "NamedTemporaryFile"):
                 self._register_native_builtin_value_alias(local_name, "tempfile." + attr_name)
                 continue
             if attr_name == "path" and import_module == "os":
                 self._register_native_builtin_value_alias(local_name, "os.path")
+                continue
+            if import_module == "os" and (attr_name in ("fdopen", "open", "close")
+                    or native_os_descriptor_constant(attr_name, self._target_sys_platform_text()) is not None):
+                self._register_native_builtin_value_alias(local_name, "os." + attr_name)
                 continue
             if attr_name == "urandom" and import_module == "os":
                 self._register_native_builtin_value_alias(local_name, "os.urandom")

@@ -2,7 +2,19 @@
 
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
-from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
+from pcc.runtime.py.py_abi_constants import (
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_FLAG_GC_PINNED,
+    PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_COMPLEX,
+    PY_TYPE_CPY_HANDLE,
+    PY_TYPE_FLOAT,
+    PY_TYPE_INT,
+    PY_TYPE_NONE,
+    PY_TYPE_STR,
+)
 from pcc.unsafe import (
     atomic_cas_i32,
     atomic_load_i32,
@@ -196,7 +208,17 @@ def pcc_gc_foreign_lease_acquire(slot) -> i64:
             if backend >= 0 and backend <= 2:
                 status = 2
             elif (backend == 3 or backend == 4) and (flags & (4096 | 65536)) == 0:
-                if tag == 0 or tag == 1 or tag == 2 or tag == 3 or tag == 4 or tag == 16 or tag == 17 or tag == 18 or tag == 32:
+                if (
+                    tag == PY_TYPE_NONE
+                    or tag == PY_TYPE_BOOL
+                    or tag == PY_TYPE_INT
+                    or tag == PY_TYPE_FLOAT
+                    or tag == PY_TYPE_STR
+                    or tag == PY_TYPE_COMPLEX
+                    or tag == PY_TYPE_BYTES
+                    or tag == PY_TYPE_BYTEARRAY
+                    or tag == PY_TYPE_CPY_HANDLE
+                ):
                     status = 2
     if status > 0:
         active: i64 = load_i64(global_addr("pcc_gc_foreign_lease_active"), 0)

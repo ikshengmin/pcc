@@ -29,6 +29,21 @@ _PYOBJ = ir.IntType(8).as_pointer()
 
 
 
+def native_os_descriptor_constant(name: str, platform: str):
+    common = {"O_RDONLY": 0, "O_WRONLY": 1, "O_RDWR": 2, "O_ACCMODE": 3}
+    if name in common:
+        return common[name]
+    if platform == "linux":
+        return {"O_CREAT": 64, "O_EXCL": 128, "O_TRUNC": 512, "O_APPEND": 1024,
+                "O_NONBLOCK": 2048, "O_DIRECTORY": 65536, "O_NOFOLLOW": 131072,
+                "O_CLOEXEC": 524288}.get(name)
+    if platform == "darwin":
+        return {"O_CREAT": 512, "O_EXCL": 2048, "O_TRUNC": 1024, "O_APPEND": 8,
+                "O_NONBLOCK": 4, "O_DIRECTORY": 1048576, "O_NOFOLLOW": 256,
+                "O_CLOEXEC": 16777216}.get(name)
+    return None
+
+
 class NativeOsLoweringMixin:
     def _emit_owned_os_getenv_call(self, expr: Call) -> ir.Value:
         """Retain both operands and publish getenv's uniform NEW result."""

@@ -17,6 +17,7 @@ from pcc.unsafe import (
     define_global_i64,
     getcwd,
     getpid,
+    open_file_flags,
     global_addr,
     load_i8,
     logical_shift_right_i64,
@@ -213,9 +214,9 @@ def pcc_platform_realpath(path, output, size: i64):
     return null()
 
 
-@c_abi_export("pcc_platform_mkdtemp_suffix")
-def pcc_platform_mkdtemp_suffix(path_template, suffix_length: i64) -> i64:
-    """Create 0700 directory, replacing XXXXXX before suffix; return -errno."""
+@c_abi_export("pcc_platform_create_temporary_suffix")
+def _create_temporary_suffix(path_template, suffix_length: i64, regular_file: i64) -> i64:
+    """Replace the six-X stem and create one exclusive filesystem owner."""
     if ptr_is_null(path_template):
         return -22
     length = _bounded_cstr_len(path_template, 1048576)
@@ -243,15 +244,37 @@ def pcc_platform_mkdtemp_suffix(path_template, suffix_length: i64) -> i64:
             store_i8(path_template, end - 1 - digit_offset, byte)
             value = logical_shift_right_i64(value, 5)
             digit_offset = digit_offset + 1
-        status: i64 = mkdir(path_template, 448)
-        if status == 0:
-            return 0
-        if load_i8(target_sys_platform(), 0) == 100:
-            status = 0 - load_i32(darwin_errno_location(), 0)
+        status: i64 = -38
+        if regular_file != 0:
+            platform_byte = load_i8(target_sys_platform(), 0)
+            if platform_byte == 108:  # Linux openat flags and AT_FDCWD.
+                status = open_file_flags(path_template, 2 | 64 | 128 | 524288, 384, -100)
+            elif platform_byte == 100:  # Darwin O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC.
+                status = open_file_flags(path_template, 2 | 512 | 2048 | 16777216, 384, -2)
+            if status >= 0:
+                return status
+        else:
+            status = mkdir(path_template, 448)
+            if status == 0:
+                return 0
+            if load_i8(target_sys_platform(), 0) == 100:
+                status = 0 - load_i32(darwin_errno_location(), 0)
         if status != -17:
             return status
         attempt = attempt + 1
     return -17
+
+
+@c_abi_export("pcc_platform_mkdtemp_suffix")
+def pcc_platform_mkdtemp_suffix(path_template, suffix_length: i64) -> i64:
+    """Create a 0700 directory; return zero or negative errno."""
+    return _create_temporary_suffix(path_template, suffix_length, 0)
+
+
+@c_abi_export("pcc_platform_mkstemp_suffix")
+def pcc_platform_mkstemp_suffix(path_template, suffix_length: i64) -> i64:
+    """Create a 0600 exclusive, close-on-exec file; return fd or negative errno."""
+    return _create_temporary_suffix(path_template, suffix_length, 1)
 
 
 @c_abi_export("pcc_platform_mkdtemp")

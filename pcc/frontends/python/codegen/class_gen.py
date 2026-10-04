@@ -56,6 +56,7 @@ import sys
 from typing import Optional, cast
 
 from pcc.ir.compat import ir
+from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_STR
 from pcc.ir.ir import (
     IRBuilder_current_instruction_count,
     IRBuilder_emit_raw,
@@ -4887,6 +4888,13 @@ class ClassLowering:
                 base_values.append(
                     self._load_class_object(base_info, f".base.{b.ident}")
                 )
+                continue
+            if b.ident == "str":
+                base_values.append(builder.call(
+                    runtime["py_builtin_type_for_tag"],
+                    [ir.Constant(_I64, PY_TYPE_STR)],
+                    name=self._fresh(".base.str"),
+                ))
                 continue
             exc_tag = _builtin_exception_tag_for_base_name(b.ident)
             if exc_tag is not None:

@@ -1418,9 +1418,11 @@ def pcc_gc_relocate_copy_payload_prepared_locked(
         )
         if n_fields < 0:
             n_fields: i64 = 0
-        # py_instance_new (also used by py_valuebox_new) always reserves the
-        # hidden owning slot, regardless of public __slots__ visibility.
-        n_slots: i64 = n_fields + 1
+        # Match allocation and both slot enumerators: include the reserved
+        # owner and any appended immutable builtin payload owners.
+        n_slots: i64 = (load_i32(cls, abi_constant("object.class.instance_size_offset")) - abi_constant("object.instance.fields_offset")) // abi_constant("object.pointer.size")
+        if n_slots < n_fields + 1:
+            n_slots = n_fields + 1
         if n_slots < 0:
             return _relocate_copy_payload_fail(ctx)
         if size < (

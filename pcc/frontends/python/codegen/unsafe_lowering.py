@@ -98,6 +98,7 @@ UNSAFE_INTRINSICS = frozenset(
         "darwin_current_rss_bytes",
         "darwin_peak_rss_bytes",
         "open_file",
+        "open_file_flags",
         "rename_file",
         "chmod_file",
         "sync_file",
@@ -333,6 +334,7 @@ _UNSAFE_INTRINSIC_FAMILIES = (
     ),
     (
         'open_file',
+        'open_file_flags',
         'rename_file',
         'chmod_file',
         'sync_file',
@@ -2843,6 +2845,35 @@ class UnsafeIntrinsicMixin:
         intrinsic: str,
         expr: Call,
     ) -> ir.Value:
+        if intrinsic == "open_file_flags":
+            self._unsafe_expect_arity(intrinsic, expr, 4)
+            path = self._unsafe_ptr_arg(expr.args[0])
+            flags = self._unsafe_i32_arg(expr.args[1])
+            permissions = self._unsafe_i32_arg(expr.args[2])
+            directory = self._unsafe_i32_arg(expr.args[3])
+            platform_name = self._target_sys_platform_text()
+            machine = self._target_machine_text()
+            if platform_name == "darwin":
+                openat = self._declare_external_function(
+                    "openat", _I32, [_I32, _CSTR, _I32], var_arg=True,
+                )
+                result = self.builder.call(
+                    openat, [directory, path, flags, permissions],
+                    name=self._fresh("unsafe.open_file_flags.result"),
+                )
+                return self._unsafe_darwin_errno_result(result, "open_file_flags")
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
+                zero = ir.Constant(_I64, 0)
+                return self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 257),
+                    self.builder.sext(directory, _I64),
+                    self.builder.ptrtoint(path, _I64),
+                    self.builder.zext(flags, _I64),
+                    self.builder.zext(permissions, _I64), zero, zero,
+                    name=self._fresh("unsafe.open_file_flags.syscall"),
+                )
+            # No host libc or lossy access/disposition fallback is permitted.
+            return ir.Constant(_I64, -38)
         if intrinsic == "open_file":
             self._unsafe_expect_arity(intrinsic, expr, 3)
             path = self._unsafe_ptr_arg(expr.args[0])

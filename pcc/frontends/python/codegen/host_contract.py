@@ -655,12 +655,14 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_slot_call_int_constructor",
     "_emit_owned_text_conversion",
     "_emit_owned_unary_runtime_call",
+    "_emit_owned_descriptor_constructor",
     "_emit_owned_object_constructor",
     "_emit_owned_set_constructor",
     "_dict_get_uses_owned_slots",
     "_emit_rooted_dict_get",
     "_emit_owned_os_getenv_call",
     "_emit_owned_dyn_list_count",
+    "_emit_owned_list_pop",
     "_maybe_emit_owned_str_result",
     "_emit_owned_bytes_decode",
     "_emit_owned_os_runtime_call",
@@ -703,6 +705,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_next_pending_or_default",
     "_emit_next_filter_truth",
     "_emit_owned_padding_method",
+    "_emit_ellipsis_literal",
 )
 
 

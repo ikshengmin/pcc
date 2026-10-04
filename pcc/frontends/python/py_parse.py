@@ -1441,7 +1441,7 @@ class Parser:
         if t.kind == TK_OP and t.text == "...":
             # Ellipsis — ``Callable[..., T]`` / ``tuple[T, ...]``.
             self._advance()
-            node = _Name(ident="Ellipsis", line=t.line)
+            node = _Name(ident="...", line=t.line)
             return node
         if t.kind == TK_KEYWORD and t.text in ("None", "True", "False"):
             self._advance()
@@ -2406,9 +2406,9 @@ class Parser:
                 return _None(t.line)
         if t.kind == TK_OP and t.text == "...":
             self._advance()
-            # Model Ellipsis as a distinguished _Name — lowering can
-            # treat it like any builtin singleton.
-            return _Name("Ellipsis", t.line)
+            # The unbindable spelling matches the host parser and keeps
+            # the literal distinct from a user binding named Ellipsis.
+            return _Name("...", t.line)
         if t.kind == TK_NAME:
             self._advance()
             return _Name(t.text, t.line)

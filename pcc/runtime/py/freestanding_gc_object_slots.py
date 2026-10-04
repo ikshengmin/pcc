@@ -452,31 +452,19 @@ def _visit_instance_slots(o, visitor, context) -> i64:
     cls = load_ptr(o, abi_constant("object.instance.cls_offset"))
     if ptr_is_null(cls) != 0:
         return 1
-    count: i64 = load_i32(cls, abi_constant("object.class.n_fields_offset"))
-    if count < 0:
-        count: i64 = 0
+    # Class instance_size describes every physical owning slot, including
+    # the unchanged dynamic owner and appended immutable builtin payloads.
+    count: i64 = (load_i32(cls, abi_constant("object.class.instance_size_offset")) - abi_constant("object.instance.fields_offset")) // abi_constant("object.pointer.size")
+    minimum: i64 = load_i32(cls, abi_constant("object.class.n_fields_offset")) + 1
+    if minimum < 1:
+        minimum = 1
+    if count < minimum:
+        count = minimum
     index: i64 = 0
     while index < count:
-        _visit_slot(
-            o,
-            abi_constant("object.instance.fields_offset")
-            + index * abi_constant("object.pointer.size"),
-            1,
-            visitor,
-            context,
-        )
+        _visit_slot(o, abi_constant("object.instance.fields_offset") + index * abi_constant("object.pointer.size"), 1, visitor, context)
         index = index + 1
-    # Every native instance/valuebox reserves and zeroes n_fields + 1 slots.
-    # __slots__ restricts public attribute visibility, not this physical
-    # owner used for builtin-base backing and exception arguments.
-    _visit_slot(
-        o,
-        abi_constant("object.instance.fields_offset")
-        + count * abi_constant("object.pointer.size"),
-        1,
-        visitor,
-        context,
-    )
+
     return 1
 
 
@@ -647,7 +635,10 @@ def pcc_gc_visit_object_slots_slice(
         )
         if n_fields < 0:
             n_fields = 0
-        total = 2 + n_fields
+        count: i64 = (load_i32(cls, abi_constant("object.class.instance_size_offset")) - abi_constant("object.instance.fields_offset")) // abi_constant("object.pointer.size")
+        if count < n_fields + 1:
+            count = n_fields + 1
+        total = 1 + count
         family = 22
     else:
         return 0

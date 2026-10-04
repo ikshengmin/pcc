@@ -1157,7 +1157,7 @@ def _lift_type(node) -> pa.Type:
                     isinstance(inner, pp._Tuple)
                     and len(inner.elems) == 2
                     and isinstance(inner.elems[1], pp._Name)
-                    and _node_ident(inner.elems[1]) == "Ellipsis"
+                    and _node_ident(inner.elems[1]) in ("...", "Ellipsis")
                 ):
                     return pa.TupleType("tuple_variadic", (_lift_type(inner.elems[0]),))
                 if isinstance(inner, pp._Tuple):

@@ -385,7 +385,7 @@ class OwnershipLoweringMixin:
             return True
         if isinstance(expr, Call):
             native_call = self._native_builtin_value_kind_for_expr(expr.func)
-            if native_call in ("tempfile.TemporaryDirectory", "tempfile.mkdtemp"):
+            if native_call in ("tempfile.TemporaryDirectory", "tempfile.mkdtemp", "tempfile.NamedTemporaryFile", "os.fdopen", "os.open", "os.close"):
                 return True
             if (
                 native_call == "os._pcc_sha256_file_hex"

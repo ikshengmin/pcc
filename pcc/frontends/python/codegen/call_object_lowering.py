@@ -653,6 +653,47 @@ class CallObjectLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
 
+    def _emit_owned_descriptor_constructor(self, expr, runtime_name, arity):
+        """Retain accessors and publish the NEW descriptor before cleanup."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        saved_preference = self._prefer_native_callable_values
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root(runtime_name + ".result")
+            roots.append(output)
+        operands = []
+        try:
+            self._prefer_native_callable_values = True
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            for argument_expr in expr.args:
+                argument = self._emit_slot_call_operand(
+                    argument_expr, runtime_name + ".accessor",
+                )
+                operands.append(argument)
+                roots.append(argument)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            # A NULL optional property accessor means absent. Explicit None
+            # remains an ordinary owned operand understood by the runtime.
+            omitted = tuple(ir.Constant(_CSTR, None) for _ in range(arity - len(operands)))
+            self._slot_call_runtime_call(
+                runtime_name, tuple(operands), result_slot=output,
+                suffix_args=omitted, span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(operands))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("descriptor.current"))
+        finally:
+            self._prefer_native_callable_values = saved_preference
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_owned_format_call(self, expr):
         """Evaluate value then spec into owners and publish the runtime result."""
         previous = self._current_try_err_block()

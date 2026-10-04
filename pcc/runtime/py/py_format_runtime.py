@@ -93,6 +93,10 @@ py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_exc_new_with_value = extern("py_exc_new_with_value", (c_int64, c_ptr), c_ptr)
 py_int_from_f64_exact = extern("py_int_from_f64_exact", (c_double,), c_ptr)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
+py_str_payload = extern("py_str_payload", (c_ptr,), c_ptr)
+py_str_exact_copy = extern("py_str_exact_copy", (c_ptr,), c_ptr)
+pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+py_str_check = extern("py_str_check", (c_ptr,), c_int64)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
 py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
@@ -1799,6 +1803,9 @@ def _format_callback_body(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr) -> int:
     if ptr_is_null(load_ptr(slots, _FORMAT_RESULT * C_POINTER_SIZE)) != 0:
         _format_require_result(null(), cstr("__format__"), cstr("format callback returned NULL without setting an exception"))
         return -1
+    if py_str_check(load_ptr(slots, _FORMAT_RESULT * C_POINTER_SIZE)) == 0:
+        py_raise_owned(py_exc_new(3, cstr("__format__ must return a str")))
+        return -1
     return 0
 
 
@@ -1867,6 +1874,18 @@ def _format_value(value, spec):
         return _format_float_value(value, text, length)
     if tag == PY_TYPE_STR:
         return _format_str_value(value, text, length)
+    payload = py_str_payload(value)
+    if ptr_is_null(payload) == 0:
+        exact = py_str_exact_copy(value)
+        if ptr_is_null(exact) != 0:
+            return null()
+        pcc_gc_pin(exact)
+        result = _format_str_value(exact, text, length)
+        pcc_gc_pin(result)
+        pcc_gc_unpin(exact)
+        py_decref(exact)
+        pcc_gc_unpin(result)
+        return result
     # object.__format__ rejects any non-empty spec.
     state = _buffer_new(96)
     _buffer_cstr(state, cstr("unsupported format string passed to "))

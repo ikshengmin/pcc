@@ -329,6 +329,9 @@ class DictLoweringMixin:
             return None
         if self.current_function is None:
             return None
+        if (self._dyn_list_method_shape_supported(expr)
+                and not self._expr_looks_cpython(attr.obj)):
+            return self._emit_owned_list_pop(expr)
 
         recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):

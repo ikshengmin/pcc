@@ -12,6 +12,7 @@ from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
+from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
@@ -766,7 +767,22 @@ class NameLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
 
+    def _emit_ellipsis_literal(self, expr: Name) -> ir.Value:
+        # py_substrate owns this exact physical singleton pointer slot. A
+        # slot-call consumer copies from that authoritative source directly.
+        gv = declare_runtime_global(self.module, "py_Ellipsis")
+        sink = self._slot_call_result_sink(expr)
+        if sink is not None:
+            self._slot_call_copy_source(sink, gv, span=expr.span)
+            self._slot_call_note_published(sink)
+            return self.builder.load(sink, name=self._fresh("ellipsis.current"))
+        return self.builder.load(gv, name=self._fresh("ellipsis"))
+
     def _emit_name(self, expr: Name) -> ir.Value:
+        # Both parsers use this impossible identifier for literal syntax.
+        # It cannot be shadowed by local, global or class namespace bindings.
+        if expr.ident == "...":
+            return self._emit_ellipsis_literal(expr)
         class_value = self._emit_class_namespace_name_root(expr, "class.name.value")
         if class_value is not None:
             return self._take_slot_call_root(class_value)
@@ -860,12 +876,6 @@ class NameLoweringMixin:
                 if self.ast_module.docstring is None:
                     return self._emit_none_literal()
                 return self._emit_str_literal(self.ast_module.docstring)
-            if expr.ident == "Ellipsis":
-                # ``...`` / ``Ellipsis`` used as an expression — pcc
-                # doesn't have a distinct Ellipsis type; reuse the
-                # None-literal emitter so code that stashes
-                # ``Ellipsis`` as a sentinel keeps working.
-                return self._emit_none_literal()
             if expr.ident == "NotImplemented":
                 gv = declare_runtime_global(self.module, "py_NotImplemented")
                 sink = self._slot_call_result_sink(expr)
@@ -915,8 +925,18 @@ class NameLoweringMixin:
             builtin_value = self._native_builtin_value_for_name(expr.ident)
             if builtin_value == "tempfile.TemporaryDirectory":
                 return self._emit_owned_namespace_runtime_value("py_tempdir_type", (), expr)
+            if builtin_value in ("os.fdopen", "os.open", "os.close"):
+                provider = {"os.fdopen": "py_file_fdopen_function", "os.open": "py_os_open_function",
+                            "os.close": "py_os_close_function"}[builtin_value]
+                return self._emit_owned_namespace_runtime_value(provider, (), expr)
+            if builtin_value is not None and builtin_value.startswith("os.O_"):
+                flag = native_os_descriptor_constant(builtin_value[3:], self._target_sys_platform_text())
+                if flag is not None:
+                    return self._emit_native_module_constant({"value_kind": "int", "value": flag})
             if builtin_value == "tempfile.mkdtemp":
                 return self._emit_owned_namespace_runtime_value("py_tempfile_mkdtemp_function", (), expr)
+            if builtin_value == "tempfile.NamedTemporaryFile":
+                return self._emit_owned_namespace_runtime_value("py_namedtempfile_function", (), expr)
             if builtin_value == "os.name":
                 return self._emit_str_literal("nt" if self._target_sys_platform_text() == "win32" else "posix")
             if builtin_value == "os.sep":
@@ -1198,6 +1218,10 @@ class NameLoweringMixin:
                         name=self._fresh(f"cpy.{expr.ident}"),
                     )
                     return self._mark_owned_cpy_value(result)
+            # Ordinary lexical/import/class/function bindings above outrank
+            # the builtin. Literal ``...`` took the unshadowable entry path.
+            if expr.ident == "Ellipsis":
+                return self._emit_ellipsis_literal(expr)
             # ``globals()[dynamic_name] = value`` writes the shared module
             # namespace even when no statically declared LLVM global exists.
             # Python's LOAD_GLOBAL observes those writes before consulting

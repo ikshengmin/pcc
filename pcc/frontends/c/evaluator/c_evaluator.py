@@ -1419,12 +1419,50 @@ class CEvaluator(object):
         )
         return
 
-    def emit_executable(self, compiled_units, output: str, *, optimize=True, link_args=None):
+    def validate_owned_freestanding_request(self, link_args=None):
+        """Admit the real production runtime before a public C compilation."""
+        self._validate_freestanding_link_args(link_args or (), enabled=True)
+        triple = str(self.target_triple or "").lower()
+        if not any(name in triple for name in ("linux", "darwin", "apple")):
+            raise BackendUnavailable("owned --freestanding-libc supports Linux and Darwin")
+        explicit = str(os.environ.get("PCC_RUNTIME_ARCHIVE", "") or "").strip()
+        if explicit and os.path.basename(explicit) != "libpy_runtime_pcc_py.a":
+            raise RuntimeError(
+                "--freestanding-libc requires libpy_runtime_pcc_py.a; "
+                "PCC_RUNTIME_ARCHIVE selected " + os.path.basename(explicit)
+            )
+        from pcc.frontends.python.pipeline import _ensure_runtime
+        from pcc.frontends.python.pipeline_runtime_archive import runtime_build_mode
+
+        if runtime_build_mode() != "owned":
+            raise BackendUnavailable("owned --freestanding-libc requires the owned runtime builder")
+        # This checks actual archive/member/source/compiler/target/configuration
+        # identities and honors the no-provisioning guard. Never create a second
+        # archive view or interpret absent member configuration as defaults.
+        return _ensure_runtime(False, needs_libpython=False, target_triple=self.target_triple)
+
+    def emit_executable(self, compiled_units, output: str, *, optimize=True,
+                        link_args=None, freestanding_libc=False):
         """Publish a C executable with the explicitly selected backend owner."""
+        runtime = (self.validate_owned_freestanding_request(link_args)
+                   if freestanding_libc else None)
         external_objects = []
         external_archives = []
+        map_path = ""
         for argument in link_args or ():
             path = os.fspath(argument)
+            if path.startswith(("-Wl,-Map,", "-Wl,-Map=", "-Wl,-map,")):
+                if not any(name in self.target_triple for name in ("linux", "darwin", "apple")):
+                    raise BackendUnavailable("owned C link maps require Linux or Darwin")
+                if map_path:
+                    raise BackendUnavailable("owned C executable accepts one link map")
+                map_path = path[len("-Wl,-Map,"):]
+                if not map_path:
+                    raise BackendUnavailable("owned C link map requires a path")
+                continue
+            if (freestanding_libc and "linux" in self.target_triple
+                    and path in ("-nostdlib", "-static", "-no-pie", "-Wl,-e,_start")):
+                continue
             if path.startswith("-") or not path.lower().endswith((".o", ".obj", ".a", ".lib")):
                 raise BackendUnavailable("unsupported owned C executable link argument: " + path)
             if os.path.realpath(path) == os.path.realpath(output):
@@ -1433,6 +1471,14 @@ class CEvaluator(object):
                 external_archives.append(path)
             else:
                 external_objects.append(path)
+        if map_path:
+            protected = [output, output + ".pcc-link.tmp"] + external_objects + external_archives
+            if runtime is not None:
+                protected.append(runtime)
+            if any(os.path.realpath(candidate) == os.path.realpath(path)
+                   for candidate in (map_path, map_path + ".pcc-link.tmp")
+                   for path in protected):
+                raise BackendUnavailable("link map output aliases an input or executable")
         prepared = self._prepare_self_backend_units(compiled_units, optimize=optimize) if self._normalize_opt_level(optimize) > 0 else compiled_units
         target_id = self._self_link_target_identity(prepared)
         if target_id in ("self-aarch64-linux-v0", "self-x86_64-linux-v0", "self-x86_64-windows-v0"):
@@ -1447,17 +1493,19 @@ class CEvaluator(object):
                     with open(path, "w", encoding="utf-8") as stream:
                         stream.write(self._self_backend_asm_text([unit]))
                     paths.append(path)
-                if self.target_triple == host_target_triple():
-                    runtime = _ensure_runtime(False, needs_libpython=False)
-                else:
-                    runtime_root = os.path.join(resolve_pcc_dir_from_environment(__file__), "runtime")
-                    runtime = ensure_target_runtime(runtime_root, self.target_triple)
+                if runtime is None:
+                    if self.target_triple == host_target_triple():
+                        runtime = _ensure_runtime(False, needs_libpython=False)
+                    else:
+                        runtime_root = os.path.join(resolve_pcc_dir_from_environment(__file__), "runtime")
+                        runtime = ensure_target_runtime(runtime_root, self.target_triple)
                 if "windows" in self.target_triple:
                     pe_link(output=output, assembly=paths, objects=external_objects,
                             archives=external_archives + [runtime])
                 else:
                     elf_link(output=output, target=self.target_triple, assembly=paths,
-                             objects=external_objects, archives=external_archives + [runtime])
+                             objects=external_objects, archives=external_archives + [runtime],
+                             map_path=map_path)
             return
         from pcc.backend.arm64_asm_driver import assemble_file
         from pcc.backend.native_object import NativeObject
@@ -1472,11 +1520,29 @@ class CEvaluator(object):
         for path in external_objects:
             with open(path, "rb") as stream:
                 objects.append(stream.read())
+        archive_paths = list(external_archives)
+        if runtime is not None:
+            archive_paths.append(runtime)
         archives = []
-        for path in external_archives:
+        for path in archive_paths:
             with open(path, "rb") as stream:
                 archives.append(stream.read())
-        image = link_executable(objects, archives=archives, entry="_main")
+        receipt = {} if map_path else None
+        image = link_executable(objects, archives=archives, entry="_main", link_receipt=receipt)
+        map_text = ""
+        if map_path:
+            lines = ["# pcc owned Mach-O link map v1", "# target " + self.target_triple,
+                     "# entry _main", "# image sha256=" + receipt["image_sha256"]]
+            for selected in receipt["archive_members"]:
+                lines.append(archive_paths[selected["archive_index"]] + "(" + selected["member"] + ")"
+                             + " archive_sha256=" + selected["archive_sha256"]
+                             + " member_sha256=" + selected["member_sha256"])
+            for library in receipt["dynamic_libraries"]:
+                lines.append("# declared_library " + json.dumps(library, sort_keys=True))
+            for imported in receipt["imports"]:
+                lines.append("# dynamic_import " + json.dumps(imported, sort_keys=True))
+            lines.append("# Dynamic imports name declared load-command providers; physical reexport owners are not established.")
+            map_text = "\n".join(lines) + "\n"
         temporary = output + ".pcc-link.tmp"
         with open(temporary, "wb") as stream:
             stream.write(image)
@@ -1484,6 +1550,15 @@ class CEvaluator(object):
             os.fsync(stream.fileno())
         os.chmod(temporary, 0o755)
         os.replace(temporary, output)
+        if map_path:
+            map_temporary = map_path + ".pcc-link.tmp"
+            try:
+                with open(map_temporary, "w", encoding="utf-8") as stream:
+                    stream.write(map_text)
+                os.replace(map_temporary, map_path)
+            finally:
+                if os.path.exists(map_temporary):
+                    os.unlink(map_temporary)
 
     def _emit_compiled_units_self_backend(
         self,
@@ -1888,37 +1963,20 @@ class CEvaluator(object):
             if self._normalize_opt_level(optimize) > 0
             else compiled_units
         )
-        asm_text = self._self_backend_asm_text(prepared_units)
         tmpdir = tempfile.mkdtemp(prefix="pcc_self_run_")
         try:
-            if not link_with_system_cc and self._self_link_target_identity(prepared_units) in (
-                "self-x86_64-linux-v0", "self-aarch64-linux-v0", "self-x86_64-windows-v0"
-            ):
+            if not link_with_system_cc:
+                if self.is_cross:
+                    raise BackendUnavailable("cannot execute C for a foreign target")
                 owned_bin = os.path.join(tmpdir, "program.exe" if "windows" in self.target_triple else "program")
-                self.emit_executable(prepared_units, owned_bin, optimize=False, link_args=link_args)
+                self.emit_executable(prepared_units, owned_bin, optimize=False,
+                                     link_args=link_args, freestanding_libc=freestanding_libc)
                 return subprocess.run([owned_bin] + [str(arg) for arg in (prog_args or [])],
                                       capture_output=capture_output, text=text,
                                       timeout=timeout, cwd=base_dir or os.getcwd())
-            # Freestanding startup objects and caller-supplied link arguments
-            # are host-toolchain inputs; pcc owns the plain case, which is the
-            # one that made *running* C require a C compiler.
-            if (
-                not link_with_system_cc
-                and self._self_link_mode() == "pcc"
-                and self._self_link_target_identity(prepared_units)
-                == "self-aarch64-darwin-v0"
-                and not freestanding_libc
-                and not link_args
-            ):
-                owned_bin = os.path.join(tmpdir, "a.out")
-                self._link_executable_owned(asm_text, owned_bin)
-                return subprocess.run(
-                    [owned_bin] + [str(arg) for arg in (prog_args or [])],
-                    capture_output=capture_output,
-                    text=text,
-                    timeout=timeout,
-                    cwd=base_dir or os.getcwd(),
-                )
+            # The external toolchain is reachable only through an explicitly
+            # requested system-cc oracle entrypoint.
+            asm_text = self._self_backend_asm_text(prepared_units)
             cc = self._system_cc()
             asm_path = os.path.join(tmpdir, "self_backend.s")
             with open(asm_path, "w") as f:
@@ -1959,6 +2017,30 @@ class CEvaluator(object):
             )
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def run_translation_units_owned(
+        self, units, optimize=True, llvmdump=False, base_dir=None,
+        prog_args=None, jobs=1, include_dirs=None, cpp_args=None,
+        link_args=None, use_compile_cache=True, cache_dir=None,
+        timeout=120, capture_output=True, text=True, freestanding_libc=False,
+    ):
+        """Run the public process ABI through the same owned emitter as -o."""
+        if freestanding_libc:
+            self.validate_owned_freestanding_request(link_args)
+        compiled_units = self.compile_translation_units(
+            units, base_dir=base_dir, jobs=jobs, include_dirs=include_dirs,
+            cpp_args=cpp_args, use_compile_cache=use_compile_cache,
+            cache_dir=cache_dir, frontend_opt_level=self._normalize_opt_level(optimize),
+        )
+        dump_dir = _normalize_llvm_dump_dir(llvmdump, cache_dir)
+        if dump_dir:
+            _write_llvm_dump(dump_dir, "temp.ir", "\n".join(unit[1] for unit in compiled_units))
+        return self._run_compiled_translation_units_self_backend(
+            compiled_units, optimize=optimize, base_dir=base_dir,
+            prog_args=prog_args, link_args=link_args, timeout=timeout,
+            capture_output=capture_output, text=text,
+            freestanding_libc=freestanding_libc, link_with_system_cc=False,
+        )
 
     def run_translation_units_with_system_cc(
         self,

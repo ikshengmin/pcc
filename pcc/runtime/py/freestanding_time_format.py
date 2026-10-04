@@ -15,6 +15,9 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+# Platform struct tm starts with tm_sec, tm_min, tm_hour (three C int fields).
+TM_HOUR_OFFSET = 8
+
 
 define_global_i8("pcc_time_zone_lock", 0)
 define_global_ptr_null("pcc_time_zone_names")
@@ -104,7 +107,7 @@ def breakdown(seconds: i64, offset: i64, daylight: i64, zone: c_ptr, output: c_p
         return -75
     store_i32(output, 0, clock % 60)
     store_i32(output, 4, (clock // 60) % 60)
-    store_i32(output, 8, clock // 3600)
+    store_i32(output, TM_HOUR_OFFSET, clock // 3600)
     store_i32(output, 12, day)
     store_i32(output, 16, month - 1)
     store_i32(output, 20, year - 1900)
@@ -208,9 +211,9 @@ def strftime(output: c_ptr, capacity: i64, fmt: c_ptr, tm: c_ptr) -> i64:
             elif code == 100 or code == 101:
                 value = load_i32(tm, 12)
                 if code == 101: padding = 32
-            elif code == 72: value = load_i32(tm, 8)
+            elif code == 72: value = load_i32(tm, TM_HOUR_OFFSET)
             elif code == 73:
-                value = load_i32(tm, 8) % 12
+                value = load_i32(tm, TM_HOUR_OFFSET) % 12
                 if value == 0: value = 12
             elif code == 77: value = load_i32(tm, 4)
             elif code == 83: value = load_i32(tm, 0)
@@ -233,11 +236,11 @@ def strftime(output: c_ptr, capacity: i64, fmt: c_ptr, tm: c_ptr) -> i64:
                 width = 4 if code == 71 else 2
             elif code == 115:
                 value = days_from_civil(year, month + 1, load_i32(tm, 12)) * 86400
-                value = value + load_i32(tm, 8) * 3600 + load_i32(tm, 4) * 60 + load_i32(tm, 0) - load_i64(tm, 40)
+                value = value + load_i32(tm, TM_HOUR_OFFSET) * 3600 + load_i32(tm, 4) * 60 + load_i32(tm, 0) - load_i64(tm, 40)
                 width = 1
             elif code == 97 or code == 65: text = word(weekday, 0, 1 if code == 65 else 0)
             elif code == 98 or code == 104 or code == 66: text = word(month, 1, 1 if code == 66 else 0)
-            elif code == 112: text = cstr("AM") if load_i32(tm, 8) < 12 else cstr("PM")
+            elif code == 112: text = cstr("AM") if load_i32(tm, TM_HOUR_OFFSET) < 12 else cstr("PM")
             elif code == 90:
                 text = load_ptr(tm, 48)
                 if ptr_is_null(text): text = cstr("")

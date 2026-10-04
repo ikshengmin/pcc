@@ -241,3 +241,30 @@ class Adapter:
     body = _function(text, "user_binding_Adapter_read")
     assert len(re.findall(r"\bcall [^\n]*@py_obj_call_slots\(", body)) == 1
     assert len(re.findall(r"%call.slot.if.move[^\n]*= call [^\n]*@pcc_gc_root_move\(", body)) == 2
+
+
+@pytest.mark.parametrize("kind", ("staticmethod", "classmethod", "property"))
+def test_descriptor_constructor_result_reaches_owned_boundaries(kind):
+    from tests.owned_ir_validation import verify_ir_text
+    from tests.python.test_slot_call_subscript_producers import (
+        _assert_immediate_publication,
+    )
+
+    source = """def accessor(value):
+    return value
+def take(*, value):
+    return value
+class Holder:
+    value = CONSTRUCTOR(accessor)
+def make():
+    return CONSTRUCTOR(accessor)
+def probe():
+    value = take(value=CONSTRUCTOR(accessor))
+    values = [CONSTRUCTOR(accessor)]
+    def defaulted(value=CONSTRUCTOR(accessor)):
+        return value
+    return value, values, defaulted()
+""".replace("CONSTRUCTOR", kind)
+    text = _emit(source)
+    verify_ir_text(text)
+    _assert_immediate_publication(text, "py_" + kind + "_new")

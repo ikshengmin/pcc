@@ -1006,40 +1006,22 @@ fi
 def test_linux_x86_64_c_frontend_freestanding_libc_is_static_and_python_owned():
     """The public C CLI uses the strict pcc-Python libc and startup objects.
 
-    A cc wrapper copies only the final ``-nostdlib -static`` executable before
-    pcc removes its staging directory, allowing the gate to inspect the actual
-    CLI-produced artifact and link map.
+    Public output mode retains the exact owned executable and map. Compiler
+    tool wrappers reject external product delegation; file/readelf/nm remain
+    separately invoked artifact-inspection oracles.
     """
     result = _run_linux_x86_64_harness(r"""
 set -euo pipefail
-wrapper="$(mktemp -d /tmp/pcc-c-libc-cc.XXXXXX)"
-cat >"$wrapper/cc" <<'EOF'
+wrapper="$(mktemp -d /tmp/pcc-c-libc-owned.XXXXXX)"
+for tool in cc gcc clang as ld ar; do
+  cat >"$wrapper/$tool" <<'EOF'
 #!/bin/sh
-set -eu
-/usr/bin/cc "$@"
-out=""
-want_out=0
-seen_nostdlib=0
-seen_static=0
-seen_start=0
-for arg in "$@"; do
-  if [ "$want_out" = 1 ]; then
-    out="$arg"
-    want_out=0
-  elif [ "$arg" = "-o" ]; then
-    want_out=1
-  fi
-  [ "$arg" = "-nostdlib" ] && seen_nostdlib=1
-  [ "$arg" = "-static" ] && seen_static=1
-  [ "$arg" = "-Wl,-e,_start" ] && seen_start=1
-done
-if [ "$seen_nostdlib" = 1 ] && [ "$seen_static" = 1 ] && [ "$seen_start" = 1 ]; then
-  test -n "$out"
-  cp "$out" /tmp/pcc-c-libc-final
-  printf '%s\n' "$@" >/tmp/pcc-c-libc-link-args
-fi
+printf 'unexpected external compiler invocation: %s\n' "$0" >&2
+printf '%s\n' "$0" >>/tmp/pcc-c-libc-external-attempt
+exit 97
 EOF
-chmod +x "$wrapper/cc"
+  chmod +x "$wrapper/$tool"
+done
 
 cat >/tmp/pcc-c-libc-consumer.c <<'EOF'
 typedef unsigned long size_t;
@@ -1061,17 +1043,18 @@ int main(int argc, char **argv, char **envp) {
 EOF
 
 PATH="$wrapper:$PATH" \
+PCC_RUNTIME_BUILD=owned PCC_SELF_OBJ=pcc PCC_SELF_LINK=pcc \
+PCC_IR_TO_OBJ_EMITTER=pcc PCC_PYTHON_LIBPYTHON=off \
 PCC_PYTHON_IR_PASSES=off \
 env -u LC_ALL uv run pcc \
   --backend=self \
   --verbose \
   --freestanding-libc \
   --link-arg=-Wl,-Map,/tmp/pcc-c-libc.map \
-  /tmp/pcc-c-libc-consumer.c bridge
-
-grep -Fx -- '-nostdlib' /tmp/pcc-c-libc-link-args >/dev/null
-grep -Fx -- '-static' /tmp/pcc-c-libc-link-args >/dev/null
-grep -Fx -- '-Wl,-e,_start' /tmp/pcc-c-libc-link-args >/dev/null
+  -o /tmp/pcc-c-libc-final \
+  /tmp/pcc-c-libc-consumer.c
+PATH="$wrapper:$PATH" /tmp/pcc-c-libc-final bridge
+test ! -e /tmp/pcc-c-libc-external-attempt
 file /tmp/pcc-c-libc-final | grep -F 'statically linked' >/dev/null
 if readelf -l /tmp/pcc-c-libc-final | grep -q 'INTERP'; then
   echo 'unexpected PT_INTERP' >&2
@@ -1082,9 +1065,32 @@ if readelf -d /tmp/pcc-c-libc-final 2>&1 | grep -q '(NEEDED)'; then
   exit 1
 fi
 test -z "$(nm -u /tmp/pcc-c-libc-final)"
-grep -F 'libpcc_freestanding_c.a(freestanding_allocator.o)' /tmp/pcc-c-libc.map >/dev/null
-grep -F 'libpcc_freestanding_c.a(freestanding_mem_str.o)' /tmp/pcc-c-libc.map >/dev/null
-grep -F 'libpcc_freestanding_c.a(freestanding_platform_env.o)' /tmp/pcc-c-libc.map >/dev/null
+grep -F 'libpy_runtime_pcc_py.a(freestanding_allocator.o)' /tmp/pcc-c-libc.map >/dev/null
+grep -F 'libpy_runtime_pcc_py.a(freestanding_mem_str.o)' /tmp/pcc-c-libc.map >/dev/null
+grep -F 'libpy_runtime_pcc_py.a(freestanding_platform_env.o)' /tmp/pcc-c-libc.map >/dev/null
+uv run python - <<'PYMAP'
+import hashlib
+from pathlib import Path
+import re
+from pcc.backend.elf_x86_64 import read_archive_payloads
+
+ownership = Path("/tmp/pcc-c-libc.map").read_text()
+assert ownership.startswith("# pcc owned ELF link map v1\n")
+assert "# entry _start\n" in ownership
+image = Path("/tmp/pcc-c-libc-final").read_bytes()
+assert "# image sha256=" + hashlib.sha256(image).hexdigest() + "\n" in ownership
+for member in ("freestanding_allocator.o", "freestanding_mem_str.o", "freestanding_platform_env.o"):
+    selected = re.search(
+        r"^(.+libpy_runtime_pcc_py\.a)\(" + re.escape(member)
+        + r"\) archive_sha256=([0-9a-f]{64}) member_sha256=([0-9a-f]{64})$",
+        ownership, re.MULTILINE,
+    )
+    assert selected is not None, member
+    archive = Path(selected.group(1)).read_bytes()
+    assert hashlib.sha256(archive).hexdigest() == selected.group(2)
+    payload = dict(read_archive_payloads(archive))[member]
+    assert hashlib.sha256(payload).hexdigest() == selected.group(3)
+PYMAP
 if grep -E 'vendor_|libc[.]a|/build_py/.*[.]c' /tmp/pcc-c-libc.map >/dev/null; then
   echo 'non-pcc-Python libc owner entered final link' >&2
   exit 1

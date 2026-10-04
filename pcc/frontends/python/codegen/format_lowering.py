@@ -8,7 +8,6 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, Call, ClassDef, DictType, Expr, For, FuncDef, If, Name, StrLit, StrType, Try, While, With
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_STR
 
 _I64 = ir.IntType(64)
 
@@ -678,8 +677,8 @@ class FormatLoweringMixin:
                         # CPython returns the field itself only when it is
                         # nonempty. Validate the runtime value before reading
                         # its native string length; a callback may be invalid.
-                        tag = self._slot_call_runtime_call("py_obj_type_tag", (piece,), span=expr.span)
-                        is_string = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_STR))
+                        checked = self._slot_call_runtime_call("py_str_check", (piece,), span=expr.span)
+                        is_string = self.builder.icmp_signed("!=", checked, ir.Constant(_I64, 0))
                         typed = self.current_function.append_basic_block(self._fresh("str.format.string"))
                         invalid = self.current_function.append_basic_block(self._fresh("str.format.invalid"))
                         self.builder.cbranch(is_string, typed, invalid)

@@ -1,10 +1,12 @@
 """In-process Linux linker used by host pcc and native pcc stages."""
 
 import os
+import hashlib
 
 from .elf_x86_64 import (
     EM_AARCH64, ElfError, link_static_executable, parse_relocatable,
     parse_static_executable,
+    read_archive_payloads,
 )
 from .macho_internal_inputs import read_internal_input_manifest
 from .self_backend_target_match import is_aarch64_linux_triple, is_x86_64_linux_triple
@@ -46,14 +48,22 @@ pcc_linux_set_thread_pointer:
 
 
 def link_inputs(*, target: str, output: str, assembly=(), objects=(),
-                archives=(), manifest: str = "", entry: str = "_start") -> None:
+                archives=(), manifest: str = "", entry: str = "_start",
+                map_path: str = "") -> None:
     if not (is_aarch64_linux_triple(target) or is_x86_64_linux_triple(target)):
         raise ElfError("unsupported owned ELF target: " + target)
+    archives = list(archives)
     if manifest and (assembly or objects):
         raise ElfError("manifest cannot be mixed with direct internal inputs")
     ordered = read_internal_input_manifest(manifest) if manifest else (
         [("ASM", path) for path in assembly] + [("PCO", path) for path in objects]
     )
+    if map_path:
+        protected = [output, output + ".pcc-link.tmp", manifest] + [path for _kind, path in ordered] + archives
+        if any(path and os.path.realpath(candidate) == os.path.realpath(path)
+               for candidate in (map_path, map_path + ".pcc-link.tmp")
+               for path in protected):
+            raise ElfError("link map output aliases an input or executable")
     inputs = []
     for kind, path in ordered:
         if os.path.abspath(path) == os.path.abspath(output):
@@ -76,14 +86,45 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     inputs.append(_thread_pointer_object(target))
     from .linux_thread_intrinsics import assembly as thread_assembly
     inputs.append(assemble(thread_assembly(expected == EM_AARCH64), target))
-    image = link_static_executable(inputs, archives=archive_data, entry=entry)
+    selections = [] if map_path else None
+    image = link_static_executable(inputs, archives=archive_data, entry=entry,
+                                   archive_selections=selections)
     parse_static_executable(image)
+    map_text = ""
+    if map_path:
+        # These names come from the very selection that produced the image.
+        # Preserve the actual parent archive identity; never invent a C-only
+        # archive alias or manufacture a host-linker map.
+        payloads = []
+        for data in archive_data:
+            members = read_archive_payloads(data)
+            member_bytes = dict(members)
+            if len(member_bytes) != len(members):
+                raise ElfError("link map cannot identify duplicate archive member names")
+            payloads.append(member_bytes)
+        archive_hashes = [hashlib.sha256(data).hexdigest() for data in archive_data]
+        lines = ["# pcc owned ELF link map v1", "# target " + target, "# entry " + entry,
+                 "# image sha256=" + hashlib.sha256(image).hexdigest()]
+        for index, member in selections:
+            lines.append(str(archives[index]) + "(" + member + ")"
+                         + " archive_sha256=" + archive_hashes[index]
+                         + " member_sha256=" + hashlib.sha256(payloads[index][member]).hexdigest())
+        map_text = "\n".join(lines) + "\n"
     temporary = output + ".pcc-link.tmp"
     try:
         with open(temporary, "wb") as stream:
             stream.write(image)
         os.chmod(temporary, 0o755)
         os.replace(temporary, output)
+        if map_path:
+            map_temporary = map_path + ".pcc-link.tmp"
+            try:
+                with open(map_temporary, "w", encoding="utf-8") as stream:
+                    stream.write(map_text)
+                os.replace(map_temporary, map_path)
+            finally:
+                if os.path.exists(map_temporary):
+                    os.unlink(map_temporary)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

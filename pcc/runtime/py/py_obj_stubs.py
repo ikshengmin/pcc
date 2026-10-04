@@ -15,6 +15,7 @@ Tagged ints use the generated ``PY_TYPE_INT`` semantic tag.
 
 __pcc_runtime_port__ = True
 
+from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_EXC_UNICODE_PAYLOAD,
     PY_FLAG_GC_PINNED,
@@ -101,6 +102,9 @@ py_slice_index_i64 = extern("py_slice_index_i64", (c_ptr, c_int64), c_int64)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 py_int_to_str_obj = extern("py_int_to_str_obj", (c_ptr,), c_ptr)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
+py_str_payload = extern("py_str_payload", (c_ptr,), c_ptr)
+py_str_exact_copy = extern("py_str_exact_copy", (c_ptr,), c_ptr)
+pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
 py_user_str_dispatch = extern("py_user_str_dispatch", (c_ptr,), c_ptr)
@@ -3508,6 +3512,8 @@ def _format_builtin_str(o, tag: int):
     # tag is not one of these (caller falls back to user dispatch).
     if tag == PY_TYPE_FLOAT:  # PY_TYPE_FLOAT
         return _float_str(o)
+    if tag == PY_TYPE_ELLIPSIS:
+        return py_str_new(cstr("Ellipsis"), 8)
     if tag == PY_TYPE_NONE:  # PY_TYPE_NONE
         return _str_lit4(78, 111, 110, 101)  # 'None'
     if tag == PY_TYPE_BOOL:  # PY_TYPE_BOOL
@@ -3656,6 +3662,18 @@ def py_obj_repr(o):
         return dunder
     if py_err_occurred() != 0:
         return null()
+    payload = py_str_payload(o)
+    if ptr_is_null(payload) == 0:
+        exact = py_str_exact_copy(o)
+        if ptr_is_null(exact) != 0:
+            return null()
+        pcc_gc_pin(exact)
+        result = _obj_repr_str(exact, 0)
+        pcc_gc_pin(result)
+        pcc_gc_unpin(exact)
+        py_decref(exact)
+        pcc_gc_unpin(result)
+        return result
     return _default_object_repr(o, tag)
 
 
@@ -3714,6 +3732,11 @@ def py_obj_str(o):
         return dunder
     if py_err_occurred() != 0:
         return null()
+    payload = py_str_payload(o)
+    if ptr_is_null(payload) == 0:
+        # __str__ overrides stay authoritative. The exact result has its
+        # own owner; never expose an unleased view of the private backing.
+        return py_str_exact_copy(o)
     # A user exception subclass instance with no __str__ uses BaseException
     # __str__: the message from ``args`` (args[0] if one, "" if none, the
     # tuple repr otherwise). super().__init__(*args) stores ``args``.

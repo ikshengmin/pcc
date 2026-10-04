@@ -52,6 +52,8 @@ enum {
      * is released by the dealloc hook via py_cpy_decref. Tag 32 remains
      * distinct from the tracked lifecycle objects at tags 29..31. */
     PY_TYPE_CPY_HANDLE = 32,
+    /* Immortal, pointer-free Ellipsis singleton; no heap instances. */
+    PY_TYPE_ELLIPSIS = 33,
     PY_TYPE_USER = 100,
     PY_TYPE_PROPERTY = 101,
     PY_TYPE_CLASSMETHOD = 102,
@@ -872,6 +874,7 @@ void py_decref(PyObject *o);
 /* ---- None -------------------------------------------------------------- */
 extern PyObject *const py_None;
 extern PyObject *const py_NotImplemented;
+extern PyObject *const py_Ellipsis;
 
 /* ---- Bool -------------------------------------------------------------- */
 extern PyObject *const py_True;
@@ -1710,6 +1713,15 @@ PyObject *py_obj_format(PyObject *o, PyObject *spec);
 PyObject *py_file_open(PyObject *path, PyObject *mode);
 PyObject *py_file_open_options(PyObject *path, PyObject *mode, PyObject *encoding,
                                PyObject *errors, PyObject *newline);
+PyObject *py_file_fdopen_function(void);
+PyObject *py_namedtempfile_function(void);
+PyObject *py_file_fspath(PyObject *path);
+PyObject *py_os_open_function(void);
+PyObject *py_os_close_function(void);
+PyObject *py_file_fdopen_options(PyObject *descriptor, PyObject *mode, PyObject *encoding,
+                                PyObject *errors, PyObject *newline, int64_t closefd,
+                                int64_t buffering);
+void      py_file_close_checked(PyObject *file);
 PyObject *py_file_read_all(PyObject *file);
 PyObject *py_file_read(PyObject *file, int64_t limit);
 PyObject *py_file_write(PyObject *file, PyObject *text);
@@ -2341,5 +2353,8 @@ int64_t     pcc_metal_buffer_runtime_read_prebuilt(
 int64_t     pcc_metal_buffer_runtime_release_prebuilt(
                 const char *runtime_library_path,
                 uint64_t buffer_ptr);
+
+/* Exact strings and native str subtype values; preserves receiver identity. */
+int64_t py_str_check(PyObject *value);
 
 #endif /* PY_RUNTIME_H */

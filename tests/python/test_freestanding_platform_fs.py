@@ -3,6 +3,8 @@ import platform
 import subprocess
 import sys
 
+import pytest
+
 from pcc.frontends.python import pipeline
 
 
@@ -361,3 +363,16 @@ def test_default_runtime_routes_path_queries_through_platform_fs_object(
     assert run.stdout == (
         "True\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nFalse\n"
     )
+
+
+@pytest.mark.parametrize('target', ['x86_64-unknown-linux-gnu','aarch64-unknown-linux-gnu','arm64-apple-macosx11.0'])
+def test_complete_platform_module_owns_new_export(tmp_path, target):
+    import re
+    from pcc.frontends.python.pipeline import compile_python
+    from tests.owned_ir_validation import verify_ir_text
+    source=PLATFORM_SOURCE
+    output=tmp_path/'platform.ll'
+    compile_python(str(source),str(output),emit_llvm_only=True,python_library=True,libpython_mode='off',target_triple=target)
+    text=output.read_text();verify_ir_text(text)
+    assert re.search(r'define[^\n]*i64 @pcc_platform_mkstemp_suffix\(ptr ',text)
+    assert not re.search(r'\bcall[^\n]*@py_cpy_',text)

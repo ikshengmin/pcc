@@ -10,11 +10,14 @@ from pcc.frontends.python.py_ast import (
     Attr,
     BinOp,
     BoolLit,
+    BoolType,
     Call,
     ClassType,
     DynType,
     Expr,
+    FloatType,
     IntLit,
+    IntType,
     Lambda,
     ListType,
     Name,
@@ -365,6 +368,139 @@ class ListMethodLoweringMixin:
             return not expr.args and not expr.kwargs
         return False
 
+    def _emit_owned_list_pop(self, expr, list_ty=None):
+        """Keep receiver, index and either result in authoritative owner slots.
+
+        A popped element transfers the list's owner. Publish it before lease
+        release, error checks or receiver/index finalizers can collect. The
+        dynamic fallback binds the method before evaluating its arguments and
+        publishes into the same result slot without re-evaluating the receiver.
+        """
+        attr = expr.func
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("list.pop.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(attr.obj, "list.pop.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Ordinary annotations do not prove an exact built-in receiver.
+            # Keep dispatch separate from the selected scalar return ABI.
+            tag = self._slot_call_runtime_call(
+                "py_obj_type_tag", (receiver,), span=expr.span,
+            )
+            is_list = self.builder.icmp_signed(
+                "==", tag, ir.Constant(_I64, PY_TYPE_LIST),
+                name=self._fresh("list.pop.is_list"),
+            )
+            function = self.current_function
+            list_block = function.append_basic_block(self._fresh("list.pop.native"))
+            generic_block = function.append_basic_block(self._fresh("list.pop.generic"))
+            done_block = function.append_basic_block(self._fresh("list.pop.done"))
+            self.builder.cbranch(is_list, list_block, generic_block)
+            self.builder.position_at_end(list_block)
+
+            index = None
+            index_value = ir.Constant(_I64, -1)
+            if expr.args:
+                index = self._emit_slot_call_operand(expr.args[0], "list.pop.index")
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (index,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                # __index__ can mutate the list, collect, or raise. The receiver
+                # stays owned, and its address is leased only after conversion.
+                # Keep the index alive until pop completes, as an ordinary call
+                # would; its finalizer must not run before the list is mutated.
+                index_value = self.builder.call(
+                    self.runtime["py_index_i64_checked_slots"],
+                    [self._as_gc_ptr(index)], name=self._fresh("list.pop.index.i64"),
+                )
+                self._emit_post_call_err_check(expr.span)
+            self._slot_call_runtime_call(
+                "py_list_pop", (receiver,), result_slot=output,
+                suffix_args=(index_value,), span=expr.span,
+            )
+            if index is not None:
+                self._release_slot_call_roots((index,))
+
+            self.builder.branch(done_block)
+            self.builder.position_at_end(generic_block)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            method = self._new_slot_call_root("list.pop.method")
+            branch_roots = list(roots) + [method]
+            self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_obj_getattr", (receiver,), result_slot=method,
+                suffix_args=(self._attr_name_ptr(attr.name),), span=expr.span,
+            )
+            current = self.builder.load(method, name=self._fresh("list.pop.callable"))
+            self._emit_attribute_error_if_null(current, attr.name, attr.span)
+            args = self._emit_slot_call_args_tuple(expr.args, "list.pop.args")
+            branch_roots.append(args)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            kwargs = self._emit_slot_call_kwargs_object(
+                (), None, expr.span, "list.pop.kwargs", method,
+            )
+            branch_roots.append(kwargs)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(
+                self.runtime["py_obj_call_slots"],
+                [self._as_gc_ptr(method), self._as_gc_ptr(args),
+                 self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                name=self._fresh("list.pop.invoke"),
+            )
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, "pop method call", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots(tuple(branch_roots[len(roots):]))
+            self.builder.branch(done_block)
+            self.builder.position_at_end(done_block)
+
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_note_published(output)
+            scalar = None
+            if sink is None and list_ty is not None:
+                elem = list_ty.elem
+                if isinstance(elem, FloatType):
+                    scalar = self._slot_call_runtime_call(
+                        "py_float_to_f64", (output,), span=expr.span,
+                    )
+                elif isinstance(elem, BoolType):
+                    truth = self._slot_call_runtime_call(
+                        "py_obj_truthy", (output,), span=expr.span,
+                    )
+                    scalar = self.builder.trunc(truth, _I1, name=self._fresh("list.pop.bool"))
+                elif isinstance(elem, IntType) and elem.name != "int":
+                    overflow = self._alloca_in_entry(_I32, name=self._fresh("list.pop.overflow"))
+                    scalar = self._slot_call_runtime_call(
+                        "py_int_to_i64_lane", (output,), suffix_args=(overflow,), span=expr.span,
+                    )
+                # Ordinary Python integers retain their object projection, so
+                # a pop never narrows a bignum solely from an annotation.
+            if scalar is not None:
+                self._release_slot_call_roots(tuple(roots))
+                return scalar
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("list.pop.output"))
+            return self._take_slot_call_root(output)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_owned_dyn_list_count(self, expr):
         """Publish both guarded count results before retiring any operand owner."""
         attr = expr.func
@@ -473,6 +609,8 @@ class ListMethodLoweringMixin:
             return None
         if self.current_function is None:
             return None
+        if attr.name == "pop" and not self._expr_looks_cpython(attr.obj):
+            return self._emit_owned_list_pop(expr)
         if attr.name == "count" and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_dyn_list_count(expr)
 
@@ -689,6 +827,8 @@ class ListMethodLoweringMixin:
         ):
             return None
         name = attr.name
+        if name == "pop" and len(expr.args) <= 1 and not self._expr_looks_cpython(attr.obj):
+            return self._emit_owned_list_pop(expr, list_ty)
         recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):
             return self._emit_cpy_method_call_src(

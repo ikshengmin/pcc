@@ -72,6 +72,7 @@ def render_header() -> str:
             f"#define PCC_STDIO_FLAG_EOF {ABI_SPEC['stdio.flag.eof']}ULL",
             f"#define PCC_STDIO_FLAG_STANDARD {ABI_SPEC['stdio.flag.standard']}ULL",
             f"#define PCC_STDIO_FLAG_APPEND {ABI_SPEC['stdio.flag.append']}ULL",
+            f"#define PCC_STDIO_FLAG_BORROWED_DESCRIPTOR {ABI_SPEC['stdio.flag.borrowed_descriptor']}ULL",
             "",
         )
     )

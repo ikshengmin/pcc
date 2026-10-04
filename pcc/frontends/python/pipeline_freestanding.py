@@ -159,6 +159,7 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "darwin_current_rss_bytes": ("task_info", "mach_task_self_"),
         "darwin_peak_rss_bytes": ("getrusage",),
         "open_file": ("open", "__error"),
+        "open_file_flags": ("openat", "__error"),
         "rename_file": ("rename", "__error"),
         "chmod_file": ("chmod", "__error"),
         "sync_file": ("fsync", "__error"),

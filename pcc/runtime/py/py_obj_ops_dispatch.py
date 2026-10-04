@@ -22,11 +22,39 @@ from pcc.runtime.py.py_abi_constants import (
     PYSTATICMETHODOBJECT_FUNC_OFFSET,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
+    PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_CEXT_TAG_BASE,
+    PY_TYPE_CLASS,
+    PY_TYPE_COMPLEX,
     PY_TYPE_CONTINUATION,
+    PY_TYPE_COROUTINE,
+    PY_TYPE_DICT,
+    PY_TYPE_ELLIPSIS,
+    PY_TYPE_EXC,
+    PY_TYPE_FILE,
+    PY_TYPE_FLOAT,
+    PY_TYPE_FUNC,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_LIST,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_NONE,
+    PY_TYPE_SET,
+    PY_TYPE_STATICMETHOD,
+    PY_TYPE_STR,
+    PY_TYPE_THREAD_CONDITION,
+    PY_TYPE_THREAD_EVENT,
+    PY_TYPE_THREAD_LOCK,
+    PY_TYPE_THREAD_RLOCK,
+    PY_TYPE_THREAD_SEMAPHORE,
+    PY_TYPE_TUPLE,
+    PY_TYPE_USER_CLASS_START,
     PY_TYPE_VIRTUAL_THREAD,
     PY_TYPE_VTHREAD_CHANNEL,
+    PY_TYPE_WEAKREF,
 )
-from pcc.runtime.py.py_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PY_TYPE_COMPLEX, PY_TYPE_COROUTINE, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FILE, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STATICMETHOD, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_WEAKREF
 from pcc.unsafe import (
     store_ptr,
     stack_alloc,
@@ -155,6 +183,9 @@ py_class_metaclass_call = extern("py_class_metaclass_call", (c_ptr, c_ptr, c_ptr
 py_class_setattr = extern("py_class_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 py_class_delattr = extern("py_class_delattr", (c_ptr, c_ptr), c_int64)
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
+py_class_is_str_subclass = extern("py_class_is_str_subclass", (c_ptr,), c_int64)
+py_str_subclass_new = extern("py_str_subclass_new", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_str_check = extern("py_str_check", (c_ptr,), c_int64)
 py_instance_getattr = extern("py_instance_getattr", (c_ptr, c_ptr), c_ptr)
 py_instance_getattr_default = extern(
     "py_instance_getattr_default", (c_ptr, c_ptr), c_ptr
@@ -307,6 +338,7 @@ pcc_diagnostics_runtime_log_event_code = extern(
 
 
 define_global_ptr_null("pcc_type_cls_none")
+define_global_ptr_null("pcc_type_cls_ellipsis")
 define_global_ptr_null("pcc_type_cls_bool")
 define_global_ptr_null("pcc_type_cls_int")
 define_global_ptr_null("pcc_type_cls_float")
@@ -333,6 +365,7 @@ define_global_ptr_null("pcc_slice_cls")
 define_global_struct_words(
     "pcc_builtin_type_root_slots",
     "pcc_type_cls_none",
+    "pcc_type_cls_ellipsis",
     "pcc_type_cls_bool",
     "pcc_type_cls_int",
     "pcc_type_cls_float",
@@ -1268,6 +1301,8 @@ def py_obj_truediv(a, b):
 
 
 def _type_name_cstr_for_tag(tag: int):
+    if tag == PY_TYPE_ELLIPSIS:
+        return cstr("ellipsis")
     if tag == PY_TYPE_NONE:
         return cstr("NoneType")
     if tag == PY_TYPE_BOOL:
@@ -1734,6 +1769,13 @@ def _builtin_type_class_for_tag(tag: int):
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_super", cls)
         return _return_builtin_type(cls)
+    if tag == PY_TYPE_ELLIPSIS:
+        cls = global_load_ptr("pcc_type_cls_ellipsis")
+        if ptr_is_null(cls) != 0:
+            cls = py_class_new(cstr("ellipsis"), null(), 0, null(), 0)
+            if ptr_is_null(cls) == 0:
+                global_store_ptr("pcc_type_cls_ellipsis", cls)
+        return _return_builtin_type(cls)
     if tag == PY_TYPE_NONE:  # PY_TYPE_NONE
         cls = global_load_ptr("pcc_type_cls_none")
         if ptr_is_null(cls) != 0:
@@ -1934,6 +1976,8 @@ def py_builtin_type_class_tag(value) -> int:
         return -2
     if ptr_eq(value, global_load_ptr("pcc_type_cls_super")) != 0:
         return -3
+    if ptr_eq(value, global_load_ptr("pcc_type_cls_ellipsis")) != 0:
+        return PY_TYPE_ELLIPSIS
     if ptr_eq(value, global_load_ptr("pcc_type_cls_none")) != 0:
         return PY_TYPE_NONE
     if ptr_eq(value, global_load_ptr("pcc_type_cls_bool")) != 0:
@@ -2845,9 +2889,9 @@ def py_obj_getattr(o, name):
 
     # A pcc instance is never a C-API type object, list, lock or str, so the
     # hooks below cannot answer for it; C-extension objects carry tags from
-    # 0x10000 up and keep the full walk.
+    # PY_TYPE_CEXT_TAG_BASE up and keep the full walk.
     if tag == PY_TYPE_INSTANCE or (
-        tag >= PY_TYPE_USER_CLASS_START and tag < 0x10000
+        tag >= PY_TYPE_USER_CLASS_START and tag < PY_TYPE_CEXT_TAG_BASE
     ):
         result = py_instance_getattr(o, name)
         if ptr_is_null(result) == 0:
@@ -3150,7 +3194,7 @@ def py_obj_getattr_maybe(o, name):
     # builtin the hooks below answer for.  `getattr(node, field, None)` over
     # AST nodes reaches here millions of times per native frontend worker.
     if tag == PY_TYPE_INSTANCE or (
-        tag >= PY_TYPE_USER_CLASS_START and tag < 0x10000
+        tag >= PY_TYPE_USER_CLASS_START and tag < PY_TYPE_CEXT_TAG_BASE
     ):
         return py_instance_getattr(o, name)
 
@@ -3293,6 +3337,8 @@ def _require_call_result(result, callee, message):
 
 
 def _not_callable_message(tag: int):
+    if tag == PY_TYPE_ELLIPSIS:
+        return cstr("'ellipsis' object is not callable")
     if tag == PY_TYPE_NONE:
         return cstr("'NoneType' object is not callable")
     if tag == PY_TYPE_BOOL:
@@ -3385,6 +3431,8 @@ def _class_call_new(callable_obj, args, kwargs):
     its own ``__new__`` takes the allocation path unchanged.
     """
     new_method = py_class_lookup(callable_obj, cstr("__new__"))
+    if ptr_is_null(new_method) != 0 and py_class_is_str_subclass(callable_obj) != 0:
+        return py_str_subclass_new(callable_obj, args, kwargs)
     if ptr_is_null(new_method) != 0 or is_tagged_int(new_method) != 0:
         return _require_call_result(
             py_instance_new(callable_obj),
@@ -3489,6 +3537,12 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
         if ptr_is_null(kwargs) == 0 and ptr_eq(kwargs, global_load_ptr("py_None")) == 0:
             if _type_of(kwargs) == PY_TYPE_DICT:
                 nkwargs = py_dict_len(kwargs)
+        if ptr_eq(callable, global_load_ptr("pcc_type_cls_ellipsis")) != 0:
+            if nargs != 0 or nkwargs != 0:
+                py_raise_owned(py_exc_new(3, cstr("EllipsisType takes no arguments")))
+                return null()
+            # This immutable static object cannot move or be reclaimed.
+            return global_load_ptr("py_Ellipsis")
         is_builtin: int = 0
         if ptr_eq(callable, global_load_ptr("pcc_type_cls_bool")) != 0:
             is_builtin = 1
@@ -3765,6 +3819,8 @@ def py_obj_isinstance(o, cls) -> int:
         if tag == PY_TYPE_CLASS:
             return 1
         return pcc_capi_is_type_object_value(o)
+    if ptr_eq(cls, global_load_ptr("pcc_type_cls_ellipsis")) != 0:
+        return 1 if tag == PY_TYPE_ELLIPSIS else 0
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_bool")) != 0:
         return 1 if tag == PY_TYPE_BOOL else 0
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_int")) != 0:
@@ -3772,7 +3828,7 @@ def py_obj_isinstance(o, cls) -> int:
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_float")) != 0:
         return 1 if tag == PY_TYPE_FLOAT else 0
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_str")) != 0:
-        return 1 if tag == PY_TYPE_STR else 0
+        return py_str_check(o)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_list")) != 0:
         return 1 if tag == PY_TYPE_LIST else 0
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_dict")) != 0:

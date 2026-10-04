@@ -151,6 +151,7 @@ PORT_ABI_NATIVE_EXPORTS = {
         "PY_TYPE_VIRTUAL_THREAD": {"kind": "constant", "value_kind": "int", "value": 30},
         "PY_TYPE_VTHREAD_CHANNEL": {"kind": "constant", "value_kind": "int", "value": 31},
         "PY_TYPE_CPY_HANDLE": {"kind": "constant", "value_kind": "int", "value": 32},
+        "PY_TYPE_ELLIPSIS": {"kind": "constant", "value_kind": "int", "value": 33},
         "PY_TYPE_USER": {"kind": "constant", "value_kind": "int", "value": 100},
         "PY_TYPE_PROPERTY": {"kind": "constant", "value_kind": "int", "value": 101},
         "PY_TYPE_CLASSMETHOD": {"kind": "constant", "value_kind": "int", "value": 102},

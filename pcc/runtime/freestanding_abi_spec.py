@@ -110,6 +110,7 @@ ABI_SPEC: dict[str, int] = {
     "stdio.flag.eof": 8,
     "stdio.flag.standard": 16,
     "stdio.flag.append": 32,
+    "stdio.flag.borrowed_descriptor": 64,
     "stdio.flag.input_standard": 17,
     "stdio.flag.output_standard": 18,
 }

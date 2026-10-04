@@ -4,6 +4,8 @@ import ast
 from pathlib import Path
 import pytest
 
+from pcc.runtime.py import py_abi_constants as abi
+
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "pcc/runtime/py"
 
@@ -41,6 +43,8 @@ class Model:
             pcc_gc_granule_is_object_start=lambda p:int(p in self.proven),
             pcc_gc_managed_pointer_index_contains=lambda p:0,
             pcc_py_gc_minor_graph_lock=self.lock, pcc_py_gc_minor_graph_unlock=self.unlock)
+        self.ns.update({name: value for name, value in vars(abi).items()
+                        if name.startswith("PY_TYPE_")})
         _functions(RUNTIME / "freestanding_gc_root_operations.py", {
             "pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release", "pcc_gc_object_is_address_pinned"}, self.ns)
 

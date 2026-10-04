@@ -71,6 +71,7 @@ py_set_add = extern("py_set_add", (c_ptr, c_ptr), c_void)
 py_set_items = extern("py_set_items", (c_ptr,), c_ptr)
 py_class_lookup = extern("py_class_lookup", (c_ptr, c_ptr), c_ptr)
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
+py_instance_copy_builtin_payload = extern("py_instance_copy_builtin_payload", (c_ptr, c_ptr), c_void)
 py_instance_get_field = extern("py_instance_get_field", (c_ptr, c_int32), c_ptr)
 py_instance_set_field = extern("py_instance_set_field", (c_ptr, c_int32, c_ptr), c_void)
 py_func_call = extern("py_func_call", (c_ptr, c_ptr), c_ptr)
@@ -519,6 +520,7 @@ def _copy_instance(obj, memo, deep: int):
     out = py_instance_new(cls)
     if ptr_is_null(out) != 0:
         return null()
+    py_instance_copy_builtin_payload(obj, out)
     if deep != 0 and _memo_set(memo, obj, out) != 0:
         py_decref(out)
         return null()

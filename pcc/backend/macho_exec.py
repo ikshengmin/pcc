@@ -364,6 +364,7 @@ def prepare_executable_object(
     semantic_manifest=None,
     _consume_inputs: bool = False,
     _source_view: bool = False,
+    archive_selections=None,
 ):
     """Resolve a final link job into its reusable relocatable state.
 
@@ -399,11 +400,23 @@ def prepare_executable_object(
                 raise LinkError(
                     f"archive {archive_index} is outside the proven subset: {exc}"
                 ) from exc
+            selected_members = [] if archive_selections is not None else None
             pulled, pending = select_members(
                 members,
                 pending,
                 already_defined=already_defined,
+                selected_members=selected_members,
             )
+            if archive_selections is not None:
+                import hashlib
+                archive_hash = hashlib.sha256(archive).hexdigest()
+                for member in selected_members:
+                    archive_selections.append({
+                        "archive_index": archive_index,
+                        "member": member.name,
+                        "archive_sha256": archive_hash,
+                        "member_sha256": hashlib.sha256(member.data).hexdigest(),
+                    })
             resolved_objects.extend(_coerce_link_objects(
                 list(pulled),
                 start_index=len(resolved_objects),
@@ -445,22 +458,33 @@ def link_executable(
     semantic_manifest=None,
     _consume_inputs: bool = False,
     _direct_source_view: bool = False,
+    link_receipt=None,
 ) -> bytes:
     # Finish only after the preparation frame has returned. In a compiled
     # caller, temporary arguments may stay owned until that frame exits.
+    receipt = {} if link_receipt is not None else None
     plan = _prepare_executable_inputs(
         objects, archives, entry, minos, identifier, semantic_manifest,
-        _consume_inputs, _direct_source_view,
+        _consume_inputs, _direct_source_view, receipt,
     )
-    return _finish_executable_image(plan, identifier, None)
+    image = _finish_executable_image(plan, identifier, None)
+    if link_receipt is not None:
+        import hashlib
+        receipt["image_sha256"] = hashlib.sha256(image).hexdigest()
+        link_receipt.clear()
+        link_receipt.update(receipt)
+    return image
 
 
 def _prepare_executable_inputs(objects, archives, entry, minos, identifier,
                                semantic_manifest, consume_inputs,
-                               direct_source_view):
+                               direct_source_view, link_receipt=None):
     # Preserve fail-closed option validation before parsing potentially large
     # inputs.  ``link_prepared_executable`` validates again for direct users.
     minos = _validate_minos(minos)
+    selections = [] if link_receipt is not None else None
+    if link_receipt is not None:
+        link_receipt["archive_members"] = selections
     return _prepare_executable_image(
         prepare_executable_object(
             objects,
@@ -468,10 +492,12 @@ def _prepare_executable_inputs(objects, archives, entry, minos, identifier,
             semantic_manifest=semantic_manifest,
             _consume_inputs=consume_inputs,
             _source_view=direct_source_view,
+            archive_selections=selections,
         ),
         entry=entry,
         minos=minos,
         identifier=identifier,
+        link_receipt=link_receipt,
     )
 
 
@@ -500,6 +526,7 @@ def _prepare_executable_image(
     entry: str = "_main",
     minos: tuple[int, int] = (12, 0),
     identifier: bytes = b"pcc-linked",
+    link_receipt=None,
 ):
     """Resolve addresses into immutable output regions, without allocating an image."""
 
@@ -1479,6 +1506,16 @@ def _prepare_executable_image(
     cmds += struct.pack("<IIIIII", spec.LC_LOAD_DYLIB, dylib_size, 24,
                         0, 0x10000, 0x10000)
     cmds += LIBSYSTEM.ljust(dylib_size - 24, b"\0")
+    if link_receipt is not None:
+        # Describe the load command and ordinal actually emitted. libSystem
+        # may reexport these names; this makes no physical symbol-owner claim.
+        link_receipt["dynamic_libraries"] = [
+            {"ordinal": 1, "install_name": LIBSYSTEM.decode("ascii")},
+        ]
+        link_receipt["imports"] = [
+            {"symbol": name, "library_ordinal": 1, "weak": name in weak_imports}
+            for name in imports
+        ]
     cmds += struct.pack("<IIII", spec.LC_CODE_SIGNATURE, 16, sig_off, sig_size)
 
     if len(cmds) != sizeofcmds:

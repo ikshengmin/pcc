@@ -6,7 +6,7 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, BytesType, Call, DictType, DynType, Expr, FloatType, IntLit, IntType, ListType, Name, NoneLit, NoneType, SetType, StrType, Subscript, TupleExpr, TupleType
+from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, BytesType, Call, ClassType, DictType, DynType, Expr, FloatType, IntLit, IntType, ListType, Name, NoneLit, NoneType, SetType, StrType, Subscript, TupleExpr, TupleType
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
@@ -83,7 +83,7 @@ def compile_time_isinstance_impl(
         return None
     matcher = _BUILTIN_TYPE_MATCHERS[class_ident]
     ty = obj_expr.ty
-    if isinstance(ty, DynType):
+    if isinstance(ty, DynType) or (class_ident == "str" and isinstance(ty, ClassType)):
         return None
     return ir.Constant(_I1, 1 if isinstance(ty, matcher) else 0)
 
@@ -100,6 +100,11 @@ def emit_builtin_runtime_isinstance_impl(
     evaluated_operand = obj_val is None
     if evaluated_operand:
         obj_val = host._emit_as_object(obj_expr)
+    if class_ident == "str":
+        raw = host.builder.call(host.runtime["py_str_check"], [obj_val])
+        if evaluated_operand:
+            host._gc_release_if_owned(obj_val, obj_expr)
+        return host.builder.icmp_signed("!=", raw, ir.Constant(_I64, 0))
     if class_ident == "type":
         cls_val = host.builder.call(
             host.runtime["py_builtin_type_for_tag"], [ir.Constant(_I64, PY_TYPE_CLASS)],

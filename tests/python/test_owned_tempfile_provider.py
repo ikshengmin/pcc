@@ -286,8 +286,10 @@ def runtime():
     yield model
     model.error=None;model.remove_failure=0
     model.ns['_td_shutdown']()
-    retained=model.globals.get('pcc_tempfile_mkdtemp_root_handle')
-    assert set(model.handles)==({retained} if retained is not None else set())
+    retained={model.global_load(name) for name in (
+        'pcc_tempfile_mkdtemp_root_handle','pcc_tempdir_class_root_handle')}
+    retained.discard(None)
+    assert set(model.handles)==retained
     assert not model.frames
     assert not model.leases
 
@@ -485,3 +487,84 @@ def test_mkdtemp_unimplemented_path_domains_fail_explicitly(runtime,tmp_path,bad
     assert runtime.error.value[0]==11
     assert 'owned' in runtime.error.value[1]
     assert list(tmp_path.iterdir())==[]
+
+
+def _mkstemp_model_with_native_open():
+    value = Runtime()
+    calls = []
+    def open_flags(path, flags, permissions, directory):
+        calls.append((value.raw(path), flags, permissions, directory))
+        try:
+            return os.open(value.raw(path), flags, permissions, dir_fd=None if directory == -100 else directory)
+        except OSError as error:
+            return -error.errno
+    value.ns['open_file_flags'] = open_flags
+    return value, calls
+
+
+def test_owned_mkstemp_has_exclusive_owner_permissions_suffix_and_no_auto_delete(tmp_path, monkeypatch):
+    import stat
+
+    model, calls = _mkstemp_model_with_native_open()
+    template = model.cstr(str(tmp_path / 'file-XXXXXX.tail'))
+    fd = model.ns['pcc_platform_mkstemp_suffix'](template, 5)
+    assert fd >= 0
+    path = Path(os.fsdecode(model.raw(template)))
+    try:
+        assert path.name.endswith('.tail') and 'XXXXXX' not in path.name
+        assert stat.S_IMODE(os.fstat(fd).st_mode) == 0o600
+        assert not os.get_inheritable(fd)
+        assert calls[-1][1] == os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+        assert calls[-1][2:] == (0o600, -100)
+        os.write(fd, b'first owner')
+    finally:
+        os.close(fd)
+    assert path.read_bytes() == b'first owner'
+    # Reuse the original seed so the first name collides. The original file
+    # must remain untouched while a subsequent stem gets a new owner.
+    model.global_store('pcc_platform_mkdtemp_counter', 0)
+    second = model.cstr(str(tmp_path / 'file-XXXXXX.tail'))
+    fd = model.ns['pcc_platform_mkstemp_suffix'](second, 5)
+    try:
+        assert fd >= 0 and model.raw(second) != model.raw(template)
+        assert path.read_bytes() == b'first owner'
+        assert len(calls) == 3
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+@pytest.mark.parametrize('name,suffix', [('short',0),('aXXXXX',0),('XXXXXX',-1),('XXXXXX',1),('XXXXXX.tail',6)])
+def test_owned_mkstemp_rejects_invalid_template_before_open(name, suffix, monkeypatch):
+    model,calls=_mkstemp_model_with_native_open()
+    template=model.cstr(name)
+    assert model.ns['pcc_platform_mkstemp_suffix'](template,suffix)==-22
+    assert calls==[] and model.raw(template)==name.encode()
+
+
+def test_owned_mkstemp_preserves_noncollision_error_and_bounds_retries(monkeypatch):
+    model,calls=_mkstemp_model_with_native_open()
+    seen=[]
+    def denied(*args):
+        seen.append(args)
+        return -13
+    model.ns['open_file_flags']=denied
+    assert model.ns['pcc_platform_mkstemp_suffix'](model.cstr('XXXXXX'),0)==-13
+    assert len(seen)==1
+    model.ns['open_file_flags']=lambda *args: seen.append(args) or -17
+    seen.clear()
+    assert model.ns['pcc_platform_mkstemp_suffix'](model.cstr('XXXXXX'),0)==-17
+    assert len(seen)==256
+
+
+def test_owned_mkstemp_selects_target_flags_without_host_translation(monkeypatch):
+    model,calls=_mkstemp_model_with_native_open()
+    model.ns['target_sys_platform']=lambda:model.cstr('darwin')
+    seen=[]
+    model.ns['open_file_flags']=lambda *args:seen.append(args) or 42
+    assert model.ns['pcc_platform_mkstemp_suffix'](model.cstr('XXXXXX.end'),4)==42
+    assert seen[0][1:]==(2|512|2048|16777216,0o600,-2)
+    model.ns['target_sys_platform']=lambda:model.cstr('win32')
+    seen.clear()
+    assert model.ns['pcc_platform_mkstemp_suffix'](model.cstr('XXXXXX'),0)==-38
+    assert seen==[]

@@ -803,7 +803,8 @@ typedef struct PyClassMethod {
  *                       classes are small and the cost is dwarfed by call.
  *   field_names       : declared instance-field names in slot order.
  *   instance_size     : total bytes of a PyInstanceObject carrying
- *                       n_fields slots.
+ *                       declared fields, the reserved dynamic owner, and
+ *                       any appended builtin payload owners.
  *   type_tag_alloc    : the type tag allocated for this class
  *                       (PY_TYPE_USER_CLASS_START + n). Tags immediately
  *                       above PY_TYPE_USER are reserved for descriptors and
@@ -1092,6 +1093,12 @@ PyObject *py_class_new_from_objects(PyObject *name,
                                     PyObject *ns);
 void py_class_mark_slots_only(PyClassObject *cls);
 void py_class_mark_dict_subclass(PyClassObject *cls);
+/* Immutable builtin backing is an appended traced owner after __dict__. */
+int64_t py_class_is_str_subclass(PyClassObject *cls);
+PyObject *py_str_payload(PyObject *value); /* immediate borrowed lookup only */
+PyObject *py_str_exact_copy(PyObject *value); /* scoped payload lease; new exact str */
+PyObject *py_str_subclass_new(PyClassObject *cls, PyObject *args, PyObject *kwargs);
+void py_instance_copy_builtin_payload(PyObject *source, PyObject *destination);
 /* dict-subclass inherited-behavior fallback (py_protocol.c). */
 PyObject *py_dict_subclass_getattr(PyObject *o, const char *name);
 PyObject *py_dict_subclass_getitem(PyObject *o, PyObject *key);

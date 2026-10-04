@@ -17,6 +17,9 @@ Owned surface (stable C ABI names):
 
 __pcc_runtime_port__ = True
 
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_CEXT_TAG_BASE,
+)
 from pcc.extern import c_abi_typed_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     call_i64_ptr2,
@@ -67,7 +70,7 @@ def pcc_capi_visit_cext_object_slots(o, visit, ctx) -> int:
     if ptr_is_null(o) or is_tagged_int(o) or ptr_is_null(visit):
         return 0
     tag: int = load_i32(o, 8)
-    offset = tag - (0x10000)
+    offset = tag - (PY_TYPE_CEXT_TAG_BASE)
     count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
     if offset < 0 or offset >= count:
         return 0

@@ -8,6 +8,7 @@ object-path print(), list/tuple repr, and print_many.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
+from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS
 from pcc.runtime.py.py_abi_constants import PY_TYPE_CONTINUATION, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_EXC_UNICODE_PAYLOAD,
@@ -393,7 +394,9 @@ def _format(o) -> None:
         return
 
     tag: int = load_i32(o, 8)
-    if tag == PY_TYPE_NONE:                    # PY_TYPE_NONE
+    if tag == PY_TYPE_ELLIPSIS:
+        _write_lit(cstr("Ellipsis"), 8)
+    elif tag == PY_TYPE_NONE:                    # PY_TYPE_NONE
         _write_lit(cstr("None"), 4)
     elif tag == PY_TYPE_BOOL:                  # PY_TYPE_BOOL
         if ptr_eq(o, global_load_ptr("py_True")) != 0:

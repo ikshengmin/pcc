@@ -37,7 +37,24 @@ now; they call the exported pcc-Python helpers below via extern.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_CEXT_TAG_BASE,
+    PY_TYPE_CLASS,
+    PY_TYPE_COMPLEX,
+    PY_TYPE_DICT,
+    PY_TYPE_FLOAT,
+    PY_TYPE_FUNC,
+    PY_TYPE_INT,
+    PY_TYPE_LIST,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_NONE,
+    PY_TYPE_SET,
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+)
 
 from pcc.extern import c_abi_typed_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
@@ -103,7 +120,7 @@ def _cext_tag_for_type(type_ptr) -> int:
     count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
     if count >= (1024):
         return 0
-    tag: int = (0x10000) + count
+    tag: int = (PY_TYPE_CEXT_TAG_BASE) + count
     store_ptr(
         global_addr("pcc_capi_cext_types"), count * 8, type_ptr
     )
@@ -120,7 +137,7 @@ def pcc_capi_cext_tag_for(type_ptr) -> int:
 @c_abi_typed_export("pcc_capi_is_cext_type_tag", "i64", ("i64",))
 def pcc_capi_is_cext_type_tag(type_tag: int) -> int:
     count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
-    offset: int = type_tag - (0x10000)
+    offset: int = type_tag - (PY_TYPE_CEXT_TAG_BASE)
     if offset >= 0 and offset < count:
         return 1
     return 0
@@ -132,7 +149,7 @@ def pcc_capi_cext_type_for_object(o) -> c_ptr:
         return null()
     type_tag: int = load_i32(o, 8)
     count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
-    offset: int = type_tag - (0x10000)
+    offset: int = type_tag - (PY_TYPE_CEXT_TAG_BASE)
     if offset < 0 or offset >= count:
         return null()
     return load_ptr(global_addr("pcc_capi_cext_types"), offset * 8)
@@ -460,11 +477,9 @@ def pcc_capi_type(o) -> c_ptr:
         return global_addr("PySlice_Type")
     tag: int = load_i32(o, 8)
     count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
-    if tag >= (0x10000) and tag < (0x10000) + count:
-        return load_ptr(
-            global_addr("pcc_capi_cext_types"),
-            (tag - (0x10000)) * 8,
-        )
+    if tag >= (PY_TYPE_CEXT_TAG_BASE) and tag < (PY_TYPE_CEXT_TAG_BASE) + count:
+        index: int = tag - PY_TYPE_CEXT_TAG_BASE
+        return load_ptr(global_addr("pcc_capi_cext_types"), index * 8)
     if tag == PY_TYPE_BOOL:  # PY_TYPE_BOOL
         return global_addr("PyBool_Type")
     if tag == PY_TYPE_INT:  # PY_TYPE_INT
@@ -514,7 +529,7 @@ def pcc_capi_type_addr(o) -> c_ptr:
         )
         return global_addr("pcc_capi_func_type")
     count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
-    if tag >= (0x10000) and tag < (0x10000) + count:
+    if tag >= (PY_TYPE_CEXT_TAG_BASE) and tag < (PY_TYPE_CEXT_TAG_BASE) + count:
         return ptr_add(o, 16)
     if tag >= PY_TYPE_NONE and tag < 256:
         slot: c_ptr = load_ptr(

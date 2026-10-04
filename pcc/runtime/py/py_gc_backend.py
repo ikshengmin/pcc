@@ -12,6 +12,7 @@ Names are algorithmic, not project-branded:
 __pcc_runtime_port__ = True
 
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
+from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS
 from pcc.runtime.py.py_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COMPLEX, PY_TYPE_CPY_HANDLE, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_NONE, PY_TYPE_STR
 from pcc.unsafe import (
     define_global_ptr_null,
@@ -946,6 +947,8 @@ def _gc_tracks_objects() -> int:
 
 
 def _backend3_graph_leaf_tag(tag: int) -> int:
+    if tag == PY_TYPE_ELLIPSIS:
+        return 1
     if tag == PY_TYPE_NONE:
         return 1
     if tag == PY_TYPE_BOOL:
@@ -2225,6 +2228,8 @@ def _pointer_is_managed_no_lock(o) -> int:
     if ptr_eq(o, global_load_ptr("py_None")) != 0:
         return 1
     if ptr_eq(o, global_load_ptr("py_NotImplemented")) != 0:
+        return 1
+    if ptr_eq(o, global_load_ptr("py_Ellipsis")) != 0:
         return 1
     if ptr_eq(o, global_load_ptr("py_True")) != 0:
         return 1

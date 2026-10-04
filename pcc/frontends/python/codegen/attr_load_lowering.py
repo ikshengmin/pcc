@@ -12,6 +12,7 @@ from pcc.frontends.python.py_ast import BoolLit, IntLit, NoneLit, StrLit
 from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, BytesType, Call, ClassType, DictType, DynType, Expr, FloatType, IntType, ListType, MemoryViewType, Name, NoneType, StrType, Subscript, TupleType, Type
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
 from pcc.frontends.python.py_ast import RawPointerType
 from pcc.frontends.python.codegen.generator_lowering import emit_function_auto_park_role
@@ -93,8 +94,18 @@ class AttrLoadLoweringMixin:
                 return ("int", access[expr.name])
         if module == "tempfile" and expr.name == "TemporaryDirectory":
             return ("runtime", "py_tempdir_type", ())
+        if module == "os":
+            provider = {"fdopen": "py_file_fdopen_function", "open": "py_os_open_function",
+                        "close": "py_os_close_function"}.get(expr.name)
+            if provider is not None:
+                return ("runtime", provider, ())
+            flag = native_os_descriptor_constant(expr.name, self._target_sys_platform_text())
+            if flag is not None:
+                return ("int", flag)
         if module == "tempfile" and expr.name == "mkdtemp":
             return ("runtime", "py_tempfile_mkdtemp_function", ())
+        if module == "tempfile" and expr.name == "NamedTemporaryFile":
+            return ("runtime", "py_namedtempfile_function", ())
         if module == "sys":
             if expr.name == "argv":
                 return ("argv",)
@@ -1045,6 +1056,10 @@ class AttrLoadLoweringMixin:
             # callable rather than asking the runtime builtin-type ClassInfo
             # for a descriptor it does not own.
             builtin_name = expr.obj.ident
+            if builtin_name == "str":
+                return self._take_slot_call_root(
+                    self._emit_slot_call_attribute(expr, "str.__new__.descriptor")
+                )
             builtin_type = self._emit_native_builtin_callable_value(builtin_name)
             if builtin_type is not None:
                 adapter_name = f"__pcc_builtin_type_{builtin_name}_dunder_new"

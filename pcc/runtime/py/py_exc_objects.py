@@ -23,6 +23,7 @@ The private exception-table code used here is ``PY_EXC_EXCEPTION``.
 __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_NONE,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
     PYTUPLEOBJECT_ITEMS_OFFSET,
@@ -656,7 +657,7 @@ def _unicode_error_normalize(value, type_tag: int):
         pcc_gc_store_root(ptr_add(owned, 8), pcc_gc_load_ptr(null(), borrowed))
         pcc_py_gc_minor_graph_unlock()
     else:
-        count: int = 0 if tag < 0 else 1
+        count: int = 0 if tag < PY_TYPE_NONE else 1
         store_ptr(owned, 8, py_tuple_new(count))
         if count != 0 and ptr_is_null(load_ptr(owned, 8)) == 0:
             pcc_py_gc_minor_graph_lock()

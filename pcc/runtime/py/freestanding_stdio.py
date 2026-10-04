@@ -27,6 +27,7 @@ from pcc.unsafe import (
     free,
     f64_bits,
     f64_signbit,
+    fd_control,
     global_addr,
     initial_environ,
     load_i32,
@@ -261,6 +262,80 @@ def fopen(path, mode) -> c_ptr:
             abi_constant("stdio.file.buffer_position_offset"),
             append_position,
         )
+    return stream
+
+
+@c_abi_export("pcc_stdio_fdopen")
+def pcc_stdio_fdopen(fd: i64, mode, closefd: i64, buffering: i64):
+    """Adopt an existing descriptor without opening or truncating its path."""
+    if fd < 0 or ptr_is_null(mode):
+        pcc_errno_set(9 if fd < 0 else 22)
+        return null()
+    first: i64 = load_i8(mode, 0)
+    flags: i64 = 0
+    if first == 114:
+        flags = abi_constant("stdio.flag.readable")
+    elif first == 119 or first == 97 or first == 120:
+        flags = abi_constant("stdio.flag.writable")
+    else:
+        pcc_errno_set(22)
+        return null()
+    offset: i64 = 1
+    while load_i8(mode, offset) != 0:
+        marker: i64 = load_i8(mode, offset)
+        if marker == 43:
+            flags = abi_constant("stdio.flag.readable") | abi_constant("stdio.flag.writable")
+        elif marker != 98 and marker != 116:
+            pcc_errno_set(22)
+            return null()
+        offset = offset + 1
+    descriptor_flags: i64 = fd_control(fd, 3, 0)  # F_GETFL on supported POSIX targets.
+    if descriptor_flags < 0:
+        pcc_errno_set(0 - descriptor_flags)
+        return null()
+    descriptor_access: i64 = descriptor_flags & 3
+    if ((flags & abi_constant("stdio.flag.readable")) != 0 and descriptor_access == 1
+            or (flags & abi_constant("stdio.flag.writable")) != 0 and descriptor_access == 0):
+        pcc_errno_set(22)
+        return null()
+    if first == 97:
+        flags = flags | abi_constant("stdio.flag.append")
+    if closefd == 0:
+        flags = flags | abi_constant("stdio.flag.borrowed_descriptor")
+    stream = _stream_new(fd, flags, 0)
+    if ptr_is_null(stream):
+        pcc_errno_set(12)
+        return null()  # Ownership has not transferred on failure.
+    if buffering == 0:
+        _stream_release_buffer(stream)
+        store_i64(stream, abi_constant("stdio.file.buffer_capacity_offset"), 0)
+    elif buffering > 1 and (flags & abi_constant("stdio.flag.writable")) != 0:
+        buffer = malloc(buffering)
+        if ptr_is_null(buffer):
+            _stream_unregister(stream)
+            _stream_release_buffer(stream)
+            free(stream)
+            pcc_errno_set(12)
+            return null()
+        _stream_release_buffer(stream)
+        store_ptr(stream, abi_constant("stdio.file.buffer_offset"), buffer)
+        store_i64(stream, abi_constant("stdio.file.buffer_capacity_offset"), buffering)
+    # Descriptor flags/position change only after every allocation succeeds.
+    # A failed adoption leaves both descriptor ownership and state untouched.
+    if first == 97:
+        append_flag: i64 = 8 if load_i8(target_sys_platform(), 0) == 100 else 1024
+        changed: i64 = fd_control(fd, 4, descriptor_flags | append_flag)
+        if changed < 0:
+            _stream_unregister(stream)
+            _stream_release_buffer(stream)
+            free(stream)
+            pcc_errno_set(0 - changed)
+            return null()
+    position: i64 = seek_file(fd, 0, 1)
+    if first == 97:
+        position = seek_file(fd, 0, 2)
+    if position >= 0:
+        store_i64(stream, abi_constant("stdio.file.buffer_position_offset"), position)
     return stream
 
 
@@ -511,6 +586,32 @@ def fgetc(stream) -> i64:
     return load_i8(byte, 0) & 255
 
 
+@c_abi_typed_export("getc", "i32", ("ptr",))
+def getc(stream) -> i64:
+    return fgetc(stream)
+
+
+@c_abi_typed_export("fgets", "ptr", ("ptr", "i32", "ptr"))
+def fgets(output, count: i64, stream) -> c_ptr:
+    if count <= 0:
+        return null()
+    index: i64 = 0
+    while index < count - 1:
+        byte = fgetc(stream)
+        if byte < 0:
+            # EOF after some input yields the partial line. Read errors and
+            # EOF before any input return NULL; the latter leaves output alone.
+            if index == 0 or ferror(stream) != 0:
+                return null()
+            break
+        store_i8(output, index, byte)
+        index = index + 1
+        if byte == 10:
+            break
+    store_i8(output, index, 0)
+    return output
+
+
 @c_abi_typed_export("fseek", "i32", ("ptr", "i64", "i32"))
 def fseek(stream, offset: i64, whence: i64) -> i64:
     if ptr_is_null(stream) or load_i64(
@@ -696,7 +797,9 @@ def fclose(stream) -> i64:
     flush_result: i64 = 0
     if (flags & abi_constant("stdio.flag.writable")) != 0:
         flush_result = _flush_output(stream)
-    rc = close(load_i64(stream, abi_constant("stdio.file.fd_offset")))
+    rc: i64 = 0
+    if (flags & abi_constant("stdio.flag.borrowed_descriptor")) == 0:
+        rc = close(load_i64(stream, abi_constant("stdio.file.fd_offset")))
     _stream_release_buffer(stream)
     store_i64(stream, abi_constant("stdio.file.magic_offset"), 0)
     free(stream)
@@ -1563,6 +1666,19 @@ def _format_core(output, capacity: i64, stream, format, cursor) -> i64:
             terminator = capacity - 1
         store_i8(output, terminator, 0)
     return index
+
+
+@c_abi_typed_export("sprintf", "i32", ("ptr", "ptr"))
+@c_abi_variadic_export("sprintf")
+def sprintf(output, format) -> i64:
+    cursor = va_start()
+    # sprintf has no destination bound. The largest addressable signed
+    # pointer distance keeps the shared formatter's terminating-NUL contract.
+    result = _format_core(output, 9223372036854775807, null(), format, cursor)
+    va_end(cursor)
+    if result > 2147483647:
+        return -1
+    return result
 
 
 @c_abi_variadic_export("snprintf")

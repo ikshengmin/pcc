@@ -28,6 +28,9 @@ Owned surface (stable C ABI names):
 
 __pcc_runtime_port__ = True
 
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_CEXT_TAG_BASE,
+)
 from pcc.extern import c_abi_typed_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     call_i64_ptr1,
@@ -191,7 +194,7 @@ def PyType_FromModuleAndSpec(module, spec, bases) -> c_ptr:
     if ptr_is_null(type_obj):
         return null()
     tag: int = load_i32(type_obj, 8)  # type_tag set by PyType_Ready via cext tag
-    offset = tag - (0x10000)
+    offset = tag - (PY_TYPE_CEXT_TAG_BASE)
     if offset < 0 or offset >= (1024):
         _runtime_error(cstr("heap type registry exhausted"))
         return null()
@@ -209,10 +212,10 @@ def PyType_GetModule(type_obj) -> c_ptr:
     if ptr_is_null(type_obj):
         return null()
     version_tag: int = load_i32(type_obj, (392))
-    if version_tag < (0x10000):
+    if version_tag < (PY_TYPE_CEXT_TAG_BASE):
         _type_error(cstr("type has no associated module"))
         return null()
-    offset = version_tag - (0x10000)
+    offset = version_tag - (PY_TYPE_CEXT_TAG_BASE)
     if offset < 0 or offset >= (1024):
         _type_error(cstr("type has no associated module"))
         return null()
@@ -237,8 +240,8 @@ def PyType_GetModuleByDef(type_obj, def_obj) -> c_ptr:
     while not ptr_is_null(type_obj) and guard < 64:
         module = null()
         version_tag: int = load_i32(type_obj, (392))
-        if version_tag >= (0x10000):
-            offset = version_tag - (0x10000)
+        if version_tag >= (PY_TYPE_CEXT_TAG_BASE):
+            offset = version_tag - (PY_TYPE_CEXT_TAG_BASE)
             count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
             if offset >= 0 and offset < count:
                 table = global_addr("pcc_capi_cext_type_modules")

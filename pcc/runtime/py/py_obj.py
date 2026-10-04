@@ -15,7 +15,49 @@ not belong in this prose because the generator cannot update them.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
-from pcc.runtime.py.py_abi_constants import PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_PINNED, PY_FLAG_GC_TRACKED, PY_FLAG_IMMORTAL, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COMPLEX, PY_TYPE_CONTINUATION, PY_TYPE_CPY_HANDLE, PY_TYPE_EXC, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_GEN, PY_TYPE_INT, PY_TYPE_ITER, PY_TYPE_MEMORYVIEW, PY_TYPE_STATICMETHOD, PY_TYPE_TASK, PY_TYPE_COROUTINE, PY_TYPE_INSTANCE, PY_TYPE_LIST, PY_TYPE_CLASS, PY_TYPE_CLASSMETHOD, PY_TYPE_NONE, PY_TYPE_DICT, PY_TYPE_SET, PY_TYPE_PROPERTY, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_WEAKREF, PY_TYPE_USER, PY_TYPE_USER_CLASS_START, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL
+from pcc.runtime.py.py_abi_constants import (
+    PYLISTOBJECT_ITEMS_OFFSET,
+    PYLISTOBJECT_LENGTH_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PYOBJECTHEADER_REFCOUNT_OFFSET,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_FLAG_GC_PINNED,
+    PY_FLAG_GC_TRACKED,
+    PY_FLAG_IMMORTAL,
+    PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_CEXT_TAG_BASE,
+    PY_TYPE_CLASS,
+    PY_TYPE_CLASSMETHOD,
+    PY_TYPE_COMPLEX,
+    PY_TYPE_CONTINUATION,
+    PY_TYPE_COROUTINE,
+    PY_TYPE_CPY_HANDLE,
+    PY_TYPE_DICT,
+    PY_TYPE_ELLIPSIS,
+    PY_TYPE_EXC,
+    PY_TYPE_FLOAT,
+    PY_TYPE_FUNC,
+    PY_TYPE_GEN,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_ITER,
+    PY_TYPE_LIST,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_NONE,
+    PY_TYPE_PROPERTY,
+    PY_TYPE_SET,
+    PY_TYPE_STATICMETHOD,
+    PY_TYPE_STR,
+    PY_TYPE_TASK,
+    PY_TYPE_TUPLE,
+    PY_TYPE_USER,
+    PY_TYPE_USER_CLASS_START,
+    PY_TYPE_VIRTUAL_THREAD,
+    PY_TYPE_VTHREAD_CHANNEL,
+    PY_TYPE_WEAKREF,
+)
 from pcc.unsafe import (
     cstr,
     define_global_i32,
@@ -315,6 +357,8 @@ def py_bool_from_bit(b: int):
 
 
 def _gc_graph_leaf_tag(tag: int) -> int:
+    if tag == PY_TYPE_ELLIPSIS:
+        return 1
     if tag == PY_TYPE_NONE:
         return 1
     if tag == PY_TYPE_BOOL:
@@ -546,7 +590,7 @@ def _gc_incref_fresh_native_instance(o) -> None:
     if is_tagged_int(o) != 0:
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag != PY_TYPE_INSTANCE and (tag < PY_TYPE_USER_CLASS_START or tag >= (0x10000)):
+    if tag != PY_TYPE_INSTANCE and (tag < PY_TYPE_USER_CLASS_START or tag >= (PY_TYPE_CEXT_TAG_BASE)):
         # Keep an accidental future caller safe; the optimized frontend lane
         # proves this exact tag and therefore never takes the generic query.
         py_incref(o)
@@ -1284,13 +1328,10 @@ def _py_refcount_prepared_reset(prepared, o) -> None:
     store_i64(prepared, 48, 0)
 
 
-# 0x10000 is PY_TYPE_CEXT_TAG_BASE (py_runtime.h), the first tag handed out by
-# pcc_capi_register_cext_type.  It is spelled as a literal here and in
-# py_capi_type_runtime.py rather than imported: a comparison against the
-# imported name lowers through the generic object comparison instead of the
-# raw integer one.  Everything from PY_TYPE_USER_CLASS_START up to it is a pcc
-# user class and must be refcounted; the guards used to stop at 500, which
-# silently made py_incref a no-op past roughly the 440th class.
+# PY_TYPE_CEXT_TAG_BASE is the first tag handed out by the extension registry.
+# The generated ABI import is statically resolved by the runtime-library
+# pipeline. Tags from PY_TYPE_USER_CLASS_START up to this boundary belong to
+# pcc user classes and must be refcounted.
 def _py_incref_prepare(o, prepared) -> None:
     _py_refcount_prepared_reset(prepared, o)
     if ptr_is_null(o) != 0:
@@ -1308,8 +1349,8 @@ def _py_incref_prepare(o, prepared) -> None:
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
     if (
         tag < PY_TYPE_NONE
-        or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER)
-        or (tag >= (0x10000) and pcc_capi_is_cext_type_tag(tag) == 0)
+        or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER and tag != PY_TYPE_ELLIPSIS)
+        or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0)
     ):
         if _pcc_debug_runtime_enabled() != 0:
             # Debug-invalid value: a store plan must not publish it, and the
@@ -1406,7 +1447,7 @@ def py_incref(o) -> None:
         if (
             (fast_tag >= PY_TYPE_NONE and fast_tag < PY_TYPE_CONTINUATION)
             or fast_tag == PY_TYPE_CPY_HANDLE
-            or (fast_tag >= PY_TYPE_USER and fast_tag < 0x10000)
+            or (fast_tag >= PY_TYPE_USER and fast_tag < PY_TYPE_CEXT_TAG_BASE)
         ):
             if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
                 fast_rc: int = load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET)
@@ -1424,7 +1465,7 @@ def py_incref(o) -> None:
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER) or (tag >= (0x10000) and pcc_capi_is_cext_type_tag(tag) == 0):
+    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER and tag != PY_TYPE_ELLIPSIS) or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and pcc_gc_object_is_known(o) == 0:
@@ -1455,8 +1496,8 @@ def _py_decref_prepare(o, prepared) -> None:
     tag_dbg: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
     if (
         tag_dbg < PY_TYPE_NONE
-        or (tag_dbg > PY_TYPE_CPY_HANDLE and tag_dbg < PY_TYPE_USER)
-        or (tag_dbg >= (0x10000) and pcc_capi_is_cext_type_tag(tag_dbg) == 0)
+        or (tag_dbg > PY_TYPE_CPY_HANDLE and tag_dbg < PY_TYPE_USER and tag_dbg != PY_TYPE_ELLIPSIS)
+        or (tag_dbg >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag_dbg) == 0)
     ):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
@@ -1580,7 +1621,7 @@ def py_decref(o) -> None:
         if (
             (fast_tag >= PY_TYPE_NONE and fast_tag < PY_TYPE_CONTINUATION)
             or fast_tag == PY_TYPE_CPY_HANDLE
-            or (fast_tag >= PY_TYPE_USER and fast_tag < 0x10000)
+            or (fast_tag >= PY_TYPE_USER and fast_tag < PY_TYPE_CEXT_TAG_BASE)
         ):
             if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
                 fast_rc: int = load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET)
@@ -1598,7 +1639,7 @@ def py_decref(o) -> None:
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER) or (tag >= (0x10000) and pcc_capi_is_cext_type_tag(tag) == 0):
+    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER and tag != PY_TYPE_ELLIPSIS) or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and pcc_gc_object_is_known(o) == 0:

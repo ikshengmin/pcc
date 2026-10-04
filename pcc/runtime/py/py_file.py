@@ -11,8 +11,14 @@ from pcc.extern import (
     c_size_t,
     c_void,
 )
-from pcc.runtime.py.py_abi_constants import PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_GC_PINNED, PY_FLAG_IMMORTAL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_FILE, PY_TYPE_INT, PY_TYPE_MEMORYVIEW
-from pcc.runtime.py.py_abi_constants import PY_TYPE_LIST, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import (
+    PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET,
+    PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET,
+    PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_GC_PINNED, PY_FLAG_IMMORTAL, PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_FILE, PY_TYPE_INT,
+    PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_STR, PY_TYPE_TUPLE,
+)
 from pcc.unsafe import (
     cstr,
     define_global_ptr_null,
@@ -47,6 +53,7 @@ ferror = extern("ferror", (c_ptr,), c_int32)
 fflush = extern("fflush", (c_ptr,), c_int32)
 fgetc = extern("fgetc", (c_ptr,), c_int32)
 fopen = extern("fopen", (c_ptr, c_ptr), c_ptr)
+pcc_stdio_fdopen = extern("pcc_stdio_fdopen", (c_int64, c_ptr, c_int64, c_int64), c_ptr)
 fread = extern("fread", (c_ptr, c_size_t, c_size_t, c_ptr), c_size_t)
 # LP64 targets (aarch64-darwin / x86_64-linux): C ``long`` is 64-bit, so
 # fseek/ftell take/return c_int64 here.
@@ -77,6 +84,8 @@ py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_bool_from_bit = extern("py_bool_from_bit", (c_int32,), c_ptr)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
+py_int_to_i64 = extern("py_int_to_i64", (c_ptr, c_ptr), c_int64)
+py_index_i64_checked_slots = extern("py_index_i64_checked_slots", (c_ptr,), c_int64)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
 py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
@@ -87,6 +96,12 @@ py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
+py_obj_special_call_slots = extern("py_obj_special_call_slots",
+    (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
+pcc_errno_get = extern("pcc_errno_get", (), c_int32)
+pcc_errno_message_into = extern("pcc_errno_message_into", (c_int32, c_ptr, c_int64), c_int32)
 py_str_splitlines_keepends = extern(
     "py_str_splitlines_keepends", (c_ptr, c_int32), c_ptr
 )
@@ -203,6 +218,23 @@ _FILE_COUNT = 8
 _FILE_BYTES = 8
 _FILE_SIZE = 48
 _FILE_STATE_SIZE = 96
+# Offset 32 keeps the original descriptor name after the FILE has closed.
+_FILE_DESCRIPTOR_NAME = 1073741824
+_FILE_DESCRIPTOR_SHIFT = 32
+_FILE_FDOPEN_OWNED = 6
+_FILE_FDOPEN_BORROWED = 7
+_FILE_ERRNO_EXCEPTION = 0
+_FILE_ERRNO_NUMBER = 1
+_FILE_ERRNO_MESSAGE = 2
+_FILE_ERRNO_ARGS = 3
+_FILE_DYNAMIC_METHOD = 8
+_FILE_BOUND_METHOD = 9
+_FILE_FSPATH = 10
+_FILE_METHOD_CAPTURES = 0
+_FILE_METHOD_ARGS = 1
+_FILE_METHOD_CODE = 2
+_FILE_METHOD_OPERAND = 3
+_FILE_METHOD_RECEIVER = 5
 
 # Native decoder-state layout. Input tails never exceed three UTF-8 bytes.
 _FILE_DECODED = 0
@@ -292,12 +324,155 @@ def _file_validate_cstr(value, label) -> int:
     return 0
 
 
-def _file_open_body(slots, tokens) -> int:
+def _file_validate_mode(mode) -> int:
+    data = py_str_utf8(mode)
+    count: int = py_str_byte_len(mode)
+    seen: int = 0
+    base_count: int = 0
+    index: int = 0
+    while index < count:
+        char: int = load_i8(data, index)
+        bit: int = 0
+        if char == 114 or char == 119 or char == 97 or char == 120:
+            base_count = base_count + 1
+        elif char == 98:
+            bit = 1
+        elif char == 116:
+            bit = 2
+        elif char == 43:
+            bit = 4
+        else:
+            return _file_error(2, cstr("invalid file mode"))
+        if bit and (seen & bit):
+            return _file_error(2, cstr("invalid duplicate mode character"))
+        seen = seen | bit
+        index = index + 1
+    if base_count != 1 or (seen & 3) == 3:
+        return _file_error(2, cstr("must have exactly one of create/read/write/append and text/binary mode"))
+    return 0
+
+
+def _file_native_mode(mode, output) -> None:
+    data = py_str_utf8(mode)
+    count: int = py_str_byte_len(mode)
+    index: int = 0
+    base: int = 114
+    plus: int = 0
+    binary: int = 0
+    while index < count:
+        char: int = load_i8(data, index)
+        if char == 114 or char == 119 or char == 97 or char == 120:
+            base = char
+        elif char == 43:
+            plus = 1
+        elif char == 98:
+            binary = 1
+        index = index + 1
+    store_i8(output, 0, base)
+    index = 1
+    if binary:
+        store_i8(output, index, 98)
+        index = index + 1
+    if plus:
+        store_i8(output, index, 43)
+        index = index + 1
+    store_i8(output, index, 0)
+
+
+def _file_raise_errno(code: int) -> int:
+    slots = stack_alloc(_FILE_COUNT * _FILE_BYTES)
+    tokens = stack_alloc(_FILE_COUNT * _FILE_BYTES)
+    memset(slots, 0, _FILE_COUNT * _FILE_BYTES)
+    index: int = 0
+    while index < _FILE_COUNT:
+        store_i64(tokens, index * _FILE_BYTES, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_file_owned_map"), slots)
+    message = stack_alloc(256)
+    pcc_errno_message_into(code, message, 256)
+    count: int = 0
+    while count < 255 and load_i8(message, count) != 0:
+        count = count + 1
+    store_ptr(slots, _FILE_ERRNO_EXCEPTION * _FILE_BYTES, py_exc_new(14, message))
+    if _file_adopt(slots, tokens, _FILE_ERRNO_EXCEPTION) == 0:
+        store_ptr(slots, _FILE_ERRNO_NUMBER * _FILE_BYTES, py_int_from_i64(code))
+        if _file_adopt(slots, tokens, _FILE_ERRNO_NUMBER) == 0:
+            store_ptr(slots, _FILE_ERRNO_MESSAGE * _FILE_BYTES, py_str_new(message, count))
+            if _file_adopt(slots, tokens, _FILE_ERRNO_MESSAGE) == 0:
+                store_ptr(slots, _FILE_ERRNO_ARGS * _FILE_BYTES, py_tuple_new(2))
+                _file_adopt(slots, tokens, _FILE_ERRNO_ARGS)
+        if not py_err_occurred():
+            exception = load_ptr(slots, _FILE_ERRNO_EXCEPTION * _FILE_BYTES)
+            number = load_ptr(slots, _FILE_ERRNO_NUMBER * _FILE_BYTES)
+            text = load_ptr(slots, _FILE_ERRNO_MESSAGE * _FILE_BYTES)
+            args = load_ptr(slots, _FILE_ERRNO_ARGS * _FILE_BYTES)
+            py_tuple_set_item(args, 0, number)
+            py_tuple_set_item(args, 1, text)
+            py_obj_setattr(exception, cstr("errno"), number)
+            if not py_err_occurred():
+                py_obj_setattr(exception, cstr("strerror"), text)
+            if not py_err_occurred():
+                py_obj_setattr(exception, cstr("args"), args)
+            if not py_err_occurred():
+                py_incref(exception)
+                py_raise_owned(exception)
+    py_tls_exc_swap_slot(ptr_add(slots, _FILE_ERROR * _FILE_BYTES))
+    index = _FILE_ERRNO_ARGS
+    while index >= _FILE_ERRNO_EXCEPTION:
+        _file_drop(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(ptr_add(slots, _FILE_ERROR * _FILE_BYTES))
+    pcc_gc_frame_leave(slots)
+    return -1
+
+
+def _file_fspath_body(slots, tokens) -> int:
+    value = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
+    if not ptr_is_null(value) and not is_tagged_int(value):
+        tag: int = _type_of(value)
+        if tag == PY_TYPE_STR or tag == PY_TYPE_BYTES:
+            py_incref(value)
+            store_ptr(slots, _FILE_RESULT * _FILE_BYTES, value)
+            return _file_adopt(slots, tokens, _FILE_RESULT)
+    # os.fspath performs special-method lookup on the type, bypassing an
+    # instance's __getattribute__/__getattr__ and same-named instance field.
+    handled = stack_alloc(_FILE_BYTES)
+    store_i64(handled, 0, 0)
+    if py_obj_special_call_slots(ptr_add(slots, _FILE_FIRST * _FILE_BYTES),
+            cstr("__fspath__"), null(), null(),
+            ptr_add(slots, _FILE_RESULT * _FILE_BYTES), handled) != 0:
+        return -1
+    if load_i64(handled, 0) == 0:
+        return _file_error(3, cstr("expected str, bytes or os.PathLike object"))
+    if _file_adopt(slots, tokens, _FILE_RESULT) != 0:
+        return -1
+    result = load_ptr(slots, _FILE_RESULT * _FILE_BYTES)
+    if is_tagged_int(result) or (_type_of(result) != PY_TYPE_STR and _type_of(result) != PY_TYPE_BYTES):
+        return _file_error(3, cstr("__fspath__ must return str or bytes"))
+    return 0
+
+
+def _file_open_body(slots, tokens, descriptor_mode: int = 0, buffering: int = -1) -> int:
     path = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
     mode = load_ptr(slots, _FILE_SECOND * _FILE_BYTES)
     path_data = null()
     path_count: int = 0
-    if not ptr_is_null(path) and not is_tagged_int(path) and _type_of(path) == PY_TYPE_BYTES:
+    descriptor: int = -1
+    if descriptor_mode != 0:
+        if ptr_is_null(path) or (_type_of(path) != PY_TYPE_INT and _type_of(path) != PY_TYPE_BOOL):
+            return _file_error(3, cstr("invalid fd type: expected integer"))
+        overflow = stack_alloc(4)
+        store_i32(overflow, 0, 0)
+        descriptor = py_int_to_i64(path, overflow)
+        if py_err_occurred():
+            return -1
+        # io.open considers only C-int-range integers to be descriptors.
+        if load_i32(overflow, 0) != 0 or descriptor < -2147483648 or descriptor > 2147483647:
+            return _file_error(3, cstr("expected str, bytes or os.PathLike object, not int"))
+        if descriptor < 0:
+            return _file_error(2, cstr("negative file descriptor"))
+    elif not ptr_is_null(path) and not is_tagged_int(path) and _type_of(path) == PY_TYPE_BYTES:
         path_data = ptr_add(path, PYBYTESOBJECT_DATA_OFFSET)
         path_count = load_i64(path, PYBYTESOBJECT_BYTE_LEN_OFFSET)
         index: int = 0
@@ -316,7 +491,13 @@ def _file_open_body(slots, tokens) -> int:
         mode = load_ptr(slots, _FILE_TEMP * _FILE_BYTES)
     if _file_validate_cstr(mode, cstr("open mode must be str")) != 0:
         return -1
+    if _file_validate_mode(mode) != 0:
+        return -1
     binary: int = _mode_is_binary(mode)
+    if descriptor_mode != 0 and buffering == 0 and binary == 0:
+        return _file_error(2, cstr("cannot have unbuffered text I/O"))
+    if descriptor_mode != 0 and buffering == 1:
+        return _file_error(11, cstr("native fdopen line buffering is not implemented"))
     encoding = load_ptr(slots, _FILE_ENCODING * _FILE_BYTES)
     errors = load_ptr(slots, _FILE_ERRORS * _FILE_BYTES)
     newline = load_ptr(slots, _FILE_NEWLINE * _FILE_BYTES)
@@ -344,18 +525,45 @@ def _file_open_body(slots, tokens) -> int:
     if _file_is_none(newline) == 0:
         return _file_error(11, cstr("native text files support universal newlines only"))
     access: int = _mode_access_bits(mode)
-    fp = fopen(path_data, py_str_utf8(mode))
+    mode_data = stack_alloc(4)
+    _file_native_mode(mode, mode_data)
+    fp = null()
+    out = null()
+    if descriptor_mode == 0:
+        fp = fopen(path_data, mode_data)
+    else:
+        # An unsuccessful fdopen never consumes the caller's descriptor.
+        # Finish managed allocation/rooting before native FILE adoption.
+        out = pcc_gc_alloc(_FILE_SIZE, PY_TYPE_FILE, 0)
+        if ptr_is_null(out):
+            return _file_error(19, cstr("cannot allocate file object"))
+        memset(ptr_add(out, 16), 0, _FILE_SIZE - 16)
+        store_ptr(slots, _FILE_RESULT * _FILE_BYTES, out)
+        if _file_adopt(slots, tokens, _FILE_RESULT) != 0:
+            return -1
+        fp = pcc_stdio_fdopen(descriptor, mode_data,
+                             1 if descriptor_mode == _FILE_FDOPEN_OWNED else 0, buffering)
     if ptr_is_null(fp):
+        if descriptor_mode != 0:
+            return _file_raise_errno(pcc_errno_get())
         return _file_error(14, cstr("could not open file"))
-    out = pcc_gc_alloc(_FILE_SIZE, PY_TYPE_FILE, 0)
-    if ptr_is_null(out):
-        fclose(fp)
-        return _file_error(19, cstr("cannot allocate file object"))
-    memset(ptr_add(out, 16), 0, _FILE_SIZE - 16)
+    if descriptor_mode == 0:
+        out = pcc_gc_alloc(_FILE_SIZE, PY_TYPE_FILE, 0)
+        if ptr_is_null(out):
+            fclose(fp)
+            return _file_error(19, cstr("cannot allocate file object"))
+        memset(ptr_add(out, 16), 0, _FILE_SIZE - 16)
+    else:
+        out = load_ptr(slots, _FILE_RESULT * _FILE_BYTES)
     store_ptr(out, 16, fp)
     store_i32(out, 28, binary)
-    store_i64(out, 32, access | (codec << 10) | (policy << 12))
+    metadata: int = access | (codec << 10) | (policy << 12)
+    if descriptor_mode != 0:
+        metadata = metadata | _FILE_DESCRIPTOR_NAME | (descriptor << _FILE_DESCRIPTOR_SHIFT)
+    store_i64(out, 32, metadata)
     store_ptr(slots, _FILE_RESULT * _FILE_BYTES, out)
+    if descriptor_mode != 0:
+        return 0
     return _file_adopt(slots, tokens, _FILE_RESULT)
 
 
@@ -753,6 +961,14 @@ def _file_guarded(first, second, encoding, errors, newline, operation: int, limi
     if status == 0:
         if operation == 0:
             status = _file_open_body(slots, tokens)
+        elif operation == _FILE_FDOPEN_OWNED or operation == _FILE_FDOPEN_BORROWED:
+            status = _file_open_body(slots, tokens, operation, limit)
+        elif operation == _FILE_DYNAMIC_METHOD:
+            status = _file_method_body(slots, tokens)
+        elif operation == _FILE_BOUND_METHOD:
+            status = _file_bound_method_body(slots, tokens, limit)
+        elif operation == _FILE_FSPATH:
+            status = _file_fspath_body(slots, tokens)
         elif operation == 3:
             status = _file_write_body(slots, tokens)
         elif operation == 4:
@@ -794,6 +1010,17 @@ def _file_guarded(first, second, encoding, errors, newline, operation: int, limi
 @c_abi_export("py_file_open_options")
 def py_file_open_options(path, mode, encoding, errors, newline):
     return _file_guarded(path, mode, encoding, errors, newline, 0, 0)
+
+
+@c_abi_export("py_file_fdopen_options")
+def py_file_fdopen_options(descriptor, mode, encoding, errors, newline, closefd: int, buffering: int):
+    operation: int = _FILE_FDOPEN_OWNED if closefd else _FILE_FDOPEN_BORROWED
+    return _file_guarded(descriptor, mode, encoding, errors, newline, operation, buffering)
+
+
+@c_abi_export("py_file_fspath")
+def py_file_fspath(path):
+    return _file_guarded(path, null(), null(), null(), null(), _FILE_FSPATH, 0)
 
 
 @c_abi_export("py_file_open")
@@ -1018,8 +1245,7 @@ def py_file_fileno(file):
     return py_int_from_i64(fd)
 
 
-@c_abi_export("py_file_close")
-def py_file_close(file) -> None:
+def _file_close(file, report: int) -> None:
     if ptr_is_null(file):
         return
     if _type_of(file) != PY_TYPE_FILE:
@@ -1032,9 +1258,22 @@ def py_file_close(file) -> None:
                 # sys.stdin/stdout/stderr: closefd=False, like CPython.
                 fflush(fp)
             else:
-                fclose(fp)
+                status: int = fclose(fp)
                 store_ptr(file, 16, null())
+                store_i32(file, 24, 1)
+                if report and status != 0:
+                    _file_error(14, cstr("file close failed"))
             store_i32(file, 24, 1)
+
+
+@c_abi_export("py_file_close")
+def py_file_close(file) -> None:
+    _file_close(file, 0)
+
+
+@c_abi_export("py_file_close_checked")
+def py_file_close_checked(file) -> None:
+    _file_close(file, 1)
 
 
 @c_abi_export("py_file_readlines")
@@ -1146,59 +1385,80 @@ def _file_method_code(name) -> int:
     return 0
 
 
-def _method_arg_i64(args, index: int, default: int) -> int:
-    """Positional int argument ``index`` (None or absent: ``default``)."""
+def _method_arg_i64(slots, tokens, index: int, default: int, allow_none: int) -> int:
+    """Convert one rooted method operand without retaining a raw callback result."""
+    args = load_ptr(slots, _FILE_METHOD_ARGS * _FILE_BYTES)
     if ptr_is_null(args) != 0 or index >= py_tuple_len(args):
         return default
-    value = py_tuple_get(args, index)
-    if ptr_is_null(value) != 0:
+    _file_drop(slots, tokens, _FILE_METHOD_OPERAND)
+    store_ptr(slots, _FILE_METHOD_OPERAND * _FILE_BYTES, py_tuple_get(args, index))
+    if _file_adopt(slots, tokens, _FILE_METHOD_OPERAND) != 0:
+        return 0
+    if allow_none != 0 and ptr_eq(load_ptr(slots, _FILE_METHOD_OPERAND * _FILE_BYTES), global_load_ptr("py_None")) != 0:
         return default
-    if ptr_eq(value, global_load_ptr("py_None")) != 0:
-        py_decref(value)
-        return default
-    out: int = py_int_value_i64(value)
-    py_decref(value)
-    return out
+    return py_index_i64_checked_slots(ptr_add(slots, _FILE_METHOD_OPERAND * _FILE_BYTES))
 
 
-def _file_method_entry(captures, args):
-    f = py_tuple_get(captures, 0)
-    code_obj = py_tuple_get(captures, 1)
-    if ptr_is_null(f) != 0 or ptr_is_null(code_obj) != 0:
-        return null()
-    code: int = py_int_value_i64(code_obj)
-    py_decref(code_obj)
+def _file_method_body(slots, tokens) -> int:
+    captures = load_ptr(slots, _FILE_METHOD_CAPTURES * _FILE_BYTES)
+    args = load_ptr(slots, _FILE_METHOD_ARGS * _FILE_BYTES)
+    store_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES, py_tuple_get(captures, 0))
+    if _file_adopt(slots, tokens, _FILE_METHOD_RECEIVER) != 0:
+        return -1
+    store_ptr(slots, _FILE_METHOD_CODE * _FILE_BYTES, py_tuple_get(captures, 1))
+    if _file_adopt(slots, tokens, _FILE_METHOD_CODE) != 0:
+        return -1
+    f = load_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES)
+    code: int = py_int_value_i64(load_ptr(slots, _FILE_METHOD_CODE * _FILE_BYTES))
     nargs: int = 0
     if ptr_is_null(args) == 0:
         nargs = py_tuple_len(args)
+    if ((code >= 6 and code <= 8 or code >= 10 and code <= 12 or code >= 14) and nargs != 0
+            or code == 13 and nargs != 3 or (code == 2 or code == 3) and nargs > 1
+            or code == 9 and (nargs < 1 or nargs > 2)):
+        return _file_error(3, cstr("invalid file method argument count"))
     none = global_load_ptr("py_None")
     result = null()
     if code == 1 or code == 5:
         if nargs != 1:
             py_raise_owned(py_exc_new(3, cstr("expected exactly one argument")))
         else:
-            arg = py_tuple_get(args, 0)
+            store_ptr(slots, _FILE_METHOD_OPERAND * _FILE_BYTES, py_tuple_get(args, 0))
+            if _file_adopt(slots, tokens, _FILE_METHOD_OPERAND) != 0:
+                return -1
+            arg = load_ptr(slots, _FILE_METHOD_OPERAND * _FILE_BYTES)
             if code == 1:
                 result = py_file_write(f, arg)
             else:
                 result = py_file_writelines(f, arg)
-            py_decref(arg)
     elif code == 2:
-        result = py_file_read(f, _method_arg_i64(args, 0, -1))
+        limit: int = _method_arg_i64(slots, tokens, 0, -1, 1)
+        if not py_err_occurred():
+            result = py_file_read(load_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES), limit)
     elif code == 3:
-        result = py_file_readline(f, _method_arg_i64(args, 0, -1))
+        limit: int = _method_arg_i64(slots, tokens, 0, -1, 1)
+        if not py_err_occurred():
+            result = py_file_readline(load_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES), limit)
     elif code == 4:
         result = py_file_readlines(f)
     elif code == 6:
         result = py_file_flush(f)
     elif code == 7:
-        py_file_close(f)
-        py_incref(none)
-        result = none
+        py_file_close_checked(f)
+        if not py_err_occurred():
+            py_incref(none)
+            result = none
     elif code == 8:
         result = py_file_fileno(f)
     elif code == 9:
-        result = py_file_seek(f, _method_arg_i64(args, 0, 0), _method_arg_i64(args, 1, 0))
+        offset: int = _method_arg_i64(slots, tokens, 0, 0, 0)
+        whence: int = 0
+        if not py_err_occurred():
+            whence = _method_arg_i64(slots, tokens, 1, 0, 0)
+        if not py_err_occurred() and (whence < -2147483648 or whence > 2147483647):
+            return _file_error(15, cstr("Python int too large to convert to C int"))
+        if not py_err_occurred():
+            result = py_file_seek(load_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES), offset, whence)
     elif code == 10:
         result = py_file_tell(f)
     elif code == 11:
@@ -1211,8 +1471,9 @@ def _file_method_entry(captures, args):
             py_incref(f)
             result = f
     elif code == 13:
-        py_file_close(f)
-        result = global_load_ptr("py_False")
+        py_file_close_checked(f)
+        if not py_err_occurred():
+            result = global_load_ptr("py_False")
     elif code == 14 or code == 15:
         checked = _checked_open_file(f)
         if ptr_is_null(checked) == 0:
@@ -1220,8 +1481,62 @@ def _file_method_entry(captures, args):
             if code == 15:
                 wanted = 512
             result = py_bool_from_bit((load_i64(f, 32) & wanted) != 0)
-    py_decref(f)
-    return result
+    store_ptr(slots, _FILE_RESULT * _FILE_BYTES, result)
+    if py_err_occurred():
+        return -1
+    return _file_adopt(slots, tokens, _FILE_RESULT)
+
+
+def _file_method_entry(captures, args):
+    return _file_guarded(captures, args, null(), null(), null(), _FILE_DYNAMIC_METHOD, 0)
+
+
+def _file_method_name(code: int):
+    if code == 1:
+        return cstr("write")
+    if code == 2:
+        return cstr("read")
+    if code == 3:
+        return cstr("readline")
+    if code == 4:
+        return cstr("readlines")
+    if code == 5:
+        return cstr("writelines")
+    if code == 6:
+        return cstr("flush")
+    if code == 7:
+        return cstr("close")
+    if code == 8:
+        return cstr("fileno")
+    if code == 9:
+        return cstr("seek")
+    if code == 10:
+        return cstr("tell")
+    if code == 11:
+        return cstr("isatty")
+    if code == 12:
+        return cstr("__enter__")
+    if code == 13:
+        return cstr("__exit__")
+    if code == 14:
+        return cstr("readable")
+    return cstr("writable")
+
+
+def _file_bound_method_body(slots, tokens, code: int) -> int:
+    store_ptr(slots, _FILE_SECOND * _FILE_BYTES, py_tuple_new(2))
+    if _file_adopt(slots, tokens, _FILE_SECOND) != 0:
+        return -1
+    store_ptr(slots, _FILE_ENCODING * _FILE_BYTES, py_int_from_i64(code))
+    if _file_adopt(slots, tokens, _FILE_ENCODING) != 0:
+        return -1
+    captures = load_ptr(slots, _FILE_SECOND * _FILE_BYTES)
+    file = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
+    py_tuple_set_item(captures, 0, file)
+    py_tuple_set_item(captures, 1, load_ptr(slots, _FILE_ENCODING * _FILE_BYTES))
+    store_ptr(slots, _FILE_RESULT * _FILE_BYTES,
+              py_func_new_bound(_file_method_entry, captures, _file_method_name(code), file))
+    return _file_adopt(slots, tokens, _FILE_RESULT)
 
 
 @c_abi_export("py_file_type_kind")
@@ -1249,19 +1564,12 @@ def py_file_getattr(file, name):
         return null()
     if strcmp(name, cstr("closed")) == 0:
         return py_bool_from_bit(load_i32(file, 24))
+    if strcmp(name, cstr("name")) == 0 and (load_i64(file, 32) & _FILE_DESCRIPTOR_NAME) != 0:
+        return py_int_from_i64(load_i64(file, 32) >> _FILE_DESCRIPTOR_SHIFT)
     code: int = _file_method_code(name)
     if code == 0:
         return null()
-    captures = py_tuple_new(2)
-    if ptr_is_null(captures):
-        return null()
-    py_tuple_set_item(captures, 0, file)
-    code_obj = py_int_from_i64(code)
-    py_tuple_set_item(captures, 1, code_obj)
-    py_decref(code_obj)
-    fn = py_func_new_bound(_file_method_entry, captures, name, file)
-    py_decref(captures)
-    return fn
+    return _file_guarded(file, null(), null(), null(), null(), _FILE_BOUND_METHOD, code)
 
 
 # Keep fileinput state indexes as integer literals at use sites below. The

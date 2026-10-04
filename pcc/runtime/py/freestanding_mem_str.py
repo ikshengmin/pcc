@@ -7,7 +7,7 @@ The retained musl sources are differential oracles, not this implementation.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_ptr
+from pcc.extern import c_abi_export, c_abi_typed_export, c_ptr
 from pcc.unsafe import (
     load_i64,
     load_i8,
@@ -166,6 +166,23 @@ def pcc_strcpy(dst, src) -> c_ptr:
         if byte == 0:
             return dst
         index = index + 1
+
+
+@c_abi_typed_export("strncpy", "ptr", ("ptr", "ptr", "i64"))
+def pcc_strncpy(dst, src, size: i64) -> c_ptr:
+    # Copy at most size source bytes. Once NUL is reached, pad the remaining
+    # destination without reading past the source. A full copy adds no NUL.
+    index: i64 = 0
+    while index < size:
+        byte: i64 = load_i8(src, index) & 255
+        if byte == 0:
+            break
+        store_i8(dst, index, byte)
+        index = index + 1
+    while index < size:
+        store_i8(dst, index, 0)
+        index = index + 1
+    return dst
 
 
 @c_abi_export("strcat")

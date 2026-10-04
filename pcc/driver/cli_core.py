@@ -40,7 +40,7 @@ Options:
   --jobs N                  Parallel jobs for multi-input or system-link modes.
   --system-link             Link and run via the host C compiler.
   --freestanding-libc       For C, link supported libc ABI to the shared
-                            pcc-Python archive (implies --system-link).
+                            pcc-Python archive with the owned linker.
   --no-cache                Disable the translation-unit compile cache.
   --cache-dir PATH          Override the on-disk compile cache directory.
   --sources-from-make GOAL  Collect project sources from `make -nB GOAL`.
@@ -1230,12 +1230,9 @@ def execute_cli(
         )
         return 1
 
-    if freestanding_libc:
-        system_link = True
-
     use_multi_input = separate_tus or bool(dependencies)
 
-    if jobs_was_explicit and not (use_multi_input or system_link):
+    if jobs_was_explicit and not (use_multi_input or system_link or freestanding_libc):
         _write_text(
             "Error: --jobs requires --separate-tus, --depends-on, or --system-link",
             err=True,
@@ -1280,7 +1277,7 @@ def execute_cli(
                 sources_from_make=sources_from_make,
                 cpp_args=cpp_args,
             )
-            if system_link:
+            if system_link or freestanding_libc:
                 unit_path = (
                     os.path.abspath(path)
                     if os.path.isfile(path)
@@ -1299,7 +1296,7 @@ def execute_cli(
         return 1
 
     emit_mode = emit_obj or emit_asm or emit_llvm
-    if target_triple and not emit_mode and not system_link:
+    if target_triple and not emit_mode and not (system_link or freestanding_libc):
         _write_text(
             "Error: --target requires --emit-obj, --emit-asm, --emit-llvm, or --system-link",
             err=True,
@@ -1319,6 +1316,9 @@ def execute_cli(
         )
         with _temporary_env(pass_env):
             effective_link_args = _copy_seq(link_args)
+            if freestanding_libc and not system_link:
+                # Reject link policy and runtime mismatches before compiling C.
+                pcc.validate_owned_freestanding_request(effective_link_args)
 
             if emit_mode or output_path:
                 if use_multi_input:
@@ -1352,6 +1352,7 @@ def execute_cli(
                     pcc.emit_executable(
                         compiled_units, output_path, optimize=opt_level,
                         link_args=effective_link_args,
+                        freestanding_libc=freestanding_libc,
                     )
                     return 0
                 pcc.emit_compiled_units(
@@ -1363,9 +1364,11 @@ def execute_cli(
                 )
                 return 0
 
-            if use_multi_input or system_link:
-                if system_link:
-                    run = pcc.run_translation_units_with_system_cc(
+            if use_multi_input or system_link or freestanding_libc:
+                if system_link or freestanding_libc:
+                    run_units = (pcc.run_translation_units_with_system_cc
+                                 if system_link else pcc.run_translation_units_owned)
+                    run = run_units(
                         units,
                         optimize=opt_level,
                         llvmdump=llvmdump,

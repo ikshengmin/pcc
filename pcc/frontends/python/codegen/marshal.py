@@ -52,6 +52,9 @@ from pcc.frontends.python.py_ast import (
     Type,
 )
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_FLOAT as _PY_TYPE_FLOAT,
+)
 
 # -- Canonical IR types ------------------------------------------------------
 
@@ -182,9 +185,7 @@ def is_native_type(ty: Type) -> bool:
     return isinstance(ty, (IntType, FloatType, BoolType))
 
 
-# PyFloatObject is {i64 refcount, i32 type_tag, i32 flags, double value};
-# PY_TYPE_FLOAT is 3 and PY_FLAG_IMMORTAL is 1.
-_PY_TYPE_FLOAT = 3
+# Static float headers share the generated runtime ABI.
 _PY_FLAG_IMMORTAL = 1
 
 

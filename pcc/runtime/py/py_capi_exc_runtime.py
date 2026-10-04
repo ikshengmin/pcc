@@ -159,7 +159,6 @@ define_global_i32("pcc_capi_user_warning_sentinel", 0)
 define_global_i32("pcc_capi_runtime_warning_sentinel", 0)
 define_global_i32("pcc_capi_deprecation_warning_sentinel", 0)
 define_global_i32("pcc_capi_future_warning_sentinel", 0)
-define_global_i32("pcc_capi_ellipsis_sentinel", 0)
 
 define_global_ptr_to_global("PyExc_ValueError", "pcc_capi_value_error_sentinel")
 define_global_ptr_to_global("PyExc_TypeError", "pcc_capi_type_error_sentinel")
@@ -197,7 +196,8 @@ define_global_ptr_to_global("PyExc_UserWarning", "pcc_capi_user_warning_sentinel
 define_global_ptr_to_global("PyExc_RuntimeWarning", "pcc_capi_runtime_warning_sentinel")
 define_global_ptr_to_global("PyExc_DeprecationWarning", "pcc_capi_deprecation_warning_sentinel")
 define_global_ptr_to_global("PyExc_FutureWarning", "pcc_capi_future_warning_sentinel")
-define_global_ptr_to_global("Py_Ellipsis", "pcc_capi_ellipsis_sentinel")
+# Native C-API users observe the same valid object as compiled Python.
+define_global_ptr_to_global("Py_Ellipsis", "py_ellipsis_storage")
 
 
 

@@ -24,6 +24,7 @@ FNV-1a constants (verified to work in pcc-Python signed-i64):
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void, c_double
+from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS
 from pcc.runtime.py.py_abi_constants import PY_OBJ_CMP_UNORDERED, C_POINTER_SIZE, DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET, PYBYTEARRAYOBJECT_DATA_OFFSET, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_ITEM_COUNT_OFFSET, PYFLOATOBJECT_VALUE_OFFSET, PYINTOBJECT_SIGN_OFFSET, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_FIELDS_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET, PYSTROBJECT_HASH_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_VALUEBOX
 from pcc.runtime.py.py_abi_constants import PY_TYPE_INSTANCE, PY_TYPE_USER_CLASS_START
 from pcc.unsafe import (
@@ -816,6 +817,15 @@ def py_obj_hash(o) -> int:
     if is_tagged_int(o) != 0:
         return _hash_i64(untag_int(o))
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    if tag == PY_TYPE_ELLIPSIS:
+        # The singleton is immortal and never relocates: identity hashing is
+        # stable for its lifetime and needs no cached mutable object field.
+        address: int = ptr_to_int(o)
+        hashed: int = (logical_shift_right_i64(address, 4)
+                       | logical_shift_left_i64(address, 60))
+        if hashed == -1:
+            return -2
+        return hashed
     if tag == PY_TYPE_NONE:                      # NONE
         return 0
     if tag == PY_TYPE_BOOL:                      # BOOL

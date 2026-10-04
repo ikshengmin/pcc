@@ -121,6 +121,8 @@ _DEFINE_TYPE_TAG_RE = re.compile(
 FLAGS: tuple[str, ...] = (
     "PY_FLAG_FINALIZED", "PY_FLAG_GC_TRACKED", "PY_FLAG_IMMORTAL",
     "PY_FLAG_GC_MALLOC_ALLOC", "PY_FLAG_GC_PINNED",
+    "PY_FLAG_FUNC_AUTO_PARK", "PY_FLAG_FUNC_TRANSPARENT_CALL",
+    "PY_FLAG_GEN_SOURCE", "PY_FLAG_FUNC_CONTINUATION_FACTORY",
     "PY_FLAG_EXC_SUPPRESS_CONTEXT", "PY_FLAG_EXC_UNICODE_PAYLOAD",
 )
 
@@ -317,7 +319,10 @@ def render(abi: dict[str, dict[str, int]]) -> str:
     ]
     for heading, items in _constant_groups(abi):
         out += ["", f"# --- {heading} ---"]
-        out.extend(f"{name} = {value}" for name, value in items)
+        for name, value in items:
+            if name == "PY_FLAG_GEN_SOURCE":
+                out.append("# Source generator objects are iterator data even if their body can park.")
+            out.append(f"{name} = {value}")
     out.append("")
     return "\n".join(out)
 

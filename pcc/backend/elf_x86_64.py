@@ -748,6 +748,7 @@ def select_archive_members(
     undefined: set[str],
     *,
     already_defined: set[str] | frozenset[str] = frozenset(),
+    selected_names: list[str] | None = None,
 ) -> tuple[list[ElfObject], set[str]]:
     pending = set(undefined) - set(already_defined)
     provided = set(already_defined)
@@ -763,6 +764,9 @@ def select_archive_members(
             pending.difference_update(member.defines)
             pending.update(member.undefined - provided)
             changed = True
+    if selected_names is not None:
+        selected_names.extend(member.name for index, member in enumerate(members)
+                              if index in selected)
     return [member.object for index, member in enumerate(members) if index in selected], pending
 
 
@@ -829,6 +833,7 @@ def link_static_executable(
     archives: list[bytes] = (),
     entry: str = "_start",
     base_address: int = _BASE,
+    archive_selections: list[tuple[int, str]] | None = None,
 ) -> bytes:
     """Link a static, fixed-address ELF executable with no dynamic surface."""
     if not objects:
@@ -843,14 +848,18 @@ def link_static_executable(
         boundary_symbols.append(ElfSymbol(name, SHN_ABS, 0, 0, STB_GLOBAL, STT_NOTYPE))
     objects.append(ElfObject((), tuple(boundary_symbols), machine))
     definitions, undefined = _global_state(objects)
-    for archive_data in archives:
+    for archive_index, archive_data in enumerate(archives):
         if entry not in definitions:
             undefined.add(entry)
+        selected_names = [] if archive_selections is not None else None
         selected, _remaining = select_archive_members(
             read_archive(archive_data),
             undefined,
             already_defined=set(definitions),
+            selected_names=selected_names,
         )
+        if archive_selections is not None:
+            archive_selections.extend((archive_index, name) for name in selected_names)
         objects.extend(selected)
         definitions, undefined = _global_state(objects)
     if any(obj.machine != machine for obj in objects):

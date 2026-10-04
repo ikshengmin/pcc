@@ -138,6 +138,7 @@ def select_members(
     undefined: set[str],
     *,
     already_defined: set[str] | frozenset[str] = frozenset(),
+    selected_members: list[Member] | None = None,
 ) -> tuple[list[bytes], set[str]]:
     """Pull members that satisfy pending undefined symbols, repeatedly.
 
@@ -172,4 +173,6 @@ def select_members(
             changed = True
 
     ordered = [m for i, m in enumerate(members) if i in taken]
+    if selected_members is not None:
+        selected_members.extend(ordered)
     return [m.data for m in ordered], pending

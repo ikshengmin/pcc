@@ -379,6 +379,16 @@ def open_file(path: Any, access_mode: int, disposition: int) -> int:
     _trap("open_file")
 
 
+def open_file_flags(path: Any, flags: int, permissions: int, dir_fd: int) -> int:
+    """Open relative to a descriptor with target-native POSIX flags and mode.
+
+    Returns the new descriptor or a negative errno. The caller supplies the
+    target's AT_FDCWD for a working-directory-relative path. Linux and Darwin
+    implement this primitive; other platforms report unsupported (-ENOSYS).
+    """
+    _trap("open_file_flags")
+
+
 def rename_file(source: Any, destination: Any) -> int:
     """Atomically rename a path, replacing the destination when permitted."""
     _trap("rename_file")
@@ -1205,6 +1215,7 @@ __all__ = [
     "darwin_current_rss_bytes",
     "darwin_peak_rss_bytes",
     "open_file",
+    "open_file_flags",
     "rename_file",
     "chmod_file",
     "sync_file",

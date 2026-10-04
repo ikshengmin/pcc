@@ -83,6 +83,7 @@ ABI_CONSTANTS: dict[str, int] = {
     'object.type.coroutine': 20,
     'object.type.cpy_handle': 32,
     'object.type.dict': 6,
+    'object.type.ellipsis': 33,
     'object.type.exc': 12,
     'object.type.file': 13,
     'object.type.float': 3,
@@ -175,6 +176,7 @@ ABI_CONSTANTS: dict[str, int] = {
     'stdio.file.magic_offset': 0,
     'stdio.file.size': 64,
     'stdio.flag.append': 32,
+    'stdio.flag.borrowed_descriptor': 64,
     'stdio.flag.eof': 8,
     'stdio.flag.error': 4,
     'stdio.flag.input_standard': 17,
@@ -198,6 +200,7 @@ PY_TYPE_CONTINUATION = 29
 PY_TYPE_COROUTINE = 20
 PY_TYPE_CPY_HANDLE = 32
 PY_TYPE_DICT = 6
+PY_TYPE_ELLIPSIS = 33
 PY_TYPE_EXC = 12
 PY_TYPE_FILE = 13
 PY_TYPE_FLOAT = 3

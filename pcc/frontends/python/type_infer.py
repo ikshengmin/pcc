@@ -722,6 +722,7 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "darwin_current_rss_bytes": TYPE_INT,
     "darwin_peak_rss_bytes": TYPE_INT,
     "open_file": TYPE_INT,
+    "open_file_flags": TYPE_INT,
     "rename_file": TYPE_INT,
     "chmod_file": TYPE_INT,
     "sync_file": TYPE_INT,

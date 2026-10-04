@@ -27,7 +27,7 @@ PccCapiNumberMethods (mirror of CPython PyNumberMethods, offsets in words):
 PccCapiMappingMethods: mp_length@0, mp_subscript@8, mp_ass_subscript@16
 PccCapiSequenceMethods: sq_length@0, sq_concat@8, sq_repeat@16, sq_item@24,
   sq_ass_item@40, sq_contains@56, sq_inplace_concat@64, sq_inplace_repeat@72
-PCC_CAPI_CEXT_TAG_BASE = 0x10000
+The registry uses the generated PY_TYPE_CEXT_TAG_BASE boundary.
 
 Owned surface (stable C ABI names):
 
@@ -45,7 +45,13 @@ Owned surface (stable C ABI names):
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_CLASS, PY_TYPE_FUNC, PY_TYPE_GEN, PY_TYPE_STR
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_CEXT_TAG_BASE,
+    PY_TYPE_CLASS,
+    PY_TYPE_FUNC,
+    PY_TYPE_GEN,
+    PY_TYPE_STR,
+)
 
 from pcc.extern import c_abi_typed_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
@@ -144,11 +150,11 @@ def _cext_offset(o) -> int:
     if ptr_is_null(o) or is_tagged_int(o):
         return -1
     tag: int = load_i32(o, 8)
-    return tag - (0x10000)
+    return tag - (PY_TYPE_CEXT_TAG_BASE)
 
 
 def _cext_type_for_tag(tag: int) -> c_ptr:
-    offset = tag - (0x10000)
+    offset = tag - (PY_TYPE_CEXT_TAG_BASE)
     if offset < 0 or offset >= 1024:
         return null()
     count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
@@ -691,7 +697,7 @@ def pcc_capi_type_object_is_callable(callable) -> int:
         return 0
     type_obj = callable
     version_tag: int = load_i32(type_obj, (392))
-    if version_tag < (0x10000):
+    if version_tag < (PY_TYPE_CEXT_TAG_BASE):
         return 0
     if ptr_is_null(load_ptr(type_obj, (320))):
         return 0
@@ -755,7 +761,7 @@ pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void
 
 @c_abi_typed_export("pcc_capi_dealloc_cext_object", "i64", ("ptr", "i64"))
 def pcc_capi_dealloc_cext_object(o, type_tag: int) -> int:
-    offset = type_tag - (0x10000)
+    offset = type_tag - (PY_TYPE_CEXT_TAG_BASE)
     count: int = load_i32(global_addr("pcc_capi_cext_type_count"), 0)
     if offset < 0 or offset >= count:
         return 0

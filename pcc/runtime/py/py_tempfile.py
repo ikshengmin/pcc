@@ -12,20 +12,23 @@ str(). ResourceWarning filtering is still an owned-runtime capability gap.
 
 __pcc_runtime_port__ = True
 
-from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
+from pcc.extern import (
+    extern, c_abi_export, c_int32, c_int64, c_ptr, c_void,
+)
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PY_FLAG_GC_PINNED, PY_TYPE_STR, PY_TYPE_BYTES, PY_TYPE_LIST,
-    PYSTROBJECT_BYTE_LEN_OFFSET,
+    PY_TYPE_INT, PY_TYPE_BOOL,
+    PYSTROBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET,
 )
 from pcc.unsafe import (
-    atomic_cas_i64, atomic_load_i64, cstr, function_addr, define_global_i32,
+    atomic_cas_i64, atomic_load_i64, close, cstr, function_addr, define_global_i32,
     define_global_i64, define_global_ptr_null, free, global_addr,
     global_load_ptr, global_store_ptr, int_to_ptr, is_tagged_int,
     load_i8, load_i32, load_i64, load_ptr, malloc, memcpy, memset,
-    null, ptr_add, ptr_eq, ptr_is_null, ptr_to_int, readlink,
+    null, open_file_flags, ptr_add, ptr_eq, ptr_is_null, ptr_to_int, readlink,
     stack_alloc, stat_kind, store_i8, store_i32, store_i64, store_ptr,
-    strlen, target_sys_platform,
+    strlen, target_sys_platform, unlinkat,
 )
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -43,7 +46,16 @@ py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
-py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
+py_index_i64_checked_slots = extern("py_index_i64_checked_slots", (c_ptr,), c_int64)
+py_file_fdopen_options = extern("py_file_fdopen_options",
+    (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64), c_ptr)
+py_file_fspath = extern("py_file_fspath", (c_ptr,), c_ptr)
+py_file_close = extern("py_file_close", (c_ptr,), c_void)
+py_file_close_checked = extern("py_file_close_checked", (c_ptr,), c_void)
+py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
+py_obj_next = extern("py_obj_next", (c_ptr,), c_ptr)
+py_builtin_callable = extern("py_builtin_callable", (c_ptr,), c_ptr)
+strcmp = extern("strcmp", (c_ptr, c_ptr), c_int32)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
@@ -79,6 +91,7 @@ pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
 pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 mkdtemps = extern("pcc_platform_mkdtemp_suffix", (c_ptr, c_int64), c_int64)
+mkstemps = extern("pcc_platform_mkstemp_suffix", (c_ptr, c_int64), c_int64)
 remove_tree = extern("pcc_platform_tempdir_remove_tree", (c_ptr,), c_int64)
 atexit = extern("atexit", (c_ptr,), c_int32)
 errno_message = extern("pcc_errno_message_into", (c_int32, c_ptr, c_int64), c_int32)
@@ -93,6 +106,67 @@ _MKDTEMP_PREFIX = 1
 _MKDTEMP_DIRECTORY = 2
 _MKDTEMP_ARGUMENT_COUNT = 3
 _MKDTEMP_CALLABLE_CANDIDATE = 0
+# fdopen callback view; values remain rooted throughout option validation.
+_FDOPEN_DESCRIPTOR = 0
+_FDOPEN_MODE = 1
+_FDOPEN_BUFFERING = 2
+_FDOPEN_ENCODING = 3
+_FDOPEN_ERRORS = 4
+_FDOPEN_NEWLINE = 5
+_FDOPEN_CLOSEFD = 6
+_FDOPEN_OPENER = 7
+_FDOPEN_ARGUMENT_COUNT = 8
+# Callable factory/signature view of the same fixed frame.
+_TYPE_CANDIDATE = 0
+_TYPE_METHOD = 9
+_TYPE_MODULE = 10
+_FILE_CALLABLE_CANDIDATE = 0
+_FILE_SIGNATURE_NAMES = 1
+_FILE_SIGNATURE_KINDS = 2
+_FILE_SIGNATURE_PRESENT = 3
+_FILE_SIGNATURE_DEFAULTS = 4
+_FILE_SIGNATURE_ITEM = 5
+_FILE_SIGNATURE = 6
+_FILE_CAPTURES_EMPTY = 7
+_FILE_CAPTURES = 8
+# NamedTemporaryFile argument/scratch view of the shared owned frame.
+_NT_MODE = 0
+_NT_BUFFERING = 1
+_NT_ENCODING = 2
+_NT_NEWLINE = 3
+_NT_SUFFIX = 4
+_NT_PREFIX = 5
+_NT_DIRECTORY = 6
+_NT_DELETE = 7
+_NT_ERRORS = 8
+_NT_DELETE_ON_CLOSE = 9
+_NT_ARGUMENT_COUNT = 10
+_NT_PATH = 10
+_NT_FILE = 11
+_NT_WRAPPER = 12
+_NT_NORMALIZED_DIRECTORY = 13
+_NT_TYPE = 14
+_NT_RAW_NAME = 15
+_NT_DESCRIPTOR = 16
+# Wrapper method/cleanup view; args and captures are independently retained.
+_NT_SELF = 0
+_NT_METHOD_FILE = 1
+_NT_METHOD_NAME = 2
+_NT_METHOD_VALUE = 3
+_NT_METHOD_CAPTURES = 4
+_NT_METHOD_ARGS = 5
+_NT_METHOD_BOOL = 6
+_NT_CLEANUP_PATH = 2
+_NT_CLEANUP_DELETE = 3
+_NT_CLEANUP_ON_CLOSE = 4
+_NT_CLEANUP_REMOVED = 5
+_NT_CLEANUP_READY = 6
+_NT_CLOSE_ERROR = 21
+_OS_OPEN_PATH = 0
+_OS_OPEN_FLAGS = 1
+_OS_OPEN_MODE = 2
+_OS_OPEN_DIR_FD = 3
+_OS_OPEN_NORMALIZED = 4
 # Registered native record: only state is managed, with its own root handle.
 _TD_NEXT = 0
 _TD_PREVIOUS = 8
@@ -109,9 +183,20 @@ _TD_SAVED_ERROR = 22
 define_global_i32("pcc_tempdir_frame_map", _TD_SLOTS)
 define_global_i64("pcc_tempdir_mutex_bits", 0)
 define_global_ptr_null("pcc_tempdir_class")
+define_global_ptr_null("pcc_tempdir_class_root_handle")
 define_global_ptr_null("pcc_tempdir_records")
 define_global_ptr_null("pcc_tempfile_mkdtemp_function")
 define_global_ptr_null("pcc_tempfile_mkdtemp_root_handle")
+define_global_ptr_null("pcc_file_fdopen_function")
+define_global_ptr_null("pcc_file_fdopen_root_handle")
+define_global_ptr_null("pcc_namedtempfile_function")
+define_global_ptr_null("pcc_namedtempfile_root_handle")
+define_global_ptr_null("pcc_namedtempfile_wrapper_type")
+define_global_ptr_null("pcc_namedtempfile_wrapper_root_handle")
+define_global_ptr_null("pcc_os_open_function")
+define_global_ptr_null("pcc_os_open_root_handle")
+define_global_ptr_null("pcc_os_close_function")
+define_global_ptr_null("pcc_os_close_root_handle")
 
 
 def _td_none():
@@ -238,11 +323,7 @@ def _td_text(value, default):
     return raw
 
 
-def _td_mkdir_at(root, prefix, suffix, status):
-    previous_failure = load_ptr(status, C_POINTER_SIZE)
-    if not ptr_is_null(previous_failure):
-        free(previous_failure)
-    store_ptr(status, C_POINTER_SIZE, null())
+def _td_path_template(root, prefix, suffix):
     rlen: int = strlen(root)
     if load_i8(prefix, 0) == 47:
         rlen = 0
@@ -254,7 +335,6 @@ def _td_mkdir_at(root, prefix, suffix, status):
     size: int = rlen + slash + plen + 6 + slen
     path = malloc(size + 1)
     if ptr_is_null(path):
-        store_i64(status, 0, -12)
         return null()
     memcpy(path, root, rlen)
     if slash:
@@ -263,7 +343,19 @@ def _td_mkdir_at(root, prefix, suffix, status):
     memcpy(ptr_add(path, rlen + slash + plen), cstr("XXXXXX"), 6)
     memcpy(ptr_add(path, size - slen), suffix, slen)
     store_i8(path, size, 0)
-    result: int = mkdtemps(path, slen)
+    return path
+
+
+def _td_mkdir_at(root, prefix, suffix, status):
+    previous_failure = load_ptr(status, C_POINTER_SIZE)
+    if not ptr_is_null(previous_failure):
+        free(previous_failure)
+    store_ptr(status, C_POINTER_SIZE, null())
+    path = _td_path_template(root, prefix, suffix)
+    if ptr_is_null(path):
+        store_i64(status, 0, -12)
+        return null()
+    result: int = mkdtemps(path, strlen(suffix))
     store_i64(status, 0, result)
     if result < 0:
         store_ptr(status, C_POINTER_SIZE, path)
@@ -737,7 +829,7 @@ def py_tempfile_mkdtemp_function():
     source = global_addr("pcc_tempfile_mkdtemp_function")
     if not ptr_is_null(global_load_ptr("pcc_tempfile_mkdtemp_function")):
         pcc_mutex_unlock(mutex)
-        _td_mkdtemp_copy_function(slots, pins, source)
+        _td_copy_cached_owner(slots, pins, source)
         return _td_finish(slots, pins)
     pcc_mutex_unlock(mutex)
     # Allocation and retirement can invoke callbacks. Build outside the cache
@@ -762,71 +854,833 @@ def py_tempfile_mkdtemp_function():
     if root_failed:
         _td_error(19, cstr("mkdtemp callable root registration failed"))
     if not py_err_occurred():
-        _td_mkdtemp_copy_function(slots, pins, source)
+        _td_copy_cached_owner(slots, pins, source)
     return _td_finish(slots, pins)
 
 
-def _td_mkdtemp_copy_function(slots, pins, source) -> None:
+def _td_copy_cached_owner(slots, pins, source) -> None:
     output = ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE)
     token: int = pcc_gc_root_copy_lease(output, source)
     if token < 0:
-        _td_error(7, cstr("mkdtemp callable owner copy failed"))
+        _td_error(7, cstr("cached owner copy failed"))
         return
     # The counted address lease is independent of the legacy pin flag, and
     # protects this load until the return pin has been established.
     _td_hold(slots, pins, _TD_OUTPUT, load_ptr(output, 0))
     if pcc_gc_foreign_lease_release(output, token) < 0:
-        _td_error(7, cstr("mkdtemp callable owner lease release failed"))
+        _td_error(7, cstr("cached owner lease release failed"))
 
 
-def _td_add_method(cls, name, entry, captures, slots, pins) -> None:
-    _td_hold(slots, pins, 9, py_func_new_named(entry, captures, name))
-    if not ptr_is_null(load_ptr(slots, 9 * C_POINTER_SIZE)):
-        py_class_setattr(cls, name, load_ptr(slots, 9 * C_POINTER_SIZE))
-    _td_drop(slots, pins, 9)
+def _fdopen_signature(slots, pins, temporary: int = 0):
+    count: int = _NT_ARGUMENT_COUNT if temporary else _FDOPEN_ARGUMENT_COUNT
+    index: int = _FILE_SIGNATURE_NAMES
+    while index <= _FILE_SIGNATURE_DEFAULTS:
+        _td_hold(slots, pins, index, py_tuple_new(count))
+        index = index + 1
+    index = _FDOPEN_DESCRIPTOR
+    while index < count:
+        name = cstr("fd")
+        if index == _FDOPEN_MODE:
+            name = cstr("mode")
+        elif index == _FDOPEN_BUFFERING:
+            name = cstr("buffering")
+        elif index == _FDOPEN_ENCODING:
+            name = cstr("encoding")
+        elif index == _FDOPEN_ERRORS:
+            name = cstr("errors")
+        elif index == _FDOPEN_NEWLINE:
+            name = cstr("newline")
+        elif index == _FDOPEN_CLOSEFD:
+            name = cstr("closefd")
+        elif index == _FDOPEN_OPENER:
+            name = cstr("opener")
+        if temporary:
+            if index == _NT_MODE:
+                name = cstr("mode")
+            elif index == _NT_BUFFERING:
+                name = cstr("buffering")
+            elif index == _NT_ENCODING:
+                name = cstr("encoding")
+            elif index == _NT_NEWLINE:
+                name = cstr("newline")
+            elif index == _NT_SUFFIX:
+                name = cstr("suffix")
+            elif index == _NT_PREFIX:
+                name = cstr("prefix")
+            elif index == _NT_DIRECTORY:
+                name = cstr("dir")
+            elif index == _NT_DELETE:
+                name = cstr("delete")
+            elif index == _NT_ERRORS:
+                name = cstr("errors")
+            else:
+                name = cstr("delete_on_close")
+        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_str_new(name, strlen(name)))
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_NAMES * C_POINTER_SIZE), index,
+                          load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
+        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM,
+                 py_int_from_i64(2 if temporary and index >= _NT_ERRORS else 0))
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_KINDS * C_POINTER_SIZE), index,
+                          load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
+        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_PRESENT * C_POINTER_SIZE), index,
+            global_load_ptr("py_False") if not temporary and index == _FDOPEN_DESCRIPTOR else global_load_ptr("py_True"))
+        default = _td_none()
+        if index == (_NT_MODE if temporary else _FDOPEN_MODE):
+            _td_hold(slots, pins, _FILE_SIGNATURE_ITEM,
+                     py_str_new(cstr("w+b") if temporary else cstr("r"), 3 if temporary else 1))
+            default = load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE)
+        elif index == (_NT_BUFFERING if temporary else _FDOPEN_BUFFERING):
+            _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(-1))
+            default = load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE)
+        elif (not temporary and index == _FDOPEN_CLOSEFD
+              or temporary and (index == _NT_DELETE or index == _NT_DELETE_ON_CLOSE)):
+            default = global_load_ptr("py_True")
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_DEFAULTS * C_POINTER_SIZE), index, default)
+        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        index = index + 1
+    _td_hold(slots, pins, _FILE_SIGNATURE, py_tuple_new(5))
+    _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_str_new(cstr("__pcc_func_signature_v1__"), 25))
+    py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE), 0,
+                      load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
+    index = _FILE_SIGNATURE_NAMES
+    while index <= _FILE_SIGNATURE_DEFAULTS:
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE), index,
+                          load_ptr(slots, index * C_POINTER_SIZE))
+        index = index + 1
+    _td_hold(slots, pins, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
+    _td_hold(slots, pins, _FILE_CAPTURES, py_tuple_new(2))
+    py_tuple_set_item(load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE), 0,
+                      load_ptr(slots, _FILE_CAPTURES_EMPTY * C_POINTER_SIZE))
+    py_tuple_set_item(load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE), 1,
+                      load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE))
+    return load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE)
 
 
-@c_abi_export("py_tempdir_type")
-def py_tempdir_type():
-    mutex = _td_mutex()
-    if ptr_is_null(mutex):
-        return null()
-    pcc_mutex_lock(mutex)
-    cls = global_load_ptr("pcc_tempdir_class")
-    if not ptr_is_null(cls):
-        py_incref(cls)
-        pcc_mutex_unlock(mutex)
-        return cls
-    pcc_mutex_unlock(mutex)
+def _file_c_int_argument(slots, index: int) -> int:
+    # This is an authoritative owning frame slot. The protocol helper retains
+    # both the receiver and callback result across arbitrary __index__ code.
+    value: int = py_index_i64_checked_slots(ptr_add(slots, index * C_POINTER_SIZE))
+    if not py_err_occurred() and (value < -2147483648 or value > 2147483647):
+        _td_error(15, cstr("Python int too large to convert to C int"))
+    return value
+
+
+def _fdopen_descriptor_type(slots) -> int:
+    # os.fdopen explicitly requires an int before delegating to io.open;
+    # an arbitrary __index__ provider is accepted by os.close, not fdopen.
+    descriptor = load_ptr(slots, _FDOPEN_DESCRIPTOR * C_POINTER_SIZE)
+    if is_tagged_int(descriptor):
+        return 0
+    if not ptr_is_null(descriptor):
+        tag: int = load_i32(descriptor, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        if tag == PY_TYPE_INT or tag == PY_TYPE_BOOL:
+            return 0
+    _td_error(3, cstr("invalid fd type: expected integer"))
+    return -1
+
+
+@c_abi_export("pcc_file_fdopen_entry")
+def _fdopen_entry(captures, args):
+    if py_tuple_len(args) != _FDOPEN_ARGUMENT_COUNT:
+        return _td_error(3, cstr("fdopen expects eight bound arguments"))
+    if load_i8(target_sys_platform(), 0) == 119:
+        return _td_error(11, cstr("native fdopen requires an owned Windows provider"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
     memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, 0, py_class_new(cstr("TemporaryDirectory"), null(), 0, null(), 0))
-    cls = load_ptr(slots, 0)
-    if not ptr_is_null(cls):
-        captures = _td_init_signature(slots, pins)
-        _td_add_method(cls, cstr("__init__"), function_addr("pcc_tempdir_init_entry"), captures, slots, pins)
-        _td_add_method(cls, cstr("__enter__"), function_addr("pcc_tempdir_enter_entry"), load_ptr(slots, 7 * C_POINTER_SIZE), slots, pins)
-        _td_add_method(cls, cstr("__exit__"), function_addr("pcc_tempdir_exit_entry"), load_ptr(slots, 7 * C_POINTER_SIZE), slots, pins)
-        _td_add_method(cls, cstr("cleanup"), function_addr("pcc_tempdir_cleanup_entry"), load_ptr(slots, 7 * C_POINTER_SIZE), slots, pins)
-        _td_add_method(cls, cstr("__repr__"), function_addr("pcc_tempdir_repr_entry"), load_ptr(slots, 7 * C_POINTER_SIZE), slots, pins)
-        _td_hold(slots, pins, 10, py_str_new(cstr("tempfile"), 8))
-        py_class_setattr(cls, cstr("__module__"), load_ptr(slots, 10 * C_POINTER_SIZE))
-        if not py_err_occurred():
-            pcc_mutex_lock(mutex)
-            existing = global_load_ptr("pcc_tempdir_class")
-            if not ptr_is_null(existing):
-                py_incref(existing)
-                _td_hold(slots, pins, _TD_OUTPUT, existing)
-            elif atexit(_td_shutdown) != 0:
-                _td_error(19, cstr("TemporaryDirectory could not register shutdown cleanup"))
+    index: int = _FDOPEN_DESCRIPTOR
+    while index < _FDOPEN_ARGUMENT_COUNT:
+        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        index = index + 1
+    buffering: int = -1
+    closefd: int = 0
+    if not py_err_occurred() and _fdopen_descriptor_type(slots) == 0:
+        buffering = _file_c_int_argument(slots, _FDOPEN_BUFFERING)
+    if not py_err_occurred():
+        closefd = py_obj_truthy(load_ptr(slots, _FDOPEN_CLOSEFD * C_POINTER_SIZE))
+    if not py_err_occurred() and not ptr_eq(load_ptr(slots, _FDOPEN_OPENER * C_POINTER_SIZE), _td_none()):
+        _td_error(11, cstr("native fdopen custom openers are not implemented"))
+    if not py_err_occurred():
+        _td_hold(slots, pins, _TD_OUTPUT, py_file_fdopen_options(
+            load_ptr(slots, _FDOPEN_DESCRIPTOR * C_POINTER_SIZE),
+            load_ptr(slots, _FDOPEN_MODE * C_POINTER_SIZE),
+            load_ptr(slots, _FDOPEN_ENCODING * C_POINTER_SIZE),
+            load_ptr(slots, _FDOPEN_ERRORS * C_POINTER_SIZE),
+            load_ptr(slots, _FDOPEN_NEWLINE * C_POINTER_SIZE), closefd, buffering))
+    return _nt_finish(slots, pins)
+
+
+def _file_provider_function(temporary: int):
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    mutex = _td_mutex()
+    if ptr_is_null(mutex):
+        return _td_finish(slots, pins)
+    source = global_addr("pcc_namedtempfile_function") if temporary else global_addr("pcc_file_fdopen_function")
+    if temporary == 2:
+        source = global_addr("pcc_os_open_function")
+    elif temporary == 3:
+        source = global_addr("pcc_os_close_function")
+    pcc_mutex_lock(mutex)
+    if not ptr_is_null(load_ptr(source, 0)):
+        pcc_mutex_unlock(mutex)
+        _td_copy_cached_owner(slots, pins, source)
+        return _td_finish(slots, pins)
+    pcc_mutex_unlock(mutex)
+    captures = _os_descriptor_signature(slots, pins, temporary == 3) if temporary >= 2 else _fdopen_signature(slots, pins, temporary)
+    if not py_err_occurred():
+        entry = function_addr("pcc_namedtempfile_entry") if temporary else function_addr("pcc_file_fdopen_entry")
+        name = cstr("NamedTemporaryFile") if temporary else cstr("fdopen")
+        if temporary == 2:
+            entry = function_addr("pcc_os_open_entry")
+            name = cstr("open")
+        elif temporary == 3:
+            entry = function_addr("pcc_os_close_entry")
+            name = cstr("close")
+        _td_hold(slots, pins, _FILE_CALLABLE_CANDIDATE, py_func_new_named(
+            entry, captures, name))
+    root_failed: int = 0
+    pcc_mutex_lock(mutex)
+    if not py_err_occurred() and not ptr_is_null(
+            load_ptr(slots, _FILE_CALLABLE_CANDIDATE * C_POINTER_SIZE)):
+        if ptr_is_null(load_ptr(source, 0)):
+            handle = pcc_gc_scheduler_root_register_handle(source)
+            if ptr_is_null(handle):
+                root_failed = 1
             else:
-                # Classes are immortal in the existing class owner; its normal
-                # attrs traversal retains all callable/signature metadata.
-                global_store_ptr("pcc_tempdir_class", cls)
-                py_incref(cls)
-                _td_hold(slots, pins, _TD_OUTPUT, cls)
-            pcc_mutex_unlock(mutex)
+                if temporary == 2:
+                    global_store_ptr("pcc_os_open_root_handle", handle)
+                elif temporary == 3:
+                    global_store_ptr("pcc_os_close_root_handle", handle)
+                elif temporary:
+                    global_store_ptr("pcc_namedtempfile_root_handle", handle)
+                else:
+                    global_store_ptr("pcc_file_fdopen_root_handle", handle)
+                pcc_gc_store_root(source,
+                    load_ptr(slots, _FILE_CALLABLE_CANDIDATE * C_POINTER_SIZE))
+    pcc_mutex_unlock(mutex)
+    if root_failed:
+        _td_error(19, cstr("fdopen callable root registration failed"))
+    if not py_err_occurred():
+        _td_copy_cached_owner(slots, pins, source)
     return _td_finish(slots, pins)
+
+
+@c_abi_export("py_file_fdopen_function")
+def py_file_fdopen_function():
+    return _file_provider_function(0)
+
+
+@c_abi_export("py_namedtempfile_function")
+def py_namedtempfile_function():
+    return _file_provider_function(1)
+
+
+@c_abi_export("py_os_open_function")
+def py_os_open_function():
+    return _file_provider_function(2)
+
+
+@c_abi_export("py_os_close_function")
+def py_os_close_function():
+    return _file_provider_function(3)
+
+
+def _os_descriptor_signature(slots, pins, closing: int):
+    count: int = 1 if closing else 4
+    index: int = _FILE_SIGNATURE_NAMES
+    while index <= _FILE_SIGNATURE_DEFAULTS:
+        _td_hold(slots, pins, index, py_tuple_new(count))
+        index = index + 1
+    index = 0
+    while index < count:
+        name = cstr("fd") if closing else cstr("path")
+        if index == _OS_OPEN_FLAGS:
+            name = cstr("flags")
+        elif index == _OS_OPEN_MODE:
+            name = cstr("mode")
+        elif index == _OS_OPEN_DIR_FD:
+            name = cstr("dir_fd")
+        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_str_new(name, strlen(name)))
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_NAMES * C_POINTER_SIZE), index,
+                          load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
+        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(2 if index == _OS_OPEN_DIR_FD else 0))
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_KINDS * C_POINTER_SIZE), index,
+                          load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
+        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_PRESENT * C_POINTER_SIZE), index,
+            global_load_ptr("py_True") if index >= _OS_OPEN_MODE else global_load_ptr("py_False"))
+        default = _td_none()
+        if index == _OS_OPEN_MODE:
+            _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(511))
+            default = load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE)
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_DEFAULTS * C_POINTER_SIZE), index, default)
+        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        index = index + 1
+    _td_hold(slots, pins, _FILE_SIGNATURE, py_tuple_new(5))
+    _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_str_new(cstr("__pcc_func_signature_v1__"), 25))
+    py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE), 0,
+                      load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
+    index = _FILE_SIGNATURE_NAMES
+    while index <= _FILE_SIGNATURE_DEFAULTS:
+        py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE), index,
+                          load_ptr(slots, index * C_POINTER_SIZE))
+        index = index + 1
+    _td_hold(slots, pins, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
+    _td_hold(slots, pins, _FILE_CAPTURES, py_tuple_new(2))
+    py_tuple_set_item(load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE), 0,
+                      load_ptr(slots, _FILE_CAPTURES_EMPTY * C_POINTER_SIZE))
+    py_tuple_set_item(load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE), 1,
+                      load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE))
+    return load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE)
+
+
+@c_abi_export("pcc_os_open_entry")
+def _os_open_entry(captures, args):
+    if py_tuple_len(args) != 4:
+        return _td_error(3, cstr("os.open expects four bound arguments"))
+    if load_i8(target_sys_platform(), 0) == 119:
+        return _td_error(11, cstr("native os.open requires an owned Windows provider"))
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    index: int = _OS_OPEN_PATH
+    while index <= _OS_OPEN_DIR_FD:
+        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        index = index + 1
+    flags: int = 0
+    permissions: int = 0
+    directory_fd: int = -2 if load_i8(target_sys_platform(), 0) == 100 else -100
+    if not py_err_occurred():
+        _td_hold(slots, pins, _OS_OPEN_NORMALIZED,
+                 py_file_fspath(load_ptr(slots, _OS_OPEN_PATH * C_POINTER_SIZE)))
+    if not py_err_occurred():
+        flags = _file_c_int_argument(slots, _OS_OPEN_FLAGS)
+    if not py_err_occurred():
+        permissions = _file_c_int_argument(slots, _OS_OPEN_MODE)
+    if not py_err_occurred() and not ptr_eq(load_ptr(slots, _OS_OPEN_DIR_FD * C_POINTER_SIZE), _td_none()):
+        directory_fd = _file_c_int_argument(slots, _OS_OPEN_DIR_FD)
+    if not py_err_occurred():
+        path = load_ptr(slots, _OS_OPEN_NORMALIZED * C_POINTER_SIZE)
+        data = null()
+        length: int = 0
+        if load_i32(path, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BYTES:
+            data = ptr_add(path, PYBYTESOBJECT_DATA_OFFSET)
+            length = load_i64(path, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+        else:
+            data = py_str_utf8(path)
+            length = load_i64(path, PYSTROBJECT_BYTE_LEN_OFFSET)
+        index = 0
+        while index < length:
+            if load_i8(data, index) == 0:
+                _td_error(2, cstr("embedded null character"))
+                break
+            index = index + 1
+        if not py_err_occurred():
+            flags = flags | (16777216 if load_i8(target_sys_platform(), 0) == 100 else 524288)
+            descriptor: int = open_file_flags(data, flags, permissions, directory_fd)
+            while descriptor == -4:
+                descriptor = open_file_flags(data, flags, permissions, directory_fd)
+            if descriptor < 0:
+                _td_os_error(descriptor, path)
+            else:
+                _td_hold(slots, pins, _TD_OUTPUT, py_int_from_i64(descriptor))
+                if py_err_occurred():
+                    close(descriptor)
+    return _nt_finish(slots, pins)
+
+
+@c_abi_export("pcc_os_close_entry")
+def _os_close_entry(captures, args):
+    if py_tuple_len(args) != 1:
+        return _td_error(3, cstr("os.close expects one argument"))
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    _td_hold(slots, pins, _FDOPEN_DESCRIPTOR, py_tuple_get(args, 0))
+    descriptor: int = 0
+    if not py_err_occurred():
+        descriptor = _file_c_int_argument(slots, _FDOPEN_DESCRIPTOR)
+    if not py_err_occurred():
+        status: int = close(descriptor)
+        if status < 0:
+            _td_os_error(status, _td_none())
+        else:
+            py_incref(_td_none())
+            _td_hold(slots, pins, _TD_OUTPUT, _td_none())
+    return _nt_finish(slots, pins)
+
+
+def _nt_finish(slots, pins):
+    # Retiring file/callable owners may execute user finalizers. Preserve the
+    # exception which belongs to this operation until all other owners retire.
+    saved_slot = ptr_add(slots, _TD_SAVED_ERROR * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(saved_slot)
+    saved = load_ptr(saved_slot, 0)
+    if not ptr_is_null(saved):
+        _td_hold(slots, pins, _TD_SAVED_ERROR, saved)
+    index: int = _TD_SAVED_ERROR
+    while index > 0:
+        index = index - 1
+        _td_drop(slots, pins, index)
+    py_clear_exception()
+    saved = load_ptr(saved_slot, 0)
+    if not ptr_is_null(saved):
+        pcc_gc_unpin(saved)
+        if load_i64(pins, _TD_SAVED_ERROR * C_POINTER_SIZE):
+            store_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET,
+                      load_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_GC_PINNED)
+    py_tls_exc_swap_slot(saved_slot)
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE),
+                                   load_i64(pins, _TD_OUTPUT * C_POINTER_SIZE))
+
+
+def _nt_create_name(slots, pins, descriptor_out):
+    if load_i8(target_sys_platform(), 0) == 119:
+        return _td_error(11, cstr("native NamedTemporaryFile requires an owned Windows provider"))
+    suffix = _td_text(load_ptr(slots, _NT_SUFFIX * C_POINTER_SIZE), cstr(""))
+    prefix = _td_text(load_ptr(slots, _NT_PREFIX * C_POINTER_SIZE), cstr("tmp"))
+    if ptr_is_null(suffix) or ptr_is_null(prefix):
+        return null()
+    directory = load_ptr(slots, _NT_DIRECTORY * C_POINTER_SIZE)
+    root = null()
+    if not ptr_eq(directory, _td_none()):
+        _td_hold(slots, pins, _NT_NORMALIZED_DIRECTORY, py_file_fspath(directory))
+        if py_err_occurred():
+            return null()
+        root = _td_text(load_ptr(slots, _NT_NORMALIZED_DIRECTORY * C_POINTER_SIZE), null())
+    else:
+        status = stack_alloc(2 * C_POINTER_SIZE)
+        store_i64(status, 0, -2)
+        store_ptr(status, C_POINTER_SIZE, null())
+        candidate: int = 0
+        while candidate < 7:
+            if candidate == 0:
+                root = getenv(cstr("TMPDIR"))
+            elif candidate == 1:
+                root = getenv(cstr("TEMP"))
+            elif candidate == 2:
+                root = getenv(cstr("TMP"))
+            elif candidate == 3:
+                root = cstr("/tmp")
+            elif candidate == 4:
+                root = cstr("/var/tmp")
+            elif candidate == 5:
+                root = cstr("/usr/tmp")
+            else:
+                root = cstr(".")
+            if not ptr_is_null(root) and load_i8(root, 0) != 0:
+                probe = _td_mkdir_at(root, cstr(".pcc_probe_"), cstr(""), status)
+                if not ptr_is_null(probe):
+                    removed: int = remove_tree(probe)
+                    free(probe)
+                    if removed < 0:
+                        return _td_os_error(removed, directory)
+                    break
+            root = null()
+            candidate = candidate + 1
+        failed_path = load_ptr(status, C_POINTER_SIZE)
+        if not ptr_is_null(failed_path):
+            free(failed_path)
+    if ptr_is_null(root):
+        if not py_err_occurred():
+            _td_os_error(-2, directory)
+        return null()
+    path = _td_path_template(root, prefix, suffix)
+    if ptr_is_null(path):
+        return _td_error(19, cstr("cannot allocate temporary filename"))
+    descriptor: int = mkstemps(path, strlen(suffix))
+    _td_hold(slots, pins, _NT_RAW_NAME, py_str_new(path, strlen(path)))
+    if descriptor < 0:
+        free(path)
+        if not py_err_occurred():
+            return _td_os_error(descriptor, load_ptr(slots, _NT_RAW_NAME * C_POINTER_SIZE))
+        return null()
+    if not py_err_occurred():
+        _td_hold(slots, pins, _NT_PATH,
+                 py_os_path_abspath(load_ptr(slots, _NT_RAW_NAME * C_POINTER_SIZE)))
+    if py_err_occurred():
+        close(descriptor)
+        unlinkat(path, 0)
+        free(path)
+        return null()
+    free(path)
+    store_i64(descriptor_out, 0, descriptor)
+    return load_ptr(slots, _NT_PATH * C_POINTER_SIZE)
+
+
+def _nt_cleanup(manager, mode: int):
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    py_incref(manager)
+    _td_hold(slots, pins, _NT_SELF, manager)
+    _td_hold(slots, pins, _NT_CLEANUP_READY, py_obj_getattr(manager, cstr("_ready")))
+    if mode == 2 and py_err_occurred():
+        py_clear_exception()  # A failed constructor performs its own rollback.
+    elif not py_err_occurred() and py_obj_truthy(load_ptr(slots, _NT_CLEANUP_READY * C_POINTER_SIZE)):
+        _td_hold(slots, pins, _NT_METHOD_FILE, py_obj_getattr(manager, cstr("_cleanup_file")))
+        _td_hold(slots, pins, _NT_CLEANUP_PATH, py_obj_getattr(manager, cstr("_cleanup_name")))
+        _td_hold(slots, pins, _NT_CLEANUP_DELETE, py_obj_getattr(manager, cstr("_delete")))
+        _td_hold(slots, pins, _NT_CLEANUP_ON_CLOSE, py_obj_getattr(manager, cstr("_delete_on_close")))
+        _td_hold(slots, pins, _NT_CLEANUP_REMOVED, py_obj_getattr(manager, cstr("_removed")))
+        if not py_err_occurred():
+            py_file_close_checked(load_ptr(slots, _NT_METHOD_FILE * C_POINTER_SIZE))
+            close_error = ptr_add(slots, _NT_CLOSE_ERROR * C_POINTER_SIZE)
+            py_tls_exc_swap_slot(close_error)
+            if not ptr_is_null(load_ptr(close_error, 0)):
+                _td_hold(slots, pins, _NT_CLOSE_ERROR, load_ptr(close_error, 0))
+            should_remove: int = py_obj_truthy(load_ptr(slots, _NT_CLEANUP_DELETE * C_POINTER_SIZE))
+            on_close: int = py_obj_truthy(load_ptr(slots, _NT_CLEANUP_ON_CLOSE * C_POINTER_SIZE))
+            removed: int = py_obj_truthy(load_ptr(slots, _NT_CLEANUP_REMOVED * C_POINTER_SIZE))
+            if should_remove and (on_close or mode != 0) and not removed and not py_err_occurred():
+                py_obj_setattr(manager, cstr("_removed"), global_load_ptr("py_True"))
+                if not py_err_occurred():
+                    path = _td_text(load_ptr(slots, _NT_CLEANUP_PATH * C_POINTER_SIZE), null())
+                    if not ptr_is_null(path):
+                        status: int = unlinkat(path, 0)
+                        # An externally removed pathname is already cleaned,
+                        # as in tempfile._TemporaryFileCloser.cleanup.
+                        if status < 0 and status != -2:
+                            _td_os_error(status, load_ptr(slots, _NT_CLEANUP_PATH * C_POINTER_SIZE))
+            if not py_err_occurred() and not ptr_is_null(load_ptr(close_error, 0)):
+                saved = load_ptr(close_error, 0)
+                pcc_gc_unpin(saved)
+                if load_i64(pins, _NT_CLOSE_ERROR * C_POINTER_SIZE):
+                    store_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET,
+                              load_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_GC_PINNED)
+                py_tls_exc_swap_slot(close_error)
+                store_i64(pins, _NT_CLOSE_ERROR * C_POINTER_SIZE, 0)
+    if mode == 2:
+        py_clear_exception()
+    if not py_err_occurred():
+        result = global_load_ptr("py_False") if mode == 1 else _td_none()
+        py_incref(result)
+        _td_hold(slots, pins, _TD_OUTPUT, result)
+    return _nt_finish(slots, pins)
+
+
+@c_abi_export("pcc_namedtempfile_close_entry")
+def _nt_close(captures, args):
+    if py_tuple_len(args) != 1:
+        return _td_error(3, cstr("close expects no arguments"))
+    return _nt_cleanup_entry(args, 0)
+
+
+@c_abi_export("pcc_namedtempfile_exit_entry")
+def _nt_exit(captures, args):
+    if py_tuple_len(args) != 4:
+        return _td_error(3, cstr("__exit__ expects three arguments"))
+    return _nt_cleanup_entry(args, 1)
+
+
+@c_abi_export("pcc_namedtempfile_del_entry")
+def _nt_del(captures, args):
+    return _nt_cleanup_entry(args, 2)
+
+
+def _nt_cleanup_entry(args, mode: int):
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    prior = ptr_add(slots, _NT_CLOSE_ERROR * C_POINTER_SIZE)
+    if mode == 2:
+        py_tls_exc_swap_slot(prior)
+        if not ptr_is_null(load_ptr(prior, 0)):
+            _td_hold(slots, pins, _NT_CLOSE_ERROR, load_ptr(prior, 0))
+    _td_hold(slots, pins, _NT_SELF, py_tuple_get(args, 0))
+    if not py_err_occurred():
+        _td_hold(slots, pins, _TD_OUTPUT,
+                 _nt_cleanup(load_ptr(slots, _NT_SELF * C_POINTER_SIZE), mode))
+    if mode == 2:
+        py_clear_exception()
+        saved = load_ptr(prior, 0)
+        if not ptr_is_null(saved):
+            pcc_gc_unpin(saved)
+            if load_i64(pins, _NT_CLOSE_ERROR * C_POINTER_SIZE):
+                store_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET,
+                          load_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_GC_PINNED)
+        py_tls_exc_swap_slot(prior)
+        store_i64(pins, _NT_CLOSE_ERROR * C_POINTER_SIZE, 0)
+    return _nt_finish(slots, pins)
+
+
+@c_abi_export("pcc_namedtempfile_getattr_entry")
+def _nt_getattr(captures, args):
+    if py_tuple_len(args) != 2:
+        return _td_error(3, cstr("__getattr__ expects a name"))
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    _td_hold(slots, pins, _NT_SELF, py_tuple_get(args, 0))
+    _td_hold(slots, pins, _NT_METHOD_NAME, py_tuple_get(args, 1))
+    name = py_str_utf8(load_ptr(slots, _NT_METHOD_NAME * C_POINTER_SIZE))
+    if load_i8(name, 0) == 95 or strcmp(name, cstr("file")) == 0 or strcmp(name, cstr("name")) == 0:
+        _td_error(6, cstr("temporary file wrapper attribute is not initialized"))
+    else:
+        _td_hold(slots, pins, _NT_METHOD_FILE,
+                 py_obj_getattr(load_ptr(slots, _NT_SELF * C_POINTER_SIZE), cstr("file")))
+        if not py_err_occurred():
+            _td_hold(slots, pins, _NT_METHOD_VALUE,
+                     py_obj_getattr(load_ptr(slots, _NT_METHOD_FILE * C_POINTER_SIZE), name))
+        if not py_err_occurred():
+            _td_hold(slots, pins, _NT_METHOD_BOOL,
+                     py_builtin_callable(load_ptr(slots, _NT_METHOD_VALUE * C_POINTER_SIZE)))
+        if not py_err_occurred():
+            if py_obj_truthy(load_ptr(slots, _NT_METHOD_BOOL * C_POINTER_SIZE)):
+                # A saved write/read/etc method keeps the wrapper and its
+                # delete policy alive, not just the underlying FILE object.
+                _td_hold(slots, pins, _NT_METHOD_CAPTURES, py_tuple_new(2))
+                if not py_err_occurred():
+                    py_tuple_set_item(load_ptr(slots, _NT_METHOD_CAPTURES * C_POINTER_SIZE), 0,
+                                      load_ptr(slots, _NT_SELF * C_POINTER_SIZE))
+                    py_tuple_set_item(load_ptr(slots, _NT_METHOD_CAPTURES * C_POINTER_SIZE), 1,
+                                      load_ptr(slots, _NT_METHOD_VALUE * C_POINTER_SIZE))
+                    _td_hold(slots, pins, _TD_OUTPUT, py_func_new_named(
+                        function_addr("pcc_namedtempfile_delegate_entry"),
+                        load_ptr(slots, _NT_METHOD_CAPTURES * C_POINTER_SIZE), cstr("temporary_file_method")))
+            else:
+                value = load_ptr(slots, _NT_METHOD_VALUE * C_POINTER_SIZE)
+                py_incref(value)
+                _td_hold(slots, pins, _TD_OUTPUT, value)
+    return _nt_finish(slots, pins)
+
+
+@c_abi_export("pcc_namedtempfile_delegate_entry")
+def _nt_delegate(captures, args):
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    py_incref(captures)
+    _td_hold(slots, pins, _NT_METHOD_CAPTURES, captures)
+    py_incref(args)
+    _td_hold(slots, pins, _NT_METHOD_ARGS, args)
+    _td_hold(slots, pins, _NT_METHOD_VALUE,
+             py_tuple_get(load_ptr(slots, _NT_METHOD_CAPTURES * C_POINTER_SIZE), 1))
+    if not py_err_occurred():
+        _td_hold(slots, pins, _TD_OUTPUT, py_obj_call(
+            load_ptr(slots, _NT_METHOD_VALUE * C_POINTER_SIZE),
+            load_ptr(slots, _NT_METHOD_ARGS * C_POINTER_SIZE), null()))
+    return _nt_finish(slots, pins)
+
+
+def _nt_access_entry(args, operation: int):
+    if py_tuple_len(args) != 1:
+        return _td_error(3, cstr("temporary file context/iterator expects no arguments"))
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    _td_hold(slots, pins, _NT_SELF, py_tuple_get(args, 0))
+    _td_hold(slots, pins, _NT_METHOD_FILE,
+             py_obj_getattr(load_ptr(slots, _NT_SELF * C_POINTER_SIZE), cstr("file")))
+    if not py_err_occurred():
+        _td_hold(slots, pins, _NT_METHOD_BOOL,
+                 py_obj_getattr(load_ptr(slots, _NT_METHOD_FILE * C_POINTER_SIZE), cstr("closed")))
+    if not py_err_occurred():
+        if py_obj_truthy(load_ptr(slots, _NT_METHOD_BOOL * C_POINTER_SIZE)):
+            _td_error(2, cstr("I/O operation on closed file."))
+        elif operation == 2:
+            value = py_obj_next(load_ptr(slots, _NT_METHOD_FILE * C_POINTER_SIZE))
+            if ptr_is_null(value) and not py_err_occurred():
+                _td_error(8, cstr(""))
+            _td_hold(slots, pins, _TD_OUTPUT, value)
+        else:
+            value = load_ptr(slots, _NT_SELF * C_POINTER_SIZE)
+            py_incref(value)
+            _td_hold(slots, pins, _TD_OUTPUT, value)
+    return _nt_finish(slots, pins)
+
+
+@c_abi_export("pcc_namedtempfile_enter_entry")
+def _nt_enter(captures, args):
+    return _nt_access_entry(args, 0)
+
+
+@c_abi_export("pcc_namedtempfile_iter_entry")
+def _nt_iter(captures, args):
+    return _nt_access_entry(args, 1)
+
+
+@c_abi_export("pcc_namedtempfile_next_entry")
+def _nt_next(captures, args):
+    return _nt_access_entry(args, 2)
+
+
+def _temporary_type(named_file: int):
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    mutex = _td_mutex()
+    if ptr_is_null(mutex):
+        return _nt_finish(slots, pins)
+    source = global_addr("pcc_namedtempfile_wrapper_type") if named_file else global_addr("pcc_tempdir_class")
+    handle_slot = global_addr("pcc_namedtempfile_wrapper_root_handle") if named_file else global_addr("pcc_tempdir_class_root_handle")
+    pcc_mutex_lock(mutex)
+    present: int = not ptr_is_null(load_ptr(source, 0))
+    pcc_mutex_unlock(mutex)
+    if present != 0:
+        _td_copy_cached_owner(slots, pins, source)
+        return _nt_finish(slots, pins)
+    # Construction occurs outside the publication mutex. Every candidate is
+    # rooted; only a complete class is published to the permanent owner.
+    _td_hold(slots, pins, _TYPE_CANDIDATE, py_class_new(
+        cstr("_TemporaryFileWrapper") if named_file else cstr("TemporaryDirectory"),
+        null(), 0, null(), 0))
+    if not py_err_occurred():
+        if named_file:
+            _td_hold(slots, pins, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
+        else:
+            captures = _td_init_signature(slots, pins)
+            _td_add_method(load_ptr(slots, _TYPE_CANDIDATE * C_POINTER_SIZE),
+                cstr("__init__"), function_addr("pcc_tempdir_init_entry"), captures, slots, pins)
+    cls = load_ptr(slots, _TYPE_CANDIDATE * C_POINTER_SIZE)
+    captures = load_ptr(slots, _FILE_CAPTURES_EMPTY * C_POINTER_SIZE)
+    if not py_err_occurred():
+        if named_file:
+            _td_add_method(cls, cstr("close"), function_addr("pcc_namedtempfile_close_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__enter__"), function_addr("pcc_namedtempfile_enter_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__exit__"), function_addr("pcc_namedtempfile_exit_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__del__"), function_addr("pcc_namedtempfile_del_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__getattr__"), function_addr("pcc_namedtempfile_getattr_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__iter__"), function_addr("pcc_namedtempfile_iter_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__next__"), function_addr("pcc_namedtempfile_next_entry"), captures, slots, pins)
+        else:
+            _td_add_method(cls, cstr("__enter__"), function_addr("pcc_tempdir_enter_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__exit__"), function_addr("pcc_tempdir_exit_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("cleanup"), function_addr("pcc_tempdir_cleanup_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__repr__"), function_addr("pcc_tempdir_repr_entry"), captures, slots, pins)
+            if not py_err_occurred():
+                _td_hold(slots, pins, _TYPE_MODULE, py_str_new(cstr("tempfile"), 8))
+            if not py_err_occurred():
+                py_class_setattr(cls, cstr("__module__"), load_ptr(slots, _TYPE_MODULE * C_POINTER_SIZE))
+    root_failed: int = 0
+    shutdown_failed: int = 0
+    if not py_err_occurred():
+        pcc_mutex_lock(mutex)
+        if ptr_is_null(load_ptr(source, 0)):
+            handle = pcc_gc_scheduler_root_register_handle(source)
+            if ptr_is_null(handle):
+                root_failed = 1
+            elif named_file == 0 and atexit(_td_shutdown) != 0:
+                pcc_gc_scheduler_root_unregister_handle(handle)
+                shutdown_failed = 1
+            else:
+                store_ptr(handle_slot, 0, handle)
+                pcc_gc_store_root(source, load_ptr(slots, _TYPE_CANDIDATE * C_POINTER_SIZE))
+        pcc_mutex_unlock(mutex)
+    if root_failed != 0:
+        _td_error(19, cstr("temporary class root registration failed"))
+    elif shutdown_failed != 0:
+        _td_error(19, cstr("TemporaryDirectory could not register shutdown cleanup"))
+    if not py_err_occurred():
+        # Reload through the authoritative root after registration/relocation.
+        # Losing local candidate roots retire after the winner has its own lease.
+        _td_copy_cached_owner(slots, pins, source)
+    return _nt_finish(slots, pins)
+
+
+def _nt_wrapper_type():
+    return _temporary_type(1)
+
+
+@c_abi_export("pcc_namedtempfile_entry")
+def _nt_entry(captures, args):
+    if py_tuple_len(args) != _NT_ARGUMENT_COUNT:
+        return _td_error(3, cstr("NamedTemporaryFile expects ten bound arguments"))
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    index: int = _NT_MODE
+    while index < _NT_ARGUMENT_COUNT:
+        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        index = index + 1
+    buffering: int = -1
+    if not py_err_occurred():
+        buffering = _file_c_int_argument(slots, _NT_BUFFERING)
+    descriptor_out = stack_alloc(C_POINTER_SIZE)
+    store_i64(descriptor_out, 0, -1)
+    if not py_err_occurred():
+        _nt_create_name(slots, pins, descriptor_out)
+    descriptor: int = load_i64(descriptor_out, 0)
+    if descriptor >= 0 and not py_err_occurred():
+        _td_hold(slots, pins, _NT_DESCRIPTOR, py_int_from_i64(descriptor))
+        if not py_err_occurred():
+            _td_hold(slots, pins, _NT_FILE, py_file_fdopen_options(
+                load_ptr(slots, _NT_DESCRIPTOR * C_POINTER_SIZE),
+                load_ptr(slots, _NT_MODE * C_POINTER_SIZE),
+                load_ptr(slots, _NT_ENCODING * C_POINTER_SIZE),
+                load_ptr(slots, _NT_ERRORS * C_POINTER_SIZE),
+                load_ptr(slots, _NT_NEWLINE * C_POINTER_SIZE), 1, buffering))
+        if not ptr_is_null(load_ptr(slots, _NT_FILE * C_POINTER_SIZE)):
+            descriptor = -1  # The file owner now closes this descriptor.
+        if not py_err_occurred():
+            _td_hold(slots, pins, _NT_TYPE, _nt_wrapper_type())
+        if not py_err_occurred():
+            _td_hold(slots, pins, _NT_WRAPPER, py_instance_new(load_ptr(slots, _NT_TYPE * C_POINTER_SIZE)))
+        if not py_err_occurred():
+            manager = load_ptr(slots, _NT_WRAPPER * C_POINTER_SIZE)
+            py_obj_setattr(manager, cstr("_ready"), global_load_ptr("py_False"))
+            py_obj_setattr(manager, cstr("name"), load_ptr(slots, _NT_PATH * C_POINTER_SIZE))
+            py_obj_setattr(manager, cstr("file"), load_ptr(slots, _NT_FILE * C_POINTER_SIZE))
+            py_obj_setattr(manager, cstr("_cleanup_name"), load_ptr(slots, _NT_PATH * C_POINTER_SIZE))
+            py_obj_setattr(manager, cstr("_cleanup_file"), load_ptr(slots, _NT_FILE * C_POINTER_SIZE))
+            py_obj_setattr(manager, cstr("_delete"), load_ptr(slots, _NT_DELETE * C_POINTER_SIZE))
+            py_obj_setattr(manager, cstr("delete"), load_ptr(slots, _NT_DELETE * C_POINTER_SIZE))
+            py_obj_setattr(manager, cstr("_delete_on_close"), load_ptr(slots, _NT_DELETE_ON_CLOSE * C_POINTER_SIZE))
+            py_obj_setattr(manager, cstr("_removed"), global_load_ptr("py_False"))
+            if not py_err_occurred():
+                py_obj_setattr(manager, cstr("_ready"), global_load_ptr("py_True"))
+                if not py_err_occurred():
+                    py_incref(manager)
+                    _td_hold(slots, pins, _TD_OUTPUT, manager)
+    if ptr_is_null(load_ptr(slots, _TD_OUTPUT * C_POINTER_SIZE)):
+        if descriptor >= 0:
+            close(descriptor)
+        file = load_ptr(slots, _NT_FILE * C_POINTER_SIZE)
+        if not ptr_is_null(file):
+            py_file_close(file)
+        path = load_ptr(slots, _NT_PATH * C_POINTER_SIZE)
+        if not ptr_is_null(path):
+            unlinkat(py_str_utf8(path), 0)
+    return _nt_finish(slots, pins)
+
+
+def _td_add_method(cls, name, entry, captures, slots, pins) -> None:
+    if py_err_occurred():
+        return
+    _td_hold(slots, pins, _TYPE_METHOD, py_func_new_named(entry, captures, name))
+    if not py_err_occurred():
+        py_class_setattr(cls, name, load_ptr(slots, _TYPE_METHOD * C_POINTER_SIZE))
+    _td_drop(slots, pins, _TYPE_METHOD)
+
+
+@c_abi_export("py_tempdir_type")
+def py_tempdir_type():
+    return _temporary_type(0)

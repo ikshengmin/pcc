@@ -901,7 +901,9 @@ class CallExpressionLoweringMixin:
         func_attr_name = _call_attr_name(func_expr)
         func_attr_obj = _call_attr_obj(func_expr)
         pcc_intrinsic = self._native_builtin_value_kind_for_expr(func_expr)
-        if pcc_intrinsic in ("tempfile.TemporaryDirectory", "tempfile.mkdtemp"):
+        if pcc_intrinsic in ("os.fdopen", "os.open", "os.close"):
+            return self._emit_slot_call_object(expr, pcc_intrinsic)
+        if pcc_intrinsic in ("tempfile.TemporaryDirectory", "tempfile.mkdtemp", "tempfile.NamedTemporaryFile"):
             if self._native_module_attr_global_if_exists("tempfile", pcc_intrinsic.split(".")[1]) is None:
                 for option in ("tempdir", "template", "_get_candidate_names"):
                     if self._native_module_attr_global_if_exists("tempfile", option) is not None:
@@ -1678,49 +1680,12 @@ class CallExpressionLoweringMixin:
             result = self._maybe_emit_dict_builtin(expr)
             if result is not None:
                 return result
-        if name == "staticmethod" and len(expr.args) == 1 and not expr.kwargs:
-            value = self._emit_expr_with_native_callable_values(expr.args[0])
-            func_obj = marshal.marshal_to_object(
-                self.builder, self.module, self.runtime, value, expr.args[0].ty
+        if name in ("staticmethod", "classmethod") and len(expr.args) == 1 and not expr.kwargs:
+            return self._emit_owned_descriptor_constructor(
+                expr, "py_" + name + "_new", 1,
             )
-            result = self.builder.call(
-                self.runtime["py_staticmethod_new"], [func_obj],
-                name=self._fresh("staticmethod"),
-            )
-            self._emit_post_call_err_check(
-                None,
-                release_on_error=(func_obj,) if self._owned_release_needed(func_obj, expr.args[0]) else (),
-            )
-            self._gc_release_if_owned(func_obj, expr.args[0])
-            self._note_owned_object_value(result)
-            return result
         if name == "property" and 1 <= len(expr.args) <= 3 and not expr.kwargs:
-            prop_args: list[ir.Value] = []
-            for arg in expr.args:
-                value = self._emit_expr_with_native_callable_values(arg)
-                prop_args.append(
-                    marshal.marshal_to_object(
-                        self.builder,
-                        self.module,
-                        self.runtime,
-                        value,
-                        arg.ty,
-                    )
-                )
-            while len(prop_args) < 3:
-                prop_args.append(ir.Constant(_CSTR, None))
-            return self.builder.call(
-                self.runtime["py_property_new"],
-                prop_args,
-                name=self._fresh("property"),
-            )
-        if name == "classmethod" and len(expr.args) == 1 and not expr.kwargs:
-            func_obj = self._emit_expr_with_native_callable_values(expr.args[0])
-            return self.builder.call(
-                self.runtime["py_classmethod_new"],
-                [func_obj],
-                name=self._fresh("classmethod"),
-            )
+            return self._emit_owned_descriptor_constructor(expr, "py_property_new", 3)
         if name == "sorted" and len(expr.args) == 1:
             # sorted(x) or sorted(x, reverse=<bool const>). A constant
             # reverse=True reverses the result list in place after sorting.

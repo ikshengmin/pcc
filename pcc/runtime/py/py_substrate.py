@@ -19,6 +19,7 @@ from pcc.extern import (
     c_void,
     extern,
 )
+from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PYCLASSOBJECT_BASES_OFFSET,
@@ -109,10 +110,12 @@ pcc_gc_pointer_register = extern(
 
 define_global_header("py_none_storage", 1, 0, PY_FLAG_IMMORTAL)
 define_global_header("py_notimplemented_storage", 1, 0, PY_FLAG_IMMORTAL)
+define_global_header("py_ellipsis_storage", 1, PY_TYPE_ELLIPSIS, PY_FLAG_IMMORTAL)
 define_global_header("py_true_storage", 1, 1, PY_FLAG_IMMORTAL)
 define_global_header("py_false_storage", 1, 1, PY_FLAG_IMMORTAL)
 define_global_ptr_to_global("py_None", "py_none_storage")
 define_global_ptr_to_global("py_NotImplemented", "py_notimplemented_storage")
+define_global_ptr_to_global("py_Ellipsis", "py_ellipsis_storage")
 define_global_ptr_to_global("py_True", "py_true_storage")
 define_global_ptr_to_global("py_False", "py_false_storage")
 

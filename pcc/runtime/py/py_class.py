@@ -25,6 +25,7 @@ from pcc.extern import (
     c_void,
 )
 from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_NONE,
     PYSTROBJECT_BYTE_LEN_OFFSET,
     PYSTROBJECT_DATA_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
@@ -1267,6 +1268,87 @@ def _instance_reserved_owner_slot(inst, cls):
     )
 
 
+def _instance_storage_slot_count(cls) -> int:
+    # Declared fields, the established dynamic/builtin backing owner, then
+    # any appended builtin payload owners. Existing field offsets never move.
+    minimum: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET) + 1
+    if minimum < 1:
+        minimum = 1
+    count: int = (load_i32(cls, PYCLASSOBJECT_INSTANCE_SIZE_OFFSET) - PYINSTANCEOBJECT_FIELDS_OFFSET) // C_POINTER_SIZE
+    if count < minimum:
+        count = minimum
+    return count
+
+
+@c_abi_export("py_class_is_str_subclass")
+def py_class_is_str_subclass(cls) -> int:
+    if not _ptr_is_class(cls):
+        return 0
+    n_mro: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
+    mro = load_ptr(cls, PYCLASSOBJECT_MRO_OFFSET)
+    index: int = 0
+    while index < n_mro:
+        owner = pcc_gc_load_ptr(cls, ptr_add(mro, index * C_POINTER_SIZE))
+        if py_builtin_type_class_tag(owner) == PY_TYPE_STR:
+            return 1
+        index = index + 1
+    return 0
+
+
+def _instance_builtin_payload_slot(inst, cls):
+    # The immutable str payload follows the pre-existing reserved owner.
+    count: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET) + 1
+    if count < 1:
+        count = 1
+    if _instance_storage_slot_count(cls) <= count:
+        return null()
+    return ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + count * C_POINTER_SIZE)
+
+
+@c_abi_export("py_str_payload")
+def py_str_payload(value):
+    # Borrowed native string storage. The receiver keeps its own class,
+    # identity, fields, dictionary and finalizer throughout this view.
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        return null()
+    value = pcc_gc_note_relocation_read(value)
+    if load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR:
+        return value
+    if not _ptr_is_instance(value):
+        return null()
+    cls = pcc_gc_load_ptr(value, ptr_add(value, PYINSTANCEOBJECT_CLS_OFFSET))
+    # Only str currently declares an appended immutable owner. Read its
+    # scalar layout immediately; do not hold a borrowed class pointer over
+    # another allocating lookup. Return is an immediate borrowed check only.
+    count: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET) + 1
+    if count < 1:
+        count = 1
+    offset: int = PYINSTANCEOBJECT_FIELDS_OFFSET + count * C_POINTER_SIZE
+    if load_i32(cls, PYCLASSOBJECT_INSTANCE_SIZE_OFFSET) <= offset:
+        return null()
+    payload = pcc_gc_load_ptr(value, ptr_add(value, offset))
+    if ptr_is_null(payload) != 0 or is_tagged_int(payload) != 0:
+        return null()
+    if load_i32(payload, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_STR:
+        return null()
+    return payload
+
+
+@c_abi_export("py_instance_copy_builtin_payload")
+def py_instance_copy_builtin_payload(source, destination) -> None:
+    if not _ptr_is_instance(source) or not _ptr_is_instance(destination):
+        return
+    pcc_py_gc_minor_graph_lock()
+    source = pcc_gc_note_relocation_read(source)
+    destination = pcc_gc_note_relocation_read(destination)
+    cls = pcc_gc_load_ptr(source, ptr_add(source, PYINSTANCEOBJECT_CLS_OFFSET))
+    source_slot = _instance_builtin_payload_slot(source, cls)
+    if ptr_is_null(source_slot) == 0:
+        value = pcc_gc_load_ptr(source, source_slot)
+        pcc_gc_store_ptr(destination, _instance_builtin_payload_slot(destination, cls), value)
+    pcc_py_gc_minor_graph_unlock()
+
+
 def _dynamic_attr_slot(inst):
     if not _ptr_is_instance(inst):
         return null()
@@ -1679,7 +1761,7 @@ def _object_allocator_supports_class(cls) -> bool:
             builtin_tag: int = py_builtin_type_class_tag(owner)
             # -1 is object, -2 is an ordinary user class. Other builtin
             # classes need their allocator; object layout is not a fallback.
-            if builtin_tag >= 0 or builtin_tag == -3:
+            if builtin_tag >= PY_TYPE_NONE or builtin_tag == -3:
                 return False
             exc_index: int = 0
             while exc_index < 65:
@@ -1859,7 +1941,10 @@ def _object_new_cache_fill(root, result_slot) -> None:
             pcc_gc_pin(captures)
             function = null()
             if ptr_is_null(captures) == 0 and py_err_occurred() == 0:
-                function = py_func_new_bound(_object_new_entry, captures, cstr("__new__"), null())
+                if py_builtin_type_class_tag(root) == PY_TYPE_STR:
+                    function = py_func_new_bound(_str_new_entry, captures, cstr("__new__"), null())
+                else:
+                    function = py_func_new_bound(_object_new_entry, captures, cstr("__new__"), null())
                 pcc_gc_pin(function)
             pcc_gc_unpin(captures)
             py_decref(captures)
@@ -1968,6 +2053,10 @@ def _class_new_lookup(cls) -> c_ptr:
                     py_incref(value)
                     return _class_new_return_value(value, key, prior_pin)
                 j = j + 1
+            if py_builtin_type_class_tag(owner) == PY_TYPE_STR:
+                pcc_gc_unpin(key)
+                py_decref(key)
+                return _object_new_cached(owner)
         i = i + 1
     pcc_gc_unpin(key)
     py_decref(key)
@@ -2339,7 +2428,7 @@ def py_instance_new(cls) -> c_ptr:
     n_fields_i32: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
     if n_fields_i32 < 0:
         n_fields_i32 = 0
-    n_slots: int = n_fields_i32 + 1
+    n_slots: int = _instance_storage_slot_count(cls)
     size: int = PYINSTANCEOBJECT_SIZE + n_slots * C_POINTER_SIZE
     inst = pcc_gc_alloc(
         size,
@@ -3384,6 +3473,9 @@ def py_instance_dealloc(o) -> None:
         # protocol backing stores. The store owner resolves forwarding and
         # preserves the NULL-before-reentrant-cleanup invariant.
         pcc_gc_store_ptr(o, _instance_reserved_owner_slot(o, cls), null())
+        payload_slot = _instance_builtin_payload_slot(o, cls)
+        if ptr_is_null(payload_slot) == 0:
+            pcc_gc_store_ptr(o, payload_slot, null())
     delayed_zpage_note: int = 0
     if _gc_backend_selected_fast() == 4:
         if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & 65536) != 0:
@@ -3419,6 +3511,7 @@ def py_dataclass_replace(obj, n_overrides: int, names, values):
             store_ptr(dst_fields, i * C_POINTER_SIZE, v)
         i = i + 1
     _copy_instance_reserved_owner(obj, dst, cls)
+    py_instance_copy_builtin_payload(obj, dst)
 
     j: int = 0
     while j < n_overrides:
@@ -3472,6 +3565,7 @@ def py_dataclass_replace_from_dict(obj, overrides):
         i = i + 1
 
     _copy_instance_reserved_owner(obj, dst, cls)
+    py_instance_copy_builtin_payload(obj, dst)
 
     entries = load_ptr(overrides, PYDICTOBJECT_ENTRIES_OFFSET)
     entries_used: int = load_i64(overrides, PYDICTOBJECT_ENTRIES_USED_OFFSET)
@@ -3689,7 +3783,7 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
         c = pcc_gc_load_ptr(null(), roots)
         store_ptr(c, PYCLASSOBJECT_FIELD_NAMES_OFFSET, copied_fields)
     user_tag: int = _alloc_user_tag()
-    if user_tag < 0:
+    if user_tag < PY_TYPE_NONE:
         _class_require_result(
             null(), cstr("class type tag allocation"),
             cstr("user class type tag space exhausted"),
@@ -3812,6 +3906,10 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     store_i32(c, PYCLASSOBJECT_N_MRO_OFFSET, mro_len)
     pcc_gc_backend4_zpage_register_owner_payload_span(c, mro, mro_len * C_POINTER_SIZE)
     pcc_py_gc_minor_graph_unlock()
+    c = pcc_gc_load_ptr(null(), roots)
+    if py_class_is_str_subclass(c) != 0:
+        # One extra traced owner; __dict__ stays at the existing offset.
+        store_i32(c, PYCLASSOBJECT_INSTANCE_SIZE_OFFSET, inst_size + C_POINTER_SIZE)
     return _class_construct_finish(roots, borrowed, 1)
 
 
@@ -4687,3 +4785,244 @@ def py_class_write_namespace_slots(class_slot: c_ptr, name: c_ptr, value_slot: c
         _special_error(cstr("class namespace write failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
     return status
+
+
+# The constructor reuses the fourteen-slot special-call frame. Slot zero and
+# thirteen retain its existing exception protocol; names make semantic owners
+# explicit while preserving the shared _special_publish result position.
+_STR_NEW_CLASS = 1
+_STR_NEW_ARGS = 2
+_STR_NEW_KWARGS = 3
+_STR_NEW_OBJECT = 4
+_STR_NEW_ENCODING = 5
+_STR_NEW_ERRORS = 6
+_STR_NEW_TEXT = 7
+_STR_NEW_KEY = 8
+_STR_NEW_KEY_VALUE = 9
+_STR_NEW_PAYLOAD_CLASS = 10
+_STR_NEW_RESULT = 12
+
+define_global_i32("pcc_str_new_borrowed_map", -3)
+define_global_i32("pcc_str_new_result_map", 1)
+py_obj_str = extern("py_obj_str", (c_ptr,), c_ptr)
+py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
+py_bytes_decode_with_encoding = extern("py_bytes_decode_with_encoding", (c_ptr, c_ptr, c_ptr), c_ptr)
+
+
+def _str_new_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
+    # The ordinary native binder resolved cls, *args and **kwargs. args is
+    # leased by that binder throughout the raw constructor call.
+    return py_str_subclass_new(
+        load_ptr(args, PYTUPLEOBJECT_ITEMS_OFFSET),
+        load_ptr(args, PYTUPLEOBJECT_ITEMS_OFFSET + C_POINTER_SIZE),
+        load_ptr(args, PYTUPLEOBJECT_ITEMS_OFFSET + 2 * C_POINTER_SIZE),
+    )
+
+
+def _str_new_exact_argument(slots, tokens, index: int) -> int:
+    value = load_ptr(slots, index * C_POINTER_SIZE)
+    if ptr_is_null(value) != 0:
+        return 0
+    if load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR:
+        return 0
+    # Codec helpers use the exact-string raw view ABI. Snapshot a subtype
+    # under its backing-owner lease instead of passing the wrapper through.
+    store_ptr(slots, _STR_NEW_KEY_VALUE * C_POINTER_SIZE, py_str_exact_copy(value))
+    if _special_adopt(slots, tokens, _STR_NEW_KEY_VALUE) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _STR_NEW_KEY_VALUE * C_POINTER_SIZE)) != 0:
+        return -1
+    _special_drop(slots, tokens, index)
+    status: int = _special_copy(slots, tokens, index, ptr_add(slots, _STR_NEW_KEY_VALUE * C_POINTER_SIZE), 0)
+    _special_drop(slots, tokens, _STR_NEW_KEY_VALUE)
+    return status
+
+
+def _str_new_body(slots, tokens) -> int:
+    cls = load_ptr(slots, _STR_NEW_CLASS * C_POINTER_SIZE)
+    if py_class_is_str_subclass(cls) == 0:
+        py_raise_owned(py_exc_new(3, cstr("str.__new__ requires a str subtype")))
+        return -1
+    if _special_validate_arguments(slots) != 0:
+        return -1
+    nargs: int = 0
+    args = load_ptr(slots, _STR_NEW_ARGS * C_POINTER_SIZE)
+    if ptr_is_null(args) == 0:
+        nargs = py_tuple_len(args)
+    if nargs > 3:
+        py_raise_owned(py_exc_new(3, cstr("str() takes at most 3 arguments")))
+        return -1
+    index: int = 0
+    while index < nargs:
+        if _special_tuple_item(slots, tokens, _STR_NEW_OBJECT + index, _STR_NEW_ARGS, index) != 0:
+            return -1
+        index = index + 1
+    kwargs = load_ptr(slots, _STR_NEW_KWARGS * C_POINTER_SIZE)
+    if ptr_is_null(kwargs) == 0 and ptr_eq(kwargs, global_load_ptr("py_None")) == 0:
+        matched: int = 0
+        index = 0
+        while index < 3:
+            name = cstr("object")
+            if index == 1:
+                name = cstr("encoding")
+            elif index == 2:
+                name = cstr("errors")
+            store_ptr(slots, _STR_NEW_KEY * C_POINTER_SIZE, py_str_new(name, strlen(name)))
+            if _special_adopt(slots, tokens, _STR_NEW_KEY) != 0:
+                return -1
+            store_ptr(slots, _STR_NEW_KEY_VALUE * C_POINTER_SIZE, py_dict_get(kwargs, load_ptr(slots, _STR_NEW_KEY * C_POINTER_SIZE)))
+            if _special_adopt(slots, tokens, _STR_NEW_KEY_VALUE) != 0:
+                return -1
+            if ptr_is_null(load_ptr(slots, _STR_NEW_KEY_VALUE * C_POINTER_SIZE)) == 0:
+                matched = matched + 1
+                if index < nargs:
+                    py_raise_owned(py_exc_new(3, cstr("str() argument supplied by name and position")))
+                    return -1
+                if _special_copy(slots, tokens, _STR_NEW_OBJECT + index, ptr_add(slots, _STR_NEW_KEY_VALUE * C_POINTER_SIZE), 0) != 0:
+                    return -1
+            _special_drop(slots, tokens, _STR_NEW_KEY_VALUE)
+            _special_drop(slots, tokens, _STR_NEW_KEY)
+            index = index + 1
+        if matched != py_dict_len(kwargs):
+            py_raise_owned(py_exc_new(3, cstr("invalid keyword argument for str()")))
+            return -1
+    value = load_ptr(slots, _STR_NEW_OBJECT * C_POINTER_SIZE)
+    encoding = load_ptr(slots, _STR_NEW_ENCODING * C_POINTER_SIZE)
+    errors = load_ptr(slots, _STR_NEW_ERRORS * C_POINTER_SIZE)
+    if ptr_is_null(encoding) == 0 or ptr_is_null(errors) == 0:
+        if ptr_is_null(encoding) == 0:
+            if ptr_is_null(py_str_payload(encoding)) != 0:
+                py_raise_owned(py_exc_new(3, cstr("str() encoding must be str")))
+                return -1
+        if ptr_is_null(errors) == 0:
+            if ptr_is_null(py_str_payload(errors)) != 0:
+                py_raise_owned(py_exc_new(3, cstr("str() errors must be str")))
+                return -1
+        if _str_new_exact_argument(slots, tokens, _STR_NEW_ENCODING) != 0:
+            return -1
+        if _str_new_exact_argument(slots, tokens, _STR_NEW_ERRORS) != 0:
+            return -1
+        encoding = load_ptr(slots, _STR_NEW_ENCODING * C_POINTER_SIZE)
+        errors = load_ptr(slots, _STR_NEW_ERRORS * C_POINTER_SIZE)
+        if ptr_is_null(value) != 0:
+            store_ptr(slots, _STR_NEW_TEXT * C_POINTER_SIZE, py_str_new(cstr(""), 0))
+        else:
+            store_ptr(slots, _STR_NEW_TEXT * C_POINTER_SIZE, py_bytes_decode_with_encoding(value, encoding, errors))
+    elif ptr_is_null(value) != 0:
+        store_ptr(slots, _STR_NEW_TEXT * C_POINTER_SIZE, py_str_new(cstr(""), 0))
+    else:
+        store_ptr(slots, _STR_NEW_TEXT * C_POINTER_SIZE, py_obj_str(value))
+    if _special_adopt(slots, tokens, _STR_NEW_TEXT) != 0:
+        return -1
+    if py_err_occurred() != 0:
+        return -1
+    text = load_ptr(slots, _STR_NEW_TEXT * C_POINTER_SIZE)
+    payload = py_str_payload(text)
+    if ptr_is_null(payload) != 0:
+        py_raise_owned(py_exc_new(3, cstr("__str__ returned non-string")))
+        return -1
+    # A __str__ override can itself return a subclass. The immutable storage
+    # owner must be an exact native string, not a hidden second user object.
+    if ptr_eq(payload, text) == 0:
+        store_ptr(slots, _STR_NEW_KEY_VALUE * C_POINTER_SIZE, py_str_exact_copy(text))
+        if _special_adopt(slots, tokens, _STR_NEW_KEY_VALUE) != 0:
+            return -1
+        _special_drop(slots, tokens, _STR_NEW_TEXT)
+        if _special_copy(slots, tokens, _STR_NEW_TEXT, ptr_add(slots, _STR_NEW_KEY_VALUE * C_POINTER_SIZE), 0) != 0:
+            return -1
+        _special_drop(slots, tokens, _STR_NEW_KEY_VALUE)
+    if py_builtin_type_class_tag(cls) == PY_TYPE_STR:
+        return _special_copy(slots, tokens, _STR_NEW_RESULT, ptr_add(slots, _STR_NEW_TEXT * C_POINTER_SIZE), 0)
+    store_ptr(slots, _STR_NEW_RESULT * C_POINTER_SIZE, py_instance_new(cls))
+    if _special_adopt(slots, tokens, _STR_NEW_RESULT) != 0:
+        return -1
+    result = load_ptr(slots, _STR_NEW_RESULT * C_POINTER_SIZE)
+    if ptr_is_null(result) != 0:
+        return _special_error(cstr("str subtype allocation failed"))
+    pcc_gc_store_ptr(result, _instance_builtin_payload_slot(result, cls), load_ptr(slots, _STR_NEW_TEXT * C_POINTER_SIZE))
+    return -1 if py_err_occurred() != 0 else 0
+
+
+def _str_exact_copy_body(slots, tokens) -> int:
+    value = load_ptr(slots, _STR_NEW_CLASS * C_POINTER_SIZE)
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        py_raise_owned(py_exc_new(3, cstr("string copy requires str")))
+        return -1
+    if load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR:
+        source = ptr_add(slots, _STR_NEW_CLASS * C_POINTER_SIZE)
+    else:
+        if not _ptr_is_instance(value):
+            py_raise_owned(py_exc_new(3, cstr("string copy requires str")))
+            return -1
+        if _special_copy(slots, tokens, _STR_NEW_PAYLOAD_CLASS,
+                ptr_add(value, PYINSTANCEOBJECT_CLS_OFFSET), 1) != 0:
+            return -1
+        cls = load_ptr(slots, _STR_NEW_PAYLOAD_CLASS * C_POINTER_SIZE)
+        if py_class_is_str_subclass(cls) == 0:
+            py_raise_owned(py_exc_new(3, cstr("string copy requires str")))
+            return -1
+        source = _instance_builtin_payload_slot(value, cls)
+    # The receiver is leased, so its payload slot remains addressable while
+    # the child acquires its own counted address lease. This child lease, not
+    # a receiver root/pin, protects UTF-8 bytes across allocation and polls.
+    if _special_copy(slots, tokens, _STR_NEW_TEXT, source, 0) != 0:
+        return -1
+    payload = load_ptr(slots, _STR_NEW_TEXT * C_POINTER_SIZE)
+    if ptr_is_null(payload) != 0:
+        return _special_error(cstr("str subtype has no initialized payload"))
+    store_ptr(slots, _STR_NEW_RESULT * C_POINTER_SIZE,
+              py_str_new(py_str_utf8(payload), py_str_byte_len(payload)))
+    return _special_adopt(slots, tokens, _STR_NEW_RESULT)
+
+
+def _str_rooted_entry(cls, args, kwargs, copy_only: int):
+    borrowed = stack_alloc(3 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, cls)
+    store_ptr(borrowed, C_POINTER_SIZE, args)
+    store_ptr(borrowed, 2 * C_POINTER_SIZE, kwargs)
+    pcc_gc_frame_enter(global_addr("pcc_str_new_borrowed_map"), borrowed)
+    output = stack_alloc(C_POINTER_SIZE)
+    store_ptr(output, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_str_new_result_map"), output)
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _STR_NEW_CLASS, borrowed, 1)
+        if status == 0:
+            status = _special_copy(slots, tokens, _STR_NEW_ARGS, ptr_add(borrowed, C_POINTER_SIZE), 1)
+        if status == 0:
+            status = _special_copy(slots, tokens, _STR_NEW_KWARGS, ptr_add(borrowed, 2 * C_POINTER_SIZE), 1)
+        if status == 0:
+            if copy_only != 0:
+                status = _str_exact_copy_body(slots, tokens)
+            else:
+                status = _str_new_body(slots, tokens)
+        if status == 0:
+            status = _special_publish(slots, tokens, output)
+    if status != 0:
+        _special_error(cstr("str subtype construction failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    prior: int = 0
+    value = load_ptr(output, 0)
+    if ptr_is_null(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_gc_frame_leave(output)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(output, prior)
+
+
+@c_abi_export("py_str_subclass_new")
+def py_str_subclass_new(cls, args, kwargs):
+    return _str_rooted_entry(cls, args, kwargs, 0)
+
+
+@c_abi_export("py_str_exact_copy")
+def py_str_exact_copy(value):
+    return _str_rooted_entry(value, null(), null(), 1)

@@ -718,6 +718,10 @@ class UnaryCallLoweringMixin:
         if builtin_name not in _CPY_BUILTIN_TYPE_NAMES:
             return None
         if attr.name == "__new__":
+            if builtin_name == "str":
+                # The allocator must receive the requested class. Rewriting
+                # str.__new__(cls, x) as str(x) discards subclass identity.
+                return self._emit_slot_call_object(expr, "str.__new__")
             ctor_args = expr.args
             if (
                 ctor_args

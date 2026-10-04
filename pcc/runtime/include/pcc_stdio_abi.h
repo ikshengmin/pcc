@@ -24,6 +24,7 @@ typedef struct PccOwnedFile {
 #define PCC_STDIO_FLAG_EOF 8ULL
 #define PCC_STDIO_FLAG_STANDARD 16ULL
 #define PCC_STDIO_FLAG_APPEND 32ULL
+#define PCC_STDIO_FLAG_BORROWED_DESCRIPTOR 64ULL
 
 _Static_assert(offsetof(PccOwnedFile, magic) == 0, "PccOwnedFile.magic ABI");
 _Static_assert(offsetof(PccOwnedFile, fd) == 8, "PccOwnedFile.fd ABI");

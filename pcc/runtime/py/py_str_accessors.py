@@ -68,6 +68,19 @@ from pcc.unsafe import (
 )
 
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
+py_str_payload = extern("py_str_payload", (c_ptr,), c_ptr)
+py_str_exact_copy = extern("py_str_exact_copy", (c_ptr,), c_ptr)
+pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+
+
+@c_abi_export("py_str_check")
+def py_str_check(value) -> int:
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        return 0
+    if load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR:
+        return 1
+    return 0 if ptr_is_null(py_str_payload(value)) != 0 else 1
+
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
@@ -355,6 +368,8 @@ def _int_or_default(obj, default_value: int) -> int:
 
 @c_abi_export("py_str_byte_len")
 def py_str_byte_len(s) -> int:
+    if ptr_is_null(s) == 0 and _type_of(s) != PY_TYPE_STR:
+        s = py_str_payload(s)
     if ptr_is_null(s) != 0:
         return 0
     return load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -1859,6 +1874,29 @@ def py_str_casefold(s):
     return py_str_lower(s)
 
 
+def _str_concat_subclasses(a, b):
+    # Subclass storage is a separate owner. Make independently owned exact
+    # snapshots under the payload's scoped lease before any subsequent poll.
+    left = py_str_exact_copy(a)
+    if ptr_is_null(left) != 0:
+        return null()
+    pcc_gc_pin(left)
+    right = py_str_exact_copy(b)
+    if ptr_is_null(right) != 0:
+        pcc_gc_unpin(left)
+        py_decref(left)
+        return null()
+    pcc_gc_pin(right)
+    result = py_str_concat(left, right)
+    pcc_gc_pin(result)
+    pcc_gc_unpin(right)
+    py_decref(right)
+    pcc_gc_unpin(left)
+    py_decref(left)
+    pcc_gc_unpin(result)
+    return result
+
+
 @c_abi_export("py_str_concat")
 def py_str_concat(a, b):
     if ptr_is_null(a) != 0:
@@ -1873,11 +1911,9 @@ def py_str_concat(a, b):
     tag_a: int = _type_of(a)
     tag_b: int = _type_of(b)
     if tag_a != PY_TYPE_STR:
-        pcc_debug_bad_str_concat(a, b, tag_a, tag_b)
-        return null()
+        return _str_concat_subclasses(a, b)
     if tag_b != PY_TYPE_STR:
-        pcc_debug_bad_str_concat(a, b, tag_a, tag_b)
-        return null()
+        return _str_concat_subclasses(a, b)
     la: int = load_i64(a, PYSTROBJECT_BYTE_LEN_OFFSET)
     lb: int = load_i64(b, PYSTROBJECT_BYTE_LEN_OFFSET)
     if la < 0:
