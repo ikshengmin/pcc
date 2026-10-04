@@ -5,8 +5,21 @@ from __future__ import annotations
 from typing import Optional
 
 from pcc.ir.compat import ir
+from pcc.runtime.py.py_abi_constants import PY_TYPE_STR
 
-from pcc.frontends.python.py_ast import Attr, Call, DictType, DynType, Expr, ListType, Name, StrLit, StrType, TupleExpr, TupleType
+from pcc.frontends.python.py_ast import (
+    Attr,
+    Call,
+    DictType,
+    DynType,
+    Expr,
+    ListType,
+    Name,
+    StrLit,
+    StrType,
+    TupleExpr,
+    TupleType,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
@@ -21,8 +34,8 @@ class BuiltinTypeAttrLoweringMixin:
         """``getattr(obj, name)`` / ``getattr(obj, name, default)``.
         CPython-backed receivers go through the real CPython builtin so
         module objects and the three-arg default form keep Python
-        semantics. Native receivers use ``py_obj_getattr`` directly,
-        with a null-check fallback for the defaulted form.
+        semantics. Native receivers use authoritative operand/result roots;
+        only AttributeError selects an explicitly evaluated default.
         """
         native_module_getattr = self._maybe_emit_native_module_getattr(expr)
         if native_module_getattr is not None:
@@ -34,101 +47,171 @@ class BuiltinTypeAttrLoweringMixin:
                 "getattr",
                 tuple(expr.args),
             )
-        obj_val = self._emit_expr_as_pcc_object(expr.args[0])
-        name_expr = expr.args[1]
-        if isinstance(name_expr, StrLit):
-            name_ptr = self._attr_name_ptr(name_expr.value)
-        else:
-            # Dynamic name — marshal and use py_str_utf8 to grab
-            # the C string.
-            nv = self._emit_expr(name_expr)
-            n_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                nv,
-                name_expr.ty,
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("getattr.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(expr.args[0], "getattr.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            name_expr = expr.args[1]
+            name_root = None
+            if not isinstance(name_expr, StrLit):
+                name_root = self._emit_slot_call_operand(name_expr, "getattr.name")
+                roots.append(name_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            # A default is an ordinary argument: evaluate it before lookup,
+            # even when the attribute exists or the eventual lookup fails.
+            default = None
+            if len(expr.args) == 3:
+                default = self._emit_slot_call_operand(expr.args[2], "getattr.default")
+                roots.append(default)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            pending = self._new_slot_call_root("getattr.exception")
+            roots.append(pending)
+            attribute_error = None
+            if default is not None:
+                attribute_error = self._new_slot_call_root("getattr.attribute_error")
+                roots.append(attribute_error)
+            cleanup = self._slot_call_cleanup_block(tuple(roots), target)
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            if attribute_error is not None:
+                # Copy the authoritative builtin cache, independent of a
+                # user's binding named AttributeError. Prime before lookup
+                # so cache allocation cannot replace its pending exception.
+                self.builder.call(self.runtime["py_exc_builtin_class"], [ir.Constant(_I64, 6)])
+                self._emit_post_call_err_check(expr.span)
+                cache = self.builder.call(self.runtime["py_subs_exc_cache_slot"], [ir.Constant(_I64, 6)])
+                self._slot_call_copy_source(attribute_error, cache, span=expr.span)
+            if name_root is not None:
+                # Validate only after every source argument has run. A name
+                # is a native string value, never an implicit str() coercion.
+                name_tag = self._slot_call_runtime_call(
+                    "py_obj_type_tag", (name_root,), span=expr.span,
+                )
+                valid_name = self.current_function.append_basic_block(self._fresh("getattr.name.valid"))
+                invalid_name = self.current_function.append_basic_block(self._fresh("getattr.name.invalid"))
+                self.builder.cbranch(
+                    self.builder.icmp_signed("==", name_tag, ir.Constant(_I64, PY_TYPE_STR)),
+                    valid_name, invalid_name,
+                )
+                self.builder.position_at_end(invalid_name)
+                self._emit_builtin_exception_and_branch(
+                    "TypeError", "attribute name must be string", expr.span,
+                )
+                self.builder.position_at_end(valid_name)
+            name_token = None
+            if name_root is None:
+                name_ptr = self._attr_name_ptr(name_expr.value)
+            else:
+                # The C string is an interior pointer. Keep its string owner
+                # leased through lookup, including receiver lease acquisition,
+                # user callbacks and publication of the returned object.
+                name_token = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_acquire"],
+                    [self._as_gc_ptr(name_root)], name=self._fresh("getattr.name.lease"),
+                )
+                self._slot_call_check_status(name_token, "getattr name lease", expr.span)
+                self._try_err_block = self._slot_call_cleanup_block(
+                    (), cleanup, ((name_root, name_token),),
+                )
+                self._cpy_operand_cleanup_block = self._try_err_block
+                name_ptr = self.builder.call(
+                    self.runtime["py_str_utf8"], [self.builder.load(name_root)],
+                    name=self._fresh("getattr.name.utf8"),
+                )
+            # The shared producer immediately stores the NEW result in the
+            # output root, then transfers TLS into pending before releasing
+            # argument leases. No raw result crosses a check or finalizer.
+            self._slot_call_runtime_call(
+                "py_obj_getattr", (receiver,), result_slot=output,
+                suffix_args=(name_ptr,), span=expr.span, exception_slot=pending,
             )
-            name_ptr = self.builder.call(
-                self.runtime["py_str_utf8"],
-                [n_obj],
-                name=self._fresh("getattr.name"),
+            if name_root is not None:
+                released = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_release"],
+                    [self._as_gc_ptr(name_root), name_token],
+                    name=self._fresh("getattr.name.release"),
+                )
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                self._slot_call_check_status(released, "getattr name lease release", expr.span)
+            failed = self.current_function.append_basic_block(self._fresh("getattr.failed"))
+            present = self.current_function.append_basic_block(self._fresh("getattr.present"))
+            done = self.current_function.append_basic_block(self._fresh("getattr.done"))
+            self.builder.cbranch(
+                self.builder.icmp_unsigned(
+                    "!=", self.builder.load(pending), ir.Constant(_CSTR, None),
+                ),
+                failed, present,
             )
-        # Python evaluates every call argument left-to-right before invoking
-        # the callable.  In particular, evaluate the default before
-        # py_obj_getattr can install the AttributeError that this three-arg
-        # form is responsible for swallowing.  Deferring default evaluation
-        # until after the lookup leaks that pending exception into any runtime
-        # calls made while constructing the default value.
-        default_obj = (
-            self._emit_as_object(expr.args[2]) if len(expr.args) == 3 else None
-        )
-        # 2-arg getattr must raise on a miss; the 3-arg form swallows the
-        # miss into the default, so it uses the no-raise probe and skips the
-        # AttributeError construction entirely.
-        getattr_runtime = (
-            "py_obj_getattr" if len(expr.args) == 2 else "py_obj_getattr_maybe"
-        )
-        got = self.builder.call(
-            self.runtime[getattr_runtime],
-            [obj_val, name_ptr],
-            name=self._fresh("getattr"),
-        )
-        if len(expr.args) == 2:
-            # ``py_obj_getattr`` returns a NEW owned reference on every non-NULL
-            # edge (type-class increfs its interned class, instance/class attr
-            # loads incref the stored value, and the bound-method/cext paths
-            # fabricate a fresh object).  The emitter therefore records the
-            # result as owned so a discarded ``getattr(o, 'x')`` releases it
-            # exactly once, mirroring the dynamic-method-call and dict.get
-            # precedents.  The AST classifier is NOT flipped: the native-module
-            # and cpython getattr branches (which return earlier) have their own
-            # unaudited ownership and must not be over-released.
-            self._note_owned_object_value(got)
-            return got
-        assert default_obj is not None
-        # 3-arg: make BOTH phi edges own exactly one reference so the merged
-        # result is uniformly owned.
-        #   - present edge: ``got`` is owned; the (already-evaluated) default is
-        #     unused here, so release it when it was an owned temporary.
-        #   - missing edge: the default becomes the result; retain it when it
-        #     was a borrowed value so the result owns a reference, and keep the
-        #     temporary's own reference when it was already owned (transfer).
-        default_is_owned = self._expr_returns_owned_object(expr.args[2])
-        is_missing = self.builder.icmp_signed(
-            "==",
-            got,
-            ir.Constant(_CSTR, None),
-            name=self._fresh("getattr.missing"),
-        )
-        parent_fn = self.current_function
-        missing_bb = parent_fn.append_basic_block(name=self._fresh("getattr.missing"))
-        present_bb = parent_fn.append_basic_block(name=self._fresh("getattr.present"))
-        end_bb = parent_fn.append_basic_block(name=self._fresh("getattr.end"))
-        self.builder.cbranch(is_missing, missing_bb, present_bb)
-        self.builder.position_at_end(missing_bb)
-        self.builder.call(self.runtime["py_clear_exception"], [])
-        default_result = default_obj
-        if not default_is_owned:
-            default_result = self._gc_retain(
-                default_obj, name=self._fresh("getattr.default.retain")
+            self.builder.position_at_end(failed)
+            if default is not None:
+                matched = self._slot_call_runtime_call(
+                    "py_exc_matches", (pending, attribute_error), span=expr.span,
+                )
+                use_default = self.current_function.append_basic_block(self._fresh("getattr.use_default"))
+                propagate = self.current_function.append_basic_block(self._fresh("getattr.propagate"))
+                self.builder.cbranch(
+                    self.builder.icmp_signed("!=", matched, ir.Constant(_I64, 0)),
+                    use_default, propagate,
+                )
+                self.builder.position_at_end(use_default)
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(output), ir.Constant(_CSTR, None)],
+                )
+                self._slot_call_copy_source(output, default, span=expr.span)
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(pending), ir.Constant(_CSTR, None)],
+                )
+                self.builder.branch(done)
+                self.builder.position_at_end(propagate)
+            # Restore exactly the selecting exception. The cleanup block
+            # protects that owner while receiver/name/default finalizers run.
+            self.builder.call(self.runtime["py_clear_exception"], [])
+            self.builder.call(
+                self.module.globals["py_tls_exc_swap_slot"], [self._as_gc_ptr(pending)],
             )
-        self.builder.branch(end_bb)
-        missing_exit = self.builder._block
-        self.builder.position_at_end(present_bb)
-        if default_is_owned:
-            self._gc_release(
-                default_obj,
-                self._release_context_label("getattr.default.unused"),
+            self.builder.branch(cleanup)
+            self.builder.position_at_end(present)
+            invalid_result = self.current_function.append_basic_block(self._fresh("getattr.invalid_result"))
+            valid_result = self.current_function.append_basic_block(self._fresh("getattr.valid_result"))
+            self.builder.cbranch(
+                self.builder.icmp_unsigned(
+                    "==", self.builder.load(output), ir.Constant(_CSTR, None),
+                ),
+                invalid_result, valid_result,
             )
-        self.builder.branch(end_bb)
-        present_exit = self.builder._block
-        self.builder.position_at_end(end_bb)
-        phi = self.builder.phi(_CSTR, name=self._fresh("getattr.default"))
-        phi.add_incoming(default_result, missing_exit)
-        phi.add_incoming(got, present_exit)
-        self._note_owned_object_value(phi)
-        return phi
+            self.builder.position_at_end(invalid_result)
+            # We use the raising lookup ABI for both arities. NULL without a
+            # pending exception is a broken producer, not an attribute miss.
+            self._emit_builtin_exception_and_branch(
+                "RuntimeError", "getattr returned NULL without setting an exception", expr.span,
+            )
+            self.builder.position_at_end(valid_result)
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("getattr.current"))
+            return self._take_slot_call_root(output)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_attr_name_ptr_arg(self, expr: Expr, label: str) -> ir.Value:
         if isinstance(expr, StrLit):

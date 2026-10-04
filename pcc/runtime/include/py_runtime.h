@@ -1810,6 +1810,7 @@ PyObject *py_shutil_which(PyObject *name);
 PyObject *py_shutil_rmtree(PyObject *path, int32_t ignore_errors);
 /* Canonical managed tempfile.TemporaryDirectory class, NEW reference. */
 PyObject *py_tempdir_type(void);
+PyObject *py_tempfile_mkdtemp_function(void);
 PyObject *py_tempdir_new(PyObject *prefix);
 void py_tempdir_cleanup(PyObject *path);
 PyObject *py_re_match(PyObject *pattern, PyObject *text);

@@ -1104,6 +1104,7 @@ def _runtime_signatures_part_16():
     "py_shutil_which": (_PYOBJ, [_PYOBJ], False),
     "py_shutil_rmtree": (_PYOBJ, [_PYOBJ, _I32], False),
     "py_tempdir_type": (_PYOBJ, [], False),
+    "py_tempfile_mkdtemp_function": (_PYOBJ, [], False),
     "py_tempdir_new": (_PYOBJ, [_PYOBJ], False),
     "py_tempdir_cleanup": (_VOID, [_PYOBJ], False),
     "py_re_escape": (_PYOBJ, [_PYOBJ], False),

@@ -10,6 +10,7 @@ from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
 from pcc.driver.project import TranslationUnit
 from tests.owned_c_corpus import run_owned_c_corpus
 from tests.corpus_execution_phases import ExecutionPhases
+from tests.corpus_manifest import runtime_cases_except
 from tests.gcc_torture_cases import (
     DEFAULT_TIMEOUT,
     PccCompileResult,
@@ -35,6 +36,12 @@ GCC_TORTURE_SELF_BACKEND_EXACT_MATCH_CASES = tuple(
 )
 GCC_TORTURE_SELF_BACKEND_RETURNCODE_CASES = tuple(
     GCC_TORTURE_MANIFEST.get("runtime_returncode_match_only", [])
+)
+GCC_TORTURE_SELF_BACKEND_COMPARISON_CASES = (
+    GCC_TORTURE_SELF_BACKEND_EXACT_MATCH_CASES
+    + tuple(runtime_cases_except(
+        GCC_TORTURE_MANIFEST, {"runtime_exact_match", "runtime_returncode_match_only"}
+    ))
 )
 
 pytestmark = pytest.mark.integration
@@ -107,7 +114,7 @@ def _run_llvm_backend(case_path: Path, timeout: int = DEFAULT_TIMEOUT):
 
 
 @pytest.mark.parametrize(
-    "relative_path", _case_params(GCC_TORTURE_SELF_BACKEND_EXACT_MATCH_CASES)
+    "relative_path", _case_params(GCC_TORTURE_SELF_BACKEND_COMPARISON_CASES)
 )
 def test_gcc_torture_self_backend_matches_native_and_llvm_exactly(relative_path):
     case_path = _case_path(relative_path)

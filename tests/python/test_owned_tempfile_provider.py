@@ -42,6 +42,7 @@ class Obj:
 class Runtime:
     def __init__(self):
         self.globals = {}
+        self.exports = {}
         self.handles = {}
         self.frames = []
         self.error = None
@@ -49,6 +50,7 @@ class Runtime:
         self.memory = []
         self.fail_state = False
         self.fail_setattr = False
+        self.leases = {}
         self.remove_failure = 0
         self.none = Obj('none')
         self.true, self.false = Obj('bool', True), Obj('bool', False)
@@ -66,8 +68,8 @@ class Runtime:
             'load_i32': self.read, 'load_i64': self.read,
             'store_i32': self.write, 'store_i64': self.write,
             'load_i8': self.byte, 'store_i8': self.store_byte,
-            'global_load_ptr': lambda k:self.globals.get(k),
-            'global_store_ptr': lambda k,v:self.globals.__setitem__(k,v),
+            'global_load_ptr': self.global_load,
+            'global_store_ptr': self.global_store,
             'global_addr': self.global_addr,
             'define_global_i32': lambda k,v:self.define(k,v),
             'define_global_i64': lambda k,v:self.define(k,v),
@@ -76,7 +78,7 @@ class Runtime:
             'atomic_cas_i64': self.cas, 'atomic_rmw_i64': self.rmw,
             'int_to_ptr': lambda n: n, 'ptr_to_int': lambda p:p,
             'target_sys_platform': lambda:self.cstr('linux'),
-            'function_addr':lambda name:self.ns['_td_'+name.removeprefix('pcc_tempdir_').removesuffix('_entry')],
+            'function_addr':lambda name:self.exports[name],
             'pcc_mutex_new': lambda:self.alloc(8), 'pcc_mutex_free': self.free,
             'pcc_mutex_lock': lambda p:0, 'pcc_mutex_unlock':lambda p:0,
             'pcc_gc_pin': self.pin, 'pcc_gc_unpin': self.unpin,
@@ -91,7 +93,7 @@ class Runtime:
             'pcc_gc_scheduler_root_register_handle': self.register,
             'pcc_gc_scheduler_root_unregister_handle': lambda h:self.handles.pop(h),
             'pcc_gc_root_copy_lease':self.copy_lease,
-            'pcc_gc_foreign_lease_release':lambda s,t:self.unpin(self.read(s,0)),
+            'pcc_gc_foreign_lease_release':self.release_lease,
             'py_incref':lambda x:None, 'py_decref':lambda x:None,
             'py_err_occurred':lambda:int(self.error is not None),
             'py_exc_new':lambda tag,msg:Obj('exception',(tag,self.raw(msg).decode())),
@@ -140,14 +142,20 @@ class Runtime:
     def load(self,path):
         tree=ast.parse(path.read_text())
         kept=[]
+        exports={}
         for node in tree.body:
             if isinstance(node,ast.FunctionDef):
+                for decorator in node.decorator_list:
+                    if (isinstance(decorator,ast.Call) and isinstance(decorator.func,ast.Name)
+                            and decorator.func.id=='c_abi_export'):
+                        exports[decorator.args[0].value]=node.name
                 node.decorator_list=[]; kept.append(node)
             elif isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant):
                 kept.append(node)
             elif isinstance(node,ast.Expr) and isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Name) and node.value.func.id.startswith('define_global_'):
                 kept.append(node)
         exec(compile(ast.Module(kept,type_ignores=[]),str(path),'exec'),self.ns)
+        self.exports.update({symbol:self.ns[name] for symbol,name in exports.items()})
 
     def alloc(self,n):
         m=Memory(n);self.memory.append(m);return Ptr(m)
@@ -179,6 +187,13 @@ class Runtime:
         key='address:'+k
         if key not in self.globals:self.globals[key]=self.alloc(8);self.write(self.globals[key],0,self.globals.get(k,0))
         return self.globals[key]
+    def global_load(self,k):
+        address=self.globals.get('address:'+k)
+        return self.read(address,0) if address is not None else self.globals.get(k)
+    def global_store(self,k,v):
+        self.globals[k]=v
+        address=self.globals.get('address:'+k)
+        if address is not None:self.write(address,0,v)
     def define(self,k,v):self.globals[k]=v
     def cas(self,p,n,old,new,*_):
         was=self.read(p,n)
@@ -197,7 +212,16 @@ class Runtime:
         if isinstance(o,Obj) and prior:o.flags|=64
         return o
     def register(self,p):h=object();self.handles[h]=p;return h
-    def copy_lease(self,d,s):o=self.read(s,0);self.write(d,0,o);self.pin(o);return 0
+    def copy_lease(self,d,s):
+        o=self.read(s,0);self.write(d,0,o)
+        key=id(o);self.leases[key]=self.leases.get(key,0)+1
+        return 1
+    def release_lease(self,s,t):
+        assert t==1
+        key=id(self.read(s,0));assert self.leases[key]>0
+        self.leases[key]-=1
+        if not self.leases[key]:del self.leases[key]
+        return 0
     def swap_error(self,s):previous=self.read(s,0);self.write(s,0,self.error);self.error=previous
     def new_list(self,n):return None if self.fail_state else Obj('list',[self.none]*n)
     def getattr(self,o,name):
@@ -262,8 +286,10 @@ def runtime():
     yield model
     model.error=None;model.remove_failure=0
     model.ns['_td_shutdown']()
-    assert not model.handles
+    retained=model.globals.get('pcc_tempfile_mkdtemp_root_handle')
+    assert set(model.handles)==({retained} if retained is not None else set())
     assert not model.frames
+    assert not model.leases
 
 
 def test_manager_enter_name_identity_and_repeat_cleanup(runtime,tmp_path):
@@ -410,3 +436,52 @@ def test_root_symlink_error_matches_rmtree_base_error(runtime,tmp_path):
     assert runtime.error.value[0]==14
     assert 'errno' not in runtime.error.attrs
     name.unlink()
+
+
+def test_mkdtemp_callable_identity_signature_and_owned_result(runtime,tmp_path):
+    fn=runtime.ns['py_tempfile_mkdtemp_function']()
+    assert fn is runtime.ns['py_tempfile_mkdtemp_function']()
+    entry,captures=fn.value
+    signature=captures.value[1]
+    assert [x.value for x in signature.value[1].value]==['suffix','prefix','dir']
+    assert signature.value[2].value==[0,0,0]
+    assert signature.value[3].value==[runtime.true]*3
+    assert signature.value[4].value==[runtime.none]*3
+    args=Obj('tuple',[runtime.string('_end'),runtime.string('owned_'),runtime.string(str(tmp_path))])
+    name=entry(captures,args)
+    assert runtime.error is None
+    assert name.kind=='str' and os.path.isabs(name.value)
+    assert Path(name.value).name.startswith('owned_') and name.value.endswith('_end')
+    assert Path(name.value).is_dir()
+    assert name.pins==0 and fn.pins==0 and not (name.flags&64) and not (fn.flags&64)
+    runtime.ns['_td_shutdown']()
+    assert Path(name.value).is_dir(), 'mkdtemp must not register automatic cleanup'
+    Path(name.value).rmdir()
+
+
+def test_mkdtemp_relative_directory_empty_prefix_and_unique_names(runtime,tmp_path,monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    entry=runtime.ns['_td_mkdtemp_entry']
+    args=Obj('tuple',[runtime.string(''),runtime.string(''),runtime.string('.')])
+    first=entry(None,args);second=entry(None,args)
+    assert first.value!=second.value
+    for name in (first,second):
+        assert os.path.isabs(name.value) and len(Path(name.value).name)==6
+        Path(name.value).rmdir()
+
+
+@pytest.mark.parametrize('prefix', ('bad\0name','missing/child'))
+def test_mkdtemp_failure_preserves_filesystem_error(runtime,tmp_path,prefix):
+    args=Obj('tuple',[runtime.none,runtime.string(prefix),runtime.string(str(tmp_path))])
+    assert runtime.ns['_td_mkdtemp_entry'](None,args) is None
+    assert runtime.error is not None
+    assert list(tmp_path.iterdir())==[]
+
+
+@pytest.mark.parametrize('bad', (Obj('bytes',b'bytes_'),Obj('instance')))
+def test_mkdtemp_unimplemented_path_domains_fail_explicitly(runtime,tmp_path,bad):
+    args=Obj('tuple',[runtime.none,bad,runtime.string(str(tmp_path))])
+    assert runtime.ns['_td_mkdtemp_entry'](None,args) is None
+    assert runtime.error.value[0]==11
+    assert 'owned' in runtime.error.value[1]
+    assert list(tmp_path.iterdir())==[]

@@ -86,6 +86,13 @@ errno_message = extern("pcc_errno_message_into", (c_int32, c_ptr, c_int64), c_in
 # Named fixed frame, shared by leaf entrypoints. Every slot owns one reference.
 _TD_SLOTS = 24
 _TD_OUTPUT = 23
+# Public mkdtemp entry and callable-factory views of the shared fixed frame.
+# Both publish through _TD_OUTPUT; their independent lifetimes reuse slot 0.
+_MKDTEMP_SUFFIX = 0
+_MKDTEMP_PREFIX = 1
+_MKDTEMP_DIRECTORY = 2
+_MKDTEMP_ARGUMENT_COUNT = 3
+_MKDTEMP_CALLABLE_CANDIDATE = 0
 # Registered native record: only state is managed, with its own root handle.
 _TD_NEXT = 0
 _TD_PREVIOUS = 8
@@ -103,6 +110,8 @@ define_global_i32("pcc_tempdir_frame_map", _TD_SLOTS)
 define_global_i64("pcc_tempdir_mutex_bits", 0)
 define_global_ptr_null("pcc_tempdir_class")
 define_global_ptr_null("pcc_tempdir_records")
+define_global_ptr_null("pcc_tempfile_mkdtemp_function")
+define_global_ptr_null("pcc_tempfile_mkdtemp_root_handle")
 
 
 def _td_none():
@@ -641,36 +650,38 @@ def _td_repr(captures, args):
     return _td_finish(slots, pins)
 
 
-def _td_init_signature(slots, pins):
-    _td_hold(slots, pins, 1, py_tuple_new(6))
-    _td_hold(slots, pins, 2, py_tuple_new(6))
-    _td_hold(slots, pins, 3, py_tuple_new(6))
-    _td_hold(slots, pins, 4, py_tuple_new(6))
+def _td_init_signature(slots, pins, constructor: int = 1):
+    count: int = 6 if constructor else 3
+    _td_hold(slots, pins, 1, py_tuple_new(count))
+    _td_hold(slots, pins, 2, py_tuple_new(count))
+    _td_hold(slots, pins, 3, py_tuple_new(count))
+    _td_hold(slots, pins, 4, py_tuple_new(count))
     index: int = 0
-    while index < 6:
+    while index < count:
+        parameter: int = index if constructor else index + 1
         name = cstr("self")
-        if index == 1:
+        if parameter == 1:
             name = cstr("suffix")
-        elif index == 2:
+        elif parameter == 2:
             name = cstr("prefix")
-        elif index == 3:
+        elif parameter == 3:
             name = cstr("dir")
-        elif index == 4:
+        elif parameter == 4:
             name = cstr("ignore_cleanup_errors")
-        elif index == 5:
+        elif parameter == 5:
             name = cstr("delete")
         _td_hold(slots, pins, 5, py_str_new(name, strlen(name)))
         py_tuple_set_item(load_ptr(slots, C_POINTER_SIZE), index, load_ptr(slots, 5 * C_POINTER_SIZE))
         _td_drop(slots, pins, 5)
-        _td_hold(slots, pins, 5, py_int_from_i64(2 if index == 5 else 0))
+        _td_hold(slots, pins, 5, py_int_from_i64(2 if parameter == 5 else 0))
         py_tuple_set_item(load_ptr(slots, 2 * C_POINTER_SIZE), index, load_ptr(slots, 5 * C_POINTER_SIZE))
         _td_drop(slots, pins, 5)
         py_tuple_set_item(load_ptr(slots, 3 * C_POINTER_SIZE), index,
-                          global_load_ptr("py_False") if index == 0 else global_load_ptr("py_True"))
+                          global_load_ptr("py_False") if parameter == 0 else global_load_ptr("py_True"))
         default = _td_none()
-        if index == 4:
+        if parameter == 4:
             default = global_load_ptr("py_False")
-        elif index == 5:
+        elif parameter == 5:
             default = global_load_ptr("py_True")
         py_tuple_set_item(load_ptr(slots, 4 * C_POINTER_SIZE), index, default)
         index = index + 1
@@ -686,6 +697,86 @@ def _td_init_signature(slots, pins):
     py_tuple_set_item(load_ptr(slots, 8 * C_POINTER_SIZE), 0, load_ptr(slots, 7 * C_POINTER_SIZE))
     py_tuple_set_item(load_ptr(slots, 8 * C_POINTER_SIZE), 1, load_ptr(slots, 5 * C_POINTER_SIZE))
     return load_ptr(slots, 8 * C_POINTER_SIZE)
+
+
+@c_abi_export("pcc_tempdir_mkdtemp_entry")
+def _td_mkdtemp_entry(captures, args):
+    # The ordinary callable binder supplies all three defaults and validates
+    # argument names/duplicates before this entry. No manager owns this path:
+    # mkdtemp leaves removal to its caller.
+    if py_tuple_len(args) != _MKDTEMP_ARGUMENT_COUNT:
+        return _td_error(3, cstr("mkdtemp expects three bound arguments"))
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    index: int = _MKDTEMP_SUFFIX
+    while index < _MKDTEMP_ARGUMENT_COUNT:
+        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        index = index + 1
+    if not py_err_occurred():
+        _td_hold(slots, pins, _TD_OUTPUT, _td_mkdtemp(
+            load_ptr(slots, _MKDTEMP_SUFFIX * C_POINTER_SIZE),
+            load_ptr(slots, _MKDTEMP_PREFIX * C_POINTER_SIZE),
+            load_ptr(slots, _MKDTEMP_DIRECTORY * C_POINTER_SIZE), slots, pins))
+    return _td_finish(slots, pins)
+
+
+@c_abi_export("py_tempfile_mkdtemp_function")
+def py_tempfile_mkdtemp_function():
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    mutex = _td_mutex()
+    if ptr_is_null(mutex):
+        return _td_finish(slots, pins)
+    pcc_mutex_lock(mutex)
+    source = global_addr("pcc_tempfile_mkdtemp_function")
+    if not ptr_is_null(global_load_ptr("pcc_tempfile_mkdtemp_function")):
+        pcc_mutex_unlock(mutex)
+        _td_mkdtemp_copy_function(slots, pins, source)
+        return _td_finish(slots, pins)
+    pcc_mutex_unlock(mutex)
+    # Allocation and retirement can invoke callbacks. Build outside the cache
+    # mutex, then retain only the winning candidate in the permanent root.
+    captures = _td_init_signature(slots, pins, 0)
+    if not py_err_occurred():
+        _td_hold(slots, pins, _MKDTEMP_CALLABLE_CANDIDATE, py_func_new_named(
+            function_addr("pcc_tempdir_mkdtemp_entry"), captures, cstr("mkdtemp")))
+    pcc_mutex_lock(mutex)
+    root_failed: int = 0
+    if not py_err_occurred() and not ptr_is_null(
+            load_ptr(slots, _MKDTEMP_CALLABLE_CANDIDATE * C_POINTER_SIZE)):
+        if ptr_is_null(global_load_ptr("pcc_tempfile_mkdtemp_function")):
+            handle = pcc_gc_scheduler_root_register_handle(source)
+            if ptr_is_null(handle):
+                root_failed = 1
+            else:
+                global_store_ptr("pcc_tempfile_mkdtemp_root_handle", handle)
+                pcc_gc_store_root(source,
+                    load_ptr(slots, _MKDTEMP_CALLABLE_CANDIDATE * C_POINTER_SIZE))
+    pcc_mutex_unlock(mutex)
+    if root_failed:
+        _td_error(19, cstr("mkdtemp callable root registration failed"))
+    if not py_err_occurred():
+        _td_mkdtemp_copy_function(slots, pins, source)
+    return _td_finish(slots, pins)
+
+
+def _td_mkdtemp_copy_function(slots, pins, source) -> None:
+    output = ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE)
+    token: int = pcc_gc_root_copy_lease(output, source)
+    if token < 0:
+        _td_error(7, cstr("mkdtemp callable owner copy failed"))
+        return
+    # The counted address lease is independent of the legacy pin flag, and
+    # protects this load until the return pin has been established.
+    _td_hold(slots, pins, _TD_OUTPUT, load_ptr(output, 0))
+    if pcc_gc_foreign_lease_release(output, token) < 0:
+        _td_error(7, cstr("mkdtemp callable owner lease release failed"))
 
 
 def _td_add_method(cls, name, entry, captures, slots, pins) -> None:

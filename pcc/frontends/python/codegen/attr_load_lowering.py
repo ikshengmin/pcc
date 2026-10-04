@@ -93,6 +93,8 @@ class AttrLoadLoweringMixin:
                 return ("int", access[expr.name])
         if module == "tempfile" and expr.name == "TemporaryDirectory":
             return ("runtime", "py_tempdir_type", ())
+        if module == "tempfile" and expr.name == "mkdtemp":
+            return ("runtime", "py_tempfile_mkdtemp_function", ())
         if module == "sys":
             if expr.name == "argv":
                 return ("argv",)

@@ -901,12 +901,12 @@ class CallExpressionLoweringMixin:
         func_attr_name = _call_attr_name(func_expr)
         func_attr_obj = _call_attr_obj(func_expr)
         pcc_intrinsic = self._native_builtin_value_kind_for_expr(func_expr)
-        if pcc_intrinsic == "tempfile.TemporaryDirectory":
-            if self._native_module_attr_global_if_exists("tempfile", "TemporaryDirectory") is None:
+        if pcc_intrinsic in ("tempfile.TemporaryDirectory", "tempfile.mkdtemp"):
+            if self._native_module_attr_global_if_exists("tempfile", pcc_intrinsic.split(".")[1]) is None:
                 for option in ("tempdir", "template", "_get_candidate_names"):
                     if self._native_module_attr_global_if_exists("tempfile", option) is not None:
-                        raise L1CodegenError("native TemporaryDirectory does not support tempfile." + option + " overrides")
-            return self._emit_slot_call_object(expr, "tempfile.TemporaryDirectory")
+                        raise L1CodegenError("native " + pcc_intrinsic + " does not support tempfile." + option + " overrides")
+            return self._emit_slot_call_object(expr, pcc_intrinsic)
         if pcc_intrinsic == "pcc.guarded_i64_dot":
             return emit_guarded_i64_dot(self, expr)
         if pcc_intrinsic == "pcc.guarded_loop_counter":

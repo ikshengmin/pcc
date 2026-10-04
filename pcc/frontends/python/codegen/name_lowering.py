@@ -915,6 +915,8 @@ class NameLoweringMixin:
             builtin_value = self._native_builtin_value_for_name(expr.ident)
             if builtin_value == "tempfile.TemporaryDirectory":
                 return self._emit_owned_namespace_runtime_value("py_tempdir_type", (), expr)
+            if builtin_value == "tempfile.mkdtemp":
+                return self._emit_owned_namespace_runtime_value("py_tempfile_mkdtemp_function", (), expr)
             if builtin_value == "os.name":
                 return self._emit_str_literal("nt" if self._target_sys_platform_text() == "win32" else "posix")
             if builtin_value == "os.sep":

@@ -346,9 +346,9 @@ class NativeModuleAliasMixin:
             isinstance(expr, Attr)
             and isinstance(expr.obj, Name)
             and self._native_builtin_module_for_name(expr.obj.ident) == "tempfile"
-            and expr.name == "TemporaryDirectory"
+            and expr.name in ("TemporaryDirectory", "mkdtemp")
         ):
-            return "tempfile.TemporaryDirectory"
+            return "tempfile." + expr.name
         if (
             isinstance(expr, Attr)
             and isinstance(expr.obj, Name)
@@ -674,6 +674,8 @@ class NativeModuleAliasMixin:
     ) -> Optional[ir.Value]:
         if module_name == "tempfile" and attr_name == "TemporaryDirectory":
             return self._emit_owned_namespace_runtime_value("py_tempdir_type", ())
+        if module_name == "tempfile" and attr_name == "mkdtemp":
+            return self._emit_owned_namespace_runtime_value("py_tempfile_mkdtemp_function", ())
         if module_name == "math":
             constants = {
                 "pi": 3.141592653589793,
@@ -1239,7 +1241,7 @@ class NativeModuleAliasMixin:
                 for attr_name, _as_name in stmt.names
             )
         if import_module == "tempfile":
-            return all(attr_name == "TemporaryDirectory" for attr_name, _as_name in stmt.names)
+            return all(attr_name in ("TemporaryDirectory", "mkdtemp") for attr_name, _as_name in stmt.names)
         if import_module == "dataclasses":
             return all(attr_name == "replace" for attr_name, _as_name in stmt.names)
         if import_module == "functools":
@@ -1400,8 +1402,8 @@ class NativeModuleAliasMixin:
                     "builtins." + attr_name,
                 )
                 continue
-            if import_module == "tempfile" and attr_name == "TemporaryDirectory":
-                self._register_native_builtin_value_alias(local_name, "tempfile.TemporaryDirectory")
+            if import_module == "tempfile" and attr_name in ("TemporaryDirectory", "mkdtemp"):
+                self._register_native_builtin_value_alias(local_name, "tempfile." + attr_name)
                 continue
             if attr_name == "path" and import_module == "os":
                 self._register_native_builtin_value_alias(local_name, "os.path")
