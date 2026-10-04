@@ -4275,6 +4275,8 @@ def _class_fields_from_def(
 
     fields: list[tuple[str, Type]] = []
     nullable_scalar_fields: set[str] = set()
+    constructor_none_fields: set[str] = set()
+    constructor_value_fields: set[str] = set()
     for body_stmt in stmt.body:
         if trace_fields:
             print("FIELD body", stmt.name, type(body_stmt).__name__, getattr(body_stmt, "name", ""), file=sys.stderr)
@@ -4339,6 +4341,11 @@ def _class_fields_from_def(
                         continue
                     if trace_fields:
                         print("FIELD target", body_stmt.name, target.name, file=sys.stderr)
+                    if body_stmt.name == "__init__":
+                        if isinstance(init_stmt.value, NoneLit):
+                            constructor_none_fields.add(target.name)
+                        else:
+                            constructor_value_fields.add(target.name)
                     # Method writes contribute field order, but must not
                     # replace constructor/declaration types with a cleanup
                     # sentinel (e.g. an exhausted list replaced by ()).
@@ -4404,6 +4411,15 @@ def _class_fields_from_def(
                     if target.name in nullable_scalar_fields:
                         field_ty = TYPE_DYN
                     _append_field(fields, target.name, field_ty)
+    # This schema describes every constructor path, not its final source
+    # statement. A cleanup/disabled branch can assign None after a native
+    # object was installed, and a later assignment can replace an initial
+    # None. Both states require object storage and dynamic native dispatch.
+    # Keep this join aligned with the closed-world exported field schema.
+    if not _class_has_valueclass_decorator(stmt):
+        for field_name in constructor_none_fields:
+            if field_name in constructor_value_fields:
+                _append_field(fields, field_name, TYPE_DYN)
     return tuple(fields)
 
 

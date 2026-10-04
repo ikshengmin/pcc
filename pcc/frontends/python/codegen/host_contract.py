@@ -689,6 +689,10 @@ L1_CODEGEN_HOST_METHODS = (
     "_set_call_operands",
     "_emit_set_algebra_call",
     "_emit_for_unpack_assign",
+    "_emit_native_re_sub_call",
+    "_emit_generator_yield_value",
+    "_emit_generator_take_send",
+    "_generator_frame_helper",
 )
 
 

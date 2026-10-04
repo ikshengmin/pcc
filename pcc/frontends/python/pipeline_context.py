@@ -586,6 +586,8 @@ def build_closed_world_context(
             field_defs = []
             init_field_defs = []
             constructor_field_names = set()
+            constructor_none_fields = set()
+            constructor_value_fields = set()
             declared_field_annotations = {}
             for declared_stmt in stmt_body:
                 if (
@@ -615,6 +617,16 @@ def build_closed_world_context(
                                 constructor_field_names.add(
                                     _py_ast_field_value(constructor_target, "name", "")
                                 )
+                                constructor_field_name = _py_ast_field_value(
+                                    constructor_target, "name", ""
+                                )
+                                constructor_value = _py_ast_field_value(
+                                    constructor_stmt, "value", None
+                                )
+                                if _closed_world_is_node(constructor_value, _NoneLit):
+                                    constructor_none_fields.add(constructor_field_name)
+                                else:
+                                    constructor_value_fields.add(constructor_field_name)
                     continue
                 if not _closed_world_is_node(declared_stmt, _Assign):
                     continue
@@ -876,6 +888,21 @@ def build_closed_world_context(
                     }
                 )
 
+            # Match local field inference before publishing or inheriting the
+            # schema. A cleanup None and an installed value share object
+            # storage; neither source order nor the first typed write proves
+            # a permanent concrete field type. Copy inherited definitions so
+            # a subclass's nullable write cannot change its base's schema.
+            if not class_is_valueclass:
+                for field_index, field_def in enumerate(field_defs):
+                    field_name = field_def["name"]
+                    if (
+                        field_name in constructor_none_fields
+                        and field_name in constructor_value_fields
+                    ):
+                        nullable_field_def = dict(field_def)
+                        nullable_field_def["annotation"] = _DynType(name="dyn")
+                        field_defs[field_index] = nullable_field_def
             class_field_defs[stmt_name] = tuple(field_defs)
             class_init_field_defs[stmt_name] = tuple(init_field_defs)
             class_field_names[stmt_name] = tuple(field_names)

@@ -121,10 +121,14 @@ def test_self_c_frontend_does_not_probe_or_run_a_system_preprocessor(monkeypatch
     assert result
 
 
-def test_self_c_emitted_execution_with_tool_and_llvm_denial(tmp_path):
+def test_self_c_emitted_execution_with_tool_and_llvm_denial(
+    tmp_path, monkeypatch, pcc_runtime_archive,
+):
     import os
     import subprocess
     import sys
+
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
 
     # Install the guards before importing pcc so an eager optional import
     # cannot hide behind modules loaded by another test.
@@ -145,7 +149,7 @@ ev._system_cc = forbidden
 source = '#include <stdio.h>\\n#include <stdint.h>\\nint add(int32_t a,int32_t b){return a+b;}\\nint main(void){printf("%d\\\\n",add(20,VALUE));return 0;}\\n'
 units = ev.compile_translation_units([TranslationUnit(name="probe.c", path="probe.c", source=source)], cpp_args=["-DVALUE=22"], use_compile_cache=False)
 prepared = ev._prepare_self_backend_units(units, optimize=1)
-ev._link_executable_owned(ev._self_backend_asm_text(prepared), sys.argv[1])
+ev.emit_executable(prepared, sys.argv[1], optimize=False)
 '''
     exe = tmp_path / "owned_c"
     built = subprocess.run([sys.executable, "-c", script, str(exe)], capture_output=True, text=True, timeout=20)
@@ -155,11 +159,14 @@ ev._link_executable_owned(ev._self_backend_asm_text(prepared), sys.argv[1])
     assert run.stdout == "42\n"
 
 
-def test_c_output_option_publishes_without_running_or_delegating(tmp_path, monkeypatch):
+def test_c_output_option_publishes_without_running_or_delegating(
+    tmp_path, monkeypatch, pcc_runtime_archive,
+):
     import subprocess
     from pcc.driver import project
     from pcc.driver.cli_core import cli_main
 
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
     source = tmp_path / "program.c"
     source.write_text('#include <stdio.h>\nint add(int a,int b){return a+b;}\nint main(void){printf("%d\\n",add(20,22));return 0;}\n')
     output = tmp_path / "program"

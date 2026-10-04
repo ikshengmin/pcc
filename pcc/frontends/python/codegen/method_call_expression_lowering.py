@@ -2491,41 +2491,64 @@ class MethodCallExpressionLoweringMixin:
             )
         if (
             isinstance(obj_ty, (BytesType, ByteArrayType))
-            and attr.name in ("strip", "lstrip", "rstrip")
-            and not expr.args
             and not expr.kwargs
-        ):
-            # No-arg ASCII-whitespace strip, all three sides.  `lstrip`/
-            # `rstrip` used to fall through to the generic attribute path and
-            # die with "'bytes' object has no attribute 'rstrip'" -- which is
-            # how the self-hosted archive reader (`macho_archive` trims a
-            # 16-byte ar member name with `header[0:16].rstrip()`) failed once
-            # pcc1 reached it.  `strip(chars)` still falls back.
-            recv = self._emit_expr(attr.obj)
-            return self.builder.call(
-                self.runtime["py_bytes_" + attr.name],
-                [recv],
-                name=self._fresh("bytes." + attr.name),
+            and (
+                (attr.name in ("strip", "lstrip", "rstrip") and len(expr.args) <= 1)
+                or (attr.name in ("ljust", "rjust") and len(expr.args) in (1, 2))
             )
-        if (
-            isinstance(obj_ty, (BytesType, ByteArrayType))
-            and attr.name in ("strip", "lstrip", "rstrip")
-            and len(expr.args) == 1
-            and not expr.kwargs
         ):
-            # strip(chars): trim any byte in `chars` from the chosen side(s).
-            # pcc1 reaches this through its own archive reader, which trims a
-            # member name with `.rstrip(b"/")` and a long-name entry with
-            # `.rstrip(b"\0")`; without it the call fell through to the
-            # dynamic attribute path and raised "'bytes' object has no
-            # attribute 'rstrip'".
-            recv = self._emit_expr(attr.obj)
-            chars = self._emit_expr(expr.args[0])
-            return self.builder.call(
-                self.runtime["py_bytes_" + attr.name + "_chars"],
-                [recv, chars],
-                name=self._fresh("bytes." + attr.name + ".chars"),
-            )
+            # These byte-family ABIs return NEW objects, including unchanged
+            # values. Keep operands owned across later evaluation and width
+            # callbacks; publish the result before releasing those owners.
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("bytes.method.result")
+                roots.append(output)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            operands = []
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                for argument in (attr.obj,) + tuple(expr.args):
+                    operand = self._emit_slot_call_operand(argument, "bytes.method.argument")
+                    operands.append(operand)
+                    roots.append(operand)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                runtime_name = "py_bytes_" + attr.name
+                arguments = tuple(operands)
+                suffix = ()
+                order = ()
+                if attr.name in ("ljust", "rjust"):
+                    width = self.builder.call(
+                        self.runtime["py_index_i64_checked_slots"],
+                        [self._as_gc_ptr(operands[1])],
+                        name=self._fresh("bytes.method.width"),
+                    )
+                    self._emit_post_call_err_check(expr.span)
+                    arguments = (operands[0],)
+                    suffix = (width, ir.Constant(ir.PointerType(ir.IntType(8)), None))
+                    if len(expr.args) == 2:
+                        arguments = (operands[0], operands[2])
+                        suffix = (width,)
+                        order = (0, 2, 1)
+                elif expr.args:
+                    runtime_name += "_chars"
+                self._slot_call_runtime_call(
+                    runtime_name, arguments, result_slot=output,
+                    suffix_args=suffix, argument_order=order, span=expr.span,
+                )
+                self._release_slot_call_roots(tuple(operands))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("bytes.method.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         if (
             isinstance(obj_ty, (BytesType, ByteArrayType))
             and attr.name == "split"
@@ -2572,29 +2595,6 @@ class MethodCallExpressionLoweringMixin:
             if sink is not None:
                 return self.builder.load(output, name=self._fresh("bytes.split.output"))
             return self._take_slot_call_root(output)
-        if (
-            isinstance(obj_ty, (BytesType, ByteArrayType))
-            and attr.name in ("ljust", "rjust")
-            and len(expr.args) in (1, 2)
-            and not expr.kwargs
-        ):
-            # `bytes.ljust(width[, fill])`: pcc1 writes every Mach-O segment
-            # and section name with `name.encode().ljust(16, b"\0")`, which
-            # had no lowering and reached the dynamic attribute path as
-            # "'bytes' object has no attribute 'ljust'".
-            recv = self._emit_expr(attr.obj)
-            width = self._emit_expr_as_i64(expr.args[0])
-            if len(expr.args) == 2:
-                fill = self._emit_as_object(expr.args[1])
-            else:
-                fill = ir.Constant(ir.PointerType(ir.IntType(8)), None)
-            result = self.builder.call(
-                self.runtime["py_bytes_" + attr.name],
-                [recv, width, fill],
-                name=self._fresh("bytes." + attr.name),
-            )
-            self._emit_post_call_err_check(expr.span)
-            return result
         if (
             isinstance(obj_ty, (BytesType, ByteArrayType))
             and attr.name == "partition"

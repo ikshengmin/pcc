@@ -160,6 +160,10 @@ class CallObjectLoweringMixin:
             # Empty counts as owned too: an output-slot runtime call can
             # publish an owner before reporting failure to its caller.
             self.builder.store(ir.Constant(_I1, 1), flag)
+            from pcc.frontends.python.codegen.generator_lowering import (
+                register_generator_operand_root,
+            )
+            register_generator_operand_root(self, name, slot, flag)
         if not hasattr(self, "_slot_call_root_records"):
             self._slot_call_root_records = []
         record = (slot, flag, lifo)
@@ -196,6 +200,9 @@ class CallObjectLoweringMixin:
         return None
 
     def _slot_call_note_published(self, slot) -> None:
+        _slot, flag, _lifo = self._slot_call_root_record(slot)
+        if flag is not None:
+            self.builder.store(ir.Constant(_I1, 1), flag)
         sinks = getattr(self, "_slot_call_result_sinks", ())
         for index, entry in enumerate(sinks):
             if entry[1] is slot:
@@ -423,8 +430,9 @@ class CallObjectLoweringMixin:
         """Evaluate one operand into an independent owning authoritative root."""
         if self._expr_returns_unsafe_raw_pointer(expr):
             raise L1CodegenError("raw pointer cannot be a slot-call operand: " + type(expr).__name__)
-        if getattr(self, "_generator_ctx_stack", ()) and self._generator_expr_may_suspend(expr):
-            raise L1CodegenError("suspending slot-call operand requires a persistent generator-frame output slot")
+        # Resume-body operand roots are enrolled in the owning heap frame by
+        # _new_slot_call_root, including results created while evaluating a
+        # suspending expression. They are restored before resume dispatch.
         if isinstance(expr, IfExpr):
             return self._emit_slot_call_conditional(expr, label)
         class_value = self._emit_class_namespace_name_root(expr, label)
@@ -969,6 +977,7 @@ class CallObjectLoweringMixin:
 
     def _slot_call_runtime_call(
         self, runtime_name, roots, *, result_slot=None, suffix_args=(), argument_order=(), span=None,
+        exception_slot=None,
     ):
         """Expose raw operands only while independent counted leases live.
 
@@ -1003,6 +1012,18 @@ class CallObjectLoweringMixin:
             )
             if result_slot is not None:
                 self._publish_slot_call_owned(result_slot, result, label=runtime_name)
+            if exception_slot is not None:
+                # Iteration protocols inspect StopIteration themselves. Move
+                # the exact TLS owner out before retiring operands can run a
+                # finalizer and replace or clear that pending exception.
+                swap_exception = self.module.globals.get("py_tls_exc_swap_slot")
+                if swap_exception is None:
+                    swap_exception = ir.Function(
+                        self.module, ir.FunctionType(ir.VoidType(), [_CSTR]),
+                        name="py_tls_exc_swap_slot",
+                    )
+                self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
+                self._slot_call_note_published(exception_slot)
             while leases:
                 slot, token = leases.pop()
                 released = self.builder.call(
@@ -1016,7 +1037,8 @@ class CallObjectLoweringMixin:
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
-        self._emit_post_call_err_check(span)
+        if exception_slot is None:
+            self._emit_post_call_err_check(span)
         return None if result_slot is not None else result
 
     def _emit_slot_call_sequence(self, elems, label, tuple_result):

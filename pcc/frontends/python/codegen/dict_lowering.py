@@ -117,7 +117,7 @@ def _emit_rooted_dict_view(self, expr):
 
 class DictLoweringMixin:
     def _dict_get_uses_owned_slots(self, expr):
-        if expr.func.name != "get" or expr.kwargs or len(expr.args) not in (1, 2):
+        if expr.func.name not in ("get", "setdefault") or expr.kwargs or len(expr.args) not in (1, 2):
             return False
         if self._expr_looks_cpython(expr.func.obj):
             return False
@@ -128,6 +128,10 @@ class DictLoweringMixin:
         return True
 
     def _emit_rooted_dict_get(self, expr):
+        method_name = expr.func.name
+        root_label = "dict." + method_name
+        runtime_name = ("py_dict_setdefault_slots" if method_name == "setdefault"
+                        else "py_dict_get_default_slots")
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
@@ -135,65 +139,65 @@ class DictLoweringMixin:
         output = sink
         roots = []
         if output is None:
-            output = self._new_slot_call_root('dict.get.result')
+            output = self._new_slot_call_root(root_label + '.result')
             roots.append(output)
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            receiver = self._emit_slot_call_operand(expr.func.obj, 'dict.get.receiver')
+            receiver = self._emit_slot_call_operand(expr.func.obj, root_label + '.receiver')
             roots.append(receiver)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             tag = self._slot_call_runtime_call('py_obj_type_tag', (receiver,), span=expr.span)
             is_dict = self.builder.icmp_signed('==', tag, ir.Constant(_I64, PY_TYPE_DICT))
-            native_bb = self.current_function.append_basic_block(self._fresh('dict.get.native'))
-            generic_bb = self.current_function.append_basic_block(self._fresh('dict.get.generic'))
-            done_bb = self.current_function.append_basic_block(self._fresh('dict.get.done'))
+            native_bb = self.current_function.append_basic_block(self._fresh(root_label + '.native'))
+            generic_bb = self.current_function.append_basic_block(self._fresh(root_label + '.generic'))
+            done_bb = self.current_function.append_basic_block(self._fresh(root_label + '.done'))
             self.builder.cbranch(is_dict, native_bb, generic_bb)
 
             self.builder.position_at_end(native_bb)
             native_roots = list(roots)
             self._try_err_block = self._slot_call_cleanup_block(tuple(native_roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            key = self._emit_slot_call_operand(expr.args[0], 'dict.get.key')
+            key = self._emit_slot_call_operand(expr.args[0], root_label + '.key')
             native_roots.append(key)
             self._try_err_block = self._slot_call_cleanup_block(tuple(native_roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             default_expr = expr.args[1] if len(expr.args) == 2 else NoneLit(span=expr.span, ty=NoneType(name='None'))
-            default = self._emit_slot_call_operand(default_expr, 'dict.get.default')
+            default = self._emit_slot_call_operand(default_expr, root_label + '.default')
             native_roots.append(default)
             self._try_err_block = self._slot_call_cleanup_block(tuple(native_roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             status = self.builder.call(
-                self.runtime['py_dict_get_default_slots'],
+                self.runtime[runtime_name],
                 [self._as_gc_ptr(receiver), self._as_gc_ptr(key),
                  self._as_gc_ptr(default), self._as_gc_ptr(output)],
-                name=self._fresh('dict.get.invoke'),
+                name=self._fresh(root_label + '.invoke'),
             )
             self._slot_call_note_published(output)
-            self._slot_call_check_status(status, 'dictionary lookup', expr.span)
+            self._slot_call_check_status(status, 'dictionary ' + method_name, expr.span)
             self._emit_post_call_err_check(expr.span)
             self._release_slot_call_roots((key, default))
             self.builder.branch(done_bb)
 
             self.builder.position_at_end(generic_bb)
             generic_roots = list(roots)
-            callable_root = self._new_slot_call_root('dict.get.callable')
+            callable_root = self._new_slot_call_root(root_label + '.callable')
             generic_roots.append(callable_root)
             self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             # Python resolves the user method before evaluating its arguments.
             self._slot_call_runtime_call(
                 'py_obj_getattr', (receiver,), result_slot=callable_root,
-                suffix_args=(self._attr_name_ptr('get'),), span=expr.span,
+                suffix_args=(self._attr_name_ptr(method_name),), span=expr.span,
             )
-            current_method = self.builder.load(callable_root, name=self._fresh('dict.get.method.current'))
-            self._emit_attribute_error_if_null(current_method, 'get', expr.span)
-            args = self._emit_slot_call_args_tuple(expr.args, 'dict.get.args')
+            current_method = self.builder.load(callable_root, name=self._fresh(root_label + '.method.current'))
+            self._emit_attribute_error_if_null(current_method, method_name, expr.span)
+            args = self._emit_slot_call_args_tuple(expr.args, root_label + '.args')
             generic_roots.append(args)
             self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            kwargs = self._emit_slot_call_kwargs_object((), None, expr.span, 'dict.get.kwargs', callable_root)
+            kwargs = self._emit_slot_call_kwargs_object((), None, expr.span, root_label + '.kwargs', callable_root)
             generic_roots.append(kwargs)
             self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
@@ -201,10 +205,10 @@ class DictLoweringMixin:
                 self.runtime['py_obj_call_slots'],
                 [self._as_gc_ptr(callable_root), self._as_gc_ptr(args),
                  self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
-                name=self._fresh('dict.get.generic.invoke'),
+                name=self._fresh(root_label + '.generic.invoke'),
             )
             self._slot_call_note_published(output)
-            self._slot_call_check_status(status, 'get method call', expr.span)
+            self._slot_call_check_status(status, method_name + ' method call', expr.span)
             self._emit_post_call_err_check(expr.span)
             self._release_slot_call_roots((callable_root, args, kwargs))
             self.builder.branch(done_bb)
@@ -217,7 +221,7 @@ class DictLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
-            return self.builder.load(output, name=self._fresh('dict.get.current'))
+            return self.builder.load(output, name=self._fresh(root_label + '.current'))
         return self._take_slot_call_root(output)
 
     def _maybe_emit_dict_method_via_dyn(

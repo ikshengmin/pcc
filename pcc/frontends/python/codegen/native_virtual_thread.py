@@ -13,7 +13,11 @@ from pcc.frontends.python.py_ast import Attr, Call, DynType, Expr, FuncDef, Name
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_GEN
-from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_child, generator_may_park_child_slot
+from pcc.frontends.python.codegen.generator_lowering import (
+    emit_generator_may_park_child,
+    generator_may_park_child_slot,
+    take_generator_frame_result,
+)
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 _I8 = ir.IntType(8)
@@ -140,67 +144,58 @@ class NativeVirtualThreadLoweringMixin:
                 "pcc.virtual_thread.call requires a resumable parent"
             )
 
-        callable_obj = self._emit_as_object(args[0])
-        callable_root = self._enter_virtual_thread_operand_root(
-            callable_obj,
-            args[0],
-            "vthread.call.callable",
-        )
-        callback_args = args[1:]
-        args_root = self._emit_virtual_thread_dynamic_args_with_roots(
-            callback_args,
-            (callable_root,),
-        )
-        none_gv = declare_runtime_global(self.module, "py_None")
-        none_obj = self.builder.load(
-            none_gv,
-            name=self._fresh("vthread.call.none"),
-        )
-        result = self.builder.call(
-            self.runtime["py_obj_call_deferred"],
-            [
-                self._load_virtual_thread_operand_root(callable_root),
-                self._load_virtual_thread_operand_root(args_root),
-                none_obj,
-            ],
-            name=self._fresh("vthread.call.result"),
-        )
+        parent_fn = self.current_function
         child_slot, child_root_ptr = generator_may_park_child_slot(
             self, expr, "pcc.virtual_thread.call"
         )
-        # Stage the open-world callback result in a traced frame slot before
-        # any cleanup call can safepoint.  Unlike pcc_gc_pin this preserves an
-        # object's pre-existing pin state and works for tagged values too.
-        result_is_null = self.builder.icmp_unsigned(
-            "==",
-            result,
-            ir.Constant(_CSTR, None),
-            name=self._fresh("vthread.call.result.is_null"),
-        )
-        parent_fn = self.current_function
-        result_error_bb = parent_fn.append_basic_block(
-            name=self._fresh("vthread.call.result.error")
-        )
-        result_ready_bb = parent_fn.append_basic_block(
-            name=self._fresh("vthread.call.result.ready")
-        )
-        self.builder.cbranch(result_is_null, result_error_bb, result_ready_bb)
-
-        self.builder.position_at_end(result_error_bb)
-        self._release_rooted_pcc_lifetimes((callable_root, args_root))
-        # py_obj_call guarantees NULL carries a pending exception. Reuse the
-        # normal post-call router after cleanup so source-span traceback frames
-        # and surrounding try targets remain identical to other native calls.
-        self._emit_post_call_err_check(expr.span)
-        self.builder.unreachable()
-
-        self.builder.position_at_end(result_ready_bb)
-        self.builder.call(
-            self.runtime["pcc_gc_store_root"],
-            [child_root_ptr, result],
-        )
-        self._gc_release(result)
-        self._release_rooted_pcc_lifetimes((callable_root, args_root))
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = []
+        try:
+            # These owners are enrolled in the persistent generator frame.
+            # A later argument may suspend before the callback is invoked.
+            callable_root = self._emit_slot_call_operand(args[0], "vthread.call.callable")
+            roots.append(callable_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            args_root = self._emit_slot_call_args_tuple(args[1:], "vthread.call.args")
+            roots.append(args_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            result_root = self._new_slot_call_root("vthread.call.result")
+            roots.append(result_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Keep explicit defer semantics. Counted operand leases protect
+            # the raw compatibility ABI and its result is published before
+            # any lease or argument cleanup, then moved into the child cell.
+            self._slot_call_runtime_call(
+                "py_obj_call_deferred", (callable_root, args_root),
+                suffix_args=(self._emit_none_literal(),),
+                result_slot=result_root, span=expr.span,
+            )
+            result_is_null = self.builder.icmp_unsigned(
+                "==", self.builder.load(result_root), ir.Constant(_CSTR, None),
+            )
+            status = self.builder.select(
+                result_is_null, ir.Constant(_I64, -1), ir.Constant(_I64, 0),
+            )
+            self._slot_call_check_status(status, "virtual-thread callback", expr.span)
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [child_root_ptr, ir.Constant(_CSTR, None)],
+            )
+            moved = self.builder.call(
+                self.runtime["pcc_gc_root_move"],
+                [child_root_ptr, self._as_gc_ptr(result_root)],
+                name=self._fresh("vthread.call.child.move"),
+            )
+            self._slot_call_check_status(moved, "continuation frame move", expr.span)
+            self._release_slot_call_roots(tuple(roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
         rooted_result = self.builder.call(
             self.runtime["pcc_gc_load_ptr"],
             [ir.Constant(_CSTR, None), child_root_ptr],
@@ -252,22 +247,9 @@ class NativeVirtualThreadLoweringMixin:
         self.builder.cbranch(is_continuation, continuation_bb, direct_bb)
 
         self.builder.position_at_end(direct_bb)
-        # The marker check is a runtime call and may safepoint.  Reload from
-        # the traced slot in each successor rather than carrying its pre-call
-        # SSA value across a relocating collection.
-        direct_rooted_result = self.builder.call(
-            self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), child_root_ptr],
-            name=self._fresh("vthread.call.direct.rooted"),
-        )
-        direct_value = self._gc_retain(
-            direct_rooted_result,
-            name=self._fresh("vthread.call.direct.retain"),
-        )
-        self.builder.call(
-            self.runtime["pcc_gc_store_root"],
-            [child_root_ptr, none_obj],
-        )
+        # The marker check can safepoint. Copy directly from the authoritative
+        # child cell into the consumer owner before retiring this frame cell.
+        direct_value = take_generator_frame_result(self, expr, child_slot)
         direct_block = self.builder._block
         self.builder.branch(done_bb)
 

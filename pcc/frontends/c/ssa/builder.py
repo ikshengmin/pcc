@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from pcc.frontends.c.ast import c_ast
+from pcc.frontends.c.c_character_literals import decode_c_character_constant
 from pcc.frontends.c.c_abi_layout import builtin_integer_is_unsigned, builtin_scalar_layout, c_ptrdiff_type_name, c_size_type_name, c_target_triple, integer_literal_type_name, integer_literal_value, pointer_scalar_layout
 from pcc.frontends.c.ssa.ir import SSABinaryOp, SSABlock, SSABranch, SSACast, SSACall, SSAConstant, SSAFieldAddr, SSAFieldExtract, SSAFunction, SSAGlobalRef, SSABinding, SSAJump, SSALoad, SSAParam, SSAPhi, SSAReturn, SSAStackAlloc, SSAStringConstant, SSAStore, SSASwitch, SSAUnaryOp, SSAUndef, SSAValue
 
@@ -1666,7 +1667,7 @@ class SSABuilder:
             if expr.type == "char":
                 return SSAConstant.from_int(
                     self._parse_char_constant(expr.value),
-                    type_name="int",
+                    type_name=self._char_constant_type_name(expr.value),
                     is_safe=True,
                 )
             if expr.type in {"string", "wstring"}:
@@ -3550,7 +3551,7 @@ class SSABuilder:
             if expr.type == "int":
                 return self._type_name_size(self._int_literal_type_name(expr.value, self.target_triple))
             if expr.type == "char":
-                return self._type_name_size("int")
+                return self._type_name_size(self._char_constant_type_name(expr.value))
             if expr.type == "float":
                 return self._type_name_size(self._float_literal_type_name(expr.value))
             raise SSAConstructionError(
@@ -3615,7 +3616,7 @@ class SSABuilder:
             if expr.type == "int":
                 return self._int_literal_type_name(expr.value, self.target_triple)
             if expr.type == "char":
-                return "int"
+                return self._char_constant_type_name(expr.value)
             if expr.type == "string":
                 return "char*"
             if expr.type == "wstring":
@@ -3923,19 +3924,11 @@ class SSABuilder:
             i += 1
         return "".join(result)
 
-    @classmethod
-    def _parse_char_constant(cls, raw: str) -> int:
-        if raw and raw[:2] in {"L'", "u'", "U'"} and raw.endswith("'"):
-            raw = raw[1:]
-        if not raw or len(raw) < 2 or raw[0] != "'" or raw[-1] != "'":
-            return 0
-        processed = cls._process_escapes(raw[1:-1])
-        if not processed:
-            return 0
-        value = 0
-        for ch in processed:
-            value = (value << 8) | (ord(ch) & 0xFF)
-        return value
+    def _parse_char_constant(self, raw: str) -> int:
+        return decode_c_character_constant(raw, self.target_triple)[0]
+
+    def _char_constant_type_name(self, raw: str) -> str:
+        return decode_c_character_constant(raw, self.target_triple)[1]
 
     def _eval_enum_constant(self, expr: c_ast.Node, known: dict[str, int]) -> int:
         if isinstance(expr, c_ast.Constant):

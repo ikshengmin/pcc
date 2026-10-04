@@ -587,7 +587,7 @@ def _part_49(out):
     _append_method(out, '_emit_slot_call_conditional', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_short_circuit', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('need_truth', 'pos', True)))
     _append_method(out, '_take_slot_call_root', (('self', 'pos', False), ('slot', 'pos', False)))
-    _append_method(out, '_slot_call_runtime_call', (('self', 'pos', False), ('runtime_name', 'pos', False), ('roots', 'pos', False), ('', 'kw_only', False), ('result_slot', 'pos', True), ('suffix_args', 'pos', True), ('argument_order', 'pos', True), ('span', 'pos', True)))
+    _append_method(out, '_slot_call_runtime_call', (('self', 'pos', False), ('runtime_name', 'pos', False), ('roots', 'pos', False), ('', 'kw_only', False), ('result_slot', 'pos', True), ('suffix_args', 'pos', True), ('argument_order', 'pos', True), ('span', 'pos', True), ('exception_slot', 'pos', True)))
     _append_method(out, '_emit_slot_call_sequence', (('self', 'pos', False), ('elems', 'pos', False), ('label', 'pos', False), ('tuple_result', 'pos', False)))
     _append_method(out, '_emit_slot_call_args_tuple', (('self', 'pos', False), ('args', 'pos', False), ('label', 'pos', True)))
     _append_method(out, '_slot_call_deferred_star', (('self', 'pos', False), ('args', 'pos', False)))
@@ -655,6 +655,13 @@ def _part_55(out):
     _append_method(out, '_set_call_operands', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_set_algebra_call', (('self', 'pos', False), ('expr', 'pos', False), ('dynamic', 'pos', True), ('', 'kw_only', False), ('receiver_slot', 'pos', True), ('output_slot', 'pos', True)))
     _append_method(out, '_emit_for_unpack_assign', (('self', 'pos', False), ('stmt', 'pos', False), ('name', 'pos', False)))
+    _append_method(out, '_emit_native_re_sub_call', (('self', 'pos', False), ('args', 'pos', False), ('kwargs', 'pos', False), ('expr', 'pos', True)))
+    _append_method(out, '_emit_generator_yield_value', (('self', 'pos', False), ('value', 'pos', False), ('', 'kw_only', False), ('resume_err_target', 'pos', True), ('result_slot', 'pos', True)))
+    _append_method(out, '_emit_generator_take_send', (('self', 'pos', False),))
+
+
+def _part_56(out):
+    _append_method(out, '_generator_frame_helper', (('self', 'pos', False), ('operation', 'pos', False)))
 
 
 def _build_static_methods():
@@ -715,6 +722,7 @@ def _build_static_methods():
     _part_53(out)
     _part_54(out)
     _part_55(out)
+    _part_56(out)
     return tuple(out)
 
 L1_CODEGEN_STATIC_METHODS = _build_static_methods()

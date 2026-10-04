@@ -36,6 +36,33 @@ def _generator_borrowed_frame_map(host, count: int) -> ir.GlobalVariable:
     return frame_map
 
 
+def register_generator_operand_root(host, name, slot, flag) -> None:
+    """Give one generated operand the same persistent lifetime as a local.
+
+    The wrapper is emitted after the resume body, so extending frame_names
+    here also extends its fixed-size heap frame. Each resume restores every
+    such owner before switching to a continuation; an entry alloca alone
+    would be empty when execution resumes after its original definition.
+    """
+    ctx = host._generator_ctx_stack[-1]
+    index = len(ctx["frame_slots"])
+    ctx["frame_names"].append(name)
+    ctx["frame_slots"][name] = (index, slot)
+    saved = host.builder._block
+    # SwitchInstr is a wrapper, not an InstructionRecord. Anchor to the
+    # dispatch block's actual terminator record, preserving any state read
+    # before these restores and dominating every saved continuation edge.
+    host.builder.position_before(ctx["dispatch_bb"]._instrs[-1])
+    frame = host.builder.load(ctx["frame_root"], name=host._fresh("gen.operand.frame"))
+    current = host.builder.call(
+        host._generator_frame_helper("get"), [frame, ir.Constant(_I64, index)],
+        name=host._fresh("gen.operand.restore"),
+    )
+    host.builder.store(current, slot)
+    host.builder.store(ir.Constant(_I1, 1), flag)
+    host.builder.position_at_end(saved)
+
+
 def emit_generator_terminal_frame_clear(host) -> None:
     """Retire only the heap cells of this compiler-owned generator frame.
 
@@ -58,16 +85,29 @@ def emit_generator_terminal_frame_clear(host) -> None:
     prior = host.builder.zext(prior, _I64)
     keeper = host._enter_container_temp_root(frame, host._fresh("gen.terminal.frame.keeper"))
     none = host._emit_none_literal()
-    for _name, entry in ctx["frame_slots"].items():
-        current = host.builder.call(
-            host.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), host._as_gc_ptr(keeper)],
-            name=host._fresh("gen.terminal.frame.current"),
-        )
-        host.builder.call(
-            host._generator_frame_helper("set"),
-            [current, ir.Constant(_I64, entry[0]), none],
-        )
+    # Later-emitted operands can extend the frame after an earlier return
+    # was lowered. Retire the actual fixed frame length, not the partial
+    # compile-time inventory visible at this return site.
+    length = host.builder.call(host.runtime["py_list_len"], [frame])
+    index_slot = host._alloca_in_entry(_I64, name=host._fresh("gen.terminal.index"))
+    host.builder.store(ir.Constant(_I64, 0), index_slot)
+    test = host.current_function.append_basic_block(host._fresh("gen.terminal.test"))
+    clear = host.current_function.append_basic_block(host._fresh("gen.terminal.clear"))
+    done = host.current_function.append_basic_block(host._fresh("gen.terminal.done"))
+    host.builder.branch(test)
+    host.builder.position_at_end(test)
+    index = host.builder.load(index_slot)
+    host.builder.cbranch(host.builder.icmp_signed("<", index, length), clear, done)
+    host.builder.position_at_end(clear)
+    current = host.builder.call(
+        host.runtime["pcc_gc_load_ptr"],
+        [ir.Constant(_CSTR, None), host._as_gc_ptr(keeper)],
+        name=host._fresh("gen.terminal.frame.current"),
+    )
+    host.builder.call(host._generator_frame_helper("set"), [current, index, none])
+    host.builder.store(host.builder.add(index, ir.Constant(_I64, 1)), index_slot)
+    host.builder.branch(test)
+    host.builder.position_at_end(done)
     if not (host.current_func_def is not None and getattr(host, "_runtime_threads_enabled", False)):
         host._emit_gc_frame_leave_lifo_for_slot(keeper)
     owned_frame = host.builder.call(
@@ -486,15 +526,7 @@ def emit_generator_may_park_child(
         )
         return payload
     if host._is_object(result_ty):
-        owned_result = host._gc_retain(
-            rooted_result,
-            name=host._fresh("vthread.delegate.result.retain"),
-        )
-        host.builder.call(
-            host.runtime["pcc_gc_store_root"],
-            [result_root_ptr, host._emit_none_literal()],
-        )
-        return owned_result
+        return take_generator_frame_result(host, expr, child_slot)
     native_result = marshal.marshal_from_object(
         host.builder,
         host.module,
@@ -508,6 +540,41 @@ def emit_generator_may_park_child(
         [result_root_ptr, host._emit_none_literal()],
     )
     return native_result
+
+
+
+def take_generator_frame_result(host, expr: Call, source_slot) -> ir.Value:
+    """Publish an independent result owner before retiring a frame cell."""
+    contexts = getattr(host, "_generator_ctx_stack", ())
+    if (
+        not contexts
+        or contexts[-1].get("resume_function") is not host.current_function
+        or not any(entry[1] is source_slot for entry in contexts[-1]["frame_slots"].values())
+    ):
+        raise L1CodegenError("continuation result has no authoritative frame owner")
+    sink = host._slot_call_result_sink(expr)
+    output = sink if sink is not None else host._new_slot_call_root("vthread.result")
+    previous = host._current_try_err_block()
+    saved_cpy = host._cpy_operand_cleanup_block
+    target = previous if previous is not None else host._ensure_fn_err_exit()
+    try:
+        if sink is None:
+            host._try_err_block = host._slot_call_cleanup_block((output,), target)
+            host._cpy_operand_cleanup_block = host._try_err_block
+        # The retaining slot copy holds both authoritative cells under the
+        # runtime graph lock. No borrowed result is wrapped after cleanup.
+        host._slot_call_copy_source(output, source_slot, False, expr.span)
+        host._slot_call_note_published(output)
+        host.builder.call(
+            host.runtime["pcc_gc_store_root"],
+            [host._as_gc_ptr(source_slot), host._emit_none_literal()],
+        )
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+    if sink is None:
+        return host._take_slot_call_root(output)
+    return host.builder.load(output, name=host._fresh("vthread.result.current"))
 
 
 def generator_may_park_child_slot(host, expr: Call, callee_name: str):
@@ -859,6 +926,8 @@ class GeneratorLoweringMixin:
             if self._yield_sentinel_call(node) is not None:
                 return True
             if isinstance(node, Call):
+                if isinstance(node.func, Name) and node.func.ident == "__await__":
+                    return True
                 if self._vthread_suspension_call(node):
                     return True
                 if isinstance(node.func, Name) and node.func.ident in self._vthread_may_park_func_names:
@@ -941,11 +1010,6 @@ class GeneratorLoweringMixin:
                 for tuple_name in (hidden, hidden + "_item"):
                     if tuple_name not in names:
                         names.append(tuple_name)
-            if isinstance(node, Call) and isinstance(node.func, Name) and node.func.ident == "__await__":
-                for kind in ("asyncio.await.child", "asyncio.await.send", "asyncio.await.error"):
-                    hidden = vthread_delegate_frame_name(node, kind)
-                    if hidden not in names:
-                        names.append(hidden)
             if (
                 isinstance(node, BinOp)
                 and isinstance(node.lhs.ty, (IntType, BoolType))
@@ -1298,6 +1362,7 @@ class GeneratorLoweringMixin:
             sys.stderr.write(
                 "pcc frontend generator resume start function=" + fd.name + "\n"
             )
+        source_frame_count = len(frame_names)
         resume_fn = self._emit_generator_resume_function(
             fd,
             frame_names,
@@ -1401,9 +1466,15 @@ class GeneratorLoweringMixin:
             arg_entry = arg_by_name.get(name)
             cell = None
             if arg_entry is None:
-                if bulk_frame_init:
+                if frame_index >= source_frame_count:
+                    # An unpublished call result is NULL, not the Python None
+                    # object. The slot-call ABI requires an actually empty
+                    # destination on first entry and after suspension.
+                    obj = ir.Constant(_CSTR, None)
+                elif bulk_frame_init:
                     continue
-                obj = none_obj
+                else:
+                    obj = none_obj
             else:
                 ir_arg, ast_arg = arg_entry
                 if name in argument_slots:
@@ -1655,6 +1726,7 @@ class GeneratorLoweringMixin:
                 "resume_function": fn,
                 "frame_root": frame_root,
                 "frame_slots": frame_slots,
+                "frame_names": frame_names,
                 "dispatch_bb": dispatch_bb,
                 "switch": switch_inst,
                 "next_state": 1,
@@ -1857,8 +1929,26 @@ class GeneratorLoweringMixin:
         value: ir.Value,
         *,
         resume_err_target: Optional[ir.Block] = None,
+        result_slot=None,
     ) -> None:
         ctx = self._generator_ctx_stack[-1]
+        result_name = None
+        prior_pin = None
+        if result_slot is not None:
+            # The producer published before any cleanup. Pin that registered
+            # owner while activation roots are retired, then take it only
+            # after the final operation that can park.
+            for local_name, local in self.env.items():
+                if local[0] is result_slot:
+                    result_name = local_name
+                    break
+            if result_name is None:
+                raise L1CodegenError("yield result has no registered local owner")
+            self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
+            current = self.builder.load(result_slot)
+            prior_pin = self._extern_prior_pin(current)
+            self._gc_pin(current)
+            self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
         worker_timing = str(
             os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or ""
         ).strip().lower() in ("1", "true", "yes", "on")
@@ -1869,12 +1959,16 @@ class GeneratorLoweringMixin:
         )
         if worker_timing:
             sys.stderr.write("pcc frontend generator yield save-frame start\n")
+        saved_skip = ctx.get("cpy_skip_save_names", ())
+        if result_name is not None:
+            ctx["cpy_skip_save_names"] = tuple(saved_skip) + (result_name,)
         self._emit_generator_save_frame()
+        ctx["cpy_skip_save_names"] = saved_skip
         if worker_timing:
             sys.stderr.write("pcc frontend generator yield save-frame done\n")
             sys.stderr.write("pcc frontend generator yield cleanup start\n")
         self._emit_suspend_handled_exception_scopes()
-        self._emit_owned_local_cleanup()
+        self._emit_owned_local_cleanup(skip_name=result_name)
         if worker_timing:
             sys.stderr.write("pcc frontend generator yield cleanup done\n")
         self.builder.call(
@@ -1886,6 +1980,16 @@ class GeneratorLoweringMixin:
         self._emit_generator_add_case(state_id, cont_bb)
         if worker_timing:
             sys.stderr.write("pcc frontend generator yield add-case done\n")
+        if result_slot is not None:
+            value = self.builder.call(
+                self.runtime["pcc_gc_take_pinned_slot"],
+                [self._as_gc_ptr(result_slot), prior_pin],
+                name=self._fresh("gen.yield.owner"),
+            )
+            self._return_handoff_sites.append((
+                self.current_function, self.builder._block,
+                self.builder._block._instrs[-1],
+            ))
         self.builder.ret(value)
         self.builder.position_at_end(cont_bb)
         self._emit_resume_handled_exception_scopes()

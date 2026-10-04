@@ -1270,7 +1270,7 @@ class NativeModuleAliasMixin:
             )
         if import_module == "re":
             return all(
-                attr_name in ("match", "search", "fullmatch", "compile", "findall")
+                attr_name in ("match", "search", "fullmatch", "compile", "findall", "sub")
                 for attr_name, _as_name in stmt.names
             )
         if import_module == "codecs":
@@ -1516,7 +1516,7 @@ class NativeModuleAliasMixin:
                     },
                 )
                 continue
-            if attr_name in ("match", "search", "fullmatch", "compile", "findall") and import_module == "re":
+            if attr_name in ("match", "search", "fullmatch", "compile", "findall", "sub") and import_module == "re":
                 self._register_native_builtin_value_alias(
                     local_name,
                     "re." + attr_name,

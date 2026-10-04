@@ -97,3 +97,12 @@
 #ifndef EOPNOTSUPP
 #define EOPNOTSUPP 102
 #endif
+
+/* Socket completion reports the selected target's exact SO_ERROR value. */
+#ifndef ECONNREFUSED
+#if defined(__linux__)
+#define ECONNREFUSED 111
+#else
+#define ECONNREFUSED 61
+#endif
+#endif

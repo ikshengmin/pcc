@@ -1199,6 +1199,10 @@ class CallExpressionLoweringMixin:
             result = self._emit_native_re_findall_call(expr.args, expr.kwargs, expr)
             if result is not None:
                 return result
+        if builtin_value == "re.sub":
+            result = self._emit_native_re_sub_call(expr.args, expr.kwargs, expr)
+            if result is not None:
+                return result
         if builtin_value in ("re.match", "re.search", "re.fullmatch"):
             result = self._emit_native_re_value_call(
                 builtin_value,
@@ -1487,34 +1491,41 @@ class CallExpressionLoweringMixin:
         if name == "format" and not expr.kwargs and 1 <= len(expr.args) <= 2:
             return self._emit_owned_format_call(expr)
         if name == "chr" and len(expr.args) == 1 and not expr.kwargs:
-            v = self._emit_expr(expr.args[0])
-            ty = expr.args[0].ty
-            if isinstance(ty, BoolType) and self._ir_type_matches(v.type, _I1):
-                v = self.builder.zext(
-                    v,
-                    _I64,
-                    name=self._fresh("chr.from_bool"),
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("chr.result")
+                roots.append(output)
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                argument = self._emit_slot_call_operand(expr.args[0], "chr.argument")
+                roots.append(argument)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                # Evaluate the source exactly once. The checked converter
+                # owns its __index__ receiver across user callbacks.
+                codepoint = self.builder.call(
+                    self.runtime["py_index_i64_checked_slots"],
+                    [self._as_gc_ptr(argument)],
+                    name=self._fresh("chr.index"),
                 )
-            elif isinstance(ty, IntType):
-                v = self._to_int64(v, ty)
-            else:
-                v = None
-            if v is not None:
-                return self.builder.call(
-                    self.runtime["py_chr_from_i64"],
-                    [v],
-                    name=self._fresh("chr"),
+                self._emit_post_call_err_check(expr.span)
+                self._slot_call_runtime_call(
+                    "py_chr_from_i64", (), result_slot=output,
+                    suffix_args=(codepoint,), span=expr.span,
                 )
-            codepoint = self.builder.call(
-                self.runtime["py_obj_index_i64"],
-                [self._emit_expr_as_pcc_object(expr.args[0])],
-                name=self._fresh("chr.index"),
-            )
-            return self.builder.call(
-                self.runtime["py_chr_from_i64"],
-                [codepoint],
-                name=self._fresh("chr"),
-            )
+                self._release_slot_call_roots((argument,))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("chr.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         if name == "float" and len(expr.args) == 1:
             arg = expr.args[0]
             ty = arg.ty

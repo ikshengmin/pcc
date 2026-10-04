@@ -22,6 +22,7 @@ from pcc.frontends.c.c_abi_layout import (
     integer_scalar_layout,
     pointer_scalar_layout,
 )
+from pcc.frontends.c.c_character_literals import decode_c_character_constant
 from pcc.frontends.c.codegen.c_declaration_state import (
     CodegenError,
     ExternGlobalRef,
@@ -1971,17 +1972,10 @@ class CCodeGenerator(
         return list(self._string_bytes(content + "\00"))
 
     def _char_constant_value(self, raw):
-        if raw and raw[:2] in {"L'", "u'", "U'"} and raw.endswith("'"):
-            raw = raw[1:]
-        if not raw or len(raw) < 2 or raw[0] != "'" or raw[-1] != "'":
-            return 0
-        processed = self._process_escapes(raw[1:-1])
-        if not processed:
-            return 0
-        value = 0
-        for ch in processed:
-            value = (value << 8) | (ord(ch) & 0xFF)
-        return value
+        return decode_c_character_constant(raw, str(self.module.triple))[0]
+
+    def _char_constant_type_name(self, raw):
+        return decode_c_character_constant(raw, str(self.module.triple))[1]
 
     def codegen_Constant(self, node):
 
@@ -1993,16 +1987,11 @@ class CCodeGenerator(
                 self._tag_unsigned(result)
             return result, None
         elif node.type == "char":
-            # char constant like 'a' -> i8
-            is_wide_char = str(getattr(node, "value", "")).startswith(("L'", "u'", "U'"))
-            ir_type = int32_t if is_wide_char else int8_t
-            mask = 0xFFFFFFFF if is_wide_char else 0xFF
-            return (
-                ir.values.Constant(
-                    ir_type, self._char_constant_value(node.value) & mask
-                ),
-                None,
-            )
+            value, type_name = decode_c_character_constant(node.value, str(self.module.triple))
+            result = ir.values.Constant(self._get_ir_type(type_name), value)
+            if type_name.startswith("unsigned"):
+                self._tag_unsigned(result)
+            return result, None
         elif node.type in ("string", "wstring"):
             data = self._string_literal_data(node)
             if self._is_wide_string_constant(node):
@@ -3673,7 +3662,7 @@ class CCodeGenerator(
             if node.type == "int":
                 return self._get_ir_type(integer_literal_type_name(node.value, str(self.module.triple)))
             if node.type == "char":
-                return int32_t
+                return self._get_ir_type(self._char_constant_type_name(node.value))
             if node.type in ("string", "wstring"):
                 data = self._string_literal_data(node)
                 elem_type = int32_t if self._is_wide_string_constant(node) else int8_t
@@ -4084,7 +4073,7 @@ class CCodeGenerator(
                 )
             if node.type == "char":
                 return self._generic_type_key_from_type(
-                    self._make_identifier_type(["int"])
+                    self._make_identifier_type(self._char_constant_type_name(node.value).split())
                 )
             if node.type == "float":
                 raw = node.value.lower()
@@ -7254,9 +7243,10 @@ class CCodeGenerator(
                 return 0  # string constants can't be int-evaluated
             if node.type in ("float", "double"):
                 return self._parse_float_constant(node.value)
-            v = node.value.rstrip("uUlL")
-            if v.startswith("'"):
-                return make_int(self._char_constant_value(v))
+            if node.type == "char":
+                value, type_name = decode_c_character_constant(node.value, str(self.module.triple))
+                width = builtin_scalar_layout(type_name.split(), str(self.module.triple)).size * 8
+                return make_int(value, width, type_name.startswith("unsigned"))
             try:
                 return parse_int_constant(node.value)
             except ValueError:

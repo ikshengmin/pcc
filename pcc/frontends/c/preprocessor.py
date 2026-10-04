@@ -197,7 +197,7 @@ class _IncompleteMacroInvocation(RuntimeError):
     """More physical source lines may complete a function-like invocation."""
 
 
-def _eval_cpp_expr(src: str) -> int:
+def _eval_cpp_expr(src: str, target_triple=None) -> int:
     """Evaluate a C preprocessor ``#if`` expression to an integer.
 
     Accepts the subset the preprocessor produces after macro expansion
@@ -214,7 +214,7 @@ def _eval_cpp_expr(src: str) -> int:
 
     Raises :class:`_CppExprError` on any failure in the live path.
     """
-    p = _CppExprParser(src)
+    p = _CppExprParser(src, target_triple)
     tree = p.parse_ternary()
     p.skip_ws()
     if p.pos < len(p.src):
@@ -273,7 +273,8 @@ def _eval_tree(node) -> int:
 class _CppExprParser:
     """Recursive-descent parser producing a small tagged-tuple tree."""
 
-    def __init__(self, src: str) -> None:
+    def __init__(self, src: str, target_triple=None) -> None:
+        self.target_triple = target_triple
         self.src = src
         self.pos = 0
 
@@ -423,61 +424,14 @@ class _CppExprParser:
         return ("lit", self.parse_number())
 
     def parse_character(self) -> int:
-        """Decode C character constants without Python literal/eval semantics."""
-        start = self.pos
-        if self.src[self.pos] != "'":
-            self.pos += 1
-        self.pos += 1
-        values = []
-        escapes = {
-            "a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12,
-            "r": 13, "'": 39, '"': 34, "?": 63, "\\": 92,
-        }
-        while self.pos < len(self.src) and self.src[self.pos] != "'":
-            char = self.src[self.pos]
-            self.pos += 1
-            if char == "\\":
-                if self.pos >= len(self.src):
-                    raise _CppExprError(f"unterminated character constant at pos {start}")
-                char = self.src[self.pos]
-                self.pos += 1
-                if char in escapes:
-                    value = escapes[char]
-                elif char in "01234567":
-                    digits = char
-                    while (len(digits) < 3 and self.pos < len(self.src)
-                           and self.src[self.pos] in "01234567"):
-                        digits += self.src[self.pos]
-                        self.pos += 1
-                    value = int(digits, 8)
-                elif char in "xuU":
-                    digits_start = self.pos
-                    count = 4 if char == "u" else 8 if char == "U" else len(self.src)
-                    while (self.pos < len(self.src) and self.pos - digits_start < count
-                           and self.src[self.pos] in "0123456789abcdefABCDEF"):
-                        self.pos += 1
-                    digits = self.src[digits_start:self.pos]
-                    if not digits or (char != "x" and len(digits) != count):
-                        raise _CppExprError(f"invalid character escape at pos {digits_start}")
-                    value = int(digits, 16)
-                    if char != "x" and (
-                        value > 0x10ffff or 0xd800 <= value <= 0xdfff
-                        or (value < 0xa0 and value not in (0x24, 0x40, 0x60))
-                    ):
-                        raise _CppExprError(f"invalid universal character at pos {digits_start}")
-                else:
-                    raise _CppExprError(f"invalid character escape at pos {self.pos - 1}")
-            else:
-                if char in "\r\n":
-                    raise _CppExprError(f"unterminated character constant at pos {start}")
-                value = ord(char)
-            values.append(value)
-        if not values or self.pos >= len(self.src):
-            raise _CppExprError(f"invalid character constant at pos {start}")
-        self.pos += 1
-        value = values[0]
-        for char in values[1:]:
-            value = (value << 8) | (char & 0xff)
+        from pcc.frontends.c.c_character_literals import parse_c_character_constant
+
+        try:
+            value, _type_name, self.pos = parse_c_character_constant(
+                self.src, self.pos, self.target_triple,
+            )
+        except ValueError as exc:
+            raise _CppExprError(str(exc)) from exc
         return value
 
     def parse_number(self) -> int:
@@ -709,6 +663,7 @@ class Preprocessor:
         })
         from pcc.frontends.c.c_abi_layout import c_target_predefines, c_target_triple
         target_triple = c_target_triple(target_triple)
+        self.target_triple = target_triple
         from pcc.backend.self_backend_target_match import target_os_name
         target_os = target_os_name(target_triple)
         machine = target_triple.split("-", 1)[0].lower()
@@ -1109,7 +1064,7 @@ class Preprocessor:
         # eval() is out of scope for the self-host target (see
         # scripts/audit_selfhost.py banned-builtin list).
         try:
-            return bool(_eval_cpp_expr(expanded))
+            return bool(_eval_cpp_expr(expanded, self.target_triple))
         except _CppExprError as exc:
             raise RuntimeError(
                 f"owned preprocessor: failed to evaluate #if expression: {expanded!r} ({exc})"

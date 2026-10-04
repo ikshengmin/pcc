@@ -8,6 +8,7 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, Call, ClassDef, DictType, Expr, For, FuncDef, If, Name, StrLit, StrType, Try, While, With
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_STR
 
 _I64 = ir.IntType(64)
 
@@ -568,6 +569,177 @@ class FormatLoweringMixin:
             if kname.startswith("*"):
                 return None  # **splat: not handled here
             kw_map[kname] = kw[1]
+        if (
+            star_arg is None
+            and all(not isinstance(part, tuple) or isinstance(part[0], str) for part in parts)
+            and not any(self._expr_looks_cpython(argument) for argument in expr.args)
+            and not any(self._expr_looks_cpython(argument) for _key, argument in expr.kwargs)
+        ):
+            # Evaluate every argument once before conversion/__format__,
+            # then publish each NEW field and concatenation into an owner.
+            # Repeated fields reuse argument roots; other existing format
+            # shapes retain their separate lowering below.
+            fields = []
+            auto_index = 0
+            for part in parts:
+                if not isinstance(part, tuple):
+                    fields.append(part)
+                    continue
+                spec, kind, ref, conv = part
+                if kind == "auto":
+                    ref = auto_index
+                    auto_index += 1
+                elif kind == "index":
+                    ref = int(ref)
+                if kind == "name":
+                    if ref not in kw_map:
+                        return None
+                elif ref < 0 or ref >= len(expr.args):
+                    return None
+                fields.append((spec, kind, ref, conv))
+
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("str.format.result")
+                roots.append(output)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            # Inputs remain owned for the complete call. Register their empty
+            # slots before evaluation, so one cleanup handles every argument
+            # prefix instead of rebuilding a growing cleanup for each input.
+            argument_exprs = [expr.func.obj] + list(expr.args)
+            argument_exprs.extend(argument for _key, argument in expr.kwargs)
+            arguments = []
+            for argument in argument_exprs:
+                slot = self._new_slot_call_root("str.format.argument")
+                arguments.append(slot)
+                roots.append(slot)
+            # These five owners are reused by every field. Clearing a scratch
+            # owner retires its value, not its lexical frame registration.
+            converted = self._new_slot_call_root("str.format.converted")
+            spec_root = self._new_slot_call_root("str.format.spec")
+            piece = self._new_slot_call_root("str.format.field")
+            current = self._new_slot_call_root("str.format.accumulator")
+            combined = self._new_slot_call_root("str.format.concat")
+            roots.extend((converted, spec_root, piece, current, combined))
+            cleanup = self._slot_call_cleanup_block(tuple(roots), target)
+            try:
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                for argument, destination in zip(argument_exprs, arguments):
+                    temporary = self._emit_slot_call_operand(argument, "str.format.input")
+                    self._try_err_block = self._slot_call_cleanup_block((temporary,), cleanup)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    moved = self.builder.call(
+                        self.runtime["pcc_gc_root_move"],
+                        [self._as_gc_ptr(destination), self._as_gc_ptr(temporary)],
+                        name=self._fresh("str.format.argument.move"),
+                    )
+                    self._slot_call_check_status(moved, "format argument move", expr.span)
+                    self._release_slot_call_roots((temporary,))
+                    self._try_err_block = cleanup
+                    self._cpy_operand_cleanup_block = cleanup
+                positional = arguments[1:1 + len(expr.args)]
+                keywords = {}
+                for index, (key, _argument) in enumerate(expr.kwargs):
+                    keywords[key] = arguments[1 + len(expr.args) + index]
+                # Multiple fields copy each transient result before the
+                # next callback. A sole field keeps Python's result identity,
+                # including a str subclass returned by __format__.
+                single_field = len(fields) == 1
+                if not single_field:
+                    empty = self._emit_str_literal("")
+                    self.builder.call(self.runtime["py_incref"], [self._as_gc_ptr(empty)])
+                    self._publish_slot_call_owned(current, empty, label="format empty literal")
+                for field in fields:
+                    if isinstance(field, str):
+                        literal = self._emit_str_literal(field)
+                        self.builder.call(self.runtime["py_incref"], [self._as_gc_ptr(literal)])
+                        self._publish_slot_call_owned(piece, literal, label="format literal")
+                    else:
+                        spec, kind, ref, conv = field
+                        value = keywords[ref] if kind == "name" else positional[ref]
+                        if conv is not None:
+                            runtime_name = {"r": "py_obj_repr", "s": "py_obj_str", "a": "py_obj_ascii"}[conv]
+                            self._slot_call_runtime_call(
+                                runtime_name, (value,), result_slot=converted, span=expr.span,
+                            )
+                            value = converted
+                        literal = self._emit_str_literal(spec)
+                        self.builder.call(self.runtime["py_incref"], [self._as_gc_ptr(literal)])
+                        self._publish_slot_call_owned(spec_root, literal, label="format spec literal")
+                        self._slot_call_runtime_call(
+                            "py_obj_format", (value, spec_root), result_slot=piece, span=expr.span,
+                        )
+                    if single_field:
+                        # CPython returns the field itself only when it is
+                        # nonempty. Validate the runtime value before reading
+                        # its native string length; a callback may be invalid.
+                        tag = self._slot_call_runtime_call("py_obj_type_tag", (piece,), span=expr.span)
+                        is_string = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_STR))
+                        typed = self.current_function.append_basic_block(self._fresh("str.format.string"))
+                        invalid = self.current_function.append_basic_block(self._fresh("str.format.invalid"))
+                        self.builder.cbranch(is_string, typed, invalid)
+                        self.builder.position_at_end(invalid)
+                        self._emit_builtin_exception_and_branch(
+                            "TypeError", "__format__ must return a str", expr.span,
+                        )
+                        self.builder.position_at_end(typed)
+                        length = self._slot_call_runtime_call("py_str_byte_len", (piece,), span=expr.span)
+                        is_empty = self.builder.icmp_signed("==", length, ir.Constant(_I64, 0))
+                        empty_result = self.current_function.append_basic_block(self._fresh("str.format.empty"))
+                        keep_result = self.current_function.append_basic_block(self._fresh("str.format.keep"))
+                        result_ready = self.current_function.append_basic_block(self._fresh("str.format.ready"))
+                        self.builder.cbranch(is_empty, empty_result, keep_result)
+                        self.builder.position_at_end(empty_result)
+                        empty = self._emit_str_literal("")
+                        self.builder.call(self.runtime["py_incref"], [self._as_gc_ptr(empty)])
+                        self._publish_slot_call_owned(current, empty, label="format empty field")
+                        self.builder.branch(result_ready)
+                        self.builder.position_at_end(keep_result)
+                        next_value = piece
+                    else:
+                        self._slot_call_runtime_call(
+                            "py_str_concat", (current, piece), result_slot=combined, span=expr.span,
+                        )
+                        self.builder.call(
+                            self.runtime["pcc_gc_store_root"],
+                            [self._as_gc_ptr(current), ir.Constant(ir.IntType(8).as_pointer(), None)],
+                        )
+                        next_value = combined
+                    moved = self.builder.call(
+                        self.runtime["pcc_gc_root_move"],
+                        [self._as_gc_ptr(current), self._as_gc_ptr(next_value)],
+                        name=self._fresh("str.format.accumulator.move"),
+                    )
+                    self._slot_call_check_status(moved, "format accumulator move", expr.span)
+                    if single_field:
+                        self.builder.branch(result_ready)
+                        self.builder.position_at_end(result_ready)
+                    # Match field-consumption lifetime: the result and its
+                    # conversion temporary retire before the next callback.
+                    for scratch in (piece, converted, spec_root):
+                        self.builder.call(
+                            self.runtime["pcc_gc_store_root"],
+                            [self._as_gc_ptr(scratch), ir.Constant(ir.IntType(8).as_pointer(), None)],
+                        )
+                moved = self.builder.call(
+                    self.runtime["pcc_gc_root_move"],
+                    [self._as_gc_ptr(output), self._as_gc_ptr(current)],
+                    name=self._fresh("str.format.move"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(moved, "formatted result move", expr.span)
+                self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("str.format.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         star_obj = self._emit_as_object(star_arg) if star_arg is not None else None
         out: Optional[ir.Value] = None
         auto_idx = 0

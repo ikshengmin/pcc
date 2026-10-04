@@ -57,7 +57,11 @@
 #endif
 
 #ifndef O_NONBLOCK
+#if defined(__linux__)
+#define O_NONBLOCK 2048
+#else
 #define O_NONBLOCK 4
+#endif
 #endif
 
 #ifndef O_NDELAY

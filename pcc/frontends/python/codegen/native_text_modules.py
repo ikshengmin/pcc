@@ -994,7 +994,7 @@ class NativeTextModulesLoweringMixin:
                 return legacy_split
             return self._emit_native_re_engine_split_call(expr.args, expr.kwargs)
         if attr.name == "sub":
-            return self._emit_native_re_sub_call(expr.args, expr.kwargs)
+            return self._emit_native_re_sub_call(expr.args, expr.kwargs, expr)
         if attr.name not in ("match", "search", "fullmatch"):
             return None
         return self._emit_native_re_value_call(
@@ -1224,42 +1224,50 @@ class NativeTextModulesLoweringMixin:
         self,
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
+        expr=None,
     ) -> Optional[ir.Value]:
         if kwargs or len(args) < 3 or len(args) > 4:
             return None
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = None if expr is None else self._slot_call_result_sink(expr)
+        output = sink
         roots = []
-        values = []
-        for index, argument in enumerate(args[:3]):
-            value = self._emit_expr_with_cpy_operand_cleanup(
-                argument, (), as_object=True, rooted_pcc_lifetimes=tuple(roots),
+        if output is None:
+            output = self._new_slot_call_root("re.sub.result")
+            roots.append(output)
+        operands = []
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            for argument in args:
+                operand = self._emit_slot_call_operand(argument, "re.sub.argument")
+                operands.append(operand)
+                roots.append(operand)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            count = ir.Constant(_I64, 0)
+            if len(args) == 4:
+                count = self.builder.call(
+                    self.runtime["py_index_i64_checked_slots"],
+                    [self._as_gc_ptr(operands[3])],
+                    name=self._fresh("re.sub.count"),
+                )
+                self._emit_post_call_err_check(args[3].span)
+            # The regex engine returns a NEW string (or NULL on error).
+            # Publish it before lease release can park or dispose operands.
+            self._slot_call_runtime_call(
+                "py_re_engine_sub", tuple(operands[:3]), result_slot=output,
+                suffix_args=(count, ir.Constant(_I64, 0)), span=args[0].span,
             )
-            owned = self._owned_release_needed(value, argument)
-            root = self._enter_container_temp_root(value, self._fresh("re.sub.argument"))
-            roots.append((root, owned))
-            values.append(value)
-        count = ir.Constant(_I64, 0)
-        if len(args) == 4:
-            count = self._emit_expr_with_cpy_operand_cleanup(
-                args[3], (), as_i64=True, rooted_pcc_lifetimes=tuple(roots),
-            )
-        values = [self.builder.call(self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), self._as_gc_ptr(root)]) for root, _owned in roots]
-        result = self.builder.call(
-            self.runtime["py_re_engine_sub"],
-            [values[0], values[1], values[2], count, ir.Constant(_I64, 0)],
-            name=self._fresh("re.sub.engine"),
-        )
-        self._gc_pin(result)
-        self._release_rooted_pcc_lifetimes(tuple(roots))
-        self._gc_unpin(result)
-        # This ABI always returns a new string reference. Record its owner
-        # at emission: raw-scaffold code can infer a Dyn result and otherwise
-        # lose the owner when assigning or copying the replacement string.
-        self._note_owned_object_value(result)
-        # the engine raises for patterns outside the native subset or
-        # backslash replacement templates
-        self._emit_post_call_err_check(getattr(args[0], "span", None))
-        return result
+            self._release_slot_call_roots(tuple(operands))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("re.sub.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_native_re_compile_alias_method_call(
         self,

@@ -7,6 +7,7 @@ from pcc.frontends.c.passes.ast_utils import ASTTransformer
 from pcc.frontends.c.passes.base import ASTPass
 from pcc.frontends.c.passes.context import PassContext
 from pcc.frontends.c.passes.ssa_gvn import SSAGVNPass
+from pcc.frontends.c.ssa.ir import SSAReturn
 
 
 class _SSAGVNRewriter(ASTTransformer):
@@ -50,7 +51,7 @@ class _SSAGVNRewriter(ASTTransformer):
         self._current_func_name: str | None = None
         self._current_return_type: str = ""
         self._current_types: dict[str, str] = {}
-        self._coord_decisions: dict[str, str] = {}
+        self._coord_decisions: dict[tuple[str, str, str], str] = {}
 
     def visit_FuncDef(self, node):
         func_name = getattr(getattr(node, "decl", None), "name", None)
@@ -82,6 +83,7 @@ class _SSAGVNRewriter(ASTTransformer):
             replacement = self._replacement_for_expr(
                 node.init,
                 action="rewrite_decl",
+                source_coord=node.coord,
                 target_name=node.name,
             )
             if replacement is not None:
@@ -102,6 +104,7 @@ class _SSAGVNRewriter(ASTTransformer):
             replacement = self._replacement_for_expr(
                 node.rvalue,
                 action="rewrite_assign",
+                source_coord=node.coord,
                 target_name=node.lvalue.name,
             )
             if replacement is not None:
@@ -117,6 +120,7 @@ class _SSAGVNRewriter(ASTTransformer):
             replacement = self._replacement_for_expr(
                 node.expr,
                 action="rewrite_return",
+                source_coord=node.coord,
                 return_type=self._current_return_type,
             )
             if replacement is not None:
@@ -130,14 +134,17 @@ class _SSAGVNRewriter(ASTTransformer):
         expr,
         *,
         action: str,
+        source_coord,
         target_name: str | None = None,
         return_type: str = "",
     ):
-        coord_key = str(expr.coord) if getattr(expr, "coord", None) else None
+        coord_key = str(source_coord) if source_coord is not None else None
         if coord_key is None:
             return None
 
-        replacement_name = self._coord_decisions.get(coord_key)
+        replacement_name = self._coord_decisions.get(
+            (action, coord_key, target_name or "")
+        )
         if not replacement_name:
             return None
         if target_name and replacement_name == target_name:
@@ -160,8 +167,8 @@ class _SSAGVNRewriter(ASTTransformer):
         self.ctx.bump(f"ssa_gvn_rewrite.{action}")
         return c_ast.ID(replacement_name, coord=expr.coord)
 
-    def _decisions_for_function(self, func_name: str) -> dict[str, str]:
-        decisions: dict[str, str] = {}
+    def _decisions_for_function(self, func_name: str) -> dict[tuple[str, str, str], str]:
+        decisions: dict[tuple[str, str, str], str] = {}
         result = self.ctx.ssa_gvn_results.get(func_name)
         ssa_func = self.ctx.ssa_functions.get(func_name)
         if result is None or ssa_func is None:
@@ -173,14 +180,40 @@ class _SSAGVNRewriter(ASTTransformer):
             for instruction in block.instructions
         }
 
-        for value_name, leader_name in result.redundant_values.items():
+        # Coordinates identify statements, not their nested expressions: the
+        # owned parser may give every expression on a line the same location.
+        # Bind a rewrite to the complete value consumed by that statement.
+        sites = []
+        for binding in ssa_func.bindings:
+            action = {"decl_init": "rewrite_decl", "assign": "rewrite_assign"}.get(
+                binding.kind
+            )
+            if action and binding.source_coord:
+                sites.append(((action, binding.source_coord, binding.target_name),
+                              binding.value))
+        for block in ssa_func.blocks:
+            terminator = block.terminator
+            if isinstance(terminator, SSAReturn) and terminator.source_coord:
+                sites.append((("rewrite_return", terminator.source_coord, ""),
+                              terminator.value))
+
+        counts = {}
+        for key, _value in sites:
+            counts[key] = counts.get(key, 0) + 1
+        for key, value in sites:
+            # Two statements can also occupy one source line. Without a
+            # unique statement identity, keep the original expression.
+            if counts[key] != 1 or value is None:
+                continue
+            value_name = value.name
+            leader_name = result.redundant_values.get(value_name)
+            if leader_name is None:
+                continue
             try:
                 instruction = ssa_func.instruction(value_name)
             except KeyError:
                 continue
             if instruction_blocks.get(value_name) == instruction_blocks.get(leader_name):
-                continue
-            if not instruction.source_coord:
                 continue
 
             for binding_name, binding_value in instruction.available_bindings:
@@ -188,7 +221,7 @@ class _SSAGVNRewriter(ASTTransformer):
                     continue
                 if not self._is_rewrite_safe_type(self._type_name(binding_name)):
                     continue
-                decisions.setdefault(instruction.source_coord, binding_name)
+                decisions[key] = binding_name
                 break
 
         return decisions
