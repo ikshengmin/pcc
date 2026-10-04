@@ -91,6 +91,8 @@ class AttrLoadLoweringMixin:
             access = {"F_OK": 0, "X_OK": 1, "W_OK": 2, "R_OK": 4}
             if module == "os" and expr.name in access:
                 return ("int", access[expr.name])
+        if module == "tempfile" and expr.name == "TemporaryDirectory":
+            return ("runtime", "py_tempdir_type", ())
         if module == "sys":
             if expr.name == "argv":
                 return ("argv",)

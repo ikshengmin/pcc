@@ -945,7 +945,7 @@ class ExceptionLoweringMixin:
         if isinstance(exc_expr, Call) and isinstance(exc_expr.func, Name):
             cls_name = exc_expr.func.ident
             tag = _builtin_exc_tag_or_missing(cls_name)
-            if tag == 59:  # UnicodeEncodeError has a five-field constructor.
+            if tag == 58 or tag == 59:  # Decode/encode errors have five-field constructors.
                 cls = self.builder.call(
                     self.runtime["py_exc_builtin_class"], [ir.Constant(_I64, tag)],
                     name=self._fresh("exc.unicode.class"),

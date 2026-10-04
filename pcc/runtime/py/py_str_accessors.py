@@ -556,6 +556,24 @@ def _encode_error_id(errors) -> int:
     return -1
 
 
+
+@c_abi_export("py_text_codec_id")
+def py_text_codec_id(encoding) -> int:
+    if _encode_validate_name(encoding) == 0:
+        return -1
+    codec: int = _encode_codec_id(encoding)
+    if codec < 0:
+        py_raise_owned(py_exc_new(13, cstr("unknown or unsupported native encoding")))
+    return codec
+
+
+@c_abi_export("py_text_error_id")
+def py_text_error_id(errors) -> int:
+    if _encode_validate_name(errors) == 0:
+        return -1
+    # Like CPython, an unknown handler is an error only when first needed.
+    return _encode_error_id(errors)
+
 def _encode_width(cp: int) -> int:
     if cp < 128:
         return 1
@@ -772,7 +790,7 @@ def _str_encode_guarded(s, encoding, errors, forced_codec: int):
                 pcc_gc_load_ptr(null(), ptr_add(owned, 16)),
             )
         else:
-            result = _str_encode_codec(pcc_gc_load_ptr(null(), owned), forced_codec, 0)
+            result = _str_encode_codec(pcc_gc_load_ptr(null(), owned), forced_codec % 3, forced_codec // 3)
         # Transfer the newly produced owner directly into the already traced
         # result slot before lease release or any source-owner finalizer.
         store_ptr(result_slot, 0, result)
@@ -808,6 +826,14 @@ def _str_encode_guarded(s, encoding, errors, forced_codec: int):
 @c_abi_export("py_str_encode_with_encoding")
 def py_str_encode_with_encoding(s, encoding, errors):
     return _str_encode_guarded(s, encoding, errors, -1)
+
+
+@c_abi_export("py_text_encode_ids")
+def py_text_encode_ids(s, codec: int, mode: int):
+    if codec < 0 or codec > 2 or mode < 0 or mode > 7:
+        py_raise_owned(py_exc_new(11, cstr("unsupported native text encoding policy")))
+        return null()
+    return _str_encode_guarded(s, null(), null(), codec + 3 * mode)
 
 
 @c_abi_export("py_str_utf8_encode")

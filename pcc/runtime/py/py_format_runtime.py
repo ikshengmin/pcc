@@ -2905,6 +2905,8 @@ def py_bytes_mod(format_obj, arguments):
     return _percent_format_entry(format_obj, arguments, 1)
 
 
+py_bytes_len = extern("py_bytes_len", (c_ptr,), c_int64)
+py_bytes_data_ptr = extern("py_bytes_data_ptr", (c_ptr,), c_ptr)
 py_unicode_error_get_field = extern("py_unicode_error_get_field", (c_ptr, c_int64), c_ptr)
 py_str_len = extern("py_str_len", (c_ptr,), c_int64)
 py_str_ord_at_i64 = extern("py_str_ord_at_i64", (c_ptr, c_int64), c_int64)
@@ -2957,27 +2959,65 @@ def _unicode_format_decimal(state, number: int) -> None:
         _buffer_decimal(state, number)
 
 
-def _unicode_format_body(state, slots, repr_mode: int) -> int:
+def _unicode_format_repr(state, slots, type_tag: int) -> int:
+    _buffer_cstr(state, cstr("UnicodeDecodeError") if type_tag == 58 else cstr("UnicodeEncodeError"))
+    _buffer_char(state, 40)
+    args_slot = ptr_add(slots, 56)
+    count: int = py_tuple_len(pcc_gc_load_ptr(null(), args_slot))
+    i: int = 0
+    while i < count:
+        if i != 0:
+            _buffer_cstr(state, cstr(", "))
+        prior: int = _unicode_format_pin(args_slot)
+        store_ptr(slots, 0, py_tuple_get(load_ptr(args_slot, 0), i))
+        store_ptr(args_slot, 0, pcc_gc_take_pinned_slot(args_slot, prior))
+        if ptr_is_null(load_ptr(slots, 0)) or _unicode_format_append(state, slots, 0, 1) != 0:
+            return -1
+        pcc_gc_store_root(slots, null())
+        i = i + 1
+    _buffer_char(state, 41)
+    return 0
+
+
+def _unicode_format_body(state, slots, repr_mode: int, type_tag: int) -> int:
     if repr_mode != 0:
-        _buffer_cstr(state, cstr("UnicodeEncodeError"))
-        return _unicode_format_append(state, slots, 7, 1)
+        return _unicode_format_repr(state, slots, type_tag)
     source = pcc_gc_load_ptr(null(), ptr_add(slots, 8))
-    if _type_of(source) != PY_TYPE_STR:
+    if type_tag == 58:
+        if _type_of(source) != PY_TYPE_BYTES:
+            py_raise_owned(py_exc_new(3, cstr("UnicodeError 'object' attribute must be a bytes")))
+            return -1
+    elif _type_of(source) != PY_TYPE_STR:
         py_raise_owned(py_exc_new(3, cstr("UnicodeError 'object' attribute must be a string")))
         return -1
     start: int = py_int_value_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 16)))
     end: int = py_int_value_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 24)))
-    length: int = py_str_len(pcc_gc_load_ptr(null(), ptr_add(slots, 8)))
+    source_slot = ptr_add(slots, 8)
+    source_pin: int = _unicode_format_pin(source_slot)
+    length: int = 0
+    if type_tag == 58:
+        length = py_bytes_len(load_ptr(source_slot, 0))
+    else:
+        length = py_str_len(load_ptr(source_slot, 0))
     code: int = -1
     if start >= 0 and start < length and end == start + 1:
-        code = py_str_ord_at_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 8)), start)
+        if type_tag == 58:
+            code = load_i8(py_bytes_data_ptr(load_ptr(source_slot, 0)), start) & 255
+        else:
+            code = py_str_ord_at_i64(load_ptr(source_slot, 0), start)
+    store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, source_pin))
     _buffer_char(state, 39)
     if _unicode_format_append(state, slots, 0, 0) != 0:
         return -1
     if code >= 0:
-        _buffer_cstr(state, cstr("' codec can't encode character '\\"))
         width: int = 2
-        if code <= 255:
+        if type_tag == 58:
+            _buffer_cstr(state, cstr("' codec can't decode byte 0x"))
+        else:
+            _buffer_cstr(state, cstr("' codec can't encode character '\\"))
+        if type_tag == 58:
+            width = 2
+        elif code <= 255:
             _buffer_char(state, 120)
         elif code <= 65535:
             _buffer_char(state, 117)
@@ -2990,10 +3030,13 @@ def _unicode_format_body(state, slots, repr_mode: int) -> int:
             digit: int = (code >> shift) & 15
             _buffer_char(state, 48 + digit if digit < 10 else 87 + digit)
             shift = shift - 4
-        _buffer_cstr(state, cstr("' in position "))
+        _buffer_cstr(state, cstr(" in position ") if type_tag == 58 else cstr("' in position "))
         _unicode_format_decimal(state, start)
     else:
-        _buffer_cstr(state, cstr("' codec can't encode characters in position "))
+        if type_tag == 58:
+            _buffer_cstr(state, cstr("' codec can't decode bytes in position "))
+        else:
+            _buffer_cstr(state, cstr("' codec can't encode characters in position "))
         _unicode_format_decimal(state, start)
         _buffer_char(state, 45)
         # CPython formats this descriptor through Py_ssize_t, including the
@@ -3014,6 +3057,9 @@ def py_unicode_error_format(value, repr_mode: int):
     slots = stack_alloc(64)
     memset(slots, 0, 64)
     pcc_gc_frame_enter(global_addr("pcc_unicode_format_owned_map"), slots)
+    store_ptr(slots, 48, py_unicode_error_get_field(pcc_gc_load_ptr(null(), borrowed), 6))
+    type_tag: int = py_int_value_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 48)))
+    pcc_gc_store_root(ptr_add(slots, 48), null())
     if repr_mode != 0:
         store_ptr(slots, 56, py_unicode_error_get_field(pcc_gc_load_ptr(null(), borrowed), 0))
     else:
@@ -3023,7 +3069,7 @@ def py_unicode_error_format(value, repr_mode: int):
             i = i + 1
     state = _buffer_new(128)
     if ptr_is_null(state) == 0:
-        if _unicode_format_body(state, slots, repr_mode) == 0:
+        if _unicode_format_body(state, slots, repr_mode, type_tag) == 0:
             store_ptr(slots, 48, _buffer_string(state))
         _buffer_free(state)
     prior: int = _unicode_format_pin(ptr_add(slots, 48))

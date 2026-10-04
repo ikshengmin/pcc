@@ -2483,6 +2483,31 @@ def _root_group(
     return _RootGroup(key, tuple(locations))
 
 
+def _frame_protocol_enter_group(
+    func: ParsedFunction,
+    globals_by_name: dict[str, GlobalDef],
+    aliases: dict[int, list[tuple[str, _PointerOrigin]]],
+    frame_map_value: str,
+    slots_value: str,
+) -> _RootGroup | None:
+    """Track local registry-frame lifetime without inventing machine roots."""
+    origin = _resolve_pointer(func, aliases, slots_value)
+    if _frame_map_is_registry_owned(func, aliases, frame_map_value):
+        if _origin_is_registry_owned(func, origin):
+            return None
+        # Explicit C/runtime maps need no static count: the root registry owns
+        # their tracing. Their local slots still need a matched enter/leave
+        # fact at every CFG edge, including aliases and loop backedges.
+        return _RootGroup(f"{origin.base}@{origin.offset}", ())
+    # Preserve the strict compiler-map path, including untraceable slots.
+    group = _root_group(
+        func, globals_by_name, aliases, frame_map_value, slots_value,
+    )
+    if _origin_is_registry_owned(func, origin):
+        return None
+    return group
+
+
 def _direct_call_parts(kind: str, data: tuple) -> tuple[str, tuple] | None:
     if kind != "call":
         return None
@@ -2520,27 +2545,10 @@ def _apply_frame_protocol_parts(
     if callee in _FRAME_ENTER:
         if len(args) != 2:
             _fail(func, f"{callee} has the wrong argument count")
-        if _frame_map_is_registry_owned(func, aliases, args[0][1]):
-            return True
-        group = _root_group(
-            func,
-            globals_by_name,
-            aliases,
-            args[0][1],
-            args[1][1],
+        group = _frame_protocol_enter_group(
+            func, globals_by_name, aliases, args[0][1], args[1][1],
         )
-        slots_origin = _resolve_pointer(func, aliases, args[1][1])
-        if (
-            slots_origin.base == "null"
-            or slots_origin.base.startswith("@")
-            or any(arg.name == slots_origin.base for arg in func.args)
-        ):
-            # Global, heap/continuation and caller-owned slot arrays are
-            # registered roots, but they are not locations in this function's
-            # machine frame.  Their lifetime may deliberately cross this
-            # function (module globals do), so including them in the local
-            # control-flow state creates a false join mismatch on an
-            # already-initialized fast path.
+        if group is None:
             return True
         if group.key in active:
             _fail(func, f"managed slot {group.key!r} is registered twice")
@@ -2600,17 +2608,10 @@ def _apply_frame_protocol_indexed(
             if second.second >= 0
             else kernel.call_texts[second.third]
         )
-        if _frame_map_is_registry_owned(func, aliases, frame_map_value):
-            return True
-        group = _root_group(
-            func,
-            globals_by_name,
-            aliases,
-            frame_map_value,
-            slots_value,
+        group = _frame_protocol_enter_group(
+            func, globals_by_name, aliases, frame_map_value, slots_value,
         )
-        slots_origin = _resolve_pointer(func, aliases, slots_value)
-        if _origin_is_registry_owned(func, slots_origin):
+        if group is None:
             return True
         if group.key in active:
             _fail(func, f"managed slot {group.key!r} is registered twice")
@@ -3708,17 +3709,24 @@ def _native_frame_group_id(
     frame_map_ref: int,
     slots_ref: int,
 ) -> int:
-    signed_count = _native_frame_map_count(
-        func,
-        globals_by_name,
-        aliases,
-        kernel,
-        frame_map_ref,
+    registry_map = _native_frame_map_is_registry_owned(
+        aliases, kernel, frame_map_ref,
     )
+    if registry_map:
+        # An empty location group records the local registration lifetime;
+        # the runtime registry remains responsible for tracing its slots.
+        signed_count = 0
+    else:
+        signed_count = _native_frame_map_count(
+            func, globals_by_name, aliases, kernel, frame_map_ref,
+        )
     aliases.resolve(slots_ref)
     origin_base = aliases.result.get_unchecked(0)
     origin_offset = aliases.result.get_unchecked(1)
-    if _native_ref_is_nonstack(kernel, origin_base):
+    if registry_map:
+        if _native_ref_is_registry_owned(kernel, origin_base):
+            return -1
+    elif _native_ref_is_nonstack(kernel, origin_base):
         return -1
     alloca_offset = kernel.alloca_offset(origin_base)
     if alloca_offset < 0:
@@ -3763,12 +3771,6 @@ def _native_protocol_transition(
             _fail(func, f"{callee} has the wrong argument count")
         first: CompilerInt4 = kernel.call_arg(header.fourth)
         second: CompilerInt4 = kernel.call_arg(header.fourth + 1)
-        if _native_frame_map_is_registry_owned(
-            aliases,
-            kernel,
-            _native_call_arg_ref(first),
-        ):
-            return state_id
         group_id = _native_frame_group_id(
             func,
             globals_by_name,

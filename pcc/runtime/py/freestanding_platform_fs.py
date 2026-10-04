@@ -10,6 +10,7 @@ from pcc.extern import c_abi_export
 from pcc.unsafe import (
     windows_real_path, target_sys_platform,
     directory_open, directory_next, directory_error, directory_close,
+    chmod_file, darwin_errno_location, load_i32,
     malloc, free, unlinkat,
     access,
     atomic_rmw_i64,
@@ -34,6 +35,7 @@ __pcc_freestanding__ = True
 
 
 define_global_i64("pcc_platform_mkdtemp_counter", 0)
+
 
 
 @c_abi_export("pcc_platform_access")
@@ -211,25 +213,22 @@ def pcc_platform_realpath(path, output, size: i64):
     return null()
 
 
-@c_abi_export("pcc_platform_mkdtemp")
-def pcc_platform_mkdtemp(path_template):
+@c_abi_export("pcc_platform_mkdtemp_suffix")
+def pcc_platform_mkdtemp_suffix(path_template, suffix_length: i64) -> i64:
+    """Create 0700 directory, replacing XXXXXX before suffix; return -errno."""
     if ptr_is_null(path_template):
-        return null()
-    length = _bounded_cstr_len(path_template, 8192)
-    if length < 6:
-        return null()
+        return -22
+    length = _bounded_cstr_len(path_template, 1048576)
+    if length < 6 or suffix_length < 0 or suffix_length > length - 6:
+        return -22
+    end: i64 = length - suffix_length
     check: i64 = 0
     while check < 6:
-        if load_i8(path_template, length - 1 - check) != 88:
-            return null()
+        if load_i8(path_template, end - 1 - check) != 88:
+            return -22
         check = check + 1
-
     ticket = atomic_rmw_i64(
-        "add",
-        global_addr("pcc_platform_mkdtemp_counter"),
-        0,
-        1,
-        "relaxed",
+        "add", global_addr("pcc_platform_mkdtemp_counter"), 0, 1, "relaxed",
     )
     seed = getpid() * 1103515245 + ticket * 2654435761
     attempt: i64 = 0
@@ -241,17 +240,51 @@ def pcc_platform_mkdtemp(path_template):
             byte = digit + 48
             if digit >= 10:
                 byte = digit + 87
-            store_i8(path_template, length - 1 - digit_offset, byte)
+            store_i8(path_template, end - 1 - digit_offset, byte)
             value = logical_shift_right_i64(value, 5)
             digit_offset = digit_offset + 1
-        if mkdir(path_template, 448) == 0:
-            return path_template
+        status: i64 = mkdir(path_template, 448)
+        if status == 0:
+            return 0
+        if load_i8(target_sys_platform(), 0) == 100:
+            status = 0 - load_i32(darwin_errno_location(), 0)
+        if status != -17:
+            return status
         attempt = attempt + 1
-    return null()
+    return -17
+
+
+@c_abi_export("pcc_platform_mkdtemp")
+def pcc_platform_mkdtemp(path_template):
+    if pcc_platform_mkdtemp_suffix(path_template, 0) < 0:
+        return null()
+    return path_template
 
 
 @c_abi_export("pcc_platform_remove_tree")
 def pcc_platform_remove_tree(path) -> i64:
+    return _remove_tree(path, 0)
+
+
+@c_abi_export("pcc_platform_tempdir_remove_tree")
+def pcc_platform_tempdir_remove_tree(path) -> i64:
+    probe = stack_alloc(1)
+    if ptr_is_null(path) or load_i8(path, 0) == 0:
+        return -22
+    if readlink(path, probe, 1) >= 0:
+        return -20
+    if stat_kind(path) != 2:
+        status: i64 = access(path, 0)
+        if status < 0:
+            if load_i8(target_sys_platform(), 0) == 100:
+                status = 0 - load_i32(darwin_errno_location(), 0)
+            return status
+        return -20
+    return _remove_tree(path, 1)
+
+
+@c_abi_export("pcc_platform_remove_tree_options")
+def _remove_tree(path, repair: i64) -> i64:
     if ptr_is_null(path) or load_i8(path, 0) == 0:
         return -22
     probe = stack_alloc(1)
@@ -263,6 +296,9 @@ def pcc_platform_remove_tree(path) -> i64:
     if kind != 2:
         return unlinkat(path, 0)
     stream = directory_open(path)
+    if ptr_is_null(stream) and repair:
+        chmod_file(path, 448)
+        stream = directory_open(path)
     if ptr_is_null(stream):
         return -13
     path_size: i64 = _bounded_cstr_len(path, 1048576)
@@ -295,7 +331,14 @@ def pcc_platform_remove_tree(path) -> i64:
         while index <= size:
             store_i8(child, path_size + 1 + index, load_i8(name, index))
             index = index + 1
-        result = pcc_platform_remove_tree(child)
+        result = _remove_tree(child, repair)
+        if repair and (result == -13 or result == -1):
+            chmod_file(path, 448)
+            if readlink(child, probe, 1) < 0:
+                chmod_file(child, 448 if stat_kind(child) == 2 else 384)
+            result = _remove_tree(child, 0)
+        if repair and result == -2:
+            result = 0
         free(child)
         if result < 0:
             break

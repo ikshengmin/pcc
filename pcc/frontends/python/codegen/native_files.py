@@ -8,7 +8,7 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import (
     Assign, Attr, AugAssign, Call, Delete, DynType, FuncDef, Import,
-    Name, NoneLit, StrLit, StrType, With,
+    Name, NoneLit, NoneType, StrLit, StrType, With,
 )
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.hoist_analysis import (
@@ -113,20 +113,10 @@ class NativeFilesLoweringMixin:
             return None
         if not 1 <= len(expr.args) <= 2 or self._has_starred_unpack(expr.args):
             return None
-        # The file runtime owns UTF-8/default text handling. Do not silently
-        # discard dynamic expressions or unsupported encoding options.
-        for key, value in expr.kwargs:
-            if key == "encoding":
-                if not isinstance(value, StrLit) or value.value not in ("utf-8", "utf8"):
-                    return None
-            elif key == "errors":
-                if not isinstance(value, StrLit) or value.value != "strict":
-                    return None
-            elif key == "newline":
-                if not isinstance(value, NoneLit):
-                    return None
-            else:
-                return None
+        # Preserve every option operand and its evaluation order. The runtime
+        # validates codec/error/newline support before opening the file.
+        if any(key not in ("encoding", "errors", "newline") for key, _ in expr.kwargs):
+            return None
 
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
@@ -153,10 +143,26 @@ class NativeFilesLoweringMixin:
             roots.append(mode)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            # Both operands remain leased until the NEW file is published.
-            # TLS checks and operand disposal only see the rooted result.
+            options = {}
+            for key, value in expr.kwargs:
+                option = self._emit_os_path_slot_operand(value, "file.open." + key)
+                options[key] = option
+                operands.append(option)
+                roots.append(option)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            for key in ("encoding", "errors", "newline"):
+                if key not in options:
+                    option = self._emit_slot_call_operand(NoneLit(span=expr.span, ty=NoneType(name="None")), "file.open." + key)
+                    options[key] = option
+                    operands.append(option)
+                    roots.append(option)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
             self._slot_call_runtime_call(
-                "py_file_open", (path, mode), result_slot=output, span=expr.span,
+                "py_file_open_options",
+                (path, mode, options["encoding"], options["errors"], options["newline"]),
+                result_slot=output, span=expr.span,
             )
             self._release_slot_call_roots(tuple(operands))
             result = (self._take_slot_call_root(output) if sink is None
@@ -224,19 +230,35 @@ class NativeFilesLoweringMixin:
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
-        recv = self._emit_expr(attr.obj)
         if attr.name == "write" and len(expr.args) == 1:
-            text_v = self._emit_expr(expr.args[0])
-            text_obj = self._emit_value_as_pcc_object_or_bridge(
-                text_v,
-                expr.args[0].ty,
-                "cpy.file.write.arg",
-            )
-            return self.builder.call(
-                self.runtime["py_file_write"],
-                [recv, text_obj],
-                name=self._fresh("file.write"),
-            )
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root("file.write.result")
+                roots.append(output)
+            operands = []
+            try:
+                for argument, label in ((attr.obj, "file.write.receiver"), (expr.args[0], "file.write.text")):
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    operand = self._emit_os_path_slot_operand(argument, label)
+                    operands.append(operand)
+                    roots.append(operand)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call("py_file_write", tuple(operands), result_slot=output, span=expr.span)
+                self._release_slot_call_roots(tuple(operands))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("file.write.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+        recv = self._emit_expr(attr.obj)
         if attr.name == "seek" and 1 <= len(expr.args) <= 2:
             offset_v = self._emit_expr(expr.args[0])
             offset_i64 = self._to_int64(offset_v, expr.args[0].ty)
@@ -374,55 +396,10 @@ class NativeFilesLoweringMixin:
 
 
     def _emit_native_tempdir_with(self, stmt: With) -> bool:
-        ctx_expr, as_expr = stmt.items[0]
-        if (
-            not isinstance(ctx_expr, Call)
-            or not isinstance(ctx_expr.func, Attr)
-            or not isinstance(ctx_expr.func.obj, Name)
-            or self._native_builtin_module_for_name(ctx_expr.func.obj.ident)
-            != "tempfile"
-            or ctx_expr.func.name != "TemporaryDirectory"
-            or ctx_expr.args
-            or not isinstance(as_expr, Name)
-        ):
-            return False
-        prefix_expr = None
-        for key, value in ctx_expr.kwargs:
-            if key != "prefix":
-                return False
-            prefix_expr = value
-        previous = self._current_try_err_block()
-        target = previous if previous is not None else self._ensure_fn_err_exit()
-        saved_cpy = self._cpy_operand_cleanup_block
-        context_root = self._new_slot_call_root("with.tempdir.manager")
-        roots = [context_root]
-        try:
-            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-            self._cpy_operand_cleanup_block = self._try_err_block
-            if prefix_expr is None:
-                prefix_expr = StrLit(span=stmt.span, ty=StrType(name="str"), value="tmp")
-            prefix = self._emit_slot_call_operand(prefix_expr, "with.tempdir.prefix")
-            roots.append(prefix)
-            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-            self._cpy_operand_cleanup_block = self._try_err_block
-            self._slot_call_runtime_call(
-                "py_tempdir_new", (prefix,), result_slot=context_root, span=stmt.span,
-            )
-            self._release_slot_call_roots((prefix,))
-            roots.pop()
-            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-            self._cpy_operand_cleanup_block = self._try_err_block
-            enter_root = self._new_slot_call_root("with.tempdir.enter")
-            roots.append(enter_root)
-            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-            self._cpy_operand_cleanup_block = self._try_err_block
-            self._slot_call_copy_source(enter_root, context_root, span=stmt.span)
-        finally:
-            self._try_err_block = previous
-            self._cpy_operand_cleanup_block = saved_cpy
-        self._emit_native_context_body(stmt, context_root, enter_root, "py_tempdir_cleanup")
-
-        return True
+        # TemporaryDirectory is an ordinary managed class. The generic context
+        # path keeps the manager separate from __enter__'s stable name string,
+        # honors delete=False, and owns cleanup across every control-flow exit.
+        return False
 
 
 __all__ = ["NativeFilesLoweringMixin"]

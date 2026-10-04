@@ -93,6 +93,7 @@ py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_set = extern("py_list_set", (c_ptr, c_int64, c_ptr), c_void)
 py_list_setitem = extern("py_list_setitem", (c_ptr, c_int64, c_ptr), c_int64)
 py_list_pop = extern("py_list_pop", (c_ptr, c_int64), c_ptr)
+py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_list_del_slice = extern("py_list_del_slice", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 py_list_concat = extern("py_list_concat", (c_ptr, c_ptr), c_ptr)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
@@ -164,6 +165,7 @@ py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_traceback_object = extern("py_exc_traceback_object", (c_ptr,), c_ptr)
 py_file_getattr = extern("py_file_getattr", (c_ptr, c_ptr), c_ptr)
+py_unicode_decode_error_new = extern("py_unicode_decode_error_new", (c_ptr,), c_ptr)
 py_unicode_encode_error_new = extern("py_unicode_encode_error_new", (c_ptr,), c_ptr)
 py_unicode_error_get_field = extern("py_unicode_error_get_field", (c_ptr, c_int64), c_ptr)
 py_unicode_error_set_field = extern("py_unicode_error_set_field", (c_ptr, c_int64, c_ptr), c_int64)
@@ -272,6 +274,7 @@ py_str_concat = extern("py_str_concat", (c_ptr, c_ptr), c_ptr)
 py_complex_real = extern("py_complex_real", (c_ptr,), c_ptr)
 py_complex_imag = extern("py_complex_imag", (c_ptr,), c_ptr)
 py_coroutine_class = extern("py_coroutine_class", (), c_ptr)
+py_coroutine_bound_method = extern("py_coroutine_bound_method", (c_ptr, c_int64), c_ptr)
 py_continuation_class = extern("py_continuation_class", (), c_ptr)
 py_bytes_len = extern("py_bytes_len", (c_ptr,), c_int64)
 py_bytes_getitem = extern("py_bytes_getitem", (c_ptr, c_ptr), c_ptr)
@@ -2050,38 +2053,6 @@ def _raise_attribute_status(o, name) -> int:
     return -1
 
 
-def _py_coroutine_send_bound_entry(captures, args):
-    coro = py_tuple_get(captures, 0)
-    if ptr_is_null(coro) != 0:
-        return null()
-    value = null()
-    if ptr_is_null(args) == 0:
-        if py_tuple_len(args) > 0:
-            value = py_tuple_get(args, 0)
-    if ptr_is_null(value) != 0:
-        value = global_load_ptr("py_None")
-        py_incref(value)
-    out = py_gen_send(coro, value)
-    py_decref(value)
-    py_decref(coro)
-    return out
-
-
-def _py_coroutine_bound_send(coro):
-    captures = py_tuple_new(1)
-    if ptr_is_null(captures) != 0:
-        return null()
-    py_tuple_set_item(captures, 0, coro)
-    fn = py_func_new_bound(
-        _py_coroutine_send_bound_entry,
-        captures,
-        cstr("send"),
-        coro,
-    )
-    py_decref(captures)
-    return fn
-
-
 def _cstr_is_dunder_enter(s) -> int:
     # "__enter__" — 9 bytes, compared explicitly like the other dunder probes
     # in this module (no strcmp on the port tier).
@@ -2519,6 +2490,162 @@ def _py_lock_context_bound(o, want_exit: int):
     return fn
 
 
+# Both stored bound-method construction and invocation own their scratch values
+# through the same slot/lease contract used by ordinary call boundaries.
+_BOUND_LIST_INPUT0 = 0
+_BOUND_LIST_INPUT1 = 1
+_BOUND_LIST_VALUE = 2
+_BOUND_LIST_ITEM = 3
+_BOUND_LIST_RESULT = 4
+_BOUND_LIST_ERROR = 5
+_BOUND_LIST_SLOT_COUNT = 6
+_BOUND_LIST_INPUT_COUNT = 2
+
+define_global_i32("pcc_bound_list_borrowed_map", -2)
+define_global_i32("pcc_bound_list_owned_map", 6)
+
+
+def _bound_list_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    if token < 0:
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(7, cstr("bound list method owner lease failed")))
+        return -1
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    if ptr_is_null(load_ptr(slot, 0)) != 0:
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("bound list method allocation failed")))
+        return -1
+    return -1 if py_err_occurred() != 0 else 0
+
+
+def _bound_list_begin(borrowed, slots, tokens) -> int:
+    pcc_gc_frame_enter(global_addr("pcc_bound_list_borrowed_map"), borrowed)
+    memset(slots, 0, _BOUND_LIST_SLOT_COUNT * C_POINTER_SIZE)
+    index: int = 0
+    while index < _BOUND_LIST_SLOT_COUNT:
+        store_i64(tokens, index * C_POINTER_SIZE, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_bound_list_owned_map"), slots)
+    index = 0
+    while index < _BOUND_LIST_INPUT_COUNT:
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, index * C_POINTER_SIZE),
+            ptr_add(borrowed, index * C_POINTER_SIZE),
+        )
+        store_i64(tokens, index * C_POINTER_SIZE, token)
+        if token < 0:
+            if py_err_occurred() == 0:
+                py_raise_owned(py_exc_new(7, cstr("bound list method input owner failed")))
+            return -1
+        index = index + 1
+    return 0
+
+
+def _bound_list_clear(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = load_i64(tokens, index * C_POINTER_SIZE)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) != 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * C_POINTER_SIZE, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _bound_list_finish(borrowed, slots, tokens, status: int):
+    if py_err_occurred() != 0:
+        status = -1
+    error = ptr_add(slots, _BOUND_LIST_ERROR * C_POINTER_SIZE)
+    result = ptr_add(slots, _BOUND_LIST_RESULT * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(error)
+    memset(borrowed, 0, _BOUND_LIST_INPUT_COUNT * C_POINTER_SIZE)
+    _bound_list_clear(slots, tokens, _BOUND_LIST_ITEM)
+    _bound_list_clear(slots, tokens, _BOUND_LIST_VALUE)
+    _bound_list_clear(slots, tokens, _BOUND_LIST_INPUT1)
+    _bound_list_clear(slots, tokens, _BOUND_LIST_INPUT0)
+    if status != 0:
+        _bound_list_clear(slots, tokens, _BOUND_LIST_RESULT)
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), result)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    token: int = load_i64(tokens, _BOUND_LIST_RESULT * C_POINTER_SIZE)
+    if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result, prior)
+
+
+def _py_list_append_bound_entry(captures, args):
+    borrowed = stack_alloc(_BOUND_LIST_INPUT_COUNT * C_POINTER_SIZE)
+    store_ptr(borrowed, _BOUND_LIST_INPUT0 * C_POINTER_SIZE, captures)
+    store_ptr(borrowed, _BOUND_LIST_INPUT1 * C_POINTER_SIZE, args)
+    slots = stack_alloc(_BOUND_LIST_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_BOUND_LIST_SLOT_COUNT * C_POINTER_SIZE)
+    status: int = _bound_list_begin(borrowed, slots, tokens)
+    if status == 0:
+        nargs: int = py_tuple_len(load_ptr(slots, _BOUND_LIST_INPUT1 * C_POINTER_SIZE))
+        if nargs != 1:
+            py_raise_owned(py_exc_new(3, cstr("list.append expected exactly 1 argument")))
+            status = -1
+    if status == 0:
+        store_ptr(slots, _BOUND_LIST_VALUE * C_POINTER_SIZE,
+                  py_tuple_get(load_ptr(slots, _BOUND_LIST_INPUT0 * C_POINTER_SIZE), 0))
+        status = _bound_list_adopt(slots, tokens, _BOUND_LIST_VALUE)
+    if status == 0:
+        store_ptr(slots, _BOUND_LIST_ITEM * C_POINTER_SIZE,
+                  py_tuple_get(load_ptr(slots, _BOUND_LIST_INPUT1 * C_POINTER_SIZE), 0))
+        status = _bound_list_adopt(slots, tokens, _BOUND_LIST_ITEM)
+    if status == 0:
+        py_list_append(load_ptr(slots, _BOUND_LIST_VALUE * C_POINTER_SIZE),
+                       load_ptr(slots, _BOUND_LIST_ITEM * C_POINTER_SIZE))
+        if py_err_occurred() != 0:
+            status = -1
+        else:
+            value = global_load_ptr("py_None")
+            py_incref(value)
+            store_ptr(slots, _BOUND_LIST_RESULT * C_POINTER_SIZE, value)
+            status = _bound_list_adopt(slots, tokens, _BOUND_LIST_RESULT)
+    return _bound_list_finish(borrowed, slots, tokens, status)
+
+
+def _py_list_append_bound(o):
+    borrowed = stack_alloc(_BOUND_LIST_INPUT_COUNT * C_POINTER_SIZE)
+    store_ptr(borrowed, _BOUND_LIST_INPUT0 * C_POINTER_SIZE, o)
+    store_ptr(borrowed, _BOUND_LIST_INPUT1 * C_POINTER_SIZE, null())
+    slots = stack_alloc(_BOUND_LIST_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_BOUND_LIST_SLOT_COUNT * C_POINTER_SIZE)
+    status: int = _bound_list_begin(borrowed, slots, tokens)
+    if status == 0:
+        store_ptr(slots, _BOUND_LIST_VALUE * C_POINTER_SIZE, py_tuple_new(1))
+        status = _bound_list_adopt(slots, tokens, _BOUND_LIST_VALUE)
+    if status == 0:
+        py_tuple_set_item(load_ptr(slots, _BOUND_LIST_VALUE * C_POINTER_SIZE), 0,
+                          load_ptr(slots, _BOUND_LIST_INPUT0 * C_POINTER_SIZE))
+        if py_err_occurred() != 0:
+            status = -1
+    if status == 0:
+        store_ptr(slots, _BOUND_LIST_RESULT * C_POINTER_SIZE, py_func_new_bound(
+            _py_list_append_bound_entry,
+            load_ptr(slots, _BOUND_LIST_VALUE * C_POINTER_SIZE), cstr("append"),
+            load_ptr(slots, _BOUND_LIST_INPUT0 * C_POINTER_SIZE),
+        ))
+        status = _bound_list_adopt(slots, tokens, _BOUND_LIST_RESULT)
+    return _bound_list_finish(borrowed, slots, tokens, status)
+
+
 def _py_list_pop_bound_entry(captures, args):
     lst = py_tuple_get(captures, 0)
     if ptr_is_null(lst) != 0:
@@ -2766,6 +2893,8 @@ def py_obj_getattr(o, name):
         sync_method = _py_sync_method_bound(o, tag, name)
         if ptr_is_null(sync_method) == 0:
             return sync_method
+    if tag == PY_TYPE_LIST and strcmp(name, cstr("append")) == 0:
+        return _py_list_append_bound(o)
     if _cstr_is_pop(name) != 0:
         if tag == PY_TYPE_LIST:  # PY_TYPE_LIST
             return _py_list_pop_bound(o)
@@ -2862,7 +2991,11 @@ def py_obj_getattr(o, name):
         if _cstr_is_dunder_class(name) != 0:
             result = py_coroutine_class()
         elif _cstr_is_send(name) != 0:
-            return _py_coroutine_bound_send(o)
+            return py_coroutine_bound_method(o, 0)
+        elif strcmp(name, cstr("throw")) == 0:
+            return py_coroutine_bound_method(o, 1)
+        elif strcmp(name, cstr("close")) == 0:
+            return py_coroutine_bound_method(o, 2)
         if ptr_is_null(result) == 0:
             py_incref(result)
             return result
@@ -3068,7 +3201,7 @@ def py_obj_setattr(o, name, v) -> int:
 
     if tag == PY_TYPE_EXC and (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
         field: int = _unicode_error_attribute_index(name)
-        if field > 0:
+        if field >= 0:
             return py_unicode_error_set_field(o, field, v)
 
     if tag == PY_TYPE_EXC and strcmp(name, cstr("__suppress_context__")) == 0:
@@ -3230,6 +3363,8 @@ def _builtin_exception_call(cls, args, nargs: int):
     plain instance with no message and no ``args``, so ``warnings.warn``
     printed an empty ``UserWarning:``.
     """
+    if _builtin_exception_class_tag(cls) == 58:
+        return py_unicode_decode_error_new(args)
     if _builtin_exception_class_tag(cls) == 59:
         return py_unicode_encode_error_new(args)
     if nargs == 0:
@@ -3457,6 +3592,9 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
             if ptr_is_null(arg) == 0:
                 py_decref(arg)
             return out
+        if nkwargs != 0 and _builtin_exception_class_tag(callable) == 58:
+            py_raise_owned(py_exc_new(3, cstr("UnicodeDecodeError() takes no keyword arguments")))
+            return null()
         if nkwargs != 0 and _builtin_exception_class_tag(callable) == 59:
             py_raise_owned(py_exc_new(3, cstr("UnicodeEncodeError() takes no keyword arguments")))
             return null()

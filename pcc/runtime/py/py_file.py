@@ -11,11 +11,13 @@ from pcc.extern import (
     c_size_t,
     c_void,
 )
-from pcc.runtime.py.py_abi_constants import PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_IMMORTAL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_FILE, PY_TYPE_INT, PY_TYPE_MEMORYVIEW
+from pcc.runtime.py.py_abi_constants import PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_GC_PINNED, PY_FLAG_IMMORTAL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_FILE, PY_TYPE_INT, PY_TYPE_MEMORYVIEW
 from pcc.runtime.py.py_abi_constants import PY_TYPE_LIST, PY_TYPE_STR, PY_TYPE_TUPLE
 from pcc.unsafe import (
     cstr,
     define_global_ptr_null,
+    define_global_i32,
+    stack_alloc,
     free,
     global_addr,
     global_load_ptr,
@@ -33,6 +35,7 @@ from pcc.unsafe import (
     ptr_eq,
     ptr_is_null,
     realloc,
+    seek_file,
     store_i8,
     store_i32,
     store_i64,
@@ -185,53 +188,640 @@ def _file_bytes_like_base(value):
     return null()
 
 
-@c_abi_export("py_file_open")
-def py_file_open(path, mode):
-    path_s = _coerce_str(path)
-    path_owned = null()
-    if not ptr_is_null(path_s) and not ptr_eq(path_s, path):
-        path_owned = path_s
+# File body: header + FILE* + closed/binary + access/codec/error bits + native
+# decoder-state pointer (48 bytes). The decoder owns only malloc storage;
+# managed owners stay in the explicit frame below. The GC has no extra edges.
+_FILE_FIRST = 0
+_FILE_SECOND = 1
+_FILE_ENCODING = 2
+_FILE_ERRORS = 3
+_FILE_NEWLINE = 4
+_FILE_TEMP = 5
+_FILE_RESULT = 6
+_FILE_ERROR = 7
+_FILE_COUNT = 8
+_FILE_BYTES = 8
+_FILE_SIZE = 48
+_FILE_STATE_SIZE = 96
 
-    mode_s = null()
-    mode_owned = null()
-    none = global_load_ptr("py_None")
-    if ptr_is_null(mode) or ptr_eq(mode, none) != 0:
-        mode_s = py_str_new(cstr("r"), 1)
-        mode_owned = mode_s
+# Native decoder-state layout. Input tails never exceed three UTF-8 bytes.
+_FILE_DECODED = 0
+_FILE_LENGTH = 8
+_FILE_POSITION = 16
+_FILE_TAIL = 24
+_FILE_TAIL_LENGTH = 32
+_FILE_EOF = 40
+_FILE_PENDING_CR = 48
+_FILE_CR_OFFSET = 56
+_FILE_RAW_OFFSET = 64
+_FILE_MAP = 72
+_FILE_LOGICAL_OFFSET = 80
+
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_text_codec_id = extern("py_text_codec_id", (c_ptr,), c_int64)
+py_text_error_id = extern("py_text_error_id", (c_ptr,), c_int64)
+py_text_decode_buffer = extern("py_text_decode_buffer", (c_ptr, c_int64, c_int64, c_int64, c_int64, c_ptr), c_int64)
+py_text_encode_ids = extern("py_text_encode_ids", (c_ptr, c_int64, c_int64), c_ptr)
+py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
+py_str_len = extern("py_str_len", (c_ptr,), c_int64)
+define_global_i32("pcc_file_borrowed_map", -5)
+define_global_i32("pcc_file_owned_map", _FILE_COUNT)
+
+
+def _file_error(kind: int, message) -> int:
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(kind, message))
+    return -1
+
+
+def _file_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * _FILE_BYTES)
+    token: int = load_i64(tokens, index * _FILE_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) < 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * _FILE_BYTES, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _file_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * _FILE_BYTES)
+    if ptr_is_null(load_ptr(slot, 0)):
+        return _file_error(19, cstr("file operation could not allocate a result"))
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    store_i64(tokens, index * _FILE_BYTES, token)
+    if token < 0:
+        return _file_error(19, cstr("file operation could not lease an owner"))
+    return 0
+
+
+def _file_is_none(value) -> int:
+    return ptr_is_null(value) or ptr_eq(value, global_load_ptr("py_None"))
+
+
+def _file_encoding(file) -> int:
+    return (load_i64(file, 32) >> 10) & 3
+
+
+def _file_errors(file) -> int:
+    return (load_i64(file, 32) >> 12) & 7
+
+
+def _file_validate_cstr(value, label) -> int:
+    if ptr_is_null(value) or is_tagged_int(value) or _type_of(value) != PY_TYPE_STR:
+        return _file_error(3, label)
+    count: int = py_str_byte_len(value)
+    data = py_str_utf8(value)
+    index: int = 0
+    while index < count:
+        if load_i8(data, index) == 0:
+            return _file_error(2, cstr("embedded null character"))
+        index = index + 1
+    return 0
+
+
+def _file_open_body(slots, tokens) -> int:
+    path = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
+    mode = load_ptr(slots, _FILE_SECOND * _FILE_BYTES)
+    path_data = null()
+    path_count: int = 0
+    if not ptr_is_null(path) and not is_tagged_int(path) and _type_of(path) == PY_TYPE_BYTES:
+        path_data = ptr_add(path, PYBYTESOBJECT_DATA_OFFSET)
+        path_count = load_i64(path, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+        index: int = 0
+        while index < path_count:
+            if load_i8(path_data, index) == 0:
+                return _file_error(2, cstr("embedded null byte"))
+            index = index + 1
     else:
-        mode_s = _coerce_str(mode)
-        if not ptr_is_null(mode_s) and not ptr_eq(mode_s, mode):
-            mode_owned = mode_s
-
-    if ptr_is_null(path_s) or ptr_is_null(mode_s):
-        py_decref(path_owned)
-        py_decref(mode_owned)
-        return null()
-
-    binary: int = _mode_is_binary(mode_s)
-    access: int = _mode_access_bits(mode_s)
-    fp = fopen(py_str_utf8(path_s), py_str_utf8(mode_s))
-    py_decref(path_owned)
-    py_decref(mode_owned)
+        if _file_validate_cstr(path, cstr("native open path must be str or bytes")) != 0:
+            return -1
+        path_data = py_str_utf8(path)
+    if ptr_is_null(mode):
+        store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_str_new(cstr("r"), 1))
+        if _file_adopt(slots, tokens, _FILE_TEMP) != 0:
+            return -1
+        mode = load_ptr(slots, _FILE_TEMP * _FILE_BYTES)
+    if _file_validate_cstr(mode, cstr("open mode must be str")) != 0:
+        return -1
+    binary: int = _mode_is_binary(mode)
+    encoding = load_ptr(slots, _FILE_ENCODING * _FILE_BYTES)
+    errors = load_ptr(slots, _FILE_ERRORS * _FILE_BYTES)
+    newline = load_ptr(slots, _FILE_NEWLINE * _FILE_BYTES)
+    if binary != 0:
+        if _file_is_none(encoding) == 0:
+            return _file_error(2, cstr("binary mode doesn't take an encoding argument"))
+        if _file_is_none(errors) == 0:
+            return _file_error(2, cstr("binary mode doesn't take an errors argument"))
+        if _file_is_none(newline) == 0:
+            return _file_error(2, cstr("binary mode doesn't take a newline argument"))
+    codec: int = 0
+    policy: int = 0
+    if _file_is_none(encoding) == 0:
+        codec = py_text_codec_id(encoding)
+        if py_err_occurred() != 0:
+            return -1
+    if _file_is_none(errors) == 0:
+        policy = py_text_error_id(errors)
+        if py_err_occurred() != 0:
+            return -1
+    if codec != 0 and codec != 1:
+        return _file_error(11, cstr("native text files support UTF-8 and ASCII"))
+    if policy != 0 and policy != 3:
+        return _file_error(11, cstr("native text files support strict and surrogateescape errors"))
+    if _file_is_none(newline) == 0:
+        return _file_error(11, cstr("native text files support universal newlines only"))
+    access: int = _mode_access_bits(mode)
+    fp = fopen(path_data, py_str_utf8(mode))
     if ptr_is_null(fp):
-        # 14 == PY_EXC_OSERROR. Keep the C and pcc-Python runtime mirrors on
-        # the same NULL-plus-exception failure contract.
-        py_raise_owned(py_exc_new(14, cstr("could not open file")))
-        return null()
-
-    out = pcc_gc_alloc(40, PY_TYPE_FILE, 0)
+        return _file_error(14, cstr("could not open file"))
+    out = pcc_gc_alloc(_FILE_SIZE, PY_TYPE_FILE, 0)
     if ptr_is_null(out):
         fclose(fp)
-        return null()
+        return _file_error(19, cstr("cannot allocate file object"))
+    memset(ptr_add(out, 16), 0, _FILE_SIZE - 16)
     store_ptr(out, 16, fp)
-    store_i32(out, 24, 0)
     store_i32(out, 28, binary)
-    store_i64(out, 32, access)
-    return out
+    store_i64(out, 32, access | (codec << 10) | (policy << 12))
+    store_ptr(slots, _FILE_RESULT * _FILE_BYTES, out)
+    return _file_adopt(slots, tokens, _FILE_RESULT)
+
+
+def _file_clear_decoder(file) -> None:
+    state = load_ptr(file, 40)
+    if ptr_is_null(state) == 0:
+        store_ptr(file, 40, null())
+        free(load_ptr(state, _FILE_DECODED))
+        free(load_ptr(state, _FILE_MAP))
+        free(state)
+
+
+def _file_decoder(file):
+    state = load_ptr(file, 40)
+    if ptr_is_null(state):
+        state = malloc(_FILE_STATE_SIZE)
+        if ptr_is_null(state):
+            _file_error(19, cstr("cannot allocate file decoder"))
+            return null()
+        memset(state, 0, _FILE_STATE_SIZE)
+        # A failed ftell poisons the owned FILE error flag (notably on
+        # pipes). Probe the descriptor directly, leaving FILE state intact.
+        fp = load_ptr(file, 16)
+        if (load_i64(file, 32) & 512) != 0:
+            if fflush(fp) != 0:
+                free(state)
+                _file_error(14, cstr("file flush before read failed"))
+                return null()
+        position: int = seek_file(fileno(fp), 0, 1)
+        if position < 0:
+            position = 0
+        store_i64(state, _FILE_RAW_OFFSET, position)
+        store_i64(state, _FILE_LOGICAL_OFFSET, position)
+        store_ptr(file, 40, state)
+    return state
+
+
+def _file_text_width(data, at: int) -> int:
+    first: int = load_i8(data, at) & 255
+    if first < 128:
+        return 1
+    if first < 224:
+        return 2
+    if first < 240:
+        return 3
+    return 4
+
+
+def _file_text_fill(file, state) -> int:
+    if load_i64(state, _FILE_EOF) != 0:
+        return 0
+    free(load_ptr(state, _FILE_DECODED))
+    free(load_ptr(state, _FILE_MAP))
+    store_ptr(state, _FILE_DECODED, null())
+    store_ptr(state, _FILE_MAP, null())
+    store_i64(state, _FILE_LENGTH, 0)
+    store_i64(state, _FILE_POSITION, 0)
+    raw = malloc(8196)
+    if ptr_is_null(raw):
+        return _file_error(19, cstr("cannot allocate file input buffer"))
+    previous: int = load_i64(state, _FILE_TAIL_LENGTH)
+    index: int = 0
+    while index < previous:
+        store_i8(raw, index, load_i8(state, _FILE_TAIL + index))
+        index = index + 1
+    origin: int = load_i64(state, _FILE_RAW_OFFSET) - previous
+    received: int = fread(ptr_add(raw, previous), 1, 8192, load_ptr(file, 16))
+    if received == 0 and ferror(load_ptr(file, 16)) != 0:
+        free(raw)
+        return _file_error(14, cstr("file read failed"))
+    total: int = previous + received
+    store_i64(state, _FILE_RAW_OFFSET, origin + total)
+    final: int = 1 if received == 0 else 0
+    return _file_decode_chunk(file, state, raw, total, origin, final)
+
+
+def _file_decode_chunk(file, state, raw, total: int, origin: int, final: int) -> int:
+    decoded = stack_alloc(24)
+    status: int = py_text_decode_buffer(raw, total, _file_encoding(file), _file_errors(file), final, decoded)
+    if status != 0:
+        free(raw)
+        # The bytes have been consumed by the OS even when decoding fails.
+        store_i64(state, _FILE_TAIL_LENGTH, 0)
+        return -1
+    consumed: int = load_i64(decoded, 16)
+    remaining: int = total - consumed
+    index = 0
+    while index < remaining:
+        store_i8(state, _FILE_TAIL + index, load_i8(raw, consumed + index))
+        index = index + 1
+    store_i64(state, _FILE_TAIL_LENGTH, remaining)
+    text = load_ptr(decoded, 0)
+    count: int = load_i64(decoded, 8)
+    if count > 1152921504606846973:
+        free(text)
+        free(raw)
+        return _file_error(15, cstr("text file buffer is too large"))
+    output = malloc(count + 2)
+    offsets = malloc((count + 2) * 8)
+    if ptr_is_null(output) or ptr_is_null(offsets):
+        free(output)
+        free(offsets)
+        free(text)
+        free(raw)
+        return _file_error(19, cstr("cannot allocate text file buffer"))
+    source: int = 0
+    position: int = 0
+    used: int = 0
+    pending_cr: int = load_i64(state, _FILE_PENDING_CR)
+    cr_offset: int = load_i64(state, _FILE_CR_OFFSET)
+    while position < count:
+        width: int = _file_text_width(text, position)
+        first: int = load_i8(text, position) & 255
+        raw_width: int = width
+        if _file_encoding(file) == 1:
+            raw_width = 1
+        elif width == 3 and first == 237:
+            second: int = load_i8(text, position + 1) & 255
+            if second == 178 or second == 179:
+                # Only surrogateescape produces U+DC80..U+DCFF here.
+                raw_width = 1
+        source = source + raw_width
+        end: int = origin + source
+        if pending_cr != 0:
+            store_i8(output, used, 10)
+            store_i64(offsets, used * 8, end if first == 10 else cr_offset)
+            used = used + 1
+            pending_cr = 0
+            if first == 10:
+                position = position + 1
+                continue
+        if first == 13:
+            pending_cr = 1
+            cr_offset = end
+        else:
+            index = 0
+            while index < width:
+                store_i8(output, used, load_i8(text, position + index))
+                store_i64(offsets, used * 8, end)
+                used = used + 1
+                index = index + 1
+        position = position + width
+    if final != 0 and pending_cr != 0:
+        store_i8(output, used, 10)
+        store_i64(offsets, used * 8, cr_offset)
+        used = used + 1
+        pending_cr = 0
+    store_i64(state, _FILE_PENDING_CR, pending_cr)
+    store_i64(state, _FILE_CR_OFFSET, cr_offset)
+    store_i64(state, _FILE_EOF, final)
+    store_ptr(state, _FILE_DECODED, output)
+    store_ptr(state, _FILE_MAP, offsets)
+    store_i64(state, _FILE_LENGTH, used)
+    free(text)
+    free(raw)
+    return used
+
+
+def _file_text_fill_all(file, state) -> int:
+    free(load_ptr(state, _FILE_DECODED))
+    free(load_ptr(state, _FILE_MAP))
+    store_ptr(state, _FILE_DECODED, null())
+    store_ptr(state, _FILE_MAP, null())
+    store_i64(state, _FILE_LENGTH, 0)
+    store_i64(state, _FILE_POSITION, 0)
+    capacity: int = 8192
+    raw = malloc(capacity)
+    if ptr_is_null(raw):
+        return _file_error(19, cstr("cannot allocate file input buffer"))
+    total: int = load_i64(state, _FILE_TAIL_LENGTH)
+    index: int = 0
+    while index < total:
+        store_i8(raw, index, load_i8(state, _FILE_TAIL + index))
+        index = index + 1
+    origin: int = load_i64(state, _FILE_RAW_OFFSET) - total
+    while True:
+        if capacity - total < 4096:
+            if capacity > 4611686018427387903:
+                free(raw)
+                return _file_error(15, cstr("file read result is too large"))
+            capacity = capacity * 2
+            grown = realloc(raw, capacity)
+            if ptr_is_null(grown):
+                free(raw)
+                return _file_error(19, cstr("cannot grow file input buffer"))
+            raw = grown
+        received: int = fread(ptr_add(raw, total), 1, capacity - total, load_ptr(file, 16))
+        total = total + received
+        if received == 0:
+            if ferror(load_ptr(file, 16)) != 0:
+                free(raw)
+                return _file_error(14, cstr("file read failed"))
+            break
+    store_i64(state, _FILE_RAW_OFFSET, origin + total)
+    return _file_decode_chunk(file, state, raw, total, origin, 1)
+
+
+def _file_read_body(file, limit: int, line: int):
+    checked = _checked_open_file(file)
+    if ptr_is_null(checked):
+        return null()
+    if (load_i64(file, 32) & 256) == 0:
+        _file_error(14, cstr("file is not readable"))
+        return null()
+    if _file_binary(file) != 0:
+        if line != 0:
+            return _file_binary_readline(file, limit)
+        if limit < 0:
+            return _file_binary_read_all(file)
+        return _file_binary_read(file, limit)
+    state = _file_decoder(file)
+    if ptr_is_null(state):
+        return null()
+    result = null()
+    capacity: int = 0
+    used: int = 0
+    characters: int = 0
+    stop: int = 0
+    while stop == 0 and (limit < 0 or characters < limit):
+        position: int = load_i64(state, _FILE_POSITION)
+        if position >= load_i64(state, _FILE_LENGTH):
+            if load_i64(state, _FILE_EOF) != 0:
+                break
+            count: int = 0
+            if limit < 0 and line == 0:
+                count = _file_text_fill_all(file, state)
+            else:
+                count = _file_text_fill(file, state)
+            if count < 0:
+                free(result)
+                return null()
+            if count == 0:
+                continue
+            position = 0
+        data = load_ptr(state, _FILE_DECODED)
+        width: int = _file_text_width(data, position)
+        if used + width > capacity:
+            if capacity > 4611686018427387903:
+                free(result)
+                _file_error(15, cstr("file read result is too large"))
+                return null()
+            next_capacity: int = 128 if capacity == 0 else capacity * 2
+            if next_capacity < used + width:
+                next_capacity = used + width
+            grown = realloc(result, next_capacity)
+            if ptr_is_null(grown):
+                free(result)
+                _file_error(19, cstr("cannot allocate file read result"))
+                return null()
+            result = grown
+            capacity = next_capacity
+        memcpy(ptr_add(result, used), ptr_add(data, position), width)
+        used = used + width
+        characters = characters + 1
+        if line != 0 and load_i8(data, position) == 10:
+            stop = 1
+        position = position + width
+        store_i64(state, _FILE_POSITION, position)
+        store_i64(state, _FILE_LOGICAL_OFFSET, load_i64(load_ptr(state, _FILE_MAP), (position - 1) * 8))
+    output = py_str_new(result, used)
+    free(result)
+    return output
+
+
+def _file_write_body(slots, tokens) -> int:
+    file = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
+    text = load_ptr(slots, _FILE_SECOND * _FILE_BYTES)
+    if ptr_is_null(_checked_open_file(file)):
+        return -1
+    if (load_i64(file, 32) & 512) == 0:
+        return _file_error(14, cstr("file is not writable"))
+    characters: int = 0
+    if _file_binary(file) == 0:
+        if ptr_is_null(text) or is_tagged_int(text) or _type_of(text) != PY_TYPE_STR:
+            return _file_error(3, cstr("write() argument must be str"))
+        characters = py_str_len(text)
+        store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_text_encode_ids(text, _file_encoding(file), _file_errors(file)))
+    else:
+        if ptr_is_null(_file_bytes_like_base(text)):
+            return _file_error(3, cstr("a bytes-like object is required for binary write"))
+        store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_bytes_from_obj(text))
+    if _file_adopt(slots, tokens, _FILE_TEMP) != 0:
+        return -1
+    encoded = load_ptr(slots, _FILE_TEMP * _FILE_BYTES)
+    count: int = load_i64(encoded, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+    position: int = 0
+    while position < count:
+        wrote: int = fwrite(ptr_add(encoded, PYBYTESOBJECT_DATA_OFFSET + position), 1, count - position, load_ptr(file, 16))
+        if wrote <= 0:
+            return _file_error(14, cstr("file write failed"))
+        position = position + wrote
+    _file_clear_decoder(file)
+    if _file_binary(file) != 0:
+        characters = position
+    store_ptr(slots, _FILE_RESULT * _FILE_BYTES, py_int_from_i64(characters))
+    return _file_adopt(slots, tokens, _FILE_RESULT)
+
+
+def _file_readlines_body(slots, tokens) -> int:
+    store_ptr(slots, _FILE_RESULT * _FILE_BYTES, py_list_new(0))
+    if _file_adopt(slots, tokens, _FILE_RESULT) != 0:
+        return -1
+    while True:
+        store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_file_readline(load_ptr(slots, _FILE_FIRST * _FILE_BYTES), -1))
+        if _file_adopt(slots, tokens, _FILE_TEMP) != 0:
+            return -1
+        line = load_ptr(slots, _FILE_TEMP * _FILE_BYTES)
+        length: int = py_str_byte_len(line) if _type_of(line) == PY_TYPE_STR else load_i64(line, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+        if length == 0:
+            return 0
+        py_list_append(load_ptr(slots, _FILE_RESULT * _FILE_BYTES), line)
+        if py_err_occurred() != 0:
+            return -1
+        _file_drop(slots, tokens, _FILE_TEMP)
+
+
+def _file_restore_pending(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * _FILE_BYTES)
+    token: int = load_i64(tokens, index * _FILE_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) < 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * _FILE_BYTES, -1)
+    py_tls_exc_swap_slot(slot)
+
+
+def _file_writelines_body(slots, tokens) -> int:
+    store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_obj_iter(load_ptr(slots, _FILE_SECOND * _FILE_BYTES)))
+    if _file_adopt(slots, tokens, _FILE_TEMP) != 0:
+        return -1
+    # The iterator now owns everything it needs. Reuse the independently
+    # owned input slot for each item, and the result slot for each write.
+    _file_drop(slots, tokens, _FILE_SECOND)
+    while True:
+        store_ptr(slots, _FILE_SECOND * _FILE_BYTES, py_obj_next(load_ptr(slots, _FILE_TEMP * _FILE_BYTES)))
+        if ptr_is_null(load_ptr(slots, _FILE_SECOND * _FILE_BYTES)):
+            if py_err_occurred() != 0:
+                # Publish and lease the pending exception before class-cache
+                # construction can allocate or move it.
+                error_slot = ptr_add(slots, _FILE_ERRORS * _FILE_BYTES)
+                py_tls_exc_swap_slot(error_slot)
+                if _file_adopt(slots, tokens, _FILE_ERRORS) != 0:
+                    _file_restore_pending(slots, tokens, _FILE_ERRORS)
+                    return -1
+                cls = py_exc_builtin_class(8)
+                py_incref(cls)
+                store_ptr(slots, _FILE_ENCODING * _FILE_BYTES, cls)
+                if _file_adopt(slots, tokens, _FILE_ENCODING) != 0:
+                    _file_restore_pending(slots, tokens, _FILE_ERRORS)
+                    return -1
+                exhausted: int = py_exc_matches(load_ptr(error_slot, 0), load_ptr(slots, _FILE_ENCODING * _FILE_BYTES))
+                if exhausted == 0:
+                    _file_restore_pending(slots, tokens, _FILE_ERRORS)
+                    return -1
+                _file_drop(slots, tokens, _FILE_ERRORS)
+                py_clear_exception()
+            none = global_load_ptr("py_None")
+            py_incref(none)
+            store_ptr(slots, _FILE_RESULT * _FILE_BYTES, none)
+            return _file_adopt(slots, tokens, _FILE_RESULT)
+        if _file_adopt(slots, tokens, _FILE_SECOND) != 0:
+            return -1
+        store_ptr(slots, _FILE_RESULT * _FILE_BYTES, py_file_write(load_ptr(slots, _FILE_FIRST * _FILE_BYTES), load_ptr(slots, _FILE_SECOND * _FILE_BYTES)))
+        if _file_adopt(slots, tokens, _FILE_RESULT) != 0:
+            return -1
+        _file_drop(slots, tokens, _FILE_RESULT)
+        _file_drop(slots, tokens, _FILE_SECOND)
+
+
+def _file_guarded(first, second, encoding, errors, newline, operation: int, limit: int):
+    borrowed = stack_alloc(5 * _FILE_BYTES)
+    store_ptr(borrowed, 0, first)
+    store_ptr(borrowed, 8, second)
+    store_ptr(borrowed, 16, encoding)
+    store_ptr(borrowed, 24, errors)
+    store_ptr(borrowed, 32, newline)
+    pcc_gc_frame_enter(global_addr("pcc_file_borrowed_map"), borrowed)
+    slots = stack_alloc(_FILE_COUNT * _FILE_BYTES)
+    tokens = stack_alloc(_FILE_COUNT * _FILE_BYTES)
+    memset(slots, 0, _FILE_COUNT * _FILE_BYTES)
+    index: int = 0
+    while index < _FILE_COUNT:
+        store_i64(tokens, index * _FILE_BYTES, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_file_owned_map"), slots)
+    index = 0
+    status: int = 0
+    while index < 5 and status == 0:
+        token: int = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, index * _FILE_BYTES), ptr_add(borrowed, index * _FILE_BYTES))
+        store_i64(tokens, index * _FILE_BYTES, token)
+        if token < 0:
+            status = _file_error(19, cstr("file operation could not retain an input"))
+        index = index + 1
+    if status == 0:
+        if operation == 0:
+            status = _file_open_body(slots, tokens)
+        elif operation == 3:
+            status = _file_write_body(slots, tokens)
+        elif operation == 4:
+            status = _file_readlines_body(slots, tokens)
+        elif operation == 5:
+            status = _file_writelines_body(slots, tokens)
+        else:
+            store_ptr(slots, _FILE_RESULT * _FILE_BYTES, _file_read_body(load_ptr(slots, _FILE_FIRST * _FILE_BYTES), limit, 1 if operation == 2 else 0))
+            status = _file_adopt(slots, tokens, _FILE_RESULT)
+    result = ptr_add(slots, _FILE_RESULT * _FILE_BYTES)
+    pending = ptr_add(slots, _FILE_ERROR * _FILE_BYTES)
+    py_tls_exc_swap_slot(pending)
+    memset(borrowed, 0, 5 * _FILE_BYTES)
+    if status != 0:
+        _file_drop(slots, tokens, _FILE_RESULT)
+    index = _FILE_TEMP
+    while index >= 0:
+        _file_drop(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(pending)
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), result)
+    prior: int = 0
+    if not ptr_is_null(value) and not is_tagged_int(value):
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    token = load_i64(tokens, _FILE_RESULT * _FILE_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(result, token) < 0:
+            pcc_platform_abort()
+            return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result, prior)
+
+
+@c_abi_export("py_file_open_options")
+def py_file_open_options(path, mode, encoding, errors, newline):
+    return _file_guarded(path, mode, encoding, errors, newline, 0, 0)
+
+
+@c_abi_export("py_file_open")
+def py_file_open(path, mode):
+    return py_file_open_options(path, mode, null(), null(), null())
 
 
 @c_abi_export("py_file_read_all")
 def py_file_read_all(file):
+    return _file_guarded(file, null(), null(), null(), null(), 1, -1)
+
+
+@c_abi_export("py_file_read")
+def py_file_read(file, limit: int):
+    return _file_guarded(file, null(), null(), null(), null(), 1, limit)
+
+
+@c_abi_export("py_file_readline")
+def py_file_readline(file, limit: int):
+    return _file_guarded(file, null(), null(), null(), null(), 2, limit)
+
+
+@c_abi_export("py_file_write")
+def py_file_write(file, text):
+    return _file_guarded(file, text, null(), null(), null(), 3, 0)
+
+
+def _file_binary_read_all(file):
     f = _checked_open_file(file)
     if ptr_is_null(f):
         return null()
@@ -276,10 +866,9 @@ def py_file_read_all(file):
     return out
 
 
-@c_abi_export("py_file_read")
-def py_file_read(file, limit: int):
+def _file_binary_read(file, limit: int):
     if limit < 0:
-        return py_file_read_all(file)
+        return _file_binary_read_all(file)
     f = _checked_open_file(file)
     if ptr_is_null(f):
         return null()
@@ -302,46 +891,6 @@ def py_file_read(file, limit: int):
     return out
 
 
-@c_abi_export("py_file_write")
-def py_file_write(file, text):
-    f = _checked_file(file)
-    if ptr_is_null(f):
-        return null()
-    if _file_binary(f) != 0:
-        base = _file_bytes_like_base(text)
-        if ptr_is_null(base):
-            py_raise_owned(
-                py_exc_new(
-                    3,
-                    cstr("a bytes-like object is required for binary write"),
-                )
-            )
-            return null()
-        n: int = load_i64(base, PYBYTESOBJECT_BYTE_LEN_OFFSET)
-        wrote: int = 0
-        if n > 0:
-            wrote = fwrite(
-                ptr_add(base, PYBYTESOBJECT_DATA_OFFSET),
-                1,
-                n,
-                load_ptr(f, 16),
-            )
-        return py_int_from_i64(wrote)
-    s = _coerce_str(text)
-    owned = null()
-    if not ptr_is_null(s) and not ptr_eq(s, text):
-        owned = s
-    if ptr_is_null(s):
-        py_decref(owned)
-        return null()
-    n: int = py_str_byte_len(s)
-    wrote: int = 0
-    if n > 0:
-        wrote = fwrite(py_str_utf8(s), 1, n, load_ptr(f, 16))
-    py_decref(owned)
-    return py_int_from_i64(wrote)
-
-
 def _checked_open_file(file):
     """Shared open-file precondition for reads, seek, tell and flush.
 
@@ -360,8 +909,7 @@ def _checked_open_file(file):
     return file
 
 
-@c_abi_export("py_file_readline")
-def py_file_readline(file, limit: int):
+def _file_binary_readline(file, limit: int):
     f = _checked_open_file(file)
     if ptr_is_null(f):
         return null()
@@ -407,6 +955,11 @@ def py_file_seek(file, offset: int, whence: int):
     if ptr_is_null(f):
         return null()
     fp = load_ptr(f, 16)
+    if _file_binary(f) == 0 and whence != 0 and offset != 0:
+        _file_error(14, cstr("can't do nonzero cur-relative seeks"))
+        return null()
+    if _file_binary(f) == 0 and whence == 1 and offset == 0:
+        return py_file_tell(f)
     # SEEK_SET/SEEK_CUR/SEEK_END are 0/1/2 on both LP64 targets; unknown
     # whence values fall back to SEEK_SET like the C mirror.
     w: int = 0
@@ -422,6 +975,7 @@ def py_file_seek(file, offset: int, whence: int):
         # 14 == PY_EXC_OSERROR
         py_raise_owned(py_exc_new(14, cstr("Invalid argument")))
         return null()
+    _file_clear_decoder(f)
     return py_int_from_i64(pos)
 
 
@@ -435,6 +989,9 @@ def py_file_tell(file):
         # 14 == PY_EXC_OSERROR
         py_raise_owned(py_exc_new(14, cstr("Invalid argument")))
         return null()
+    state = load_ptr(f, 40)
+    if _file_binary(f) == 0 and ptr_is_null(state) == 0:
+        pos = load_i64(state, _FILE_LOGICAL_OFFSET)
     return py_int_from_i64(pos)
 
 
@@ -467,6 +1024,7 @@ def py_file_close(file) -> None:
         return
     if _type_of(file) != PY_TYPE_FILE:
         return
+    _file_clear_decoder(file)
     if load_i32(file, 24) == 0:
         fp = load_ptr(file, 16)
         if not ptr_is_null(fp):
@@ -481,51 +1039,12 @@ def py_file_close(file) -> None:
 
 @c_abi_export("py_file_readlines")
 def py_file_readlines(file):
-    """``f.readlines()``: every remaining line, keeping line endings."""
-    out = py_list_new(0)
-    if ptr_is_null(out):
-        return null()
-    while True:
-        line = py_file_readline(file, -1)
-        if ptr_is_null(line):
-            py_decref(out)
-            return null()
-        n: int = 0
-        if _type_of(line) == PY_TYPE_STR:
-            n = py_str_byte_len(line)
-        else:
-            n = load_i64(line, PYBYTESOBJECT_BYTE_LEN_OFFSET)
-        if n == 0:
-            py_decref(line)
-            return out
-        py_list_append(out, line)
-        py_decref(line)
+    return _file_guarded(file, null(), null(), null(), null(), 4, 0)
 
 
 @c_abi_export("py_file_writelines")
 def py_file_writelines(file, lines):
-    """``f.writelines(iterable)``: write each item; returns None."""
-    it = py_obj_iter(lines)
-    if ptr_is_null(it):
-        return null()
-    while True:
-        item = py_obj_next(it)
-        if ptr_is_null(item):
-            py_decref(it)
-            if py_err_occurred() != 0:
-                # 8 == PY_EXC_STOPITERATION: exhaustion, not a failure.
-                if py_exc_matches(py_current_exception(), py_exc_builtin_class(8)) == 0:
-                    return null()
-                py_clear_exception()
-            none = global_load_ptr("py_None")
-            py_incref(none)
-            return none
-        wrote = py_file_write(file, item)
-        py_decref(item)
-        if ptr_is_null(wrote):
-            py_decref(it)
-            return null()
-        py_decref(wrote)
+    return _file_guarded(file, lines, null(), null(), null(), 5, 0)
 
 
 def _std_stream_new(fd: int):
@@ -545,10 +1064,10 @@ def _std_stream_new(fd: int):
         fp = global_addr("pcc_stdio_stdout_storage")
     else:
         fp = global_addr("pcc_stdio_stderr_storage")
-    out = malloc(40)
+    out = malloc(_FILE_SIZE)
     if ptr_is_null(out):
         return null()
-    memset(out, 0, 40)
+    memset(out, 0, _FILE_SIZE)
     store_i64(out, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
     store_i32(out, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_FILE)
     store_i32(out, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC)

@@ -91,6 +91,7 @@ pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 define_global_i32("pcc_capi_unicode_string_owned_map", 1)
+py_unicode_decode_error_normalize = extern("py_unicode_decode_error_normalize", (c_ptr,), c_ptr)
 py_unicode_encode_error_normalize = extern("py_unicode_encode_error_normalize", (c_ptr,), c_ptr)
 py_exc_new_with_value = extern("py_exc_new_with_value", (c_int64, c_ptr), c_ptr)
 py_exc_new_with_class = extern("py_exc_new_with_class", (c_ptr, c_ptr), c_ptr)
@@ -293,6 +294,19 @@ def _capi_is_unicode_encode_type(type) -> int:
     return 0 if ptr_is_null(cached) else ptr_eq(type, cached)
 
 
+def _capi_is_unicode_decode_type(type) -> int:
+    if ptr_eq(type, global_load_ptr("PyExc_UnicodeDecodeError")):
+        return 1
+    cached = load_ptr(global_addr("py_exc_classes"), 58 * 8)
+    return 0 if ptr_is_null(cached) else ptr_eq(type, cached)
+
+
+def _capi_set_unicode_decode_value(value) -> None:
+    error = py_unicode_decode_error_normalize(value)
+    if ptr_is_null(error) == 0:
+        py_raise_owned(error)
+
+
 def _capi_set_unicode_encode_value(value) -> None:
     error = py_unicode_encode_error_normalize(value)
     # Failed normalization already installed its TypeError/OverflowError.
@@ -315,6 +329,16 @@ def PyErr_SetString(type, message) -> None:
         pcc_gc_store_root(owned, null())
         pcc_gc_frame_leave(owned)
         return
+    if _capi_is_unicode_decode_type(type) != 0:
+        owned = stack_alloc(8)
+        store_ptr(owned, 0, null())
+        pcc_gc_frame_enter(global_addr("pcc_capi_unicode_string_owned_map"), owned)
+        store_ptr(owned, 0, py_str_new(message, strlen(message)))
+        if ptr_is_null(load_ptr(owned, 0)) == 0:
+            _capi_set_unicode_decode_value(pcc_gc_load_ptr(null(), owned))
+        pcc_gc_store_root(owned, null())
+        pcc_gc_frame_leave(owned)
+        return
     py_raise_owned(py_exc_new(pcc_capi_exception_tag(type), message))
 
 
@@ -323,6 +347,9 @@ def PyErr_SetNone(type) -> None:
     if _capi_is_unicode_encode_type(type) != 0:
         _capi_set_unicode_encode_value(null())
         return
+    if _capi_is_unicode_decode_type(type) != 0:
+        _capi_set_unicode_decode_value(null())
+        return
     PyErr_SetString(type, cstr(""))
 
 
@@ -330,6 +357,9 @@ def PyErr_SetNone(type) -> None:
 def PyErr_SetObject(type, value) -> None:
     if _capi_is_unicode_encode_type(type) != 0:
         _capi_set_unicode_encode_value(value)
+        return
+    if _capi_is_unicode_decode_type(type) != 0:
+        _capi_set_unicode_decode_value(value)
         return
     cls = pcc_capi_exception_class(type)
     exc = null()

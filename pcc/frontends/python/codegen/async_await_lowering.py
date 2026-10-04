@@ -22,7 +22,8 @@ def emit_resumable_await(host, expr):
     error = host._new_slot_call_root("await.error")
     step_value = host._new_slot_call_root("await.step")
     exception = host._new_slot_call_root("await.exception")
-    roots.extend((child, send, error, step_value, exception))
+    throw_args = host._new_slot_call_root("await.throw_args")
+    roots.extend((child, send, error, step_value, exception, throw_args))
     null = ir.Constant(_CSTR, None)
     swap = host.module.globals.get("py_tls_exc_swap_slot")
     if swap is None:
@@ -39,6 +40,8 @@ def emit_resumable_await(host, expr):
 
         fn = host.current_function
         step = fn.append_basic_block(host._fresh("await.step"))
+        step_done = fn.append_basic_block(host._fresh("await.step_done"))
+        thrown_args = fn.append_basic_block(host._fresh("await.throw_arguments"))
         yielded = fn.append_basic_block(host._fresh("await.yielded"))
         stopped = fn.append_basic_block(host._fresh("await.stopped"))
         completed = fn.append_basic_block(host._fresh("await.completed"))
@@ -50,15 +53,35 @@ def emit_resumable_await(host, expr):
             "py_await_step", (child, send, error), result_slot=step_value,
             exception_slot=exception, span=expr.span,
         )
+        host.builder.branch(step_done)
+        host.builder.position_at_end(step_done)
         host._release_slot_call_roots((send, error))
         result = host.builder.load(step_value)
         host.builder.cbranch(host.builder.icmp_unsigned("==", result, null), stopped, yielded)
 
         host.builder.position_at_end(yielded)
-        host._emit_generator_yield_value(result, result_slot=step_value, resume_err_target=thrown)
+        host._emit_generator_yield_value(
+            result, result_slot=step_value, resume_err_target=thrown,
+            resume_args_target=thrown_args,
+        )
         sent = host._emit_generator_take_send()
         host._publish_slot_call_owned(send, sent, label="await sent value")
         host.builder.branch(step)
+
+        host.builder.position_at_end(thrown_args)
+        pending_args = host.builder.call(
+            host.runtime["py_coroutine_take_throw_arguments"],
+            [host._generator_ctx_stack[-1]["gen"]],
+            name=host._fresh("await.throw_args.owner"),
+        )
+        host._publish_slot_call_owned(throw_args, pending_args, label="await throw arguments")
+        host._emit_resume_handled_exception_scopes()
+        host._slot_call_runtime_call(
+            "py_await_throw_arguments", (child, throw_args), result_slot=step_value,
+            exception_slot=exception, span=expr.span,
+        )
+        host._release_slot_call_roots((throw_args,))
+        host.builder.branch(step_done)
 
         host.builder.position_at_end(thrown)
         host.builder.call(swap, [host._as_gc_ptr(error)])

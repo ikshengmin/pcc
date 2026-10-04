@@ -6966,7 +6966,14 @@ class ClassLowering:
             if other is info:
                 continue
             if method_name not in other.methods:
-                continue
+                # A sibling base can supply an inherited attribute hook:
+                # Child(Receiver, Hook) intercepts calls through Receiver
+                # even though Child has no directly declared hook method.
+                if (method_name != "__getattribute__"
+                        or self.parent._resolve_method_mro(
+                            other.name, method_name
+                        ) is None):
+                    continue
             if self._derives_from(other, info.name):
                 return True
         return False

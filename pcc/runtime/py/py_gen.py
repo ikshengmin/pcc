@@ -334,7 +334,10 @@ def py_gen_state(gen) -> int:
     gen = _checked_gen(gen)
     if ptr_is_null(gen):
         return -1
-    return load_i64(gen, 32)
+    state: int = load_i64(gen, 32)
+    # A suspended coroutine may temporarily own raw throw arguments in its
+    # traced send slot. Dispatch still targets the same positive resume index.
+    return -state if state < 0 else state
 
 
 @c_abi_export("py_gen_set_state")

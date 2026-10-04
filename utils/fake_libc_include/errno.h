@@ -16,8 +16,25 @@
 #ifndef ENXIO
 #define ENXIO 6
 #endif
+#ifndef EBADF
+#define EBADF 9
+#endif
+#ifndef ECHILD
+#define ECHILD 10
+#endif
+#ifndef ENOTSOCK
+#if defined(__linux__)
+#define ENOTSOCK 88
+#else
+#define ENOTSOCK 38
+#endif
+#endif
 #ifndef EDEADLK
+#if defined(__linux__)
+#define EDEADLK 35
+#else
 #define EDEADLK 11
+#endif
 #endif
 #ifndef ENOMEM
 #define ENOMEM 12
@@ -62,40 +79,74 @@
 #define ERANGE 34
 #endif
 #ifndef EAGAIN
+#if defined(__linux__)
+#define EAGAIN 11
+#else
 #define EAGAIN 35
+#endif
 #endif
 #ifndef EWOULDBLOCK
 #define EWOULDBLOCK EAGAIN
 #endif
-/* py_asyncio_io.c tests a non-blocking connect() against these two alongside
- * EWOULDBLOCK; without them the pcc-C runtime archive could not be built at
- * all. Darwin values, matching the EAGAIN=35 line above. */
+/* Non-blocking connect uses the selected target's kernel error values. */
 #ifndef EINPROGRESS
+#if defined(__linux__)
+#define EINPROGRESS 115
+#else
 #define EINPROGRESS 36
 #endif
+#endif
 #ifndef EALREADY
+#if defined(__linux__)
+#define EALREADY 114
+#else
 #define EALREADY 37
 #endif
+#endif
 #ifndef ENOTSUP
+#if defined(__linux__)
+#define ENOTSUP 95
+#else
 #define ENOTSUP 45
 #endif
+#endif
 #ifndef ENAMETOOLONG
+#if defined(__linux__)
+#define ENAMETOOLONG 36
+#else
 #define ENAMETOOLONG 63
 #endif
+#endif
 #ifndef ETIMEDOUT
+#if defined(__linux__)
+#define ETIMEDOUT 110
+#else
 #define ETIMEDOUT 60
 #endif
+#endif
 #ifndef ENOLCK
+#if defined(__linux__)
+#define ENOLCK 37
+#else
 #define ENOLCK 77
+#endif
 #endif
 #ifndef EAUTH
 #define EAUTH 80
 #endif
 #ifndef EOVERFLOW
+#if defined(__linux__)
+#define EOVERFLOW 75
+#else
 #define EOVERFLOW 84
 #endif
+#endif
 #ifndef EOPNOTSUPP
+#if defined(__linux__)
+#define EOPNOTSUPP 95
+#else
 #define EOPNOTSUPP 102
+#endif
 #endif
 
 /* Socket completion reports the selected target's exact SO_ERROR value. */

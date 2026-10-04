@@ -1550,3 +1550,110 @@ def test_a_compiler_shaped_frame_with_an_untraceable_slots_pointer_still_fails_c
             [_SM_FRAME_MAP_GLOBAL],
             target=target,
         )
+
+
+def _local_registry_frame_ir(triple, body):
+    return f'''
+target triple = "{triple}"
+declare void @pcc_gc_frame_enter(ptr, ptr)
+declare void @pcc_gc_frame_leave(ptr)
+declare void @opaque_call()
+define void @local_registry_frame(i1 %pick) {{
+entry:
+  %map = alloca [1 x i32], align 4
+  %roots = alloca [2 x ptr], align 8
+  %count = getelementptr [1 x i32], ptr %map, i64 0, i64 0
+  store i32 1, ptr %count
+  %map.alias = bitcast ptr %count to ptr
+  %first = getelementptr [2 x ptr], ptr %roots, i64 0, i64 0
+  %first.alias = bitcast ptr %first to ptr
+  %second = getelementptr [2 x ptr], ptr %roots, i64 0, i64 1
+  {body}
+}}
+'''
+
+
+@pytest.mark.parametrize(
+    ("triple", "emitter"),
+    [("arm64-apple-darwin23.6.0", emit_aarch64_darwin_asm),
+     ("x86_64-unknown-linux-gnu", emit_x86_64_linux_asm)],
+)
+@pytest.mark.parametrize("body", [
+    '''call void @pcc_gc_frame_enter(ptr %map.alias, ptr %first.alias)
+       call void @opaque_call()
+       call void @pcc_gc_frame_leave(ptr %roots)
+       ret void''',
+    '''call void @pcc_gc_frame_enter(ptr %map.alias, ptr %first)
+       call void @pcc_gc_frame_enter(ptr %map.alias, ptr %second)
+       call void @opaque_call()
+       call void @pcc_gc_frame_leave(ptr %second)
+       call void @pcc_gc_frame_leave(ptr %first.alias)
+       ret void''',
+    '''br i1 %pick, label %left, label %right
+     left:
+       call void @pcc_gc_frame_enter(ptr %map.alias, ptr %roots)
+       br label %join
+     right:
+       call void @pcc_gc_frame_enter(ptr %map.alias, ptr %first.alias)
+       br label %join
+     join:
+       call void @opaque_call()
+       call void @pcc_gc_frame_leave(ptr %first)
+       ret void''',
+    '''call void @pcc_gc_frame_enter(ptr %map.alias, ptr %first.alias)
+       br label %loop
+     loop:
+       call void @pcc_gc_frame_enter(ptr %map.alias, ptr %second)
+       call void @opaque_call()
+       call void @pcc_gc_frame_leave(ptr %second)
+       br i1 %pick, label %loop, label %done
+     done:
+       call void @pcc_gc_frame_leave(ptr %roots)
+       ret void''',
+], ids=["aliases", "nested", "branch_join", "loop_backedge"])
+def test_local_registry_frames_keep_matched_lifetimes(triple, emitter, body):
+    source = _local_registry_frame_ir(triple, body)
+    assembly = emitter(source)
+    assert "local_registry_frame:" in assembly
+    prepared = prepare_module_for_target(
+        source, aggregate_returned_indirect=lambda _ty: False,
+    )
+    target = "aarch64-darwin" if "apple" in triple else "x86_64-linux"
+    plans = build_stack_map_plans(prepared.functions, prepared.globals_, target=target)
+    records = plans[0].diagnostic_records()
+    assert any(record.kind == SAFEPOINT_CALL for record in records)
+    assert all(record.locations == () for record in records)
+
+
+@pytest.mark.parametrize(
+    ("triple", "emitter"),
+    [("arm64-apple-darwin23.6.0", emit_aarch64_darwin_asm),
+     ("x86_64-unknown-linux-gnu", emit_x86_64_linux_asm)],
+)
+@pytest.mark.parametrize("body,message", [
+    ('''call void @pcc_gc_frame_leave(ptr %first)
+        ret void''', "leaves without an active enter"),
+    ('''call void @pcc_gc_frame_enter(ptr %map.alias, ptr %roots)
+        call void @pcc_gc_frame_enter(ptr %map.alias, ptr %first.alias)
+        ret void''', "registered twice"),
+    ('''call void @pcc_gc_frame_enter(ptr %map.alias, ptr %first)
+        call void @pcc_gc_frame_leave(ptr %second)
+        ret void''', "leaves without an active enter"),
+    ('''br i1 %pick, label %left, label %right
+      left:
+        call void @pcc_gc_frame_enter(ptr %map.alias, ptr %first)
+        br label %join
+      right:
+        br label %join
+      join:
+        ret void''', "state disagrees at block join"),
+    ('''br label %loop
+      loop:
+        call void @pcc_gc_frame_enter(ptr %map.alias, ptr %first)
+        br i1 %pick, label %loop, label %done
+      done:
+        ret void''', "state disagrees at block join"),
+], ids=["no_enter", "duplicate_enter", "wrong_slot", "branch_mismatch", "loop_mismatch"])
+def test_local_registry_frame_mismatches_still_fail_closed(triple, emitter, body, message):
+    with pytest.raises(BackendUnavailable, match=message):
+        emitter(_local_registry_frame_ir(triple, body))

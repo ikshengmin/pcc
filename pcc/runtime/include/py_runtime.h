@@ -957,7 +957,14 @@ PyObject *py_bytes_new(const char *data, int64_t byte_len);
 PyObject *py_bytearray_from_obj(PyObject *o);
 PyObject *py_bytes_from_obj(PyObject *o);
 PyObject *py_memoryview_new(PyObject *o);
+int64_t py_text_codec_id(PyObject *encoding);
+int64_t py_text_error_id(PyObject *errors);
+PyObject *py_text_encode_ids(PyObject *text, int64_t codec, int64_t errors);
+PyObject *py_text_decode(const char *data, int64_t count, int64_t codec, int64_t errors);
+int64_t py_text_decode_buffer(const char *data, int64_t count, int64_t codec,
+                              int64_t errors, int64_t final, void *result);
 PyObject *py_bytes_decode(PyObject *o);
+PyObject *py_bytes_decode_utf8_surrogateescape(PyObject *o);
 PyObject *py_bytes_decode_utf8_ignore(PyObject *o);
 PyObject *py_bytes_decode_with_encoding(PyObject *o,
                                         PyObject *encoding,
@@ -1478,6 +1485,11 @@ PyObject *py_coroutine_new(const char *name);
 PyObject *py_coroutine_new_native(const char *name, void *entry, PyObject *captures_tuple, PyObject *args_tuple);
 PyObject *py_coroutine_new_resumable(const char *name, void *entry, PyObject *captures_tuple, PyObject *args_tuple);
 PyObject *py_coroutine_send(PyObject *coro, PyObject *value, PyObject *error);
+PyObject *py_coroutine_bound_method(PyObject *coro, int64_t operation);
+/* Original throw arguments use the generator's traced send slot. */
+int64_t py_coroutine_has_throw_arguments(PyObject *gen);
+PyObject *py_coroutine_take_throw_arguments(PyObject *gen);
+PyObject *py_await_throw_arguments(PyObject *iterator, PyObject *args);
 PyObject *py_await_iterator(PyObject *awaitable);
 PyObject *py_await_step(PyObject *iterator, PyObject *value, PyObject *error);
 PyObject *py_coroutine_run(PyObject *coro);
@@ -1696,6 +1708,8 @@ PyObject *py_obj_format(PyObject *o, PyObject *spec);
 
 /* ---- File I/O ---------------------------------------------------------- */
 PyObject *py_file_open(PyObject *path, PyObject *mode);
+PyObject *py_file_open_options(PyObject *path, PyObject *mode, PyObject *encoding,
+                               PyObject *errors, PyObject *newline);
 PyObject *py_file_read_all(PyObject *file);
 PyObject *py_file_read(PyObject *file, int64_t limit);
 PyObject *py_file_write(PyObject *file, PyObject *text);
@@ -1794,6 +1808,8 @@ PyObject *py_os_listdir(PyObject *path);
 PyObject *py_shlex_split(PyObject *text);
 PyObject *py_shutil_which(PyObject *name);
 PyObject *py_shutil_rmtree(PyObject *path, int32_t ignore_errors);
+/* Canonical managed tempfile.TemporaryDirectory class, NEW reference. */
+PyObject *py_tempdir_type(void);
 PyObject *py_tempdir_new(PyObject *prefix);
 void py_tempdir_cleanup(PyObject *path);
 PyObject *py_re_match(PyObject *pattern, PyObject *text);
@@ -1945,7 +1961,13 @@ PyObject *py_exc_new(int64_t type_tag, const char *msg);
  * borrowed; the exception stores its own reference. */
 PyObject *py_exc_new_with_value(int64_t type_tag, PyObject *value);
 
-/* Owned UnicodeEncodeError, with original args and independent attributes. */
+/* Owned UnicodeEncodeError/UnicodeDecodeError with independent args/fields. */
+PyObject *py_unicode_decode_error_new(PyObject *args);
+PyObject *py_unicode_decode_error_normalize(PyObject *value);
+/* Copies caller-stable native bytes before publishing the exception in TLS. */
+void py_unicode_decode_error_from_buffer(const char *data, int64_t count,
+                                        const char *encoding, int64_t start,
+                                        int64_t end, const char *reason);
 PyObject *py_unicode_encode_error_new(PyObject *args);
 PyObject *py_unicode_encode_error_normalize(PyObject *value);
 void py_unicode_encode_error(PyObject *object, const char *encoding,

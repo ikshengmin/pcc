@@ -575,6 +575,23 @@ class MethodCallExpressionLoweringMixin:
             if binding_owner is not None and not binding_owner.valueclass:
                 kind = binding_owner.method_kinds.get(attr.name, "instance")
                 bound_receiver = kind == "classmethod" or kind != "static" and class_object is None
+                # An instance's __getattribute__ runs before argument
+                # evaluation, even when its target method has a proven direct
+                # signature. A compatible subclass can introduce the hook.
+                receiver_info = self.class_lowering.classes.get(receiver_class)
+                attribute_hook = class_object is None and (
+                    self._resolve_method_mro(receiver_class, "__getattribute__") is not None
+                    or (receiver_info is not None
+                        and self.class_lowering.method_overridden_by_subclass(
+                            receiver_info, "__getattribute__"
+                        ))
+                )
+                if attribute_hook:
+                    # The hook can replace the declared method with any
+                    # callable, including one with a different return kind.
+                    result = self._emit_slot_call_object(expr, attr.name + ".intercepted")
+                    self._note_owned_dynamic_call_value(result)
+                    return result
                 if self._ordinary_call_needs_runtime_binding(
                     expr, binding_fd, bound_receiver, self._slot_call_result_sink(expr) is not None,
                 ):

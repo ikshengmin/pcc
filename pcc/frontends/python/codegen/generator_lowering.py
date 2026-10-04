@@ -1929,6 +1929,7 @@ class GeneratorLoweringMixin:
         value: ir.Value,
         *,
         resume_err_target: Optional[ir.Block] = None,
+        resume_args_target: Optional[ir.Block] = None,
         result_slot=None,
     ) -> None:
         ctx = self._generator_ctx_stack[-1]
@@ -1992,6 +1993,22 @@ class GeneratorLoweringMixin:
             ))
         self.builder.ret(value)
         self.builder.position_at_end(cont_bb)
+        if resume_args_target is not None:
+            # Original throw arguments are ordinary managed values, never a
+            # fake pending exception. Consume them before restoring handled
+            # exceptions, chaining context, or invoking delegate callbacks.
+            pending_args = self.builder.call(
+                self.runtime["py_coroutine_has_throw_arguments"], [ctx["gen"]],
+                name=self._fresh("gen.resume.throw_args"),
+            )
+            normal_resume = self.current_function.append_basic_block(
+                self._fresh("gen.resume.normal"),
+            )
+            self.builder.cbranch(
+                self.builder.icmp_signed("!=", pending_args, ir.Constant(_I64, 0)),
+                resume_args_target, normal_resume,
+            )
+            self.builder.position_at_end(normal_resume)
         self._emit_resume_handled_exception_scopes()
         self._emit_chain_pending_handled_exception()
         pending = self.builder.call(

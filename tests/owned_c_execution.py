@@ -1,10 +1,13 @@
 """Compile and execute C regressions through the public owned PCC API."""
 
+import builtins
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pcc
 from pcc import build
 
 
@@ -34,3 +37,50 @@ def compile_and_run_owned_c(source: str, *, timeout: int = 30):
             text=True,
             timeout=timeout,
         )
+
+
+def compile_owned_c_with_runtime(source: Path, executable: Path, *, cpp_args=()):
+    """Emit a C runtime control using an explicitly admitted current archive.
+
+    Unlike the general C helper, this path never provisions a runtime. The
+    caller executes the artifact separately so one build can exercise all GCs.
+    """
+    from pcc.driver.project import TranslationUnit
+    from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    from tests.runtime_fixture_provenance import _verified_test_runtime_archive
+
+    root = Path(pcc.__file__).resolve().parents[1]
+    explicit = os.environ.get("PCC_RUNTIME_ARCHIVE")
+    assert explicit, "provide a source-matching PCC_RUNTIME_ARCHIVE; this test does not build one"
+    archive, _manifest = _verified_test_runtime_archive(
+        explicit, runtime_root=root / "pcc/runtime",
+    )
+    original_import = builtins.__import__
+
+    def checked_import(name, *args, **kwargs):
+        if name == "llvmlite" or name.startswith("llvmlite."):
+            raise AssertionError("owned C runtime control imported " + name)
+        return original_import(name, *args, **kwargs)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("owned C runtime control attempted an external process or runtime build")
+
+    with (
+        patch.dict(os.environ, {
+            "PCC_RUNTIME_ARCHIVE": str(archive),
+            "PCC_TEST_NO_NATIVE_PROVISIONING": "1",
+        }),
+        patch("builtins.__import__", checked_import),
+        patch("subprocess.Popen", forbidden),
+        patch("pcc.frontends.python.owned_runtime_build.build_runtime_archive", forbidden),
+    ):
+        evaluator = CEvaluator(backend="self", target_triple=host_target_triple())
+        units = evaluator.compile_translation_units(
+            [TranslationUnit(str(source), str(source), source.read_text())],
+            use_system_cpp=False, use_compile_cache=False,
+            include_dirs=[str(root / "pcc/runtime/include"), str(root / "utils/fake_libc_include")],
+            cpp_args=list(cpp_args),
+        )
+        evaluator.emit_executable(units, str(executable))
+    return executable

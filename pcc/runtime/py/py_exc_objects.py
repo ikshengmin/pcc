@@ -27,10 +27,12 @@ from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_EXC_UNICODE_PAYLOAD,
     PYTUPLEOBJECT_ITEMS_OFFSET,
     PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_CLASS,
     PY_TYPE_EXC,
     PY_TYPE_INT,
+    PY_TYPE_MEMORYVIEW,
     PY_TYPE_STR,
     PY_TYPE_TUPLE,
 )
@@ -383,12 +385,15 @@ def py_dealloc_exc(o) -> None:
     pcc_gc_free_object_memory(o)
 
 
-# UnicodeEncodeError keeps its private record in the already owned/traced
-# message slot. Record[0] is the original constructor tuple; [1:6] are the
-# independently mutable attributes. The explicit flag distinguishes this
-# representation from any legacy message or user-supplied tuple.
+# UnicodeEncodeError and UnicodeDecodeError use the owned/traced message slot.
+# Record[0] is .args, initially the constructor tuple; [1:6] are independently
+# mutable attributes; [6] is the immutable builtin tag. The explicit flag
+# distinguishes this record from a legacy message or user-supplied tuple.
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
+py_tuple_from_splat = extern("py_tuple_from_splat", (c_ptr,), c_ptr)
+py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
+py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
@@ -485,12 +490,19 @@ def _unicode_type_error(slots, offset: int, argument: int) -> None:
         return
     name_pin: int = _unicode_pin_slot(name_slot)
     name = py_str_utf8(load_ptr(name_slot, 0))
-    message = malloc(py_str_byte_len(load_ptr(name_slot, 0)) + 40)
+    message = malloc(py_str_byte_len(load_ptr(name_slot, 0)) + 48)
     if ptr_is_null(message) == 0:
-        end: int = _unicode_copy_cstr(message, 0, cstr("argument "))
-        store_i8(message, end, 48 + argument)
-        end = _unicode_copy_cstr(message, end + 1, cstr(" must be str, not "))
+        end: int = 0
+        if argument == 0:
+            end = _unicode_copy_cstr(message, 0, cstr("a bytes-like object is required, not '"))
+        else:
+            end = _unicode_copy_cstr(message, 0, cstr("argument "))
+            store_i8(message, end, 48 + argument)
+            end = _unicode_copy_cstr(message, end + 1, cstr(" must be str, not "))
         end = _unicode_copy_cstr(message, end, name)
+        if argument == 0:
+            store_i8(message, end, 39)
+            end = end + 1
         store_i8(message, end, 0)
     store_ptr(name_slot, 0, pcc_gc_take_pinned_slot(name_slot, name_pin))
     pcc_gc_store_root(name_slot, null())
@@ -523,7 +535,7 @@ def _unicode_constructor_index(owned, offset: int) -> int:
     return 1
 
 
-def _unicode_constructor_body(borrowed, owned) -> int:
+def _unicode_constructor_body(borrowed, owned, type_tag: int) -> int:
     args = pcc_gc_load_ptr(null(), borrowed)
     count: int = py_tuple_len(args)
     if count != 5:
@@ -539,7 +551,23 @@ def _unicode_constructor_body(borrowed, owned) -> int:
     if _type_of(pcc_gc_load_ptr(null(), ptr_add(owned, 24))) != PY_TYPE_STR:
         _unicode_type_error(owned, 24, 1)
         return 0
-    if _type_of(pcc_gc_load_ptr(null(), ptr_add(owned, 32))) != PY_TYPE_STR:
+    source_tag: int = _type_of(pcc_gc_load_ptr(null(), ptr_add(owned, 32)))
+    if type_tag == 58:
+        if source_tag != PY_TYPE_BYTES:
+            if source_tag != PY_TYPE_BYTEARRAY and source_tag != PY_TYPE_MEMORYVIEW:
+                _unicode_type_error(owned, 32, 0)
+                return 0
+            # Buffer conversion owns and leases the actual payload leaf, so
+            # a memoryview's base may move independently of the outer view.
+            source_slot = ptr_add(owned, 32)
+            source_pin: int = _unicode_pin_slot(source_slot)
+            store_ptr(owned, 16, py_bytes_from_obj(load_ptr(source_slot, 0)))
+            store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, source_pin))
+            if ptr_is_null(load_ptr(owned, 16)):
+                return 0
+            pcc_gc_store_root(source_slot, load_ptr(owned, 16))
+            pcc_gc_store_root(ptr_add(owned, 16), null())
+    elif source_tag != PY_TYPE_STR:
         _unicode_type_error(owned, 32, 2)
         return 0
     if _unicode_constructor_index(owned, 40) == 0:
@@ -549,7 +577,7 @@ def _unicode_constructor_body(borrowed, owned) -> int:
     if _type_of(pcc_gc_load_ptr(null(), ptr_add(owned, 56))) != PY_TYPE_STR:
         _unicode_type_error(owned, 56, 5)
         return 0
-    store_ptr(owned, 8, py_tuple_new(6))
+    store_ptr(owned, 8, py_tuple_new(7))
     if ptr_is_null(load_ptr(owned, 8)):
         return 0
     args = pcc_gc_load_ptr(null(), borrowed)
@@ -560,7 +588,10 @@ def _unicode_constructor_body(borrowed, owned) -> int:
     while i < 5:
         _unicode_tuple_put(owned, 8, i + 1, 24 + i * 8)
         i = i + 1
-    store_ptr(owned, 0, py_exc_new(59, null()))
+    pcc_gc_store_root(ptr_add(owned, 16), null())
+    store_ptr(owned, 16, py_int_from_i64(type_tag))
+    _unicode_tuple_put(owned, 8, 6, 16)
+    store_ptr(owned, 0, py_exc_new(type_tag, null()))
     if ptr_is_null(load_ptr(owned, 0)):
         return 0
     _exc_store_constructed_slot(owned, owned, 8, 24)
@@ -571,8 +602,7 @@ def _unicode_constructor_body(borrowed, owned) -> int:
     return 1
 
 
-@c_abi_export("py_unicode_encode_error_new")
-def py_unicode_encode_error_new(args):
+def _unicode_error_new(args, type_tag: int):
     borrowed = stack_alloc(16)
     store_ptr(borrowed, 0, args)
     store_ptr(borrowed, 8, null())
@@ -580,12 +610,21 @@ def py_unicode_encode_error_new(args):
     owned = stack_alloc(64)
     memset(owned, 0, 64)
     pcc_gc_frame_enter(global_addr("pcc_unicode_owned_map"), owned)
-    success: int = _unicode_constructor_body(borrowed, owned)
+    success: int = _unicode_constructor_body(borrowed, owned, type_tag)
     return _unicode_finish(borrowed, owned, success)
 
 
-@c_abi_export("py_unicode_encode_error_normalize")
-def py_unicode_encode_error_normalize(value):
+@c_abi_export("py_unicode_encode_error_new")
+def py_unicode_encode_error_new(args):
+    return _unicode_error_new(args, 59)
+
+
+@c_abi_export("py_unicode_decode_error_new")
+def py_unicode_decode_error_new(args):
+    return _unicode_error_new(args, 58)
+
+
+def _unicode_error_normalize(value, type_tag: int):
     """Normalize a PyErr value: existing instance, argument tuple, or one arg."""
     borrowed = stack_alloc(16)
     store_ptr(borrowed, 0, value)
@@ -601,7 +640,7 @@ def py_unicode_encode_error_normalize(value):
     matched: int = 0
     if tag == PY_TYPE_EXC:
         class_slot = ptr_add(borrowed, 8)
-        store_ptr(class_slot, 0, py_exc_builtin_class(59))
+        store_ptr(class_slot, 0, py_exc_builtin_class(type_tag))
         class_pin: int = _unicode_pin_slot(class_slot)
         prior: int = _unicode_pin_slot(borrowed)
         matched = py_exc_matches(load_ptr(borrowed, 0), load_ptr(class_slot, 0))
@@ -625,8 +664,60 @@ def py_unicode_encode_error_normalize(value):
             pcc_py_gc_minor_graph_unlock()
             _unicode_tuple_put(owned, 8, 0, 16)
     if ptr_is_null(load_ptr(owned, 8)) == 0:
-        store_ptr(owned, 0, py_unicode_encode_error_new(pcc_gc_load_ptr(null(), ptr_add(owned, 8))))
+        store_ptr(owned, 0, _unicode_error_new(pcc_gc_load_ptr(null(), ptr_add(owned, 8)), type_tag))
     return _unicode_finish(borrowed, owned, 0 if ptr_is_null(load_ptr(owned, 0)) else 1)
+
+
+@c_abi_export("py_unicode_encode_error_normalize")
+def py_unicode_encode_error_normalize(value):
+    return _unicode_error_normalize(value, 59)
+
+
+@c_abi_export("py_unicode_decode_error_normalize")
+def py_unicode_decode_error_normalize(value):
+    return _unicode_error_normalize(value, 58)
+
+
+@c_abi_export("py_unicode_decode_error_from_buffer")
+def py_unicode_decode_error_from_buffer(data, count: int, encoding, start: int, end: int, reason) -> None:
+    # data/encoding/reason are caller-stable native buffers, never borrowed
+    # interiors of movable Python objects. py_bytes_new copies all count bytes,
+    # including embedded NULs, before the caller may release its buffer.
+    borrowed = stack_alloc(16)
+    memset(borrowed, 0, 16)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_borrowed_map"), borrowed)
+    owned = stack_alloc(64)
+    memset(owned, 0, 64)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_owned_map"), owned)
+    store_ptr(owned, 24, py_bytes_new(data, count))
+    if ptr_is_null(load_ptr(owned, 24)) == 0:
+        store_ptr(owned, 8, py_tuple_new(5))
+        store_ptr(owned, 16, py_str_new(encoding, strlen(encoding)))
+        store_ptr(owned, 32, py_int_from_i64(start))
+        store_ptr(owned, 40, py_int_from_i64(end))
+        store_ptr(owned, 48, py_str_new(reason, strlen(reason)))
+        complete: int = 1
+        i: int = 1
+        while i < 7:
+            if ptr_is_null(pcc_gc_load_ptr(null(), ptr_add(owned, i * 8))):
+                complete = 0
+            i = i + 1
+        if complete != 0:
+            i = 0
+            while i < 5:
+                _unicode_tuple_put(owned, 8, i, 16 + i * 8)
+                i = i + 1
+            store_ptr(owned, 0, py_unicode_decode_error_new(pcc_gc_load_ptr(null(), ptr_add(owned, 8))))
+    # Publish while the full graph still has an owning frame. Keep the owned
+    # slot until py_raise_owned has installed the TLS reference, then release
+    # the construction owner through the normal shared cleanup traversal.
+    if ptr_is_null(load_ptr(owned, 0)) == 0:
+        result_pin: int = _unicode_pin_slot(owned)
+        result = load_ptr(owned, 0)
+        py_incref(result)
+        py_raise_owned(result)
+        store_ptr(owned, 0, pcc_gc_take_pinned_slot(owned, result_pin))
+    _unicode_finish(borrowed, owned, 0)
 
 
 @c_abi_export("py_unicode_encode_error")
@@ -675,7 +766,9 @@ def _unicode_primary_argument(error):
     error = pcc_gc_load_ptr(null(), borrowed)
     record = pcc_gc_load_ptr(error, ptr_add(error, 24))
     args = pcc_gc_load_ptr(record, ptr_add(record, PYTUPLEOBJECT_ITEMS_OFFSET))
-    value = pcc_gc_load_ptr(args, ptr_add(args, PYTUPLEOBJECT_ITEMS_OFFSET))
+    value = null()
+    if py_tuple_len(args) > 0:
+        value = pcc_gc_load_ptr(args, ptr_add(args, PYTUPLEOBJECT_ITEMS_OFFSET))
     store_ptr(borrowed, 8, value)
     prior: int = 0
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
@@ -720,7 +813,21 @@ def py_unicode_error_set_field(error, index: int, value) -> int:
     memset(owned, 0, 64)
     pcc_gc_frame_enter(global_addr("pcc_unicode_owned_map"), owned)
     ok: int = 1
-    if index == 3 or index == 4:
+    if index == 0:
+        # CPython changes args independently of the five private fields and
+        # consumes an iterable. Preserve exact tuple identity when supplied.
+        source_slot = ptr_add(borrowed, 8)
+        if _type_of(pcc_gc_load_ptr(null(), source_slot)) == PY_TYPE_TUPLE:
+            pcc_py_gc_minor_graph_lock()
+            pcc_gc_store_root(ptr_add(owned, 8), pcc_gc_load_ptr(null(), source_slot))
+            pcc_py_gc_minor_graph_unlock()
+        else:
+            prior: int = _unicode_pin_slot(source_slot)
+            store_ptr(owned, 8, py_tuple_from_splat(load_ptr(source_slot, 0)))
+            store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, prior))
+            if ptr_is_null(load_ptr(owned, 8)):
+                ok = 0
+    elif index == 3 or index == 4:
         tag: int = _type_of(pcc_gc_load_ptr(null(), ptr_add(borrowed, 8)))
         if tag != PY_TYPE_INT and tag != PY_TYPE_BOOL:
             py_raise_owned(py_exc_new(3, cstr("an integer is required")))
@@ -745,7 +852,7 @@ def py_unicode_error_set_field(error, index: int, value) -> int:
         error = pcc_gc_load_ptr(null(), borrowed)
         payload = pcc_gc_load_ptr(error, ptr_add(error, 24))
         replacement = pcc_gc_load_ptr(null(), ptr_add(borrowed, 8))
-        if index == 3 or index == 4:
+        if index == 0 or index == 3 or index == 4:
             replacement = pcc_gc_load_ptr(null(), ptr_add(owned, 8))
         pcc_gc_store_ptr_plan_commit_locked(plan, payload, ptr_add(payload, PYTUPLEOBJECT_ITEMS_OFFSET + index * 8), replacement)
         pcc_py_gc_minor_graph_unlock()

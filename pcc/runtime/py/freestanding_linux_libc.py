@@ -13,7 +13,8 @@ from pcc.extern import (
 from pcc.unsafe import (
     syscall6, target_platform_machine, load_i8, load_i64, store_i64,
     ptr_add, ptr_is_null, stack_alloc, mkdir, null,
-    close, load_i32, process_exit, va_arg_i32, va_arg_i64, va_arg_ptr,
+    close, read, write, socket_open, socket_connect, socket_send, socket_recv,
+    waitpid, load_i32, process_exit, va_arg_i32, va_arg_i64, va_arg_ptr,
     va_start, va_end,
     atomic_cas_i32, atomic_store_i32, call_void_ptr0,
     define_global_i32, define_global_i64, define_global_ptr_null,
@@ -119,6 +120,113 @@ def close_c(fd: i64) -> i64:
     # Linux releases the descriptor even when close reports EINTR. Retrying
     # could close an unrelated descriptor reused by another thread.
     result: i64 = close(fd)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+# These C leaves make exactly one kernel operation. Preserve successful short
+# transfers and EOF; publish a raw negative errno once, including EINTR/EAGAIN.
+# Kernel SA_RESTART behavior still applies, but libc adds no retry policy.
+# In particular, send/write retain SIGPIPE and caller-supplied MSG_NOSIGNAL.
+
+
+@c_abi_typed_export("read", "i64", ("i32", "ptr", "u64"))
+def read_c(fd: i64, buffer: c_ptr, size: i64) -> i64:
+    result: i64 = read(fd, buffer, size)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("write", "i64", ("i32", "ptr", "u64"))
+def write_c(fd: i64, buffer: c_ptr, size: i64) -> i64:
+    result: i64 = write(fd, buffer, size)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("socket", "i32", ("i32", "i32", "i32"))
+def socket_c(family: i64, kind: i64, protocol: i64) -> i64:
+    result: i64 = socket_open(family, kind, protocol)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("connect", "i32", ("i32", "ptr", "u32"))
+def connect_c(fd: i64, address: c_ptr, length: i64) -> i64:
+    # socklen_t is unsigned 32-bit on both supported Linux LP64 ABIs.
+    result: i64 = socket_connect(fd, address, length & 4294967295)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("send", "i64", ("i32", "ptr", "u64", "i32"))
+def send_c(fd: i64, buffer: c_ptr, size: i64, flags: i64) -> i64:
+    # The named intrinsic lowers to sendto with NULL destination and length 0.
+    result: i64 = socket_send(fd, buffer, size, flags)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("recv", "i64", ("i32", "ptr", "u64", "i32"))
+def recv_c(fd: i64, buffer: c_ptr, size: i64, flags: i64) -> i64:
+    # recvfrom with NULL source address preserves stream and datagram rules.
+    result: i64 = socket_recv(fd, buffer, size, flags)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("pipe", "i32", ("ptr",))
+def pipe_c(output: c_ptr) -> i64:
+    # AArch64 has no legacy pipe syscall. pipe2(..., 0) creates the ordinary
+    # blocking, inheritable descriptors and lets the kernel validate int[2].
+    machine = target_platform_machine()
+    number: i64 = 59 if load_i8(machine, 0) == 97 else 293
+    result: i64 = syscall6(number, output, 0, 0, 0, 0, 0)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("fork", "i32", ())
+def fork_c() -> i64:
+    # Copy the calling process address space and signal SIGCHLD to the parent.
+    # AArch64 has clone, not fork. No CLONE_VM/CLONE_THREAD/CLONE_SETTLS flags:
+    # its NULL stack keeps the copied user stack and inherited TLS.
+    # This is the kernel process boundary, not a pthread_atfork/GC repair
+    # protocol. A multi-threaded parent's locks/thread registry are inherited;
+    # post-fork managed-runtime use is not qualified by this leaf.
+    machine = target_platform_machine()
+    result: i64 = 0
+    if load_i8(machine, 0) == 97:
+        result = syscall6(220, 17, 0, 0, 0, 0, 0)
+    else:
+        result = syscall6(57, 0, 0, 0, 0, 0, 0)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("waitpid", "i32", ("i32", "ptr", "i32"))
+def waitpid_c(pid: i64, status: c_ptr, options: i64) -> i64:
+    # The existing target ABI maps waitpid to wait4 with NULL struct rusage.
+    # Preserve pid selectors, WNOHANG's 0 result and the kernel status word.
+    result: i64 = waitpid(pid, status, options)
     if result < 0:
         pcc_errno_set(0 - result)
         return -1

@@ -859,10 +859,11 @@ class _Scope:
     globals → builtins (builtins live as a fallback in ``_lookup``).
     """
 
-    __slots__ = ("bindings", "parent")
+    __slots__ = ("bindings", "parent", "class_objects")
 
     def __init__(self, parent: Optional["_Scope"] = None) -> None:
         self.bindings: dict[str, Type] = {}
+        self.class_objects: set[str] = set()
         if parent:
             self.parent: Optional[_Scope] = parent
         else:
@@ -875,6 +876,7 @@ class _Scope:
 
     def define(self, name: str, ty: Type) -> None:
         self.bindings[name] = ty
+        self.class_objects.discard(name)
 
     def update(self, name: str, ty: Type) -> None:
         """Update or insert; used for assignment re-typing."""
@@ -891,6 +893,14 @@ class _Scope:
                 return found
             scope = scope.parent
         return None
+
+    def is_class_object(self, name: str) -> bool:
+        scope: Optional[_Scope] = self
+        while scope:
+            if name in scope.bindings:
+                return name in scope.class_objects
+            scope = scope.parent
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -923,6 +933,7 @@ class _InferCtx:
     _l1_codegen_host_type: Optional[ClassType]
     _preload_dependency_modules: list[str]
     _record_preload_dependencies: bool
+    _attribute_interceptors: Optional[set[str]]
 
     def __init__(
         self,
@@ -1030,6 +1041,7 @@ class _InferCtx:
         self._l1_codegen_host_type: Optional[ClassType] = None
         self._preload_dependency_modules = []
         self._record_preload_dependencies = False
+        self._attribute_interceptors = None
 
     # -- helpers -----------------------------------------------------------
 
@@ -2069,6 +2081,8 @@ def _infer_expr(ctx: _InferCtx, scope: _Scope, expr: Expr) -> Expr:
                     ctx,
                     recv_ty,
                     method,
+                    isinstance(callee.obj, Name)
+                    and scope.is_class_object(callee.obj.ident),
                 )
             if (
                 inferred is not None
@@ -2409,10 +2423,44 @@ def _call_result_type(ctx: _InferCtx, callee: Expr) -> Type:
     return TYPE_DYN
 
 
+def _external_attribute_interceptors(ctx: _InferCtx) -> set[str]:
+    """Cache the complete hook graph once for this inference context."""
+    cached = ctx._attribute_interceptors
+    if cached is not None:
+        return cached
+    from pcc.frontends.python.codegen.class_override_index import (
+        build_export_attribute_interceptors,
+    )
+
+    exports = dict(ctx.external_exports)
+    local_exports = dict(exports.get(ctx.module_name, {}))
+    for stmt in ctx.module.body:
+        if not isinstance(stmt, ClassDef):
+            continue
+        bases = []
+        for base in _class_bases_from_def(ctx, stmt):
+            bases.append(_class_type_module(base) + "." + base.name)
+        local_exports[stmt.name] = {
+            "kind": "class",
+            "owning_module": ctx.module_name,
+            "class_name": stmt.name,
+            "base_names": tuple(bases),
+            "methods": tuple(
+                {"name": member.name}
+                for member in stmt.body if isinstance(member, FuncDef)
+            ),
+        }
+    exports[ctx.module_name] = local_exports
+    cached = build_export_attribute_interceptors(exports)
+    ctx._attribute_interceptors = cached
+    return cached
+
+
 def _external_method_return_type(
     ctx: _InferCtx,
     receiver: ClassType,
     method_name: str,
+    receiver_is_class_object: bool = False,
 ) -> Optional[Type]:
     module_name = _class_type_module(receiver)
     if not module_name:
@@ -2429,6 +2477,16 @@ def _external_method_return_type(
     for method in class_info.get("methods", ()):
         if method.get("name") != method_name:
             continue
+        # Instance lookup may return a completely different callable. Its
+        # result must stay boxed even if the declared method returns a
+        # float/bool (or another statically known type). Class-object lookup
+        # does not invoke an instance's __getattribute__.
+        if (
+            not receiver_is_class_object
+            and module_name + "." + receiver.name
+            in _external_attribute_interceptors(ctx)
+        ):
+            return TYPE_DYN
         memo: dict[tuple[str, str], ClassType] = {}
         return _resolve_export_type_refs(
             ctx,
@@ -5183,6 +5241,7 @@ def _bind_external_import_exports(
                 memo,
             )
             scope.update(local_name, cls_ty)
+            scope.class_objects.add(local_name)
             ctx.register_class_type(local_name, cls_ty)
         elif info["kind"] == "module_global":
             value_ty = _resolve_export_type_refs(
@@ -7148,6 +7207,7 @@ def _prepopulate_module_scope(ctx: _InferCtx, module: Module) -> None:
             )
             ctx.register_class_type(stmt.name, cls_ty)
             ctx.globals.define(stmt.name, cls_ty)
+            ctx.globals.class_objects.add(stmt.name)
 
     _validate_valueclass_recursion(ctx, module)
 
@@ -7168,6 +7228,7 @@ def _prepopulate_module_scope(ctx: _InferCtx, module: Module) -> None:
             )
             ctx.register_class_type(stmt.name, cls_ty)
             ctx.globals.define(stmt.name, cls_ty)
+            ctx.globals.class_objects.add(stmt.name)
 
     for stmt in module.body:
         if not isinstance(stmt, Assign) or len(stmt.targets) != 1:

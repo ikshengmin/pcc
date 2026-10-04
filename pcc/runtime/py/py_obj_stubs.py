@@ -2244,299 +2244,275 @@ def py_dealloc_memoryview(o) -> None:
     pcc_gc_free_object_memory(o)
 
 
+# Text codecs share one incremental byte decoder. All input/output buffers in
+# this primitive are native allocations, or views covered by a caller lease.
+# Result record: native allocation at +0, byte length at +8, consumed input at
+# +16. Ownership of the allocation transfers only after a zero status.
+py_unicode_decode_error_from_buffer = extern(
+    "py_unicode_decode_error_from_buffer",
+    (c_ptr, c_int64, c_ptr, c_int64, c_int64, c_ptr), c_void,
+)
+py_text_codec_id = extern("py_text_codec_id", (c_ptr,), c_int64)
+py_text_error_id = extern("py_text_error_id", (c_ptr,), c_int64)
+
+
+def _text_utf8_expected(first: int) -> int:
+    if first < 128:
+        return 1
+    if first >= 194 and first <= 223:
+        return 2
+    if first >= 224 and first <= 239:
+        return 3
+    if first >= 240 and first <= 244:
+        return 4
+    return 0
+
+
+def _text_decode_step(data, count: int, start: int, codec: int, mode: int, final: int) -> int:
+    """Positive width, negative invalid-prefix width, or incomplete zero."""
+    first: int = load_i8(data, start) & 255
+    if first < 128 or codec == 2:
+        return 1
+    if codec == 1:
+        return -1
+    width: int = _text_utf8_expected(first)
+    if width == 0:
+        return -1
+    offset: int = 1
+    while offset < width:
+        if start + offset >= count:
+            if final == 0:
+                return 0
+            return -offset
+        byte: int = load_i8(data, start + offset) & 255
+        low: int = 128
+        high: int = 191
+        if offset == 1:
+            if first == 224:
+                low = 160
+            elif first == 237:
+                high = 159
+                if mode == 4 and start + 2 < count:
+                    last: int = load_i8(data, start + 2) & 255
+                    if last >= 128 and last <= 191:
+                        high = 191
+            elif first == 240:
+                low = 144
+            elif first == 244:
+                high = 143
+        # CPython leaves a two-byte surrogate prefix undecided until the
+        # third byte arrives, even for strict/ignore/replace error policies.
+        if first == 237 and offset == 1 and byte >= 160 and byte <= 191:
+            if final == 0 and start + 2 == count:
+                return 0
+        if byte < low or byte > high:
+            return -offset
+        offset = offset + 1
+    return width
+
+
+def _text_decode_failure(data, count: int, start: int, end: int, codec: int) -> None:
+    encoding = cstr("utf-8")
+    reason = cstr("invalid continuation byte")
+    if codec == 1:
+        encoding = cstr("ascii")
+        reason = cstr("ordinal not in range(128)")
+    elif _text_utf8_expected(load_i8(data, start) & 255) == 0:
+        reason = cstr("invalid start byte")
+    elif end == count:
+        reason = cstr("unexpected end of data")
+    py_unicode_decode_error_from_buffer(data, count, encoding, start, end, reason)
+
+
+@c_abi_export("py_text_decode_buffer")
+def py_text_decode_buffer(data, count: int, codec: int, mode: int, final: int, result) -> int:
+    store_ptr(result, 0, null())
+    store_i64(result, 8, 0)
+    store_i64(result, 16, 0)
+    if codec < 0 or codec > 2:
+        py_raise_owned(py_exc_new(13, cstr("unknown or unsupported native encoding")))
+        return -1
+    if count < 0 or count > 2305843009213693951:
+        py_raise_owned(py_exc_new(15, cstr("decoded string is too long")))
+        return -1
+    output = py_mem_alloc(count * 4 + 1)
+    if ptr_is_null(output):
+        py_raise_owned(py_exc_new(19, cstr("cannot allocate decoded string")))
+        return -1
+    position: int = 0
+    used: int = 0
+    while position < count:
+        width: int = _text_decode_step(data, count, position, codec, mode, final)
+        if width == 0:
+            break
+        if width > 0:
+            first: int = load_i8(data, position) & 255
+            if codec == 2 and first >= 128:
+                store_i8(output, used, 192 | (first >> 6))
+                store_i8(output, used + 1, 128 | (first & 63))
+                used = used + 2
+            else:
+                offset: int = 0
+                while offset < width:
+                    store_i8(output, used, load_i8(data, position + offset))
+                    used = used + 1
+                    offset = offset + 1
+            position = position + width
+        else:
+            end: int = position - width
+            if mode == 1:
+                pass
+            elif mode == 2:
+                store_i8(output, used, 239)
+                store_i8(output, used + 1, 191)
+                store_i8(output, used + 2, 189)
+                used = used + 3
+            elif mode == 3:
+                offset = position
+                while offset < end:
+                    byte: int = load_i8(data, offset) & 255
+                    store_i8(output, used, 237)
+                    store_i8(output, used + 1, 176 | (byte >> 6))
+                    store_i8(output, used + 2, 128 | (byte & 63))
+                    used = used + 3
+                    offset = offset + 1
+            elif mode == 5:
+                offset = position
+                while offset < end:
+                    byte = load_i8(data, offset) & 255
+                    store_i8(output, used, 92)
+                    store_i8(output, used + 1, 120)
+                    digit: int = byte >> 4
+                    store_i8(output, used + 2, 48 + digit if digit < 10 else 87 + digit)
+                    digit = byte & 15
+                    store_i8(output, used + 3, 48 + digit if digit < 10 else 87 + digit)
+                    used = used + 4
+                    offset = offset + 1
+            else:
+                py_mem_free(output)
+                if mode < 0:
+                    py_raise_owned(py_exc_new(13, cstr("unknown error handler name")))
+                elif mode == 6 or mode == 7:
+                    py_raise_owned(py_exc_new(11, cstr("native decoding does not support this error handler")))
+                else:
+                    _text_decode_failure(data, count, position, end, codec)
+                return -1
+            position = end
+    store_i8(output, used, 0)
+    store_ptr(result, 0, output)
+    store_i64(result, 8, used)
+    store_i64(result, 16, position)
+    return 0
+
+
+@c_abi_export("py_text_decode")
+def py_text_decode(data, count: int, codec: int, mode: int):
+    decoded = stack_alloc(24)
+    if py_text_decode_buffer(data, count, codec, mode, 1, decoded) != 0:
+        return null()
+    result = py_str_new(load_ptr(decoded, 0), load_i64(decoded, 8))
+    py_mem_free(load_ptr(decoded, 0))
+    return result
+
+
+def _bytes_decode_body(slots, tokens, codec: int, mode: int) -> int:
+    source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
+    value = load_ptr(source, 0)
+    if ptr_is_null(value) or is_tagged_int(value):
+        return _buffer_error(3, cstr("decoding to str: need bytes-like object"))
+    tag: int = _type_of(value)
+    if tag != PY_TYPE_BYTES and tag != PY_TYPE_BYTEARRAY and tag != PY_TYPE_MEMORYVIEW:
+        return _buffer_error(3, cstr("decoding to str: need bytes-like object"))
+    if codec < 0:
+        codec = py_text_codec_id(load_ptr(slots, _BUFFER_LEAF * _BUFFER_BYTES))
+        if py_err_occurred() != 0:
+            return -1
+        mode = py_text_error_id(load_ptr(slots, _BUFFER_ITEM * _BUFFER_BYTES))
+        if py_err_occurred() != 0:
+            return -1
+    # Snapshot a mutable or indirect buffer using its established leaf-owner
+    # protocol. A memoryview's outer lease alone cannot protect its base.
+    store_ptr(slots, _BUFFER_INDEX * _BUFFER_BYTES, _buffer_convert_owned(load_ptr(source, 0), 0))
+    if _buffer_adopt(slots, tokens, _BUFFER_INDEX) != 0:
+        return -1
+    payload = load_ptr(slots, _BUFFER_INDEX * _BUFFER_BYTES)
+    store_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES, py_text_decode(_bytes_data(payload), py_bytes_len(payload), codec, mode))
+    if ptr_is_null(load_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES)):
+        return -1
+    return _buffer_adopt(slots, tokens, _BUFFER_RESULT)
+
+
+def _bytes_decode_guarded(value, encoding, errors, codec: int, mode: int):
+    borrowed = stack_alloc(3 * _BUFFER_BYTES)
+    store_ptr(borrowed, 0, value)
+    store_ptr(borrowed, 8, encoding)
+    store_ptr(borrowed, 16, errors)
+    pcc_gc_frame_enter(global_addr("pcc_text_decode_borrowed_map"), borrowed)
+    slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    memset(slots, 0, _BUFFER_COUNT * _BUFFER_BYTES)
+    index: int = 0
+    while index < _BUFFER_COUNT:
+        store_i64(tokens, index * _BUFFER_BYTES, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_buffer_owned_map"), slots)
+    status: int = 0
+    index = 0
+    while index < 3 and status == 0:
+        status = _buffer_copy(slots, tokens, index, ptr_add(borrowed, index * _BUFFER_BYTES), 1)
+        index = index + 1
+    if status == 0:
+        status = _bytes_decode_body(slots, tokens, codec, mode)
+    result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
+    error = ptr_add(slots, _BUFFER_ERROR * _BUFFER_BYTES)
+    py_tls_exc_swap_slot(error)
+    memset(borrowed, 0, 3 * _BUFFER_BYTES)
+    if status != 0:
+        _buffer_drop(slots, tokens, _BUFFER_RESULT)
+    index = _BUFFER_INDEX
+    while index >= 0:
+        _buffer_drop(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_py_gc_minor_graph_lock()
+    current = pcc_gc_load_ptr(null(), result)
+    prior: int = 0
+    if not ptr_is_null(current) and not is_tagged_int(current):
+        prior = load_i32(current, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+        pcc_gc_pin(current)
+    pcc_py_gc_minor_graph_unlock()
+    token: int = load_i64(tokens, _BUFFER_RESULT * _BUFFER_BYTES)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(result, token) < 0:
+            pcc_platform_abort()
+            return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result, prior)
+
+
+define_global_i32("pcc_text_decode_borrowed_map", -3)
+
+
 @c_abi_export("py_bytes_decode")
 def py_bytes_decode(o):
-    return py_str_new(_bytes_data(o), py_bytes_len(o))
-
-
-def _utf8_cont(c: int) -> int:
-    if (c & 192) == 128:
-        return 1
-    return 0
-
-
-def _utf8_valid_width(data, n: int, i: int) -> int:
-    c: int = load_i8(data, i) & 255
-    if c < 128:
-        return 1
-    if c >= 194 and c <= 223:
-        if i + 1 < n and _utf8_cont(load_i8(data, i + 1) & 255) != 0:
-            return 2
-        return 0
-    if c == 224:
-        c1: int = load_i8(data, i + 1) & 255 if i + 1 < n else 0
-        if (
-            i + 2 < n
-            and c1 >= 160
-            and c1 <= 191
-            and _utf8_cont(load_i8(data, i + 2) & 255) != 0
-        ):
-            return 3
-        return 0
-    if c >= 225 and c <= 236:
-        if (
-            i + 2 < n
-            and _utf8_cont(load_i8(data, i + 1) & 255) != 0
-            and _utf8_cont(load_i8(data, i + 2) & 255) != 0
-        ):
-            return 3
-        return 0
-    if c == 237:
-        c2: int = load_i8(data, i + 1) & 255 if i + 1 < n else 0
-        if (
-            i + 2 < n
-            and c2 >= 128
-            and c2 <= 159
-            and _utf8_cont(load_i8(data, i + 2) & 255) != 0
-        ):
-            return 3
-        return 0
-    if c >= 238 and c <= 239:
-        if (
-            i + 2 < n
-            and _utf8_cont(load_i8(data, i + 1) & 255) != 0
-            and _utf8_cont(load_i8(data, i + 2) & 255) != 0
-        ):
-            return 3
-        return 0
-    if c == 240:
-        c3: int = load_i8(data, i + 1) & 255 if i + 1 < n else 0
-        if (
-            i + 3 < n
-            and c3 >= 144
-            and c3 <= 191
-            and _utf8_cont(load_i8(data, i + 2) & 255) != 0
-            and _utf8_cont(load_i8(data, i + 3) & 255) != 0
-        ):
-            return 4
-        return 0
-    if c >= 241 and c <= 243:
-        if (
-            i + 3 < n
-            and _utf8_cont(load_i8(data, i + 1) & 255) != 0
-            and _utf8_cont(load_i8(data, i + 2) & 255) != 0
-            and _utf8_cont(load_i8(data, i + 3) & 255) != 0
-        ):
-            return 4
-        return 0
-    if c == 244:
-        c4: int = load_i8(data, i + 1) & 255 if i + 1 < n else 0
-        if (
-            i + 3 < n
-            and c4 >= 128
-            and c4 <= 143
-            and _utf8_cont(load_i8(data, i + 2) & 255) != 0
-            and _utf8_cont(load_i8(data, i + 3) & 255) != 0
-        ):
-            return 4
-    return 0
+    return _bytes_decode_guarded(o, null(), null(), 0, 0)
 
 
 @c_abi_export("py_bytes_decode_utf8_ignore")
 def py_bytes_decode_utf8_ignore(o):
-    data = _bytes_data(o)
-    n: int = py_bytes_len(o)
-    if ptr_is_null(data) or n <= 0:
-        return py_str_new(null(), 0)
-    tmp = py_mem_alloc(n)
-    if ptr_is_null(tmp):
-        return null()
-    out_n: int = 0
-    i: int = 0
-    while i < n:
-        width: int = _utf8_valid_width(data, n, i)
-        if width <= 0:
-            i = i + 1
-        else:
-            j: int = 0
-            while j < width:
-                store_i8(tmp, out_n, load_i8(data, i + j))
-                out_n = out_n + 1
-                j = j + 1
-            i = i + width
-    out = py_str_new(tmp, out_n)
-    py_mem_free(tmp)
-    return out
+    return _bytes_decode_guarded(o, null(), null(), 0, 1)
 
 
 @c_abi_export("py_bytes_decode_utf8_surrogateescape")
 def py_bytes_decode_utf8_surrogateescape(o):
-    # PEP 383: a byte that cannot start a valid UTF-8 sequence becomes the
-    # lone surrogate U+DC00+byte, which round-trips back through
-    # ``encode("utf-8", "surrogateescape")``.  The ignore mode drops those
-    # bytes instead; both share `_utf8_valid_width`.
-    data = _bytes_data(o)
-    n: int = py_bytes_len(o)
-    if ptr_is_null(data) or n <= 0:
-        return py_str_new(null(), 0)
-    tmp = py_mem_alloc(n * 3)
-    if ptr_is_null(tmp):
-        return null()
-    out_n: int = 0
-    i: int = 0
-    while i < n:
-        width: int = _utf8_valid_width(data, n, i)
-        if width <= 0:
-            code: int = 56320 + (load_i8(data, i) & 255)
-            store_i8(tmp, out_n, 224 | (code >> 12))
-            store_i8(tmp, out_n + 1, 128 | ((code >> 6) & 63))
-            store_i8(tmp, out_n + 2, 128 | (code & 63))
-            out_n = out_n + 3
-            i = i + 1
-        else:
-            j: int = 0
-            while j < width:
-                store_i8(tmp, out_n, load_i8(data, i + j))
-                out_n = out_n + 1
-                j = j + 1
-            i = i + width
-    out = py_str_new(tmp, out_n)
-    py_mem_free(tmp)
-    return out
-
-
-def _ascii_lower(c: int) -> int:
-    if c >= 65 and c <= 90:
-        return c + 32
-    return c
-
-
-def _str_is_utf8_name(obj) -> int:
-    if ptr_is_null(obj) or is_tagged_int(obj) or _type_of(obj) != PY_TYPE_STR:
-        return 0
-    data = py_str_utf8(obj)
-    n: int = py_str_byte_len(obj)
-    if n == 4:
-        if (
-            _ascii_lower(load_i8(data, 0) & 255) == 117
-            and _ascii_lower(load_i8(data, 1) & 255) == 116
-            and _ascii_lower(load_i8(data, 2) & 255) == 102
-            and load_i8(data, 3) == 56
-        ):
-            return 1
-    if n == 5:
-        sep: int = load_i8(data, 3) & 255
-        if (
-            _ascii_lower(load_i8(data, 0) & 255) == 117
-            and _ascii_lower(load_i8(data, 1) & 255) == 116
-            and _ascii_lower(load_i8(data, 2) & 255) == 102
-            and (sep == 45 or sep == 95)
-            and load_i8(data, 4) == 56
-        ):
-            return 1
-    return 0
-
-
-def _str_is_surrogateescape(obj) -> int:
-    if ptr_is_null(obj) or is_tagged_int(obj) or _type_of(obj) != PY_TYPE_STR:
-        return 0
-    if py_str_byte_len(obj) != 15:
-        return 0
-    data = py_str_utf8(obj)
-    want = cstr("surrogateescape")
-    i: int = 0
-    while i < 15:
-        if _ascii_lower(load_i8(data, i) & 255) != (load_i8(want, i) & 255):
-            return 0
-        i = i + 1
-    return 1
-
-
-def _str_is_errors_name(obj, ignore: int) -> int:
-    if ptr_is_null(obj) or is_tagged_int(obj) or _type_of(obj) != PY_TYPE_STR:
-        return 0
-    data = py_str_utf8(obj)
-    if py_str_byte_len(obj) != 6:
-        return 0
-    if ignore != 0:
-        expected0: int = 105
-        expected1: int = 103
-        expected2: int = 110
-        expected3: int = 111
-        expected4: int = 114
-        expected5: int = 101
-    else:
-        expected0 = 115
-        expected1 = 116
-        expected2 = 114
-        expected3 = 105
-        expected4 = 99
-        expected5 = 116
-    if (
-        _ascii_lower(load_i8(data, 0) & 255) == expected0
-        and _ascii_lower(load_i8(data, 1) & 255) == expected1
-        and _ascii_lower(load_i8(data, 2) & 255) == expected2
-        and _ascii_lower(load_i8(data, 3) & 255) == expected3
-        and _ascii_lower(load_i8(data, 4) & 255) == expected4
-        and _ascii_lower(load_i8(data, 5) & 255) == expected5
-    ):
-        return 1
-    return 0
-
-
-def _str_is_ascii_name(obj) -> int:
-    if ptr_is_null(obj) or is_tagged_int(obj) or _type_of(obj) != PY_TYPE_STR:
-        return 0
-    n: int = py_str_byte_len(obj)
-    if n != 5 and n != 8:
-        return 0
-    wanted = cstr("ascii")
-    if n == 8:
-        wanted = cstr("us-ascii")
-    data = py_str_utf8(obj)
-    index: int = 0
-    while index < n:
-        actual: int = _ascii_lower(load_i8(data, index) & 255)
-        if n == 8 and index == 2 and actual == 95:
-            actual = 45
-        if actual != (load_i8(wanted, index) & 255):
-            return 0
-        index = index + 1
-    return 1
+    return _bytes_decode_guarded(o, null(), null(), 0, 3)
 
 
 @c_abi_export("py_bytes_decode_with_encoding")
 def py_bytes_decode_with_encoding(o, encoding, errors):
-    if (
-        ptr_is_null(o)
-        or is_tagged_int(o)
-        or (_type_of(o) != PY_TYPE_BYTES and _type_of(o) != PY_TYPE_BYTEARRAY and _type_of(o) != PY_TYPE_MEMORYVIEW)
-    ):
-        py_raise_owned(py_exc_new(3, cstr("decoding to str: need bytes-like object")))
-        return null()
-    if _str_is_ascii_name(encoding) != 0:
-        if ptr_is_null(errors) == 0 and _type_of(errors) != PY_TYPE_STR:
-            py_raise_owned(py_exc_new(3, cstr("decode errors must be a string")))
-            return null()
-        data = _bytes_data(o)
-        count: int = py_bytes_len(o)
-        if ptr_is_null(data) != 0 and count != 0:
-            py_raise_owned(py_exc_new(3, cstr("decoding requires an accessible bytes buffer")))
-            return null()
-        index: int = 0
-        while index < count:
-            if (load_i8(data, index) & 255) >= 128:
-                # UnicodeDecodeError still lacks a distinct native exception
-                # identity. Reject this capability instead of inventing text.
-                py_raise_owned(py_exc_new(11, cstr("pcc-native ASCII decoding of non-ASCII bytes is not supported")))
-                return null()
-            index = index + 1
-        return py_str_new(data, count)
-    if _str_is_utf8_name(encoding) == 0:
-        py_raise_owned(py_exc_new(13, cstr("pcc-native bytes decode supports utf-8 and ascii only")))
-        return null()
-    if (
-        ptr_is_null(errors)
-        or ptr_eq(errors, global_load_ptr("py_None")) != 0
-        or _str_is_errors_name(errors, 0) != 0
-    ):
-        return py_bytes_decode(o)
-    if _str_is_errors_name(errors, 1) != 0:
-        return py_bytes_decode_utf8_ignore(o)
-    if _str_is_surrogateescape(errors) != 0:
-        return py_bytes_decode_utf8_surrogateescape(o)
-    py_raise_owned(py_exc_new(13, cstr("unsupported pcc-native bytes decode errors mode")))
-    return null()
+    return _bytes_decode_guarded(o, encoding, errors, -1, 0)
 
 
 @c_abi_export("py_bytes_getitem")
