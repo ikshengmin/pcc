@@ -803,6 +803,12 @@ class ListMethodLoweringMixin:
                 [recv, idx_val],
                 name=self._fresh("list.pop"),
             )
+            output = self._slot_call_result_sink(expr)
+            if output is not None:
+                self._publish_slot_call_owned(output, popped, label="list pop")
+                self._emit_post_call_err_check(getattr(expr, "span", None))
+                return self.builder.load(output, name=self._fresh("list.pop.current"))
+            self._note_owned_object_value(popped)
             self._emit_post_call_err_check(getattr(expr, "span", None))
             if not isinstance(list_ty.elem, DynType):
                 return marshal.marshal_from_object(

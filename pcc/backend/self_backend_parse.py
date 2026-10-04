@@ -1644,7 +1644,24 @@ def parse_constant_gep(text: str, *, type_context=None) -> tuple[str, int]:
     base_type = _parse_type(parts[0], type_context=type_context)
     ptr_type_text, base_value = _extract_leading_type_token(parts[1], type_context=type_context)
     ptr_type = _parse_type(ptr_type_text, type_context=type_context)
-    if not ptr_type.is_ptr or not base_value.startswith("@"):
+    if not ptr_type.is_ptr:
+        raise BackendUnavailable(
+            f"self backend constant getelementptr currently requires a global pointer base, got {parts[1]!r}"
+        )
+    # C address constants may nest array/member GEPs and pointer bitcasts.
+    # Resolve each layer with this module's layout and preserve the relocation
+    # symbol while accumulating its byte addend. A local/unknown pointer is
+    # still not a constant relocation base.
+    decoded_base = decode_value_token(base_value, type_context=type_context)
+    base_offset = 0
+    if decoded_base.startswith("@"):
+        base_name = decoded_base[1:]
+    elif decoded_base.startswith("gepconst:"):
+        base_name, offset_text = decoded_base[len("gepconst:"):].rsplit(":", 1)
+        base_offset = int(offset_text)
+    elif decoded_base.startswith("gep0:"):
+        base_name = decoded_base[len("gep0:"):]
+    else:
         raise BackendUnavailable(
             f"self backend constant getelementptr currently requires a global pointer base, got {parts[1]!r}"
         )
@@ -1652,7 +1669,7 @@ def parse_constant_gep(text: str, *, type_context=None) -> tuple[str, int]:
     for chunk in parts[2:]:
         index_type_text, index_value = _extract_leading_type_token(chunk, type_context=type_context)
         indices.append((_parse_type(index_type_text, type_context=type_context), decode_value_token(index_value, type_context=type_context)))
-    return decode_global_name(base_value), _constant_gep_offset(
+    return base_name, base_offset + _constant_gep_offset(
         base_type, tuple(indices)
     )
 

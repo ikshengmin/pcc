@@ -131,6 +131,26 @@ def gate_coroutine_scheduler_roots(_args) -> int:
     return run_pytest(_COROUTINE_ROOTS)
 
 
+def gate_async_gateway(args) -> int:
+    required = ("gateway", "runtime_archive", "source_manifest", "out_dir",
+                "threads", "refcount")
+    missing = [name.replace("_", "-") for name in required if getattr(args, name) is None]
+    if missing:
+        raise SystemExit("async-gateway requires --" + ", --".join(missing))
+    command = [
+        sys.executable, "-B", str(ROOT / "scripts/qualification/async_gateway.py"),
+        "--core", str(ROOT), "--gateway", args.gateway,
+        "--runtime-archive", args.runtime_archive,
+        "--source-manifest", args.source_manifest, "--output", args.out_dir,
+        "--threads", args.threads, "--refcount", args.refcount,
+    ]
+    for option in ("pcc0", "pcc1"):
+        value = getattr(args, option)
+        if value:
+            command.extend(["--" + option, value])
+    return run_command(command)
+
+
 def gate_goal_closure_bundle(_args) -> int:
     for gate in (gate_b1_b6, gate_d2_d6, gate_final_language):
         code = gate(_args)
@@ -240,6 +260,7 @@ _GATES = {
     "d2-d6": gate_d2_d6,
     "final-language": gate_final_language,
     "coroutine-scheduler-roots": gate_coroutine_scheduler_roots,
+    "async-gateway": gate_async_gateway,
     "goal-closure-bundle": gate_goal_closure_bundle,
     "gc-production-contract": gate_gc_production_contract,
     "gc-longrun": gate_gc_longrun,
@@ -252,7 +273,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--gate", choices=sorted(_GATES))
     parser.add_argument("--list", action="store_true", help="list gate names")
-    parser.add_argument("--out-dir", help="gc-longrun output directory")
+    parser.add_argument("--out-dir", help="gate evidence output directory")
+    parser.add_argument("--gateway", help="immutable gateway source root for async-gateway")
+    parser.add_argument("--runtime-archive", help="explicit matched runtime for async-gateway")
+    parser.add_argument("--source-manifest", help="exact combined source inventories")
+    parser.add_argument("--threads", choices=("0", "1"))
+    parser.add_argument("--refcount", choices=("atomic", "local"))
+    parser.add_argument("--pcc0", help="verified host PCC command for gateway tests")
+    parser.add_argument("--pcc1", help="verified native PCC command for gateway tests")
     parser.add_argument("--churn-rounds", default=200000)
     parser.add_argument("--gs-cycles", default=4000)
     parser.add_argument("--fin-rounds", default=100000)

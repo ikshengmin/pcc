@@ -45,6 +45,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_cpy_values",
     "_container_temp_root_slot_names",
     "_slot_call_root_records",
+    "_slot_call_root_record_index",
     "_slot_call_result_sinks",
     "_cross_module_func_defs",
     "_cross_module_identity_decorators",

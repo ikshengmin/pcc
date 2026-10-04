@@ -2396,7 +2396,11 @@ class CCodeGenerator(
             else:
                 result_ptr = name_ptr
                 result = result_ptr
-            if self._is_unsigned_binding(result_ptr):
+            # A member/array lvalue carries its declaration's signedness on
+            # the loaded value, even when its computed address has no binding.
+            # Preserve that type information when taking its address so atomic
+            # builtins and indirect loads promote unsigned narrow objects.
+            if self._is_unsigned_binding(result_ptr) or self._is_unsigned_val(name_ir):
                 self._tag_unsigned_pointee(result)
             if self._is_unsigned_return_binding(result_ptr):
                 self._tag_unsigned_return(result)

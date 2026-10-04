@@ -5,7 +5,11 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, Call, Name
+from pcc.frontends.python.py_ast import (
+    Attr,
+    Call,
+    Name,
+)
 from pcc.frontends.python.codegen import marshal
 
 
@@ -61,11 +65,12 @@ class NativeDataclassesLoweringMixin:
                 kwdict_val,
                 kwdict_expr.ty,
             )
-            return self.builder.call(
+            result = self.builder.call(
                 self.runtime["py_dataclass_replace_from_dict"],
                 [obj_val, kwdict_obj],
                 name=self._fresh("dataclasses.replace.kwdict"),
             )
+            return self._publish_dataclass_replace_result(expr, result)
 
         n_kw = len(expr.kwargs)
         if n_kw == 0:
@@ -114,11 +119,20 @@ class NativeDataclassesLoweringMixin:
                 name=self._fresh("replace.kwv.p"),
             )
 
-        return self.builder.call(
+        result = self.builder.call(
             self.runtime["py_dataclass_replace"],
             [obj_val, ir.Constant(_I64, n_kw), names_ptr, vals_ptr],
             name=self._fresh("dataclasses.replace"),
         )
+        return self._publish_dataclass_replace_result(expr, result)
+
+    def _publish_dataclass_replace_result(self, expr, result):
+        """Both replacement helpers return the newly allocated instance owner."""
+        output = self._slot_call_result_sink(expr)
+        if output is not None:
+            self._publish_slot_call_owned(output, result, label="dataclass replacement")
+        self._note_owned_object_value(result)
+        return result
 
 
 __all__ = ["NativeDataclassesLoweringMixin"]

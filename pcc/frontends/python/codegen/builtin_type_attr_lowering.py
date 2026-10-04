@@ -317,7 +317,9 @@ class BuiltinTypeAttrLoweringMixin:
         arg = expr.args[0]
         weak_dict_kind = self._weak_dict_kind_for_expr(arg)
         # Class-based ``__len__`` fast path.
-        dunder = self._try_dispatch_dunder_unary(arg, "__len__", ())
+        dunder = self._try_dispatch_dunder_unary(
+            arg, "__len__", (), result_slot=self._slot_call_result_sink(expr),
+        )
         if dunder is not None:
             return dunder
         obj = self._emit_expr(arg)

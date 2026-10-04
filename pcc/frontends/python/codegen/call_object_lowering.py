@@ -155,12 +155,30 @@ class CallObjectLoweringMixin:
             self.builder.store(ir.Constant(_I1, 1), flag)
         if not hasattr(self, "_slot_call_root_records"):
             self._slot_call_root_records = []
-        self._slot_call_root_records.append((slot, flag, lifo))
+        record = (slot, flag, lifo)
+        record_index = len(self._slot_call_root_records)
+        self._slot_call_root_records.append(record)
+        if not hasattr(self, "_slot_call_root_record_index"):
+            self._slot_call_root_record_index = {}
+        self._slot_call_root_record_index[id(slot)] = (record_index, record)
         return slot
 
     def _slot_call_root_record(self, slot):
-        for record in getattr(self, "_slot_call_root_records", ()):
+        # The list remains the ownership ledger. Index its exact slot identity
+        # without comparing IR values, retaining the record strongly so an id
+        # cannot outlive its key. Validate the position against the ledger to
+        # preserve rejection when a diagnostic replaces or edits that list.
+        records = getattr(self, "_slot_call_root_records", ())
+        if not hasattr(self, "_slot_call_root_record_index"):
+            self._slot_call_root_record_index = {}
+        indexed = self._slot_call_root_record_index.get(id(slot))
+        if indexed is not None:
+            position, record = indexed
+            if position < len(records) and records[position] is record and record[0] is slot:
+                return record
+        for position, record in enumerate(records):
             if record[0] is slot:
+                self._slot_call_root_record_index[id(slot)] = (position, record)
                 return record
         raise L1CodegenError("slot-call root was not registered by this emitter")
 
@@ -1430,7 +1448,10 @@ class CallObjectLoweringMixin:
             arg.ty,
         )
         output = self._slot_call_result_sink(arg)
-        if output is not None and isinstance(raw.type, (ir.IntType, ir.FloatType, ir.DoubleType)):
+        if output is not None and isinstance(
+            raw.type, (ir.IntType, ir.FloatType, ir.DoubleType, ir.VoidType)
+        ):
+            # A real void ABI result marshals to the immortal None singleton.
             # The actual scalar-to-object producer establishes this owner.
             # Pointer pass-through and annotations alone provide no such
             # evidence and retain the caller's strict provenance checks.

@@ -1053,11 +1053,16 @@ class NativeModuleAliasMixin:
                 [exc_val],
             )
             return self._emit_none_literal()
-        return self.builder.call(
+        result = self.builder.call(
             self.runtime["py_exc_traceback_format_exc"],
             [exc_val],
             name=self._fresh("traceback.format_exc"),
         )
+        # This runtime formatter returns a new string, including the no-error
+        # case. Record that producer at its return; no cleanup may intervene
+        # before an enclosing operand consumer publishes the owned result.
+        self._note_owned_object_value(result)
+        return result
 
     def _module_imports_traceback(self) -> bool:
         # Worklist walk (module body + nested statement bodies) so a

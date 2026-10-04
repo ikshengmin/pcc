@@ -1298,10 +1298,10 @@ def _emit_smul_overflow_intrinsic_call(
     if (
         lhs_type.describe() != rhs_type.describe()
         or not lhs_type.is_int
-        or lhs_type.width != 64
+        or lhs_type.width not in (32, 64)
     ):
         raise BackendUnavailable(
-            f"x86_64 self backend {callee} intrinsic currently expects i64 "
+            f"x86_64 self backend {callee} intrinsic currently expects i32/i64 "
             f"same-width integer args in {func.name!r}"
         )
     if not ret_type.is_struct or len(ret_type.fields) != 2:
@@ -1320,15 +1320,18 @@ def _emit_smul_overflow_intrinsic_call(
             f"in {func.name!r}: {ret_type.describe()}"
         )
     slot_offset = func.value_slots[dest].offset
-    lines = _materialize_value(func, lhs, lhs_type, "r10")
-    lines.extend(_materialize_value(func, rhs, rhs_type, "r11"))
-    # Two-operand signed imul sets OF on signed overflow; the {i64, i1}
-    # slot layout matches the generic call path (value at +0, flag at +8).
-    lines.append("  imul r10, r11")
+    lhs_reg = _reg_name(lhs_type, 10)
+    rhs_reg = _reg_name(rhs_type, 11)
+    lines = _materialize_value(func, lhs, lhs_type, lhs_reg)
+    lines.extend(_materialize_value(func, rhs, rhs_type, rhs_reg))
+    # Match the instruction width to the intrinsic: imul sets OF when the
+    # mathematical product cannot be represented in that signed width.
+    lines.append(f"  imul {lhs_reg}, {rhs_reg}")
     lines.append("  seto r11b")
-    lines.append("  movzx r11, r11b")
-    lines.extend(_store_reg_to_slot("r10", slot_offset, value_type))
-    lines.append(f"  mov QWORD PTR [rbp - {slot_offset - 8}], r11")
+    lines.extend(_store_reg_to_slot(lhs_reg, slot_offset, value_type))
+    lines.extend(_store_reg_to_slot(
+        "r11b", slot_offset - ret_type.field_offset(1), overflow_type,
+    ))
     return lines
 
 
@@ -1610,7 +1613,11 @@ def _atomic_width_check(
     kind: str,
     value_type: TypeDesc,
     widths: tuple = (8, 16, 32, 64),
+    *,
+    allow_pointer: bool = False,
 ) -> None:
+    if allow_pointer and value_type.is_ptr:
+        return
     if value_type.is_int and value_type.width in widths:
         return
     names = "/".join(f"i{w}" for w in widths)
@@ -1765,7 +1772,7 @@ def _emit_memory_instruction(func: ParsedFunction, kind: str, data: tuple) -> li
 
     if kind == "atomicrmw":
         dest, op, ptr_type, ptr_name, value_type, value, _ordering = data
-        _atomic_width_check(func, kind, value_type)
+        _atomic_width_check(func, kind, value_type, allow_pointer=op == "xchg")
         val_reg = _reg_name(value_type, 10)
         acc_reg = _reg_name(value_type, 0)
         mem = f"{_mem_size(value_type)} [r11]"

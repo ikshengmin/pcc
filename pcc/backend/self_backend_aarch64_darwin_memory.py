@@ -86,7 +86,11 @@ def _atomic_width_check(
     kind: str,
     value_type: TypeDesc,
     allowed: tuple = ("i8", "i16", "i32", "i64"),
+    *,
+    allow_pointer: bool = False,
 ) -> None:
+    if allow_pointer and value_type.is_ptr:
+        return
     if value_type.describe() not in allowed:
         raise BackendUnavailable(
             f"self backend {kind} supports only {'/'.join(allowed)} operands in "
@@ -527,7 +531,7 @@ def emit_memory_instruction_by_id(
 
     if kind_id == PARSED_INSTRUCTION_KIND_ATOMICRMW:
         dest, op, _ptr_type, ptr_name, value_type, value, _ordering = data
-        _atomic_width_check(func, "atomicrmw", value_type)
+        _atomic_width_check(func, "atomicrmw", value_type, allow_pointer=op == "xchg")
         # ldaxr/stlxr is acquire+release on every iteration — always at least
         # as strong as the requested ordering, and it is what LLVM itself
         # emits for atomicrmw at -O0 on AArch64 without LSE.

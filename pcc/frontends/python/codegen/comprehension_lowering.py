@@ -987,11 +987,9 @@ class ComprehensionLoweringMixin:
         self.builder.store(ir.Constant(_I64, 0), idx_slot)
 
         target_ident = target.ident
-        alloca = self._alloca_in_entry(
-            _CSTR,
-            name=f"{target_ident}.addr",
+        target_slot = _for_prepare_owned_object_target(
+            self, target_ident, DynType(name="dyn"),
         )
-        self.env[target_ident] = (alloca, _CSTR, DynType(name="dyn"))
 
         cond_bb = fn.append_basic_block(name=self._fresh("comp.obj.cond"))
         body_bb = fn.append_basic_block(name=self._fresh("comp.obj.body"))
@@ -1018,7 +1016,9 @@ class ComprehensionLoweringMixin:
             [iter_val, idx_box],
             name=self._fresh("comp.obj.elem"),
         )
-        self.builder.store(elem, alloca)
+        # getitem transfers an owner. Use the same replaceable, registered
+        # slot as ordinary loops before element calls or later iterations.
+        _for_store_owned_target(self, target_ident, target_slot, elem)
         self._emit_comprehension_after_bind(
             kind,
             container,

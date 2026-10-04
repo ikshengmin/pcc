@@ -60,6 +60,13 @@ class CallResolutionLoweringMixin:
                 or fd.manual_pointer_abi
                 or self._func_c_abi_export_symbol(fd) is not None):
             return False
+        if fd.is_async:
+            # Calling an async function creates a coroutine object regardless
+            # of the eventual return annotation. Its published callable owns
+            # argument binding and writes that new owner directly into the
+            # consumer's registered output slot before retiring arguments.
+            # The direct adapter path returns a raw coroutine after cleanup.
+            return True
         types = [fd.return_ty]
         for formal in fd.args:
             types.append(formal.annotation)

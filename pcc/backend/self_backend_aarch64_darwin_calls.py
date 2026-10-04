@@ -1107,14 +1107,18 @@ def emit_umul_overflow_intrinsic_call(
     return lines
 
 
-def emit_uadd_overflow_intrinsic_call(
+def emit_unsigned_addsub_overflow_intrinsic_call(
     func: ParsedFunction,
     dest: str | None,
     ret_type: TypeDesc,
     callee: str,
     args: tuple[tuple[TypeDesc, str], ...],
     module_symbols: PreparedModuleSymbols,
+    *,
+    mnemonic: str,
+    condition: str,
 ) -> list[str]:
+    """Use carry for addition and borrow (inverted carry) for subtraction."""
     if dest is None or not parsed_function_has_value_slot(func, dest):
         return []
     if len(args) != 2:
@@ -1147,14 +1151,42 @@ def emit_uadd_overflow_intrinsic_call(
     lines = materialize_value(func, lhs, lhs_type, 9, module_symbols)
     lines.extend(materialize_value(func, rhs, rhs_type, 10, module_symbols))
     if lhs_type.width == 64:
-        lines.append("  adds x11, x9, x10")
-        lines.append(emitted_cset_line("w12", "hs"))
+        lines.append(f"  {mnemonic} x11, x9, x10")
+        lines.append(emitted_cset_line("w12", condition))
     else:
-        lines.append("  adds w11, w9, w10")
-        lines.append(emitted_cset_line("w12", "hs"))
+        lines.append(f"  {mnemonic} w11, w9, w10")
+        lines.append(emitted_cset_line("w12", condition))
         lines.append("  orr x11, x11, x12, lsl #32")
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
+
+
+def emit_uadd_overflow_intrinsic_call(
+    func: ParsedFunction,
+    dest: str | None,
+    ret_type: TypeDesc,
+    callee: str,
+    args: tuple[tuple[TypeDesc, str], ...],
+    module_symbols: PreparedModuleSymbols,
+) -> list[str]:
+    return emit_unsigned_addsub_overflow_intrinsic_call(
+        func, dest, ret_type, callee, args, module_symbols,
+        mnemonic="adds", condition="hs",
+    )
+
+
+def emit_usub_overflow_intrinsic_call(
+    func: ParsedFunction,
+    dest: str | None,
+    ret_type: TypeDesc,
+    callee: str,
+    args: tuple[tuple[TypeDesc, str], ...],
+    module_symbols: PreparedModuleSymbols,
+) -> list[str]:
+    return emit_unsigned_addsub_overflow_intrinsic_call(
+        func, dest, ret_type, callee, args, module_symbols,
+        mnemonic="subs", condition="lo",
+    )
 
 
 def emit_signed_addsub_overflow_intrinsic_call(
@@ -2438,6 +2470,10 @@ def emit_call_instruction(
         )
     if not is_indirect and callee.startswith("llvm.uadd.with.overflow."):
         return emit_uadd_overflow_intrinsic_call(
+            func, dest, ret_type, callee, args, module_symbols
+        )
+    if not is_indirect and callee.startswith("llvm.usub.with.overflow."):
+        return emit_usub_overflow_intrinsic_call(
             func, dest, ret_type, callee, args, module_symbols
         )
     if not is_indirect and callee.startswith("llvm.sadd.with.overflow."):

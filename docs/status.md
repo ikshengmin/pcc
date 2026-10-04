@@ -1,72 +1,89 @@
 # Current status
 
-Updated October 4, 2026, 05:21 UTC. Maintain this page in place.
+Updated October 4, 2026, 07:09 UTC. Maintain this page in place.
 [Project intent](project-intent.md) and [compiler contracts](compiler-contract.md)
 remain authoritative. Focused repairs do not replace the original ten goals.
 
 ## Current boundary
 
 There is no qualified current pcc1, pcc2 or pcc3, and no Stage2/Stage3 fixed point.
-The candidate now includes the numeric-return and literal-unpack repairs,
-including unfinished qualifications, for the authorized source synchronization.
-Managed numeric results move into pending-return owners before cleanup; cancelled
-returns preserve the original exception across reentrant disposal. Pending owners
-are reused by function and nested-return depth. The first draft grew to 43
-permanent roots and 1,763 frame leaves for 40 flat returns; the current follow-on
-keeps four roots and 164 leaves. The 04:49 combined source has 1,512 scoped passes and two failures;
-native proof for its newer producer bytes remains pending. Literal unpack now stages all managed RHS owners before writing
-targets, preserving aliases, later-RHS exceptions and moving-root lifetimes.
-Its retained original arm64 replay clears the seg/sect ownership error and reaches
-a separate keyword-dict publication failure at b"".join(buf.chunks). A later
-shared bytes/bytearray join repair publishes the result before operand cleanup.
-It passes four target object-emission checks and the entire retained original
-arm64_asm_driver context with zero CPython fallback calls. This remains causal
-evidence on retained context; fresh combined context and native proof are open.
+The latest verified local baseline is `026ad210`; later integrated source remains
+under cloud qualification. The immutable October 4 06:49 source adds generic
+managed-call publication, async constructor ownership, authoritative root-index
+lookup, C99 integer macros, module-owned constant-GEP handling, and the AArch64
+optional-type-context repair. Its complete source delta is Library
+`libfile_47855ab9757c819199fae4b3b9212ff1`, version 0. Seven runtime preflight
+objects pass; the fresh 186-member runtime is building. Original async and
+gateway native execution on that source remains pending.
 
-The latest complete compiler-context census, V8, uses the immutable 20:15 capture,
-Stage1 source `90bb894ee2b5ee9dc0b4cbed2543679dfb0dde85cd79e1bda64d21e8b83d4ecb`.
-All 441 freshly exported contexts are accounted: 383 pass, 57 fail in the
-frontend, and one reaches its worker timeout. Source, graph, original indices,
-receipts and output hashes were independently reverified. Graph SHA256 is
-`4ed613cc0ad947858ad8642bfe864517a8abe3f37fafdec18c23c409dbdce43a`.
-Elapsed time is 1,705.50 seconds and peak process-tree RSS is 3,160,305,664 bytes.
-Other diagnostics overlapped; these are diagnostic observations, not build
-performance or native acceptance.
+The unchanged async file on the admitted `026ad210` boundary records one native
+pass and 15 compilation failures. The generic async-call repair makes all 16
+complete program closures produce IR, which does not establish native behavior.
+The D3 coroutine test incorrectly expected send() to return 42; CPython 3.15 and
+PCC both raise StopIteration(42). The corrected test catches and checks that
+value, and passes both original reference and native execution.
 
-Compared with V7, 361 passes remain passes, 22 failures pass, 56 failures remain,
-one pass becomes a failure and one prior failure reaches its 120-second worker
-cap. The single new regression is native_text_modules: the added regex flag
-helper's lhs.value | rhs.value reaches the unchanged arithmetic ownership gate.
-The later shared bitwise producer/callee repair makes its unchanged full module
-lower successfully in a separate causal replay. That repair is outside V8; a
-new complete integrated census remains required.
-The timed-out cli_bootstrap module advances beyond its old frontend error into
-__nested_read_labeled_report; its partial output is preserved, not classified
-as a semantic failure. Both prior V7 regressions, macho_spec and
-integer_fold_contract, now pass in the fresh V8 graph.
+The latest complete compiler-context census, V9, uses the immutable 04:49 source
+`e220ddb201a9182236c3b685034ab2e2a50b8bf8dbaa65f8c5e4659bcdac2a0e`.
+It accounts for all 441 modules: 398 pass, 42 fail in the frontend, and one reaches
+the unchanged 120-second limit. All 383 V8 passes remain passing, with 15
+recoveries and no new regressions. Its receipts are Library
+`libfile_31c74178f38c8191a4dca4b594738d3a`; successful PIDX output is preserved
+by `libfile_41ebd6cbd5208191a3fbc5a696b9afa2`, version 1.
 
-Later sum, valueclass, receiver, cleanup and runtime-algebra repairs are outside
-V8 and require another integrated census. The original classgen field-contract
-file passes unchanged on the 20:15 source plus its one-file receiver repair;
-175 distinct focused and adjacent host/IR cases pass. Sum has stable paired
-fail-before/pass-after results for both original affected module contexts.
-These scoped results do not qualify the current full compiler.
+A same-input causal replay identifies quadratic authoritative-root lookup in the
+timed-out cli_bootstrap module. The indexed lookup preserves ownership checks
+and exact output prefixes, completing the unchanged 120-second/4-GiB gate in
+70.103 seconds at 2,575,339,520 bytes, producing 547,521,620 bytes of PIDX. The
+baseline still times out. This fixes that diagnostic limit, not compiler output
+size or final build performance. Source and proof are Library
+`libfile_246dd4e059e0819185be6e085e5c8c5c`. A new full 441-module audit is required.
 
-The earlier quadratic cleanup expansion is repaired with lexical/LIFO owners,
-while generator-resume roots stay in their frames. Original module 242 passes
-in both V7 and V8. The generic pending-exception cleanup repair must preserve
-that linear-growth contract. Strict ownership validators remain enabled; the
-three principal source/result admission gates are unchanged in V8.
+The later original 47-target Stage1-context test emits all 47 zero-fallback
+outputs but reaches its unchanged memory limit while retaining IR text. A
+post-emission replay also exposes preexisting dynamic attribute edges in
+_define_label. The test remains failed; output counts are not a pass.
 
-Remaining families include bitwise and other managed-result publication,
-iterator/call producers, source bindings and ownership across compatibility
-bridges. No earlier source's passing result qualifies later bytes. Complete
-C/Python execution, native bootstrap, all-five-GC production/performance and
-actual four-platform qualification remain open.
+After the 06:49 freeze, six atomic/overflow paths were integrated into the mutable
+candidate. Their separate source-bound checks pass 136 cases, execute 19 C
+programs through the owned Linux x86-64 backend/linker, and emit 76 target-object
+controls. Public runtime-backed integration and non-Linux device execution remain
+open. These later compiler bytes are not qualified by the in-progress 06:49 runtime.
+
+All ten goals remain active. Strict root and publication validators remain enabled.
+Complete C/Python and integration execution, the native fixed point, sustained
+five-GC behavior, actual four-platform qualification and final performance remain
+unfinished. Every scheduled source validation now includes the whole original
+async file and gateway regressions, with per-node failed and unrun results.
 
 ## Matched runtime and native evidence
 
-The October 4 rebuilt runtime on frozen compiler closure
+The October 4 05:27 source, synchronized as `026ad210`, now has its own admitted
+Linux x86-64 runtime. Compiler closure is
+`50de79da07a6f2e8cac3946f97229d15a3a1eb3c018f7b73921a04f275450c49`,
+with threads enabled and atomic refcounts. All 186 members and strict fixture
+provenance pass; archive SHA256 is
+`142316289982b026915f625d4a30b1bf89533e5c95e1e1856b4056abb6048013`.
+The diagnostic build completed in 419.257 seconds at a 467,439,616-byte peak.
+The unchanged cleanup program now passes its original callback-order and
+exception-identity assertions on five actually witnessed GC backends. The
+unchanged dynamic pair-list dict case passes on all five requested settings;
+its silent runs have no observable backend telemetry and are labeled as such.
+Join, modulo/division, bitwise/set and literal-unpack priority programs pass
+with all five backend identities witnessed. A separate pair-list program appends
+an explicit collection and also witnesses all five; this does not retroactively
+supply telemetry for the silent original runs. All 22 maintained native nodes,
+four original Python controls across five witnessed GCs, and both original C
+controls pass. Three explicit-prebuilt helper calls execute successfully with both
+no-build flags. Full runtime recovery is Library
+`libfile_aa56feba14e48191bd876a21f17fb4ea`; native receipts are
+`libfile_49e0122a218c81918c4c30fba9dfc690`,
+`libfile_6e8bf640a3b88191b288f85948944565` and
+`libfile_69cf612757f08191aeb74d2b57b5ff82`.
+The full native/compiler fixed point and sustained five-GC acceptance remain open.
+
+
+Historical October 4 04:10 runtime evidence uses compiler closure
 `833cebfea0df6caa9522f67b0d4d3adfaff01f1e8d3c4c80ad8d955f89411877`
 is strictly admitted with all 186 threaded/atomic members. Archive SHA256 is
 `7414929986c3181d2432a2259ad857adc72a27e17fa3e282d89385a6ffce8015`.
@@ -79,7 +96,7 @@ controls pass on all five observed backends, both original C controls pass,
 and bitwise/set controls plus the held-snapshot/STW probe contribute another
 15 successful backend-witnessed runs. These 35 runs are host-pcc0-emitted native
 execution. Twelve of 13 original container nodes also pass with GC0 requested.
-Two real failures remain: the cleanup control observes weakref before finalizer,
+On that historical source, two real failures remained: cleanup observed weakref before finalizer,
 and dict() rejects a valid dynamic list of pairs. The cleanup failure preserves
 the selected exception and runs both callbacks. The later integrated correction
 keeps native-instance weakrefs live through finalization and resurrection checks;
@@ -88,9 +105,9 @@ helper. Their 36 runtime-body/CFG checks pass, but native-after execution and
 broader host validation remain pending. Full binaries and receipts are retained in Library
 `libfile_89f3e21b0da88191bbef7ec524ba4ec4`,
 `libfile_a03205e7f2d48191b31aef5430720609` and
-`libfile_7f55225c4884819198f4310c877ae588`. This runtime excludes the later
-numeric-return, literal-unpack, join and provisioning changes and cannot qualify
-those newer candidate bytes.
+`libfile_7f55225c4884819198f4310c877ae588`. That earlier runtime excludes the later numeric-return, literal-unpack, join
+and provisioning changes. Its failures and passes remain historical to that
+source; the matched 05:27 repair boundary is recorded above.
 
 The earlier October 3 native control boundary uses Linux x86-64 source
 `addad00416e5a8e9f35382212ea54c1c75c9f7fb8276a074ddc616546a44d63c`
@@ -313,8 +330,19 @@ The pinned Harness reference is restored at
 `47f943859bef60e4160492346772ded9b24f765a`. All 7,412 Git blob hashes and modes
 match tree `f904efab9ef435201d6ba4da88a34d6366568272`, with no missing/extra
 files or submodules. Reference recovery is not behavioral or pixel parity.
-The reconstructed GUI Loader/session tranche has 147 host checks; actual native
-GUI, HTTP/TLS, HMR, typed FFI/bridges, interaction traces and pixels remain open.
+The latest GUI observer and native-pump ABI repairs pass 204 host cases and 14
+subtests; nine integration cases remain unexecuted. Actual native GUI, HTTP/TLS,
+HMR, typed FFI/bridges, interaction traces and pixels remain open.
+
+Gateway cancellation, pipeline retirement and bounded Content-Length parsing
+repairs pass 381 host cases. The actual 20-node integration batch against the
+admitted 026ad210 compiler, after strict fixture repair, has two passes, two
+compiler failures and 16 missing-qualified-pcc1 prerequisites. The passes are
+the host-pcc0 structured-scope example and an external-provider ABI control using
+GCC and CPython ctypes. They do not establish native-pcc1 or live TLS behavior.
+Dashboard and local HTTP fail at the managed len(self.output) producer. The
+joined compiler repair is queued for actual replay. Full integration receipts
+are Library `libfile_f5adceccce788191b06dc3557bcffec1`, version 0.
 
 All ten acceptance goals remain active:
 
@@ -341,14 +369,27 @@ platform execution must remain explicit until a suitable environment is arranged
 ## Source recovery and synchronization
 
 The October 4 environment refresh removed the cloud filesystem. The latest
-verified local baseline is PCC `5b72fc2c3614d860e5b153f5dc6dbdf097380e24`,
+verified local baseline is PCC `026ad210a4009bf69e406b1e5cc5a166565175ed`,
 GUI `45b84f1d1b112c4a88cc9d5a6772077a2f78bb7c`, and gateway
 `83577bc41dc79d3ead2e217bfa04f0f500799012`. All 29,724 PCC, 560 gateway and
 130 GUI paths were restored from durable bytes and independently compared with
 the complete 22:22 capture identities. There are no missing or extra source
 paths, hash mismatches or executable-mode/type mismatches.
 
-The latest synchronized capture is October 4 at 04:49:46 UTC: 17 PCC paths,
+The latest synchronized capture is October 4 at 05:27:21 UTC: 29 PCC paths.
+Its retained execution attempts record 1,526 passes, eight failures, one setup
+error and two Darwin execution skips, with no resource-incomplete group.
+Two initial synthetic-runtime model cases were stopped by the external build
+reservation; their complete original files then passed 61 cases with that flag
+cleared only for the controlled model processes. Five native cases and one
+setup case lacked a matching admitted runtime at validation time. The original
+context assertion still failed with 43 zero-fallback outputs and four codegen
+errors, at a 1,479,221,248-byte peak. Collection accounts for 26,568 C/Python
+nodes with zero errors/skips; the separate integration inventory is not execution.
+The source and full attempt accounting are Library
+`libfile_129668b3d8a881918c9f90559085ca8b`, version 1.
+
+The preceding synchronized capture is October 4 at 04:49:46 UTC: 17 PCC paths,
 1,512 scoped passes, two failures and no resource-incomplete group. Its original
 47-target context completes with 40 zero-fallback outputs and seven codegen
 errors at a 1,460,547,584-byte peak. The other failure is a native reservation
@@ -428,11 +469,12 @@ Detailed source-bound receipts and restore chains remain in the external recover
 archives. Code archive `libfile_a5f7c11281008191be4ea89ea9611cbd`, version 41,
 contains the 17:35 source changes; later source packets preserve the full chain.
 
-Hourly synchronization includes all legitimate integrated changes even when
+Synchronization every two hours includes all legitimate integrated changes even when
 failing or unqualified. Collection and affected whole regression files run on the
 exact immutable capture first. Failures, resource limits and unexecuted native
 cases are reported explicitly. Local work is limited to applying the verified
 delta and one change-based commit per changed repository, preserving user edits.
+The next scheduled synchronization is October 4 at 07:40 UTC; the 06:40 run is canceled.
 There is no local development, test execution, push or history rewrite. Promote
 only a capture whose actual local commit is verified. The future push/CI loop
 requires all ten goals and a separate explicit user instruction to start.

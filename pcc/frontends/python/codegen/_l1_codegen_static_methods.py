@@ -499,7 +499,7 @@ def _part_41(out):
     _append_method(out, '_codegen_trace_set_stmt_context', (('self', 'pos', False), ('stmt_index', 'pos', False), ('stmt_kind', 'pos', False)))
     _append_method(out, '_codegen_trace_span', (('self', 'pos', False), ('node', 'pos', False)))
     _append_method(out, '_emit_attribute_error_if_null', (('self', 'pos', False), ('value', 'pos', False), ('attr_name', 'pos', False), ('span', 'pos', False)))
-    _append_method(out, '_emit_direct_method_call', (('self', 'pos', False), ('method_fn', 'pos', False), ('self_val', 'pos', False), ('info', 'pos', False), ('method_name', 'pos', False), ('arg_exprs', 'pos', False), ('kwargs', 'pos', True), ('park_expr', 'pos', True)))
+    _append_method(out, '_emit_direct_method_call', (('self', 'pos', False), ('method_fn', 'pos', False), ('self_val', 'pos', False), ('info', 'pos', False), ('method_name', 'pos', False), ('arg_exprs', 'pos', False), ('kwargs', 'pos', True), ('park_expr', 'pos', True), ('result_slot', 'pos', True)))
     _append_method(out, '_emit_async_native_func_value_adapter', (('self', 'pos', False), ('orig_name', 'pos', False), ('body_adapter', 'pos', False)))
     _append_method(out, '_active_handler_exception_for_current_function', (('self', 'pos', False),))
     _append_method(out, '_emit_exception_frame', (('self', 'pos', False), ('exc', 'pos', False), ('span', 'pos', False)))

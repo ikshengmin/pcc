@@ -1030,6 +1030,7 @@ class UnaryCallLoweringMixin:
         host_expr: "Expr",
         dunder_name: str,
         arg_exprs: tuple["Expr", ...],
+        result_slot=None,
     ) -> Optional[ir.Value]:
         """If ``host_expr`` is a Name bound to a hinted class that
         defines ``dunder_name`` (via MRO), emit the direct method call
@@ -1074,4 +1075,5 @@ class UnaryCallLoweringMixin:
             info,
             dunder_name,
             arg_exprs,
+            result_slot=result_slot,
         )

@@ -346,8 +346,11 @@ def store_large_aggregate_literal_to_address(
     data_reg_32: str = "w14",
     module_symbols: PreparedModuleSymbols | None = None,
 ) -> list[str]:
+    # Numeric literals need no symbols; callers may omit the optional module.
+    # Symbolic/named values still use the explicit owning module when supplied.
+    type_context = module_symbols.type_context if module_symbols is not None else None
     try:
-        literal_bytes = aggregate_literal_to_bytes(value_type, value, type_context=module_symbols.type_context)
+        literal_bytes = aggregate_literal_to_bytes(value_type, value, type_context=type_context)
     except BackendUnavailable:
         if module_symbols is None:
             raise

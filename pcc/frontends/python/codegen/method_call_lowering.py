@@ -6,7 +6,17 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import BoolType, Call, DynType, Expr, FloatType, IntType, Name, Type
+from pcc.frontends.python.py_ast import (
+    BoolType,
+    Call,
+    DynType,
+    Expr,
+    FloatType,
+    IntType,
+    Name,
+    RawPointerType,
+    Type,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_FUNC
@@ -542,6 +552,7 @@ class MethodCallLoweringMixin:
         arg_exprs: tuple[Expr, ...],
         kwargs: tuple = (),
         park_expr: Optional[Call] = None,
+        result_slot=None,
     ) -> ir.Value:
         ast_fd = self.class_lowering._find_method_def(info.name, method_name)
         if self.class_lowering.has_definition_defaults(info, method_name) and (
@@ -659,12 +670,20 @@ class MethodCallLoweringMixin:
             set(),
         )
         method_may_park = local_method_may_park or external_method_may_park
+        if result_slot is not None and (
+            method_fn.name in self._manual_pointer_abi_functions
+            or ast_fd is not None and isinstance(ast_fd.return_ty, RawPointerType)
+        ):
+            raise L1CodegenError(
+                "raw-pointer method ABI cannot publish into a managed operand root"
+            )
         result = self._call_user(
             method_fn,
             args_ir,
             call_name,
             root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
             pinned_arg_temps=_method_pinned_arg_cleanup(arg_provenance),
+            result_slot=None if method_may_park else result_slot,
         )
         if method_may_park:
             if park_expr is None:
