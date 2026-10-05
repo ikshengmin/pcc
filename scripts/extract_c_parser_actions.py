@@ -96,14 +96,14 @@ def main() -> int:
         """
         from __future__ import annotations
 
-        from ..ast import c_ast
+        from pcc.frontends.c.ast import c_ast
         # ``Coord`` originally lived on ``pcc.frontends.c.parse.plyparser``; we
         # re-use its location here because the legacy ``CParser`` and
         # the new driver must produce ``Coord`` instances that compare
         # equal (they're used in AST nodes). The import is data-only:
         # ``Coord`` is a small dataclass-style container, no PLY.
-        from .plyparser import Coord, ParseError, PLYParser
-        from ..ast.ast_transforms import fix_switch_cases
+        from pcc.frontends.c.parse.plyparser import Coord, ParseError, PLYParser
+        from pcc.frontends.c.ast.ast_transforms import fix_switch_cases
 
 
         class CParserActions(PLYParser):

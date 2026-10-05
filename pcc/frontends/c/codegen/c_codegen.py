@@ -290,6 +290,7 @@ class CCodeGenerator(
         self._unsigned_pointee_bindings = set()
         self._unsigned_return_bindings = set()
         self._vla_bindings = set()
+        self._vla_element_counts = {}
         self._expr_ir_types = {}
         self._decl_ast_types = ChainMap()
         self._typedef_ast_types = ChainMap()
@@ -1047,12 +1048,29 @@ class CCodeGenerator(
             self._tag_unsigned_return(value)
         return value
 
-    def _mark_vla_binding(self, binding):
+    def _mark_vla_binding(self, binding, element_count=None):
         if binding is not None:
             try:
                 binding._pcc_vla_binding = True
             except (AttributeError, TypeError):
                 self._vla_bindings.add(binding)
+            if element_count is not None:
+                try:
+                    binding._pcc_vla_element_count = element_count
+                except (AttributeError, TypeError):
+                    self._vla_element_counts[binding] = element_count
+
+    def _vla_byte_size(self, binding):
+        """``sizeof`` of a VLA binding, evaluated at run time (C99 6.5.3.4p2)."""
+        element_count = getattr(binding, "_pcc_vla_element_count", None)
+        if element_count is None:
+            element_count = self._vla_element_counts.get(binding)
+        if element_count is None:
+            return None
+        element_size = self._ir_type_size(binding.type.pointee)
+        return self.builder.mul(
+            element_count, ir.Constant(int64_t, element_size), name="vlasizeof"
+        )
 
     def _is_vla_binding(self, binding):
         return binding is not None and (
@@ -1567,25 +1585,31 @@ class CCodeGenerator(
         function type derived from the promoted call operands matches clang's
         old-style call ABI lowering.
         """
-        if (
-            not isinstance(callee_func, ir.Function)
-            or not call_args
-            or not self._is_no_prototype_function_ir_type(
-                getattr(callee_func, "function_type", None)
-            )
-        ):
+        if not isinstance(callee_func, ir.Function):
             return callee_func
+        return self._concrete_no_prototype_callee(
+            callee_func,
+            getattr(callee_func, "function_type", None),
+            call_args,
+            f"{callee_func.name}.callabi",
+        )
 
+    def _concrete_no_prototype_callee(self, callee, function_type, call_args, name):
+        """Call an old-style ``T ()`` target with its promoted fixed arguments.
+
+        The same rule applies to calls through pointers to such functions
+        (``int (*fp)(); fp(i)``): an ``...``-only signature would pass ``i``
+        as a variadic argument, which arm64 Darwin puts on the stack while the
+        callee reads ``w0``.
+        """
+        if not call_args or not self._is_no_prototype_function_ir_type(function_type):
+            return callee
         call_type = ir.FunctionType(
-            callee_func.function_type.return_type,
+            function_type.return_type,
             [arg.type for arg in call_args],
             var_arg=False,
         )
-        return self.builder.bitcast(
-            callee_func,
-            call_type.as_pointer(),
-            name=f"{callee_func.name}.callabi",
-        )
+        return self.builder.bitcast(callee, call_type.as_pointer(), name=name)
 
     # GCC/clang builtins that are plain libm/libc entry points at the ABI
     # level. musl's pow() calls __builtin_fma; emitting that name verbatim
@@ -2453,13 +2477,18 @@ class CCodeGenerator(
         elif self._is_string_constant(expr):
             size = len(self._string_literal_data(expr))
         elif isinstance(expr, c_ast.ID):
+            binding = None
             try:
-                ir_type, _ = self.lookup(expr.name)
+                ir_type, binding = self.lookup(expr.name)
             except SemanticError:
                 decl_type = self._lookup_decl_ast_type(expr.name)
                 if decl_type is None:
                     raise
                 ir_type = self._resolve_ast_type(decl_type)
+            if self._is_vla_binding(binding):
+                runtime_size = self._vla_byte_size(binding)
+                if runtime_size is not None:
+                    return self._tag_unsigned(runtime_size)
             size = self._ir_type_size(ir_type)
         else:
             semantic_type = self._infer_sizeof_operand_ir_type(expr)
@@ -4831,10 +4860,13 @@ class CCodeGenerator(
                         )
                 call_args = coerced
                 ret_type = ftype.return_type
+                call_target = self._concrete_no_prototype_callee(
+                    fp_val, ftype, call_args, "fpcall.callabi"
+                )
                 if isinstance(ret_type, ir.VoidType):
-                    self.builder.call(fp_val, call_args)
+                    self.builder.call(call_target, call_args)
                     return ir.Constant(int64_t, 0), None
-                result = self.builder.call(fp_val, call_args, "fpcall")
+                result = self.builder.call(call_target, call_args, "fpcall")
                 return (
                     self._extend_call_result(
                         result, returns_unsigned=self._is_unsigned_return(fp_val)
@@ -4888,10 +4920,13 @@ class CCodeGenerator(
                     ]
                     ret_type = ftype.return_type
                     is_void = isinstance(ret_type, ir.VoidType)
+                    call_target = self._concrete_no_prototype_callee(
+                        func_val, ftype, coerced, "fpcall.callabi"
+                    )
                     if is_void:
-                        self.builder.call(func_val, coerced)
+                        self.builder.call(call_target, coerced)
                         return ir.Constant(int64_t, 0), None
-                    result = self.builder.call(func_val, coerced, "fpcall")
+                    result = self.builder.call(call_target, coerced, "fpcall")
                     return (
                         self._extend_call_result(
                             result, returns_unsigned=self._is_unsigned_return(func_val)

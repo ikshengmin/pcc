@@ -78,10 +78,11 @@ def test_finalizer_preserves_pending_exception_and_removes_file(tmp_path):
 @pytest.mark.parametrize('failure',('mode','setattr'))
 def test_construction_failure_rolls_back_file_and_descriptor(tmp_path,failure):
     runtime=FileRuntime();runtime.fail_setattr=failure=='setattr'
-    before=set(os.listdir('/proc/self/fd'))
+    descriptors='/proc/self/fd' if os.path.isdir('/proc/self/fd') else '/dev/fd'
+    before=set(os.listdir(descriptors))
     assert create(runtime,tmp_path,mode='rr' if failure=='mode' else 'w') is None
     assert runtime.error is not None and list(tmp_path.iterdir())==[]
-    assert set(os.listdir('/proc/self/fd'))==before
+    assert set(os.listdir(descriptors))==before
     assert not runtime.frames and not runtime.leases
 
 

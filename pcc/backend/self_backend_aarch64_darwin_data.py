@@ -9,7 +9,7 @@ from . import BackendUnavailable
 from .self_backend_aarch64_darwin_regs import align_pow2
 from .self_backend_aarch64_darwin_symbols import asm_symbol
 from .self_backend_ir import GlobalDef, TypeDesc, _align_to
-from .self_backend_literals import fp_bitcast_initializer_bits
+from .self_backend_literals import fp_bitcast_initializer_bits, wide_int_quad_lines
 from .self_backend_float_bits import bits_to_float64, float32_to_bits
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_parse import (
@@ -152,6 +152,10 @@ def emit_globals(
             lines.append(f".globl {asm_symbol(global_.name, module_symbols)}")
         lines.append(f"{asm_symbol(global_.name, module_symbols)}:")
         lines.append(emit_global_initializer(global_, module_symbols))
+        if global_.type.slot_size == 0:
+            # An empty struct/union object still needs a distinct address,
+            # and a Mach-O section must not be empty.
+            lines.append("  .space 1")
         lines.append("")
     return lines
 
@@ -211,6 +215,7 @@ def emit_zero_fill(size: int) -> list[str]:
     if size <= 0:
         return []
     return [f"  .space {size}"]
+
 
 
 def _initializer_symbol(name: str, module_symbols: PreparedModuleSymbols) -> str:
@@ -288,6 +293,8 @@ def emit_scalar_initializer(
             return [f"  .short {int(init)}"]
         if ty.width <= 32:
             return [f"  .long {int(init)}"]
+        if ty.width > 64:
+            return wide_int_quad_lines(init, ty.slot_size)
         return [f"  .quad {int(init)}"]
     if ty.is_fp:
         if is_hex_literal(init):

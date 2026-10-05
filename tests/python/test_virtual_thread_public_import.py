@@ -181,10 +181,12 @@ def worker() -> None:
 @pytest.mark.parametrize("statement, alias", _IMPORTS[:3])
 @pytest.mark.parametrize("local", (False, True), ids=("module", "local"))
 def test_public_import_continuation_runs_natively(
-    tmp_path, threaded_pcc_runtime_archive, statement, alias, local,
+    tmp_path, monkeypatch, threaded_pcc_runtime_archive, statement, alias, local,
 ):
     from pcc.frontends.python.pipeline import compile_python
 
+    # The threaded archive is admitted only for a threaded compilation.
+    monkeypatch.setenv("PCC_WITH_THREADS", "1")
     path = tmp_path / "public_import.py"
     executable = tmp_path / "public_import"
     source = (

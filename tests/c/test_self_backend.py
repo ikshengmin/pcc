@@ -1182,7 +1182,8 @@ declare i32 @llvm.vector.reduce.mul.v4i32(<4 x i32>)
 
     assert "imul r10d, r11d" in asm_text
     assert "mov DWORD PTR [rax + 12], r10d" in asm_text
-    assert "mov r11d, DWORD PTR [rbp -" in asm_text
+    # The shared integer-reduction lowering folds lanes 1..3 into eax.
+    assert asm_text.count("imul eax, r10d") == 3
 
 
 def test_self_backend_x86_64_linux_emits_sext_and_gep_subset():

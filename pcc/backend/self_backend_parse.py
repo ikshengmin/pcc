@@ -19,6 +19,9 @@ from .self_backend_float_bits import (
 from .wide_float import encode_float_bits, float_bytes
 from .self_backend_target_match import is_x86_64_linux_triple
 from .self_backend_kernel import IndexedFunctionSeed, get_indexed_function_kernel
+from .self_backend_wide_int import legalize_wide_integers
+from .self_backend_dynamic_alloca import legalize_dynamic_allocas
+from .self_backend_half import legalize_half_floats
 from .self_backend_literals import (
     _is_float_token,
     _is_hex_token,
@@ -325,6 +328,12 @@ def parse_self_backend_target_triple(ir_text: str) -> str:
 
 
 def parse_self_backend_module(ir_text: str) -> ParsedModule:
+    # Targets model scalars as one 64-bit register; split i128 values first.
+    ir_text = legalize_wide_integers(ir_text)
+    # Every alloca is a fixed frame slot below; counted ones need their size.
+    ir_text = legalize_dynamic_allocas(ir_text)
+    # No target has a binary16 register class; carry half values as float.
+    ir_text = legalize_half_floats(ir_text)
     type_context = TypeParseContext()
     type_context.type_cache.clear()
     type_context.pointer_type_cache.clear()
@@ -1878,6 +1887,7 @@ def _parse_functions(ir_text: str, *, type_context=None) -> list[ParsedFunction]
                 aarch64_reload_slot_offsets=[],
                 aarch64_fused_branch_values={},
                 aarch64_frameless=False, type_context=type_context,
+                aarch64_dynamic_stack=False,
             )
         # Freeze/adopt the complete function plane at the parser boundary.
         # Downstream consumers never need the construction seed or a block

@@ -129,6 +129,26 @@ SYSTEM_HEADERS = {
     "sys/stat.h",
 }
 
+# Clang-compatible feature-test operators. They are evaluated in #if before
+# macro expansion (a header name or identifier operand must not expand) and
+# answer from pcc's own capabilities: only keyword-backed C11 features and
+# compat-erased nullability qualifiers are claimed; no attributes, builtins or
+# warnings are, so portable fallbacks stay selected. Like clang,
+# ``defined(__has_include)`` and ``#ifdef __has_feature`` hold.
+_INCLUDE_TEST_OPERATORS = frozenset(("__has_include", "__has_include_next"))
+_UNCLAIMED_FEATURE_OPERATORS = frozenset((
+    "__has_feature", "__has_extension", "__has_builtin", "__has_attribute",
+    "__has_c_attribute", "__has_cpp_attribute", "__has_declspec_attribute",
+    "__has_warning",
+))
+_FEATURE_TEST_OPERATORS = (
+    _INCLUDE_TEST_OPERATORS | _UNCLAIMED_FEATURE_OPERATORS | frozenset(("__is_identifier",))
+)
+# __has_feature/__has_extension names backed by the C keyword table.
+_KEYWORD_BACKED_FEATURES = frozenset((
+    "c_alignas", "c_alignof", "c_generic_selections", "c_static_assert", "c_thread_local",
+))
+
 BUILTIN_DEFINES = {
     "NULL": "0",
     "EOF": "(-1)",
@@ -678,6 +698,10 @@ class Preprocessor:
             predefines["__APPLE__"] = "1"
             predefines["__MACH__"] = "1"
             predefines["__PCC_HOST_DARWIN__"] = "1"
+            # Darwin compilers enable -fblocks by default. pcc has no block
+            # literals, so only the __block storage class is accepted (and
+            # ignored); __BLOCKS__ stays undefined for ^-literal feature tests.
+            predefines["__block"] = ""
         elif target_os == "linux":
             predefines["__linux__"] = "1"
             if machine in ("aarch64", "arm64"):
@@ -744,6 +768,13 @@ class Preprocessor:
                 option, value = arg[:2], arg[2:]
             elif arg == "-nostdinc":
                 self.system_include_dirs.clear()
+                continue
+            elif arg in ("-fblocks", "-fno-blocks"):
+                if arg == "-fblocks":
+                    self.macros["__block"] = Macro("__block", "")
+                else:
+                    self.macros.pop("__block", None)
+                self._invalidate_expand_cache()
                 continue
             elif arg.startswith("-std=") or arg == "-ansi":
                 self._apply_language_standard("c89" if arg == "-ansi" else arg[5:])
@@ -898,7 +929,7 @@ class Preprocessor:
             if skipping:
                 skip_stack.append((True, False))
             else:
-                cond = name in self.macros
+                cond = self._is_defined(name)
                 skip_stack.append((not cond, cond))
             return
 
@@ -907,7 +938,7 @@ class Preprocessor:
             if skipping:
                 skip_stack.append((True, False))
             else:
-                cond = name not in self.macros
+                cond = not self._is_defined(name)
                 skip_stack.append((not cond, cond))
             return
 
@@ -932,6 +963,24 @@ class Preprocessor:
                 skip_stack[-1] = (True, branch_taken)
             else:
                 cond = self._eval_condition(expr)
+                skip_stack[-1] = (not cond, cond)
+            return
+
+        # C23 #elifdef / #elifndef: #elif with a defined test of one name.
+        elif_defined = re.match(r"(elifn?def)\s+(\S+)\s*$", directive)
+        if elif_defined:
+            if not skip_stack:
+                raise RuntimeError("owned preprocessor: #" + elif_defined.group(1) + " without #if")
+            parent_skip = (
+                any(s[0] for s in skip_stack[:-1]) if len(skip_stack) > 1 else False
+            )
+            _, branch_taken = skip_stack[-1]
+            if parent_skip or branch_taken:
+                skip_stack[-1] = (True, branch_taken)
+            else:
+                cond = self._is_defined(elif_defined.group(2))
+                if elif_defined.group(1) == "elifndef":
+                    cond = not cond
                 skip_stack[-1] = (not cond, cond)
             return
 
@@ -1063,7 +1112,7 @@ class Preprocessor:
                 end += 1
             if end >= len(tokens) or not IDENTIFIER_RE.fullmatch(tokens[end].text):
                 raise RuntimeError("owned preprocessor: invalid defined operand")
-            value = "1" if tokens[end].text in self.macros else "0"
+            value = "1" if self._is_defined(tokens[end].text) else "0"
             end += 1
             if parenthesized:
                 if end >= len(tokens) or tokens[end].text != ")":
@@ -1071,6 +1120,7 @@ class Preprocessor:
                 end += 1
             tokens[index:end] = [_MacroToken(tokens[index].leading, value)]
             index += 1
+        tokens = self._evaluate_feature_tests(tokens)
         expanded = self._serialize_macro_fragments(
             [token.leading + token.text for token in tokens]
         )
@@ -1091,6 +1141,78 @@ class Preprocessor:
             raise RuntimeError(
                 f"owned preprocessor: failed to evaluate #if expression: {expanded!r} ({exc})"
             ) from exc
+
+    def _is_defined(self, name):
+        return name in self.macros or name in _FEATURE_TEST_OPERATORS
+
+    def _evaluate_feature_tests(self, tokens):
+        """Replace feature-test operator calls with 0/1 before macro expansion."""
+        index = 0
+        while index < len(tokens):
+            name = tokens[index].text
+            # A program may supply its own fallback macro under the same name.
+            if name not in _FEATURE_TEST_OPERATORS or name in self.macros:
+                index += 1
+                continue
+            open_index = index + 1
+            if open_index >= len(tokens) or tokens[open_index].text != "(":
+                raise RuntimeError("owned preprocessor: " + name + " requires a parenthesized operand")
+            depth = 0
+            close_index = open_index
+            while close_index < len(tokens):
+                if tokens[close_index].text == "(":
+                    depth += 1
+                elif tokens[close_index].text == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                close_index += 1
+            if close_index >= len(tokens):
+                raise RuntimeError("owned preprocessor: unterminated " + name + " operand")
+            operand = tokens[open_index + 1:close_index]
+            if name in _INCLUDE_TEST_OPERATORS:
+                found = self._header_exists(operand, name == "__has_include_next")
+                value = "1" if found else "0"
+            elif name == "__is_identifier":
+                from pcc.frontends.c.parse.c_lex import KEYWORD_MAP
+
+                text = "".join(token.text for token in operand).strip()
+                value = "1" if IDENTIFIER_RE.fullmatch(text) and text not in KEYWORD_MAP else "0"
+            elif name in ("__has_feature", "__has_extension"):
+                feature = "".join(token.text for token in operand).strip()
+                # Nullability qualifiers are accepted when the compile path
+                # erases them (the C compat defines); otherwise not claimed.
+                claimed = feature in _KEYWORD_BACKED_FEATURES or (
+                    feature == "nullability" and "_Nonnull" in self.macros
+                )
+                value = "1" if claimed else "0"
+            else:
+                value = "0"
+            tokens[index:close_index + 1] = [_MacroToken(tokens[index].leading, value)]
+            index += 1
+        return tokens
+
+    def _header_exists(self, operand, include_next):
+        spelling = "".join(token.leading + token.text for token in operand).strip()
+        if not spelling.startswith(('"', '<')):
+            spelling = self._expand_line(spelling).strip()
+        quoted = len(spelling) > 1 and spelling.startswith('"') and spelling.endswith('"')
+        angled = len(spelling) > 1 and spelling.startswith('<') and spelling.endswith('>')
+        if not (quoted or angled):
+            raise RuntimeError("owned preprocessor: malformed __has_include operand: " + spelling)
+        directories = self.include_dirs + self.system_include_dirs
+        in_header = os.path.isabs(self._physical_file)
+        current_dir = os.path.dirname(self._physical_file) if in_header else self.base_dir
+        if include_next and in_header:
+            # Continue after the directory that supplied the current header;
+            # in the primary source file this degrades to __has_include.
+            current = os.path.abspath(current_dir)
+            matches = [i for i, d in enumerate(directories) if os.path.abspath(d) == current]
+            directories = directories[matches[0] + 1:] if matches else directories
+        elif quoted:
+            directories = [current_dir] + directories
+        filename = spelling[1:-1]
+        return any(os.path.isfile(os.path.join(directory, filename)) for directory in directories)
 
     @staticmethod
     def _macro_tokens(text):

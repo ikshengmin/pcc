@@ -71,6 +71,10 @@ def test_output_mode_carries_freestanding_policy_after_early_admission(tmp_path,
 
 @pytest.mark.parametrize('option', ['-pie', '-static-pie', '-Wl,--shared'])
 def test_invalid_policy_rejected_before_compilation(tmp_path, monkeypatch, capsys, option):
+    # The fixed ET_EXEC startup is Linux's freestanding contract; pin the
+    # target so the policy is checked on every host, not only on Linux.
+    import pcc.frontends.c.evaluator.c_evaluator as c_evaluator
+    monkeypatch.setattr(c_evaluator, 'host_target_triple', lambda: 'x86_64-unknown-linux-gnu')
     monkeypatch.setattr(CEvaluator, 'compile_translation_units', forbidden)
     assert cli_main(['--freestanding-libc', '--link-arg='+option, str(source_file(tmp_path))]) == 1
     assert 'fixed ET_EXEC' in capsys.readouterr().err

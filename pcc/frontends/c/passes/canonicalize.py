@@ -375,7 +375,20 @@ class _Canonicalizer(ASTTransformer):
     def visit_TernaryOp(self, node):
         self._visit_children(node)
         # The result has the common type of both arms even with a constant
-        # condition. Keep that conversion for typed lowering (e.g. 1 ? -1 : 1U).
+        # condition. Keep that conversion for typed lowering (e.g. 1 ? -1 : 1U)
+        # and fold only when it is the identity: two constants of one type.
+        cv = get_safe_int_value(node.cond)
+        if (
+            cv is not None
+            and isinstance(node.iftrue, c_ast.Constant)
+            and isinstance(node.iffalse, c_ast.Constant)
+            and node.iftrue.type == node.iffalse.type
+        ):
+            if cv != 0:
+                self._mark("ternary_true", node)
+                return node.iftrue
+            self._mark("ternary_false", node)
+            return node.iffalse
         return node
 
     # ── Cast: fold cast of constant ─────────────────────────────────────

@@ -14,6 +14,9 @@ TARGETS = (
     "arm64-apple-darwin", "x86_64-pc-windows-msvc",
 )
 UNSUPPORTED = ("half", "bfloat", "fp128", "ppc_fp128", "x86_amx")
+# The module parser's legalization stores half as its i16 encoding
+# (self_backend_half); only the raw type parser still rejects it.
+UNSUPPORTED_WHEN_USED = tuple(leaf for leaf in UNSUPPORTED if leaf != "half")
 ATTRIBUTES = ("byval", "byref", "sret", "inalloca", "preallocated", "elementtype")
 
 
@@ -41,18 +44,30 @@ def test_unused_unsupported_nested_type_preserves_owned_object(target, leaf):
     assert emit_owned_object(text, target) == emit_owned_object(_module(target=target), target)
 
 
-@pytest.mark.parametrize("leaf", UNSUPPORTED)
-@pytest.mark.parametrize("site", ["global", "signature", "alloca", "gep"])
-def test_used_unsupported_named_layout_fails_and_does_not_leak_cache(leaf, site):
+def _named_layout_use(leaf, site):
     declarations = "%T = type { " + leaf + " }\n"
     if site == "global":
-        text = _module(declarations + "@value = global %T zeroinitializer\n")
-    elif site == "signature":
-        text = _module(declarations, "define void @probe(%T %value) {\nentry:\n  ret void\n}\n")
-    elif site == "alloca":
-        text = _module(declarations, "define void @probe() {\nentry:\n  %value = alloca %T\n  ret void\n}\n")
-    else:
-        text = _module(declarations, "define ptr @probe(ptr %address) {\nentry:\n  %value = getelementptr %T, ptr %address, i32 0, i32 0\n  ret ptr %value\n}\n")
+        return declarations, _module(declarations + "@value = global %T zeroinitializer\n")
+    if site == "signature":
+        return declarations, _module(declarations, "define void @probe(%T %value) {\nentry:\n  ret void\n}\n")
+    if site == "alloca":
+        return declarations, _module(declarations, "define void @probe() {\nentry:\n  %value = alloca %T\n  ret void\n}\n")
+    return declarations, _module(declarations, "define ptr @probe(ptr %address) {\nentry:\n  %value = getelementptr %T, ptr %address, i32 0, i32 0\n  ret ptr %value\n}\n")
+
+
+@pytest.mark.parametrize("site", ["global", "signature", "alloca", "gep"])
+def test_used_half_layout_is_stored_as_its_binary16_encoding(site):
+    _declarations, text = _named_layout_use("half", site)
+    module = parser.parse_self_backend_module(text)
+    layout = parser.parse_ir_type("%T", type_context=module.type_context)
+    assert [field.describe() for field in layout.fields] == ["i16"]
+    assert (layout.slot_size, layout.align) == (2, 2)
+
+
+@pytest.mark.parametrize("leaf", UNSUPPORTED_WHEN_USED)
+@pytest.mark.parametrize("site", ["global", "signature", "alloca", "gep"])
+def test_used_unsupported_named_layout_fails_and_does_not_leak_cache(leaf, site):
+    declarations, text = _named_layout_use(leaf, site)
     with pytest.raises(BackendUnavailable):
         parser.parse_self_backend_module(text)
     context = parser._parse_named_types(declarations)

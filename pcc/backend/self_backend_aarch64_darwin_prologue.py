@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from . import BackendUnavailable
 from .self_backend_target_match import is_aarch64_linux_triple
 from .self_backend_aarch64_darwin_abi import (
     aggregate_passed_indirect,
@@ -32,6 +33,7 @@ from .self_backend_aarch64_darwin_slots import (
     store_value_regs_to_value_slot,
 )
 from .self_backend_aarch64_darwin_symbols import asm_symbol
+from .self_backend_dynamic_alloca import DYNAMIC_ALLOCA_INTRINSIC
 from .self_backend_ir import (
     ParsedFunction,
     SlotInfo,
@@ -44,6 +46,18 @@ from .self_backend_kernel import (
     TYPE_KIND_PTR,
     get_indexed_function_kernel,
 )
+
+
+def function_uses_dynamic_alloca(func: ParsedFunction) -> bool:
+    kernel = get_indexed_function_kernel(func)
+    call_count = len(kernel.call_scalars) // 8
+    call_id = 0
+    while call_id < call_count:
+        header = kernel.call_header(call_id)
+        if not (header.third & 1) and kernel.call_texts[header.second] == DYNAMIC_ALLOCA_INTRINSIC:
+            return True
+        call_id += 1
+    return False
 
 
 def emit_function_prologue(
@@ -67,6 +81,15 @@ def emit_function_prologue(
         lines.append("  mov x0, sp")
     if func.platform_frame_extra:
         func.aarch64_frameless = False
+    func.aarch64_dynamic_stack = function_uses_dynamic_alloca(func)
+    if func.aarch64_dynamic_stack:
+        func.aarch64_frameless = False
+        if func.platform_frame_extra:
+            # The va_list register save area is addressed from SP.
+            raise BackendUnavailable(
+                f"self backend cannot combine a dynamic alloca with the Linux "
+                f"variadic register save area in {func.name!r}"
+            )
     # AArch64 branch protection (pac-ret + BTI). ``paciasp`` signs LR (x30) with
     # SP as the modifier *before* the frame save stores it, and doubles as a BTI
     # ``c`` landing pad for ``bl``/``blr`` callers. The matching ``autiasp`` is

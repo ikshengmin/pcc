@@ -67,6 +67,7 @@ py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_func_new_named = extern("py_func_new_named", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr)
 py_class_setattr = extern("py_class_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
+py_class_add_method = extern("py_class_add_method", (c_ptr, c_ptr, c_ptr), c_void)
 py_weakref_new = extern("py_weakref_new", (c_ptr, c_ptr), c_ptr)
 py_os_path_abspath = extern("py_os_path_abspath", (c_ptr,), c_ptr)
 py_os_path_exists = extern("py_os_path_exists", (c_ptr,), c_int64)
@@ -1558,8 +1559,8 @@ def _temporary_type(named_file: int):
             _td_hold(slots, pins, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
         else:
             captures = _td_init_signature(slots, pins)
-            _td_add_method(load_ptr(slots, _TYPE_CANDIDATE * C_POINTER_SIZE),
-                cstr("__init__"), function_addr("pcc_tempdir_init_entry"), captures, slots, pins)
+            _td_add_init(load_ptr(slots, _TYPE_CANDIDATE * C_POINTER_SIZE),
+                function_addr("pcc_tempdir_init_entry"), captures, slots, pins)
     cls = load_ptr(slots, _TYPE_CANDIDATE * C_POINTER_SIZE)
     captures = load_ptr(slots, _FILE_CAPTURES_EMPTY * C_POINTER_SIZE)
     if not py_err_occurred():
@@ -1680,6 +1681,20 @@ def _td_add_method(cls, name, entry, captures, slots, pins) -> None:
     _td_hold(slots, pins, _TYPE_METHOD, py_func_new_named(entry, captures, name))
     if not py_err_occurred():
         py_class_setattr(cls, name, load_ptr(slots, _TYPE_METHOD * C_POINTER_SIZE))
+    _td_drop(slots, pins, _TYPE_METHOD)
+
+
+def _td_add_init(cls, entry, captures, slots, pins) -> None:
+    # Instance construction resolves __init__ from the method table
+    # (py_class_lookup), not the attribute dict. Publish the function in both:
+    # the attribute owns it, the table entry is a borrowed metadata slot.
+    if py_err_occurred():
+        return
+    _td_hold(slots, pins, _TYPE_METHOD, py_func_new_named(entry, captures, cstr("__init__")))
+    if not py_err_occurred():
+        method = load_ptr(slots, _TYPE_METHOD * C_POINTER_SIZE)
+        if py_class_setattr(cls, cstr("__init__"), method) == 0:
+            py_class_add_method(cls, cstr("__init__"), method)
     _td_drop(slots, pins, _TYPE_METHOD)
 
 

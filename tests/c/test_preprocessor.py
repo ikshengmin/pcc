@@ -65,7 +65,8 @@ class TestIncludeUser(unittest.TestCase):
 
     def test_missing_user_header_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(RuntimeError, match="system cpp failed"):
+            # Owned and system preprocessing both name the missing header.
+            with pytest.raises(RuntimeError, match=r"missing_header\.h"):
                 CEvaluator().evaluate(
                     """
                     #include "missing_header.h"

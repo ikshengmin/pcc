@@ -353,6 +353,12 @@ def parsed_function_has_alloca_slot(func, key: str) -> bool:
     return _parsed_function_alloca_slot_raw(func, key) is not None
 
 
+def _wide_int_size(width: int) -> int:
+    """Bytes for an integer wider than 64 bits: whole 16-byte units, like
+    clang's ``__int128`` (size 16, alignment 16 on arm64 and x86-64)."""
+    return ((width + 127) // 128) * 16
+
+
 def _align_to(value: int, alignment: int) -> int:
     if value == 0:
         return 0
@@ -421,6 +427,8 @@ class TypeDesc:
             if self.width == 80:
                 return 16
             return 4 if self.width <= 32 else 8
+        if self.is_int and self.width > 64:
+            return _wide_int_size(self.width)
         if self.is_ptr or self.width > 32:
             return 8
         if self.is_array:
@@ -452,6 +460,8 @@ class TypeDesc:
             if self.width == 80:
                 return 16
             return 4 if self.width <= 32 else 8
+        if self.is_int and self.width > 64:
+            return _wide_int_size(self.width)
         if self.is_ptr or self.width > 32:
             return 8
         return 4
@@ -474,6 +484,8 @@ class TypeDesc:
             if self.width == 80:
                 return 16
             return 4 if self.width <= 32 else 8
+        if self.is_int and self.width > 64:
+            return 16
         if self.is_ptr or self.width > 32:
             return 8
         if self.width <= 8:
@@ -492,6 +504,8 @@ class TypeDesc:
             if self.width == 80:
                 return 16
             return 4 if self.width <= 32 else 8
+        if self.is_int and self.width > 64:
+            return 16
         if self.is_ptr or self.width > 32:
             return 8
         return 4
@@ -1395,6 +1409,9 @@ class ParsedFunction:
     # and every return is a bare ``ret``.
     aarch64_frameless: bool = False
     type_context: TypeParseContext | None = field(default=None, repr=False, compare=False)
+    # The function moves the stack pointer at run time (a counted alloca, see
+    # self_backend_dynamic_alloca); every epilogue first restores SP from x29.
+    aarch64_dynamic_stack: bool = False
 
 
 def parsed_module_instruction_arena_profile(module: ParsedModule) -> dict[str, int]:

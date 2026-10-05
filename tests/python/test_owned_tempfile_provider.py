@@ -37,6 +37,7 @@ class Obj:
     def __init__(self, kind, value=None):
         self.kind, self.value = kind, value
         self.flags, self.pins, self.attrs = 0, 0, {}
+        self.methods = {}
 
 
 class Runtime:
@@ -118,6 +119,7 @@ class Runtime:
             'py_obj_setattr':self.setattr,
             'py_class_new':lambda *args:Obj('class'),
             'py_class_setattr':self.setattr,
+            'py_class_add_method':lambda cls,name,func:cls.methods.__setitem__(self.raw(name).decode(),func),
             'py_func_new_named':lambda entry,cap,name:Obj('func',(entry,cap)),
             'py_weakref_new':self.new_weakref,
             'py_os_path_abspath':lambda o:Obj('str',os.path.abspath(o.value)),
@@ -397,6 +399,8 @@ def test_canonical_type_has_real_binder_and_methods(runtime):
     cls=runtime.ns['py_tempdir_type']()
     assert cls is runtime.ns['py_tempdir_type']()
     assert {'__init__','__enter__','__exit__','cleanup','__repr__'} <= cls.attrs.keys()
+    # Construction finds __init__ in the method table (py_class_lookup).
+    assert cls.methods == {'__init__': cls.attrs['__init__']}
     signature=cls.attrs['__init__'].value[1].value[1]
     assert [x.value for x in signature.value[1].value]==['self','suffix','prefix','dir','ignore_cleanup_errors','delete']
     assert signature.value[2].value==[0,0,0,0,0,2]
@@ -493,9 +497,13 @@ def _mkstemp_model_with_native_open():
     value = Runtime()
     calls = []
     def open_flags(path, flags, permissions, directory):
+        from tests.python.test_owned_fdopen_provider import _host_open_flags
+
         calls.append((value.raw(path), flags, permissions, directory))
         try:
-            return os.open(value.raw(path), flags, permissions, dir_fd=None if directory == -100 else directory)
+            # The model's runtime targets Linux; translate for the host open.
+            return os.open(value.raw(path), _host_open_flags(flags), permissions,
+                           dir_fd=None if directory == -100 else directory)
         except OSError as error:
             return -error.errno
     value.ns['open_file_flags'] = open_flags
@@ -514,7 +522,8 @@ def test_owned_mkstemp_has_exclusive_owner_permissions_suffix_and_no_auto_delete
         assert path.name.endswith('.tail') and 'XXXXXX' not in path.name
         assert stat.S_IMODE(os.fstat(fd).st_mode) == 0o600
         assert not os.get_inheritable(fd)
-        assert calls[-1][1] == os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+        from tests.python.test_owned_fdopen_provider import _host_open_flags
+        assert _host_open_flags(calls[-1][1]) == os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
         assert calls[-1][2:] == (0o600, -100)
         os.write(fd, b'first owner')
     finally:

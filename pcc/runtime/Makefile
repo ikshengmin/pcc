@@ -260,8 +260,12 @@ $(OBJDIR_PY)/%.o: $(PYDIR)/%.py | $(OBJDIR_PY)
 # apparently up-to-date object eligible for the production archive.  The
 # recursive rebuild runs only for that recovery case; ordinary object builds
 # publish both files in one emitter process.
+# The recovery make goes through a plain variable: a literal $(MAKE) line is
+# executed even under ``make -n``, which made every dry-run plan recurse once
+# per runtime module (178 sub-makes, ~40 s) instead of printing the plan.
+PCC_RECOVERY_MAKE = $(MAKE)
 $(OBJDIR_PY)/%.o.provenance.json: $(OBJDIR_PY)/%.o
-	test -f $@ || $(MAKE) -B $(@D)/$*.o
+	test -f $@ || $(PCC_RECOVERY_MAKE) -B $(@D)/$*.o
 	test -f $@
 
 # This module implements pcc_thread_safepoint itself. Compiling it with the

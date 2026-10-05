@@ -207,3 +207,60 @@ def test_gnu_optional_variadic_comma():
     assert 'int a=foo(0);' in result
     assert 'int b=foo(0,1, 2);' in result
     assert 'int c=foo(0,);' in result
+
+
+def test_c23_elifdef_and_elifndef_select_one_branch():
+    source = (
+        "#define HAVE_A 1\n"
+        "#if 0\nint zero;\n#elifdef MISSING\nint missing;\n#elifdef HAVE_A\nint a;\n"
+        "#else\nint other;\n#endif\n"
+        "#ifdef MISSING\nint m;\n#elifndef ALSO_MISSING\nint not_defined;\n#endif\n"
+        "#if 0\n#if 1\n#elifdef HAVE_A\nint nested;\n#endif\n#endif\n"
+    )
+    result = preprocess(source)
+    assert "int a;" in result
+    assert "int not_defined;" in result
+    for absent in ("int zero;", "int missing;", "int other;", "int m;", "int nested;"):
+        assert absent not in result
+
+
+def test_feature_test_operators_answer_from_owned_capabilities(tmp_path):
+    (tmp_path / "present.h").write_text("int present;\n")
+    source = (
+        '#if __has_include("present.h") && !__has_include(<absent_header.h>)\n'
+        "int include_ok;\n#endif\n"
+        "#if defined(__has_include) && defined(__has_feature)\nint defined_ok;\n#endif\n"
+        "#ifdef __has_builtin\nint ifdef_ok;\n#endif\n"
+        "#if __has_feature(c_static_assert) && !__has_feature(unknown_feature)\n"
+        "int feature_ok;\n#endif\n"
+        "#if !__has_builtin(__builtin_expect) && !__has_attribute(noreturn)\n"
+        "int unclaimed_ok;\n#endif\n"
+        "#if !__is_identifier(nullptr) && __is_identifier(plain_name)\n"
+        "int identifier_ok;\n#endif\n"
+    )
+    result = preprocess(source, base_dir=str(tmp_path))
+    for marker in ("include_ok", "defined_ok", "ifdef_ok", "feature_ok",
+                   "unclaimed_ok", "identifier_ok"):
+        assert "int " + marker + ";" in result
+
+
+def test_nullability_feature_follows_qualifier_erasure():
+    source = "#if __has_feature(nullability)\nint claimed;\n#else\nint unclaimed;\n#endif\n"
+    assert "int unclaimed;" in preprocess(source)
+    assert "int claimed;" in preprocess(source, cpp_args=["-D_Nonnull="])
+
+
+def test_program_fallback_macro_overrides_feature_operator():
+    source = "#define __has_feature(x) 1\n#if __has_feature(anything)\nint program_macro;\n#endif\n"
+    assert "int program_macro;" in preprocess(source)
+
+
+def test_block_storage_class_follows_target_and_blocks_options():
+    source = "__block int counter;\n"
+    darwin, linux = "arm64-apple-darwin", "x86_64-unknown-linux-gnu"
+    assert "__block" not in preprocess(source, target_triple=darwin)
+    assert "__block int counter;" in preprocess(source, target_triple=linux)
+    assert "__block" not in preprocess(source, target_triple=linux, cpp_args=["-fblocks"])
+    assert "__block int counter;" in preprocess(
+        source, target_triple=darwin, cpp_args=["-fno-blocks"],
+    )

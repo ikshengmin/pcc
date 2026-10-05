@@ -6,7 +6,7 @@ import re
 
 from . import BackendUnavailable
 from .self_backend_ir import GlobalDef, TypeDesc, _align_to
-from .self_backend_literals import fp_bitcast_initializer_bits
+from .self_backend_literals import fp_bitcast_initializer_bits, wide_int_quad_lines
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .wide_float import encode_float_bits, float_bytes
 from .self_backend_parse import (
@@ -139,6 +139,8 @@ def emit_scalar_initializer(
             return [f"  .short {int(init)}"]
         if ty.width <= 32:
             return [f"  .long {int(init)}"]
+        if ty.width > 64:
+            return wide_int_quad_lines(init, ty.slot_size)
         return [f"  .quad {int(init)}"]
     if ty.is_fp:
         if ty.width == 80:
@@ -413,5 +415,8 @@ def emit_globals(
             lines.extend(emit_zero_fill(global_.type.slot_size))
         else:
             lines.append(emit_global_initializer(global_, module_symbols))
+        if global_.type.slot_size == 0:
+            # An empty struct/union object still needs a distinct address.
+            lines.append("  .zero 1")
         lines.append("")
     return lines

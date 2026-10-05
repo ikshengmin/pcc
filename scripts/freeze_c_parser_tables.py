@@ -69,9 +69,19 @@ def _action_name_for(prod) -> str:
 
 
 def main() -> int:
+    import tempfile
+
     from pcc.frontends.c.parse.c_parser import CParser  # noqa: E402
 
-    parser = CParser()
+    # Build from the live grammar: the default optimized CParser reuses a
+    # cached yacctab without checking its signature, which would freeze
+    # stale tables after a grammar edit.
+    with tempfile.TemporaryDirectory(prefix="pcc-c-parser-freeze-") as tmpdir:
+        parser = CParser(
+            lex_optimize=False,
+            yacc_optimize=False,
+            taboutputdir=tmpdir,
+        )
     yp = parser.cparser
 
     # Productions table — one entry per LR production

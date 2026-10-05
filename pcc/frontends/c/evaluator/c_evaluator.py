@@ -379,7 +379,9 @@ def _compile_cache_key(
         unit_name or "",
         preprocessed_source,
     ):
-        hasher.update(piece.encode("utf-8"))
+        # Malformed source bytes arrive as surrogate escapes; hash those bytes
+        # so the encoding diagnostic comes from the frontend, not the cache.
+        hasher.update(piece.encode("utf-8", "surrogateescape"))
         hasher.update(b"\0")
     return hasher.hexdigest()
 
@@ -390,7 +392,7 @@ def _native_cache_key(entry, opt_signature, pass_signature, backend_sig, source_
             f"{_COMPILE_CACHE_VERSION}\0{_COMPILER_CACHE_FINGERPRINT}\0"
             f"{entry}\0{opt_signature}\0{pass_signature}\0"
             f"{backend_sig or backend_signature(None)}\0{source_text}"
-        ).encode("utf-8")
+        ).encode("utf-8", "surrogateescape")
     ).hexdigest()
 
 
@@ -853,8 +855,8 @@ _C_EXTENSION_COMPAT_DEFINES = (
     "-D__nonnull=",
     "-D__nullable=",
     "-D__null_unspecified=",
-    "-D__int128_t=long long",
-    "-D__uint128_t=unsigned long long",
+    "-D__int128_t=__int128",
+    "-D__uint128_t=unsigned __int128",
     "-D__builtin_memcpy=memcpy",
     "-D__builtin_memmove=memmove",
     "-D__builtin_memcmp=memcmp",

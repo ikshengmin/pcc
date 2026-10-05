@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from pcc.backend.elf_x86_64 import ElfError, link_static_executable, parse_relocatable
+from pcc.runtime.freestanding_abi_spec import ABI_SPEC
 from pcc.backend.owned_object_emit import emit_owned_object
 from pcc.driver.project import TranslationUnit
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
@@ -365,13 +366,10 @@ def test_exit_runs_callbacks_reverse_finalizers_new_callbacks_then_flush_even_on
     assert events[-1] == ("exit", 42) and events.count("first") == 1
 
 
+# Every stdio layout/flag constant, from the runtime's ABI table, so a new
+# flag consulted by the modelled functions cannot drift out of this model.
 _STDIO_CONSTANTS = {
-    "stdio.file.size": 64, "stdio.file.magic": 5783538579059651889,
-    "stdio.file.magic_offset": 0, "stdio.file.fd_offset": 8,
-    "stdio.file.flags_offset": 16, "stdio.file.aux_offset": 24,
-    "stdio.file.buffer_offset": 32, "stdio.file.buffer_capacity_offset": 40,
-    "stdio.file.buffer_length_offset": 48, "stdio.file.buffer_position_offset": 56,
-    "stdio.flag.readable": 1, "stdio.flag.writable": 2,
+    name: value for name, value in ABI_SPEC.items() if name.startswith("stdio.")
 }
 
 

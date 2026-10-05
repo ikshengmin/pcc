@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - non-POSIX fallback
 
 
 _DEFAULT_PLY_LEXTAB = "pcc_frontends_c_lextab_v14"
-_DEFAULT_PLY_YACCTAB = "pcc_yacctab_v19"
+_DEFAULT_PLY_YACCTAB = "pcc_yacctab_v20"
 
 
 def _default_ply_cache_dir():
@@ -631,8 +631,13 @@ class CParser(PLYParser):
     # In function definitions, the declarator can be followed by
     # a declaration list, for old "K&R style" function definitios.
     #
+    # Without declaration specifiers the function name must be an ID: a
+    # leading TYPEID at file scope always starts declaration specifiers, so
+    # ``size_t (*hook)(void);`` declares ``hook`` instead of failing as an
+    # implicit-int K&R definition named ``size_t``.
+    #
     def p_function_definition_1(self, p):
-        """ function_definition : declarator declaration_list_opt compound_statement
+        """ function_definition : knr_declarator declaration_list_opt compound_statement
         """
         # no declaration specifiers - 'int' becomes the default type
         spec = dict(
@@ -1055,11 +1060,13 @@ class CParser(PLYParser):
 
     def p_declarator_1(self, p):
         """ declarator  : direct_declarator
+            knr_declarator : knr_direct_declarator
         """
         p[0] = p[1]
 
     def p_declarator_2(self, p):
         """ declarator  : pointer direct_declarator
+            knr_declarator : pointer knr_direct_declarator
         """
         p[0] = self._type_modify_decl(p[2], p[1])
 
@@ -1081,6 +1088,7 @@ class CParser(PLYParser):
     def p_direct_declarator_1(self, p):
         """ direct_declarator   : ID
                                 | TYPEID
+            knr_direct_declarator : ID
         """
         p[0] = c_ast.TypeDecl(
             declname=p[1],
@@ -1142,6 +1150,8 @@ class CParser(PLYParser):
     def p_direct_declarator_6(self, p):
         """ direct_declarator   : direct_declarator LPAREN parameter_type_list RPAREN
                                 | direct_declarator LPAREN identifier_list_opt RPAREN
+            knr_direct_declarator : knr_direct_declarator LPAREN parameter_type_list RPAREN
+                                  | knr_direct_declarator LPAREN identifier_list_opt RPAREN
         """
         func = c_ast.FuncDecl(
             args=p[3],

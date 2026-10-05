@@ -2481,15 +2481,28 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             raise BackendUnavailable(
                 f"x86_64 self backend unresolved direct callee not translated yet in {func.name!r}"
             )
+        # Constant-size copies/fills unroll into wide moves; the shared
+        # byte loop below is only the fallback for run-time sizes.
+        if (
+            not is_indirect
+            and callee.startswith("llvm.memcpy.")
+            and len(args) >= 4
+            and const_int_from_value(args[2][1]) is not None
+        ):
+            return _emit_memcpy_intrinsic_call(func, args)
+        if (
+            not is_indirect
+            and callee.startswith("llvm.memset.")
+            and len(args) >= 4
+            and const_int_from_value(args[2][1]) is not None
+            and const_int_from_value(args[1][1]) is not None
+        ):
+            return _emit_memset_intrinsic_call(func, args)
         if not is_indirect and callee.startswith("llvm."):
             from .self_backend_x86_intrinsics import emit as emit_extra_intrinsic
             intrinsic_lines = emit_extra_intrinsic(func, dest, ret_type, callee, args, windows=_WINDOWS_ABI)
             if intrinsic_lines is not None:
                 return intrinsic_lines
-        if not is_indirect and callee.startswith("llvm.memcpy."):
-            return _emit_memcpy_intrinsic_call(func, args)
-        if not is_indirect and callee.startswith("llvm.memset."):
-            return _emit_memset_intrinsic_call(func, args)
         if not is_indirect and callee.startswith("llvm.floor."):
             return _emit_floor_intrinsic_call(func, dest, ret_type, callee, args)
         if not is_indirect and callee.startswith("llvm.sqrt."):
@@ -2566,6 +2579,13 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
                     return lines
             raise BackendUnavailable(
                 f"x86_64 self backend intrinsic not translated yet in {func.name!r}: {callee}"
+            )
+        if not is_indirect and callee == "llvm.pcc.dynamic.alloca":
+            # Frame slots are addressed from RSP here, so moving RSP at run
+            # time would shift every slot; refuse instead of miscompiling.
+            raise BackendUnavailable(
+                "x86_64 self backend does not support run-time sized stack "
+                f"allocation (VLA or alloca) in {func.name!r}"
             )
         if not is_indirect and callee.startswith("llvm."):
             # Fail fast: an un-lowered LLVM intrinsic must never fall

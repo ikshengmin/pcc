@@ -82,5 +82,10 @@ def compile_owned_c_with_runtime(
             include_dirs=[str(root / "pcc/runtime/include"), str(root / "utils/fake_libc_include")],
             cpp_args=list(cpp_args),
         )
-        evaluator.emit_executable(units, str(executable))
+        # ELF/PE executables always link the target runtime; a Mach-O C
+        # executable links only libSystem unless the archive is named.
+        link_args = [] if any(
+            name in evaluator.target_triple for name in ("linux", "windows")
+        ) else [str(archive)]
+        evaluator.emit_executable(units, str(executable), link_args=link_args)
     return executable

@@ -510,6 +510,7 @@ def _seed_from_wire(value) -> tuple[ParsedFunction, tuple[tuple[str, int], ...]]
         aarch64_reload_slot_offsets=[],
         aarch64_fused_branch_values={},
         aarch64_frameless=False,
+        aarch64_dynamic_stack=False,
     )
     return function, tuple(arena_inventory)
 

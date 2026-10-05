@@ -224,12 +224,23 @@ def test_platform_fs_object_owns_path_queries_with_platform_boundary(tmp_path):
     assert undefined.returncode == 0, undefined.stdout + undefined.stderr
     if sys.platform == "darwin":
         assert set(undefined.stdout.split()) == {
+            # path queries
             "_access",
             "_getcwd",
             "_getpid",
             "_mkdir",
             "_readlink",
             "_stat",
+            # mkstemp-style exclusive files and directory-tree removal
+            "_chmod",
+            "_openat",
+            "_opendir",
+            "_readdir",
+            "_closedir",
+            "_unlinkat",
+            "___error",
+            "_malloc",
+            "_free",
         }
     else:
         assert sys.platform.startswith("linux") and platform.machine() == "x86_64"

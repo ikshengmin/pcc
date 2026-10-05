@@ -949,6 +949,10 @@ def _prepare_executable_image(
     # field is an import pointer in __DATA that dyld binds. Collected here,
     # emitted into the fixups chain below.
     tlv_bind_sites: list[tuple] = []  # (_Out, offset_in_out, ordinal)
+    # Ordinary data pointers to imports (``void *(*f)() = memset;``): a
+    # chained BIND with the inline addend, in whichever data segment holds
+    # the pointer. (_Out, offset_in_out, ordinal, addend)
+    data_bind_sites: list[tuple] = []
     # In-image data pointers (UNSIGNED to a defined symbol) hold absolute
     # addresses that must follow the ASLR slide, so each needs a REBASE
     # chained fixup. (_Out, offset_in_out, target_offset_from_image_base)
@@ -1097,6 +1101,19 @@ def _prepare_executable_image(
                         struct.pack_into("<Q", out.data, at_off, 0)
                         tlv_bind_sites.append(
                             (out, at_off, import_ordinal[name]))
+                    elif (
+                        name in import_ordinal
+                        and out.segname in ("__DATA", "__DATA_CONST")
+                    ):
+                        addend, = struct.unpack_from("<q", out.data, at_off)
+                        if not 0 <= addend < (1 << 8):
+                            raise LinkError(
+                                f"import {name!r} data pointer addend {addend} "
+                                "does not fit a chained bind"
+                            )
+                        struct.pack_into("<Q", out.data, at_off, 0)
+                        data_bind_sites.append(
+                            (out, at_off, import_ordinal[name], addend))
                     else:
                         raise LinkError(f"import {name!r} in a data pointer")
                 elif in_tlv_desc and name in thread_block_offset:
@@ -1237,6 +1254,11 @@ def _prepare_executable_image(
             (out.addr + off, out, off, _bind_word(ordinal))
             for out, off, ordinal in tlv_bind_sites
         )
+    for out, off, ordinal, addend in data_bind_sites:
+        # DYLD_CHAINED_PTR_64(_OFFSET) bind: addend is bits 24..31.
+        seg_index = dc_index if out.segname == "__DATA_CONST" else data_index
+        seg_fixups.setdefault(seg_index, []).append(
+            (out.addr + off, out, off, _bind_word(ordinal) | (addend << 24)))
     for out, off, image_off in rebase_sites:
         seg_index = dc_index if out.segname == "__DATA_CONST" else data_index
         seg_fixups.setdefault(seg_index, []).append(

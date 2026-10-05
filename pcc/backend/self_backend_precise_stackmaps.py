@@ -713,6 +713,65 @@ def _native_triple_hash(first: int, second: int, third: int) -> int:
     return _native_pair_hash(_native_pair_hash(first, second), third)
 
 
+def _rebuilt_pair_index(
+    previous: CompilerIntArena,
+    previous_capacity: int,
+    capacity: int,
+) -> CompilerIntArena:
+    """Reinsert (hash, encoded ID) entries into a larger linear-probe index.
+
+    Index capacities start from call-protocol hints. Frame slots, groups and
+    states are not bounded by those hints, so inserts grow the index at half
+    load instead of failing; lookups always reach an empty slot.
+    """
+    index = CompilerIntArena(capacity * 2)
+    index.append_zeros(capacity * 2)
+    mask = capacity - 1
+    slot_index = 0
+    while slot_index < previous_capacity:
+        offset = slot_index * 2
+        encoded = previous.get_unchecked(offset + 1)
+        if encoded != 0:
+            key_hash = previous.get_unchecked(offset)
+            slot = key_hash & mask
+            while index.get_unchecked(slot * 2 + 1) != 0:
+                slot = (slot + 1) & mask
+            index.set2_unchecked(slot * 2, key_hash, encoded)
+        slot_index += 1
+    previous.close()
+    return index
+
+
+def _rebuilt_transition_index(
+    previous: CompilerIntArena,
+    previous_capacity: int,
+    capacity: int,
+) -> CompilerIntArena:
+    """Rehash (state, group, operation, result) transition-cache entries."""
+    index = CompilerIntArena(capacity * 4)
+    index.append_zeros(capacity * 4)
+    mask = capacity - 1
+    slot_index = 0
+    while slot_index < previous_capacity:
+        offset = slot_index * 4
+        encoded = previous.get_unchecked(offset + 3)
+        if encoded != 0:
+            state_id = previous.get_unchecked(offset)
+            group_id = previous.get_unchecked(offset + 1)
+            operation = previous.get_unchecked(offset + 2)
+            slot = _native_triple_hash(state_id, group_id, operation) & mask
+            while index.get_unchecked(slot * 4 + 3) != 0:
+                slot = (slot + 1) & mask
+            target = slot * 4
+            index.set_unchecked(target, state_id)
+            index.set_unchecked(target + 1, group_id)
+            index.set_unchecked(target + 2, operation)
+            index.set_unchecked(target + 3, encoded)
+        slot_index += 1
+    previous.close()
+    return index
+
+
 class PackedPointerAliases:
     """Dense value-ID pointer provenance; text refs remain negative IDs."""
 
@@ -768,6 +827,7 @@ class PackedRootStatePlane:
         "state_index_capacity",
         "transition_index",
         "transition_index_capacity",
+        "transition_count",
         "state_location_spans",
         "state_locations",
         "entry_state_ids",
@@ -803,6 +863,7 @@ class PackedRootStatePlane:
         self.transition_index_capacity = transition_capacity
         self.transition_index = CompilerIntArena(transition_capacity * 4)
         self.transition_index.append_zeros(transition_capacity * 4)
+        self.transition_count = 0
         self.state_location_spans = CompilerIntArena()
         self.state_locations = CompilerIntArena()
         self.entry_state_ids = CompilerIntArena(max(1, block_count))
@@ -818,6 +879,15 @@ class PackedRootStatePlane:
         self._insert_state_index(0, 0)
 
     def _insert_state_index(self, state_hash: int, state_id: int) -> None:
+        # state_spans already holds the inserted state.
+        if (len(self.state_spans) // 4) * 2 > self.state_index_capacity:
+            capacity = self.state_index_capacity * 2
+            self.state_index = _rebuilt_pair_index(
+                self.state_index,
+                self.state_index_capacity,
+                capacity,
+            )
+            self.state_index_capacity = capacity
         slot = state_hash & (self.state_index_capacity - 1)
         probes = 0
         while probes < self.state_index_capacity:
@@ -865,6 +935,14 @@ class PackedRootStatePlane:
         add: bool,
         result_state_id: int,
     ) -> None:
+        if (self.transition_count + 1) * 2 > self.transition_index_capacity:
+            capacity = self.transition_index_capacity * 2
+            self.transition_index = _rebuilt_transition_index(
+                self.transition_index,
+                self.transition_index_capacity,
+                capacity,
+            )
+            self.transition_index_capacity = capacity
         operation = 1 if add else 0
         key_hash = _native_triple_hash(state_id, group_id, operation)
         slot = key_hash & (self.transition_index_capacity - 1)
@@ -873,6 +951,7 @@ class PackedRootStatePlane:
             offset = slot * 4
             encoded = self.transition_index.get_unchecked(offset + 3)
             if encoded == 0:
+                self.transition_count += 1
                 self.transition_index.set_unchecked(offset, state_id)
                 self.transition_index.set_unchecked(offset + 1, group_id)
                 self.transition_index.set_unchecked(offset + 2, operation)
@@ -922,6 +1001,15 @@ class PackedRootStatePlane:
         offset: int,
         group_id: int,
     ) -> None:
+        # group_keys already holds the inserted group.
+        if (len(self.group_keys) // 2) * 2 > self.group_index_capacity:
+            capacity = self.group_index_capacity * 2
+            self.group_index = _rebuilt_pair_index(
+                self.group_index,
+                self.group_index_capacity,
+                capacity,
+            )
+            self.group_index_capacity = capacity
         key_hash = _native_pair_hash(base_ref, offset)
         slot = key_hash & (self.group_index_capacity - 1)
         probes = 0
@@ -944,6 +1032,14 @@ class PackedRootStatePlane:
         byte_offset: int,
         frame_offset: int,
     ) -> None:
+        if (len(self.registered_roots) // 3 + 1) * 2 > self.registered_index_capacity:
+            capacity = self.registered_index_capacity * 2
+            self.registered_index = _rebuilt_pair_index(
+                self.registered_index,
+                self.registered_index_capacity,
+                capacity,
+            )
+            self.registered_index_capacity = capacity
         key_hash = _native_pair_hash(base_ref, byte_offset)
         slot = key_hash & (self.registered_index_capacity - 1)
         probes = 0

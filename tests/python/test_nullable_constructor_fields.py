@@ -145,9 +145,11 @@ main()
 '''
 
 
-def test_nullable_imported_factory_cleanup_runs_natively(tmp_path, threaded_pcc_runtime_archive):
+def test_nullable_imported_factory_cleanup_runs_natively(tmp_path, monkeypatch, threaded_pcc_runtime_archive):
     from pcc.frontends.python.pipeline import compile_python_multi
 
+    # The threaded archive is admitted only for a threaded compilation.
+    monkeypatch.setenv("PCC_WITH_THREADS", "1")
     provider = tmp_path / "nullable_provider.py"
     consumer = tmp_path / "nullable_consumer.py"
     provider.write_text(textwrap.dedent(_PROVIDER_SOURCE).lstrip(), encoding="utf-8")

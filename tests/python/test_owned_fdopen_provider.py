@@ -3,6 +3,7 @@ import ast
 import errno
 import fcntl
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,29 @@ from pcc.runtime.py import py_abi_constants as abi
 from tests.python.test_owned_tempfile_provider import Obj, Ptr, Runtime
 
 ROOT=Path(__file__).resolve().parents[2]
+
+
+# The model runs the runtime with target_sys_platform() == "linux", so open
+# flags arrive in Linux's encoding; translate them for the host's os.open.
+_LINUX_OPEN_FLAGS = (
+    (0o100, "O_CREAT"), (0o200, "O_EXCL"), (0o400, "O_NOCTTY"), (0o1000, "O_TRUNC"),
+    (0o2000, "O_APPEND"), (0o4000, "O_NONBLOCK"), (0o200000, "O_DIRECTORY"),
+    (0o400000, "O_NOFOLLOW"), (0o2000000, "O_CLOEXEC"),
+)
+
+
+def _host_open_flags(flags):
+    if sys.platform.startswith("linux"):
+        return flags
+    host = flags & 3  # O_RDONLY/O_WRONLY/O_RDWR are 0/1/2 everywhere
+    remaining = flags & ~3
+    for bit, name in _LINUX_OPEN_FLAGS:
+        if remaining & bit:
+            host |= getattr(os, name)
+            remaining &= ~bit
+    if remaining:
+        raise AssertionError(f"untranslated Linux open flags {remaining:#o}")
+    return host
 
 
 class FileRuntime(Runtime):
@@ -152,7 +176,7 @@ class FileRuntime(Runtime):
 
     def open_file_flags(self,path,flags,permissions,dir_fd):
         try:
-            return os.open(self.raw(path),flags,permissions,
+            return os.open(self.raw(path),_host_open_flags(flags),permissions,
                            dir_fd=None if dir_fd==-100 else dir_fd)
         except OSError as error:return -error.errno
 

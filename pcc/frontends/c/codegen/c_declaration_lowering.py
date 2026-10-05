@@ -458,7 +458,7 @@ class CDeclarationLoweringMixin:
                             name=node.name,
                         )
                         self.define(node.name, (ir.PointerType(elem_ir_type), var_addr))
-                        self._mark_vla_binding(var_addr)
+                        self._mark_vla_binding(var_addr, dynamic_dim_val)
                         if self._has_unsigned_scalar_pointee(node.type):
                             self._mark_unsigned_pointee(var_addr)
                         return None, var_addr

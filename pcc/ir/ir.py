@@ -331,7 +331,7 @@ class ArrayType(Type):
     def gep(self, indices) -> Type:
         """Type-level GEP — array has uniform element type, so any
         index into it yields ``element`` (recursed if nested)."""
-        idxs = list(indices)
+        idxs = _type_gep_indices(indices)
         if not idxs:
             return self
         result = self.element
@@ -339,6 +339,14 @@ class ArrayType(Type):
             if isinstance(result, (BaseStructType, ArrayType)):
                 return result.gep(idxs[1:])
         return result
+
+
+def _type_gep_indices(indices) -> list:
+    """Index list for a type-level GEP; one index alone is accepted as in
+    llvmlite's ``Type.gep(i)``."""
+    if isinstance(indices, (list, tuple)):
+        return list(indices)
+    return [indices]
 
 
 class BaseStructType(Type):
@@ -353,7 +361,7 @@ class BaseStructType(Type):
         """Type-level GEP — return the field type at index ``indices[0]``
         (pcc only uses single-index GEP on structs, matching llvmlite's
         static check). Extra indices recurse into nested struct types."""
-        idxs = list(indices)
+        idxs = _type_gep_indices(indices)
         if not idxs:
             return self
         first = idxs[0]

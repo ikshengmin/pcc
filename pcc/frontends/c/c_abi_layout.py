@@ -122,7 +122,9 @@ def integer_scalar_layout(bit_width: int) -> CAbiScalarLayout:
     if bit_width <= 0:
         raise ValueError(f"invalid integer width: {bit_width}")
     size = max(1, (bit_width + 7) // 8)
-    return CAbiScalarLayout(size=size, alignment=min(size, 8))
+    # __int128 is 16-byte aligned (arm64 AAPCS/Darwin and x86-64 SysV); the
+    # self backend lays i128 out the same way.
+    return CAbiScalarLayout(size=size, alignment=16 if size == 16 else min(size, 8))
 
 
 def floating_scalar_layout(bit_width: int) -> CAbiScalarLayout:

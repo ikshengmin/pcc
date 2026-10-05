@@ -1,4 +1,4 @@
-"""``tempfile.TemporaryDirectory(prefix=...)`` native with-lowering."""
+"""``with tempfile.TemporaryDirectory(prefix=...)`` through the owned provider."""
 from __future__ import annotations
 
 import os
@@ -39,7 +39,7 @@ def _function_body(ir_text: str, fn_name_suffix: str) -> str | None:
     return m.group(1) if m else None
 
 
-def test_tempdir_with_dispatches_to_native_helpers():
+def test_tempdir_with_uses_the_owned_provider_type():
     program = textwrap.dedent(
         """
         import tempfile
@@ -54,8 +54,12 @@ def test_tempdir_with_dispatches_to_native_helpers():
     body = _function_body(ir_text, "f")
 
     assert body is not None
-    assert "@py_tempdir_new" in body, body
-    assert "@py_tempdir_cleanup" in body, body
+    # The first-class owned TemporaryDirectory provider replaced the old
+    # path-only with-lowering (py_tempdir_new/py_tempdir_cleanup): the manager
+    # is a real object entered and exited through the context protocol.
+    assert "@py_tempdir_type" in body, body
+    assert "@py_context_enter" in body and "@py_context_exit" in body, body
+    assert "@py_tempdir_new" not in body, body
     assert "cpy.fn.TemporaryDirectory" not in body, body
     assert "with.enter.fn" not in body, body
     assert "with.exit.fn" not in body, body

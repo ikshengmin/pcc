@@ -21,6 +21,7 @@ from .self_backend_aarch64_darwin_regalloc import (
 )
 from .self_backend_aarch64_darwin_ops import aarch64_cc, aarch64_inverse_cc
 from .self_backend_aarch64_darwin_regs import (
+    emit_add_offset,
     emit_const_to_reg,
     emit_const_to_reg_bits,
     emit_stack_adjust,
@@ -32,11 +33,19 @@ from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntArena
 
 
+def _restore_fixed_frame_sp(func: ParsedFunction, total_frame: int) -> list[str]:
+    """Undo run-time SP moves (dynamic allocas): SP = x29 - fixed frame."""
+    if not func.aarch64_dynamic_stack:
+        return []
+    return emit_add_offset("sp", "x29", -total_frame, scratch_reg="x9")
+
+
 def emit_epilogue(func: ParsedFunction) -> list[str]:
     if func.aarch64_frameless:
         return [emitted_fixed_instruction_line("ret")]
-    lines = emit_callee_saved_loads(func)
     total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
+    lines = _restore_fixed_frame_sp(func, total_frame)
+    lines.extend(emit_callee_saved_loads(func))
     if total_frame:
         lines.extend(emit_stack_adjust(total_frame))
     lines.append(emitted_frame_pair_line(True))
@@ -55,8 +64,9 @@ def emit_tail_epilogue(func: ParsedFunction, target: str) -> list[str]:
     """Restore the caller's frame/return address before a direct sibling jump."""
     if func.aarch64_frameless:
         return [emitted_branch_line("b", target)]
-    lines = emit_callee_saved_loads(func)
     total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
+    lines = _restore_fixed_frame_sp(func, total_frame)
+    lines.extend(emit_callee_saved_loads(func))
     if total_frame:
         lines.extend(emit_stack_adjust(total_frame))
     lines.append(emitted_frame_pair_line(True))

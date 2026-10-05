@@ -89,6 +89,7 @@ from .self_backend_kernel import (
     get_indexed_function_kernel,
 )
 from .self_backend_value_arena import CompilerInt4
+from .self_backend_dynamic_alloca import DYNAMIC_ALLOCA_INTRINSIC
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_parse import (
     aggregate_literal_to_bytes,
@@ -1565,6 +1566,44 @@ def emit_fshr_intrinsic_call(
     return lines
 
 
+def emit_dynamic_alloca_call(
+    func: ParsedFunction,
+    dest: str | None,
+    args: tuple[tuple[TypeDesc, str], ...],
+    module_symbols: PreparedModuleSymbols,
+) -> list[str]:
+    """Carve ``bytes`` (16-byte rounded) below SP and return the new SP.
+
+    Calls pass stack arguments with their own SP adjustment, so the area is
+    never reused before the epilogue resets SP from x29.
+    """
+    if len(args) != 2 or not args[1][1].isdigit():
+        raise BackendUnavailable(
+            f"self backend {DYNAMIC_ALLOCA_INTRINSIC} expects (i64 bytes, i64 align) in {func.name!r}"
+        )
+    if not func.aarch64_dynamic_stack:
+        raise BackendUnavailable(
+            f"self backend dynamic alloca outside a dynamic-stack frame in {func.name!r}"
+        )
+    size_type, size_value = args[0]
+    align = int(args[1][1])
+    if align & (align - 1):
+        raise BackendUnavailable(
+            f"self backend dynamic alloca alignment must be a power of two in {func.name!r}"
+        )
+    lines = materialize_value(func, size_value, size_type, 9, module_symbols)
+    lines.append("  add x9, x9, #15")
+    lines.append("  and x9, x9, #0xfffffffffffffff0")
+    lines.append("  mov x10, sp")
+    lines.append("  sub x10, x10, x9")
+    if align > 16:
+        lines.append("  and x10, x10, #" + hex((1 << 64) - align))
+    lines.append("  mov sp, x10")
+    if dest is not None and parsed_function_has_value_slot(func, dest):
+        lines.extend(store_value_regs_to_value_slot(func, dest, 10))
+    return lines
+
+
 def emit_abs_intrinsic_call(
     func: ParsedFunction,
     dest: str | None,
@@ -2422,6 +2461,8 @@ def emit_call_instruction(
         return emit_bit_count_intrinsic_call(
             func, dest, ret_type, callee, args, module_symbols
         )
+    if not is_indirect and callee == DYNAMIC_ALLOCA_INTRINSIC:
+        return emit_dynamic_alloca_call(func, dest, args, module_symbols)
     if not is_indirect and callee.startswith("llvm.trap"):
         if args:
             raise BackendUnavailable(

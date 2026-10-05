@@ -15,6 +15,9 @@ from tests.worker_process import run_worker_process
 
 
 RUN_LINE_RE = re.compile(r"^\s*//\s*RUN:\s*(.*)$")
+# lit also reads RUN lines inside block comments: "/* RUN: ... */", " * RUN:"
+# continuations and plain indented "RUN:" lines before the closing "*/".
+BLOCK_RUN_LINE_RE = re.compile(r"^\s*(?:/\*|\*(?!/))?\s*RUN:\s*(.*?)\s*(?:\*/)?\s*$")
 PCC_STD_COMPAT_MAP = {
     "c23": "c2x",
     "gnu23": "gnu2x",
@@ -113,6 +116,8 @@ def case_config(case_path: Path) -> ClangCCaseConfig:
                 cpp_args.append(f"-std={PCC_STD_COMPAT_MAP.get(std_value, std_value)}")
         elif token.startswith("-D") or token.startswith("-U"):
             cpp_args.append(token)
+        elif token in {"-fblocks", "-fno-blocks"}:
+            cpp_args.append(token)
 
     return ClangCCaseConfig(
         mode=mode,
@@ -200,8 +205,17 @@ def _run_lines(source: str) -> list[str]:
     lines = source.splitlines()
     collected: list[str] = []
     current = ""
+    in_block_comment = False
     for line in lines:
+        stripped = line.strip()
+        opens_block_comment = not in_block_comment and stripped.startswith("/*")
         match = RUN_LINE_RE.match(line)
+        if match is None and (in_block_comment or opens_block_comment):
+            match = BLOCK_RUN_LINE_RE.match(line)
+        if opens_block_comment:
+            in_block_comment = "*/" not in stripped[2:]
+        elif in_block_comment and "*/" in stripped:
+            in_block_comment = False
         if match is None:
             if current:
                 collected.append(current.strip())
@@ -224,10 +238,9 @@ def _compiler_run_segment(line: str) -> str:
 
 
 def _read_case_source(case_path: Path) -> str:
-    try:
-        return case_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return case_path.read_text(encoding="latin-1")
+    # Preserve malformed source bytes exactly, as the owned C pipeline does;
+    # decoding them as Latin-1 would hand pcc different, valid characters.
+    return case_path.read_text(encoding="utf-8", errors="surrogateescape")
 
 
 def _run_pcc_worker(mode: str, case_path: Path, timeout: int) -> CCaseResult:

@@ -193,6 +193,52 @@ def test_packed_root_state_reuses_transitions_and_sorts_locations() -> None:
     roots.close()
 
 
+def test_packed_root_state_indexes_grow_past_protocol_hints() -> None:
+    # Capacities start from call-protocol hints; a function's frame slots,
+    # groups, states and cached transitions are not bounded by those hints.
+    group_count = 64
+    roots = PackedRootStatePlane(block_count=1, protocol_hint=0)
+    initial_capacities = (
+        roots.group_index_capacity,
+        roots.registered_index_capacity,
+        roots.state_index_capacity,
+        roots.transition_index_capacity,
+    )
+    groups = [
+        roots.intern_group(
+            base_ref=100 + index,
+            origin_offset=0,
+            count=2,
+            owned=index % 2 == 0,
+            alloca_offset=16 * (index + 1),
+            frame_size=16 * (group_count + 1),
+        )
+        for index in range(group_count)
+    ]
+    states = [0]
+    for group in groups:
+        states.append(roots.transition(states[-1], group, True))
+
+    assert roots.group_index_capacity > initial_capacities[0]
+    assert roots.registered_index_capacity > initial_capacities[1]
+    assert roots.state_index_capacity > initial_capacities[2]
+    assert roots.transition_index_capacity > initial_capacities[3]
+    for index, group in enumerate(groups):
+        base_ref = 100 + index
+        assert roots.group_id(base_ref, 0) == group
+        assert roots.registered_root_offset(base_ref, 0) == -16 * (index + 1)
+        assert roots.registered_root_offset(base_ref, 8) == -16 * (index + 1) + 8
+    assert roots.registered_root_offset(99, 0) == NO_OFFSET
+    assert roots.group_id(99, 0) == -1
+    state_count = len(roots.state_spans) // 4
+    for index, group in enumerate(groups):
+        assert roots.transition(states[index], group, True) == states[index + 1]
+    assert len(roots.state_spans) // 4 == state_count
+    locations = roots.ensure_state_locations(states[-1])
+    assert locations.second == group_count * 2
+    roots.close()
+
+
 def test_aarch64_label_offsets_skip_normalizing_ordinary_instructions():
     class InstructionText(str):
         def strip(self, *_args, **_kwargs):

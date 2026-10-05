@@ -143,7 +143,7 @@ def _run_self_from_ir(
         ):
             asm = emit_self_asm(_ensure_target_triple(ir_text, triple))
             asm_path.write_text(asm, encoding="utf-8")
-            target = classify_self_backend_target_triple(triple).target_identity
+            target = _self_target_identity(triple)
             stage = "assemble object"
             if target in (
                 "self-aarch64-linux-v0", "self-x86_64-linux-v0",
@@ -191,12 +191,18 @@ def _run_self_from_ir(
     )
 
 
-def _host_self_supported() -> str:
-    triple = _host_triple()
+def _self_target_identity(triple: str) -> str:
+    """The registry's platform verdict for ``triple``: its target identity."""
     verdict = classify_self_backend_target_triple(triple)
     if not verdict.supported:
         pytest.fail(verdict.skip_reason())
     assert verdict.target_identity is not None
+    return verdict.target_identity
+
+
+def _host_self_supported() -> str:
+    triple = _host_triple()
+    _self_target_identity(triple)
     return triple
 
 

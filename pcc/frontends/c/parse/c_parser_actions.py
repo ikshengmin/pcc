@@ -274,7 +274,7 @@ class CParserActions(PLYParser):
         self._parse_error('Directives not supported yet', self._coord(p.lineno(1)))
 
     def p_function_definition_1(self, p):
-        """ function_definition : declarator declaration_list_opt compound_statement
+        """ function_definition : knr_declarator declaration_list_opt compound_statement
             """
         spec = dict(qual=[], storage=[], type=[c_ast.IdentifierType(['int'], coord=self._coord(p.lineno(1)))], function=[])
         p[0] = self._build_function_definition(spec=spec, decl=p[1], param_decls=p[2], body=p[3])
@@ -562,11 +562,13 @@ class CParserActions(PLYParser):
 
     def p_declarator_1(self, p):
         """ declarator  : direct_declarator
+                knr_declarator : knr_direct_declarator
             """
         p[0] = p[1]
 
     def p_declarator_2(self, p):
         """ declarator  : pointer direct_declarator
+                knr_declarator : pointer knr_direct_declarator
             """
         p[0] = self._type_modify_decl(p[2], p[1])
 
@@ -579,6 +581,7 @@ class CParserActions(PLYParser):
     def p_direct_declarator_1(self, p):
         """ direct_declarator   : ID
                                     | TYPEID
+                knr_direct_declarator : ID
             """
         p[0] = c_ast.TypeDecl(declname=p[1], type=None, quals=None, coord=self._coord(p.lineno(1)))
 
@@ -612,6 +615,8 @@ class CParserActions(PLYParser):
     def p_direct_declarator_6(self, p):
         """ direct_declarator   : direct_declarator LPAREN parameter_type_list RPAREN
                                     | direct_declarator LPAREN identifier_list_opt RPAREN
+                knr_direct_declarator : knr_direct_declarator LPAREN parameter_type_list RPAREN
+                                      | knr_direct_declarator LPAREN identifier_list_opt RPAREN
             """
         func = c_ast.FuncDecl(args=p[3], type=None, coord=p[1].coord)
         if self._get_yacc_lookahead_token().type == 'LBRACE':
