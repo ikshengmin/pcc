@@ -271,8 +271,6 @@ def _td_os_error(status: int, name):
         tag = 36
     elif status == -20:
         tag = 38
-    elif status == -12:
-        tag = 19
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
@@ -290,10 +288,14 @@ def _td_os_error(status: int, name):
     if not ptr_is_null(exc) and not py_err_occurred():
         py_tuple_set_item(load_ptr(slots, 4 * C_POINTER_SIZE), 0, load_ptr(slots, 2 * C_POINTER_SIZE))
         py_tuple_set_item(load_ptr(slots, 4 * C_POINTER_SIZE), 1, load_ptr(slots, 3 * C_POINTER_SIZE))
-        py_obj_setattr(exc, cstr("errno"), load_ptr(slots, 2 * C_POINTER_SIZE))
-        py_obj_setattr(exc, cstr("strerror"), load_ptr(slots, 3 * C_POINTER_SIZE))
-        py_obj_setattr(exc, cstr("filename"), load_ptr(slots, 0))
-        py_obj_setattr(exc, cstr("args"), load_ptr(slots, 4 * C_POINTER_SIZE))
+        if py_obj_setattr(exc, cstr("errno"), load_ptr(slots, 2 * C_POINTER_SIZE)) != 0:
+            return _td_finish(slots, pins)
+        if py_obj_setattr(exc, cstr("strerror"), load_ptr(slots, 3 * C_POINTER_SIZE)) != 0:
+            return _td_finish(slots, pins)
+        if py_obj_setattr(exc, cstr("filename"), load_ptr(slots, 0)) != 0:
+            return _td_finish(slots, pins)
+        if py_obj_setattr(exc, cstr("args"), load_ptr(slots, 4 * C_POINTER_SIZE)) != 0:
+            return _td_finish(slots, pins)
         if not py_err_occurred():
             py_incref(exc)
             py_raise_owned(exc)

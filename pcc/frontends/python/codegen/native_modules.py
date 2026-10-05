@@ -38,6 +38,9 @@ def _native_builtin_type_value_names():
     # literal each time is reliable.  Single source of truth for the three
     # membership sites below.
     return (
+        "staticmethod",
+        "classmethod",
+        "property",
         "bool",
         "bytes",
         "bytearray",
@@ -290,7 +293,7 @@ class NativeModuleAliasMixin:
     def _native_builtin_value_kind_for_expr(self, expr: Expr) -> Optional[str]:
         if (isinstance(expr, Attr) and isinstance(expr.obj, Name)
                 and self._native_builtin_module_for_name(expr.obj.ident) == "os"
-                and expr.name in ("fdopen", "open", "close")):
+                and expr.name in ("fdopen", "open", "close", "mkdir")):
             return "os." + expr.name
         if isinstance(expr, Name):
             return self._native_builtin_value_for_name(expr.ident)
@@ -679,11 +682,14 @@ class NativeModuleAliasMixin:
     ) -> Optional[ir.Value]:
         if module_name == "os":
             provider = {"fdopen": "py_file_fdopen_function", "open": "py_os_open_function",
-                        "close": "py_os_close_function"}.get(attr_name)
+                        "close": "py_os_close_function", "mkdir": "py_os_mkdir_function"}.get(attr_name)
             if provider is not None:
                 return self._emit_owned_namespace_runtime_value(provider, ())
             flag = native_os_descriptor_constant(attr_name, self._target_sys_platform_text())
             if flag is not None:
+                if "os" in getattr(self, "_sibling_module_inits", ()):
+                    value_slot = self._emit_slot_call_module_value("os", attr_name, None, "owned.module.constant")
+                    return self._take_slot_call_root(value_slot)
                 return self._emit_native_module_constant({"value_kind": "int", "value": flag})
         if module_name == "tempfile" and attr_name == "TemporaryDirectory":
             return self._emit_owned_namespace_runtime_value("py_tempdir_type", ())
@@ -1242,7 +1248,7 @@ class NativeModuleAliasMixin:
             )
         if import_module == "os":
             return all(
-                attr_name in ("path", "name", "sep", "linesep", "altsep", "pathsep", "urandom", "fdopen", "open", "close")
+                attr_name in ("path", "name", "sep", "linesep", "altsep", "pathsep", "urandom", "fdopen", "open", "close", "mkdir")
                 or native_os_descriptor_constant(attr_name, self._target_sys_platform_text()) is not None
                 for attr_name, _as_name in stmt.names
             )
@@ -1424,7 +1430,7 @@ class NativeModuleAliasMixin:
             if attr_name == "path" and import_module == "os":
                 self._register_native_builtin_value_alias(local_name, "os.path")
                 continue
-            if import_module == "os" and (attr_name in ("fdopen", "open", "close")
+            if import_module == "os" and (attr_name in ("fdopen", "open", "close", "mkdir")
                     or native_os_descriptor_constant(attr_name, self._target_sys_platform_text()) is not None):
                 self._register_native_builtin_value_alias(local_name, "os." + attr_name)
                 continue

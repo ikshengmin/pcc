@@ -1113,6 +1113,7 @@ def _runtime_signatures_part_16():
     "py_file_fspath": (_PYOBJ, [_PYOBJ], False),
     "py_os_open_function": (_PYOBJ, [], False),
     "py_os_close_function": (_PYOBJ, [], False),
+    "py_os_mkdir_function": (_PYOBJ, [], False),
     "py_tempdir_new": (_PYOBJ, [_PYOBJ], False),
     "py_tempdir_cleanup": (_VOID, [_PYOBJ], False),
     "py_re_escape": (_PYOBJ, [_PYOBJ], False),

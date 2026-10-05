@@ -124,6 +124,34 @@ def _types_match(left: TypeDesc, right: TypeDesc) -> bool:
     return False
 
 
+def _storage_only_float_type_id(kernel: IndexedFunctionKernel, type_id: int) -> bool:
+    header: CompilerInt4 = kernel.type_header(type_id)
+    if header.first == TYPE_KIND_FP:
+        return header.second == 80
+    if header.first == TYPE_KIND_ARRAY:
+        return header.fourth >= 0 and _storage_only_float_type_id(kernel, header.fourth)
+    if header.first == TYPE_KIND_STRUCT:
+        start = kernel.type_field_start(type_id)
+        count = kernel.type_field_count(type_id)
+        for index in range(count):
+            if _storage_only_float_type_id(
+                kernel, kernel.type_field_ids.get_unchecked(start + index)
+            ):
+                return True
+    # A typed or opaque pointer is an address, not an extended floating value.
+    return False
+
+
+def _require_executable_type_id(
+    func: ParsedFunction, kernel: IndexedFunctionKernel, type_id: int, context: str,
+) -> None:
+    if _storage_only_float_type_id(kernel, type_id):
+        _fail(
+            "unsupported-value-type", func,
+            context + " requires x86_fp80 value/ABI lowering; only storage is implemented",
+        )
+
+
 def _type_ids_match(
     kernel: IndexedFunctionKernel, left_id: int, right_id: int
 ) -> bool:
@@ -536,6 +564,7 @@ def _build_definitions(
                     func,
                     f"instruction {kind!r} defines {dest!r} without a value type",
                 )
+            _require_executable_type_id(func, kernel, result_type_id, "instruction result")
             kernel.publish_value_type_id(dest_id, result_type_id)
             position += 1
         block_index += 1
@@ -567,9 +596,10 @@ def _require_local_type_id(
     *,
     context: str,
 ) -> None:
+    kernel = get_indexed_function_kernel(func)
+    _require_executable_type_id(func, kernel, expected_type_id, context)
     if not is_local_value_ref(value):
         return
-    kernel = get_indexed_function_kernel(func)
     definition = _definition_get(kernel, definitions, value)
     if definition.fourth == 0:
         _fail("ssa-dominance", func, f"{context} uses undefined value {value!r}")
@@ -592,6 +622,7 @@ def _require_local_type_ref(
     *,
     context: str,
 ) -> None:
+    _require_executable_type_id(func, kernel, expected_type_id, context)
     if value_ref < 0:
         return
     definition: CompilerInt4 = _definition_by_id(
@@ -868,6 +899,7 @@ def _verify_call_instruction_types_indexed(
 ) -> None:
     context = f"{block_name!r}/call"
     header: CompilerInt4 = kernel.call_header(call_id)
+    _require_executable_type_id(func, kernel, header.first, context + " return")
     span: CompilerInt4 = kernel.call_span(call_id)
     arg_count = span.first
     fixed_arg_count = span.second
@@ -1403,6 +1435,9 @@ def _verify_terminator_types(
 
 def verify_parsed_function(func: ParsedFunction) -> None:
     kernel = get_indexed_function_kernel(func)
+    _require_executable_type_id(func, kernel, kernel.intern_type(func.ret_type), "return ABI")
+    for argument in func.args:
+        _require_executable_type_id(func, kernel, kernel.intern_type(argument.type), "argument ABI")
     if not kernel.block_names:
         _fail("terminator", func, "function has no basic blocks")
     _verify_inline_error_edge_shape(func, kernel)
@@ -1548,6 +1583,18 @@ def _verify_inline_error_edges(
 
 
 def verify_parsed_module(module: ParsedModule) -> None:
+    from .self_backend_target_match import is_x86_64_linux_triple
+
+    if not is_x86_64_linux_triple(module.triple):
+        for global_ in module.globals_:
+            if global_.type.contains_storage_only_float:
+                raise BackendUnavailable("x86_fp80 storage requires an x86_64 Linux target")
+        for func in module.functions:
+            kernel = get_indexed_function_kernel(func)
+            for type_id in range(len(kernel.types)):
+                header: CompilerInt4 = kernel.type_header(type_id)
+                if header.first == TYPE_KIND_FP and header.second == 80:
+                    _fail("unsupported-target-type", func, "x86_fp80 storage requires an x86_64 Linux target")
     for func in module.functions:
         verify_parsed_function(func)
 

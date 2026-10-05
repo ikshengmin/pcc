@@ -163,6 +163,13 @@ class _CallbackModel:
             value = self.load(slot, 0)
             self.store(slot, 0, None)
             return value
+        def check_string(value):
+            # The callback model represents its owned string by this token.
+            # Validation must observe the live rooted result before disposal.
+            assert value == 'result' and self.refs[value] == 1
+            assert any(self.memory.get(base + 3 * 8) == value
+                       for base, count in self.frames if count == 6)
+            return 1
         return dict(c_ptr=object, C_POINTER_SIZE=8,
                     _FORMAT_METHOD=0, _FORMAT_ARGS=1, _FORMAT_SPEC=2,
                     _FORMAT_RESULT=3, _FORMAT_ERROR=4, _FORMAT_VALUE=5, _FORMAT_SLOT_COUNT=6,
@@ -186,6 +193,7 @@ class _CallbackModel:
                     py_err_occurred=lambda: int(self.pending is not None),
                     py_tuple_new=lambda count: self.new('args'),
                     py_tuple_set_item=set_item, py_str_new=lambda text, size: self.new('empty'),
+                    py_str_check=check_string,
                     py_obj_call=self.call, py_obj_getattr=getattr_, _format_require_result=require,
                     _unicode_format_pin=lambda slot: 0,
                     pcc_gc_take_pinned_slot=take,

@@ -22,11 +22,13 @@ from pcc.runtime.py.py_abi_constants import (
     PYSTATICMETHODOBJECT_FUNC_OFFSET,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
+    PY_FLAG_EXC_OS_PAYLOAD,
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_CEXT_TAG_BASE,
     PY_TYPE_CLASS,
+    PY_TYPE_CLASSMETHOD,
     PY_TYPE_COMPLEX,
     PY_TYPE_CONTINUATION,
     PY_TYPE_COROUTINE,
@@ -41,6 +43,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_LIST,
     PY_TYPE_MEMORYVIEW,
     PY_TYPE_NONE,
+    PY_TYPE_PROPERTY,
     PY_TYPE_SET,
     PY_TYPE_STATICMETHOD,
     PY_TYPE_STR,
@@ -127,6 +130,10 @@ py_list_concat = extern("py_list_concat", (c_ptr, c_ptr), c_ptr)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
 py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
 
+py_property_new = extern("py_property_new", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_classmethod_new = extern("py_classmethod_new", (c_ptr,), c_ptr)
+py_staticmethod_new = extern("py_staticmethod_new", (c_ptr,), c_ptr)
+
 py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
@@ -195,11 +202,15 @@ py_instance_delattr = extern("py_instance_delattr", (c_ptr, c_ptr), c_int64)
 py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_traceback_object = extern("py_exc_traceback_object", (c_ptr,), c_ptr)
+py_exc_get_args = extern("py_exc_get_args", (c_ptr,), c_ptr)
+py_exc_get_legacy_value = extern("py_exc_get_legacy_value", (c_ptr,), c_ptr)
 py_file_getattr = extern("py_file_getattr", (c_ptr, c_ptr), c_ptr)
 py_unicode_decode_error_new = extern("py_unicode_decode_error_new", (c_ptr,), c_ptr)
 py_unicode_encode_error_new = extern("py_unicode_encode_error_new", (c_ptr,), c_ptr)
 py_unicode_error_get_field = extern("py_unicode_error_get_field", (c_ptr, c_int64), c_ptr)
 py_unicode_error_set_field = extern("py_unicode_error_set_field", (c_ptr, c_int64, c_ptr), c_int64)
+py_os_error_get_field = extern("py_os_error_get_field", (c_ptr, c_int64), c_ptr)
+py_os_error_set_field = extern("py_os_error_set_field", (c_ptr, c_int64, c_ptr), c_int64)
 py_exc_new_with_class = extern("py_exc_new_with_class", (c_ptr, c_ptr), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 py_file_type_kind = extern("py_file_type_kind", (c_ptr,), c_int64)
@@ -353,6 +364,9 @@ define_global_ptr_null("pcc_type_cls_bytes")
 define_global_ptr_null("pcc_type_cls_bytearray")
 define_global_ptr_null("pcc_type_cls_memoryview")
 define_global_ptr_null("pcc_type_cls_coroutine")
+define_global_ptr_null("pcc_type_cls_staticmethod")
+define_global_ptr_null("pcc_type_cls_classmethod")
+define_global_ptr_null("pcc_type_cls_property")
 define_global_ptr_null("pcc_type_cls_object")
 define_global_ptr_null("pcc_type_cls_super")
 define_global_ptr_null("pcc_type_cls_textiowrapper")
@@ -380,6 +394,9 @@ define_global_struct_words(
     "pcc_type_cls_bytearray",
     "pcc_type_cls_memoryview",
     "pcc_type_cls_coroutine",
+    "pcc_type_cls_staticmethod",
+    "pcc_type_cls_classmethod",
+    "pcc_type_cls_property",
     "pcc_type_cls_object",
     "pcc_type_cls_super",
     "pcc_type_cls_textiowrapper",
@@ -1333,6 +1350,12 @@ def _type_name_cstr_for_tag(tag: int):
         return cstr("memoryview")
     if tag == PY_TYPE_COROUTINE:
         return cstr("coroutine")
+    if tag == PY_TYPE_STATICMETHOD:
+        return cstr("staticmethod")
+    if tag == PY_TYPE_CLASSMETHOD:
+        return cstr("classmethod")
+    if tag == PY_TYPE_PROPERTY:
+        return cstr("property")
     if tag == PY_TYPE_CONTINUATION:
         return cstr("continuation")
     if tag == PY_TYPE_VIRTUAL_THREAD:
@@ -1881,6 +1904,27 @@ def _builtin_type_class_for_tag(tag: int):
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_coroutine", cls)
         return _return_builtin_type(cls)
+    if tag == PY_TYPE_STATICMETHOD:
+        cls = global_load_ptr("pcc_type_cls_staticmethod")
+        if ptr_is_null(cls) != 0:
+            cls = py_class_new(cstr("staticmethod"), null(), 0, null(), 0)
+            if ptr_is_null(cls) == 0:
+                global_store_ptr("pcc_type_cls_staticmethod", cls)
+        return _return_builtin_type(cls)
+    if tag == PY_TYPE_CLASSMETHOD:
+        cls = global_load_ptr("pcc_type_cls_classmethod")
+        if ptr_is_null(cls) != 0:
+            cls = py_class_new(cstr("classmethod"), null(), 0, null(), 0)
+            if ptr_is_null(cls) == 0:
+                global_store_ptr("pcc_type_cls_classmethod", cls)
+        return _return_builtin_type(cls)
+    if tag == PY_TYPE_PROPERTY:
+        cls = global_load_ptr("pcc_type_cls_property")
+        if ptr_is_null(cls) != 0:
+            cls = py_class_new(cstr("property"), null(), 0, null(), 0)
+            if ptr_is_null(cls) == 0:
+                global_store_ptr("pcc_type_cls_property", cls)
+        return _return_builtin_type(cls)
     cls = global_load_ptr("pcc_type_cls_object")
     if ptr_is_null(cls) != 0:
         cls = py_class_new(cstr("object"), null(), 0, null(), 0)
@@ -2006,6 +2050,12 @@ def py_builtin_type_class_tag(value) -> int:
         return PY_TYPE_BYTEARRAY
     if ptr_eq(value, global_load_ptr("pcc_type_cls_memoryview")) != 0:
         return PY_TYPE_MEMORYVIEW
+    if ptr_eq(value, global_load_ptr("pcc_type_cls_staticmethod")) != 0:
+        return PY_TYPE_STATICMETHOD
+    if ptr_eq(value, global_load_ptr("pcc_type_cls_classmethod")) != 0:
+        return PY_TYPE_CLASSMETHOD
+    if ptr_eq(value, global_load_ptr("pcc_type_cls_property")) != 0:
+        return PY_TYPE_PROPERTY
     if ptr_eq(value, global_load_ptr("pcc_type_cls_object")) != 0:
         return -1
     return -2
@@ -3068,12 +3118,23 @@ def py_obj_getattr(o, name):
             return py_complex_imag(o)
         return _raise_attribute_error(o, name)
     if tag == PY_TYPE_EXC:  # PY_TYPE_EXC
+        if _cstr_is_args(name) != 0:
+            return py_exc_get_args(o)
+        if _cstr_is_value(name) != 0:
+            result = py_exc_get_legacy_value(o)
+            if ptr_is_null(result) == 0:
+                return result
+            return _raise_attribute_error(pcc_gc_note_relocation_read(o), name)
+        os_field: int = _os_error_attribute_index(name)
+        if (load_i32(o, 12) & PY_FLAG_EXC_OS_PAYLOAD) != 0:
+            if os_field >= 0:
+                return py_os_error_get_field(o, os_field)
+        elif os_field > 0 and _is_os_error(o) != 0:
+            return py_os_error_get_field(pcc_gc_note_relocation_read(o), os_field)
         if (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
             field: int = _unicode_error_attribute_index(name)
             if field >= 0:
                 return py_unicode_error_get_field(o, field)
-            if _cstr_is_value(name) != 0:
-                return _raise_attribute_error(o, name)
         result = null()
         if _cstr_is_dunder_class(name) != 0:
             result = pcc_gc_load_ptr(o, ptr_add(o, 16))
@@ -3099,10 +3160,6 @@ def py_obj_getattr(o, name):
             result = pcc_gc_load_ptr(o, ptr_add(o, 24))
             if ptr_is_null(result) != 0:
                 result = global_load_ptr("py_None")
-        elif _cstr_is_value(name) != 0:
-            result = pcc_gc_load_ptr(o, ptr_add(o, 24))
-            if ptr_is_null(result) != 0:
-                result = global_load_ptr("py_None")
         elif _cstr_is_msg(name) != 0:
             # CPython exposes `.msg` on ImportError/ModuleNotFoundError only
             # (it is args[0]); numpy's `_core` re-init recovery reads it. Keep
@@ -3114,21 +3171,6 @@ def py_obj_getattr(o, name):
                     result = global_load_ptr("py_None")
             else:
                 return _raise_attribute_error(o, name)
-        elif _cstr_is_args(name) != 0:
-            # args tuple. Only args[0] is stored (as `message` at offset 24);
-            # capturing args[1:] needs a dedicated field (documented follow-up,
-            # shared with multi-arg str(exc)). Return () or (message,).
-            msg = pcc_gc_load_ptr(o, ptr_add(o, 24))
-            if ptr_is_null(msg) != 0:
-                return py_tuple_new(0)
-            t = py_tuple_new(1)
-            if ptr_is_null(t) == 0:
-                # Tuple allocation can move the exception and its borrowed
-                # argument. Reload the field after that allocation.
-                o = pcc_gc_note_relocation_read(o)
-                msg = pcc_gc_load_ptr(o, ptr_add(o, 24))
-                py_tuple_set_item(t, 0, msg)
-            return pcc_gc_note_relocation_read(t)
         if ptr_is_null(result) == 0:
             py_incref(result)
             return result
@@ -3232,6 +3274,29 @@ def _unicode_error_attribute_index(name) -> int:
     return -1
 
 
+def _is_os_error(o) -> int:
+    # A live OSError subclass guarantees its canonical base class was cached.
+    # Read it without lazy class construction while operands are borrowed.
+    cls = pcc_gc_load_ptr(null(), ptr_add(global_addr("py_exc_classes"), 14 * C_POINTER_SIZE))
+    if ptr_is_null(cls):
+        return 0
+    return py_exc_matches(o, cls)
+
+
+def _os_error_attribute_index(name) -> int:
+    if _cstr_is_args(name) != 0:
+        return 0
+    if strcmp(name, cstr("errno")) == 0:
+        return 1
+    if strcmp(name, cstr("strerror")) == 0:
+        return 2
+    if strcmp(name, cstr("filename")) == 0:
+        return 3
+    if strcmp(name, cstr("filename2")) == 0:
+        return 4
+    return -1
+
+
 @c_abi_export("py_obj_setattr")
 def py_obj_setattr(o, name, v) -> int:
     if ptr_is_null(o) != 0:
@@ -3242,6 +3307,11 @@ def py_obj_setattr(o, name, v) -> int:
         return _raise_attribute_status(o, name)
     tag: int = load_i32(o, 8)
     pcc_diagnostics_runtime_log_event_code(7, 6, tag, 0, o)
+
+    if tag == PY_TYPE_EXC:
+        os_field: int = _os_error_attribute_index(name)
+        if os_field >= 0 and _is_os_error(o) != 0:
+            return py_os_error_set_field(pcc_gc_note_relocation_read(o), os_field, pcc_gc_note_relocation_read(v))
 
     if tag == PY_TYPE_EXC and (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
         field: int = _unicode_error_attribute_index(name)
@@ -3424,6 +3494,182 @@ def _builtin_exception_call(cls, args, nargs: int):
     return e
 
 
+_DESCRIPTOR_ARGS = 0
+_DESCRIPTOR_KWARGS = 1
+_DESCRIPTOR_FGET = 2
+_DESCRIPTOR_FSET = 3
+_DESCRIPTOR_FDEL = 4
+_DESCRIPTOR_RESULT = 5
+_DESCRIPTOR_KEY = 6
+_DESCRIPTOR_ERROR = 7
+_DESCRIPTOR_SLOT_COUNT = 8
+_DESCRIPTOR_INPUT_COUNT = 2
+
+define_global_i32("pcc_descriptor_call_borrowed_map", -2)
+define_global_i32("pcc_descriptor_call_owned_map", 8)
+
+
+def _descriptor_call_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    if token < 0:
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(7, cstr("descriptor constructor owner lease failed")))
+        return -1
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return -1 if py_err_occurred() != 0 else 0
+
+
+def _descriptor_call_clear(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = load_i64(tokens, index * C_POINTER_SIZE)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) != 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * C_POINTER_SIZE, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _descriptor_call_body(slots, tokens, tag: int) -> int:
+    args = load_ptr(slots, _DESCRIPTOR_ARGS * C_POINTER_SIZE)
+    nargs: int = 0
+    if ptr_is_null(args) == 0:
+        nargs = py_tuple_len(args)
+    kwargs = load_ptr(slots, _DESCRIPTOR_KWARGS * C_POINTER_SIZE)
+    nkwargs: int = 0
+    if ptr_is_null(kwargs) == 0 and ptr_eq(kwargs, global_load_ptr("py_None")) == 0:
+        nkwargs = py_dict_len(kwargs)
+    if tag != PY_TYPE_PROPERTY:
+        if nkwargs != 0:
+            py_raise_owned(py_exc_new(3, cstr("descriptor constructor takes no keyword arguments")))
+            return -1
+        if nargs != 1:
+            py_raise_owned(py_exc_new(3, cstr("descriptor constructor expected exactly one argument")))
+            return -1
+    elif nargs > 3:
+        # The existing native property layout has three accessor slots. Do
+        # not silently discard Python's optional doc argument.
+        py_raise_owned(py_exc_new(11, cstr("native property doc metadata is not implemented")))
+        return -1
+    index: int = 0
+    while index < nargs:
+        store_ptr(slots, (_DESCRIPTOR_FGET + index) * C_POINTER_SIZE,
+                  py_tuple_get(load_ptr(slots, _DESCRIPTOR_ARGS * C_POINTER_SIZE), index))
+        if _descriptor_call_adopt(slots, tokens, _DESCRIPTOR_FGET + index) != 0:
+            return -1
+        index = index + 1
+    if tag == PY_TYPE_PROPERTY and nkwargs != 0:
+        matched: int = 0
+        index = 0
+        while index < 3:
+            name = cstr("fget")
+            if index == 1:
+                name = cstr("fset")
+            elif index == 2:
+                name = cstr("fdel")
+            store_ptr(slots, _DESCRIPTOR_KEY * C_POINTER_SIZE, py_str_new(name, 4))
+            if _descriptor_call_adopt(slots, tokens, _DESCRIPTOR_KEY) != 0:
+                return -1
+            # Keep positional accessors intact until duplicate checking.
+            value = py_dict_get(load_ptr(slots, _DESCRIPTOR_KWARGS * C_POINTER_SIZE),
+                                load_ptr(slots, _DESCRIPTOR_KEY * C_POINTER_SIZE))
+            if ptr_is_null(value) == 0:
+                if index < nargs:
+                    py_decref(value)
+                    py_raise_owned(py_exc_new(3, cstr("property argument supplied by name and position")))
+                    return -1
+                store_ptr(slots, (_DESCRIPTOR_FGET + index) * C_POINTER_SIZE, value)
+                if _descriptor_call_adopt(slots, tokens, _DESCRIPTOR_FGET + index) != 0:
+                    return -1
+                matched = matched + 1
+            _descriptor_call_clear(slots, tokens, _DESCRIPTOR_KEY)
+            index = index + 1
+        if matched != nkwargs:
+            py_raise_owned(py_exc_new(3, cstr("unsupported property keyword argument")))
+            return -1
+    if tag == PY_TYPE_STATICMETHOD:
+        store_ptr(slots, _DESCRIPTOR_RESULT * C_POINTER_SIZE,
+                  py_staticmethod_new(load_ptr(slots, _DESCRIPTOR_FGET * C_POINTER_SIZE)))
+    elif tag == PY_TYPE_CLASSMETHOD:
+        store_ptr(slots, _DESCRIPTOR_RESULT * C_POINTER_SIZE,
+                  py_classmethod_new(load_ptr(slots, _DESCRIPTOR_FGET * C_POINTER_SIZE)))
+    else:
+        store_ptr(slots, _DESCRIPTOR_RESULT * C_POINTER_SIZE,
+                  py_property_new(load_ptr(slots, _DESCRIPTOR_FGET * C_POINTER_SIZE),
+                                  load_ptr(slots, _DESCRIPTOR_FSET * C_POINTER_SIZE),
+                                  load_ptr(slots, _DESCRIPTOR_FDEL * C_POINTER_SIZE)))
+    if _descriptor_call_adopt(slots, tokens, _DESCRIPTOR_RESULT) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _DESCRIPTOR_RESULT * C_POINTER_SIZE)) != 0:
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(19, cstr("descriptor constructor allocation failed")))
+        return -1
+    return 0
+
+
+def _descriptor_type_call(args, kwargs, tag: int):
+    # The first-class type path shares the ordinary factories. Every input,
+    # accessor and result keeps a counted lease across their allocation polls.
+    borrowed = stack_alloc(_DESCRIPTOR_INPUT_COUNT * C_POINTER_SIZE)
+    store_ptr(borrowed, _DESCRIPTOR_ARGS * C_POINTER_SIZE, args)
+    store_ptr(borrowed, _DESCRIPTOR_KWARGS * C_POINTER_SIZE, kwargs)
+    pcc_gc_frame_enter(global_addr("pcc_descriptor_call_borrowed_map"), borrowed)
+    slots = stack_alloc(_DESCRIPTOR_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_DESCRIPTOR_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _DESCRIPTOR_SLOT_COUNT * C_POINTER_SIZE)
+    index: int = 0
+    while index < _DESCRIPTOR_SLOT_COUNT:
+        store_i64(tokens, index * C_POINTER_SIZE, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_descriptor_call_owned_map"), slots)
+    status: int = 0
+    index = 0
+    while index < _DESCRIPTOR_INPUT_COUNT and status == 0:
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, index * C_POINTER_SIZE),
+            ptr_add(borrowed, index * C_POINTER_SIZE),
+        )
+        store_i64(tokens, index * C_POINTER_SIZE, token)
+        if token < 0:
+            if py_err_occurred() == 0:
+                py_raise_owned(py_exc_new(7, cstr("descriptor constructor input owner failed")))
+            status = -1
+        index = index + 1
+    if status == 0:
+        status = _descriptor_call_body(slots, tokens, tag)
+    if py_err_occurred() != 0:
+        status = -1
+    error = ptr_add(slots, _DESCRIPTOR_ERROR * C_POINTER_SIZE)
+    result = ptr_add(slots, _DESCRIPTOR_RESULT * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(error)
+    memset(borrowed, 0, _DESCRIPTOR_INPUT_COUNT * C_POINTER_SIZE)
+    index = _DESCRIPTOR_KEY
+    while index >= 0:
+        if index != _DESCRIPTOR_RESULT or status != 0:
+            _descriptor_call_clear(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), result)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    token = load_i64(tokens, _DESCRIPTOR_RESULT * C_POINTER_SIZE)
+    if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result, prior)
+
+
 def _class_call_new(callable_obj, args, kwargs):
     """``cls.__new__(cls, *args)``, or a plain allocation when undefined.
 
@@ -3543,6 +3789,11 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
                 return null()
             # This immutable static object cannot move or be reclaimed.
             return global_load_ptr("py_Ellipsis")
+        descriptor_tag: int = py_builtin_type_class_tag(callable)
+        if (descriptor_tag == PY_TYPE_STATICMETHOD
+                or descriptor_tag == PY_TYPE_CLASSMETHOD
+                or descriptor_tag == PY_TYPE_PROPERTY):
+            return _descriptor_type_call(args, kwargs, descriptor_tag)
         is_builtin: int = 0
         if ptr_eq(callable, global_load_ptr("pcc_type_cls_bool")) != 0:
             is_builtin = 1
@@ -3821,6 +4072,12 @@ def py_obj_isinstance(o, cls) -> int:
         return pcc_capi_is_type_object_value(o)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_ellipsis")) != 0:
         return 1 if tag == PY_TYPE_ELLIPSIS else 0
+    if ptr_eq(cls, global_load_ptr("pcc_type_cls_staticmethod")) != 0:
+        return 1 if tag == PY_TYPE_STATICMETHOD else 0
+    if ptr_eq(cls, global_load_ptr("pcc_type_cls_classmethod")) != 0:
+        return 1 if tag == PY_TYPE_CLASSMETHOD else 0
+    if ptr_eq(cls, global_load_ptr("pcc_type_cls_property")) != 0:
+        return 1 if tag == PY_TYPE_PROPERTY else 0
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_bool")) != 0:
         return 1 if tag == PY_TYPE_BOOL else 0
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_int")) != 0:

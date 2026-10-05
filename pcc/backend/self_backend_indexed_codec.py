@@ -664,12 +664,14 @@ def decode_indexed_module_file(path: str) -> ParsedModule:
             raise BackendUnavailable("indexed module named type declaration is invalid")
         declarations.append(name + " = type " + body)
     from .self_backend_parse import _parse_named_types
+    triple = _wire_str(header.get("triple", ""), "target triple")
     type_context = _parse_named_types("\n".join(declarations))
+    type_context.target_triple = triple
     for function in functions:
         function.type_context = type_context
     globals_ = tuple(_global_from_wire(row, type_context) for row in global_rows)
     return ParsedModule(
-        triple=_wire_str(header.get("triple", ""), "target triple"),
+        triple=triple,
         globals_=globals_,
         functions=tuple(functions),
         type_context=type_context,

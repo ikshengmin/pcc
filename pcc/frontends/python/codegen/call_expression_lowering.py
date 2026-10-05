@@ -901,7 +901,7 @@ class CallExpressionLoweringMixin:
         func_attr_name = _call_attr_name(func_expr)
         func_attr_obj = _call_attr_obj(func_expr)
         pcc_intrinsic = self._native_builtin_value_kind_for_expr(func_expr)
-        if pcc_intrinsic in ("os.fdopen", "os.open", "os.close"):
+        if pcc_intrinsic in ("os.fdopen", "os.open", "os.close", "os.mkdir"):
             return self._emit_slot_call_object(expr, pcc_intrinsic)
         if pcc_intrinsic in ("tempfile.TemporaryDirectory", "tempfile.mkdtemp", "tempfile.NamedTemporaryFile"):
             if self._native_module_attr_global_if_exists("tempfile", pcc_intrinsic.split(".")[1]) is None:

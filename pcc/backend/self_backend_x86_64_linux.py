@@ -1025,7 +1025,7 @@ def _store_vararg_stack_value(func: ParsedFunction, arg_type: TypeDesc, value: s
             f"x86_64 self backend vararg stack type not translated yet in {func.name!r}: {arg_type.describe()}"
         )
     lines = _materialize_value(func, value, arg_type, _reg_name(arg_type, 10))
-    lines.append(f"  mov {_mem_size(arg_type)} [rsp + {stack_offset}], {_reg_name(arg_type, 10)}")
+    lines.extend(_store_reg_to_temp(_reg_name(arg_type, 10), stack_offset, arg_type))
     return lines
 
 
@@ -1073,7 +1073,7 @@ def _emit_internal_vararg_call(
         if kind == "stack_scalar":
             stack_offset = int(payload)
             lines.extend(_materialize_value(func, value, arg_type, _reg_name(arg_type, 10)))
-            lines.append(f"  mov {_mem_size(arg_type)} [rsp + {stack_offset}], {_reg_name(arg_type, 10)}")
+            lines.extend(_store_reg_to_temp(_reg_name(arg_type, 10), stack_offset, arg_type))
             continue
         if kind == "stack_byval":
             stack_offset = int(payload)
@@ -1575,7 +1575,7 @@ def _emit_prologue(func: ParsedFunction) -> list[str]:
         if kind == "stack_scalar":
             stack_offset = 16 + int(payload)
             scratch = _reg_name(arg.type, 10)
-            lines.append(f"  mov {scratch}, {_mem_size(arg.type)} {_stack_arg_addr(stack_offset)}")
+            lines.extend(_load_address_offset_to_reg("rbp", stack_offset, scratch, arg.type))
             lines.extend(_store_reg_to_slot(scratch, func.value_slots[arg.name].offset, arg.type))
             continue
         if kind == "stack_byval":
@@ -2612,7 +2612,7 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             if kind == "stack_scalar":
                 stack_offset = int(payload)
                 lines.extend(_materialize_value(func, value, arg_type, _reg_name(arg_type, 10)))
-                lines.append(f"  mov {_mem_size(arg_type)} [rsp + {stack_offset}], {_reg_name(arg_type, 10)}")
+                lines.extend(_store_reg_to_temp(_reg_name(arg_type, 10), stack_offset, arg_type))
                 continue
             if kind == "stack_byval":
                 stack_offset = int(payload)

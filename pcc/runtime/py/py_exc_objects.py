@@ -26,6 +26,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_NONE,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
+    PY_FLAG_EXC_OS_PAYLOAD,
     PYTUPLEOBJECT_ITEMS_OFFSET,
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
@@ -320,9 +321,10 @@ def py_exc_get_message(exc):
         return null()
     if _type_of(exc) != PY_TYPE_EXC:
         return null()
-    if (load_i32(exc, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
-        return _unicode_primary_argument(exc)
-    return pcc_gc_load_ptr(exc, ptr_add(exc, 24))
+    # The discriminator and its mutable slot must be read under one lease.
+    # This remains a BORROWED API: callers still must keep its argument alive
+    # and synchronize concurrent argument mutation while using the result.
+    return _exc_primary_argument(exc)
 
 
 @c_abi_export("py_exc_get_cause")
@@ -756,7 +758,7 @@ def py_unicode_encode_error(obj, encoding, start: int, end: int, reason) -> None
         py_raise_owned(result)
 
 
-def _unicode_primary_argument(error):
+def _exc_primary_argument(error):
     # Keep the legacy BORROWED args[0] contract without leaking the private
     # record, and protect its raw handoff across frame unregistration.
     borrowed = stack_alloc(16)
@@ -765,11 +767,13 @@ def _unicode_primary_argument(error):
     pcc_gc_frame_enter(global_addr("pcc_unicode_borrowed_map"), borrowed)
     pcc_py_gc_minor_graph_lock()
     error = pcc_gc_load_ptr(null(), borrowed)
-    record = pcc_gc_load_ptr(error, ptr_add(error, 24))
-    args = pcc_gc_load_ptr(record, ptr_add(record, PYTUPLEOBJECT_ITEMS_OFFSET))
-    value = null()
-    if py_tuple_len(args) > 0:
-        value = pcc_gc_load_ptr(args, ptr_add(args, PYTUPLEOBJECT_ITEMS_OFFSET))
+    flags: int = load_i32(error, 12)
+    value = pcc_gc_load_ptr(error, ptr_add(error, 24))
+    if (flags & (PY_FLAG_EXC_UNICODE_PAYLOAD | PY_FLAG_EXC_OS_PAYLOAD)) != 0:
+        args = pcc_gc_load_ptr(value, ptr_add(value, PYTUPLEOBJECT_ITEMS_OFFSET))
+        value = null()
+        if py_tuple_len(args) > 0:
+            value = pcc_gc_load_ptr(args, ptr_add(args, PYTUPLEOBJECT_ITEMS_OFFSET))
     store_ptr(borrowed, 8, value)
     prior: int = 0
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
@@ -862,3 +866,177 @@ def py_unicode_error_set_field(error, index: int, value) -> int:
         pcc_gc_store_ptr_plan_finish(plan)
     _unicode_finish(borrowed, owned, 0)
     return 0 if ok != 0 else -1
+
+
+# OSError fields are independent of .args, exactly as in the Unicode record.
+# Conversion is lazy so existing one-message exception constructors and their
+# allocation/GC contracts remain unchanged. The record uses the already traced
+# message slot; no exception-layout or collector-specific extension is needed.
+def _os_error_prepare_payload(borrowed, owned) -> int:
+    error = pcc_gc_load_ptr(null(), borrowed)
+    if (load_i32(error, 12) & PY_FLAG_EXC_OS_PAYLOAD) != 0:
+        return 1
+    pcc_py_gc_minor_graph_lock()
+    error = pcc_gc_load_ptr(null(), borrowed)
+    pcc_gc_store_root(ptr_add(owned, 24), pcc_gc_load_ptr(error, ptr_add(error, 24)))
+    pcc_py_gc_minor_graph_unlock()
+    count: int = 0 if ptr_is_null(pcc_gc_load_ptr(null(), ptr_add(owned, 24))) else 1
+    store_ptr(owned, 16, py_tuple_new(count))
+    if ptr_is_null(load_ptr(owned, 16)):
+        return 0
+    if count != 0:
+        _unicode_tuple_put(owned, 16, 0, 24)
+    store_ptr(owned, 8, py_tuple_new(5))
+    if ptr_is_null(load_ptr(owned, 8)):
+        return 0
+    _unicode_tuple_put(owned, 8, 0, 16)
+    # NULL optional fields are initialized absence, distinct from assigning
+    # the Python None singleton (which OSError.__str__ must render).
+    pcc_gc_publish_initialized(pcc_gc_load_ptr(null(), ptr_add(owned, 8)))
+    plan = stack_alloc(128)
+    pcc_gc_store_ptr_plan_init(plan, null(), pcc_gc_backend())
+    py_gc_track(pcc_gc_load_ptr(null(), ptr_add(owned, 8)))
+    pcc_py_gc_minor_graph_lock()
+    error = pcc_gc_load_ptr(null(), borrowed)
+    # A competing setter can have installed the record while we allocated.
+    if (load_i32(error, 12) & PY_FLAG_EXC_OS_PAYLOAD) == 0:
+        payload = pcc_gc_load_ptr(null(), ptr_add(owned, 8))
+        pcc_gc_store_ptr_plan_commit_locked(plan, error, ptr_add(error, 24), payload)
+        atomic_rmw_i32("or", error, 12, PY_FLAG_EXC_OS_PAYLOAD, "relaxed")
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_ptr_plan_finish(plan)
+    pcc_gc_store_root(ptr_add(owned, 8), null())
+    pcc_gc_store_root(ptr_add(owned, 16), null())
+    pcc_gc_store_root(ptr_add(owned, 24), null())
+    return 1
+
+
+@c_abi_export("py_os_error_get_field")
+def py_os_error_get_field(error, index: int):
+    # Caller dispatches only an OSError. Uninitialized optional fields are None.
+    if (load_i32(error, 12) & PY_FLAG_EXC_OS_PAYLOAD) == 0:
+        value = global_load_ptr("py_None")
+        py_incref(value)
+        return value
+    return py_unicode_error_get_field(error, index)
+
+
+@c_abi_export("py_os_error_set_field")
+def py_os_error_set_field(error, index: int, value) -> int:
+    borrowed = stack_alloc(16)
+    store_ptr(borrowed, 0, error)
+    store_ptr(borrowed, 8, value)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_borrowed_map"), borrowed)
+    owned = stack_alloc(64)
+    memset(owned, 0, 64)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_owned_map"), owned)
+    ok: int = _os_error_prepare_payload(borrowed, owned)
+    if ok != 0 and index == 0:
+        source = ptr_add(borrowed, 8)
+        if _type_of(pcc_gc_load_ptr(null(), source)) == PY_TYPE_TUPLE:
+            pcc_py_gc_minor_graph_lock()
+            pcc_gc_store_root(ptr_add(owned, 8), pcc_gc_load_ptr(null(), source))
+            pcc_py_gc_minor_graph_unlock()
+        else:
+            prior: int = _unicode_pin_slot(source)
+            store_ptr(owned, 8, py_tuple_from_splat(load_ptr(source, 0)))
+            store_ptr(source, 0, pcc_gc_take_pinned_slot(source, prior))
+            if ptr_is_null(load_ptr(owned, 8)):
+                ok = 0
+    if ok != 0:
+        plan = stack_alloc(128)
+        pcc_gc_store_ptr_plan_init(plan, null(), pcc_gc_backend())
+        error = pcc_gc_load_ptr(null(), borrowed)
+        py_gc_track(pcc_gc_load_ptr(error, ptr_add(error, 24)))
+        pcc_py_gc_minor_graph_lock()
+        error = pcc_gc_load_ptr(null(), borrowed)
+        payload = pcc_gc_load_ptr(error, ptr_add(error, 24))
+        replacement = pcc_gc_load_ptr(null(), ptr_add(borrowed, 8))
+        if index == 0:
+            replacement = pcc_gc_load_ptr(null(), ptr_add(owned, 8))
+        pcc_gc_store_ptr_plan_commit_locked(plan, payload, ptr_add(payload, PYTUPLEOBJECT_ITEMS_OFFSET + index * 8), replacement)
+        pcc_py_gc_minor_graph_unlock()
+        pcc_gc_store_ptr_plan_finish(plan)
+    _unicode_finish(borrowed, owned, 0)
+    return 0 if ok != 0 else -1
+
+
+@c_abi_export("py_os_error_fields_present")
+def py_os_error_fields_present(error) -> int:
+    borrowed = stack_alloc(16)
+    store_ptr(borrowed, 0, error)
+    store_ptr(borrowed, 8, null())
+    pcc_gc_frame_enter(global_addr("pcc_unicode_borrowed_map"), borrowed)
+    pcc_py_gc_minor_graph_lock()
+    error = pcc_gc_load_ptr(null(), borrowed)
+    payload = pcc_gc_load_ptr(error, ptr_add(error, 24))
+    present: int = 0
+    index: int = 1
+    while index < 5:
+        if ptr_is_null(pcc_gc_load_ptr(payload, ptr_add(payload, PYTUPLEOBJECT_ITEMS_OFFSET + index * 8))) == 0:
+            present = present | (1 << index)
+        index = index + 1
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave(borrowed)
+    return present
+
+
+# Projection views reuse the named two-borrowed/eight-owned payload frames.
+# Their output slot is a NEW owner; the legacy argument must stay independently
+# owned across allocation, publication by another setter, and tuple assembly.
+_EXC_PROJECT_RESULT = 0
+_EXC_PROJECT_ARGUMENT = 8
+_EXC_PROJECT_ARGS = 1
+_EXC_PROJECT_VALUE = 2
+
+
+def _exc_project_new(error, projection: int):
+    borrowed = stack_alloc(16)
+    store_ptr(borrowed, 0, error)
+    store_ptr(borrowed, 8, null())
+    pcc_gc_frame_enter(global_addr("pcc_unicode_borrowed_map"), borrowed)
+    owned = stack_alloc(64)
+    memset(owned, 0, 64)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_owned_map"), owned)
+    legacy_args: int = 0
+    pcc_py_gc_minor_graph_lock()
+    error = pcc_gc_load_ptr(null(), borrowed)
+    flags: int = load_i32(error, 12)
+    message = pcc_gc_load_ptr(error, ptr_add(error, 24))
+    structured: int = flags & (PY_FLAG_EXC_UNICODE_PAYLOAD | PY_FLAG_EXC_OS_PAYLOAD)
+    if projection == _EXC_PROJECT_ARGS:
+        if structured != 0:
+            args = pcc_gc_load_ptr(message, ptr_add(message, PYTUPLEOBJECT_ITEMS_OFFSET))
+            py_incref(args)
+            store_ptr(owned, _EXC_PROJECT_RESULT, args)
+        else:
+            # Retain this exact logical argument before releasing the lease.
+            # Reloading error.message after allocation could read a new record.
+            py_incref(message)
+            store_ptr(owned, _EXC_PROJECT_ARGUMENT, message)
+            legacy_args = 1
+    elif structured == 0:
+        if ptr_is_null(message):
+            message = global_load_ptr("py_None")
+        py_incref(message)
+        store_ptr(owned, _EXC_PROJECT_RESULT, message)
+    pcc_py_gc_minor_graph_unlock()
+    if legacy_args != 0:
+        count: int = 0 if ptr_is_null(pcc_gc_load_ptr(null(), ptr_add(owned, _EXC_PROJECT_ARGUMENT))) else 1
+        store_ptr(owned, _EXC_PROJECT_RESULT, py_tuple_new(count))
+        if count != 0 and ptr_is_null(load_ptr(owned, _EXC_PROJECT_RESULT)) == 0:
+            _unicode_tuple_put(owned, _EXC_PROJECT_RESULT, 0, _EXC_PROJECT_ARGUMENT)
+    success: int = 0 if ptr_is_null(load_ptr(owned, _EXC_PROJECT_RESULT)) else 1
+    return _unicode_finish(borrowed, owned, success)
+
+
+@c_abi_export("py_exc_get_args")
+def py_exc_get_args(error):
+    return _exc_project_new(error, _EXC_PROJECT_ARGS)
+
+
+@c_abi_export("py_exc_get_legacy_value")
+def py_exc_get_legacy_value(error):
+    # NULL denotes an attribute miss for structured payloads. An unstructured
+    # no-argument error returns a NEW None, preserving the legacy value API.
+    return _exc_project_new(error, _EXC_PROJECT_VALUE)

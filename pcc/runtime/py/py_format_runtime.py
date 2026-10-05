@@ -10,6 +10,7 @@ __pcc_runtime_port__ = True
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
+    PY_FLAG_EXC_OS_PAYLOAD,
     PYCLASSOBJECT_NAME_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
     PY_TYPE_BOOL,
@@ -690,6 +691,8 @@ def py_exc_repr(value):
         return null()
     if (load_i32(value, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
         return py_unicode_error_format(value, 1)
+    if (load_i32(value, 12) & PY_FLAG_EXC_OS_PAYLOAD) != 0:
+        return py_os_error_format(value, 1)
     cls = pcc_gc_load_ptr(value, ptr_add(value, 16))
     name = cstr("Exception")
     if ptr_is_null(cls) == 0:
@@ -3089,6 +3092,100 @@ def py_unicode_error_format(value, repr_mode: int):
     state = _buffer_new(128)
     if ptr_is_null(state) == 0:
         if _unicode_format_body(state, slots, repr_mode, type_tag) == 0:
+            store_ptr(slots, 48, _buffer_string(state))
+        _buffer_free(state)
+    prior: int = _unicode_format_pin(ptr_add(slots, 48))
+    i = 0
+    while i < 8:
+        if i != 6:
+            pcc_gc_store_root(ptr_add(slots, i * 8), null())
+        i = i + 1
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(ptr_add(slots, 48), prior)
+
+
+py_os_error_get_field = extern("py_os_error_get_field", (c_ptr, c_int64), c_ptr)
+py_os_error_fields_present = extern("py_os_error_fields_present", (c_ptr,), c_int64)
+
+
+def _os_error_format_body(state, slots, repr_mode: int, present: int) -> int:
+    args_slot = ptr_add(slots, 56)
+    count: int = py_tuple_len(pcc_gc_load_ptr(null(), args_slot))
+    if repr_mode != 0:
+        if _unicode_format_append(state, slots, 4, 0) != 0:
+            return -1
+        _buffer_char(state, 40)
+        i: int = 0
+        while i < count:
+            if i != 0:
+                _buffer_cstr(state, cstr(", "))
+            prior: int = _unicode_format_pin(args_slot)
+            store_ptr(slots, 0, py_tuple_get(load_ptr(args_slot, 0), i))
+            store_ptr(args_slot, 0, pcc_gc_take_pinned_slot(args_slot, prior))
+            if ptr_is_null(load_ptr(slots, 0)) or _unicode_format_append(state, slots, 0, 1) != 0:
+                return -1
+            pcc_gc_store_root(slots, null())
+            i = i + 1
+        _buffer_char(state, 41)
+        return 0
+    has_name: int = present & 8
+    structured: int = has_name
+    if (present & 6) == 6:
+        structured = 1
+    if structured != 0:
+        _buffer_cstr(state, cstr("[Errno "))
+        if _unicode_format_append(state, slots, 0, 0) != 0:
+            return -1
+        _buffer_cstr(state, cstr("] "))
+        if _unicode_format_append(state, slots, 1, 0) != 0:
+            return -1
+        if has_name != 0:
+            _buffer_cstr(state, cstr(": "))
+            if _unicode_format_append(state, slots, 2, 1) != 0:
+                return -1
+            if (present & 16) != 0:
+                _buffer_cstr(state, cstr(" -> "))
+                if _unicode_format_append(state, slots, 3, 1) != 0:
+                    return -1
+        return 0
+    if count == 0:
+        return 0
+    if count > 1:
+        return _unicode_format_append(state, slots, 7, 1)
+    prior = _unicode_format_pin(args_slot)
+    store_ptr(slots, 32, py_tuple_get(load_ptr(args_slot, 0), 0))
+    store_ptr(args_slot, 0, pcc_gc_take_pinned_slot(args_slot, prior))
+    return _unicode_format_append(state, slots, 4, 0)
+
+
+@c_abi_export("py_os_error_format")
+def py_os_error_format(value, repr_mode: int):
+    borrowed = stack_alloc(8)
+    store_ptr(borrowed, 0, value)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_format_borrowed_map"), borrowed)
+    slots = stack_alloc(64)
+    memset(slots, 0, 64)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_format_owned_map"), slots)
+    present: int = py_os_error_fields_present(pcc_gc_load_ptr(null(), borrowed))
+    store_ptr(slots, 56, py_os_error_get_field(pcc_gc_load_ptr(null(), borrowed), 0))
+    if repr_mode != 0:
+        pcc_py_gc_minor_graph_lock()
+        error = pcc_gc_load_ptr(null(), borrowed)
+        cls = pcc_gc_load_ptr(error, ptr_add(error, 16))
+        name = load_ptr(cls, PYCLASSOBJECT_NAME_OFFSET)
+        pcc_py_gc_minor_graph_unlock()
+        # The class remains rooted through the exception; its C-string name
+        # is separately allocated and stable even if the class itself moves.
+        store_ptr(slots, 32, py_str_new(name, strlen(name)))
+    else:
+        i: int = 0
+        while i < 4:
+            store_ptr(slots, i * 8, py_os_error_get_field(pcc_gc_load_ptr(null(), borrowed), i + 1))
+            i = i + 1
+    state = _buffer_new(128)
+    if ptr_is_null(state) == 0:
+        if _os_error_format_body(state, slots, repr_mode, present) == 0:
             store_ptr(slots, 48, _buffer_string(state))
         _buffer_free(state)
     prior: int = _unicode_format_pin(ptr_add(slots, 48))

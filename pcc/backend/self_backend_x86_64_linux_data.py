@@ -8,7 +8,7 @@ from . import BackendUnavailable
 from .self_backend_ir import GlobalDef, TypeDesc, _align_to
 from .self_backend_literals import fp_bitcast_initializer_bits
 from .self_backend_module_symbols import PreparedModuleSymbols
-from .wide_float import encode_float_bits
+from .wide_float import encode_float_bits, float_bytes
 from .self_backend_parse import (
     decode_global_name,
     decode_value_token,
@@ -141,6 +141,8 @@ def emit_scalar_initializer(
             return [f"  .long {int(init)}"]
         return [f"  .quad {int(init)}"]
     if ty.is_fp:
+        if ty.width == 80:
+            return emit_byte_data(float_bytes(init, 80))
         if is_hex_literal(init):
             bits = int(init, 16)
             if ty.width <= 32:

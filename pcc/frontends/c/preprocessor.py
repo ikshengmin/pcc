@@ -13,6 +13,7 @@ Supports:
   ## token pasting                  - in macro bodies
   # stringification                 - in function macro bodies
   __LINE__, __FILE__                - built-in macros
+  _Pragma("...")                    - macro-expandable pragma operator
 """
 
 import re
@@ -530,6 +531,8 @@ class Preprocessor:
         self._identifier_cache = {}
         self.once_files = set()
         self._macro_stacks = {}
+        self._pragma_generation = 0
+        self._pragma_snapshot = None
         self._include_depth = 0
         self._line_no = 0
         self._file = "<string>"
@@ -854,9 +857,11 @@ class Preprocessor:
             # Retry only incomplete calls, without consuming a directive as an
             # argument or weakening the diagnostic for a genuinely open call.
             while True:
+                self._pragma_snapshot = None
                 try:
                     processed = self._expand_line(line)
                 except _IncompleteMacroInvocation:
+                    self._rollback_pragma_expansion()
                     if i + 1 >= len(lines) or lines[i + 1].text.lstrip().startswith("#"):
                         raise
                 else:
@@ -871,8 +876,10 @@ class Preprocessor:
                         and lines[following].text.lstrip().startswith("(")
                     ):
                         break
+                    self._rollback_pragma_expansion()
                 i += 1
                 line += "\n" + lines[i].text
+            self._pragma_snapshot = None
             output.append(processed)
             i += 1
 
@@ -1000,7 +1007,20 @@ class Preprocessor:
             self._invalidate_expand_cache()
             return int(marker.group(1))
 
-        stack_pragma = re.fullmatch(r'pragma\s+(push_macro|pop_macro)\s*\(\s*"([A-Za-z_]\w*)"\s*\)', directive)
+        pragma = re.match(r"pragma\b(.*)", directive)
+        if pragma:
+            self._handle_pragma(pragma.group(1).strip())
+        elif directive.startswith("error"):
+            raise RuntimeError("owned preprocessor: #" + directive)
+        elif directive.startswith("warning"):
+            warnings.warn(directive[7:].strip(), stacklevel=2)
+        elif directive:
+            raise RuntimeError("unsupported preprocessor directive: #" + directive)
+        return
+
+    def _handle_pragma(self, pragma):
+        """Share directive and operator semantics without expanding pragma tokens."""
+        stack_pragma = re.fullmatch(r'(push_macro|pop_macro)\s*\(\s*"([A-Za-z_]\w*)"\s*\)', pragma)
         if stack_pragma:
             operation, name = stack_pragma.groups()
             stack = self._macro_stacks.setdefault(name, [])
@@ -1015,15 +1035,17 @@ class Preprocessor:
                 self._invalidate_expand_cache()
             return
 
-        if directive == "pragma once":
+        if pragma == "once":
             self.once_files.add(self._physical_file)
-        elif directive.startswith("error"):
-            raise RuntimeError("owned preprocessor: #" + directive)
-        elif directive.startswith("warning"):
-            warnings.warn(directive[7:].strip(), stacklevel=2)
-        elif directive and not directive.startswith("pragma "):
-            raise RuntimeError("unsupported preprocessor directive: #" + directive)
-        return
+
+    def _rollback_pragma_expansion(self):
+        # Appending a physical line retries macro expansion from its beginning.
+        # Restore pragma effects first, so an earlier push/pop executes once.
+        # Snapshot lazily: ordinary source lines do not copy the macro table.
+        if self._pragma_snapshot is not None:
+            self.macros, self._macro_stacks, self.once_files = self._pragma_snapshot
+            self._pragma_snapshot = None
+            self._invalidate_expand_cache()
 
     def _eval_condition(self, expr):
         """Evaluate a #if / #elif expression. Returns True/False."""
@@ -1102,15 +1124,17 @@ class Preprocessor:
         cached = self._expand_cache.get(line)
         if cached is not None:
             return cached
+        pragma_generation = self._pragma_generation
         tokens = self._expand_tokens(self._macro_tokens(line))
         trailing = line[len(line.rstrip()):]
         result = self._serialize_macro_fragments(
             [token.leading + token.text for token in tokens] + [trailing]
         )
-        self._expand_cache[line] = result
+        if self._pragma_generation == pragma_generation:
+            self._expand_cache[line] = result
         return result
 
-    def _expand_tokens(self, tokens):
+    def _expand_tokens(self, tokens, defer_pragma=False):
         tokens = list(tokens)
         index = 0
         while index < len(tokens):
@@ -1118,7 +1142,37 @@ class Preprocessor:
             name = token.text
             macro = self.macros.get(name)
             end = index + 1
-            if name == "__LINE__":
+            if name == "_Pragma":
+                if defer_pragma and (end == len(tokens) or tokens[end].text != "("):
+                    # Argument prescan may supply the operator name while the
+                    # surrounding macro/source supplies its operand on rescan.
+                    index += 1
+                    continue
+                if end == len(tokens):
+                    raise _IncompleteMacroInvocation("unterminated _Pragma operator")
+                if tokens[end].text != "(":
+                    raise RuntimeError("malformed _Pragma: expected '(' and one string literal")
+                args, end = self._macro_arguments(tokens, end + 1, name)
+                argument = self._expand_tokens(args[0]) if len(args) == 1 else []
+                literal = (re.fullmatch(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', argument[0].text)
+                           if len(argument) == 1 else None)
+                if literal is None:
+                    raise RuntimeError("malformed _Pragma: expected one string literal")
+                # C11 6.10.9 only destringizes quotes/backslashes. Other escape
+                # spellings remain intact for translation-phase-3 tokenization.
+                pragma = re.sub(r'\\([\\"])', r'\1', literal.group(1))
+                pragma = "\n".join(_source_lines(pragma)).strip()
+                if self._pragma_snapshot is None:
+                    self._pragma_snapshot = (
+                        dict(self.macros),
+                        {key: list(stack) for key, stack in self._macro_stacks.items()},
+                        set(self.once_files),
+                    )
+                self._pragma_generation += 1
+                self._handle_pragma(pragma)
+                replacement = []
+                hidden = token.hide_set
+            elif name == "__LINE__":
                 replacement = [_MacroToken("", str(self._line_no))]
                 hidden = token.hide_set
             elif name == "__FILE__":
@@ -1266,7 +1320,7 @@ class Preprocessor:
                     replacement = raw[parameter]
                 else:
                     if parameter not in expanded:
-                        expanded[parameter] = self._expand_tokens(raw[parameter])
+                        expanded[parameter] = self._expand_tokens(raw[parameter], defer_pragma=True)
                     replacement = expanded[parameter]
                 replacement = self._copy_macro_tokens(replacement, leading=token.leading)
             else:

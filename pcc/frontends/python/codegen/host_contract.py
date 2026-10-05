@@ -328,6 +328,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_runtime_object_compare",
     "_emit_module_global_root_enters",
     "_emit_module_root_enters",
+    "_emit_owned_stdlib_module_bindings",
     "_emit_module_teardown",
     "_emit_module_teardown_call",
     "_emit_module_top_init",

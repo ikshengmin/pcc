@@ -78,8 +78,8 @@ def test_concurrent_module_parses_keep_distinct_type_contexts(monkeypatch):
 
 def test_failed_resolution_is_confined_to_its_own_module():
     a = parser.parse_self_backend_module(A)
-    b = parser.parse_self_backend_module(B.replace('%T = type { i16, i16 }', '%T = type { x86_fp80 }').replace('@storage = global %T zeroinitializer\n', '').replace('define %T @identity(%T %value) {\nentry:\n  ret %T %value\n}', 'define i32 @probe() {\nentry:\n  ret i32 0\n}'))
-    with pytest.raises(BackendUnavailable, match='x86_fp80'):
+    b = parser.parse_self_backend_module(B.replace('%T = type { i16, i16 }', '%T = type { bfloat }').replace('@storage = global %T zeroinitializer\n', '').replace('define %T @identity(%T %value) {\nentry:\n  ret %T %value\n}', 'define i32 @probe() {\nentry:\n  ret i32 0\n}'))
+    with pytest.raises(BackendUnavailable, match='bfloat'):
         parser.parse_ir_type('%T', type_context=b.type_context)
     assert not b.type_context.named_types
     assert widths(a.type_context) == (8, 64)

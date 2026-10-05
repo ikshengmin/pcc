@@ -63,8 +63,9 @@ class _Builder:
         self.blocks = {}
 
     def icmp_signed(self, op, left, right):
-        assert op == '=='
-        return left == int(str(right))
+        assert op in ('==', '!=')
+        equal = left == int(str(right))
+        return equal if op == '==' else not equal
 
     def cbranch(self, condition, yes, no):
         self.blocks[yes] = self.active and condition
@@ -153,8 +154,12 @@ class _FormatHost(FormatLoweringMixin):
             return 0
         if runtime == 'py_obj_type_tag':
             return 4 if isinstance(roots[0].value, str) else -1
+        if runtime == 'py_str_check':
+            assert result_slot is None
+            return int(isinstance(roots[0].value, str))
         if runtime == 'py_str_byte_len':
-            return str.__len__(roots[0].value)
+            assert result_slot is None
+            return len(str.encode(roots[0].value, 'utf-8'))
         assert result_slot.value is None
         try:
             if runtime == 'py_obj_format':
@@ -251,4 +256,4 @@ def test_single_or_empty_format_paths_have_balanced_owners(template):
     check_frames(body)
     if '{' in template:
         _assert_immediate_publication(body, 'py_obj_format')
-        assert body.index('@py_obj_type_tag(') < body.index('@py_str_byte_len(')
+        assert body.index('@py_str_check(') < body.index('@py_str_byte_len(')

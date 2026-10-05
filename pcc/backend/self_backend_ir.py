@@ -394,6 +394,17 @@ class TypeDesc:
         return self.kind == "struct"
 
     @property
+    def contains_storage_only_float(self) -> bool:
+        """An extended value needs lowering; pointers merely address storage."""
+        if self.is_fp:
+            return self.width == 80
+        if self.is_array:
+            return self.elem is not None and self.elem.contains_storage_only_float
+        if self.is_struct:
+            return any(member.contains_storage_only_float for member in self.fields)
+        return False
+
+    @property
     def bits(self) -> int:
         if self.is_ptr:
             return 64
@@ -406,6 +417,9 @@ class TypeDesc:
         if self.is_void:
             return 0
         if self.is_fp:
+            # x86_fp80 is admitted only with the x86_64 Linux storage ABI.
+            if self.width == 80:
+                return 16
             return 4 if self.width <= 32 else 8
         if self.is_ptr or self.width > 32:
             return 8
@@ -435,6 +449,8 @@ class TypeDesc:
         if self.is_array or self.is_struct:
             return self.slot_size
         if self.is_fp:
+            if self.width == 80:
+                return 16
             return 4 if self.width <= 32 else 8
         if self.is_ptr or self.width > 32:
             return 8
@@ -455,6 +471,8 @@ class TypeDesc:
                     result = member.align
             return result
         if self.is_fp:
+            if self.width == 80:
+                return 16
             return 4 if self.width <= 32 else 8
         if self.is_ptr or self.width > 32:
             return 8
@@ -471,6 +489,8 @@ class TypeDesc:
         if self.is_array or self.is_struct:
             return self.align
         if self.is_fp:
+            if self.width == 80:
+                return 16
             return 4 if self.width <= 32 else 8
         if self.is_ptr or self.width > 32:
             return 8
@@ -485,6 +505,8 @@ class TypeDesc:
         if self.is_int:
             return f"i{self.width}"
         if self.is_fp:
+            if self.width == 80:
+                return "x86_fp80"
             return "float" if self.width <= 32 else "double"
         if self.is_array:
             elem: TypeDesc = self.elem
@@ -1261,6 +1283,7 @@ class AllocaInfo:
 class TypeParseContext:
     """One module's lazy named layouts and dependent canonicalization caches."""
 
+    target_triple: str = ""
     named_type_bodies: dict[str, str] = field(default_factory=dict)
     call_signature_cache: dict[str, tuple[int, bool]] = field(default_factory=dict)
     named_types: dict[str, TypeDesc] = field(default_factory=dict)

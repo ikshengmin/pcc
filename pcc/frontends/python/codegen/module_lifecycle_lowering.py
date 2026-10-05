@@ -5,10 +5,18 @@ from __future__ import annotations
 import os
 
 from pcc.ir.compat import ir
+from pcc.frontends.python.pipeline_dependency_closure import (
+    _native_stdlib_root_for_path,
+)
 
 from pcc.frontends.python.py_ast import Call, ExprStmt, Name, Stmt
 from pcc.frontends.python.codegen.generator_lowering import funcdef_has_source_yield
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+from pcc.frontends.python.codegen.native_os import (
+    NATIVE_OS_OWNED_CALLABLES,
+    NATIVE_OS_DESCRIPTOR_CONSTANTS,
+    native_os_descriptor_constant,
+)
 
 _I8 = ir.IntType(8)
 _I32 = ir.IntType(32)
@@ -56,6 +64,54 @@ class ModuleLifecycleLoweringMixin:
             value = self._emit_str_literal(docstring)
         self._publish_module_scope_import_binding("__doc__", value)
         self._gc_release(value)
+
+    def _emit_owned_stdlib_module_bindings(self) -> None:
+        """Publish real owned API values in the compiled standard port object.
+
+        Importers with a closed module graph read this namespace. Native
+        attribute shortcuts alone cannot satisfy from-import or module values.
+        Only the compiler's actual os port receives these definitions; a user
+        module called os keeps its own namespace and initialization behavior.
+        """
+        if self.ast_module.name != "os":
+            return
+        source = getattr(self, "_module_source_path", "") or ""
+        if not source:
+            return
+        # Use source-discovery provenance. Compiled bootstrap codegen modules
+        # have synthetic __file__ values, and configured roots can relocate
+        # the actual provider. Retained-AST workers restore this input path.
+        provider_root = _native_stdlib_root_for_path(source)
+        if provider_root is None:
+            return
+        if os.path.abspath(source) != os.path.join(provider_root, "os.py"):
+            return
+        module_name = self._pooled_cstr_ptr("os", ".owned.module.os")
+        members = [(name, producer, None) for name, producer in NATIVE_OS_OWNED_CALLABLES]
+        for name in NATIVE_OS_DESCRIPTOR_CONSTANTS:
+            value = native_os_descriptor_constant(name, self._target_sys_platform_text())
+            if value is not None:
+                members.append((name, "py_int_from_i64", value))
+        for name, producer, constant in members:
+            output = self._new_slot_call_root("owned.module.member." + name)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                arguments = () if constant is None else (ir.Constant(ir.IntType(64), constant),)
+                self._slot_call_runtime_call(producer, (), result_slot=output, suffix_args=arguments)
+                status = self._slot_call_runtime_call(
+                    "py_module_attr_set", (output,),
+                    suffix_args=(module_name, self._attr_name_ptr(name)),
+                    argument_order=(1, 2, 0),
+                )
+                self._slot_call_check_status(status, "module member publication")
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            self._release_slot_call_roots((output,))
 
     def _emit_module_teardown(self) -> None:
         """Emit a per-module function that clears object globals."""
@@ -230,6 +286,7 @@ class ModuleLifecycleLoweringMixin:
         self._try_err_block = None
         self._cpy_operand_cleanup_block = None
         self._active_handler_excs = []
+        self._emit_owned_stdlib_module_bindings()
         self._emit_stmts(tuple(body))
 
         if not self._builder_block_is_terminated():
@@ -451,6 +508,7 @@ class ModuleLifecycleLoweringMixin:
         self._try_err_block = None
         self._cpy_operand_cleanup_block = None
         self._active_handler_excs = []
+        self._emit_owned_stdlib_module_bindings()
         self._emit_stmts(tuple(user_body))
 
         if not self._builder_block_is_terminated():

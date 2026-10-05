@@ -204,6 +204,8 @@ def test_owned_encoder_matches_system_assembler_per_emitted_shape(
     (
         "mov rax, [no_base*4]",
         "mov ah, r10b",
+        "mov QWORD PTR [rsp + 32], xmm10",
+        "mov xmm10, DWORD PTR [rbp + 48]",
         "vzeroupper",
         "jmp 7",
         "lock ret",

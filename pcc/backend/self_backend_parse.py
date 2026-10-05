@@ -16,7 +16,8 @@ from .self_backend_float_bits import (
     float32_to_bits,
     float64_to_bits,
 )
-from .wide_float import encode_float_bits
+from .wide_float import encode_float_bits, float_bytes
+from .self_backend_target_match import is_x86_64_linux_triple
 from .self_backend_kernel import IndexedFunctionSeed, get_indexed_function_kernel
 from .self_backend_literals import (
     _is_float_token,
@@ -50,7 +51,7 @@ from .self_backend_ir import (
 from .self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntArena
 
 _SCALAR_TYPE_TOKEN = (
-    r'(?:void|ptr|float|double|i\d+|%(?:"[^"]+"|(?:[A-Za-z_.$][\w.$-]*|\d+)))'
+    r'(?:void|ptr|float|double|x86_fp80|i\d+|%(?:"[^"]+"|(?:[A-Za-z_.$][\w.$-]*|\d+)))'
 )
 _AGG_ELEM_TYPE_TOKEN = rf"(?:{_SCALAR_TYPE_TOKEN})(?:\*+)?"
 # These regex fragments only recognize simple instruction fast paths.  Type
@@ -298,6 +299,12 @@ def _canonical_leaf_type(token: str, *, type_context=None) -> TypeDesc:
         result = TypeDesc("fp", 32)
     elif token == "double":
         result = TypeDesc("fp", 64)
+    elif token == "x86_fp80":
+        if not is_x86_64_linux_triple(type_context.target_triple):
+            raise BackendUnavailable(
+                "self backend x86_fp80 storage requires an x86_64 Linux target context"
+            )
+        result = TypeDesc("fp", 80)
     elif token.startswith("i") and token[1:].isdigit():
         result = TypeDesc("int", int(token[1:]))
     else:
@@ -716,6 +723,8 @@ def _parse_ir_type_tokens(
             resolve_named=resolve_named,
             declaration_only=declaration_only, type_context=type_context,
         )
+        if token == "<" and elem.contains_storage_only_float:
+            raise _ir_type_parse_error(text, "x86_fp80 vector storage layout is not implemented")
         close_info, index = _next_ir_type_token(text, index)
         if close_info[0] == "eof" or close_info[1] != close:
             raise _ir_type_parse_error(text, f"expected closing {close!r}")
@@ -750,6 +759,8 @@ def _parse_ir_type_tokens(
                 if field_info[0] == "eof" or field_info[1] == "}":
                     raise _ir_type_parse_error(text, "expected type after ','")
         base = TypeDesc("struct", fields=tuple(fields))
+    elif token == "x86_fp80" and not declaration_only:
+        base = _canonical_leaf_type(token, type_context=type_context)
     elif token in ("void", "ptr", "float", "double") or (
         token.startswith("i") and token[1:].isdigit()
     ):
@@ -1582,6 +1593,8 @@ def aggregate_literal_to_bytes(value_type: TypeDesc, value: str, *, type_context
         mask = (1 << bits) - 1
         return (int_value & mask).to_bytes(value_type.slot_size, "little")
     if value_type.is_fp:
+        if value_type.width == 80:
+            return float_bytes(text, 80)
         if text in {"poison", "undef"}:
             return bytes(value_type.slot_size)
         if value_type.width <= 32:
@@ -1722,6 +1735,8 @@ def _strip_volatile_memory_op_prefix(text: str) -> str:
 def _parse_named_types(ir_text: str, *, type_context=None) -> TypeParseContext:
     if type_context is None:
         type_context = TypeParseContext()
+    target_match = _TARGET_TRIPLE_RE.search(ir_text)
+    type_context.target_triple = target_match.group(1) if target_match is not None else ""
     type_context.call_signature_cache.clear()
     type_context.named_types.clear()
     type_context.named_type_bodies.clear()
@@ -1790,7 +1805,11 @@ def _resolve_typed_abi_attributes(text: str, *, type_context=None) -> None:
             continue
         opening = opening_token[2]
         closing = _find_matching_paren(text, opening)
-        _parse_type(text[opening + 1:closing], type_context=type_context)
+        value_type = _parse_type(text[opening + 1:closing], type_context=type_context)
+        if value_type.contains_storage_only_float:
+            raise BackendUnavailable(
+                "self backend x86_fp80 typed ABI attribute lowering is not implemented"
+            )
         position = closing + 1
 
 

@@ -170,6 +170,7 @@ PORT_ABI_NATIVE_EXPORTS = {
         "PY_FLAG_FUNC_CONTINUATION_FACTORY": {"kind": "constant", "value_kind": "int", "value": 67108864},
         "PY_FLAG_EXC_SUPPRESS_CONTEXT": {"kind": "constant", "value_kind": "int", "value": 134217728},
         "PY_FLAG_EXC_UNICODE_PAYLOAD": {"kind": "constant", "value_kind": "int", "value": 268435456},
+        "PY_FLAG_EXC_OS_PAYLOAD": {"kind": "constant", "value_kind": "int", "value": 1073741824},
         "PY_OBJ_CMP_UNORDERED": {"kind": "constant", "value_kind": "int", "value": 2},
         "PY_EXC_N_BUILTIN": {"kind": "constant", "value_kind": "int", "value": 65},
         "PCC_VTHREAD_WAIT_CHANNEL_SEND": {"kind": "constant", "value_kind": "int", "value": 5},

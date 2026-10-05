@@ -29,6 +29,18 @@ _PYOBJ = ir.IntType(8).as_pointer()
 
 
 
+NATIVE_OS_OWNED_CALLABLES = (
+    ("open", "py_os_open_function"),
+    ("close", "py_os_close_function"),
+    ("fdopen", "py_file_fdopen_function"),
+    ("mkdir", "py_os_mkdir_function"),
+)
+NATIVE_OS_DESCRIPTOR_CONSTANTS = (
+    "O_RDONLY", "O_WRONLY", "O_RDWR", "O_ACCMODE", "O_CREAT", "O_EXCL",
+    "O_TRUNC", "O_APPEND", "O_NONBLOCK", "O_DIRECTORY", "O_NOFOLLOW", "O_CLOEXEC",
+)
+
+
 def native_os_descriptor_constant(name: str, platform: str):
     common = {"O_RDONLY": 0, "O_WRONLY": 1, "O_RDWR": 2, "O_ACCMODE": 3}
     if name in common:

@@ -12,6 +12,7 @@ from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS
 from pcc.runtime.py.py_abi_constants import PY_TYPE_CONTINUATION, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_EXC_UNICODE_PAYLOAD,
+    PY_FLAG_EXC_OS_PAYLOAD,
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
@@ -430,14 +431,14 @@ def _format(o) -> None:
     elif tag == PY_TYPE_VTHREAD_CHANNEL:
         _write_lit(cstr("<vthread channel object>"), 24)
     elif tag == PY_TYPE_EXC:
-        if (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
+        if (load_i32(o, 12) & (PY_FLAG_EXC_UNICODE_PAYLOAD | PY_FLAG_EXC_OS_PAYLOAD)) != 0:
             rendered = py_obj_str(o)
             if ptr_is_null(rendered) == 0:
                 _format_str(rendered)
                 py_decref(rendered)
         else:
             # Preserve ordinary exception printing's existing single-message
-            # path; only the explicitly marked Unicode record needs dispatch.
+            # path; explicitly marked private payloads need shared rendering.
             msg = py_exc_get_message(o)
             if ptr_is_null(msg) == 0:
                 if py_exc_matches(o, py_exc_builtin_class(4)) != 0:

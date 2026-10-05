@@ -99,6 +99,7 @@ UNSAFE_INTRINSICS = frozenset(
         "darwin_peak_rss_bytes",
         "open_file",
         "open_file_flags",
+        "mkdir_at",
         "rename_file",
         "chmod_file",
         "sync_file",
@@ -335,6 +336,7 @@ _UNSAFE_INTRINSIC_FAMILIES = (
     (
         'open_file',
         'open_file_flags',
+        'mkdir_at',
         'rename_file',
         'chmod_file',
         'sync_file',
@@ -2845,6 +2847,32 @@ class UnsafeIntrinsicMixin:
         intrinsic: str,
         expr: Call,
     ) -> ir.Value:
+        if intrinsic == "mkdir_at":
+            self._unsafe_expect_arity(intrinsic, expr, 3)
+            path = self._unsafe_ptr_arg(expr.args[0])
+            permissions = self._unsafe_i32_arg(expr.args[1])
+            directory = self._unsafe_i32_arg(expr.args[2])
+            platform_name = self._target_sys_platform_text()
+            machine = self._target_machine_text()
+            if platform_name == "darwin":
+                mkdirat = self._declare_external_function(
+                    "mkdirat", _I32, [_I32, _CSTR, _I32],
+                )
+                result = self.builder.call(
+                    mkdirat, [directory, path, permissions],
+                    name=self._fresh("unsafe.mkdir_at.result"),
+                )
+                return self._unsafe_darwin_errno_result(result, "mkdir_at")
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
+                zero = ir.Constant(_I64, 0)
+                return self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 258),
+                    self.builder.sext(directory, _I64),
+                    self.builder.ptrtoint(path, _I64),
+                    self.builder.zext(permissions, _I64), zero, zero, zero,
+                    name=self._fresh("unsafe.mkdir_at.syscall"),
+                )
+            return ir.Constant(_I64, -38)
         if intrinsic == "open_file_flags":
             self._unsafe_expect_arity(intrinsic, expr, 4)
             path = self._unsafe_ptr_arg(expr.args[0])

@@ -67,7 +67,7 @@ OBJDIR_LIBPY = build_libpython
 
 # Runtime modules under py/ that use the managed object model.
 PY_MODULES = py_file_lock py_tuple py_tuple_slice py_obj_stubs py_exc_tls py_exc_objects py_exc_match py_exc_table py_exc_traceback py_obj_gc py_gc_telemetry py_gc_backend py_set py_os_env py_os_system py_os_path py_os_substrate py_process py_process_substrate py_process_timeout py_print_sys py_print_fmt py_format_runtime py_obj py_obj_dealloc py_dict py_list py_list_set_slice py_iter py_gen py_coroutine py_context_runtime py_call_splat_runtime py_module_attrs_runtime py_compiled_module_runtime py_dlpack_runtime py_runtime_log py_json_runtime py_pickle_copy_runtime py_protocol_runtime py_extension_loader_runtime py_hash_runtime py_http_runtime py_asyncio_io_runtime py_re_engine_runtime freestanding_io_waitset py_func py_re py_dunder py_weakref py_file py_threading py_class py_obj_ops_dispatch py_obj_ops_slice py_obj_ops_set_slice py_obj_ops_mod py_obj_ops_compare py_str py_str_accessors py_str_slice py_int_core py_int_decimal py_int_shift py_int_bitwise py_int_addsub py_int_mul py_int_bigint_pow py_int_ops py_int py_int_parse py_int_convert py_int_bigint_convert py_substrate
-PY_MODULES += py_tempfile
+PY_MODULES += py_tempfile py_os_mkdir
 PY_MODULES += py_recursion_runtime
 PY_MODULES += py_binary_repeat_runtime
 PY_MODULES += py_virtual_thread_runtime freestanding_runtime_debug py_capi_core_runtime py_capi_memory_runtime py_capi_stdio_runtime py_capi_numeric_runtime py_capi_collections_runtime py_capi_exc_runtime py_capi_dict_runtime py_capi_object_runtime py_capi_type_runtime py_capi_unicode_runtime py_capi_capsule_runtime py_capi_set_runtime py_capi_misc_runtime py_capi_cfunction_runtime py_capi_object_call_runtime py_capi_method_bridge_runtime py_capi_object_attr_runtime py_capi_number_runtime py_capi_sequence_runtime py_capi_mapping_runtime py_capi_import_runtime py_capi_unicode_search_runtime py_capi_unicode_writer_runtime py_capi_buffer_runtime py_capi_module_runtime py_capi_cext_runtime py_capi_module_state_runtime py_capi_private_runtime py_capi_slice_runtime py_capi_seqiter_runtime py_capi_contextvar_runtime py_capi_call_runtime py_capi_arg_runtime py_capi_str_conv_runtime py_capi_buildvalue_runtime py_capi_type_descriptor_runtime py_capi_visit_runtime
@@ -291,6 +291,13 @@ $(OBJDIR_PY)/py_tempfile.o: $(PYDIR)/py_tempfile.py | $(OBJDIR_PY)
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.ir.optimization.driver "$(PCC_RUNTIME_IR_PASSES)" $(OBJDIR_PY)/py_tempfile.ll $(OBJDIR_PY)/py_tempfile.opt.ll
 	mv $(OBJDIR_PY)/py_tempfile.opt.ll $(OBJDIR_PY)/py_tempfile.ll
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/py_tempfile.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
+
+# mkdir uses the same explicit NEW-return/root publication discipline.
+$(OBJDIR_PY)/py_os_mkdir.o: $(PYDIR)/py_os_mkdir.py | $(OBJDIR_PY)
+	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) PCC_WITH_THREADS=0 $(PCC) --python-library --target=$(PCC_RUNTIME_TARGET) --emit-llvm=$(OBJDIR_PY)/py_os_mkdir.ll $<
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.ir.optimization.driver "$(PCC_RUNTIME_IR_PASSES)" $(OBJDIR_PY)/py_os_mkdir.ll $(OBJDIR_PY)/py_os_mkdir.opt.ll
+	mv $(OBJDIR_PY)/py_os_mkdir.opt.ll $(OBJDIR_PY)/py_os_mkdir.ll
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/py_os_mkdir.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
 
 $(OBJDIR_PY):
 	mkdir -p $(OBJDIR_PY)

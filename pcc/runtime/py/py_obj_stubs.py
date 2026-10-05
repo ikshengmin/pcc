@@ -18,6 +18,7 @@ __pcc_runtime_port__ = True
 from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_EXC_UNICODE_PAYLOAD,
+    PY_FLAG_EXC_OS_PAYLOAD,
     PY_FLAG_GC_PINNED,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
@@ -121,6 +122,7 @@ py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 py_unicode_error_format = extern("py_unicode_error_format", (c_ptr, c_int64), c_ptr)
+py_os_error_format = extern("py_os_error_format", (c_ptr, c_int64), c_ptr)
 py_exc_repr = extern("py_exc_repr", (c_ptr,), c_ptr)
 py_complex_repr = extern("py_complex_repr", (c_ptr,), c_ptr)
 py_instance_getattr = extern("py_instance_getattr", (c_ptr, c_ptr), c_ptr)
@@ -3701,6 +3703,8 @@ def py_obj_str(o):
     if tag == PY_TYPE_EXC:  # PY_TYPE_EXC
         if (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
             return py_unicode_error_format(o, 0)
+        if (load_i32(o, 12) & PY_FLAG_EXC_OS_PAYLOAD) != 0:
+            return py_os_error_format(o, 0)
         msg = py_exc_get_message(o)
         if not ptr_is_null(msg):
             # KeyError.__str__ is repr(key), not the bare key (CPython):

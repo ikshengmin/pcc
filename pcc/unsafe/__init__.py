@@ -389,6 +389,15 @@ def open_file_flags(path: Any, flags: int, permissions: int, dir_fd: int) -> int
     _trap("open_file_flags")
 
 
+def mkdir_at(path: Any, mode: int, dir_fd: int) -> int:
+    """Create a directory relative to dir_fd, returning zero or negative errno.
+
+    The caller supplies the target's AT_FDCWD for the current directory.
+    Linux and Darwin implement this primitive; other targets return -ENOSYS.
+    """
+    _trap("mkdir_at")
+
+
 def rename_file(source: Any, destination: Any) -> int:
     """Atomically rename a path, replacing the destination when permitted."""
     _trap("rename_file")
@@ -1216,6 +1225,7 @@ __all__ = [
     "darwin_peak_rss_bytes",
     "open_file",
     "open_file_flags",
+    "mkdir_at",
     "rename_file",
     "chmod_file",
     "sync_file",

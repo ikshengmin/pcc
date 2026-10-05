@@ -9,7 +9,23 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import BoolType, ByteArrayType, BytesType, ClassType, ComplexType, DictType, DynType, FloatType, IntType, ListType, MemoryViewType, Name, NoneType, StrType, TupleType, Type
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_CLASSMETHOD,
+    PY_TYPE_COMPLEX,
+    PY_TYPE_DICT,
+    PY_TYPE_FLOAT,
+    PY_TYPE_INT,
+    PY_TYPE_LIST,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_PROPERTY,
+    PY_TYPE_SET,
+    PY_TYPE_STATICMETHOD,
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+)
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
 from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
@@ -43,6 +59,9 @@ _CPY_BUILTIN_TYPE_NAMES = frozenset(
 )
 _NATIVE_BUILTIN_CALLABLE_NAMES = frozenset(
     {
+        "staticmethod",
+        "classmethod",
+        "property",
         "abs",
         "bool",
         "bytes",
@@ -89,10 +108,25 @@ class NameLoweringMixin:
         self._try_err_block = self._slot_call_cleanup_block(roots, target)
         self._cpy_operand_cleanup_block = self._try_err_block
         try:
-            self._slot_call_runtime_call(
-                runtime_name, (), result_slot=output, suffix_args=arguments,
-                span=expr.span if expr is not None else None,
-            )
+            descriptor_name = {
+                "py_os_open_function": "open", "py_os_close_function": "close",
+                "py_file_fdopen_function": "fdopen", "py_os_mkdir_function": "mkdir",
+            }.get(runtime_name)
+            span = expr.span if expr is not None else None
+            if descriptor_name is not None and "os" in getattr(self, "_sibling_module_inits", ()):
+                value = self.builder.call(
+                    self.runtime["py_module_attr_get"],
+                    [self._pooled_cstr_ptr("os", ".owned.module.os"), self._attr_name_ptr(descriptor_name)],
+                    name=self._fresh("owned.module.member.current"),
+                )
+                self._publish_slot_call_owned(output, value, label="owned module member")
+                self._emit_attribute_error_if_null(
+                    self.builder.load(output), descriptor_name, span,
+                )
+            else:
+                self._slot_call_runtime_call(
+                    runtime_name, (), result_slot=output, suffix_args=arguments, span=span,
+                )
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
@@ -135,11 +169,15 @@ class NameLoweringMixin:
         return self._take_slot_call_root(output)
 
     def _name_returns_native_builtin_callable_value(self, name: str) -> bool:
-        if name in _NATIVE_BUILTIN_CALLABLE_NAMES:
-            return True
         value = self._native_builtin_value_for_name(name)
-        return bool(value is not None and value.startswith("builtins.")
-                    and value[len("builtins."):] in _NATIVE_BUILTIN_CALLABLE_NAMES)
+        if value is not None and value.startswith("builtins."):
+            return value[len("builtins."):] in _NATIVE_BUILTIN_CALLABLE_NAMES
+        # Native builtin spelling is a fallback after actual local/global
+        # bindings. Imported aliases were resolved above; an ordinary module
+        # value with the same spelling must keep its own identity.
+        if name in self.env or name in self._module_globals:
+            return False
+        return name in _NATIVE_BUILTIN_CALLABLE_NAMES
 
     def _emit_native_builtin_callable_type_error(
         self,
@@ -361,6 +399,9 @@ class NameLoweringMixin:
     def _emit_native_builtin_callable_value(self, name: str, expr=None) -> Optional[ir.Value]:
         builtin_value = self._native_builtin_value_for_name(name)
         canonical_names = {
+            "builtins.staticmethod": "staticmethod",
+            "builtins.classmethod": "classmethod",
+            "builtins.property": "property",
             "builtins.bool": "bool",
             "builtins.bytes": "bytes",
             "builtins.bytearray": "bytearray",
@@ -385,6 +426,9 @@ class NameLoweringMixin:
         if canonical_name == "range":
             return self._emit_native_range_callable_value()
         builtin_tags = {
+            "staticmethod": PY_TYPE_STATICMETHOD,
+            "classmethod": PY_TYPE_CLASSMETHOD,
+            "property": PY_TYPE_PROPERTY,
             "bool": PY_TYPE_BOOL,
             "int": PY_TYPE_INT,
             "float": PY_TYPE_FLOAT,
@@ -925,9 +969,9 @@ class NameLoweringMixin:
             builtin_value = self._native_builtin_value_for_name(expr.ident)
             if builtin_value == "tempfile.TemporaryDirectory":
                 return self._emit_owned_namespace_runtime_value("py_tempdir_type", (), expr)
-            if builtin_value in ("os.fdopen", "os.open", "os.close"):
+            if builtin_value in ("os.fdopen", "os.open", "os.close", "os.mkdir"):
                 provider = {"os.fdopen": "py_file_fdopen_function", "os.open": "py_os_open_function",
-                            "os.close": "py_os_close_function"}[builtin_value]
+                            "os.close": "py_os_close_function", "os.mkdir": "py_os_mkdir_function"}[builtin_value]
                 return self._emit_owned_namespace_runtime_value(provider, (), expr)
             if builtin_value is not None and builtin_value.startswith("os.O_"):
                 flag = native_os_descriptor_constant(builtin_value[3:], self._target_sys_platform_text())

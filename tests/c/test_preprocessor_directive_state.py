@@ -1,8 +1,12 @@
 """Directive state and macro token boundaries use only owned preprocessing."""
 
+import platform
+import sys
+
 import pytest
 
 from pcc.frontends.c.preprocessor import (
+    Preprocessor,
     _source_lines,
     preprocess,
 )
@@ -116,3 +120,151 @@ def test_source_newline_conventions_preserve_line_numbers(newline):
 
 def test_non_newline_whitespace_does_not_split_source_records():
     assert _source_lines('int\vvalue;\f\n') == ['int\vvalue;\f']
+
+
+@pytest.mark.parametrize('prefix', ['', 'L', 'u', 'U', 'u8'])
+def test_pragma_operator_destringizes_and_restores_macro(prefix):
+    result = preprocess(
+        '#define VALUE 7\n'
+        '_Pragma(' + prefix + r'"push_macro(\"VALUE\")")' + '\n'
+        '#undef VALUE\n#define VALUE 9\n'
+        'VALUE _Pragma("pop_macro(\\"VALUE\\")") VALUE\n'
+    )
+    assert result.split() == ['9', '7']
+
+
+def test_macro_expanded_pragma_operators_preserve_function_and_undefined_states():
+    result = preprocess(r'''
+#define PRAGMA(x) _Pragma(#x)
+#define ALIAS _Pragma
+#define POP "pop_macro(\"VALUE\")"
+#define push_macro ignored
+#define pop_macro ignored
+PRAGMA(push_macro("VALUE"))
+#define VALUE(x) x + 1
+PRAGMA(push_macro("VALUE"))
+#undef VALUE
+#define VALUE 99
+VALUE ALIAS(POP) VALUE(4)
+PRAGMA(pop_macro("VALUE"))
+#ifdef VALUE
+#error leaked macro
+#endif
+VALUE
+''')
+    assert result.split() == ['99', '4', '+', '1', 'VALUE']
+
+
+def test_pragma_operator_retokenizes_comments_without_expanding_pragma_tokens():
+    result = preprocess(r'''
+#define VALUE 7
+#define push_macro ignored
+_Pragma("push_macro /* separator */ (\"VALUE\")")
+#undef VALUE
+#define VALUE 9
+_Pragma("pop_macro(\"VALUE\") // comment") VALUE
+''')
+    assert result.strip() == '7'
+
+
+def test_pragma_operator_only_destringizes_quote_and_backslash(monkeypatch):
+    pp = Preprocessor()
+    seen = []
+    monkeypatch.setattr(pp, '_handle_pragma', seen.append)
+    assert not pp.preprocess(r'_Pragma("listing \"..\\listing.dir\" \n \x41")')
+    assert seen == [r'listing "..\listing.dir" \n \x41']
+
+
+@pytest.mark.parametrize('call', ['ID(\n7)', 'ID\n(7)', '_Pragma\n("unknown") ID(\n7)'])
+def test_multiline_rescan_does_not_repeat_pragma_side_effects(call):
+    result = preprocess(
+        '#define VALUE 1\n#define ID(x) x\n'
+        '_Pragma("push_macro(\\"VALUE\\")") ' + call + '\n'
+        '#undef VALUE\n#define VALUE 2\n'
+        '_Pragma("pop_macro(\\"VALUE\\")") VALUE\n'
+        '#undef VALUE\n#define VALUE 3\n'
+        '_Pragma("pop_macro(\\"VALUE\\")") VALUE\n'
+    )
+    assert result.split() == ['7', '1', '3']
+
+
+def test_pragma_once_operator_uses_physical_include_path(tmp_path):
+    (tmp_path / 'once.h').write_text(
+        '#line 700 "virtual.c"\n#define ONCE _Pragma("once")\n'
+        'ONCE\nint included;\n'
+    )
+    result = preprocess('#include "once.h"\n#include "once.h"\n', base_dir=str(tmp_path))
+    assert result.count('int included;') == 1
+
+
+def test_pragma_operators_are_not_executed_in_skipped_or_stringified_tokens():
+    result = preprocess(r'''
+#define STRING(x) #x
+#if 0
+_Pragma(123)
+#endif
+STRING(_Pragma("once"))
+const char *text = "_Pragma(123)";
+''')
+    assert result.strip().splitlines() == [
+        '"_Pragma(\\"once\\")"', 'const char *text = "_Pragma(123)";',
+    ]
+
+
+def test_pasted_pragma_operator_removal_keeps_surrounding_token_boundaries():
+    assert preprocess(
+        '#define CAT(a,b) a##b\n+CAT(_Pra,gma)("unknown")+1\n'
+    ) == '+ +1'
+
+
+def test_prescanned_pragma_alias_meets_surrounding_operand():
+    assert preprocess(
+        '#define ID(x) x\n#define OP _Pragma\n'
+        'ID(OP)("unknown") int value;\n'
+    ).strip() == 'int value;'
+
+
+@pytest.mark.parametrize('source', [
+    '_Pragma', '_Pragma "once"', '_Pragma(', '_Pragma()', '_Pragma(1)',
+    "_Pragma('a')", '_Pragma("once" "again")', '_Pragma("once", "again")',
+])
+def test_malformed_pragma_operator_is_a_diagnostic(source):
+    with pytest.raises(RuntimeError, match='_Pragma'):
+        preprocess(source)
+
+
+def test_pragma_operator_expansions_are_not_cached():
+    pp = Preprocessor()
+    pp.preprocess('#define VALUE 1\n#pragma push_macro("VALUE")\n'
+                  '#undef VALUE\n#define VALUE 2\n#pragma push_macro("VALUE")\n'
+                  '#undef VALUE\n#define VALUE 3\n')
+    line = '_Pragma("pop_macro(\\"VALUE\\")") VALUE'
+    assert pp._expand_line(line).strip() == '2'
+    assert pp._expand_line(line).strip() == '1'
+
+
+@pytest.mark.skipif(sys.platform != 'linux' or platform.machine() != 'x86_64',
+                    reason='native x86_64 Linux boundary')
+def test_pragma_macro_side_effects_execute_through_owned_c(tmp_path, monkeypatch):
+    from tests.c.test_owned_atomic_scalar_regressions import _run_owned
+
+    source = r'''
+#define PRAGMA(x) _Pragma(#x)
+#define VALUE(x) ((x) + 1)
+PRAGMA(push_macro("VALUE"))
+#undef VALUE
+#define VALUE(x) ((x) + 9)
+int altered(int value) { return VALUE(value); }
+PRAGMA(pop_macro("VALUE"))
+int restored(int value) { return VALUE(value); }
+int main(void) {
+    _Pragma("clang diagnostic push")
+    _Pragma("clang diagnostic ignored \"-Wformat-extra-args\"")
+    int result = altered(2) == 11 && restored(2) == 3;
+    _Pragma("clang diagnostic pop")
+    return result ? 0 : 1;
+}
+'''
+    result = _run_owned(source, tmp_path, monkeypatch)
+    assert result.returncode == 0, result
+    assert result.stdout == result.stderr == ''

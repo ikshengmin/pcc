@@ -13,7 +13,7 @@ TARGETS = (
     "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
     "arm64-apple-darwin", "x86_64-pc-windows-msvc",
 )
-UNSUPPORTED = ("half", "bfloat", "x86_fp80", "fp128", "ppc_fp128", "x86_amx")
+UNSUPPORTED = ("half", "bfloat", "fp128", "ppc_fp128", "x86_amx")
 ATTRIBUTES = ("byval", "byref", "sret", "inalloca", "preallocated", "elementtype")
 
 
@@ -31,7 +31,7 @@ def _module(declarations="", body=None, target=TARGETS[0]):
 
 
 @pytest.mark.parametrize("target", TARGETS)
-@pytest.mark.parametrize("leaf", UNSUPPORTED)
+@pytest.mark.parametrize("leaf", UNSUPPORTED + ("x86_fp80",))
 def test_unused_unsupported_nested_type_preserves_owned_object(target, leaf):
     declarations = "%Unused = type { i8, [2 x { " + leaf + " }] }\n"
     text = _module(declarations, target=target)
