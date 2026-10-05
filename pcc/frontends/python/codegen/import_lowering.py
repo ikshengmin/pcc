@@ -17,6 +17,70 @@ _Name = Name
 _CSTR = ir.IntType(8).as_pointer()
 
 
+def _bind_owned_import_root(host, local_name, root, span=None):
+    """Bind at the executing Python scope while the incoming owner is rooted."""
+    module_scope = host.current_func_def is None or local_name in host._current_global_names
+    if module_scope:
+        slot, _declared = host._ensure_module_global_name(local_name, DynType(name="dyn"))
+        host._native_extension_modules()[local_name] = slot
+    host._store_unpack_root_target(
+        Name(span=span, ty=DynType(name="dyn"), ident=local_name),
+        root,
+        DynType(name="dyn"),
+    )
+
+
+def _emit_owned_import_roots(
+    host, runtime_name, arguments, *, local_name=None, names=(), span=None,
+):
+    """Own a NEW module through imports, member lookups and publication.
+
+    Every runtime result enters an empty registered slot immediately. The
+    receiver remains rooted through callbacks, and every error edge retires
+    exactly the owners acquired before that edge.
+    """
+    module_root = host._new_slot_call_root("import.module")
+    previous = host._current_try_err_block()
+    target = previous if previous is not None else host._ensure_fn_err_exit()
+    saved_cpy = host._cpy_operand_cleanup_block
+    roots = [module_root]
+    try:
+        host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
+        host._cpy_operand_cleanup_block = host._try_err_block
+        host._slot_call_runtime_call(
+            runtime_name, (), result_slot=module_root, suffix_args=arguments, span=span,
+        )
+        if local_name is not None:
+            _bind_owned_import_root(host, local_name, module_root, span)
+        for attr_name, as_name in names:
+            if attr_name == "*":
+                destination = host._pooled_cstr_ptr(
+                    host.ast_module.name or "__main__", ".import.star.destination",
+                )
+                host._slot_call_runtime_call(
+                    "py_module_import_star", (module_root,),
+                    suffix_args=(destination,), argument_order=(1, 0), span=span,
+                )
+                continue
+            value_root = host._new_slot_call_root("import.member")
+            roots.append(value_root)
+            host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
+            host._cpy_operand_cleanup_block = host._try_err_block
+            host._slot_call_runtime_call(
+                "py_obj_getattr", (module_root,), result_slot=value_root,
+                suffix_args=(host._attr_name_ptr(attr_name),), span=span,
+            )
+            _bind_owned_import_root(host, as_name or attr_name, value_root, span)
+            host._release_slot_call_roots((value_root,))
+            roots.pop()
+            host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
+            host._cpy_operand_cleanup_block = host._try_err_block
+        host._release_slot_call_roots((module_root,))
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+
+
 def _dataclass_field_value(obj, field_name: str, default=None):
     return getattr(obj, field_name, default)
 
@@ -503,16 +567,10 @@ class ImportLoweringMixin:
         path_ptr = self._ptr_to_cstr(
             self._cstr_global(extension_path, f".pcc.ext.path.{module_name}")
         )
-        mod_val = self.builder.call(
-            self.runtime["py_native_extension_import"],
-            [mod_ptr, path_ptr],
-            name=self._fresh(f"pcc.ext.import.{module_name.replace('.', '_')}"),
+        _emit_owned_import_roots(
+            self, "py_native_extension_import", (mod_ptr, path_ptr),
+            local_name=local_name,
         )
-        self._emit_post_call_err_check()
-        gv = self._native_extension_module_global(local_name)
-        self.builder.store(mod_val, gv)
-        self._native_extension_modules()[local_name] = gv
-        self._publish_module_scope_import_binding(local_name, mod_val)
 
     def _emit_compiled_module_import(
         self,
@@ -528,29 +586,17 @@ class ImportLoweringMixin:
         mod_ptr = self._ptr_to_cstr(
             self._cstr_global(module_name, f".pcc.compiled.mod.{module_name}")
         )
-        mod_val = self.builder.call(
-            self.runtime["py_compiled_module_import_by_name"],
-            [mod_ptr],
-            name=self._fresh(f"pcc.compiled.import.{module_name.replace('.', '_')}"),
+        _emit_owned_import_roots(
+            self, "py_compiled_module_import_by_name", (mod_ptr,),
+            local_name=local_name,
         )
-        self._emit_post_call_err_check()
-        gv = self._native_extension_module_global(local_name)
-        self.builder.store(mod_val, gv)
-        self._native_extension_modules()[local_name] = gv
-        self._publish_module_scope_import_binding(local_name, mod_val)
 
     def _emit_compiled_module_ensure_initialized(self, module_name: str) -> None:
         """Run a compiled sibling's guarded top-level initializer on import."""
         mod_ptr = self._ptr_to_cstr(
             self._cstr_global(module_name, f".pcc.compiled.ensure.{module_name}")
         )
-        module = self.builder.call(
-            self.runtime["py_compiled_module_import_by_name"],
-            [mod_ptr],
-            name=self._fresh(f"pcc.compiled.ensure.{module_name.replace('.', '_')}"),
-        )
-        self._emit_post_call_err_check()
-        self._gc_release(module)
+        _emit_owned_import_roots(self, "py_compiled_module_import_by_name", (mod_ptr,))
 
     def _emit_ir_scaffold_provider_init(self, import_module) -> None:
         """Run the IR provider's top-level init for an elided scaffold import.
@@ -594,62 +640,10 @@ class ImportLoweringMixin:
         path_ptr = self._ptr_to_cstr(
             self._cstr_global(extension_path, f".pcc.ext.from.path.{module_name}")
         )
-        module = self.builder.call(
-            self.runtime["py_native_extension_import"],
-            [mod_ptr, path_ptr],
-            name=self._fresh(f"pcc.ext.from.import.{module_name.replace('.', '_')}"),
+        _emit_owned_import_roots(
+            self, "py_native_extension_import", (mod_ptr, path_ptr),
+            names=names, span=span,
         )
-        self._emit_post_call_err_check()
-        for attr_name, as_name in names:
-            if attr_name == "*":
-                gv = self._native_extension_star_module_global(module_name)
-                self.builder.store(module, gv)
-                current_module = self.ast_module.name or "__main__"
-                current_module_ptr = self._ptr_to_cstr(
-                    self._cstr_global(
-                        current_module,
-                        f".pcc.ext.star.dest.{current_module}",
-                    )
-                )
-                self.builder.call(
-                    self.runtime["py_module_import_star"],
-                    [current_module_ptr, module],
-                    name=self._fresh("pcc.ext.star.import"),
-                )
-                self._emit_post_call_err_check()
-                continue
-            attr_ptr = self._attr_name_ptr(attr_name)
-            value = self.builder.call(
-                self.runtime["py_obj_getattr"],
-                [module, attr_ptr],
-                name=self._fresh(f"pcc.ext.from.{attr_name}"),
-            )
-            self._emit_post_call_err_check()
-            local_name = as_name or attr_name
-            if self.current_func_def is not None and local_name not in getattr(
-                self, "_current_global_names", set()
-            ):
-                # An import statement binds in the executing function's local
-                # scope.  A same-named module global declared elsewhere must
-                # not capture this value (for example a helper importing
-                # ``make_scanner`` before the module later assigns its public
-                # ``make_scanner`` alias).
-                self._store_unpack_target(
-                    Name(
-                        span=span,
-                        ty=DynType(name="dyn"),
-                        ident=local_name,
-                    ),
-                    value,
-                    DynType(name="dyn"),
-                    value_is_owned=True,
-                )
-                continue
-            gv = self._native_extension_module_global(local_name)
-            self.builder.store(value, gv)
-            self._native_extension_modules()[local_name] = gv
-            self._publish_module_scope_import_binding(local_name, value)
-        self._gc_release(module)
 
     def _emit_compiled_module_import_from(
         self,
@@ -666,95 +660,10 @@ class ImportLoweringMixin:
         mod_ptr = self._ptr_to_cstr(
             self._cstr_global(module_name, f".pcc.compiled.from.mod.{module_name}")
         )
-        module = self.builder.call(
-            self.runtime["py_compiled_module_import_by_name"],
-            [mod_ptr],
-            name=self._fresh(
-                f"pcc.compiled.from.import.{module_name.replace('.', '_')}"
-            ),
+        _emit_owned_import_roots(
+            self, "py_compiled_module_import_by_name", (mod_ptr,), names=names,
+            span=self.current_func_def.span if self.current_func_def is not None else None,
         )
-        if self.current_func_def is not None:
-            # Import/getattr return owned objects. Keep the module alive until
-            # all requested bindings finish, including error unwinds, and pin
-            # each incoming value across release of a replaced local owner.
-            module_root = self._enter_container_temp_root(
-                module, self._fresh("compiled.import.module")
-            )
-            module_lifetime = (module_root, True)
-            old_error = self._current_try_err_block()
-            error_target = old_error if old_error is not None else self._ensure_fn_err_exit()
-            module_cleanup = self._make_cpy_operand_cleanup_block(
-                (), (), error_target, "compiled.import.module.error",
-                rooted_pcc_lifetimes=(module_lifetime,),
-            )
-            self._try_err_block = module_cleanup
-            try:
-                self._emit_post_call_err_check()
-                for attr_name, as_name in names:
-                    if attr_name == "*":
-                        raise NotImplementedError(
-                            "star import from compiled sibling module is not supported"
-                        )
-                    current_module = self.builder.call(
-                        self.runtime["pcc_gc_load_ptr"],
-                        [ir.Constant(_CSTR, None), self._as_gc_ptr(module_root)],
-                        name=self._fresh("compiled.import.module.current"),
-                    )
-                    value = self.builder.call(
-                        self.runtime["py_obj_getattr"],
-                        [current_module, self._attr_name_ptr(attr_name)],
-                        name=self._fresh("pcc.compiled.from." + attr_name),
-                    )
-                    value_root = self._enter_container_temp_root(
-                        value, self._fresh("compiled.import.value")
-                    )
-                    self._try_err_block = self._make_cpy_operand_cleanup_block(
-                        (), (), error_target, "compiled.import.value.error",
-                        rooted_pcc_lifetimes=(module_lifetime, (value_root, True)),
-                    )
-                    self._emit_post_call_err_check()
-                    value = self.builder.call(
-                        self.runtime["pcc_gc_load_ptr"],
-                        [ir.Constant(_CSTR, None), self._as_gc_ptr(value_root)],
-                        name=self._fresh("compiled.import.value.current"),
-                    )
-                    self._store_unpack_target(
-                        Name(
-                            span=self.current_func_def.span,
-                            ty=DynType(name="dyn"),
-                            ident=as_name or attr_name,
-                        ),
-                        value,
-                        DynType(name="dyn"),
-                        value_is_owned=True,
-                    )
-                    # The local/global assignment consumed the incoming owner.
-                    # Retire only the additional traced temporary reference.
-                    self._leave_container_temp_root(value_root)
-                    self._try_err_block = module_cleanup
-            finally:
-                self._try_err_block = old_error
-            self._release_rooted_pcc_lifetimes((module_lifetime,))
-            return
-        self._emit_post_call_err_check()
-        for attr_name, as_name in names:
-            if attr_name == "*":
-                raise NotImplementedError(
-                    "star import from compiled sibling module is not supported"
-                )
-            attr_ptr = self._attr_name_ptr(attr_name)
-            value = self.builder.call(
-                self.runtime["py_obj_getattr"],
-                [module, attr_ptr],
-                name=self._fresh(f"pcc.compiled.from.{attr_name}"),
-            )
-            self._emit_post_call_err_check()
-            local_name = as_name or attr_name
-            gv = self._native_extension_module_global(local_name)
-            self.builder.store(value, gv)
-            self._native_extension_modules()[local_name] = gv
-            self._publish_module_scope_import_binding(local_name, value)
-        self._gc_release(module)
 
     def _emit_compiled_module_import_star(self, module_name: str) -> None:
         """Copy a compiled sibling's runtime namespace for ``import *``.
@@ -767,28 +676,9 @@ class ImportLoweringMixin:
         mod_ptr = self._ptr_to_cstr(
             self._cstr_global(module_name, f".pcc.compiled.star.mod.{module_name}")
         )
-        module = self.builder.call(
-            self.runtime["py_compiled_module_import_by_name"],
-            [mod_ptr],
-            name=self._fresh(
-                f"pcc.compiled.star.import.{module_name.replace('.', '_')}"
-            ),
+        _emit_owned_import_roots(
+            self, "py_compiled_module_import_by_name", (mod_ptr,), names=(("*", None),),
         )
-        self._emit_post_call_err_check()
-        current_module = self.ast_module.name or "__main__"
-        current_module_ptr = self._ptr_to_cstr(
-            self._cstr_global(
-                current_module,
-                f".pcc.compiled.star.dest.{current_module}",
-            )
-        )
-        self.builder.call(
-            self.runtime["py_module_import_star"],
-            [current_module_ptr, module],
-            name=self._fresh("pcc.compiled.star.copy"),
-        )
-        self._emit_post_call_err_check()
-        self._gc_release(module)
 
     def _emit_import(self, stmt: Import) -> None:
         self._emit_import_unchecked(stmt)
@@ -843,7 +733,7 @@ class ImportLoweringMixin:
             if builtin_module in self._NATIVE_BUILTIN_IMPORT_MODULES:
                 mod_name = builtin_module
                 if mod_name in getattr(self, "_sibling_module_inits", ()):
-                    self._emit_compiled_module_ensure_initialized(mod_name)
+                    self._emit_compiled_module_import(mod_name, as_name or mod_name)
                 self._register_native_builtin_module_alias(
                     as_name or mod_name,
                     mod_name,
@@ -1141,6 +1031,20 @@ class ImportLoweringMixin:
         # pcc markers must not enter its lazy module namespace. Other imports
         # first bind real compiled exports, including first-class constructors.
         import_module = self._resolve_relative_import(stmt)
+        if import_module == "sys" and any(name == "modules" for name, _alias in stmt_names):
+            # This import executes an ordinary binding. A permanent name
+            # alias would reread the provider after reassignment and bypass
+            # the authoritative local/global owner.
+            for attr_name, as_name in stmt_names:
+                if attr_name != "modules":
+                    member = ImportFrom(stmt.span, stmt.module, ((attr_name, as_name),), stmt.level)
+                    self._emit_import_from_unchecked(member)
+                    continue
+                _emit_owned_import_roots(
+                    self, "py_sys_modules", (), local_name=as_name or attr_name,
+                    span=stmt.span,
+                )
+            return
         if import_module == "builtins":
             # An import is an executing assignment, not a permanent compiler
             # alias. Canonical member lookup ignores same-named source locals.

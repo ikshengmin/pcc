@@ -194,6 +194,10 @@ py_class_metaclass_call = extern("py_class_metaclass_call", (c_ptr, c_ptr, c_ptr
 py_class_setattr = extern("py_class_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 py_class_delattr = extern("py_class_delattr", (c_ptr, c_ptr), c_int64)
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
+py_tuple_type_new = extern("py_tuple_type_new", (), c_ptr)
+py_tuple_getattr = extern("py_tuple_getattr", (c_ptr, c_ptr), c_ptr)
+py_class_is_tuple_subclass = extern("py_class_is_tuple_subclass", (c_ptr,), c_int64)
+py_tuple_class_call = extern("py_tuple_class_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_class_is_str_subclass = extern("py_class_is_str_subclass", (c_ptr,), c_int64)
 py_str_subclass_new = extern("py_str_subclass_new", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_str_check = extern("py_str_check", (c_ptr,), c_int64)
@@ -1853,12 +1857,7 @@ def _builtin_type_class_for_tag(tag: int):
                 global_store_ptr("pcc_type_cls_dict", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_TUPLE:  # PY_TYPE_TUPLE
-        cls = global_load_ptr("pcc_type_cls_tuple")
-        if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("tuple"), null(), 0, null(), 0)
-            if ptr_is_null(cls) == 0:
-                global_store_ptr("pcc_type_cls_tuple", cls)
-        return _return_builtin_type(cls)
+        return py_tuple_type_new()
     if tag == PY_TYPE_SET:  # PY_TYPE_SET
         cls = global_load_ptr("pcc_type_cls_set")
         if ptr_is_null(cls) != 0:
@@ -3090,6 +3089,12 @@ def py_obj_getattr(o, name):
     if tag == PY_TYPE_STR and _cstr_is_count(name) != 0:  # PY_TYPE_STR
         return _py_str_count_bound(o)
 
+    if tag == PY_TYPE_TUPLE:
+        result = py_tuple_getattr(o, name)
+        if ptr_is_null(result) == 0 or py_err_occurred() != 0:
+            return result
+        return _raise_attribute_error(o, name)
+
     if _is_instance_tag(tag) != 0:
         result = py_instance_getattr(o, name)
         if ptr_is_null(result) == 0:
@@ -4000,6 +4005,8 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
         # singleton classes handed back a fresh object each call -- and a
         # ``__new__`` that reads ``cls._cache`` ran against a class that had
         # never been passed in.
+        if py_class_is_tuple_subclass(callable) != 0:
+            return py_tuple_class_call(callable, args, kwargs)
         inst = _class_call_new(callable, args, kwargs)
         if ptr_is_null(inst) != 0:
             return null()

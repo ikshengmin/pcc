@@ -65,7 +65,6 @@ _CPY_BUILTIN_FALLBACK = frozenset(
         "repr",
         "ord",
         "chr",
-        "dir",
         "vars",
         "locals",
     }
@@ -1121,21 +1120,41 @@ class CallExpressionLoweringMixin:
                     raise NotImplementedError(
                         "Layer 1 builtin __import__() supports only absolute level 0"
                     )
-            evaluated_args = []
-            for arg in expr.args:
-                evaluated_args.append(self._emit_as_object(arg))
-            fromlist = (
-                evaluated_args[3]
-                if len(evaluated_args) >= 4
-                else self._emit_none_literal()
-            )
-            result = self.builder.call(
-                self.runtime["py_builtin_import"],
-                [evaluated_args[0], fromlist],
-                name=self._fresh("builtin.import"),
-            )
-            self._emit_post_call_err_check()
-            return result
+            sink = self._slot_call_result_sink(expr)
+            output = sink if sink is not None else self._new_slot_call_root("builtin.import.result")
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            roots = [] if sink is not None else [output]
+            arguments = []
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                for argument in expr.args:
+                    slot = self._emit_slot_call_operand(argument, "builtin.import.argument")
+                    arguments.append(slot)
+                    roots.append(slot)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                if len(arguments) >= 4:
+                    fromlist = arguments[3]
+                else:
+                    fromlist = self._emit_slot_call_operand(
+                        NoneLit(span=expr.span, ty=NoneType(name="None")), "builtin.import.fromlist",
+                    )
+                    roots.append(fromlist)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_builtin_import", (arguments[0], fromlist), result_slot=output, span=expr.span,
+                )
+                self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("builtin.import.current"))
+            return self._take_slot_call_root(output)
         if name == "open":
             native_open = self._emit_native_open_call(expr)
             if native_open is not None:
@@ -1886,6 +1905,45 @@ class CallExpressionLoweringMixin:
             phi.add_incoming(ir.Constant(_I1, 0), missing_exit)
             phi.add_incoming(ir.Constant(_I1, 1), present_exit)
             return phi
+        if name == "dir" and not self._iterator_builtin_is_shadowed(name):
+            if not expr.args and not expr.kwargs:
+                raise L1CodegenError(
+                    "native dir() requires a frame-local namespace provider"
+                )
+            if len(expr.args) != 1 or expr.kwargs:
+                raise L1CodegenError("native dir requires one positional argument")
+            if self._expr_looks_cpython(expr.args[0]):
+                return self._emit_cpy_func_call(
+                    self._load_cpython_builtin(name), name, expr.args,
+                )
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            sink = self._slot_call_result_sink(expr)
+            output = sink if sink is not None else self._new_slot_call_root("dir.result")
+            roots = [output] if sink is None else []
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                source = self._emit_slot_call_operand(expr.args[0], "dir.source")
+                roots.append(source)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                status = self.builder.call(
+                    self.runtime["py_obj_dir_slots"],
+                    [self._as_gc_ptr(source), self._as_gc_ptr(output)],
+                    name=self._fresh("dir.status"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "dir", expr.span)
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots((source,))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("dir.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         if name == "vars" and len(expr.args) == 1 and not expr.kwargs:
             result = self.builder.call(
                 self.runtime["py_obj_vars"],

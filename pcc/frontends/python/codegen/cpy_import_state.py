@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pcc.ir.compat import ir
+from pcc.frontends.python.py_ast import DynType
 
 _I8 = ir.IntType(8)
 _CSTR = _I8.as_pointer()
@@ -32,16 +33,16 @@ class CpyImportStateMixin:
         return self._cpy_module_env
 
     def _native_extension_module_global(self, local_name: str) -> ir.GlobalVariable:
-        """Return (or create) the module-level PyObject* global for a
-        pcc-native extension module loaded without libpython."""
-        gname = f".pcc.ext.modref.{local_name}"
-        existing = self.module.globals.get(gname)
-        if isinstance(existing, ir.GlobalVariable):
-            return existing
-        g = ir.GlobalVariable(self.module, _CSTR, name=gname)
-        g.linkage = "internal"
-        g.initializer = ir.Constant(_CSTR, None)
-        return g
+        """Share ordinary managed global storage with source-level bindings.
+
+        The old private modref globals were neither registered nor updated by
+        later Python assignments. Metadata must identify the real binding.
+        """
+        slot, _declared = self._ensure_module_global_name(local_name, DynType(name="dyn"))
+        if getattr(self, "_module_del_target_names", None) is None:
+            self._module_del_target_names = set()
+        self._module_del_target_names.add(local_name)
+        return slot
 
     def _native_extension_modules(self) -> dict:
         if not hasattr(self, "_native_extension_module_env"):
@@ -56,11 +57,20 @@ class CpyImportStateMixin:
     def _native_extension_star_module_global(
         self, module_name: str
     ) -> ir.GlobalVariable:
+        """Keep only a scalar discovery marker for dynamic star-name lookup.
+
+        The executing star import copies into the live namespace while its
+        receiver has a temporary owner. It retains no hidden module pointer.
+        """
         star_modules = self._native_extension_star_modules()
         gv = star_modules.get(module_name)
         if gv is not None:
             return gv
-        gv = self._native_extension_module_global(f"starimport.{module_name}")
+        gv = ir.GlobalVariable(
+            self.module, _I8, name=".pcc.ext.star.imported." + module_name,
+        )
+        gv.linkage = "internal"
+        gv.initializer = ir.Constant(_I8, 0)
         star_modules[module_name] = gv
         return gv
 

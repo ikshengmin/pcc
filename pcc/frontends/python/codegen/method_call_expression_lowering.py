@@ -1045,6 +1045,9 @@ class MethodCallExpressionLoweringMixin:
                 )
                 self._emit_post_call_err_check(self._expr_span_or_none(expr))
                 return result
+            if (from_class is not None and attr.name == "__new__"
+                    and self._class_has_tuple_base(from_class)):
+                return self._emit_tuple_super_new_slots(expr, from_class, super_args)
             if from_class is not None and attr.name == "__new__":
                 # Follow a single-inheritance chain until either a user class
                 # actually defines ``__new__`` or the chain reaches builtin
@@ -2999,3 +3002,95 @@ class MethodCallExpressionLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
         return self._emit_none_literal()
+
+
+    def _class_has_tuple_base(self, info):
+        from pcc.frontends.python.pipeline_exports import annotation_module_bindings
+
+        # Method bodies can be emitted before runtime import statements have
+        # populated value aliases. Reuse the existing source-verified import
+        # binding analysis; unknown/rebound globals stay conservative.
+        bindings = annotation_module_bindings(self.ast_module)
+        pending = [info]
+        seen = set()
+        while pending:
+            current = pending.pop()
+            if current.name in seen:
+                continue
+            seen.add(current.name)
+            for base in self.class_lowering._class_declared_base_names(current):
+                name = self._resolve_class_alias(base)
+                parent = self.class_lowering.classes.get(name)
+                if parent is not None:
+                    pending.append(parent)
+                elif (self._native_builtin_value_for_name(base) == "builtins.tuple"
+                        or bindings.get(base) == "builtins.tuple"):
+                    return True
+        return False
+
+    def _emit_tuple_super_new_slots(self, expr, from_class, super_args):
+        fd = getattr(self, "current_func_def", None)
+        if not super_args and (fd is None or not fd.args):
+            raise L1CodegenError("super() allocator has no receiver parameter")
+        if len(super_args) not in (0, 2):
+            raise L1CodegenError("super() allocator requires zero or two arguments")
+        receiver_expr = super_args[1] if super_args else Name(
+            span=expr.span, ty=DynType(name="dyn"), ident=fd.args[0].name,
+        )
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        output = self._new_slot_call_root("super.new.result")
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if super_args:
+                origin = self._emit_slot_call_operand(super_args[0], "super.new.from")
+            else:
+                origin = self._new_slot_call_root("super.new.from")
+            roots.append(origin)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if not super_args:
+                self._slot_call_copy_source(origin, from_class.global_var, False, expr.span)
+            receiver = self._emit_slot_call_operand(receiver_expr, "super.new.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            callable_root = self._new_slot_call_root("super.new.callable")
+            roots.append(callable_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(
+                self.runtime["py_super_new_lookup_slots"],
+                [self._as_gc_ptr(receiver), self._as_gc_ptr(origin), self._as_gc_ptr(callable_root)],
+                name=self._fresh("super.new.lookup"),
+            )
+            self._slot_call_note_published(callable_root)
+            self._slot_call_check_status(status, "super allocator lookup", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            # Python resolves the attribute before evaluating call operands.
+            positional, keywords = self._slot_call_split_operands(expr)
+            args = self._emit_slot_call_args_tuple(positional, "super.new.args")
+            roots.append(args)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            kwargs = self._emit_slot_call_kwargs_object(keywords, None, expr.span, "super.new.kwargs", callable_root)
+            roots.append(kwargs)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(
+                self.runtime["py_obj_call_slots"],
+                [self._as_gc_ptr(callable_root), self._as_gc_ptr(args),
+                 self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                name=self._fresh("super.new.invoke"),
+            )
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, "super allocator call", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots(tuple(roots[1:]))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return self._take_slot_call_root(output)

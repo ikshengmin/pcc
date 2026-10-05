@@ -391,6 +391,121 @@ def _source_import_discovery_line(
 _SCAN_CACHE_MAX_ENTRIES = 4096
 _DISCOVERY_TEXT_CACHE: dict = {}
 _WITHOUT_TYPE_CHECKING_CACHE: dict = {}
+_WITHOUT_IMPLEMENTATION_CACHE: dict = {}
+
+
+def _false_implementation_guard(line, alias, implementation):
+    """Recognize the literal comparison already folded by native codegen.
+
+    More complex expressions deliberately remain in the dependency closure.
+    The caller proves the alias with an immediately preceding local import.
+    """
+    if not line.startswith("if ") or ":" not in line:
+        return False
+    condition = line[3:].split(":", 1)[0].strip()
+    for operator in ("==", "!="):
+        parts = condition.split(operator)
+        if len(parts) != 2 or parts[0].strip() != alias + ".implementation.name":
+            continue
+        literal = parts[1].strip()
+        if len(literal) < 2 or literal[0] not in ("'", '"') or literal[-1] != literal[0]:
+            continue
+        value = literal[1:-1]
+        # No escapes, embedded delimiters or executable expression suffixes.
+        # Unknown spellings stay conservative rather than guessing a value.
+        if not value or not value.replace("_", "").isalnum():
+            continue
+        equal = value == implementation
+        return not equal if operator == "==" else equal
+    return False
+
+
+def _without_inactive_implementation_imports(source, *, implementation="pcc"):
+    """Mask a proven-false implementation suite for dependency discovery.
+
+    Only a single-line ``import sys [as alias]`` immediately before the guard
+    in the same block establishes identity. Global aliases, parameters,
+    reassignments, compound guards and uncertain syntax keep all imports.
+    This is intentionally narrower than general constant propagation and
+    never edits the source consumed by Python or native code generation.
+    """
+    if ".implementation.name" not in source:
+        return source
+    key = (source, implementation)
+    cached = _WITHOUT_IMPLEMENTATION_CACHE.get(key)
+    if cached is not None:
+        return cached
+    masked_lines = _source_import_discovery_text(source).splitlines()
+    out = []
+    alias = ""
+    import_indent = -1
+    guard_indent = -1
+    guard_has_pass = False
+    bracket_depth = 0
+    continued_statement = False
+    for raw_line, masked_line in zip(source.splitlines(keepends=True), masked_lines):
+        code = masked_line.strip()
+        indent = len(raw_line) - len(raw_line.lstrip())
+        if "\t" in raw_line[:indent]:
+            # Do not infer Python's mixed tab/space block columns here.
+            return source
+        newline = "\n" if raw_line.endswith("\n") else ""
+        if (code and guard_indent >= 0 and indent <= guard_indent
+                and bracket_depth == 0 and not continued_statement):
+            guard_indent = -1
+            guard_has_pass = False
+        if guard_indent >= 0:
+            if raw_line.strip() and not guard_has_pass:
+                out.append(raw_line[:indent] + "pass" + newline)
+                guard_has_pass = True
+            else:
+                out.append(newline)
+            bracket_depth += (
+                masked_line.count("(") + masked_line.count("[") + masked_line.count("{")
+                - masked_line.count(")") - masked_line.count("]") - masked_line.count("}")
+            )
+            continued_statement = masked_line.rstrip().endswith("\\")
+            continue
+        if alias and code and indent == import_indent and code.startswith("if "):
+            inline_mask = masked_line.split(":", 1)[-1]
+            simple_inline = (
+                inline_mask.count("(") == inline_mask.count(")")
+                and inline_mask.count("[") == inline_mask.count("]")
+                and inline_mask.count("{") == inline_mask.count("}")
+                and not inline_mask.rstrip().endswith("\\")
+            )
+            if simple_inline and _false_implementation_guard(raw_line.strip(), alias, implementation):
+                header, inline_body = raw_line.split(":", 1)
+                if inline_body.split("#", 1)[0].strip():
+                    out.append(header + ": pass" + newline)
+                else:
+                    out.append(raw_line)
+                    guard_indent = indent
+                    guard_has_pass = False
+                alias = ""
+                continue
+        if code:
+            alias = ""
+            parts = code.split()
+            if parts == ["import", "sys"]:
+                alias = "sys"
+            elif len(parts) == 4 and parts[:3] == ["import", "sys", "as"]:
+                candidate = parts[3]
+                if candidate.replace("_", "").isalnum():
+                    alias = candidate
+            import_indent = indent
+        out.append(raw_line)
+    result = "".join(out)
+    if len(_WITHOUT_IMPLEMENTATION_CACHE) >= _SCAN_CACHE_MAX_ENTRIES:
+        _WITHOUT_IMPLEMENTATION_CACHE.clear()
+    _WITHOUT_IMPLEMENTATION_CACHE[key] = result
+    return result
+
+
+def _without_inactive_runtime_imports(source):
+    return _without_inactive_implementation_imports(
+        _without_type_checking_imports(source)
+    )
 
 
 def _source_import_discovery_text(source: str) -> str:

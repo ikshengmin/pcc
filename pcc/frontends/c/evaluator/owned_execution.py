@@ -139,21 +139,27 @@ def evaluate_units(evaluator, units, *, entry="main", args=None, prog_args=None,
                         return_type, [(kind, rename_map.get(symbol, symbol), display)
                                       for kind, symbol, display in definitions]))
     if load_in_process:
-        if link_args:
-            raise BackendUnavailable("owned host pointer execution does not yet accept extra link arguments")
-        from pcc.backend.host_owned_load import call_function
+        # Keep the host ABI adapter behind the same implementation boundary
+        # used by native lowering and dependency discovery. The local import
+        # proves the guard's owner without depending on global alias analysis.
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if link_args:
+                raise BackendUnavailable("owned host pointer execution does not yet accept extra link arguments")
+            from pcc.backend.host_owned_load import call_function
 
-        prepared = evaluator._prepare_self_backend_units(renamed, optimize=optimize) if optimize else renamed
-        if return_descriptor is None:
-            return_descriptor = matches and next((unit[2] for unit in units if entry in [fn.name for fn in parse_self_backend_module(unit[1]).functions]), None)
-        native_args = supplied
-        if entry == "main" and not supplied and parameter_types == ["int", "void *"]:
-            import ctypes
-            arguments = [b"pcc"] + [str(arg).encode("utf-8") for arg in (prog_args or ())]
-            argv = (ctypes.c_char_p * (len(arguments) + 1))(*arguments, None)
-            native_args = [len(arguments), argv]
-        return call_function(evaluator, prepared, evaluator.target_triple, reserved,
-                             function, native_args, return_descriptor, unsigned_return, base_dir=base_dir)
+            prepared = evaluator._prepare_self_backend_units(renamed, optimize=optimize) if optimize else renamed
+            if return_descriptor is None:
+                return_descriptor = matches and next((unit[2] for unit in units if entry in [fn.name for fn in parse_self_backend_module(unit[1]).functions]), None)
+            native_args = supplied
+            if entry == "main" and not supplied and parameter_types == ["int", "void *"]:
+                import ctypes
+                arguments = [b"pcc"] + [str(arg).encode("utf-8") for arg in (prog_args or ())]
+                argv = (ctypes.c_char_p * (len(arguments) + 1))(*arguments, None)
+                native_args = [len(arguments), argv]
+            return call_function(evaluator, prepared, evaluator.target_triple, reserved,
+                                 function, native_args, return_descriptor, unsigned_return, base_dir=base_dir)
+        raise BackendUnavailable("owned host pointer execution is unavailable for this target or entrypoint")
     with tempfile.TemporaryDirectory(prefix="pcc_c_evaluate_") as temporary:
         result_path = os.path.join(temporary, "result.bin")
         call = reserved + "(" + ", ".join(call_arguments) + ")"

@@ -232,3 +232,89 @@ def test_explicit_raw_attribute_keeps_its_unmanaged_projection():
     probe = SimpleNamespace(_maybe_emit_ir_scaffold_symbol_value=lambda _: raw)
     # No root API exists: an explicit raw lane must bypass managed publication.
     assert L1CodeGen._emit_attr(probe, expr) is raw
+
+
+@pytest.mark.parametrize("mode", ("off", "on"))
+def test_ply_dir_getattr_original_comprehension_has_owned_names(mode):
+    text = _emit('''def probe(module):
+    _items = [(k, getattr(module, k)) for k in dir(module)]
+    return _items
+''', mode)
+    assert re.search(r"call [^\n]*@py_obj_dir_slots\(", text)
+    assert re.search(r"call [^\n]*@py_obj_getattr\(", text)
+    assert not re.search(r"call [^\n]*@py_cpy_", text)
+    assert "strict.nolib.stub" not in _body(text)
+
+
+@pytest.mark.parametrize("site", ("argument", "return", "default", "later-error", "discard"))
+def test_dir_result_uses_registered_output_slot_at_every_consumer(site):
+    prefix = 'def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError("later")\n'
+    if site == "default":
+        body = '    def inner(value=dir(module)):\n        return value\n    return inner()\n'
+    elif site == "argument":
+        body = '    return take(value=dir(module))\n'
+    elif site == "later-error":
+        body = '    return take(value=dir(module), later=fail())\n'
+    elif site == "discard":
+        body = '    dir(module)\n'
+    else:
+        body = '    return dir(module)\n'
+    text = _body(_emit(prefix + 'def probe(module):\n' + body))
+    call = re.search(r"call [^\n]*@py_obj_dir_slots\(ptr (%[^,]+), ptr ([^)]+)\)", text)
+    assert call, text
+    assert call.group(1) != call.group(2)
+    assert text.index("@pcc_gc_root_copy_borrowed_lease") < call.start()
+    assert "strict.nolib.stub" not in text
+    assert not re.search(r"call [^\n]*@py_cpy_", text)
+
+
+@pytest.mark.parametrize("binding", ("function", "parameter", "local", "global", "class"))
+def test_shadowed_dir_uses_actual_callable(binding):
+    helper = 'def custom(value):\n    return ["custom"]\n'
+    if binding == "function":
+        source = 'def dir(value):\n    return ["custom"]\ndef probe(module):\n    return dir(module)\n'
+    elif binding == "parameter":
+        source = 'def probe(dir, module):\n    return dir(module)\n'
+    elif binding == "local":
+        source = helper + 'def probe(module):\n    dir = custom\n    return dir(module)\n'
+    elif binding == "class":
+        source = 'class dir:\n    def __init__(self, value):\n        self.value = value\ndef probe(module):\n    return dir(module)\n'
+    else:
+        source = helper + 'dir = custom\ndef probe(module):\n    return dir(module)\n'
+    body = _body(_emit(source))
+    assert not re.search(r"call [^\n]*@py_obj_dir_slots\(", body)
+    assert not re.search(r"call [^\n]*@py_cpy_", body)
+    assert "strict.nolib.stub" not in body
+
+
+def test_no_argument_dir_names_the_missing_frame_namespace():
+    from pcc.frontends.python.codegen.errors import L1CodegenError
+    with pytest.raises(L1CodegenError, match="frame-local namespace provider"):
+        _emit('def probe():\n    return dir()\n')
+    # The same syntax remains legal when the name has an actual local binding.
+    assert "strict.nolib.stub" not in _body(_emit('def probe(dir):\n    return dir()\n'))
+
+
+@pytest.mark.parametrize("foreign,shadowed", ((False, False), (True, False), (False, True), (True, True)))
+def test_dir_result_analysis_follows_the_actual_operand_and_binding(foreign, shadowed):
+    module = infer_module(parse_and_lift('def probe(value):\n    return dir(value)\n', "reflection.py", "reflection"))
+    codegen = L1CodeGen(module, ir_scaffold_mode="on")
+    expression = module.body[0].body[0].value
+    codegen._cpy_env_flags["value"] = foreign
+    if shadowed:
+        codegen.env["dir"] = (None, DynType(name="dyn"))
+    assert codegen._expr_looks_cpython(expression) is (foreign and not shadowed)
+
+
+def test_dir_of_imported_module_uses_live_native_binding():
+    exports = {"provider": {"value": {"kind": "constant", "value_kind": "int", "value": 4,
+               "owning_module": "provider", "export_name": "value", "has_module_storage": True,
+               "value_ty": ["int", 64, True], "box_int_abi": False}}}
+    text = _emit('''import provider
+def probe():
+    _items = [(k, getattr(provider, k)) for k in dir(provider)]
+    return _items
+''', exports=exports, siblings=("provider",))
+    assert re.search(r"call [^\n]*@py_obj_dir_slots\(", _body(text))
+    assert "strict.nolib.stub" not in text
+    assert not re.search(r"call [^\n]*@py_cpy_", text)

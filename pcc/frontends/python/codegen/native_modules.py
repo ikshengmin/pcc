@@ -638,7 +638,7 @@ class NativeModuleAliasMixin:
         if module_name == "codecs":
             return attr_name in _CODECS_BOM_CONSTANTS
         if module_name == "sys":
-            return attr_name in ("maxunicode", "maxsize")
+            return attr_name in ("maxunicode", "maxsize", "modules")
         if module_name == "re":
             return attr_name in (
                 "I",
@@ -685,6 +685,8 @@ class NativeModuleAliasMixin:
         module_name: str,
         attr_name: str,
     ) -> Optional[ir.Value]:
+        if module_name == "sys" and attr_name == "modules":
+            return self._emit_owned_namespace_runtime_value("py_sys_modules", ())
         if module_name == "os":
             provider = {"fdopen": "py_file_fdopen_function", "open": "py_os_open_function",
                         "close": "py_os_close_function", "mkdir": "py_os_mkdir_function",
@@ -2557,16 +2559,9 @@ class NativeModuleAliasMixin:
             return self._native_builtin_module_for_name(expr.ident)
         if isinstance(expr, Call):
             return self._native_literal_dunder_import_module(expr)
-        if (
-            isinstance(expr, Subscript)
-            and isinstance(expr.obj, Attr)
-            and expr.obj.name == "modules"
-            and isinstance(expr.obj.obj, Name)
-            and self._native_builtin_module_for_name(expr.obj.obj.ident) == "sys"
-            and isinstance(expr.idx, StrLit)
-            and self._is_native_dynamic_module(expr.idx.value)
-        ):
-            return expr.idx.value
+        # sys.modules is a live, mutable mapping. Even a literal key must use
+        # its current entry; an export-table lookup would hide replacements,
+        # deletions and None entries, and could initialize an absent module.
         return None
 
     def _native_module_object_export_info(

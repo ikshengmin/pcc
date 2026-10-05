@@ -122,7 +122,7 @@ class AttrLoadLoweringMixin:
             if expr.name in ("prefix", "base_prefix"):
                 return ("runtime", "py_sys_prefix_str", (ir.Constant(_I64, expr.name == "base_prefix"),))
             calls = {"executable": "py_sys_executable_str", "platform": "py_sys_platform_str",
-                     "path": "py_sys_path_list"}
+                     "path": "py_sys_path_list", "modules": "py_sys_modules"}
             if expr.name in calls:
                 return ("runtime", calls[expr.name], ())
             if expr.name == "version":

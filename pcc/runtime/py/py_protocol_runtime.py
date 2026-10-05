@@ -23,6 +23,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_INSTANCE,
     PY_TYPE_INT,
     PY_TYPE_NONE,
+    PY_TYPE_STR,
     PY_TYPE_TUPLE,
     PY_TYPE_USER_CLASS_START,
 )
@@ -599,47 +600,30 @@ def _dict_subclass_backing(obj, create: int):
 
 @c_abi_export("py_user_len_dispatch")
 def py_user_len_dispatch(obj, handled) -> int:
-    _write_handled(handled, 0)
-    method = _lookup_dunder(obj, cstr("__len__"))
-    if ptr_is_null(method) != 0:
-        if _class_is_dict_subclass(obj) != 0:
-            _write_handled(handled, 1)
-            backing = _dict_subclass_backing(obj, 0)
-            if ptr_is_null(backing) == 0:
-                return py_dict_len(backing)
-        return 0
-    _write_handled(handled, 1)
-    result = _call_unary(method, obj)
-    if ptr_is_null(result) != 0:
-        return 0
-    value: int = _int_result_value(result, 1)
-    py_decref(result)
-    return value
+    selected = stack_alloc(8)
+    scalar = stack_alloc(8)
+    py_user_special_dispatch(obj, cstr("__len__"), null(), null(), 0, 1, scalar, selected)
+    _write_handled(handled, load_i64(selected, 0))
+    if load_i64(selected, 0) != 0:
+        return load_i64(scalar, 0)
+    if _class_is_dict_subclass(obj) != 0:
+        _write_handled(handled, 1)
+        backing = _dict_subclass_backing(obj, 0)
+        if ptr_is_null(backing) == 0:
+            return py_dict_len(backing)
+    return 0
 
 
 @c_abi_export("py_user_abs_dispatch")
 def py_user_abs_dispatch(obj):
-    method = _lookup_dunder(obj, cstr("__abs__"))
-    if ptr_is_null(method) != 0:
-        return null()
-    return _call_unary(method, obj)
+    return py_user_special_dispatch(obj, cstr("__abs__"), null(), null(), 0, 0, null(), null())
 
 
 @c_abi_export("py_user_bool_dispatch")
 def py_user_bool_dispatch(obj, handled) -> int:
-    _write_handled(handled, 0)
-    method = _lookup_dunder(obj, cstr("__bool__"))
-    if ptr_is_null(method) != 0:
-        return 0
-    _write_handled(handled, 1)
-    result = _call_unary(method, obj)
-    if ptr_is_null(result) != 0:
-        return 0
-    truth: int = py_obj_truthy(result)
-    py_decref(result)
-    if truth != 0:
-        return 1
-    return 0
+    scalar = stack_alloc(8)
+    py_user_special_dispatch(obj, cstr("__bool__"), null(), null(), 0, 3, scalar, handled)
+    return load_i64(scalar, 0)
 
 
 @c_abi_export("py_obj_index")
@@ -794,23 +778,17 @@ def py_slice_index_i64(obj, default: int) -> int:
 
 @c_abi_export("py_user_contains_dispatch")
 def py_user_contains_dispatch(obj, item, handled) -> int:
-    _write_handled(handled, 0)
-    method = _lookup_dunder(obj, cstr("__contains__"))
-    if ptr_is_null(method) != 0:
-        if _class_is_dict_subclass(obj) != 0:
-            _write_handled(handled, 1)
-            backing = _dict_subclass_backing(obj, 0)
-            if ptr_is_null(backing) == 0 and py_dict_contains(backing, item) != 0:
-                return 1
-        return 0
-    _write_handled(handled, 1)
-    result = _call_binary(method, obj, item)
-    if ptr_is_null(result) != 0:
-        return 0
-    truth: int = py_obj_truthy(result)
-    py_decref(result)
-    if truth != 0:
-        return 1
+    selected = stack_alloc(8)
+    scalar = stack_alloc(8)
+    py_user_special_dispatch(obj, cstr("__contains__"), item, null(), 1, 2, scalar, selected)
+    _write_handled(handled, load_i64(selected, 0))
+    if load_i64(selected, 0) != 0:
+        return load_i64(scalar, 0)
+    if _class_is_dict_subclass(obj) != 0:
+        _write_handled(handled, 1)
+        backing = _dict_subclass_backing(obj, 0)
+        if ptr_is_null(backing) == 0 and py_dict_contains(backing, item) != 0:
+            return 1
     return 0
 
 
@@ -820,38 +798,14 @@ def py_user_eq_dispatch(a, b) -> int:
     depth: int = load_i32(depth_addr, 0)
     if depth >= 64:
         return -1
-    method = _lookup_dunder(a, cstr("__eq__"))
-    if ptr_is_null(method) == 0:
-        store_i32(depth_addr, 0, depth + 1)
-        result = _call_binary(method, a, b)
-        store_i32(depth_addr, 0, depth)
-        if ptr_is_null(result) != 0:
-            return 0
-        if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-            truth: int = py_obj_truthy(result)
-            py_decref(result)
-            if truth != 0:
-                return 1
-            return 0
-        py_decref(result)
-    if _type_of(a) == _type_of(b):
-        return -1
-    method = _lookup_dunder(b, cstr("__eq__"))
-    if ptr_is_null(method) != 0:
-        return -1
+    selected = stack_alloc(8)
+    scalar = stack_alloc(8)
     store_i32(depth_addr, 0, depth + 1)
-    result = _call_binary(method, b, a)
+    _named_binary(a, b, cstr("__eq__"), cstr("__eq__"), 1, 2, scalar, selected)
     store_i32(depth_addr, 0, depth)
-    if ptr_is_null(result) != 0:
-        return 0
-    if ptr_eq(result, global_load_ptr("py_NotImplemented")) != 0:
-        py_decref(result)
+    if load_i64(selected, 0) == 0:
         return -1
-    truth: int = py_obj_truthy(result)
-    py_decref(result)
-    if truth != 0:
-        return 1
-    return 0
+    return load_i64(scalar, 0)
 
 
 def _order_call(method, self_obj, other) -> int:
@@ -872,12 +826,6 @@ def _order_call(method, self_obj, other) -> int:
 
 @c_abi_export("py_user_order_dispatch")
 def py_user_order_dispatch(a, b, op: int) -> int:
-    # ``a < b`` (op 0), ``<=`` (1), ``>`` (4), ``>=`` (5) through user
-    # dunders in CPython's order: the rhs's reflected method first when its
-    # class is a proper subclass of the lhs class, then the lhs method, then
-    # the reflected one.  -1 when no user method answered, so the caller
-    # keeps its builtin ordering; a raising method returns 0 with the error
-    # set.
     name = cstr("__lt__")
     rname = cstr("__gt__")
     if op == 1:
@@ -889,56 +837,28 @@ def py_user_order_dispatch(a, b, op: int) -> int:
     elif op == 5:
         name = cstr("__ge__")
         rname = cstr("__le__")
-    a_cls = _instance_class(a)
-    b_cls = _instance_class(b)
-    if ptr_is_null(a_cls) != 0 and ptr_is_null(b_cls) != 0:
+    selected = stack_alloc(8)
+    scalar = stack_alloc(8)
+    _named_binary(a, b, name, rname, 1, 2, scalar, selected)
+    if load_i64(selected, 0) == 0:
         return -1
-    reflected_done: int = 0
-    verdict: int = -1
-    if (
-        ptr_is_null(a_cls) == 0
-        and ptr_is_null(b_cls) == 0
-        and ptr_eq(a_cls, b_cls) == 0
-        and py_obj_issubclass(b_cls, a_cls) > 0
-    ):
-        reflected_done = 1
-        verdict = _order_call(_lookup_dunder(b, rname), b, a)
-        if verdict != -1:
-            return verdict
-    verdict = _order_call(_lookup_dunder(a, name), a, b)
-    if verdict != -1:
-        return verdict
-    if reflected_done == 0:
-        verdict = _order_call(_lookup_dunder(b, rname), b, a)
-    return verdict
+    return load_i64(scalar, 0)
 
 
 @c_abi_export("py_user_getitem_dispatch")
 def py_user_getitem_dispatch(obj, key):
-    method = _lookup_dunder(obj, cstr("__getitem__"))
-    if ptr_is_null(method) != 0:
-        if _class_is_dict_subclass(obj) != 0:
-            return py_dict_subclass_getitem(obj, key)
-        return null()
-    return _call_binary(method, obj, key)
+    selected = stack_alloc(8)
+    result = py_user_special_dispatch(obj, cstr("__getitem__"), key, null(), 1, 0, null(), selected)
+    if load_i64(selected, 0) != 0:
+        return result
+    if _class_is_dict_subclass(obj) != 0:
+        return py_dict_subclass_getitem(obj, key)
+    return null()
 
 
 @c_abi_export("py_user_matmul_dispatch")
 def py_user_matmul_dispatch(a, b):
-    method = _lookup_dunder(a, cstr("__matmul__"))
-    if ptr_is_null(method) == 0:
-        result = _call_binary(method, a, b)
-        if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-            return result
-        py_decref(result)
-    method = _lookup_dunder(b, cstr("__rmatmul__"))
-    if ptr_is_null(method) == 0:
-        result = _call_binary(method, b, a)
-        if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-            return result
-        py_decref(result)
-    py_raise_owned(py_exc_new(3, cstr("unsupported operand type(s) for @")))
-    return null()
+    return py_user_binop_dispatch(a, b, cstr("__matmul__"), cstr("__rmatmul__"), cstr("unsupported operand type(s) for @"))
 
 
 def _unary_operand_error(value, op: int):
@@ -1012,15 +932,15 @@ def _py_obj_unary(value, op: int):
         py_incref(value)
         return value
     if _is_user_instance(value) != 0:
-        method = null()
+        name = cstr("__invert__")
         if op == 45:
-            method = _lookup_dunder(value, cstr("__neg__"))
+            name = cstr("__neg__")
         elif op == 43:
-            method = _lookup_dunder(value, cstr("__pos__"))
-        else:
-            method = _lookup_dunder(value, cstr("__invert__"))
-        if ptr_is_null(method) == 0:
-            return _call_unary(method, value)
+            name = cstr("__pos__")
+        selected = stack_alloc(8)
+        result = py_user_special_dispatch(value, name, null(), null(), 0, 0, null(), selected)
+        if load_i64(selected, 0) != 0:
+            return result
     return _unary_operand_error(value, op)
 
 
@@ -1041,39 +961,10 @@ def py_obj_invert(value):
 
 @c_abi_export("py_user_binop_dispatch")
 def py_user_binop_dispatch(a, b, name, rname, type_err_msg):
-    # CPython's order: the reflected method belongs to an rhs of another
-    # type only, and runs first when that type is a subclass of the lhs type
-    # that overrides it.
-    a_cls = _instance_class(a)
-    b_cls = _instance_class(b)
-    reflected_ok: int = 1
-    if ptr_is_null(a_cls) == 0 and ptr_eq(a_cls, b_cls) != 0:
-        reflected_ok = 0
-    if reflected_ok != 0 and ptr_is_null(a_cls) == 0 and ptr_is_null(b_cls) == 0:
-        first = py_class_lookup(b_cls, rname)
-        if (
-            ptr_is_null(first) == 0
-            and ptr_eq(first, py_class_lookup(a_cls, rname)) == 0
-            and py_obj_issubclass(b_cls, a_cls) > 0
-        ):
-            result = _call_binary(first, b, a)
-            if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-                return result
-            py_decref(result)
-            reflected_ok = 0
-    method = _lookup_dunder(a, name)
-    if ptr_is_null(method) == 0:
-        result = _call_binary(method, a, b)
-        if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-            return result
-        py_decref(result)
-    if reflected_ok != 0:
-        method = _lookup_dunder(b, rname)
-        if ptr_is_null(method) == 0:
-            result = _call_binary(method, b, a)
-            if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-                return result
-            py_decref(result)
+    selected = stack_alloc(8)
+    result = _named_binary(a, b, name, rname, 0, 0, null(), selected)
+    if load_i64(selected, 0) != 0:
+        return result
     py_raise_owned(py_exc_new(3, type_err_msg))
     return null()
 
@@ -1290,12 +1181,10 @@ def py_obj_inplace_op(a, b, op_code: int):
                 name = cstr("__ifloordiv__")
             elif op_code == 5:
                 name = cstr("__imod__")
-            method = _lookup_dunder(a, name)
-            if ptr_is_null(method) == 0:
-                result = _call_binary(method, a, b)
-                if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-                    return result
-                py_decref(result)
+            selected = stack_alloc(8)
+            result = py_user_special_dispatch(a, name, b, null(), 1, 7, null(), selected)
+            if load_i64(selected, 0) != 0:
+                return result
     if op_code == 0:
         return py_obj_add(a, b)
     if op_code == 1:
@@ -1314,49 +1203,45 @@ def py_obj_inplace_op(a, b, op_code: int):
 
 @c_abi_export("py_user_setitem_dispatch")
 def py_user_setitem_dispatch(obj, key, value, handled) -> int:
-    _write_handled(handled, 0)
-    method = _lookup_dunder(obj, cstr("__setitem__"))
-    if ptr_is_null(method) != 0:
-        if _class_is_dict_subclass(obj) != 0:
-            backing = _dict_subclass_backing(obj, 1)
-            if ptr_is_null(backing) != 0:
-                return -1
-            py_dict_set(backing, key, value)
-            _write_handled(handled, 1)
-            if py_err_occurred() != 0:
-                return -1
-            return 0
-        return -1
-    _write_handled(handled, 1)
-    result = _call_ternary(method, obj, key, value)
-    if ptr_is_null(result) != 0:
-        return -1
-    py_decref(result)
-    return 0
+    selected = stack_alloc(8)
+    py_user_special_dispatch(obj, cstr("__setitem__"), key, value, 2, 5, null(), selected)
+    _write_handled(handled, load_i64(selected, 0))
+    if load_i64(selected, 0) != 0:
+        if py_err_occurred() != 0:
+            return -1
+        return 0
+    if _class_is_dict_subclass(obj) != 0:
+        backing = _dict_subclass_backing(obj, 1)
+        if ptr_is_null(backing) != 0:
+            return -1
+        py_dict_set(backing, key, value)
+        _write_handled(handled, 1)
+        if py_err_occurred() != 0:
+            return -1
+        return 0
+    return -1
 
 
 @c_abi_export("py_user_delitem_dispatch")
 def py_user_delitem_dispatch(obj, key, handled) -> int:
-    _write_handled(handled, 0)
-    method = _lookup_dunder(obj, cstr("__delitem__"))
-    if ptr_is_null(method) != 0:
-        if _class_is_dict_subclass(obj) != 0:
-            backing = _dict_subclass_backing(obj, 0)
-            _write_handled(handled, 1)
-            if ptr_is_null(backing) != 0:
-                py_raise_owned(py_exc_new_with_value(4, key))
-                return -1
-            status: int = py_dict_del(backing, key)
-            if status < 0 and py_err_occurred() == 0:
-                py_raise_owned(py_exc_new_with_value(4, key))
-            return status
-        return -1
-    _write_handled(handled, 1)
-    result = _call_binary(method, obj, key)
-    if ptr_is_null(result) != 0:
-        return -1
-    py_decref(result)
-    return 0
+    selected = stack_alloc(8)
+    py_user_special_dispatch(obj, cstr("__delitem__"), key, null(), 1, 5, null(), selected)
+    _write_handled(handled, load_i64(selected, 0))
+    if load_i64(selected, 0) != 0:
+        if py_err_occurred() != 0:
+            return -1
+        return 0
+    if _class_is_dict_subclass(obj) != 0:
+        backing = _dict_subclass_backing(obj, 0)
+        _write_handled(handled, 1)
+        if ptr_is_null(backing) != 0:
+            py_raise_owned(py_exc_new_with_value(4, key))
+            return -1
+        status: int = py_dict_del(backing, key)
+        if status < 0 and py_err_occurred() == 0:
+            py_raise_owned(py_exc_new_with_value(4, key))
+        return status
+    return -1
 
 
 def _dictsub_nargs(args) -> int:
@@ -2080,3 +1965,213 @@ def py_obj_index_i64_slots(receiver_slot) -> int:
     unchanged. This is not a saturating slice-bound conversion.
     """
     return _index_slot_checked(receiver_slot, 1)
+
+
+# Raw compatibility callers must hold live address leases for every operand
+# through entry. Publish those borrowed inputs before the first polling call;
+# class/descriptor selection then happens only from independent owning slots.
+# Never pass a borrowed py_class_lookup result into this boundary.
+py_obj_binary_special_call_slots = extern(
+    "py_obj_binary_special_call_slots",
+    (c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_ptr, c_ptr), c_int64,
+)
+py_obj_hash = extern("py_obj_hash", (c_ptr,), c_int64)
+py_str_payload = extern("py_str_payload", (c_ptr,), c_ptr)
+
+_NAMED_OLD_ERROR = 0
+_NAMED_RECEIVER = 1
+_NAMED_ARG0 = 2
+_NAMED_ARG1 = 3
+_NAMED_ARGS = 4
+_NAMED_RESULT = 5
+_NAMED_ERROR = 6
+_NAMED_COUNT = 7
+_NAMED_BORROWED_COUNT = 3
+
+define_global_i32("pcc_named_protocol_borrowed_map", -3)
+define_global_i32("pcc_named_protocol_owned_map", 7)
+
+
+def _named_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        py_runtime_error_if_unset(cstr("named protocol"), cstr("result owner lease failed"))
+        return -1
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return 0
+
+
+def _named_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(tokens, index * C_POINTER_SIZE, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _named_convert(slots, conversion: int, scalar) -> int:
+    result_slot = ptr_add(slots, _NAMED_RESULT * C_POINTER_SIZE)
+    result = load_ptr(result_slot, 0)
+    if conversion == 0 or conversion == 5 or conversion == 7:
+        return 0
+    tag: int = _type_of(result)
+    value: int = 0
+    if conversion == 1:
+        # Python accepts an index-protocol result from __len__. The slot
+        # conversion keeps both that result and a callback-produced integer
+        # owned across narrowing, including overflow and descriptor failures.
+        value = py_index_i64_checked_slots(result_slot)
+        if py_err_occurred() != 0:
+            return -1
+        if value < 0:
+            py_raise_owned(py_exc_new(2, cstr("__len__() should return >= 0")))
+            return -1
+    elif conversion == 2:
+        value = py_obj_truthy(load_ptr(result_slot, 0))
+    elif conversion == 3:
+        if tag != PY_TYPE_BOOL:
+            py_raise_owned(py_exc_new(3, cstr("__bool__ should return bool")))
+            return -1
+        value = ptr_eq(load_ptr(result_slot, 0), global_load_ptr("py_True"))
+    elif conversion == 4:
+        if tag != PY_TYPE_INT and tag != PY_TYPE_BOOL:
+            py_raise_owned(py_exc_new(3, cstr("__hash__ method should return an integer")))
+            return -1
+        overflow = stack_alloc(4)
+        store_i32(overflow, 0, 0)
+        value = py_int_to_i64(load_ptr(result_slot, 0), overflow)
+        if load_i32(overflow, 0) != 0:
+            value = py_obj_hash(load_ptr(result_slot, 0))
+        if value == -1:
+            value = -2
+    elif conversion == 6:
+        if ptr_is_null(py_str_payload(load_ptr(result_slot, 0))) != 0:
+            py_raise_owned(py_exc_new(3, cstr("string special method returned non-string")))
+            return -1
+    if ptr_is_null(scalar) == 0:
+        store_i64(scalar, 0, value)
+    if py_err_occurred() != 0:
+        return -1
+    return 0
+
+
+def _named_body(slots, tokens, borrowed, name, rname, nargs: int, mode: int, conversion: int, scalar, handled) -> int:
+    index: int = 0
+    while index < _NAMED_BORROWED_COUNT:
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, (_NAMED_RECEIVER + index) * C_POINTER_SIZE),
+            ptr_add(borrowed, index * C_POINTER_SIZE),
+        )
+        if token < 0:
+            py_runtime_error_if_unset(cstr("named protocol"), cstr("input owner copy failed"))
+            return -1
+        store_i64(tokens, (_NAMED_RECEIVER + index) * C_POINTER_SIZE, token)
+        index = index + 1
+    receiver_slot = ptr_add(slots, _NAMED_RECEIVER * C_POINTER_SIZE)
+    result_slot = ptr_add(slots, _NAMED_RESULT * C_POINTER_SIZE)
+    status: int = 0
+    if ptr_is_null(rname) == 0:
+        status = py_obj_binary_special_call_slots(
+            receiver_slot, ptr_add(slots, _NAMED_ARG0 * C_POINTER_SIZE),
+            name, rname, mode, result_slot, handled,
+        )
+    else:
+        args_slot = null()
+        if nargs != 0:
+            args_slot = ptr_add(slots, _NAMED_ARGS * C_POINTER_SIZE)
+            store_ptr(args_slot, 0, py_tuple_new(nargs))
+            if _named_adopt(slots, tokens, _NAMED_ARGS) != 0:
+                return -1
+            if ptr_is_null(load_ptr(args_slot, 0)) != 0:
+                py_runtime_error_if_unset(cstr("named protocol"), cstr("argument tuple allocation failed"))
+                return -1
+            index = 0
+            while index < nargs:
+                py_tuple_set_item(load_ptr(args_slot, 0), index, load_ptr(slots, (_NAMED_ARG0 + index) * C_POINTER_SIZE))
+                if py_err_occurred() != 0:
+                    return -1
+                index = index + 1
+        status = py_obj_special_call_slots(receiver_slot, name, args_slot, null(), result_slot, handled)
+    if status != 0:
+        return -1
+    if load_i64(handled, 0) == 0:
+        return 0
+    if _named_adopt(slots, tokens, _NAMED_RESULT) != 0:
+        return -1
+    if ptr_is_null(load_ptr(result_slot, 0)) != 0:
+        py_runtime_error_if_unset(cstr("named protocol"), cstr("selected callback returned NULL"))
+        return -1
+    if conversion == 7 and ptr_eq(load_ptr(result_slot, 0), global_load_ptr("py_NotImplemented")) != 0:
+        _named_drop(slots, tokens, _NAMED_RESULT)
+        store_i64(handled, 0, 0)
+        return 0
+    return _named_convert(slots, conversion, scalar)
+
+
+def _named_dispatch(obj, arg0, arg1, name, rname, nargs: int, mode: int, conversion: int, scalar, handled):
+    borrowed = stack_alloc(_NAMED_BORROWED_COUNT * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, obj)
+    store_ptr(borrowed, C_POINTER_SIZE, arg0)
+    store_ptr(borrowed, 2 * C_POINTER_SIZE, arg1)
+    pcc_gc_frame_enter(global_addr("pcc_named_protocol_borrowed_map"), borrowed)
+    slots = stack_alloc(_NAMED_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_NAMED_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _NAMED_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _NAMED_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_named_protocol_owned_map"), slots)
+    local_handled = stack_alloc(8)
+    store_i64(local_handled, 0, 1)
+    if ptr_is_null(scalar) == 0:
+        store_i64(scalar, 0, 0)
+    py_tls_exc_swap_slot(ptr_add(slots, _NAMED_OLD_ERROR * C_POINTER_SIZE))
+    status: int = _named_body(slots, tokens, borrowed, name, rname, nargs, mode, conversion, scalar, local_handled)
+    if status != 0:
+        py_runtime_error_if_unset(cstr("named protocol"), cstr("protocol dispatch failed without an exception"))
+        if ptr_is_null(scalar) == 0:
+            store_i64(scalar, 0, 0)
+        store_i64(local_handled, 0, 1)
+    _write_handled(handled, load_i64(local_handled, 0))
+    py_tls_exc_swap_slot(ptr_add(slots, _NAMED_ERROR * C_POINTER_SIZE))
+    memset(borrowed, 0, _NAMED_BORROWED_COUNT * C_POINTER_SIZE)
+    index: int = _NAMED_ARGS
+    while index >= _NAMED_RECEIVER:
+        _named_drop(slots, tokens, index)
+        index = index - 1
+    if status != 0 or (conversion != 0 and conversion != 6 and conversion != 7):
+        _named_drop(slots, tokens, _NAMED_RESULT)
+    py_clear_exception()
+    if ptr_is_null(load_ptr(slots, _NAMED_ERROR * C_POINTER_SIZE)) == 0:
+        pcc_gc_store_root(ptr_add(slots, _NAMED_OLD_ERROR * C_POINTER_SIZE), null())
+        py_clear_exception()
+        py_tls_exc_swap_slot(ptr_add(slots, _NAMED_ERROR * C_POINTER_SIZE))
+    else:
+        py_tls_exc_swap_slot(ptr_add(slots, _NAMED_OLD_ERROR * C_POINTER_SIZE))
+    result_slot = ptr_add(slots, _NAMED_RESULT * C_POINTER_SIZE)
+    prior: int = _protocol_unary_pin_result(result_slot)
+    if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _NAMED_RESULT * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result_slot, prior)
+
+
+@c_abi_export("py_user_special_dispatch")
+def py_user_special_dispatch(obj, name, arg0, arg1, nargs: int, conversion: int, scalar, handled):
+    """Leased raw operands to owning named dispatch; 0/6/7 return NEW results.
+
+    Scalar conversions: 1 length, 2 truth, 3 bool, 4 hash, 5 discard.
+    Conversion 6 validates a string; 7 treats NotImplemented as absence.
+    An absent method is handled=0; selected
+    None, descriptor errors and callback failures all remain handled=1.
+    """
+    return _named_dispatch(obj, arg0, arg1, name, null(), nargs, 0, conversion, scalar, handled)
+
+
+def _named_binary(a, b, name, rname, mode: int, conversion: int, scalar, handled):
+    return _named_dispatch(a, b, null(), name, rname, 1, mode, conversion, scalar, handled)

@@ -31,6 +31,9 @@ class _Block:
 
 class _Memory:
     def __init__(self, *, phase="", fail=""):
+        self.frames = []
+        self.leases = {}
+        self.next_lease = 1
         self.globals = {}
         self.attrs = {}
         self.objects = []
@@ -40,7 +43,11 @@ class _Memory:
         self.phase, self.fail = phase, fail
         self.moves = 0
         self.decoy = self.object("decoy")
+        self.module_cache = self.object("dict")
+        self.none = self.object("none")
         self.ns = {
+            "C_POINTER_SIZE": 8, "_MI_TEMP": 0, "_MI_CREATOR": 1, "_MI_AUX": 2,
+            "_MI_ERROR": 3, "_MI_OUTPUT": 4, "_MI_CACHE": 5, "_MI_COUNT": 6,
             "PYOBJECTHEADER_FLAGS_OFFSET": 12, "PY_FLAG_GC_PINNED": 64,
             "py_current_exception": lambda: self.error,
             "py_clear_exception": self.clear_error,
@@ -54,6 +61,12 @@ class _Memory:
             "store_i8": self.setbyte, "load_i32": self.read,
             "store_i32": self.write, "load_ptr": self.read,
             "store_ptr": self.write,
+            "stack_alloc": self.malloc, "global_addr": lambda name: name,
+            "memset": lambda ptr, value, size: ptr.bytes.__setitem__(slice(0, size), bytes([value])*size),
+            "pcc_gc_frame_enter": self.frame_enter,
+            "py_sys_modules_owner_adopt": self.owner_adopt,
+            "py_sys_modules_owner_drop": self.owner_drop,
+            "py_sys_modules_owner_finish": self.owner_finish,
             "global_load_ptr": self.globals.get,
             "global_store_ptr": self.globals.__setitem__,
             "py_class_new": lambda *_args: self.object("class"),
@@ -61,6 +74,10 @@ class _Memory:
             "py_err_occurred": lambda: int(self.error is not None),
             "py_module_attrs_dict": self.attrs_dict,
             "py_module_attr_set": self.attr_set,
+            "py_sys_modules_import_cached": self.cache_import,
+            "py_sys_modules_publish": self.cache_publish,
+            "py_sys_modules_rollback": self.cache_rollback,
+            "py_sys_modules_finish_import": self.cache_finish,
             "py_instance_new": lambda _cls: self.new_module(),
             "pcc_gc_store_ptr": self.store_ref,
             "py_str_new": self.string, "py_instance_setattr": self.setattr,
@@ -73,6 +90,43 @@ class _Memory:
         functions = [node for node in parsed.body if isinstance(node, ast.FunctionDef)]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(PORT), "exec"), self.ns)
 
+    def frame_enter(self, mapping, slots):
+        assert mapping in ("pcc_compiled_module_frame_map", "pcc_extension_module_frame_map")
+        assert len(slots.bytes) == 48
+        self.frames.append(slots)
+
+    def owner_adopt(self, slots, tokens, index):
+        value = self.read(slots, index * 8)
+        if isinstance(value, _Block):
+            token = self.next_lease
+            self.next_lease += 1
+            self.leases[token] = value
+            self.write(tokens, index * 8, token)
+
+    def owner_drop(self, slots, tokens, index):
+        token = tokens.fields.pop(index * 8, -1)
+        if token >= 0:
+            self.leases.pop(token)
+        value = self.read(slots, index * 8)
+        self.write(slots, index * 8, None)
+        self.decref(value)
+
+    def owner_finish(self, slots, tokens):
+        error, self.error = self.error, None
+        if error is not None:
+            self.owner_drop(slots, tokens, 4)
+        for index in (0, 1, 2, 3, 5):
+            self.owner_drop(slots, tokens, index)
+        self.clear_error()
+        self.error = error
+        value = self.read(slots, 32)
+        token = tokens.fields.pop(32, -1)
+        if token >= 0:
+            self.leases.pop(token)
+        self.write(slots, 32, None)
+        assert self.frames.pop() is slots
+        return value
+
     def object(self, kind):
         value = _Block(kind=kind)
         self.objects.append(value)
@@ -82,7 +136,7 @@ class _Memory:
         if phase != self.phase:
             return
         for old in list(self.objects):
-            if not old.alive or old.pin or old.kind not in ("module", "decoy"):
+            if not old.alive or old.pin or old in self.leases.values() or old.kind not in ("module", "decoy"):
                 continue
             new = self.object(old.kind)
             new.fields, new.refs = old.fields.copy(), old.refs
@@ -91,6 +145,8 @@ class _Memory:
             for owner in self.objects:
                 if owner.alive:
                     owner.fields = {k: new if v is old else v for k, v in owner.fields.items()}
+            for frame in self.frames:
+                frame.fields = {k: new if v is old else v for k, v in frame.fields.items()}
             if old is self.decoy:
                 self.decoy = new
             old.alive = False
@@ -187,6 +243,33 @@ class _Memory:
             self.attrs[key].pin = True
         return self.attrs.get(key)
 
+    def cache_import(self, name):
+        value = self.module_cache.fields.get(self.text(name))
+        if value is self.none:
+            self.raise_error("None in sys.modules")
+            return None
+        self.incref(value)
+        return value
+
+    def cache_publish(self, name, value):
+        self.setdict(self.module_cache, self.text(name), value)
+        return 0
+
+    def cache_rollback(self, name):
+        key = self.text(name)
+        if key in self.module_cache.fields:
+            self.decref(self.module_cache.fields.pop(key))
+
+    def cache_finish(self, name, original):
+        value = self.module_cache.fields.get(self.text(name))
+        self.incref(value)
+        failed = self.ns["_publish_compiled_module_parent"](name, value) != 0
+        self.decref(original)
+        if failed:
+            self.decref(value)
+            return None
+        return value
+
     def new_module(self):
         self.gate("allocation")
         return None if self.fail == "module" else self.object("module")
@@ -277,7 +360,7 @@ def test_first_import_publishes_live_child_and_cached_import_preserves_override(
     assert order == ["pkg", "pkg.child"]
     m.decref(cached)
     m.decref(child)
-    assert child.refs == 1 and child.pin
+    assert child.refs == 1 and not child.pin
 
 
 def test_deep_package_publishes_each_edge_with_single_identity():
@@ -335,7 +418,7 @@ def test_exception_removes_registry_owner_without_publishing_failed_child():
     child = escaped[0]
     assert child.alive and child.refs == 1 and not child.pin
     assert m.ns["_lookup_module_node"](m.cstr("pkg.child")) is None
-    assert m.ns["_lookup_init_node"](m.cstr("pkg.child")).fields[16] == 0
+    assert m.ns["_lookup_init_node"](m.cstr("pkg.child")).fields[16] == -1
     m.decref(child)
     assert not child.alive
 
@@ -395,8 +478,9 @@ def test_failed_parent_publication_retains_only_the_completed_cache_owner():
     assert m.error.text == "publication failed"
     assert "child" not in m.namespace(parent)
     node = m.ns["_lookup_module_node"](m.cstr("pkg.child"))
-    module = node.fields[8]
-    assert module.refs == 1 and module.pin
+    module = m.module_cache.fields["pkg.child"]
+    assert node.fields[8] is None
+    assert module.refs == 1 and not module.pin
 
 
 @pytest.mark.parametrize("phase", ("allocation", "store", "string", "setattr", "parent"))
@@ -408,7 +492,7 @@ def test_registry_module_addresses_survive_each_relocation_gate(phase):
     parent = m.import_module("pkg")
     assert m.namespace(parent)["child"] is child
     assert len(m.live_modules()) == 2
-    assert all(obj.pin for obj in m.live_modules())
+    assert all(not obj.pin for obj in m.live_modules())
     assert m.moves > 0  # independent live object actually moved at this gate
 
 

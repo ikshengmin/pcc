@@ -37,6 +37,7 @@ _iter_source_import_from_specs = _pipeline_import_scan._iter_source_import_from_
 _without_attribute_error_handler_imports = _pipeline_import_scan._without_attribute_error_handler_imports
 _source_import_discovery_text = _pipeline_import_scan._source_import_discovery_text
 _without_type_checking_imports = _pipeline_import_scan._without_type_checking_imports
+_without_inactive_runtime_imports = _pipeline_import_scan._without_inactive_runtime_imports
 
 _COMPILE_TIME_ONLY_IMPORT_FROMS = _pipeline_import_policy.COMPILE_TIME_ONLY_IMPORT_FROMS
 _COMPILE_TIME_ONLY_IMPORT_MODULES = _pipeline_import_policy.COMPILE_TIME_ONLY_IMPORT_MODULES
@@ -91,7 +92,7 @@ def _validate_package_site_no_libpython_abi(
                 source = f.read()
         except OSError:
             source = ""
-        source = _without_type_checking_imports(source)
+        source = _without_inactive_runtime_imports(source)
         for import_name in _iter_source_import_specs(
             source,
             top_level_only=False,
@@ -192,7 +193,7 @@ def _top_level_import_targets(
     *,
     top_level_only: bool,
 ) -> list[tuple[str, str]]:
-    source = _without_type_checking_imports(source)
+    source = _without_inactive_runtime_imports(source)
     targets: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -274,7 +275,7 @@ def _package_import_targets(
     with open(src_path, "r", encoding="utf-8") as f:
         source = f.read()
     source = _without_attribute_error_handler_imports(source)
-    source = _without_type_checking_imports(source)
+    source = _without_inactive_runtime_imports(source)
 
     current_pkg = _package_parts_for_module(src_path, mod_name)
     package_root = mod_name.split(".")[0]
@@ -1105,7 +1106,7 @@ def _source_absolute_imports_for_discovery(
     Class bodies remain part of module initialization.  Function bodies are
     included only for the narrower pcc-owned-provider decision.
     """
-    source = _without_type_checking_imports(source)
+    source = _without_inactive_runtime_imports(source)
     masked_source = _source_import_discovery_text(source)
     if include_function_bodies:
         lines = [(line, True) for line in masked_source.splitlines()]
@@ -1185,7 +1186,7 @@ def _source_pcc_native_extension_paths(src_path: str) -> list[str]:
             source = f.read()
     except OSError:
         return []
-    source = _without_type_checking_imports(source)
+    source = _without_inactive_runtime_imports(source)
     out: list[str] = []
     seen: set[str] = set()
 
@@ -1394,7 +1395,7 @@ def _stdlib_absolute_imports_in(
 
     with open(src_path, "r", encoding="utf-8") as f:
         text = f.read()
-    text = _without_type_checking_imports(text)
+    text = _without_inactive_runtime_imports(text)
     try:
         ast_mod = parse_and_lift(text, src_path, "<scan>")
     except Exception:

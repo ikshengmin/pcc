@@ -1229,6 +1229,8 @@ PyObject *py_obj_call_method_kwargs(PyObject *method, PyObject *self_obj, PyObje
 PyObject *py_obj_getattr_default(PyObject *o, const char *name);
 PyObject *py_obj_getattr_maybe(PyObject *o, const char *name);
 PyObject *py_obj_vars(PyObject *o);
+/* Native dir publishes a NEW sorted list through registered owning slots. */
+int64_t py_obj_dir_slots(PyObject **source_slot, PyObject **result_slot);
 int64_t   py_obj_setattr(PyObject *o, const char *name, PyObject *v);
 int64_t   py_obj_delattr(PyObject *o, const char *name);
 PyObject *py_obj_type_name(PyObject *o);
@@ -2360,5 +2362,28 @@ int64_t     pcc_metal_buffer_runtime_release_prebuilt(
 
 /* Exact strings and native str subtype values; preserves receiver identity. */
 int64_t py_str_check(PyObject *value);
+/* Tuple subtype storage keeps user instance identity plus one traced payload. */
+int64_t py_class_is_tuple_subclass(PyObject *cls);
+int64_t py_tuple_check(PyObject *value);
+PyObject *py_tuple_payload(PyObject *value); /* immediate borrowed check only */
+PyObject *py_tuple_getattr(PyObject *value, const char *name); /* NEW or absent */
+PyObject *py_tuple_subclass_new(PyObject *cls, PyObject *args, PyObject *kwargs);
+PyObject *py_tuple_class_call(PyObject *cls, PyObject *args, PyObject *kwargs);
+PyObject *py_tuple_type_new(void); /* NEW reference to completed canonical type */
+PyObject *py_tuple_iter_new(PyObject *wrapper);
+PyObject *py_tuple_iter_next(PyObject *wrapper, int64_t index);
+/* Slot inputs are registered authoritative owners; output must be empty.
+ * The binary operation returns 0/-1; handled distinguishes absent/NotImplemented.
+ * mode=0 arithmetic, mode=1 rich comparison. The result is one NEW owner. */
+int64_t py_obj_binary_special_call_slots(PyObject **left, PyObject **right,
+    const char *name, const char *reflected_name, int64_t mode,
+    PyObject **result, int64_t *handled);
+int64_t py_super_new_lookup_slots(PyObject **receiver, PyObject **from_class,
+    PyObject **result);
+/* Raw compatibility adapter: inputs retain counted address leases throughout. */
+PyObject *py_user_special_dispatch(PyObject *receiver, const char *name,
+    PyObject *arg0, PyObject *arg1, int64_t nargs, int64_t conversion,
+    int64_t *scalar_result, int64_t *handled);
+
 
 #endif /* PY_RUNTIME_H */

@@ -123,9 +123,13 @@ def _maybe_declare_native_module_attr_store(host, target: Expr) -> None:
 
 def _predeclare_owned_builtin_import_globals(host, stmt, scope_names) -> bool:
     """Plan runtime builtin bindings before emitting consumers of the module."""
-    if host._resolve_relative_import(stmt) != "builtins":
+    module = host._resolve_relative_import(stmt)
+    names = _import_names_from_stmt(stmt)
+    if module not in ("builtins", "sys"):
         return False
-    for imported_name, as_name in _import_names_from_stmt(stmt):
+    for imported_name, as_name in names:
+        if module == "sys" and imported_name != "modules":
+            continue
         if imported_name == "*":
             continue
         local_name = as_name or imported_name
@@ -137,7 +141,7 @@ def _predeclare_owned_builtin_import_globals(host, stmt, scope_names) -> bool:
         if getattr(host, "_module_del_target_names", None) is None:
             host._module_del_target_names = set()
         host._module_del_target_names.add(local_name)
-    return True
+    return module == "builtins" or all(name == "modules" for name, _alias in names)
 
 
 class ModuleGlobalLoweringMixin:
@@ -181,6 +185,10 @@ class ModuleGlobalLoweringMixin:
                         continue
                     if _predeclare_owned_builtin_import_globals(self, s, None):
                         continue
+                    if self._resolve_relative_import(s) == "sys":
+                        remaining = tuple(item for item in _import_names_from_stmt(s) if item[0] != "modules")
+                        if len(remaining) != len(_import_names_from_stmt(s)):
+                            s = ImportFrom(s.span, s.module, remaining, s.level)
                     if self._register_native_builtin_import_from_aliases(
                         s,
                         self._resolve_relative_import(s),
@@ -322,6 +330,11 @@ class ModuleGlobalLoweringMixin:
                         local_name = mod_name.split(".")[0]
                     else:
                         local_name = as_name or mod_name
+                    if mod_name in getattr(self, "_sibling_module_inits", ()):
+                        self._register_native_module_alias(local_name, mod_name)
+                        gv = self._native_extension_module_global(local_name)
+                        self._native_extension_modules()[local_name] = gv
+                        continue
                     if self._resolve_pcc_native_extension_path(mod_name) is not None:
                         gv = self._native_extension_module_global(local_name)
                         self._native_extension_modules()[local_name] = gv
@@ -351,7 +364,7 @@ class ModuleGlobalLoweringMixin:
         self,
         stmts: tuple[Stmt, ...],
     ) -> None:
-        """Seed storage for ``sys.x = value`` style native module attrs.
+        """Seed storage for native imports and ``sys.x = value`` attrs.
 
         Top-level module root registration runs before top-level statements,
         so slots that may be written there must exist before ``@main`` is
@@ -363,8 +376,36 @@ class ModuleGlobalLoweringMixin:
             pending = [(stmt, None)]
             while pending:
                 s, fields = pending.pop()
-                if isinstance(s, FuncDef):
+                if isinstance(s, FuncDef) or type(s).__name__ == "ClassDef":
                     continue
+                if isinstance(s, Import):
+                    for module_name, alias in _import_names_from_stmt(s):
+                        if (module_name in getattr(self, "_sibling_module_inits", ())
+                                or self._resolve_pcc_native_extension_path(module_name) is not None):
+                            name = alias or module_name.split(".", 1)[0]
+                            slot = self._native_extension_module_global(name)
+                            self._native_extension_modules()[name] = slot
+                elif isinstance(s, ImportFrom):
+                    module_name = self._resolve_relative_import(s)
+                    scaffold = (
+                        self._is_extern_scaffold_import_module(module_name)
+                        or module_name == "pcc.unsafe"
+                        or self._is_test_facade_import_module(module_name)
+                        or module_name.split(".", 1)[0] in ("__future__", "typing", "abc", "click")
+                    )
+                    if not scaffold and (
+                        module_name in getattr(self, "_sibling_module_inits", ())
+                        or self._resolve_pcc_native_extension_path(module_name) is not None
+                    ):
+                        exports = (self._native_module_exports or {}).get(module_name, {})
+                        for imported, alias in self._filter_runtime_import_from_names(s):
+                            if imported == "*" or exports.get(imported, {}).get("kind") == "typing_metadata":
+                                continue
+                            if module_name == "pcc" and imported in ("valueclass", "i64", "u64"):
+                                continue
+                            name = alias or imported
+                            slot = self._native_extension_module_global(name)
+                            self._native_extension_modules()[name] = slot
                 if isinstance(s, Assign):
                     for target in s.targets:
                         _maybe_declare_native_module_attr_store(self, target)
@@ -595,8 +636,9 @@ class ModuleGlobalLoweringMixin:
                         bound = as_name or mod_name.split(".", 1)[0]
                         if bound in global_names:
                             if (
-                                self._resolve_pcc_native_extension_path(mod_name)
-                                is not None
+                                mod_name in getattr(self, "_sibling_module_inits", ())
+                                or mod_name in (self._native_module_exports or {})
+                                or self._resolve_pcc_native_extension_path(mod_name) is not None
                             ):
                                 gv = self._native_extension_module_global(bound)
                                 self._native_extension_modules()[bound] = gv
@@ -608,20 +650,25 @@ class ModuleGlobalLoweringMixin:
                     if _predeclare_owned_builtin_import_globals(self, s, global_names):
                         continue
                     for imported_name, as_name in s.names:
+                        if self._resolve_relative_import(s) == "sys" and imported_name == "modules":
+                            continue
                         if imported_name == "*":
                             continue
                         bound = as_name or imported_name
                         if bound in global_names:
                             native_table = self._native_module_exports
                             resolved = self._resolve_relative_import(s)
-                            if native_table is not None and resolved in native_table:
+                            if (
+                                resolved in (native_table or {})
+                                or resolved in getattr(self, "_sibling_module_inits", ())
+                                or self._resolve_pcc_native_extension_path(resolved) is not None
+                            ):
                                 # The executing import binds a pcc object into
                                 # this global through the ordinary assignment
                                 # owner. A CPython alias here would misclassify
                                 # later loads even before this function runs.
-                                self._ensure_module_global_name(
-                                    bound, DynType(name="dyn")
-                                )
+                                gv = self._native_extension_module_global(bound)
+                                self._native_extension_modules()[bound] = gv
                                 continue
                             gv = self._cpy_module_global(bound)
                             self._cpy_modules()[bound] = gv

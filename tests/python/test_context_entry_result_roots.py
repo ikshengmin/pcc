@@ -16,6 +16,11 @@ from tests.python.test_builtin_open_binding_ownership import _emit, _body
     "def read_file(manager):\n    with manager as entered:\n        return entered\n",
     "import tempfile\ndef read_file():\n"
     "    with tempfile.TemporaryDirectory(prefix='ctx') as directory:\n        return directory\n",
+    "from contextlib import contextmanager\n@contextmanager\n"
+    "def managed(value):\n    yield value\n"
+    "def take(*, value):\n    return value\n"
+    "def read_file(value):\n    with managed(value) as selected:\n"
+    "        return take(value=selected)\n",
 ))
 def test_native_context_results_move_from_registered_roots(source):
     body = _body(_emit(source))
@@ -54,3 +59,52 @@ def test_module_context_uses_a_registered_global_manager_owner():
     assert "with.module.root" in text
     assert "@pcc_gc_frame_enter(" in text
     assert "@py_file_close(" in text
+
+
+@pytest.mark.parametrize("ending", (
+    "return selected",
+    "break",
+    "continue",
+    "raise ValueError('body')",
+    "selected = None",
+))
+def test_generator_context_uses_rooted_resume_and_shared_unwind(ending):
+    text = _emit(
+        "from contextlib import contextmanager\n@contextmanager\n"
+        "def managed(value):\n    try:\n        yield value\n    finally:\n        print('exit')\n"
+        "def read_file(value):\n    for index in range(2):\n"
+        "        with managed(value) as selected:\n            " + ending + "\n"
+    )
+    body = _body(text)
+    for name in ("py_gen_next", "py_gen_throw", "py_gen_close"):
+        calls = list(re.finditer(
+            r"(?P<value>%[^ ]+) = call [^\n]*@" + name + r"\([^\n]*\)\n(?P<next>[^\n]+)", body,
+        ))
+        assert calls, name
+        for call in calls:
+            assert call.group("next").strip().startswith("store ptr " + call.group("value") + ", ptr ")
+    assert "@pcc_gc_root_move(" in body
+    assert "@py_tls_exc_swap_slot(" in body
+    assert "@pcc_gc_foreign_lease_acquire(" in body
+    assert "with.context" in body and "with.err" in body
+    assert "contextmanager.outcome" in body
+    assert "@py_cpy_" not in body
+
+
+def test_undecorated_generator_does_not_get_static_context_protocol():
+    body = _body(_emit(
+        "def plain(value):\n    yield value\n"
+        "def read_file(value):\n    with plain(value) as selected:\n        return selected\n"
+    ))
+    assert "@py_context_enter(" in body
+    assert "@py_gen_next(" not in body
+
+
+def test_generator_context_inside_generator_uses_persistent_manager_slot():
+    text = _emit(
+        "from contextlib import contextmanager\n@contextmanager\n"
+        "def managed(value):\n    yield value\n"
+        "def read_file(value):\n    with managed(value) as selected:\n        yield selected\n"
+    )
+    assert "__pcc_with_context_" in text
+    assert "contextmanager.outcome" in text

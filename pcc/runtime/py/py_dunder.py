@@ -29,6 +29,7 @@ from pcc.unsafe import (
     is_tagged_int,
     load_i8,
     load_i32,
+    load_i64,
     load_ptr,
     malloc,
     null,
@@ -48,6 +49,10 @@ from pcc.unsafe import (
 py_bigint_from_any = extern("py_bigint_from_any", (c_ptr,), c_ptr)
 py_bigint_to_cstr = extern("py_bigint_to_cstr", (c_ptr,), c_ptr)
 py_bigint_to_base_cstr = extern("py_bigint_to_base_cstr", (c_ptr, c_int32, c_int32), c_ptr)
+py_user_special_dispatch = extern(
+    "py_user_special_dispatch",
+    (c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64, c_ptr, c_ptr), c_ptr,
+)
 py_class_lookup = extern("py_class_lookup", (c_ptr, c_ptr), c_ptr)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
 py_bool_from_bit = extern("py_bool_from_bit", (c_int32,), c_ptr)
@@ -461,38 +466,12 @@ def py_builtin_callable(o):
 
 @c_abi_export("py_user_str_dispatch")
 def py_user_str_dispatch(o):
-    if ptr_is_null(o):
-        return null()
-    if is_tagged_int(o):
-        return null()
-    tag: int = load_i32(o, 8)
-    if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
-        return null()
-    cls = _load_instance_cls(o)
-    if ptr_is_null(cls):
-        return null()
-    func = py_class_lookup(cls, cstr("__str__"))
-    if ptr_is_null(func):
-        return null()
-    return _call_user_unary_method(func, o)
+    return py_user_special_dispatch(o, cstr("__str__"), null(), null(), 0, 6, null(), null())
 
 
 @c_abi_export("py_user_repr_dispatch")
 def py_user_repr_dispatch(o):
-    if ptr_is_null(o):
-        return null()
-    if is_tagged_int(o):
-        return null()
-    tag: int = load_i32(o, 8)
-    if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
-        return null()
-    cls = _load_instance_cls(o)
-    if ptr_is_null(cls):
-        return null()
-    func = py_class_lookup(cls, cstr("__repr__"))
-    if ptr_is_null(func):
-        return null()
-    return _call_user_unary_method(func, o)
+    return py_user_special_dispatch(o, cstr("__repr__"), null(), null(), 0, 6, null(), null())
 
 
 @c_abi_export("py_obj_id")
@@ -528,89 +507,40 @@ def _identity_hash(o) -> int:
 
 @c_abi_export("py_user_hash_dispatch")
 def py_user_hash_dispatch(o, handled) -> int:
+    selected = stack_alloc(8)
+    scalar = stack_alloc(8)
+    py_user_special_dispatch(o, cstr("__hash__"), null(), null(), 0, 4, scalar, selected)
     if ptr_is_null(handled) == 0:
-        store_i64(handled, 0, 0)
-    if ptr_is_null(o):
-        return 0
-    if is_tagged_int(o):
+        store_i64(handled, 0, load_i64(selected, 0))
+    if load_i64(selected, 0) != 0:
+        return load_i64(scalar, 0)
+    if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return 0
     tag: int = load_i32(o, 8)
     if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
         return 0
+    if pcc_capi_is_cext_type_tag(tag) != 0:
+        return 0
     cls = _load_instance_cls(o)
-    if ptr_is_null(cls):
+    if ptr_is_null(cls) != 0:
         return 0
-    func = py_class_lookup(cls, cstr("__hash__"))
-    if ptr_is_null(func):
-        # No __hash__ in the MRO.  Without a user __eq__, equality is
-        # identity, so hash by identity like CPython; every such instance
-        # used to hash to 0, which put all of them in one probe chain of a
-        # set or dict.  A class with __eq__ but no __hash__ keeps 0.
-        if ptr_is_null(py_class_lookup(cls, cstr("__eq__"))) == 0:
-            return 0
-        if ptr_is_null(handled) == 0:
-            store_i64(handled, 0, 1)
-        return _identity_hash(o)
-    if ptr_eq(func, global_load_ptr("py_None")) != 0:
-        if ptr_is_null(handled) == 0:
-            store_i64(handled, 0, 1)
-        py_raise_owned(py_exc_new(3, cstr("unhashable type")))
+    # Legacy identity fallback only observes presence; it never classifies or
+    # invokes a borrowed mutable descriptor. Tuple inherits a real __hash__.
+    if ptr_is_null(py_class_lookup(cls, cstr("__eq__"))) == 0:
         return 0
-    result = _call_user_unary_method(func, o)
     if ptr_is_null(handled) == 0:
         store_i64(handled, 0, 1)
-    if ptr_is_null(result):
-        return 0
-    overflow = malloc(4)
-    if ptr_is_null(overflow):
-        py_decref(result)
-        return 0
-    store_i32(overflow, 0, 0)
-    value: int = py_int_to_i64(result, overflow)
-    overflowed: int = load_i32(overflow, 0)
-    free(overflow)
-    py_decref(result)
-    if overflowed != 0:
-        return 0
-    if value == -1:
-        return -2
-    return value
+    return _identity_hash(o)
 
 
 @c_abi_export("py_user_iter_dispatch")
 def py_user_iter_dispatch(o):
-    if ptr_is_null(o):
-        return null()
-    if is_tagged_int(o):
-        return null()
-    tag: int = load_i32(o, 8)
-    if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
-        return null()
-    cls = _load_instance_cls(o)
-    if ptr_is_null(cls):
-        return null()
-    func = py_class_lookup(cls, cstr("__iter__"))
-    if ptr_is_null(func):
-        return null()
-    return _call_user_unary_method(func, o)
+    return py_user_special_dispatch(o, cstr("__iter__"), null(), null(), 0, 0, null(), null())
 
 
 @c_abi_export("py_user_next_dispatch")
 def py_user_next_dispatch(o):
-    if ptr_is_null(o):
-        return null()
-    if is_tagged_int(o):
-        return null()
-    tag: int = load_i32(o, 8)
-    if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
-        return null()
-    cls = _load_instance_cls(o)
-    if ptr_is_null(cls):
-        return null()
-    func = py_class_lookup(cls, cstr("__next__"))
-    if ptr_is_null(func):
-        return null()
-    return _call_user_unary_method(func, o)
+    return py_user_special_dispatch(o, cstr("__next__"), null(), null(), 0, 0, null(), null())
 
 
 @c_abi_export("py_user_del_dispatch")

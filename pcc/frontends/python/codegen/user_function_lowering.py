@@ -1961,6 +1961,24 @@ class UserFunctionLoweringMixin:
                 if isinstance(ast_arg.annotation, RawPointerType):
                     raw_boundary = True
                     break
+        if (adapter_fd is not None and adapter_fd.manual_pointer_abi
+                and full_fn.name in self._manual_pointer_abi_functions):
+            # The resolved callee's manual ABI gives Dyn pointer formals and
+            # results their raw view. A generic tuple contains Python objects,
+            # not caller-owned frame storage. Keep explicitly managed types
+            # and the tuple/dict carriers of variadic parameters separate.
+            if (isinstance(return_ty, DynType)
+                    and isinstance(full_fn.function_type.return_type, ir.PointerType)):
+                raw_boundary = True
+            native_index = 0
+            for formal in adapter_fd.args:
+                if formal.name == "":
+                    continue
+                if (formal.kind not in ("*args", "**kwargs")
+                        and isinstance(formal.annotation, DynType)
+                        and isinstance(full_fn.args[native_index].type, ir.PointerType)):
+                    raw_boundary = True
+                native_index += 1
         array_boundary = isinstance(return_ty, ValueArrayType)
         if not array_boundary:
             for ast_arg in original_args:

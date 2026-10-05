@@ -48,7 +48,7 @@ class _C3Memory(_Memory):
         })
         parsed=ast.parse(PORT.read_text(),filename=str(PORT))
         functions=[node for node in parsed.body if isinstance(node,ast.FunctionDef)
-                   and (node.name in {"py_class_new", "py_class_is_str_subclass",
+                   and (node.name in {"py_class_new", "py_class_is_str_subclass", "py_class_is_tuple_subclass",
                                       "_ptr_is_class", "_ptr_can_have_header"}
                         or node.name.startswith("_class_construct_"))]
         exec(compile(ast.Module(body=functions,type_ignores=[]),str(PORT),"exec"),self.namespace)
@@ -335,3 +335,25 @@ def test_class_constructor_roots_reach_owned_emitter(tmp_path,monkeypatch,triple
     payload=emit_owned_object(text,triple)
     assert len(payload)>64
     (tmp_path/"py_class.o").write_bytes(payload)
+
+
+@pytest.mark.parametrize("kind", ["builtin", "inherited", "name_only"])
+@pytest.mark.parametrize("publish_move", [False, True])
+def test_class_constructor_tuple_payload_uses_c3_builtin_identity(kind, publish_move):
+    memory = _C3Memory(publish_move=publish_move)
+    builtin = memory.klass("tuple", [memory.root])
+    memory.builtin_classes["pcc_type_cls_tuple"] = builtin
+    if kind == "builtin":
+        parent = builtin
+    elif kind == "inherited":
+        parent = memory.klass("TupleChild", [builtin, memory.root])
+    else:
+        parent = memory.klass("tuple", [memory.root])
+    result = memory.construct([parent])
+    is_tuple = kind != "name_only"
+    assert memory.namespace["py_class_is_tuple_subclass"](result) == is_tuple
+    base_size = abi.PYINSTANCEOBJECT_SIZE + abi.C_POINTER_SIZE
+    assert result.fields[abi.PYCLASSOBJECT_INSTANCE_SIZE_OFFSET] == base_size + (abi.C_POINTER_SIZE if is_tuple else 0)
+    assert result.alive and result.references == 1
+    assert memory.moves == int(publish_move)
+    assert not memory.frames and not memory.handles and memory.pin_metric == 0

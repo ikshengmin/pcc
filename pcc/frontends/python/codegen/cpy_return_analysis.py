@@ -13,7 +13,6 @@ _CPY_BUILTIN_FALLBACK = frozenset(
         "setattr",
         "delattr",
         "hasattr",
-        "dir",
         "vars",
         "locals",
         "eval",
@@ -58,6 +57,11 @@ class CpyReturnAnalysisMixin:
             return self._expr_looks_cpython(expr.obj)
         if isinstance(expr, Call):
             if isinstance(expr.func, Name):
+                if (expr.func.ident == "dir" and expr.args
+                        and not self._iterator_builtin_is_shadowed("dir")):
+                    # Native reflection owns the list and each yielded name.
+                    # Only an explicitly foreign operand keeps the CPython ABI.
+                    return self._expr_looks_cpython(expr.args[0])
                 if expr.func.ident == "getattr" and expr.args:
                     return self._expr_looks_cpython(expr.args[0])
                 if expr.func.ident == "type" and len(expr.args) == 1:

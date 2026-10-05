@@ -5,17 +5,29 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Call, ClassType, DynType, Expr, Name, NoneType, RawPointerType, Type, With
+from pcc.frontends.python.py_ast import (
+    Call,
+    ClassType,
+    DynType,
+    Expr,
+    Name,
+    NoneType,
+    RawPointerType,
+    Type,
+    With,
+)
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.generator_context_lowering import (
+    emit_generator_context_enter,
+    emit_generator_context_exit,
+)
 
 
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
 _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
-_RUNTIME_ERROR_TAG = 7
-_STOP_ITERATION_TAG = 8
 
 
 class AsyncWithLoweringMixin:
@@ -224,158 +236,14 @@ class AsyncWithLoweringMixin:
                 return fd
         return None
 
-    def _raise_contextmanager_runtime_error(self, message: str) -> None:
-        msg = self._ptr_to_cstr(
-            self._cstr_global(message, ".contextmanager.error")
-        )
-        exc = self.builder.call(
-            self.runtime["py_exc_new"],
-            [ir.Constant(_I64, _RUNTIME_ERROR_TAG), msg],
-            name=self._fresh("contextmanager.err"),
-        )
-        self.builder.call(self.runtime["py_raise"], [exc])
-
-    def _branch_on_stop_iteration_or_propagate(
-        self,
-        *,
-        after_bb,
-        propagate_bb,
-        prefix: str,
-    ) -> None:
-        current_exc = self.builder.call(
-            self.runtime["py_current_exception"],
-            [],
-            name=self._fresh(f"{prefix}.cur_exc"),
-        )
-        stop_cls = self.builder.call(
-            self.runtime["py_exc_builtin_class"],
-            [ir.Constant(_I64, _STOP_ITERATION_TAG)],
-            name=self._fresh(f"{prefix}.stop_cls"),
-        )
-        match_i64 = self.builder.call(
-            self.runtime["py_exc_matches"],
-            [current_exc, stop_cls],
-            name=self._fresh(f"{prefix}.stop_match"),
-        )
-        is_stop = self.builder.icmp_signed(
-            "!=",
-            match_i64,
-            ir.Constant(_I64, 0),
-            name=self._fresh(f"{prefix}.stop_i1"),
-        )
-        clear_bb = self.current_function.append_basic_block(
-            name=self._fresh(f"{prefix}.clear")
-        )
-        self.builder.cbranch(is_stop, clear_bb, propagate_bb)
-
-        self.builder.position_at_end(clear_bb)
-        self.builder.call(self.runtime["py_clear_exception"], [])
-        self.builder.branch(after_bb)
-
     def _emit_native_generator_context_with(self, stmt: With) -> bool:
-        ctx_expr, as_expr = stmt.items[0]
+        ctx_expr, _as_expr = stmt.items[0]
         if self._context_expr_generator_contextmanager(ctx_expr) is None:
             return False
-
-        ctx_val = self._emit_expr(ctx_expr)
-        enter_val = self.builder.call(
-            self.runtime["py_gen_next"],
-            [ctx_val],
-            name=self._fresh("contextmanager.enter"),
+        context_root, enter_root = emit_generator_context_enter(self, stmt)
+        self._emit_native_context_body(
+            stmt, context_root, enter_root, generator_context=True,
         )
-        self._emit_post_call_err_check(stmt.span)
-        if as_expr is not None:
-            if not isinstance(as_expr, Name):
-                raise NotImplementedError(
-                    "Layer 1 contextmanager with: as-clause must be a bare name"
-                    f" at {stmt.span.file}:{stmt.span.line}:{stmt.span.col}"
-                    f" (got {type(as_expr).__name__})"
-                )
-            self._store_value_at_name(as_expr, enter_val, as_expr.ty)
-
-        fn = self.current_function
-        err_bb = fn.append_basic_block(name=self._fresh("contextmanager.err"))
-        after_bb = fn.append_basic_block(name=self._fresh("contextmanager.after"))
-        prev_err_block = getattr(self, "_try_err_block", None)
-        self._try_err_block = err_bb
-        try:
-            self._emit_stmts(stmt.body)
-        finally:
-            self._try_err_block = prev_err_block
-
-        outer = prev_err_block or self._ensure_fn_err_exit()
-        null = ir.Constant(_CSTR, None)
-
-        if not self._builder_block_is_terminated():
-            exit_val = self.builder.call(
-                self.runtime["py_gen_next"],
-                [ctx_val],
-                name=self._fresh("contextmanager.exit"),
-            )
-            is_null = self.builder.icmp_unsigned(
-                "==",
-                exit_val,
-                null,
-                name=self._fresh("contextmanager.exit.null"),
-            )
-            stop_check_bb = fn.append_basic_block(
-                name=self._fresh("contextmanager.exit.stop_check")
-            )
-            yielded_again_bb = fn.append_basic_block(
-                name=self._fresh("contextmanager.exit.yielded")
-            )
-            self.builder.cbranch(is_null, stop_check_bb, yielded_again_bb)
-
-            self.builder.position_at_end(yielded_again_bb)
-            self._gc_release(exit_val)
-            self._raise_contextmanager_runtime_error("generator didn't stop")
-            self.builder.branch(outer)
-
-            self.builder.position_at_end(stop_check_bb)
-            self._branch_on_stop_iteration_or_propagate(
-                after_bb=after_bb,
-                propagate_bb=outer,
-                prefix="contextmanager.exit",
-            )
-
-        self.builder.position_at_end(err_bb)
-        current_exc = self.builder.call(
-            self.runtime["py_current_exception"],
-            [],
-            name=self._fresh("contextmanager.throw.exc"),
-        )
-        throw_val = self.builder.call(
-            self.runtime["py_gen_throw"],
-            [ctx_val, current_exc],
-            name=self._fresh("contextmanager.throw"),
-        )
-        throw_is_null = self.builder.icmp_unsigned(
-            "==",
-            throw_val,
-            null,
-            name=self._fresh("contextmanager.throw.null"),
-        )
-        throw_stop_check_bb = fn.append_basic_block(
-            name=self._fresh("contextmanager.throw.stop_check")
-        )
-        throw_yielded_bb = fn.append_basic_block(
-            name=self._fresh("contextmanager.throw.yielded")
-        )
-        self.builder.cbranch(throw_is_null, throw_stop_check_bb, throw_yielded_bb)
-
-        self.builder.position_at_end(throw_yielded_bb)
-        self._gc_release(throw_val)
-        self._raise_contextmanager_runtime_error("generator didn't stop after throw")
-        self.builder.branch(outer)
-
-        self.builder.position_at_end(throw_stop_check_bb)
-        self._branch_on_stop_iteration_or_propagate(
-            after_bb=after_bb,
-            propagate_bb=outer,
-            prefix="contextmanager.throw",
-        )
-
-        self.builder.position_at_end(after_bb)
         return True
 
     def _emit_native_user_context_with(self, stmt: With) -> bool:
@@ -443,6 +311,8 @@ class AsyncWithLoweringMixin:
         context_root: ir.Value,
         enter_root: ir.Value,
         cleanup_runtime: Optional[str] = None,
+        *,
+        generator_context: bool = False,
     ) -> None:
         """Emit the body/exit control flow for a pcc-native manager.
 
@@ -532,6 +402,10 @@ class AsyncWithLoweringMixin:
             # Return/break/continue must run this same exit, just like an
             # enclosing finally. An exception from __exit__ belongs outside
             # this manager rather than re-entering its own exception path.
+            if generator_context:
+                emit_generator_context_exit(self, context_target, clear_context, False, stmt.span)
+                self._emit_post_call_err_check(stmt.span)
+                return
             context_value = self._emit_name(context_target)
             none_gv = declare_runtime_global(self.module, "py_None")
             none = self.builder.load(none_gv, name=self._fresh("with.none"))
@@ -560,6 +434,14 @@ class AsyncWithLoweringMixin:
             self.builder.branch(after_bb)
 
         self.builder.position_at_end(err_bb)
+        if generator_context:
+            suppress = emit_generator_context_exit(
+                self, context_target, clear_context, True, stmt.span,
+            )
+            suppressed = self.builder.icmp_signed("!=", suppress, ir.Constant(_I64, 0))
+            self.builder.cbranch(suppressed, after_bb, prev_err_block or self._ensure_fn_err_exit())
+            self.builder.position_at_end(after_bb)
+            return
         if cleanup_runtime is not None:
             self.builder.call(self.runtime[cleanup_runtime], [self._emit_name(context_target)])
             clear_context()

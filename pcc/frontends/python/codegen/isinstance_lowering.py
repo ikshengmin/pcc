@@ -100,8 +100,9 @@ def emit_builtin_runtime_isinstance_impl(
     evaluated_operand = obj_val is None
     if evaluated_operand:
         obj_val = host._emit_as_object(obj_expr)
-    if class_ident == "str":
-        raw = host.builder.call(host.runtime["py_str_check"], [obj_val])
+    if class_ident in ("str", "tuple"):
+        helper = "py_str_check" if class_ident == "str" else "py_tuple_check"
+        raw = host.builder.call(host.runtime[helper], [obj_val])
         if evaluated_operand:
             host._gc_release_if_owned(obj_val, obj_expr)
         return host.builder.icmp_signed("!=", raw, ir.Constant(_I64, 0))
