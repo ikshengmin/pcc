@@ -488,8 +488,43 @@ def test_unicode_static_constructor_uses_full_runtime_call(tmp_path):
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
-    assert '@py_obj_call(' in text
-    assert not re.search(r'\bcall\b[^\n]*@py_exc_new\(', text)
+    _assert_full_unicode_constructor_body(text)
+
+
+def _unicode_constructor_function(text):
+    match = re.search(
+        r'^define[^\n]*@user_unicode_constructor_make\([^\n]*\)[^\n]*\{\n(?P<body>.*?)^\}',
+        text, re.M | re.S,
+    )
+    assert match is not None, 'Unicode constructor function was not emitted'
+    return match
+
+
+def _assert_full_unicode_constructor_body(text):
+    body = _unicode_constructor_function(text).group('body')
+    assert re.search(r'\bcall\b[^\n]*@py_obj_call\(', body), 'full Unicode constructor call is missing'
+    assert not re.search(r'\bcall\b[^\n]*@py_exc_new\(', body), 'legacy message-only Unicode constructor path'
+
+
+def test_unicode_static_constructor_rejects_legacy_call_inside_function(tmp_path):
+    test_unicode_static_constructor_uses_full_runtime_call(tmp_path)
+    text = (tmp_path / 'unicode_constructor.ll').read_text()
+    function = _unicode_constructor_function(text)
+    # Recursion activation can precede entry; inject in the actual first block
+    # of this user function rather than depending on a particular label.
+    label = re.search(r'^[^\s;][^\n]*:\n', function.group('body'), re.M)
+    assert label is not None, 'Unicode constructor has no entry block'
+    insertion = function.start('body') + label.end()
+    legacy = '  %legacy.unicode.constructor = call ptr (i64, ptr) @py_exc_new(i64 59, ptr null)\n'
+    mutated = text[:insertion] + legacy + text[insertion:]
+    verify_ir_text(mutated)
+    with pytest.raises(AssertionError, match='legacy message-only'):
+        _assert_full_unicode_constructor_body(mutated)
+
+    # A message-only exception elsewhere must not trigger this scoped check.
+    unrelated = text + '\ndefine ptr @unrelated_exception() {\nentry:\n' + legacy + '  ret ptr %legacy.unicode.constructor\n}\n'
+    verify_ir_text(unrelated)
+    _assert_full_unicode_constructor_body(unrelated)
 
 
 CONSTRUCTOR_CONTROL_PROGRAM = r'''import gc

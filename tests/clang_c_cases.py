@@ -26,6 +26,61 @@ PCC_STD_COMPAT_MAP = {
 }
 
 
+class CapturedOutput(str):
+    """Printable process output whose equality still compares original bytes.
+
+    String formatting and JSON use escaped diagnostic text. Exact comparisons
+    use ``raw_bytes`` instead, so an invalid byte cannot equal its literal
+    backslash escape. Other string operations are display operations; callers
+    that transform captured data must operate on ``raw_bytes`` explicitly.
+    """
+
+    def __new__(cls, value: bytes | str = ""):
+        if isinstance(value, CapturedOutput):
+            raw = value.raw_bytes
+        elif isinstance(value, bytes):
+            raw = value
+        else:
+            raw = value.encode("utf-8", "surrogateescape")
+        result = super().__new__(cls, raw.decode("utf-8", "backslashreplace"))
+        result._raw_bytes = raw
+        return result
+
+    @property
+    def raw_bytes(self) -> bytes:
+        return self._raw_bytes
+
+    def __eq__(self, other):
+        if isinstance(other, CapturedOutput):
+            return self.raw_bytes == other.raw_bytes
+        if isinstance(other, str):
+            return self.raw_bytes == other.encode("utf-8", "surrogateescape")
+        return NotImplemented
+
+    def __ne__(self, other):
+        equal = self.__eq__(other)
+        return NotImplemented if equal is NotImplemented else not equal
+
+    def __hash__(self):
+        return hash(self.raw_bytes.decode("utf-8", "surrogateescape"))
+
+    def __repr__(self):
+        return f"CapturedOutput({self.raw_bytes!r})"
+
+    def __reduce__(self):
+        # dataclasses.asdict/deepcopy and multiprocessing must retain the bytes,
+        # rather than reconstructing this value from its printable string.
+        return type(self), (self.raw_bytes,)
+
+
+def _run_captured(command, **options) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(command, capture_output=True, text=False, **options)
+    return subprocess.CompletedProcess(
+        result.args, result.returncode,
+        CapturedOutput(result.stdout), CapturedOutput(result.stderr),
+    )
+
+
 @dataclass(frozen=True)
 class ClangCCaseConfig:
     mode: str
@@ -74,7 +129,10 @@ class CCaseResult:
 
 
 def _stage_result(stage: str, result) -> CStageResult:
-    return CStageResult(stage, result.returncode, result.stdout, result.stderr)
+    return CStageResult(
+        stage, result.returncode,
+        CapturedOutput(result.stdout), CapturedOutput(result.stderr),
+    )
 
 
 def subprocess_env():
@@ -139,12 +197,10 @@ def compile_native(case_path: Path, repo_root: Path) -> subprocess.CompletedProc
             cmd.extend(["-c", "-o", str(output)])
         else:
             cmd.extend(["-o", str(output)])
-        return subprocess.run(
+        return _run_captured(
             cmd,
             cwd=repo_root,
             env=subprocess_env(),
-            capture_output=True,
-            text=True,
             timeout=20,
         )
 
@@ -167,9 +223,9 @@ def run_native(case_path: Path, repo_root: Path) -> CCaseResult:
         )
         for stage, command in commands:
             try:
-                result = subprocess.run(
+                result = _run_captured(
                     command, cwd=repo_root, env=subprocess_env(),
-                    capture_output=True, text=True, timeout=20,
+                    timeout=20,
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 code = 124 if isinstance(exc, subprocess.TimeoutExpired) else 1
@@ -293,6 +349,7 @@ def _pcc_worker_entry(mode: str, case_path_str: str, timeout: int, conn) -> None
                 cpp_args=config.cpp_args,
                 timeout=timeout,
                 on_stage=begin_stage,
+                text=False,
             )
             stages.append(_stage_result("run", result))
     except Exception as exc:

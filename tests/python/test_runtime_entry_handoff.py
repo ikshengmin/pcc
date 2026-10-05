@@ -294,6 +294,8 @@ class SpecialCallModel(HandoffModel):
             pcc_capi_is_cext_type_tag=lambda tag: int(tag >= abi.PY_TYPE_CEXT_TAG_BASE),
             _strs_eq=lambda first, second: int(first == second),
             global_load_ptr=lambda name: self.none if name == "py_None" else self.load(name),
+            _is_none=lambda value: value == 0 or value == self.none,
+            _type_of=lambda value: self.load(value, 8),
             pcc_platform_abort=lambda: pytest.fail("unexpected lease invariant abort"),
             call_ptr1=self.native_call,
             call_ptr2=self.native_call,
@@ -307,6 +309,8 @@ class SpecialCallModel(HandoffModel):
                      "py_obj_special_call_slots", "py_obj_call_slots",
                  })}
         _functions(path, names, self.ns)
+        _functions(ROOT / "pcc/runtime/py/py_call_splat_runtime.py",
+                   {"py_call_validate_kwargs"}, self.ns)
         _functions(ROOT / "pcc/runtime/py/py_func.py", {"py_obj_call_slots_sync"}, self.ns)
 
     def load(self, base, offset=0):
@@ -697,6 +701,7 @@ def test_default_only_sync_recursion_restores_context_without_metaclass_lookup(p
         py_obj_call_context_is_deferred=lambda: int((context["pcc_native_callable_sync_context"] & 1) == 0),
         py_class_metaclass_call=lambda *args: pytest.fail("default-only dispatch repeated metaclass lookup"),
         _builtin_exception_class_tag=lambda value: 0,
+        py_builtin_type_class_tag=lambda value: -1,
         _builtin_exception_call=construct,
     )
     _functions(ROOT / "pcc/runtime/py/py_obj_ops_dispatch.py", {

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import os
+import re
 import subprocess
 from copy import deepcopy
 from pathlib import Path
@@ -333,6 +335,37 @@ def dispatch(callback, thread):
     assert vthread_proven_value_alias(module, function, "state", "state")
 
 
+def _dynamic_callback_function_body(ir_text: str, name: str) -> str:
+    symbol = "user_park_effect_dynamic_callback_ir_" + name
+    match = re.search(
+        r"^define[^\n]*@" + re.escape(symbol) + r"\([^\n]*\)[^\n]*\{\n(.*?)^\}",
+        ir_text, re.M | re.S,
+    )
+    assert match is not None, symbol
+    return match.group(1)
+
+
+def _assert_dynamic_callback_continuation_ir(ir_text: str) -> None:
+    body = _dynamic_callback_function_body(ir_text, "dispatch_callback__gen_resume")
+    assert re.search(r"\bcall\b[^\n]*@py_gen_is_continuation\(", body), "continuation predicate is missing"
+    assert not re.search(r"\bcall\b[^\n]*@py_gen_is_may_park\(", body), "may-park alone also accepts source generators"
+    assert "__pcc_vthread_delegate_pcc_virtual_thread_call" in body
+    call_result = body.index("@py_obj_call_deferred(")
+    result_root = body.index("@pcc_gc_root_move(", call_result)
+    args_slot = body.index(" = bitcast ptr %vthread.call.args.operand.", result_root)
+    args_release = body.index("@pcc_gc_store_root(", args_slot)
+    marker_check = body.index("@py_gen_is_continuation(", args_release)
+    inspect_reload = body.rindex("@pcc_gc_load_ptr(", args_release, marker_check)
+    assert call_result < result_root < args_release < inspect_reload < marker_check
+
+    direct = re.search(r"^vthread\.call\.direct[^\n]*:\n(.*?)(?=^\S|\Z)", body, re.M | re.S)
+    assert direct is not None, "direct callback result block is missing"
+    # The non-continuation branch copies the authoritative child cell into a
+    # leased consumer owner. A raw reload/retain is no longer this contract.
+    assert re.search(r"\bcall\b[^\n]*@pcc_gc_root_copy_lease\(", direct.group(1)), "direct result owner lease is missing"
+    assert "@py_gen_next(" not in direct.group(1)
+
+
 def test_dynamic_callback_ir_uses_distinct_may_park_generator_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -345,28 +378,49 @@ def test_dynamic_callback_ir_uses_distinct_may_park_generator_marker(
         emit_llvm_only=True,
     )
     ir_text = llvm.read_text(encoding="utf-8")
+    _assert_dynamic_callback_continuation_ir(ir_text)
+    ordinary = _dynamic_callback_function_body(ir_text, "ordinary_generator")
+    parked = _dynamic_callback_function_body(ir_text, "parked_callback")
+    assert "i32 33554432" in ordinary  # PY_FLAG_GEN_SOURCE
+    assert "@py_gen_set_may_park(" not in ordinary
+    assert "@py_gen_set_may_park(" in parked
+    assert "i32 33554432" not in parked
 
-    assert "py_gen_set_may_park" in ir_text
-    assert "py_gen_is_may_park" in ir_text
-    assert "__pcc_vthread_delegate_pcc_virtual_thread_call" in ir_text
-    call_result = ir_text.index("vthread.call.result")
-    result_root = ir_text.index("@pcc_gc_store_root", call_result)
-    args_release = ir_text.index("@pcc_gc_release", result_root)
-    marker_check = ir_text.index("@py_gen_is_may_park", args_release)
-    inspect_reload = ir_text.rindex(
-        "@pcc_gc_load_ptr", args_release, marker_check
-    )
-    direct_reload = ir_text.index("@pcc_gc_load_ptr", marker_check)
-    direct_retain = ir_text.index("@pcc_gc_retain", direct_reload)
-    assert (
-        call_result
-        < result_root
-        < args_release
-        < inspect_reload
-        < marker_check
-        < direct_reload
-        < direct_retain
-    )
+    # Declarations and unrelated functions must not satisfy the call checks.
+    resume = _dynamic_callback_function_body(ir_text, "dispatch_callback__gen_resume")
+    changed = resume.replace("@py_gen_is_continuation(", "@py_gen_is_may_park(")
+    with pytest.raises(AssertionError, match="continuation predicate"):
+        _assert_dynamic_callback_continuation_ir(ir_text.replace(resume, changed))
+    changed = resume.replace("@pcc_gc_root_copy_lease(", "@pcc_gc_root_copy(")
+    with pytest.raises(AssertionError, match="direct result owner lease"):
+        _assert_dynamic_callback_continuation_ir(ir_text.replace(resume, changed))
+
+
+@pytest.mark.parametrize(
+    "kind, flags, may_park, continuation",
+    [("null", 0, 0, 0), ("int", 0, 0, 0), ("other", 1048576, 0, 0),
+     ("gen", 0, 0, 0), ("gen", 33554432, 0, 0),
+     ("gen", 1048576, 1, 1), ("gen", 1048576 | 33554432, 1, 0)],
+)
+def test_continuation_predicate_excludes_source_generators(kind, flags, may_park, continuation):
+    from pcc.runtime.py.py_abi_constants import PY_FLAG_GEN_SOURCE, PY_TYPE_GEN
+
+    # Execute the actual runtime predicates in a host memory model. In
+    # particular, a source generator can park without becoming a continuation.
+    tree = ast.parse((REPO / "pcc/runtime/py/py_gen.py").read_text())
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                 and node.name in {"py_gen_is_may_park", "py_gen_is_continuation"}]
+    namespace = {
+        "c_abi_export": lambda _name: lambda function: function,
+        "ptr_is_null": lambda value: value == "null",
+        "is_tagged_int": lambda value: value == "int",
+        "load_i32": lambda value, offset: (PY_TYPE_GEN if value == "gen" else -1) if offset == 8 else flags,
+        "PY_TYPE_GEN": PY_TYPE_GEN,
+        "PY_FLAG_GEN_SOURCE": PY_FLAG_GEN_SOURCE,
+    }
+    exec(compile(ast.Module(body=functions, type_ignores=[]), "generator_predicates", "exec"), namespace)
+    assert namespace["py_gen_is_may_park"](kind) == may_park
+    assert namespace["py_gen_is_continuation"](kind) == continuation
 
 
 def test_generator_close_reloads_gc4_roots_across_cleanup_safepoints() -> None:
@@ -1340,3 +1394,59 @@ def test_current_pcc1_self_no_libpython_method_park_resume(
     )
     assert ran.returncode == 0, ran.stdout + ran.stderr
     assert ran.stdout.strip() == "42"
+
+
+def test_native_alias_and_call_proofs_share_one_binding_walk(monkeypatch):
+    from types import SimpleNamespace
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.codegen import vthread_effect_analysis as analysis
+    from pcc.frontends.python.codegen.native_modules import NativeModuleAliasMixin
+
+    module = parse(
+        "from pcc import virtual_thread as vt\n"
+        "from pcc.virtual_thread import yield_now as pause, spawn as start\n"
+        "def worker():\n    vt.yield_now()\n    pause()\n", "shared_proof.py",
+    )
+    fd = analysis._module_function_defs(module)[0]
+    host = SimpleNamespace(
+        ast_module=module, current_func_def=fd, env={}, _module_globals={},
+        _native_builtin_module_aliases={"vt": "pcc.virtual_thread"},
+        _native_builtin_value_aliases={
+            "pause": "pcc.virtual_thread.yield_now",
+            "start": "pcc.virtual_thread.spawn",
+        },
+        _vthread_binding_cache={},
+    )
+    scans = {"module": 0, "function": 0}
+    original_module = analysis._vthread_import_aliases
+    original_function = analysis._function_vthread_bindings
+
+    def counted_module(*args):
+        scans["module"] += 1
+        return original_module(*args)
+
+    def counted_function(*args):
+        scans["function"] += 1
+        return original_function(*args)
+
+    monkeypatch.setattr(analysis, "_vthread_import_aliases", counted_module)
+    monkeypatch.setattr(analysis, "_function_vthread_bindings", counted_function)
+    for _ in range(20):
+        assert NativeModuleAliasMixin._native_builtin_module_for_name(host, "vt") == "pcc.virtual_thread"
+        assert NativeModuleAliasMixin._native_builtin_value_for_name(host, "pause") == "pcc.virtual_thread.yield_now"
+        assert NativeModuleAliasMixin._native_builtin_value_for_name(host, "start") == "pcc.virtual_thread.spawn"
+        assert analysis.vthread_proven_suspension_call_key(
+            module, fd, fd.body[0].expr, host._vthread_binding_cache,
+        ) == "pcc.virtual_thread.yield_now"
+        assert analysis.vthread_proven_suspension_value_alias(
+            module, fd, "pause", "yield_now", host._vthread_binding_cache,
+        )
+        assert not analysis.vthread_proven_suspension_value_alias(
+            module, fd, "start", "spawn", host._vthread_binding_cache,
+        )
+    assert scans == {"module": 1, "function": 1}
+    host.env["vt"] = object()
+    host.env["pause"] = object()
+    assert NativeModuleAliasMixin._native_builtin_module_for_name(host, "vt") is None
+    assert NativeModuleAliasMixin._native_builtin_value_for_name(host, "pause") is None
+    assert scans == {"module": 1, "function": 1}

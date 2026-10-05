@@ -770,3 +770,181 @@ def test_missing_field_custom_getattribute_fallback_preserves_alias_leases(phase
     assert memory.resolve(exception).references == 0
     assert memory.resolve(method).flags & abi.PY_FLAG_GC_PINNED == 0
     assert not memory.handles and memory.depth == memory.pins == 0
+
+
+@pytest.mark.parametrize('rooted', [False, True])
+@pytest.mark.parametrize('raises', [False, True])
+def test_classmethod_instance_descriptor_uses_actual_class_owner(rooted, raises):
+    memory = _MissingFieldMemory(backend=0)
+    descriptor = memory.make(abi.PY_TYPE_CLASSMETHOD)
+    bound = memory.make(abi.PY_TYPE_FUNC)
+    calls = []
+
+    def bind(value, owner):
+        calls.append((value, owner))
+        assert value is descriptor and owner is memory.klass
+        if raises:
+            memory.error = (4, 'binding failed')
+            return None
+        return bound
+
+    memory.namespace['_classmethod_bind'] = bind
+    tree = ast.parse((ROOT / 'pcc/runtime/py/py_class.py').read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == '_descriptor_call_get')
+    exec(compile(ast.Module(body=[function], type_ignores=[]), '<descriptor get>', 'exec'), memory.namespace)
+    slots = _Slots(64) if rooted else None
+    result = memory.actual_descriptor(descriptor, memory.record, memory.klass, slots, _Slots(64))
+    assert calls == [(descriptor, memory.klass)]
+    assert result is (None if raises else bound)
+    assert memory.error == ((4, 'binding failed') if raises else None)
+
+
+@pytest.mark.parametrize('populated', [False, True])
+def test_classmethod_instance_field_override_precedes_binding(populated):
+    memory = _MissingFieldMemory(backend=0)
+    descriptor = memory.make(abi.PY_TYPE_CLASSMETHOD)
+    bound = memory.make(abi.PY_TYPE_FUNC)
+    calls = []
+    if populated:
+        memory.record.fields[abi.PYINSTANCEOBJECT_FIELDS_OFFSET] = memory.item
+
+    def class_attribute(cls, name):
+        memory.incref(descriptor)
+        return descriptor
+
+    def bind(value, owner):
+        calls.append((value, owner))
+        assert value is descriptor and owner is memory.klass
+        memory.incref(bound)
+        return bound
+
+    memory.namespace.update({
+        '_class_attr_lookup_in_mro': class_attribute,
+        '_instance_lookup_descriptor': memory.actual_descriptor,
+        '_descriptor_call_get': memory.namespace['_descriptor_call_get'],
+        '_descriptor_is_data': lambda value: False,
+        '_classmethod_bind': bind,
+        'ptr_to_int': lambda value: value,
+    })
+    result = memory.namespace['_instance_getattr_default'](memory.record, memory.klass, 'value')
+    assert result is (memory.item if populated else bound)
+    assert len(calls) == (0 if populated else 1)
+    assert descriptor.references == 1
+    assert not memory.handles and memory.depth == memory.pins == 0
+
+
+class _PropertyAccessorMemory(_GetterMemory):
+    """Lease-aware field owner with relocation at each real cleanup boundary."""
+    def __init__(self, phase, failure):
+        self.leases, self.frames = {}, {}
+        self.failure, self.copies = failure, 0
+        super().__init__(backend=4, phase=phase)
+        self.none_object = self.make(abi.PY_TYPE_NONE)
+        self.none_slot = _Slots(8)
+        self.none_slot.fields[0] = self.none_object
+        self.payloads.append(self.none_slot)
+        self.namespace.update({
+            'global_addr': lambda name: self.none_slot if name == 'py_None' else name,
+            'memset': lambda base, value, size: [self.write(base, i, None) for i in range(0, size, 8)],
+            'store_i64': self.write,
+            'pcc_gc_frame_enter': self.enter, 'pcc_gc_frame_leave': self.leave,
+            'pcc_gc_root_copy_borrowed_lease': self.copy,
+            'pcc_gc_root_copy_lease': self.copy,
+            'pcc_gc_foreign_lease_release': self.release,
+            'pcc_gc_store_root': self.drop,
+            'py_tls_exc_swap_slot': self.swap,
+            'py_clear_exception': lambda: setattr(self, 'error', None),
+            'py_err_occurred': lambda: self.error is not None,
+            'pcc_platform_abort': lambda: pytest.fail('property accessor invariant failed'),
+            '_cstr_is_dunder_class': lambda name: False,
+            'pcc_diagnostics_runtime_log_event_code': lambda *args: None,
+            'strcmp': lambda left, right: int(left != right),
+        })
+        tree = ast.parse((ROOT / 'pcc/runtime/py/py_obj_ops_dispatch.py').read_text())
+        names = {'py_obj_getattr', '_property_accessor_get', '_property_accessor_clear'}
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.namespace.update({node.targets[0].id: ast.literal_eval(node.value)
+            for node in tree.body if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id.startswith('_PROPERTY_ACCESSOR_')})
+        exec(compile(ast.Module(body=functions, type_ignores=[]), '<property accessor>', 'exec'), self.namespace)
+
+    def gc(self, phase):
+        # Counted address leases are independent of legacy header pins.
+        prior = {value: value.flags for value in self.leases.values()}
+        for value in prior:
+            value.flags |= abi.PY_FLAG_GC_PINNED
+        super().gc(phase)
+        for value, flags in prior.items():
+            value.flags = flags
+
+    def enter(self, name, slots):
+        count = 1 if 'borrowed' in name else 3
+        self.frames[slots] = [self.register((slots, index * 8)) for index in range(count)]
+        self.gc('frame_enter')
+
+    def leave(self, slots):
+        for handle in self.frames.pop(slots):
+            self.unregister(handle)
+
+    def copy(self, destination, source):
+        self.copies += 1
+        self.gc('copy')
+        if self.copies == self.failure:
+            return -1
+        value = self.read(source, 0)
+        assert value.alive and self.read(destination, 0) is None
+        if self.copies == 2 and self.pointer(source)[0] is not self.none_slot:
+            assert self.pointer(source)[0] in self.leases.values()
+        self.incref(value)
+        self.write(destination, 0, value)
+        self.leases[self.pointer(destination)] = value
+        self.gc('retain_finish')
+        return 1
+
+    def release(self, slot, token):
+        assert token == 1
+        assert self.leases.pop(self.pointer(slot)) is self.read(slot, 0)
+        self.gc('release')
+        return 0
+
+    def drop(self, slot, value):
+        assert value is None and self.pointer(slot) not in self.leases
+        old = self.read(slot, 0)
+        self.write(slot, 0, None)
+        if isinstance(old, _Object):
+            old.references -= 1
+        self.gc('decref')
+        self.error = (4, 'cleanup error')
+
+    def swap(self, slot):
+        self.gc('tls_swap')
+        old = self.read(slot, 0)
+        self.write(slot, 0, self.error)
+        self.error = old
+
+
+@pytest.mark.parametrize('field', ['fget', 'fset', 'fdel'])
+@pytest.mark.parametrize('missing', [False, True])
+@pytest.mark.parametrize('phase', ['frame_enter', 'copy', 'retain_finish', 'decref', 'release', 'unregister', 'tls_swap'])
+@pytest.mark.parametrize('failure', [0, 1, 2])
+def test_property_accessor_attribute_returns_exact_retained_field(field, missing, phase, failure):
+    memory = _PropertyAccessorMemory(phase, failure)
+    descriptor = memory.make(abi.PY_TYPE_PROPERTY)
+    callable_value = memory.make(abi.PY_TYPE_FUNC)
+    offset = getattr(abi, 'PYPROPERTYOBJECT_' + field.upper() + '_OFFSET')
+    descriptor.fields[offset] = None if missing else callable_value
+    result = memory.namespace['py_obj_getattr'](descriptor, field)
+    if failure:
+        assert result is None
+        assert memory.error == (7, 'property accessor owner lease failed')
+        assert memory.resolve(callable_value).references == 1
+    else:
+        assert result is memory.resolve(memory.none_object if missing else callable_value)
+        assert result.references == 2 and result.alive
+        assert memory.error is None
+    assert memory.resolve(descriptor).references == 1
+    assert not memory.frames and not memory.handles and not memory.leases
+    assert memory.pins == memory.depth == 0
+    if failure != 1 or phase not in ('retain_finish', 'release'):
+        assert memory.moves > 0

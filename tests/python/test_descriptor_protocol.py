@@ -358,3 +358,80 @@ def test_slots_no_dict(tmp_path):
         """)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "no_dict"
+
+
+def test_property_aliases_preserve_lexical_replacements(tmp_path):
+    result = _compile_and_run(tmp_path, """
+        import gc
+        events = []
+        def record(label):
+            events.append(label)
+            return label
+        class Box:
+            @property
+            def value(self, token=record('get')):
+                return 42
+            before = value
+            get_value = value.fget
+            marker = record('middle')
+            @value.setter
+            def value(self, new_value, token=record('set')):
+                self.saved = new_value
+            after_set = value
+            before_alias = before
+            @value.deleter
+            def value(self, token=record('del')):
+                self.saved = 0
+        def main():
+            assert events == ['get', 'middle', 'set', 'del']
+            assert Box.before is Box.before_alias
+            assert Box.before is not Box.after_set
+            assert Box.after_set is not Box.value
+            assert Box.before.fset is None and Box.before.fdel is None
+            assert Box.after_set.fset is Box.value.fset
+            assert Box.after_set.fdel is None
+            assert Box.get_value is Box.before.fget
+            assert Box.get_value is Box.value.fget
+            obj = Box()
+            saved = obj.get_value
+            gc.collect()
+            assert saved() == 42
+            obj.value = 9
+            assert obj.saved == 9
+            del obj.value
+            assert obj.saved == 0
+            print('property-alias-order-ok')
+        if __name__ == '__main__':
+            main()
+    """)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'property-alias-order-ok\n'
+
+
+def test_property_later_accessor_default_failure_preserves_exception(tmp_path):
+    result = _compile_and_run(tmp_path, """
+        events = []
+        def record(label):
+            events.append(label)
+            return label
+        def fail():
+            events.append('fail')
+            raise ValueError('later-property-default')
+        try:
+            class Box:
+                @property
+                def value(self, token=record('get')):
+                    return token
+                original = value
+                callback = value.fget
+                marker = record('middle')
+                @value.setter
+                def value(self, new_value, token=fail()):
+                    pass
+        except ValueError as error:
+            assert str(error) == 'later-property-default'
+            assert events == ['get', 'middle', 'fail']
+            print('property-default-error-ok')
+    """)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'property-default-error-ok\n'

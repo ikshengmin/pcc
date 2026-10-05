@@ -13,7 +13,10 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call
-from pcc.frontends.python.codegen.vthread_effect_analysis import vthread_proven_suspension_module_alias, vthread_proven_value_alias
+from pcc.frontends.python.codegen.vthread_effect_analysis import (
+    vthread_proven_suspension_module_alias,
+    vthread_proven_value_alias,
+)
 
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
@@ -258,6 +261,7 @@ class NativeModuleAliasMixin:
                 self.ast_module,
                 current_fd,
                 ident,
+                self._vthread_binding_cache,
             )
         ):
             return None
@@ -280,6 +284,7 @@ class NativeModuleAliasMixin:
                     current_fd,
                     ident,
                     export_name,
+                    self._vthread_binding_cache,
                 ):
                     return None
         if alias is not None:

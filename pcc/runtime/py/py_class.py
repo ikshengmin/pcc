@@ -1526,6 +1526,8 @@ def _descriptor_is_data(descriptor) -> bool:
 def _descriptor_call_get(descriptor, obj, owner):
     if ptr_is_null(descriptor) == 0:
         if is_tagged_int(descriptor) == 0:
+            if load_i32(descriptor, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_CLASSMETHOD:
+                return _classmethod_bind(descriptor, owner)
             if load_i32(descriptor, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STATICMETHOD:
                 func = pcc_gc_load_ptr(
                     descriptor, ptr_add(descriptor, PYSTATICMETHODOBJECT_FUNC_OFFSET)
@@ -2749,6 +2751,10 @@ def _instance_lookup_descriptor(descriptor, inst, cls, slots, pins):
     if ptr_is_null(descriptor) != 0 or is_tagged_int(descriptor) != 0:
         return null()
     tag: int = load_i32(descriptor, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    if tag == PY_TYPE_CLASSMETHOD:
+        # Non-data lookup reaches here after the instance namespace. Bind
+        # the actual receiver class, including inherited subclass access.
+        return _classmethod_bind(descriptor, cls)
     if tag == PY_TYPE_STATICMETHOD:
         value = pcc_gc_load_ptr(descriptor, ptr_add(descriptor, PYSTATICMETHODOBJECT_FUNC_OFFSET))
         py_incref(value)

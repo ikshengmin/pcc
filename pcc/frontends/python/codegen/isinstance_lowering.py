@@ -458,84 +458,52 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
             name=host._fresh("obj.isinstance.i1"),
         )
 
-    # Tuple form ``isinstance(x, (A, B, C))`` -> OR of per-class checks.
+    def name_has_runtime_binding(element: Expr) -> bool:
+        return isinstance(element, Name) and (
+            element.ident in host.env
+            or element.ident in getattr(host, "_module_globals", {})
+            or _name_is_imported_into_module(host, element.ident)
+            or _name_is_declared_class_in_module(host, element.ident)
+        )
+
+    # Keep proven class identities on the existing static routes. A tuple
+    # containing a value read must first evaluate *all* its members, left to
+    # right, before the runtime starts its short-circuit class checks. Testing
+    # each member while evaluating the next one loses that ordering and folds
+    # ordinary bound names such as ``kind`` to false. Normal tuple lowering
+    # also owns nested tuples, element temporaries and exceptional cleanup.
     if isinstance(class_arg, TupleExpr):
         if not class_arg.elems:
             current_operand()
             return ir.Constant(_I1, 0)
-        names: list[Optional[str]] = []
+        names: list[str] = []
         ir_class_names: list[Optional[str]] = []
         declared_classinfos: list[bool] = []
-        dynamic_classinfos: list[Optional[Expr]] = []
-        for e in class_arg.elems:
-            name, ir_symbol, declared_classinfo = class_name_from_expr(e)
-            if name is None:
-                if not is_dynamic_type_call(e) and not is_closure_cell_read(e) and not isinstance(e, Attr):
-                    raise NotImplementedError(
-                        "isinstance tuple form requires bare class names "
-                        "module.name chains, type(None), or type(expr); got "
-                        f"{type(e).__name__}"
-                    )
-                dynamic_classinfos.append(e)
-            else:
-                dynamic_classinfos.append(None)
+        for element in class_arg.elems:
+            name, ir_symbol, declared_classinfo = class_name_from_expr(element)
+            if name is None or (ir_symbol is None and name_has_runtime_binding(element)):
+                return emit_dynamic_classinfo_isinstance(current_operand(), class_arg)
+            name = host._resolve_class_alias(name)
+            if (
+                ir_symbol is None
+                and not declared_classinfo
+                and name not in _BUILTIN_TYPE_TAGS
+                and name not in _BUILTIN_EXC_TAG
+                and name not in ("slice", "CodeType")
+                and name not in host.class_lowering.classes
+            ):
+                return emit_dynamic_classinfo_isinstance(current_operand(), class_arg)
             names.append(name)
             ir_class_names.append(ir_symbol)
             declared_classinfos.append(declared_classinfo)
         acc: Optional[ir.Value] = None
         obj_val: Optional[ir.Value] = None
         for idx, nm in enumerate(names):
-            dynamic_classinfo = dynamic_classinfos[idx]
-            if dynamic_classinfo is not None:
-                if obj_val is None:
-                    obj_val = current_operand()
-                ct = emit_dynamic_classinfo_isinstance(
-                    obj_val,
-                    dynamic_classinfo,
-                )
-                acc = (
-                    ct
-                    if acc is None
-                    else host.builder.or_(
-                        acc,
-                        ct,
-                        name=host._fresh("isinstance_or"),
-                    )
-                )
-                continue
-            assert nm is not None
-            nm = host._resolve_class_alias(nm)
             ir_symbol = ir_class_names[idx]
-            element = class_arg.elems[idx]
             if declared_classinfos[idx]:
                 if obj_val is None:
                     obj_val = current_operand()
                 ct = host.class_lowering.emit_isinstance(obj_val, nm)
-            elif (
-                ir_symbol is None
-                and isinstance(element, Name)
-                and (
-                    nm in _BUILTIN_TYPE_TAGS
-                    or nm in _BUILTIN_EXC_TAG
-                    or nm == "slice"
-                    or nm == "CodeType"
-                )
-                and (
-                    element.ident in host.env
-                    or element.ident in getattr(host, "_module_globals", {})
-                    or _name_is_imported_into_module(host, element.ident)
-                    or _name_is_declared_class_in_module(host, element.ident)
-                )
-            ):
-                # The single-classinfo shadowing rule below, per element: an
-                # imported ``NoneType`` class is that class, not the builtin
-                # None check.  ``isinstance(expr_ty, (NoneType, BoolType,
-                # IntType, FloatType))`` in the ownership classifier answered
-                # False for a ``NoneType()`` descriptor, so pcc1 released the
-                # ``None`` of every ``lst.append(x)`` statement.
-                if obj_val is None:
-                    obj_val = current_operand()
-                ct = emit_dynamic_classinfo_isinstance(obj_val, element)
             elif ir_symbol is not None:
                 if obj_val is None:
                     obj_val = current_operand()
@@ -598,17 +566,7 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
                         expr.args[0],
                         obj_val,
                     )
-                elif isinstance(class_arg.elems[idx], Attr):
-                    # An attribute naming no known class is a value -- see the
-                    # single-classinfo fallback below.
-                    if obj_val is None:
-                        obj_val = current_operand()
-                    ct = emit_dynamic_classinfo_isinstance(
-                        obj_val,
-                        class_arg.elems[idx],
-                    )
-                else:
-                    ct = ir.Constant(_I1, 0)
+            assert ct is not None
             acc = (
                 ct
                 if acc is None
@@ -659,13 +617,7 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
         return protocol_check
     if (
         ir_symbol is None
-        and isinstance(class_arg, Name)
-        and (
-            class_arg.ident in host.env
-            or class_arg.ident in getattr(host, "_module_globals", {})
-            or _name_is_imported_into_module(host, class_arg.ident)
-            or _name_is_declared_class_in_module(host, class_arg.ident)
-        )
+        and name_has_runtime_binding(class_arg)
     ):
         # A module/local binding shadows the builtin tag tables: a bare
         # ``NoneType`` name imported from a user module (e.g. the py_ast

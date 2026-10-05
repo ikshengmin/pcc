@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import textwrap
 from pathlib import Path
+
+from tests.owned_c_execution import compile_owned_c_with_runtime
 
 
 def test_py_type_builtin_native_runtime(tmp_path, pcc_runtime_archive):
@@ -40,19 +41,7 @@ def test_py_type_builtin_native_runtime(tmp_path, pcc_runtime_archive):
         ),
         encoding="utf-8",
     )
-    subprocess.run(
-        [
-            os.environ.get("CC", "cc"),
-            "-I",
-            str(pcc_runtime_archive.parent / "include"),
-            str(src),
-            str(pcc_runtime_archive),
-            "-lm",
-            "-o",
-            str(exe),
-        ],
-        check=True,
-    )
+    compile_owned_c_with_runtime(src, exe, runtime_archive=pcc_runtime_archive)
     proc = subprocess.run([str(exe)], check=True, text=True, capture_output=True)
     assert proc.stdout.splitlines() == ["int", "list", "bytes"]
 

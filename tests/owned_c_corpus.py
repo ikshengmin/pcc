@@ -15,7 +15,7 @@ from tests.native_provisioning import require_native_provisioning_allowed
 
 def run_owned_c_corpus(
     evaluator, units, *, base_dir=None, include_dirs=None, cpp_args=None,
-    timeout=20, optimize=True, link_args=None, jobs=1, on_stage=None,
+    timeout=20, optimize=True, link_args=None, jobs=1, on_stage=None, text=True,
 ):
     if evaluator.backend != "self":
         raise RuntimeError("corpus product execution requires the owned self backend")
@@ -41,5 +41,5 @@ def run_owned_c_corpus(
             on_stage("run")
         return subprocess.run(
             [str(executable)], cwd=base_dir or os.getcwd(), timeout=timeout,
-            capture_output=True, text=True,
+            capture_output=True, text=text,
         )

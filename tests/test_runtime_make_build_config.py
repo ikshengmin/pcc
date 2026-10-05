@@ -150,6 +150,68 @@ def test_make_inventory_matches_owned_target_membership(tmp_path, target, thread
     assert ("freestanding_windows_threads" in names) == (threads and "windows" in target)
 
 
+@pytest.mark.parametrize("flags", [
+    ("-B", "-n"),
+    ("-Bn",),
+    ("--always-make", "--just-print"),
+    ("--always-make", "--dry-run"),
+    ("--always-make", "--recon"),
+    ("-Bns",),
+])
+@pytest.mark.parametrize("selection", ["default", "environment", "command"])
+def test_make_dry_run_resolves_inventory_only_for_archive_graph(
+    tmp_path, flags, selection,
+):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    shutil.copyfile(RUNTIME / "Makefile", runtime / "Makefile")
+    (runtime / "py").symlink_to(RUNTIME / "py", target_is_directory=True)
+    calls = tmp_path / "inventory.jsonl"
+    python = tmp_path / "inventory-python"
+    python.write_text(
+        "#!" + sys.executable + "\n"
+        "import json, os, sys\n"
+        "with open(" + repr(str(calls)) + ", 'a') as log:\n"
+        "    log.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("PCC_") and key not in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL"}
+    }
+    options = []
+    target = host_target_triple()
+    if selection != "default":
+        environment["PCC_RUNTIME_TARGET"] = target = TARGETS[2]
+    if selection == "command":
+        target = TARGETS[3]
+        options.append("PCC_RUNTIME_TARGET=" + target)
+    before = sorted(str(path.relative_to(runtime)) for path in runtime.rglob("*"))
+    result = subprocess.run([
+        "make", "--no-print-directory", *flags,
+        f"PYTHON={python}", f"PCC_REPO_ROOT={ROOT}", *options,
+        "libpy_runtime_pcc_py.a",
+    ], cwd=runtime, env=environment, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    # The public archive and its locked sub-Make each select inventory once.
+    # Missing receipts in a dry run must not start one sub-Make per object.
+    expected_targets = 2 if selection == "default" else 0
+    assert len(observed) == expected_targets + 2
+    assert sum("--field" in args for args in observed) == expected_targets
+    modules = [args for args in observed if "--threads" in args]
+    assert len(modules) == 2
+    assert all(args[args.index("--target") + 1] == target for args in modules)
+    archive_line = next(line for line in result.stdout.splitlines()
+                        if "ar rcs libpy_runtime_pcc_py.a.tmp" in line)
+    objects = re.findall(r"build_py/[^ ;]+\.o(?= |;|$)", archive_line)
+    assert objects == ["build_py/" + name + ".o"
+                       for name in owned.runtime_modules(str(runtime), target, False)]
+    assert sorted(str(path.relative_to(runtime)) for path in runtime.rglob("*")) == before
+
+
 @pytest.mark.parametrize("field", ["modules", "target"])
 def test_inventory_rejects_unknown_target_without_partial_output(capsys, field):
     assert runtime_module_inventory.main([
@@ -161,7 +223,9 @@ def test_inventory_rejects_unknown_target_without_partial_output(capsys, field):
     assert "no emitter" in output.err
 
 
-def _controlled_make_runtime(tmp_path, target, threads, refcount, *, archive_tools=None):
+def _controlled_make_runtime(
+    tmp_path, target, threads, refcount, *, archive_tools=None, recover_flags=None,
+):
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     # Retain the actual production recipes and configuration selection. Reduce
@@ -193,25 +257,54 @@ def _controlled_make_runtime(tmp_path, target, threads, refcount, *, archive_too
     log = tmp_path / "frontend.jsonl"
     environment = os.environ.copy()
     for key in tuple(environment):
-        if key.startswith("PCC_"):
+        if key.startswith("PCC_") or key in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL"}:
             environment.pop(key)
     environment.update(FRONTEND_LOG=str(log), CC=str(host_cc),
                        PCC_WITH_THREADS="0" if threads else "1",
                        PCC_REFCOUNT_KIND="ambient-other")
     tools = archive_tools or {"AR": "ar", "RANLIB": "ranlib", "NM": "nm"}
-    result = subprocess.run([
-        "make", "--no-print-directory", "-rR", "-j1",
+    options = [
         f"PYTHON={sys.executable}", f"PCC_REPO_ROOT={ROOT}",
         f"PCC={shlex.quote(sys.executable)} {shlex.quote(str(frontend))}",
         f"PCC_RUNTIME_TARGET={target}", f"PCC_WITH_THREADS={int(threads)}",
         f"PCC_REFCOUNT_KIND={refcount}", f"CC={host_cc}",
         *(name + "=" + str(tool) for name, tool in tools.items()),
         "libpy_runtime_pcc_py.a",
+    ]
+    result = subprocess.run([
+        "make", "--no-print-directory", "-rR", "-j1", *options,
     ], cwd=runtime, env=environment, capture_output=True, text=True, timeout=90)
     (tmp_path / "make.stdout").write_text(result.stdout, encoding="utf-8")
     (tmp_path / "make.stderr").write_text(result.stderr, encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr
+    if recover_flags is not None:
+        # Retain the current object: only its lost receipt should force a rebuild.
+        receipt = runtime / "build_py" / "probe.o.provenance.json"
+        receipt.unlink()
+        result = subprocess.run([
+            "make", *recover_flags, "NOTE=contains-n", *options,
+        ], cwd=runtime, env=environment, capture_output=True, text=True, timeout=90)
+        (tmp_path / "recovery.stdout").write_text(result.stdout, encoding="utf-8")
+        (tmp_path / "recovery.stderr").write_text(result.stderr, encoding="utf-8")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert receipt.is_file()
     return runtime, [json.loads(line) for line in log.read_text().splitlines()]
+
+
+@pytest.mark.parametrize("flags", [(), ("--no-print-directory",)])
+def test_make_recovers_missing_receipt_with_non_dry_run_flags(tmp_path, flags):
+    target = host_target_triple()
+    runtime, calls = _controlled_make_runtime(
+        tmp_path, target, False, "atomic", recover_flags=flags,
+    )
+    names = owned.runtime_modules(str(runtime), target, False)
+    assert [call["name"] for call in calls] == [*names, "probe"]
+    manifest = provenance.verify_runtime_archive_manifest(
+        runtime / "libpy_runtime_pcc_py.a", runtime_root=runtime,
+    )
+    assert owned._manifest_matches_config(
+        manifest, str(runtime), target, {"threads": False, "refcount": "atomic"},
+    )
 
 
 @pytest.mark.parametrize("threads, refcount", [

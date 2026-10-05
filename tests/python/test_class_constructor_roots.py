@@ -24,6 +24,7 @@ class _C3Memory(_Memory):
         self.maps.update({"pcc_class_construct_owned_frame_map":5,
                           "pcc_class_construct_borrowed_frame_map":-2})
         self.root = self.klass("object", [])
+        self.builtin_classes = {"pcc_type_cls_object": self.root}
         self.parents = []
         self.namespace.update({name:getattr(abi,name) for name in dir(abi) if name.isupper()})
         self.namespace.update({
@@ -40,11 +41,22 @@ class _C3Memory(_Memory):
             "ptr_eq":lambda first,second:first is second,
             "_alloc_user_tag":lambda:1000, "_object_root":lambda:self.root,
             "atomic_rmw_i32":self.rmw,
+            # Model managed-pointer provenance and canonical builtin cache
+            # identity; the actual runtime helpers perform the MRO lookup.
+            "pcc_gc_pointer_is_managed":lambda value:isinstance(value, _Object) and value.alive,
+            "global_load_ptr":lambda name:self.builtin_classes.get(name, self.none),
         })
         parsed=ast.parse(PORT.read_text(),filename=str(PORT))
         functions=[node for node in parsed.body if isinstance(node,ast.FunctionDef)
-                   and (node.name=="py_class_new" or node.name.startswith("_class_construct_"))]
+                   and (node.name in {"py_class_new", "py_class_is_str_subclass",
+                                      "_ptr_is_class", "_ptr_can_have_header"}
+                        or node.name.startswith("_class_construct_"))]
         exec(compile(ast.Module(body=functions,type_ignores=[]),str(PORT),"exec"),self.namespace)
+        dispatch = PORT.with_name("py_obj_ops_dispatch.py")
+        parsed = ast.parse(dispatch.read_text(), filename=str(dispatch))
+        functions = [node for node in parsed.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "py_builtin_type_class_tag"]
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(dispatch), "exec"), self.namespace)
 
     def malloc(self,size):
         if self.fail_kind=="raw": return None
@@ -235,6 +247,30 @@ def test_class_constructor_temporary_snapshots_balance_nonimmortal_base_referenc
     assert result.alive and parent.alive and parent.references==1
     assert result.fields[48].fields[8] is parent
     assert not memory.frames and not memory.handles and memory.pin_metric==0
+
+
+@pytest.mark.parametrize("kind", ["builtin", "inherited", "name_only"])
+@pytest.mark.parametrize("publish_move", [False, True])
+def test_class_constructor_str_payload_uses_c3_builtin_identity(kind, publish_move):
+    memory = _C3Memory(publish_move=publish_move)
+    builtin = memory.klass("str", [memory.root])
+    memory.builtin_classes["pcc_type_cls_str"] = builtin
+    if kind == "builtin":
+        parent = builtin
+    elif kind == "inherited":
+        parent = memory.klass("Text", [builtin, memory.root])
+    else:
+        parent = memory.klass("str", [memory.root])
+    result = memory.construct([parent])
+    is_str = kind != "name_only"
+    assert memory.namespace["py_class_is_str_subclass"](result) == is_str
+    base_size = abi.PYINSTANCEOBJECT_SIZE + abi.C_POINTER_SIZE
+    assert result.fields[abi.PYCLASSOBJECT_INSTANCE_SIZE_OFFSET] == base_size + (abi.C_POINTER_SIZE if is_str else 0)
+    assert result.fields[abi.PYCLASSOBJECT_MRO_OFFSET].fields[0] is result
+    assert result.fields[abi.PYCLASSOBJECT_MRO_OFFSET].fields[abi.C_POINTER_SIZE] is parent
+    assert result.alive and result.references == 1
+    assert memory.moves == int(publish_move)
+    assert not memory.frames and not memory.handles and memory.pin_metric == 0
 
 
 def test_class_constructor_sensitive_c3_exception_shape_reaches_owned_emitter(tmp_path):

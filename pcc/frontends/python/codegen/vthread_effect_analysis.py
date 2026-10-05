@@ -633,6 +633,43 @@ def _is_suspension_call(
     return _suspension_call_export(node, module_aliases, value_aliases) is not None
 
 
+def _vthread_proven_bindings(
+    module: Module,
+    fd: FuncDef,
+    proof_cache: Optional[dict] = None,
+) -> tuple[dict[str, str], dict[str, str], set[str], set[str], set[str]]:
+    """Share lexical proofs within one codegen generation.
+
+    Syntax nodes are immutable and rewrites replace their identities. Keep
+    both key objects alive: a replaced module or temporary function must not
+    let an id be reused for another proof in the same generation.
+    """
+    binding_key = ("function-bindings", id(module), id(fd))
+    if proof_cache is not None:
+        cached_bindings = proof_cache.get(binding_key)
+        if cached_bindings is not None:
+            return cached_bindings[2]
+    aliases = None
+    aliases_key = ("module-aliases", id(module))
+    if proof_cache is not None:
+        cached_aliases = proof_cache.get(aliases_key)
+        if cached_aliases is not None:
+            aliases = cached_aliases[1]
+    if aliases is None:
+        aliases = _vthread_import_aliases(module)
+        if proof_cache is not None:
+            proof_cache[aliases_key] = (module, aliases)
+    module_aliases, value_aliases = aliases
+    binding_state = _function_vthread_bindings(
+        fd,
+        module_aliases,
+        value_aliases,
+    )
+    if proof_cache is not None:
+        proof_cache[binding_key] = (module, fd, binding_state)
+    return binding_state
+
+
 def vthread_proven_suspension_call_key(
     module: Module,
     fd: FuncDef,
@@ -640,27 +677,7 @@ def vthread_proven_suspension_call_key(
     proof_cache: Optional[dict] = None,
 ) -> Optional[str]:
     """Return the canonical primitive only for a lexically proven call."""
-    binding_state = None
-    binding_key = ("function-bindings", id(fd))
-    if proof_cache is not None:
-        binding_state = proof_cache.get(binding_key)
-    if binding_state is None:
-        aliases = None
-        aliases_key = ("module-aliases", id(module))
-        if proof_cache is not None:
-            aliases = proof_cache.get(aliases_key)
-        if aliases is None:
-            aliases = _vthread_import_aliases(module)
-            if proof_cache is not None:
-                proof_cache[aliases_key] = aliases
-        module_aliases, value_aliases = aliases
-        binding_state = _function_vthread_bindings(
-            fd,
-            module_aliases,
-            value_aliases,
-        )
-        if proof_cache is not None:
-            proof_cache[binding_key] = binding_state
+    binding_state = _vthread_proven_bindings(module, fd, proof_cache)
     effective_modules, effective_values, _blocked, _um, _uv = binding_state
     export = _suspension_call_export(
         node,
@@ -676,10 +693,10 @@ def vthread_proven_suspension_module_alias(
     module: Module,
     fd: FuncDef,
     ident: str,
+    proof_cache: Optional[dict] = None,
 ) -> bool:
-    module_aliases, value_aliases = _vthread_import_aliases(module)
     effective_modules, _values, _blocked, _um, _uv = (
-        _function_vthread_bindings(fd, module_aliases, value_aliases)
+        _vthread_proven_bindings(module, fd, proof_cache)
     )
     return effective_modules.get(ident) == "pcc.virtual_thread"
 
@@ -689,12 +706,12 @@ def vthread_proven_value_alias(
     fd: FuncDef,
     ident: str,
     export_name: str,
+    proof_cache: Optional[dict] = None,
 ) -> bool:
     """Prove one callable vthread from-import without implying may_park."""
 
-    module_aliases, value_aliases = _vthread_import_aliases(module)
     _modules, effective_values, _blocked, _um, _uv = (
-        _function_vthread_bindings(fd, module_aliases, value_aliases)
+        _vthread_proven_bindings(module, fd, proof_cache)
     )
     return effective_values.get(ident) == export_name
 
@@ -704,6 +721,7 @@ def vthread_proven_suspension_value_alias(
     fd: FuncDef,
     ident: str,
     export_name: str,
+    proof_cache: Optional[dict] = None,
 ) -> bool:
     """Prove a vthread value alias only when it is an effect root."""
 
@@ -712,6 +730,7 @@ def vthread_proven_suspension_value_alias(
         fd,
         ident,
         export_name,
+        proof_cache,
     )
 
 

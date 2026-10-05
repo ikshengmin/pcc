@@ -174,6 +174,10 @@ class GenerationLoweringMixin:
         debug_codegen = bool(os.environ.get("PCC_DEBUG_CODEGEN_PHASES"))
 
         _codegen_log(self, debug_codegen, "start")
+        # Proofs belong to this generation, including generate() without an
+        # explicit module. Replace the dict so consumers of the prior
+        # generation do not share newly populated proofs.
+        setattr(self, "_vthread_binding_cache", {})
         saved_skip_program_main = self._skip_program_main
         saved_freestanding_module = self._freestanding_module
         saved_runtime_port_module = self._runtime_port_module
@@ -258,7 +262,6 @@ class GenerationLoweringMixin:
             setattr(self, "_typed_int_abi_call_arg_safety", [])
             setattr(self, "_bounded_int_abi_function_names", [])
             setattr(self, "_funcdef_yield_sentinel_cache", {})
-            setattr(self, "_vthread_binding_cache", {})
             setattr(self, "_generator_func_names", set())
             setattr(self, "_vthread_may_park_func_ids", set())
             setattr(self, "_vthread_may_park_func_names", set())

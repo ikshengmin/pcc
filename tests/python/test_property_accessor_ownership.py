@@ -69,21 +69,23 @@ def _owners_and_cfg(body, expected):
     roots = {}
     for role in ("descriptor", "getter", "setter", "deleter"):
         matches = re.findall(r"(%class\.property\." + role + r"\.operand[-\w.]*) = alloca ptr", body)
-        assert len(matches) == 1, (role, matches)
-        roots[role] = matches[0]
-    bits = {root: 1 << index for index, root in enumerate(roots.values())}
-    expected_mask = sum(bits[roots[role]] for role in expected)
+        assert len(matches) == len(expected), (role, matches)
+        roots[role] = matches
+    all_roots = [root for matches in roots.values() for root in matches]
+    bits = {root: 1 << index for index, root in enumerate(all_roots)}
+    loads = dict(re.findall(r"(%[-\w.]+) = load ptr, ptr (%[-\w.]+)", body))
 
     # A terminal callable handoff must immediately publish to its preregistered
     # caller root, before another accessor may allocate signature/metadata.
-    for role in expected:
+    for stage, role in enumerate(expected):
         pattern = (r"(%[-\w.]+) = call [^\n]*@pcc_gc_take_pinned_slot\([^\n]*\)\n"
-                   r"  store ptr \1, ptr " + re.escape(roots[role]) + r"(?:,|\n)")
+                   r"  store ptr \1, ptr " + re.escape(roots[role][stage]) + r"(?:,|\n)")
         assert re.search(pattern, body), role
-    descriptor = re.search(r"(%[-\w.]+) = call [^\n]*@py_property_new\([^\n]*\)\n", body)
-    assert descriptor is not None
-    following = body[descriptor.end():].splitlines()[0].strip()
-    assert following.startswith("store ptr " + descriptor.group(1) + ", ptr " + roots["descriptor"])
+    descriptors = list(re.finditer(r"(%[-\w.]+) = call [^\n]*@py_property_new\([^\n]*\)\n", body))
+    assert len(descriptors) == len(expected)
+    for stage, descriptor in enumerate(descriptors):
+        following = body[descriptor.end():].splitlines()[0].strip()
+        assert following.startswith("store ptr " + descriptor.group(1) + ", ptr " + roots["descriptor"][stage])
 
     # Track only these four physical roots, resolving address-preserving casts.
     # Every reachable constructor call must see all produced accessors live;
@@ -112,6 +114,14 @@ def _owners_and_cfg(body, expected):
         for line in blocks[block]:
             if "call " in line and "@py_property_new(" in line:
                 constructor_states.append(state)
+                arguments = re.findall(r"ptr (%[-\w.]+)", line)
+                argument_roots = [original(loads[value]) for value in arguments]
+                assert len(argument_roots) == 3
+                stage = roots["getter"].index(argument_roots[0])
+                assert argument_roots == [roots[role][stage] for role in ("getter", "setter", "deleter")]
+                produced = ("getter",) if stage == 0 else ("getter", "setter", "deleter")
+                expected_mask = sum(bits[roots[role][stage]] for role in produced)
+                expected_mask |= sum(bits[root] for root in roots["descriptor"][:stage])
                 assert state == expected_mask, (block, state, expected_mask)
             store = re.search(r"store ptr (null|%[-\w.]+), ptr (%[-\w.]+)", line)
             if store:
@@ -133,10 +143,11 @@ def _owners_and_cfg(body, expected):
                 assert state == 0, (block, state)
         queue.extend((successor, state) for successor in successors)
     assert constructor_states and return_states
-    for role in expected + ("descriptor",):
+    for stage, role in enumerate(expected):
         # Resolve lease operands through the same physical alias map.
         leases = re.findall(r"@pcc_gc_foreign_lease_acquire\(ptr (%[-\w.]+)\)", body)
-        assert any(original(slot) == roots[role] for slot in leases), role
+        for root in (roots[role][stage], roots["descriptor"][stage]):
+            assert any(original(slot) == root for slot in leases), (role, stage)
     assert "property namespace publication" in body or "call.slot.report" in body
 
 
@@ -149,3 +160,29 @@ def _owners_and_cfg(body, expected):
 def test_property_assembly_preserves_accessor_roots_and_cleanup(accessors, failing_default):
     for body in _property_bodies(_emit(_source(accessors, failing_default))):
         _owners_and_cfg(body, accessors)
+
+
+@pytest.mark.parametrize('name', [
+    'test_property_aliases_preserve_lexical_replacements',
+    'test_property_later_accessor_default_failure_preserves_exception',
+])
+def test_interleaved_property_alias_frames_and_defaults_compile(name):
+    import ast
+    from pathlib import Path
+    import textwrap
+    from class_method_ir_checks import check_method_frames
+
+    tree = ast.parse(Path(__file__).with_name('test_descriptor_protocol.py').read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
+    source = next(node.args[1].value for node in ast.walk(function)
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                  and node.func.id == '_compile_and_run')
+    source = textwrap.dedent(source)
+    text = _emit(source)
+    assert check_method_frames(text)
+    bodies = _property_bodies(text)
+    for body in bodies:
+        assert '@py_obj_getattr(' in body
+        # The lexical descriptor exists before reading its accessor. There is
+        # no raw-method-table fallback in the property alias producer.
+        assert body.index('@py_property_new(') < body.index('@py_obj_getattr(')

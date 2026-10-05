@@ -5084,6 +5084,11 @@ class ClassLowering:
         events = []
         event_index = 0
         for statement_index, statement in enumerate(cd.body):
+            if _is_ast_node(statement, FuncDef):
+                if _funcdef_is_property_setter(statement):
+                    events.append((statement.span.line, statement_index, "property_setter", statement.name, statement))
+                elif _funcdef_is_property_deleter(statement):
+                    events.append((statement.span.line, statement_index, "property_deleter", statement.name, statement))
             if _is_ast_node(statement, Assign) and not statement.has_value:
                 events.append((statement.span.line, statement_index, "annotation", "", statement))
                 event_index += 1
@@ -5127,11 +5132,18 @@ class ClassLowering:
                     capture_root, owns_capture = self._emit_dataclass_factory_capture(value_expr)
                     class_body_lifetimes.append(("factory", capture_root, owns_capture))
                     continue
-                if event_kind == "method":
-                    method_root = self._emit_class_method_publication(
-                        cd, info, class_body_root, attr_name, info.methods[attr_name],
-                        value_expr, namespace_methods, prepared_method_objects,
-                    )
+                if event_kind in ("method", "property_setter", "property_deleter"):
+                    if event_kind == "method":
+                        method_root = self._emit_class_method_publication(
+                            cd, info, class_body_root, attr_name, info.methods[attr_name],
+                            value_expr, namespace_methods, prepared_method_objects,
+                        )
+                    else:
+                        accessor_kind = "setter" if event_kind == "property_setter" else "deleter"
+                        method_root = self._emit_property_descriptor_class_attr(
+                            cd, info, class_body_root, attr_name, accessor_kind,
+                            value_expr, namespace_methods,
+                        )
                     if method_root is not None:
                         target = self.parent._current_try_err_block()
                         if target is None:
@@ -5149,7 +5161,6 @@ class ClassLowering:
                 if original_name is not None and original_name != attr_name:
                     self.parent.env[original_name] = self.parent.env[attr_name]
                     namespace_bindings[original_name] = (self.parent.env[original_name][0], attr_name)
-            self._emit_property_descriptor_class_attrs(cd, info, class_body_root)
         finally:
             for method_obj in prepared_method_objects.values():
                 self.parent._gc_unpin(method_obj)
@@ -5250,7 +5261,29 @@ class ClassLowering:
         if mref is None:
             mref = mfunc
         raw_method = builder.bitcast(mref, _PTR)
-        alias = method_def is not None and mname != method_def.name and method_def.name in namespace_methods
+        alias_name = method_def.name if method_def is not None else ""
+        alias_accessor = ""
+        if method_def is not None and mname != method_def.name:
+            # Preserve the lexical alias source, even after the original
+            # property has been replaced by a setter/deleter decorator.
+            for statement in cd.body:
+                if not _is_ast_node(statement, Assign):
+                    continue
+                if not any(_is_ast_node(target, Name) and target.ident == mname for target in statement.targets):
+                    continue
+                if _is_ast_node(statement.value, Name):
+                    alias_name = statement.value.ident
+                elif (_is_ast_node(statement.value, Attr)
+                      and _is_ast_node(statement.value.obj, Name)
+                      and statement.value.name == "fget"):
+                    alias_name = statement.value.obj.ident
+                    alias_accessor = "fget"
+                break
+        alias = method_def is not None and mname != method_def.name and alias_name in namespace_methods
+        if not alias and method_kind == "property_getter" and method_def is not None:
+            return self._emit_property_descriptor_class_attr(
+                cd, info, class_root, mname, "getter", method_def, namespace_methods,
+            )
         if method_def is None or (not alias and method_kind not in ("instance", "static", "classmethod")):
             parent._slot_call_runtime_call(
                 "py_class_add_method", (class_root,),
@@ -5275,8 +5308,13 @@ class ClassLowering:
                     span=method_def.span,
                 )
             if alias:
-                source_root, prepared_value = namespace_methods[method_def.name]
-                if source_root is not None:
+                source_root, prepared_value = namespace_methods[alias_name]
+                if source_root is not None and alias_accessor:
+                    parent._slot_call_runtime_call(
+                        "py_obj_getattr", (source_root,), result_slot=output,
+                        suffix_args=(self._cname_ptr(alias_accessor),), span=method_def.span,
+                    )
+                elif source_root is not None:
                     parent._slot_call_copy_source(output, source_root, span=method_def.span)
                 else:
                     borrowed = parent._alloca_in_entry(_PTR, name=self._fresh("method.prepared.alias"), init_null=True)
@@ -5662,81 +5700,76 @@ class ClassLowering:
             parent._try_err_block = previous
             parent._cpy_operand_cleanup_block = saved_cpy
 
-    def _emit_property_descriptor_class_attrs(
-        self,
-        cd: ClassDef,
-        info: ClassInfo,
-        class_root: ir.Value,
-    ) -> None:
+    def _emit_property_descriptor_class_attr(
+        self, cd, info, class_root, prop_name, accessor_kind, accessor_def,
+        namespace_methods,
+    ):
+        """Publish one lexical property definition and retain its body owner.
+
+        Accessor decorators create a fresh descriptor from the preceding
+        property's exact callable fields. Earlier aliases retain that earlier
+        descriptor; later body expressions observe the replacement.
+        """
         parent = self.parent
-        for prop_name, getter_fn in info.properties.items():
-            getter_def = self._find_method_def(info.name, prop_name)
-            if getter_def is None:
-                continue
-            previous = parent._current_try_err_block()
-            target = previous if previous is not None else parent._ensure_fn_err_exit()
-            saved_cpy = parent._cpy_operand_cleanup_block
-            roots = []
-            named_roots = {}
-            try:
-                # Each accessor hands off a NEW callable. Register its caller
-                # owner before producing it, then publish immediately so a
-                # later accessor's signature/metadata allocations cannot leave
-                # an earlier callable in an unrooted SSA temporary.
-                for role in ("descriptor", "getter", "setter", "deleter"):
-                    root = parent._new_slot_call_root("class.property." + role)
-                    roots.append(root)
-                    named_roots[role] = root
-                    parent._try_err_block = parent._slot_call_cleanup_block(tuple(roots), target)
-                    parent._cpy_operand_cleanup_block = parent._try_err_block
-                getter_obj = self._emit_property_accessor_func_obj(
-                    cd, info, prop_name, "getter", getter_fn, getter_def.return_ty,
-                )
-                parent._publish_slot_call_owned(
-                    named_roots["getter"], getter_obj, label="property getter",
-                )
-                setter_fn = info.property_setters.get(prop_name)
-                if setter_fn is not None:
-                    setter_def = self._find_property_accessor_def(
-                        cd, info, prop_name, "setter",
-                    )
-                    if setter_def is not None:
-                        setter_obj = self._emit_property_accessor_func_obj(
-                            cd, info, prop_name, "setter", setter_fn, setter_def.return_ty,
+        previous = parent._current_try_err_block()
+        target = previous if previous is not None else parent._ensure_fn_err_exit()
+        saved_cpy = parent._cpy_operand_cleanup_block
+        roots = []
+        named_roots = {}
+        try:
+            for role in ("descriptor", "getter", "setter", "deleter"):
+                root = parent._new_slot_call_root("class.property." + role)
+                roots.append(root)
+                named_roots[role] = root
+                parent._try_err_block = parent._slot_call_cleanup_block(tuple(roots), target)
+                parent._cpy_operand_cleanup_block = parent._try_err_block
+            if accessor_kind != "getter":
+                source_name = prop_name
+                for decorator in accessor_def.decorators:
+                    if (_is_ast_node(decorator, Attr) and decorator.name == accessor_kind
+                            and _is_ast_node(decorator.obj, Name)):
+                        source_name = decorator.obj.ident
+                        break
+                source_root, prepared_value = namespace_methods[source_name]
+                if source_root is None:
+                    raise L1CodegenError("property accessor replacement requires a lexical property owner")
+                for role, field in (("getter", "fget"), ("setter", "fset"), ("deleter", "fdel")):
+                    if role != accessor_kind:
+                        parent._slot_call_runtime_call(
+                            "py_obj_getattr", (source_root,), result_slot=named_roots[role],
+                            suffix_args=(self._cname_ptr(field),), span=accessor_def.span,
                         )
-                        parent._publish_slot_call_owned(
-                            named_roots["setter"], setter_obj, label="property setter",
-                        )
-                deleter_fn = info.property_deleters.get(prop_name)
-                if deleter_fn is not None:
-                    deleter_def = self._find_property_accessor_def(
-                        cd, info, prop_name, "deleter",
-                    )
-                    if deleter_def is not None:
-                        deleter_obj = self._emit_property_accessor_func_obj(
-                            cd, info, prop_name, "deleter", deleter_fn, deleter_def.return_ty,
-                        )
-                        parent._publish_slot_call_owned(
-                            named_roots["deleter"], deleter_obj, label="property deleter",
-                        )
-                parent._slot_call_runtime_call(
-                    "py_property_new",
-                    (named_roots["getter"], named_roots["setter"], named_roots["deleter"]),
-                    result_slot=named_roots["descriptor"], span=cd.span,
-                )
-                parent._guard_cpy_value_not_null(parent.builder.load(named_roots["descriptor"]))
-                status = parent._slot_call_runtime_call(
-                    "py_class_setattr_raw", (class_root, named_roots["descriptor"]),
-                    suffix_args=(self._cname_ptr(prop_name),), argument_order=(0, 2, 1),
-                    span=cd.span,
-                )
-                parent._slot_call_check_status(status, "property namespace publication", cd.span)
-                # The descriptor and class namespace have acquired their own
-                # references. Drop all construction owners in reverse order.
-                parent._release_slot_call_roots(tuple(roots))
-            finally:
-                parent._try_err_block = previous
-                parent._cpy_operand_cleanup_block = saved_cpy
+            if accessor_kind == "setter":
+                accessor_fn = info.property_setters[prop_name]
+            elif accessor_kind == "deleter":
+                accessor_fn = info.property_deleters[prop_name]
+            else:
+                accessor_fn = info.properties[prop_name]
+            accessor_obj = self._emit_property_accessor_func_obj(
+                cd, info, prop_name, accessor_kind, accessor_fn,
+                accessor_def.return_ty, accessor_def,
+            )
+            parent._publish_slot_call_owned(
+                named_roots[accessor_kind], accessor_obj,
+                label="property " + accessor_kind,
+            )
+            parent._slot_call_runtime_call(
+                "py_property_new",
+                (named_roots["getter"], named_roots["setter"], named_roots["deleter"]),
+                result_slot=named_roots["descriptor"], span=accessor_def.span,
+            )
+            parent._guard_cpy_value_not_null(parent.builder.load(named_roots["descriptor"]))
+            status = parent._slot_call_runtime_call(
+                "py_class_setattr_raw", (class_root, named_roots["descriptor"]),
+                suffix_args=(self._cname_ptr(prop_name),), argument_order=(0, 2, 1),
+                span=accessor_def.span,
+            )
+            parent._slot_call_check_status(status, "property namespace publication", accessor_def.span)
+            parent._release_slot_call_roots(tuple(roots[1:]))
+            return named_roots["descriptor"]
+        finally:
+            parent._try_err_block = previous
+            parent._cpy_operand_cleanup_block = saved_cpy
 
     def _find_property_accessor_def(
         self,
@@ -5793,9 +5826,11 @@ class ClassLowering:
         accessor_kind: str,
         fn: ir.Function,
         return_ty,
+        accessor_def=None,
     ) -> ir.Value:
-        accessor_def = self._find_method_def(info.name, prop_name)
-        if accessor_kind != "getter":
+        if accessor_def is None and accessor_kind == "getter":
+            accessor_def = self._find_method_def(info.name, prop_name)
+        if accessor_def is None and accessor_kind != "getter":
             accessor_def = self._find_property_accessor_def(
                 cd, info, prop_name, accessor_kind
             )

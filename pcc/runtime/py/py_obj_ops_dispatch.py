@@ -20,6 +20,9 @@ from pcc.runtime.py.py_abi_constants import (
     PYINSTANCEOBJECT_CLS_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYSTATICMETHODOBJECT_FUNC_OFFSET,
+    PYPROPERTYOBJECT_FGET_OFFSET,
+    PYPROPERTYOBJECT_FSET_OFFSET,
+    PYPROPERTYOBJECT_FDEL_OFFSET,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
     PY_FLAG_EXC_OS_PAYLOAD,
@@ -93,6 +96,7 @@ from pcc.unsafe import (
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
@@ -2923,6 +2927,81 @@ def _py_str_count_bound(o):
     return fn
 
 
+_PROPERTY_ACCESSOR_OWNER = 0
+_PROPERTY_ACCESSOR_RESULT = 1
+_PROPERTY_ACCESSOR_ERROR = 2
+_PROPERTY_ACCESSOR_SLOT_COUNT = 3
+
+define_global_i32("pcc_property_accessor_borrowed_map", -1)
+define_global_i32("pcc_property_accessor_owned_map", 3)
+
+
+def _property_accessor_clear(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = load_i64(tokens, index * C_POINTER_SIZE)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) != 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * C_POINTER_SIZE, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _property_accessor_get(descriptor, field_offset: int):
+    # Retain from the actual traced field while its container is leased.
+    # No borrowed raw child survives a lock wait or deferred retain logging.
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, descriptor)
+    pcc_gc_frame_enter(global_addr("pcc_property_accessor_borrowed_map"), borrowed)
+    slots = stack_alloc(_PROPERTY_ACCESSOR_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_PROPERTY_ACCESSOR_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _PROPERTY_ACCESSOR_SLOT_COUNT * C_POINTER_SIZE)
+    index: int = 0
+    while index < _PROPERTY_ACCESSOR_SLOT_COUNT:
+        store_i64(tokens, index * C_POINTER_SIZE, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_property_accessor_owned_map"), slots)
+    owner = ptr_add(slots, _PROPERTY_ACCESSOR_OWNER * C_POINTER_SIZE)
+    result = ptr_add(slots, _PROPERTY_ACCESSOR_RESULT * C_POINTER_SIZE)
+    error = ptr_add(slots, _PROPERTY_ACCESSOR_ERROR * C_POINTER_SIZE)
+    token: int = pcc_gc_root_copy_borrowed_lease(owner, borrowed)
+    store_i64(tokens, _PROPERTY_ACCESSOR_OWNER * C_POINTER_SIZE, token)
+    if token >= 0:
+        source = ptr_add(load_ptr(owner, 0), field_offset)
+        if ptr_is_null(load_ptr(source, 0)) != 0:
+            source = global_addr("py_None")
+        token = pcc_gc_root_copy_lease(result, source)
+        store_i64(tokens, _PROPERTY_ACCESSOR_RESULT * C_POINTER_SIZE, token)
+    status: int = 0
+    if token < 0:
+        status = -1
+        if py_err_occurred() == 0:
+            py_raise_owned(py_exc_new(7, cstr("property accessor owner lease failed")))
+    if py_err_occurred() != 0:
+        status = -1
+    py_tls_exc_swap_slot(error)
+    store_ptr(borrowed, 0, null())
+    _property_accessor_clear(slots, tokens, _PROPERTY_ACCESSOR_OWNER)
+    if status != 0:
+        _property_accessor_clear(slots, tokens, _PROPERTY_ACCESSOR_RESULT)
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), result)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    token = load_i64(tokens, _PROPERTY_ACCESSOR_RESULT * C_POINTER_SIZE)
+    if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result, prior)
+
+
 @c_abi_export("py_obj_getattr")
 def py_obj_getattr(o, name):
     if ptr_is_null(o) != 0:
@@ -2949,6 +3028,17 @@ def py_obj_getattr(o, name):
         if py_err_occurred() != 0:
             return result
         return _raise_attribute_error(o, name)
+
+    if tag == PY_TYPE_PROPERTY:
+        field_offset: int = -1
+        if strcmp(name, cstr("fget")) == 0:
+            field_offset = PYPROPERTYOBJECT_FGET_OFFSET
+        elif strcmp(name, cstr("fset")) == 0:
+            field_offset = PYPROPERTYOBJECT_FSET_OFFSET
+        elif strcmp(name, cstr("fdel")) == 0:
+            field_offset = PYPROPERTYOBJECT_FDEL_OFFSET
+        if field_offset >= 0:
+            return _property_accessor_get(o, field_offset)
 
     if tag == PY_TYPE_STATICMETHOD:
         if strcmp(name, cstr("__func__")) == 0 or strcmp(name, cstr("__wrapped__")) == 0:
