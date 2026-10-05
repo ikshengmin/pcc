@@ -230,7 +230,7 @@ class CallObjectLoweringMixin:
         self.builder.position_at_end(cleanup)
         exception_slot = None
         swap_exception = None
-        if roots:
+        if roots or leases:
             # Register an empty cleanup-local owner before touching TLS. The
             # swap transfers its owned reference under the graph lock; no
             # borrowed exception pointer crosses registration or disposal.
@@ -1060,6 +1060,11 @@ class CallObjectLoweringMixin:
             )
             if result_slot is not None:
                 self._publish_slot_call_owned(result_slot, result, label=runtime_name)
+            elif exception_slot is None:
+                # Scalar results have no publication step. Check TLS before
+                # retiring a lease, and let the cleanup edge preserve the
+                # exact error while releasing every remaining operand lease.
+                self._emit_post_call_err_check(span)
             if exception_slot is not None:
                 # Iteration protocols inspect StopIteration themselves. Move
                 # the exact TLS owner out before retiring operands can run a

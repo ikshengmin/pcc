@@ -2175,12 +2175,18 @@ class UserFunctionLoweringMixin:
         context = getattr(self, "_class_namespace_context", None)
         if context is None or not isinstance(expr, Name):
             return None
-        owner_function, namespace_root, bindings, outer_env = context
+        owner_function, namespace_root, bindings, outer_env = context[:4]
         if owner_function is not self.current_function:
             return None
         binding = bindings.get(expr.ident)
         entry = self.env.get(expr.ident)
-        if binding is None or entry is None or binding[0] is not entry[0]:
+        prepared = len(context) > 4 and context[4]
+        if prepared and binding is None:
+            # A prepared mapping can supply names through __missing__ or
+            # override a global/builtin. LOAD_NAME must ask it first even
+            # when no earlier STORE_NAME established a cached binding.
+            binding = (None if entry is None else entry[0], expr.ident)
+        elif binding is None or entry is None or binding[0] is not entry[0]:
             return None
 
         previous = self._current_try_err_block()

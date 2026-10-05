@@ -34,6 +34,8 @@ NATIVE_OS_OWNED_CALLABLES = (
     ("close", "py_os_close_function"),
     ("fdopen", "py_file_fdopen_function"),
     ("mkdir", "py_os_mkdir_function"),
+    ("pwrite", "py_os_pwrite_function"),
+    ("ftruncate", "py_os_ftruncate_function"),
 )
 NATIVE_OS_DESCRIPTOR_CONSTANTS = (
     "O_RDONLY", "O_WRONLY", "O_RDWR", "O_ACCMODE", "O_CREAT", "O_EXCL",
@@ -136,22 +138,23 @@ class NativeOsLoweringMixin:
 
     def _emit_owned_os_runtime_call(
         self, expr, runtime_name, arguments=None, sequence=False, field_index=-1,
+        scalar=False,
     ):
-        """Publish proven NEW OS/path results before any parking operation.
+        """Keep OS/path operands owned through the shared leased call ABI.
 
-        Only the dispatches whose runtime bodies return a new reference use
-        this path. Operands remain owned in slots through later evaluation,
-        runtime entry, and cleanup; the shared call helper leases addresses.
+        Object results use a proven NEW-reference contract; scalar results
+        remain SSA values after an immediate runtime-error check. Operands
+        stay in slots through evaluation, runtime entry and cleanup.
         """
         if arguments is None:
             arguments = expr.args
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
-        sink = self._slot_call_result_sink(expr)
+        sink = None if scalar else self._slot_call_result_sink(expr)
         output = sink
         roots = []
-        if output is None:
+        if output is None and not scalar:
             output = self._new_slot_call_root(runtime_name + ".result")
             roots.append(output)
         temporary_start = len(roots)
@@ -194,7 +197,7 @@ class NativeOsLoweringMixin:
                 roots.append(produced)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-            self._slot_call_runtime_call(
+            result = self._slot_call_runtime_call(
                 runtime_name, tuple(operands), result_slot=produced, span=expr.span,
             )
             if field_index >= 0:
@@ -204,6 +207,8 @@ class NativeOsLoweringMixin:
                     suffix_args=(ir.Constant(_I64, field_index),), span=expr.span,
                 )
             self._release_slot_call_roots(tuple(roots[temporary_start:]))
+            if scalar:
+                return result
             if sink is None:
                 return self._take_slot_call_root(output)
             return self.builder.load(output, name=self._fresh(runtime_name + ".current"))
@@ -955,10 +960,8 @@ class NativeOsLoweringMixin:
         if name == "exists" and len(expr.args) == 1:
             if not self._native_os_path_arg_can_stay_native(expr.args[0]):
                 return None
-            i32v = self.builder.call(
-                self.runtime["py_os_path_exists"],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh("os.path.exists"),
+            i32v = self._emit_owned_os_runtime_call(
+                expr, "py_os_path_exists", scalar=True,
             )
             return self.builder.icmp_signed(
                 "!=",
@@ -975,11 +978,7 @@ class NativeOsLoweringMixin:
                 "isdir": "py_os_path_isdir",
                 "islink": "py_os_path_islink",
             }[name]
-            i32v = self.builder.call(
-                self.runtime[helper],
-                [self._emit_os_path_arg_object(expr.args[0])],
-                name=self._fresh(f"os.path.{name}"),
-            )
+            i32v = self._emit_owned_os_runtime_call(expr, helper, scalar=True)
             return self.builder.icmp_signed(
                 "!=",
                 i32v,

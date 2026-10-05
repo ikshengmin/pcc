@@ -96,7 +96,8 @@ class AttrLoadLoweringMixin:
             return ("runtime", "py_tempdir_type", ())
         if module == "os":
             provider = {"fdopen": "py_file_fdopen_function", "open": "py_os_open_function",
-                        "close": "py_os_close_function", "mkdir": "py_os_mkdir_function"}.get(expr.name)
+                        "close": "py_os_close_function", "mkdir": "py_os_mkdir_function",
+                        "pwrite": "py_os_pwrite_function", "ftruncate": "py_os_ftruncate_function"}.get(expr.name)
             if provider is not None:
                 if "os" in getattr(self, "_sibling_module_inits", ()):
                     return ("module", "os", expr.name)

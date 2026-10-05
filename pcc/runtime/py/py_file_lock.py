@@ -6,7 +6,7 @@ file owner alive. Bounded nonblocking attempts allow stop-the-world safepoints.
 __pcc_runtime_port__ = True
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
-    cstr, file_flock, file_lock_region, seek_file, global_load_ptr, load_i32, load_ptr,
+    cstr, fd_control, file_flock, file_lock_region, seek_file, global_load_ptr, load_i32, load_ptr,
     null, ptr_add, ptr_is_null, stack_alloc, store_ptr,
 )
 py_index_i64_checked = extern("py_index_i64_checked", (c_ptr,), c_int64)
@@ -81,6 +81,28 @@ def _wait_piece() -> int:
     pcc_platform_sleep_ns(5000000)
     pcc_thread_safepoint()
     return 1 if py_err_occurred() == 0 else 0
+
+
+@c_abi_export("py_fcntl_getfl")
+def py_fcntl_getfl(fd: int, keeper) -> int:
+    """Read F_GETFL without changing descriptor state or its ownership.
+
+    Ordinary Python performs integer conversions before this scalar boundary.
+    The original file owner remains registered across syscall retries; only a
+    scalar status crosses retirement, so no raw managed result can relocate.
+    """
+    slots = stack_alloc(24)
+    handles = stack_alloc(24)
+    store_ptr(slots, 0, keeper)
+    store_ptr(slots, 8, null())
+    store_ptr(slots, 16, null())
+    if _root(slots, handles) == 0:
+        return -12
+    status: int = fd_control(fd, 3, 0)
+    while status == -4:
+        status = fd_control(fd, 3, 0)
+    _unroot(handles)
+    return status
 
 
 @c_abi_export("py_fcntl_flock")

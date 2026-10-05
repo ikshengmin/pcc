@@ -20,12 +20,15 @@ def _emit(source):
     return str(codegen.generate(module))
 
 
+@pytest.mark.parametrize("prepared", (False, True))
 @pytest.mark.parametrize("mismatch", ("inactive", "function", "slot", "absent"))
-def test_class_namespace_producer_requires_exact_active_binding(mismatch):
+def test_class_namespace_producer_requires_exact_active_binding(mismatch, prepared):
     owner = object()
     slot = object()
     expr = Name(span=None, ty=DynType(name="dyn"), ident="fields")
     context = (owner, object(), {"fields": (slot, "fields")}, {})
+    if prepared:
+        context += (True,)
     probe = SimpleNamespace(
         current_function=owner,
         env={"fields": (slot, object(), expr.ty)},
@@ -105,3 +108,72 @@ class Holder:
     assert body is not None
     assert "class.name" not in body.group(0)
     assert "@pcc_gc_root_copy_borrowed_lease(" in body.group(0)
+
+
+@pytest.mark.parametrize("default", ("sentinel", "(sentinel,)", "identity(sentinel)", "method"))
+def test_prepared_class_default_uses_live_namespace(default):
+    text = _emit('''def identity(value):
+    return value
+class Meta(type):
+    @classmethod
+    def __prepare__(cls, name, bases):
+        return {}
+    def __new__(cls, name, bases, namespace):
+        return type(name, bases, namespace)
+class Holder(metaclass=Meta):
+    sentinel = object()
+    def method(self):
+        return None
+    def target(self, value=''' + default + '''):
+        return value
+''')
+    # Both prepared constructors use the same namespace-root producer. Its
+    # owner must be published before _call_user retires argument temporaries.
+    prepare = re.search(r"(%[^ ]+) = call [^\n]*@user_class_namespace_Meta___prepare__\([^\n]*\)\n", text)
+    assert prepare is not None
+    next_line = text[prepare.end():].splitlines()[0].strip()
+    assert next_line.startswith("store ptr " + prepare.group(1) + ", ptr %class.definition.namespace.prepared.")
+    lookups = list(re.finditer(r"(%call\.slot\.runtime[^ ]+) = call [^\n]*@py_obj_getitem\([^\n]*\)\n", text))
+    assert lookups
+    for lookup in lookups:
+        following = text[lookup.end():].splitlines()[0].strip()
+        assert following.startswith("store ptr " + lookup.group(1) + ", ptr "), following
+    assert "class.name.fallback" in text
+    assert "namespace.body.lease" in text
+    assert "namespace.body.release" in text
+
+
+@pytest.mark.parametrize("custom", (False, True), ids=("dict", "custom"))
+def test_prepared_namespace_roots_reach_owned_object_emitter(tmp_path, custom):
+    from pcc.backend.owned_object_emit import emit_owned_object
+
+    namespace = '''class Namespace:
+    def __init__(self):
+        self.data = {}
+    def __setitem__(self, key, value):
+        self.data[key] = value
+    def __getitem__(self, key):
+        return self.data[key]
+''' if custom else ""
+    program = '''class Meta(type):
+    @classmethod
+    def __prepare__(cls, name, bases):
+        return {}
+    def __new__(cls, name, bases, namespace):
+        return type(name, bases, namespace)
+try:
+    class Holder(metaclass=Meta):
+        sentinel = object()
+        def method(self, value=sentinel):
+            return value
+except Exception:
+    raise
+'''
+    if custom:
+        program = program.replace("return {}", "return Namespace()")
+        program = program.replace("type(name, bases, namespace)", "type(name, bases, namespace.data)")
+    text = _emit(namespace + program)
+    (tmp_path / "prepared_namespace.ll").write_text(text)
+    object_bytes = emit_owned_object(text, "x86_64-unknown-linux-gnu")
+    (tmp_path / "prepared_namespace.o").write_bytes(object_bytes)
+    assert object_bytes[:4] == b"\x7fELF"

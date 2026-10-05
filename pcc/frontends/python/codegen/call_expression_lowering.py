@@ -906,7 +906,7 @@ class CallExpressionLoweringMixin:
         func_attr_name = _call_attr_name(func_expr)
         func_attr_obj = _call_attr_obj(func_expr)
         pcc_intrinsic = self._native_builtin_value_kind_for_expr(func_expr)
-        if pcc_intrinsic in ("os.fdopen", "os.open", "os.close", "os.mkdir"):
+        if pcc_intrinsic in ("os.fdopen", "os.open", "os.close", "os.mkdir", "os.pwrite", "os.ftruncate"):
             return self._emit_slot_call_object(expr, pcc_intrinsic)
         if pcc_intrinsic in ("tempfile.TemporaryDirectory", "tempfile.mkdtemp", "tempfile.NamedTemporaryFile"):
             if self._native_module_attr_global_if_exists("tempfile", pcc_intrinsic.split(".")[1]) is None:
@@ -1436,7 +1436,13 @@ class CallExpressionLoweringMixin:
             return result
         if name == "abs" and len(expr.args) == 1:
             return self._emit_abs_builtin(expr)
-        if name in ("bin", "hex", "oct") and len(expr.args) == 1 and not expr.kwargs:
+        if (name in ("bin", "hex", "oct") and len(expr.args) == 1 and not expr.kwargs
+                and not self._iterator_builtin_is_shadowed(name)):
+            if not self._expr_looks_cpython(expr.args[0]):
+                # These runtime producers return NEW strings. Publish before
+                # checking errors or releasing the rooted argument, just as
+                # repr/ascii do, including a caller-supplied result slot.
+                return self._emit_owned_text_conversion(expr, "py_builtin_" + name)
             # bin()/hex()/oct() -> base-prefixed string via the runtime; the
             # arg is boxed so int (tagged/heap) and bool all route natively.
             arg_obj = self._emit_as_object(expr.args[0])

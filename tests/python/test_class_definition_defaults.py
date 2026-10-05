@@ -119,6 +119,119 @@ main()
 '''
 
 
+
+PREPARED_LOOKUPS = '''events = []
+sentinel = object()
+replacement = object()
+fallback = object()
+class Namespace:
+    def __init__(self):
+        self.data = {}
+    def __setitem__(self, key, value):
+        self.data[key] = value
+    def __getitem__(self, key):
+        if key == "sentinel":
+            events.append("getitem")
+            return replacement
+        if key == "provided":
+            return self.__missing__(key)
+        if key == "fallback":
+            events.append("fallback")
+        if key == "bad":
+            events.append("raise")
+            raise ValueError("lookup boom")
+        return self.data[key]
+    def __missing__(self, key):
+        events.append("missing")
+        return replacement
+class Meta(type):
+    @classmethod
+    def __prepare__(cls, name, bases):
+        return Namespace()
+    def __new__(cls, name, bases, namespace):
+        return type(name, bases, namespace.data)
+class Sample(metaclass=Meta):
+    sentinel = object()
+    original = sentinel
+    def method(self, value=sentinel):
+        return value
+    def missing(self, value=provided):
+        return value
+    def global_value(self, value=fallback):
+        return value
+try:
+    class Broken(metaclass=Meta):
+        def method(self, value=bad):
+            return value
+except ValueError as error:
+    assert str(error) == "lookup boom"
+else:
+    raise AssertionError("lookup exception was swallowed")
+def main():
+    sample = Sample()
+    assert sample.method() is replacement
+    assert Sample.original is replacement
+    assert sample.missing() is replacement
+    assert sample.global_value() is fallback
+    assert events == ["getitem", "getitem", "missing", "fallback", "raise"]
+    print("PREPARED_LOOKUPS_OK")
+main()
+'''
+
+PREPARED_MISSING = '''replacement = object()
+class Namespace(dict):
+    def __missing__(self, key):
+        if key == "provided":
+            return replacement
+        raise KeyError(key)
+class Meta(type):
+    @classmethod
+    def __prepare__(cls, name, bases):
+        return Namespace()
+    def __new__(cls, name, bases, namespace):
+        return type(name, bases, namespace)
+class Sample(metaclass=Meta):
+    def method(self, value=provided):
+        return value
+def main():
+    assert Sample().method() is replacement
+    print("PREPARED_MISSING_OK")
+main()
+'''
+
+PREPARED_FAILED_DEFAULTS = '''class Meta(type):
+    @classmethod
+    def __prepare__(cls, name, bases):
+        return {}
+    def __new__(cls, name, bases, namespace):
+        return type(name, bases, namespace)
+''' + FAILED_DEFAULTS.replace("class Broken:", "class Broken(metaclass=Meta):")
+
+PREPARED_NAMESPACE_CONTROLS = [
+    pytest.param(PREPARED_LOOKUPS, "PREPARED_LOOKUPS_OK\n", id="prepared-lookups"),
+    pytest.param(PREPARED_MISSING, "PREPARED_MISSING_OK\n", id="prepared-missing"),
+    pytest.param(PREPARED_FAILED_DEFAULTS, "DEFAULT_OWNERS_RELEASED\n", id="prepared-owner-unwind"),
+]
+
+
+@pytest.mark.parametrize("source_text,expected", PREPARED_NAMESPACE_CONTROLS)
+def test_prepared_namespace_reference_and_ir(tmp_path, monkeypatch, source_text, expected):
+    reference = io.StringIO()
+    with contextlib.redirect_stdout(reference):
+        exec(source_text, {})
+    assert reference.getvalue() == expected
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    source = tmp_path / "prepared_control.py"
+    output = tmp_path / "prepared_control.ll"
+    source.write_text(source_text)
+    compile_python(str(source), str(output), emit_llvm_only=True,
+                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    text = output.read_text()
+    assert "class.definition.namespace.prepared" in text
+    assert "namespace.body.lease" in text
+    assert "namespace.body.release" in text
+
+
 def _inherited_signature_program(frozen, factory):
     decorator = "@dataclass(frozen=True)" if frozen else "@dataclass"
     default = "field(default_factory=list)" if factory else "()"
@@ -194,7 +307,29 @@ def test_class_defaults_ir_captures_factories_only_in_definition_order(tmp_path,
     assert factory_calls[1].start() < factory_calls[2].start()
     assert "@user_class_defaults_mark(" not in probe
     assert "@py_obj_load_method" in probe
-    assert "@py_obj_call_method_kwargs" in probe
+    # Keyword constructors use the rooted callable/args/kwargs/result ABI.
+    # Keep the loaded positional __new__ checks below, and verify the slots
+    # that replaced the former py_obj_call_method_kwargs call site.
+    constructors = re.findall(
+        r"%ctor\.unpack\.call[^ \n]* = call i64 \(ptr, ptr, ptr, ptr\) "
+        r"@py_obj_call_slots\(ptr ([^,]+), ptr ([^,]+), ptr ([^,]+), ptr ([^)]+)\)",
+        probe,
+    )
+    assert len(constructors) == 4
+    for operands in constructors:
+        for role, operand in zip(("class", "args", "kwargs"), operands[:3]):
+            assert re.search(
+                re.escape(operand) + r" = bitcast ptr %ctor\.unpack\."
+                + role + r"\.operand\.[^ \n]+ to ptr", probe,
+            ), (role, operand)
+        # Private().method() publishes directly into the rooted receiver sink.
+        assert re.search(
+            re.escape(operands[3]) + r" = bitcast ptr %"
+            r"(?:ctor\.unpack\.result|Private\.method\.bound\.callable\.receiver)"
+            r"\.operand\.[^ \n]+ to ptr", probe,
+        ), operands[3]
+    assert len(re.findall(r"call ptr[^\n]*@py_call_merge_kwargs_for_call\(", probe)) == 2
+    assert "@pcc_gc_root_copy_lease" in probe
     assert "@py_obj_call_method(" in probe
 
 
@@ -373,6 +508,7 @@ def test_inherited_signature_roots_reach_direct_object_worker(tmp_path, monkeypa
     pytest.param(PREPARED, "True\nTrue\n[1]\n", id="prepared"),
     pytest.param(FAILED_DEFAULTS, "DEFAULT_OWNERS_RELEASED\n", id="factory-owner-unwind"),
     *INHERITED_SIGNATURE_PROGRAMS,
+    *PREPARED_NAMESPACE_CONTROLS,
 ])
 def test_native_class_definition_defaults(tmp_path, pcc_runtime_archive, python_program_compiler, source_text, expected):
     source = tmp_path / "class_defaults.py"

@@ -94,6 +94,8 @@ UNSAFE_INTRINSICS = frozenset(
         "read",
         "close",
         "seek_file",
+        "pwrite_file",
+        "truncate_file",
         "open_readonly",
         "darwin_current_rss_bytes",
         "darwin_peak_rss_bytes",
@@ -144,6 +146,7 @@ UNSAFE_INTRINSICS = frozenset(
         "initial_environ",
         "access",
         "stat_kind",
+        "lstat_kind",
         "stat_mtime",
         "stat_size",
         "is_symlink",
@@ -217,7 +220,7 @@ UNSAFE_INTRINSICS = frozenset(
         "atomic_test_and_set",
         "atomic_clear",
         "windows_full_path", "windows_real_path",
-        "directory_open", "directory_next", "directory_error", "directory_close",
+        "directory_open", "directory_next", "directory_entry_type", "directory_error", "directory_close",
         "syscall6",
         "linux_set_thread_pointer",
         "page_alloc",
@@ -329,6 +332,8 @@ _UNSAFE_INTRINSIC_FAMILIES = (
         'write',
         'close',
         'seek_file',
+        'pwrite_file',
+        'truncate_file',
         'open_readonly',
         'darwin_current_rss_bytes',
         'darwin_peak_rss_bytes',
@@ -395,6 +400,7 @@ _UNSAFE_INTRINSIC_FAMILIES = (
         'initial_environ',
         'access',
         'stat_kind',
+        'lstat_kind',
         'stat_mtime',
         'stat_size',
         'is_symlink',
@@ -1485,6 +1491,37 @@ class UnsafeIntrinsicMixin:
         result.add_incoming(failed_value, failure)
         return result
 
+    def _emit_unsafe_lstat_kind(self, expr: Call) -> ir.Value:
+        """Read one no-follow record; never inspect a failed stat buffer."""
+        self._unsafe_expect_arity("lstat_kind", expr, 1)
+        path = self._unsafe_ptr_arg(expr.args[0])
+        buffer, status = self._emit_unsafe_stat_call(path, follow_symlinks=False)
+        success = self.current_function.append_basic_block(self._fresh("unsafe.lstat.success"))
+        failure = self.current_function.append_basic_block(self._fresh("unsafe.lstat.failure"))
+        done = self.current_function.append_basic_block(self._fresh("unsafe.lstat.done"))
+        ok = self.builder.icmp_signed("==", status, ir.Constant(_I32, 0))
+        self.builder.cbranch(ok, success, failure)
+        self.builder.position_at_end(success)
+        _size, offset, _seconds, _nanos = self._stat_layout()
+        mode_type = _I16 if self._target_sys_platform_text() == "darwin" else _I32
+        address = self._unsafe_typed_addr(buffer, ir.Constant(_I64, offset), mode_type)
+        mode = self.builder.load(address, align=1)
+        kind = self.builder.and_(mode, ir.Constant(mode_type, 0o170000))
+        directory = self.builder.icmp_unsigned("==", kind, ir.Constant(mode_type, 0o040000))
+        symlink = self.builder.icmp_unsigned("==", kind, ir.Constant(mode_type, 0o120000))
+        value = self.builder.select(
+            symlink, ir.Constant(_I64, 3),
+            self.builder.select(directory, ir.Constant(_I64, 2), ir.Constant(_I64, 1)),
+        )
+        self.builder.branch(done)
+        self.builder.position_at_end(failure)
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+        result = self.builder.phi(_I64, name=self._fresh("unsafe.lstat.kind"))
+        result.add_incoming(value, success)
+        result.add_incoming(ir.Constant(_I64, 0), failure)
+        return result
+
     def _emit_unsafe_stat_kind(self, expr: Call) -> ir.Value:
         self._unsafe_expect_arity("stat_kind", expr, 1)
         _size, mode_off, _mtime_sec_off, _mtime_nsec_off = self._stat_layout()
@@ -1657,7 +1694,7 @@ class UnsafeIntrinsicMixin:
             function = self._declare_external_function(symbol, _CSTR, [_CSTR, _CSTR, _I64])
             return self.builder.call(function, [self._unsafe_ptr_arg(expr.args[0]),
                 self._unsafe_ptr_arg(expr.args[1]), self._unsafe_i64_arg(expr.args[2])])
-        if intrinsic in ("directory_open", "directory_next", "directory_error", "directory_close"):
+        if intrinsic in ("directory_open", "directory_next", "directory_entry_type", "directory_error", "directory_close"):
             from pcc.frontends.python.codegen.platform_directory import emit as emit_directory
             return emit_directory(self, intrinsic, expr)
         if self._target_sys_platform_text() == "win32":
@@ -2568,6 +2605,47 @@ class UnsafeIntrinsicMixin:
         intrinsic: str,
         expr: Call,
     ) -> ir.Value:
+        if intrinsic in ("pwrite_file", "truncate_file"):
+            writing = intrinsic == "pwrite_file"
+            self._unsafe_expect_arity(intrinsic, expr, 4 if writing else 2)
+            fd = self._unsafe_i32_arg(expr.args[0])
+            if writing:
+                buffer = self._unsafe_ptr_arg(expr.args[1])
+                size = self._unsafe_i64_arg(expr.args[2])
+                offset = self._unsafe_i64_arg(expr.args[3])
+            else:
+                offset = self._unsafe_i64_arg(expr.args[1])
+            platform_name = self._target_sys_platform_text()
+            if platform_name == "darwin":
+                if writing:
+                    function = self._declare_external_function(
+                        "pwrite", _I64, [_I32, _CSTR, _I64, _I64]
+                    )
+                    raw = self.builder.call(function, [fd, buffer, size, offset])
+                else:
+                    function = self._declare_external_function(
+                        "ftruncate", _I32, [_I32, _I64]
+                    )
+                    raw = self.builder.call(function, [fd, offset])
+                return self._unsafe_darwin_errno_result(raw, intrinsic)
+            if platform_name == "linux" and self._target_machine_text() in (
+                "x86_64", "aarch64", "arm64"
+            ):
+                fd_i64 = self.builder.sext(fd, _I64)
+                zero = ir.Constant(_I64, 0)
+                if writing:
+                    return self._unsafe_linux_syscall6(
+                        ir.Constant(_I64, 18), fd_i64,
+                        self.builder.ptrtoint(buffer, _I64), size, offset,
+                        zero, zero, name=self._fresh("unsafe.pwrite_file.syscall"),
+                    )
+                return self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 77), fd_i64, offset, zero, zero,
+                    zero, zero, name=self._fresh("unsafe.truncate_file.syscall"),
+                )
+            # A real unsupported status keeps common platform objects free
+            # of POSIX imports on Windows. Managed callers report the gap.
+            return ir.Constant(_I64, -38)
         if intrinsic in ("read", "write"):
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fd = self._unsafe_i32_arg(expr.args[0])
@@ -5377,6 +5455,8 @@ class UnsafeIntrinsicMixin:
             )
         if intrinsic == "stat_kind":
             return self._emit_unsafe_stat_kind(expr)
+        if intrinsic == "lstat_kind":
+            return self._emit_unsafe_lstat_kind(expr)
         if intrinsic == "stat_mtime":
             return self._emit_unsafe_stat_mtime(expr)
         if intrinsic == "stat_size":

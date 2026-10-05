@@ -26,6 +26,7 @@ from pcc.unsafe import (
     stack_alloc,
     store_i32,
     store_i8,
+    target_sys_platform,
     unsigned_div_i64,
     unsigned_rem_i64,
 )
@@ -52,6 +53,63 @@ def pcc_errno_get() -> i64:
 @c_abi_typed_export("pcc_errno_set", "void", ("i32",))
 def pcc_errno_set(value: i64) -> None:
     store_i32(pcc_errno_location(), 0, value)
+
+
+@c_abi_typed_export("pcc_errno_exception_kind", "i64", ("i32",))
+def pcc_errno_exception_kind(value: i64) -> i64:
+    """Map platform errno to the existing built-in OSError subclass tags.
+
+    Non-Darwin targets use the owned Linux-style errno namespace, including
+    Windows filesystem and socket wrappers (not raw Win32/WSA error codes).
+    No allocation, Python callback or ambient host errno lookup occurs here.
+    """
+    platform = target_sys_platform()
+    darwin: i64 = load_i8(platform, 0) == 100
+    if value == 2:
+        return 34
+    if value == 17:
+        return 35
+    if value == 13 or value == 1:
+        return 36
+    if value == 21:
+        return 37
+    if value == 20:
+        return 38
+    if value == 3:
+        return 39
+    if value == 10:
+        return 40
+    if value == 4:
+        return 42
+    if value == 32:
+        return 45
+    if darwin:
+        if value == 35 or value == 36 or value == 37:
+            return 43
+        if value == 60:
+            return 41
+        if value == 53:
+            return 46
+        if value == 61:
+            return 47
+        if value == 54:
+            return 48
+        if value == 58:
+            return 45
+    else:
+        if value == 11 or value == 114 or value == 115:
+            return 43
+        if value == 110:
+            return 41
+        if value == 103:
+            return 46
+        if value == 111:
+            return 47
+        if value == 104:
+            return 48
+        if value == 108:
+            return 45
+    return 14
 
 
 @c_abi_typed_export("pcc_errno_linux_c_locale_message", "ptr", ("i32",))

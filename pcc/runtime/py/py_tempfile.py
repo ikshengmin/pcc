@@ -17,7 +17,8 @@ from pcc.extern import (
 )
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET,
-    PY_FLAG_GC_PINNED, PY_TYPE_STR, PY_TYPE_BYTES, PY_TYPE_LIST,
+    PY_FLAG_GC_PINNED, PY_TYPE_STR, PY_TYPE_BYTES, PY_TYPE_BYTEARRAY,
+    PY_TYPE_MEMORYVIEW, PY_TYPE_LIST,
     PY_TYPE_INT, PY_TYPE_BOOL,
     PYSTROBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET,
 )
@@ -47,6 +48,14 @@ py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_index_i64_checked_slots = extern("py_index_i64_checked_slots", (c_ptr,), c_int64)
+py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
+pcc_platform_pwrite = extern(
+    "pcc_platform_pwrite", (c_int64, c_ptr, c_int64, c_int64), c_int64
+)
+pcc_platform_ftruncate = extern(
+    "pcc_platform_ftruncate", (c_int64, c_int64), c_int64
+)
+pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 py_file_fdopen_options = extern("py_file_fdopen_options",
     (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64), c_ptr)
 py_file_fspath = extern("py_file_fspath", (c_ptr,), c_ptr)
@@ -168,6 +177,12 @@ _OS_OPEN_FLAGS = 1
 _OS_OPEN_MODE = 2
 _OS_OPEN_DIR_FD = 3
 _OS_OPEN_NORMALIZED = 4
+# Positional descriptor operations share this named, independently rooted view.
+_OS_POSITIONAL_DESCRIPTOR = 0
+_OS_POSITIONAL_BUFFER = 1
+_OS_POSITIONAL_OFFSET = 2
+_OS_POSITIONAL_SNAPSHOT = 3
+_OS_TRUNCATE_LENGTH = 1
 # Registered native record: only state is managed, with its own root handle.
 _TD_NEXT = 0
 _TD_PREVIOUS = 8
@@ -198,6 +213,10 @@ define_global_ptr_null("pcc_os_open_function")
 define_global_ptr_null("pcc_os_open_root_handle")
 define_global_ptr_null("pcc_os_close_function")
 define_global_ptr_null("pcc_os_close_root_handle")
+define_global_ptr_null("pcc_os_pwrite_function")
+define_global_ptr_null("pcc_os_pwrite_root_handle")
+define_global_ptr_null("pcc_os_ftruncate_function")
+define_global_ptr_null("pcc_os_ftruncate_root_handle")
 
 
 def _td_none():
@@ -1031,13 +1050,17 @@ def _file_provider_function(temporary: int):
         source = global_addr("pcc_os_open_function")
     elif temporary == 3:
         source = global_addr("pcc_os_close_function")
+    elif temporary == 4:
+        source = global_addr("pcc_os_pwrite_function")
+    elif temporary == 5:
+        source = global_addr("pcc_os_ftruncate_function")
     pcc_mutex_lock(mutex)
     if not ptr_is_null(load_ptr(source, 0)):
         pcc_mutex_unlock(mutex)
         _td_copy_cached_owner(slots, pins, source)
         return _td_finish(slots, pins)
     pcc_mutex_unlock(mutex)
-    captures = _os_descriptor_signature(slots, pins, temporary == 3) if temporary >= 2 else _fdopen_signature(slots, pins, temporary)
+    captures = _os_descriptor_signature(slots, pins, temporary) if temporary >= 2 else _fdopen_signature(slots, pins, temporary)
     if not py_err_occurred():
         entry = function_addr("pcc_namedtempfile_entry") if temporary else function_addr("pcc_file_fdopen_entry")
         name = cstr("NamedTemporaryFile") if temporary else cstr("fdopen")
@@ -1047,6 +1070,12 @@ def _file_provider_function(temporary: int):
         elif temporary == 3:
             entry = function_addr("pcc_os_close_entry")
             name = cstr("close")
+        elif temporary == 4:
+            entry = function_addr("pcc_os_pwrite_entry")
+            name = cstr("pwrite")
+        elif temporary == 5:
+            entry = function_addr("pcc_os_ftruncate_entry")
+            name = cstr("ftruncate")
         _td_hold(slots, pins, _FILE_CALLABLE_CANDIDATE, py_func_new_named(
             entry, captures, name))
     root_failed: int = 0
@@ -1062,6 +1091,10 @@ def _file_provider_function(temporary: int):
                     global_store_ptr("pcc_os_open_root_handle", handle)
                 elif temporary == 3:
                     global_store_ptr("pcc_os_close_root_handle", handle)
+                elif temporary == 4:
+                    global_store_ptr("pcc_os_pwrite_root_handle", handle)
+                elif temporary == 5:
+                    global_store_ptr("pcc_os_ftruncate_root_handle", handle)
                 elif temporary:
                     global_store_ptr("pcc_namedtempfile_root_handle", handle)
                 else:
@@ -1096,16 +1129,36 @@ def py_os_close_function():
     return _file_provider_function(3)
 
 
-def _os_descriptor_signature(slots, pins, closing: int):
+@c_abi_export("py_os_pwrite_function")
+def py_os_pwrite_function():
+    return _file_provider_function(4)
+
+
+@c_abi_export("py_os_ftruncate_function")
+def py_os_ftruncate_function():
+    return _file_provider_function(5)
+
+
+def _os_descriptor_signature(slots, pins, operation: int):
+    closing: int = 1 if operation == 3 else 0
+    positional: int = 1 if operation == 4 or operation == 5 else 0
     count: int = 1 if closing else 4
+    if operation == 4:
+        count = 3
+    elif operation == 5:
+        count = 2
     index: int = _FILE_SIGNATURE_NAMES
     while index <= _FILE_SIGNATURE_DEFAULTS:
         _td_hold(slots, pins, index, py_tuple_new(count))
         index = index + 1
     index = 0
     while index < count:
-        name = cstr("fd") if closing else cstr("path")
-        if index == _OS_OPEN_FLAGS:
+        name = cstr("fd") if closing or positional else cstr("path")
+        if positional and index == 1:
+            name = cstr("buffer") if operation == 4 else cstr("length")
+        elif positional and index == 2:
+            name = cstr("offset")
+        elif index == _OS_OPEN_FLAGS:
             name = cstr("flags")
         elif index == _OS_OPEN_MODE:
             name = cstr("mode")
@@ -1115,14 +1168,15 @@ def _os_descriptor_signature(slots, pins, closing: int):
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_NAMES * C_POINTER_SIZE), index,
                           load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
         _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
-        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(2 if index == _OS_OPEN_DIR_FD else 0))
+        kind: int = 1 if positional else (2 if index == _OS_OPEN_DIR_FD else 0)
+        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(kind))
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_KINDS * C_POINTER_SIZE), index,
                           load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
         _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_PRESENT * C_POINTER_SIZE), index,
-            global_load_ptr("py_True") if index >= _OS_OPEN_MODE else global_load_ptr("py_False"))
+            global_load_ptr("py_True") if not positional and index >= _OS_OPEN_MODE else global_load_ptr("py_False"))
         default = _td_none()
-        if index == _OS_OPEN_MODE:
+        if not positional and index == _OS_OPEN_MODE:
             _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(511))
             default = load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE)
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_DEFAULTS * C_POINTER_SIZE), index, default)
@@ -1223,6 +1277,113 @@ def _os_close_entry(captures, args):
         else:
             py_incref(_td_none())
             _td_hold(slots, pins, _TD_OUTPUT, _td_none())
+    return _nt_finish(slots, pins)
+
+
+@c_abi_export("pcc_os_pwrite_entry")
+def _os_pwrite_entry(captures, args):
+    """Write immutable bytes; mutable/view exports remain an explicit gap.
+
+    A raw address lease prevents GC relocation, but does not implement
+    CPython's exported-buffer resize prohibition during offset.__index__.
+    Reject those buffer forms before that callback rather than silently
+    applying snapshot semantics to a different observable contract.
+    """
+    if py_tuple_len(args) != 3:
+        return _td_error(3, cstr("os.pwrite expects three positional arguments"))
+    if load_i8(target_sys_platform(), 0) == 119:
+        return _td_error(11, cstr("native os.pwrite requires an owned Windows provider"))
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    index: int = _OS_POSITIONAL_DESCRIPTOR
+    while index <= _OS_POSITIONAL_OFFSET and not py_err_occurred():
+        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        index = index + 1
+    descriptor: int = 0
+    offset: int = 0
+    if not py_err_occurred():
+        descriptor = _file_c_int_argument(slots, _OS_POSITIONAL_DESCRIPTOR)
+    if not py_err_occurred():
+        buffer = load_ptr(slots, _OS_POSITIONAL_BUFFER * C_POINTER_SIZE)
+        tag: int = -1
+        if not ptr_is_null(buffer) and not is_tagged_int(buffer):
+            tag = load_i32(buffer, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        if tag == PY_TYPE_BYTEARRAY or tag == PY_TYPE_MEMORYVIEW:
+            _td_error(11, cstr("native os.pwrite mutable buffers and memoryviews require owned buffer-export semantics"))
+        elif tag != PY_TYPE_BYTES:
+            _td_error(3, cstr("os.pwrite requires a bytes-like object"))
+    if not py_err_occurred():
+        offset = py_index_i64_checked_slots(
+            ptr_add(slots, _OS_POSITIONAL_OFFSET * C_POINTER_SIZE)
+        )
+    if not py_err_occurred():
+        # Exact bytes retain their identity with an independent owned result.
+        # Publish and pin that owner before exposing its payload to a syscall.
+        _td_hold(slots, pins, _OS_POSITIONAL_SNAPSHOT, py_bytes_from_obj(
+            load_ptr(slots, _OS_POSITIONAL_BUFFER * C_POINTER_SIZE)
+        ))
+    if not py_err_occurred():
+        snapshot = load_ptr(slots, _OS_POSITIONAL_SNAPSHOT * C_POINTER_SIZE)
+        length: int = load_i64(snapshot, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+        status: int = pcc_platform_pwrite(
+            descriptor, ptr_add(snapshot, PYBYTESOBJECT_DATA_OFFSET), length, offset
+        )
+        while status == -4 and not py_err_occurred():
+            pcc_thread_safepoint()
+            if not py_err_occurred():
+                snapshot = load_ptr(slots, _OS_POSITIONAL_SNAPSHOT * C_POINTER_SIZE)
+                status = pcc_platform_pwrite(
+                    descriptor, ptr_add(snapshot, PYBYTESOBJECT_DATA_OFFSET), length, offset
+                )
+        if not py_err_occurred():
+            if status < 0:
+                _td_os_error(status, _td_none())
+            else:
+                # A successful short write is observable to Python. The
+                # caller decides whether and how to complete the remainder.
+                _td_hold(slots, pins, _TD_OUTPUT, py_int_from_i64(status))
+    return _nt_finish(slots, pins)
+
+
+@c_abi_export("pcc_os_ftruncate_entry")
+def _os_ftruncate_entry(captures, args):
+    if py_tuple_len(args) != 2:
+        return _td_error(3, cstr("os.ftruncate expects two positional arguments"))
+    if load_i8(target_sys_platform(), 0) == 119:
+        return _td_error(11, cstr("native os.ftruncate requires an owned Windows provider"))
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    _td_hold(slots, pins, _OS_POSITIONAL_DESCRIPTOR, py_tuple_get(args, 0))
+    if not py_err_occurred():
+        _td_hold(slots, pins, _OS_TRUNCATE_LENGTH, py_tuple_get(args, 1))
+    descriptor: int = 0
+    length: int = 0
+    if not py_err_occurred():
+        descriptor = _file_c_int_argument(slots, _OS_POSITIONAL_DESCRIPTOR)
+    if not py_err_occurred():
+        length = py_index_i64_checked_slots(
+            ptr_add(slots, _OS_TRUNCATE_LENGTH * C_POINTER_SIZE)
+        )
+    if not py_err_occurred():
+        # The platform rejects negative lengths with errno; descriptor
+        # lifetime and current offset always remain the caller's property.
+        status: int = pcc_platform_ftruncate(descriptor, length)
+        while status == -4 and not py_err_occurred():
+            pcc_thread_safepoint()
+            if not py_err_occurred():
+                status = pcc_platform_ftruncate(descriptor, length)
+        if not py_err_occurred():
+            if status < 0:
+                _td_os_error(status, _td_none())
+            else:
+                py_incref(_td_none())
+                _td_hold(slots, pins, _TD_OUTPUT, _td_none())
     return _nt_finish(slots, pins)
 
 

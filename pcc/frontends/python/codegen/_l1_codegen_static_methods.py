@@ -623,7 +623,7 @@ def _part_52(out):
     _append_method(out, '_emit_owned_list_pop', (('self', 'pos', False), ('expr', 'pos', False), ('list_ty', 'pos', True)))
     _append_method(out, '_maybe_emit_owned_str_result', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_bytes_decode', (('self', 'pos', False), ('expr', 'pos', False), ('dynamic', 'pos', False)))
-    _append_method(out, '_emit_owned_os_runtime_call', (('self', 'pos', False), ('expr', 'pos', False), ('runtime_name', 'pos', False), ('arguments', 'pos', True), ('sequence', 'pos', True), ('field_index', 'pos', True)))
+    _append_method(out, '_emit_owned_os_runtime_call', (('self', 'pos', False), ('expr', 'pos', False), ('runtime_name', 'pos', False), ('arguments', 'pos', True), ('sequence', 'pos', True), ('field_index', 'pos', True), ('scalar', 'pos', True)))
     _append_method(out, '_emit_os_path_slot_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
 
 

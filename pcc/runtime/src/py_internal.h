@@ -40,6 +40,9 @@ void pcc_platform_abort(void);
 #ifdef PCC_USE_FREESTANDING_PLATFORM_IO
 int64_t pcc_platform_read(int64_t fd, void *buffer, int64_t size);
 int64_t pcc_platform_write(int64_t fd, const void *buffer, int64_t size);
+int64_t pcc_platform_pwrite(int64_t fd, const void *buffer, int64_t size,
+                          int64_t offset);
+int64_t pcc_platform_ftruncate(int64_t fd, int64_t length);
 int64_t pcc_platform_close(int64_t fd);
 #endif
 

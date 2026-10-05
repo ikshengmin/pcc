@@ -106,9 +106,10 @@ MAX_RECORDS = 8_000_000  # same rationale as MAX_LOCATIONS below: the pcc
                          # the per-function count is a u32 field and the
                          # total is only summed here -- so this guards
                          # against absurd payloads, not legit closures.
-MAX_LOCATIONS = 128_000_000  # merged pcc compiler closure exceeds 16M
-                             # managed locations; the bound guards
-                             # against absurd payloads, not legit closures
+# Resource budget, not a wire-format bound. Materialized maps charge every
+# record's locations; compact consumers charge the physical table and actual
+# unique-slice work. Repeated references do not allocate or revalidate roots.
+MAX_LOCATIONS = 128_000_000
 
 _HEADER = struct.Struct("<8sHBBIII")
 _FUNCTION = struct.Struct("<QQIIII")
@@ -883,8 +884,9 @@ def validate_stack_map_payload(
     """Validate one wire payload without materialising its decoded map.
 
     This is the executable-publication boundary for an already merged v2
-    table.  It preserves every structural and semantic check performed by
-    :func:`decode_stack_map`, but validates the shared location table through
+    table. It preserves the structural and semantic checks performed by
+    :func:`decode_stack_map`, while budgeting the work it actually performs
+    instead of that decoder's expanded allocation. It validates the table through
     its record slices instead of constructing millions of frozen dataclasses
     and then walking them a second time.  A location slice's semantics depend
     only on its table range, target architecture, and owning frame size, so a
@@ -910,11 +912,10 @@ def validate_stack_map_payload(
     if table_count > MAX_LOCATIONS:
         raise PreciseStackMapError("too many stack-map locations")
 
-    # Match decode_stack_map's fail-closed structural pass first.  Semantic
+    # Complete the fail-closed structural pass first. Semantic
     # validation below may then index the shared table without turning a
     # malformed size/count into an accidental slice or unpack error.
     total_records = 0
-    total_locations = 0
     for _ in range(function_count):
         function_fields, cursor = _take(
             payload, cursor, _FUNCTION, "function record"
@@ -950,9 +951,6 @@ def validate_stack_map_payload(
                 location_index = record_fields[9]
             if reserved_count or reserved_short:
                 raise PreciseStackMapError("non-zero reserved stack-map field")
-            total_locations += location_count
-            if total_locations > MAX_LOCATIONS:
-                raise PreciseStackMapError("too many stack-map locations")
             if location_index + location_count > table_count:
                 raise PreciseStackMapError(
                     "stack-map record names locations outside its table"
@@ -968,6 +966,7 @@ def validate_stack_map_payload(
     previous_function_id = -1
     seen_safepoints: set[int] = set()
     validated_location_slices: set[tuple[int, int, int]] = set()
+    validation_locations = 0
     stack_registers = (29, 31) if arch == ARCH_AARCH64 else (6, 7)
     register_limit = _register_limit(arch)
     arch_name = ARCH_NAMES[arch]
@@ -1070,6 +1069,12 @@ def validate_stack_map_payload(
             slice_key = (location_index, location_count, frame_size)
             if slice_key in validated_location_slices:
                 continue
+            # Overlapping slices or one range used with different frames can
+            # require more work than the physical table. Bound that work before
+            # iterating or allocating prior_flags; never omit semantic checks.
+            validation_locations += location_count
+            if validation_locations > MAX_LOCATIONS:
+                raise PreciseStackMapError("too much stack-map location validation work")
             start = table_start + location_index * _LOCATION.size
             end = start + location_count * _LOCATION.size
             prior_flags: list[int] = []
@@ -1182,32 +1187,19 @@ def validate_stack_map_payload(
 
 
 def _skip_safepoint_records(
-    payload: bytes, cursor: int, record_count: int, total_locations: int,
-) -> tuple[int, int]:
-    """Check fixed record bounds/counts without decoding unused fields.
+    payload: bytes, cursor: int, record_count: int,
+) -> int:
+    """Bound the fixed-width record range without expanding shared locations.
 
-    These structural scans need only the uint16 location count at byte 20
-    of the v2 <QIIIHHBBHI record. Full semantic validation still decodes all
-    fields before publication. Keep the struct path for other buffers (and
-    subclasses whose Python indexing need not expose their buffer bytes).
+    Callers bound aggregate record/function counts and the physical table.
+    No locations are visited or allocated here; semantic validation and merge
+    separately bound unique-slice work. A logical reference count would charge
+    repeatedly for roots these structural scans do not even read.
     """
-    byte_indexing = type(payload) is bytes or type(payload) is bytearray
-    record_size = _RECORD.size
-    payload_size = len(payload)
-    for _ in range(record_count):
-        end = cursor + record_size
-        if end > payload_size:
-            raise PreciseStackMapError("truncated safepoint record")
-        if byte_indexing:
-            location_count = payload[cursor + 20] | (payload[cursor + 21] << 8)
-        else:
-            fields, _end = _take(payload, cursor, _RECORD, "safepoint record")
-            location_count = fields[4]
-        total_locations += location_count
-        if total_locations > MAX_LOCATIONS:
-            raise PreciseStackMapError("too many stack-map locations")
-        cursor = end
-    return cursor, total_locations
+    end = cursor + record_count * _RECORD.size
+    if end > len(payload):
+        raise PreciseStackMapError("truncated safepoint record")
+    return end
 
 
 def function_address_offsets(payload: bytes) -> tuple[int, ...]:
@@ -1227,9 +1219,12 @@ def function_address_offsets(payload: bytes) -> tuple[int, ...]:
         raise PreciseStackMapError("unsupported stack-map pointer size")
     if arch not in ARCH_NAMES:
         raise PreciseStackMapError(f"unknown stack-map architecture {arch}")
+    if function_count > MAX_FUNCTIONS:
+        raise PreciseStackMapError("too many stack-map functions")
+    if table_count > MAX_LOCATIONS:
+        raise PreciseStackMapError("too many stack-map locations")
     offsets: list[int] = []
     total_records = 0
-    total_locations = 0
     for _ in range(function_count):
         function_start = cursor
         function_fields, cursor = _take(
@@ -1249,9 +1244,7 @@ def function_address_offsets(payload: bytes) -> tuple[int, ...]:
                 + " exceeds "
                 + str(MAX_RECORDS)
             )
-        cursor, total_locations = _skip_safepoint_records(
-            payload, cursor, record_count, total_locations,
-        )
+        cursor = _skip_safepoint_records(payload, cursor, record_count)
     if cursor + table_count * _LOCATION.size != len(payload):
         raise PreciseStackMapError("stack-map size disagrees with decoded records")
     return tuple(offsets)
@@ -1276,9 +1269,12 @@ def _scan_stack_map_payload(payload: bytes):
         raise PreciseStackMapError("unsupported stack-map pointer size")
     if arch not in ARCH_NAMES:
         raise PreciseStackMapError(f"unknown stack-map architecture {arch}")
+    if function_count > MAX_FUNCTIONS:
+        raise PreciseStackMapError("too many stack-map functions")
+    if table_count > MAX_LOCATIONS:
+        raise PreciseStackMapError("too many stack-map locations")
     functions: list[tuple[int, int, int]] = []
     total_records = 0
-    total_locations = 0
     for _ in range(function_count):
         fn_start = cursor
         function_fields, cursor = _take(
@@ -1293,9 +1289,7 @@ def _scan_stack_map_payload(payload: bytes):
                 + " exceeds "
                 + str(MAX_RECORDS)
             )
-        cursor, total_locations = _skip_safepoint_records(
-            payload, cursor, record_count, total_locations,
-        )
+        cursor = _skip_safepoint_records(payload, cursor, record_count)
         functions.append((function_id, fn_start, cursor))
     table_start = cursor
     if table_start + table_count * _LOCATION.size != len(payload):
@@ -1326,6 +1320,8 @@ def merge_stack_map_payloads(
     table: list[bytes] = []
     table_index: dict[bytes, int] = {}
     table_locations = 0
+    merge_locations = 0
+    total_records = 0
     location_size = _LOCATION.size
     record_size = _RECORD.size
     function_size = _FUNCTION.size
@@ -1344,6 +1340,12 @@ def merge_stack_map_payloads(
         # rebuilding and hashing the same location bytes for each occurrence.
         source_index_cache: dict[int, int] = {}
         for function_id, fn_start, fn_end in scanned:
+            if len(functions) >= MAX_FUNCTIONS:
+                raise PreciseStackMapError("too many stack-map functions")
+            # The structural scan established these fixed-width boundaries.
+            total_records += (fn_end - fn_start - function_size) // record_size
+            if total_records > MAX_RECORDS:
+                raise PreciseStackMapError("too many stack-map records")
             if function_id in seen_ids:
                 raise PreciseStackMapError(
                     f"duplicate stack-map function id {function_id}"
@@ -1377,10 +1379,19 @@ def merge_stack_map_payloads(
                     | (blob[cursor + 30] << 16)
                     | (blob[cursor + 31] << 24)
                 )
+                if index + count > table_count:
+                    raise PreciseStackMapError(
+                        "stack-map record names locations outside its table"
+                    )
                 source_key = (index << 16) | count
                 if source_key in source_index_cache:
                     merged_index = source_index_cache[source_key]
                 else:
+                    # Charge each distinct source range before copying/hashing.
+                    # Partially overlapping ranges must not bypass the work cap.
+                    merge_locations += count
+                    if merge_locations > MAX_LOCATIONS:
+                        raise PreciseStackMapError("too much stack-map location merge work")
                     start = index * location_size
                     key = bytes(source_table[start:start + count * location_size])
                     if key in table_index:
@@ -1390,6 +1401,8 @@ def merge_stack_map_payloads(
                         table_index[key] = merged_index
                         table.append(key)
                         table_locations += count
+                        if table_locations > MAX_LOCATIONS:
+                            raise PreciseStackMapError("too many stack-map locations")
                     source_index_cache[source_key] = merged_index
                 blob[cursor + 28] = merged_index & 0xFF
                 blob[cursor + 29] = (merged_index >> 8) & 0xFF

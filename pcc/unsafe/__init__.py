@@ -349,6 +349,23 @@ def seek_file(fd: int, offset: int, whence: int) -> int:
     _trap("seek_file")
 
 
+def pwrite_file(fd: int, ptr: Any, size: int, offset: int) -> int:
+    """Write at an absolute offset; return a short count or negative errno.
+
+    The caller owns the descriptor and must keep the payload address stable
+    throughout the operation. Unsupported targets return -ENOSYS.
+    """
+    _trap("pwrite_file")
+
+
+def truncate_file(fd: int, length: int) -> int:
+    """Resize an owned descriptor without seeking or closing it.
+
+    Return zero or negative errno. Unsupported targets return -ENOSYS.
+    """
+    _trap("truncate_file")
+
+
 def open_readonly(path: Any) -> int:
     """Open a path read-only and return fd or a negative errno."""
     _trap("open_readonly")
@@ -619,6 +636,11 @@ def stat_kind(path: Any) -> int:
     _trap("stat_kind")
 
 
+def lstat_kind(path: Any) -> int:
+    """Snapshot a path without following it: error=0, other=1, dir=2, link=3."""
+    _trap("lstat_kind")
+
+
 def stat_mtime(path: Any) -> float:
     _trap("stat_mtime")
 
@@ -722,6 +744,16 @@ def directory_open(path: Any) -> Any:
 def directory_next(stream: Any) -> Any:
     """Borrow a UTF-8 entry name until the next stream operation."""
     _trap("directory_next")
+
+
+def directory_entry_type(stream: Any, entry: Any) -> int:
+    """Classify the current directory record: unknown=0, other=1, dir=2, link=3.
+
+    The entry must be the name most recently returned by directory_next on
+    this live stream. The classification reads cached entry metadata and
+    performs no filesystem query, allocation or callback.
+    """
+    _trap("directory_entry_type")
 
 
 def directory_error(stream: Any) -> int:
@@ -1220,6 +1252,8 @@ __all__ = [
     "read",
     "close",
     "seek_file",
+    "pwrite_file",
+    "truncate_file",
     "open_readonly",
     "darwin_current_rss_bytes",
     "darwin_peak_rss_bytes",
@@ -1270,6 +1304,7 @@ __all__ = [
     "initial_environ",
     "access",
     "stat_kind",
+    "lstat_kind",
     "stat_mtime",
     "stat_size",
     "is_symlink",
@@ -1287,7 +1322,7 @@ __all__ = [
     "atomic_test_and_set",
     "atomic_clear",
     "windows_full_path", "windows_real_path",
-    "directory_open", "directory_next", "directory_error", "directory_close",
+    "directory_open", "directory_next", "directory_entry_type", "directory_error", "directory_close",
     "syscall6",
     "linux_set_thread_pointer",
     "page_alloc",

@@ -6294,6 +6294,7 @@ class ClassLowering:
         ns_obj: ir.Value,
         ns_info: Optional[ClassInfo],
         method_objects: dict[str, ir.Value],
+        namespace_root,
     ) -> dict[str, ir.Value]:
         precomputed: dict[str, ir.Value] = {}
         self._emit_namespace_load_name_probe(
@@ -6340,9 +6341,14 @@ class ClassLowering:
                 saved_env[name] = self.parent.env.get(name, missing_env)
         factory_captures = []
         previous_error_target = self.parent._current_try_err_block()
+        previous_namespace = getattr(self.parent, "_class_namespace_context", None)
+        self.parent._class_namespace_context = (
+            self.parent.current_function, namespace_root, {}, dict(self.parent.env), True,
+        )
         try:
             factory_captures = self._emit_prepared_namespace_statements(cd, info, ns_obj, ns_info, precomputed, method_objects)
         finally:
+            self.parent._class_namespace_context = previous_namespace
             for capture_root, owns_capture in reversed(factory_captures):
                 value = self.parent.builder.call(self.parent.runtime["pcc_gc_load_ptr"], [ir.Constant(_PTR, None), capture_root], name=self._fresh("namespace.factory.current"))
                 self.parent._leave_container_temp_root(capture_root)
@@ -6377,19 +6383,10 @@ class ClassLowering:
                     continue
                 target = stmt.targets[0]
                 if _is_ast_node(target, Name):
-                    if (
-                        _is_ast_node(stmt.value, Name)
-                        and stmt.value.ident in precomputed
-                    ):
-                        self._emit_namespace_load_name_probe(
-                            ns_obj,
-                            ns_info,
-                            stmt.value.ident,
-                            stmt.value.span,
-                        )
-                        value_obj = precomputed[stmt.value.ident]
-                    else:
-                        value_obj = self._emit_namespace_expr_object(stmt.value)
+                    # LOAD_NAME consumes the actual mapping result. A probe
+                    # followed by a cached value loses __getitem__/__missing__
+                    # substitutions and can retain a value deleted by a hook.
+                    value_obj = self._emit_namespace_expr_object(stmt.value)
                     self._emit_namespace_setitem(
                         ns_obj,
                         ns_info,
@@ -6402,6 +6399,7 @@ class ClassLowering:
                         global_var = info.class_attrs[attr_name][0]
                         self.parent.builder.store(value_obj, global_var)
                         self.parent.env[target.ident] = (global_var, _PTR, stmt.value.ty)
+                        self.parent._class_namespace_context[2][target.ident] = (global_var, target.ident)
                     continue
             if _is_ast_node(stmt, Delete):
                 for target in stmt.targets:
@@ -6429,6 +6427,7 @@ class ClassLowering:
                     slot = self.parent._alloca_in_entry(_PTR, name=self._fresh("namespace.method.local"), init_null=True)
                     self.parent.builder.store(method_obj, slot)
                     self.parent.env[stmt.name] = (slot, _PTR, DynType(name="dyn"))
+                    self.parent._class_namespace_context[2][stmt.name] = (slot, stmt.name)
                     self._emit_namespace_setitem(
                         ns_obj,
                         ns_info,
@@ -6459,39 +6458,7 @@ class ClassLowering:
         ns_info = self.classes.get(ns_class_name)
         if ns_info is None:
             return None
-        meta_cls_ptr = self._load_class_object(
-            meta_info,
-            f".meta.{metaclass_name}",
-        )
-        name_expr = self._class_name_expr(cd)
-        bases_expr = self._class_bases_tuple_expr(cd)
-        ns_obj = self.parent._emit_direct_method_call(
-            meta_info.methods["__prepare__"],
-            meta_cls_ptr,
-            meta_info,
-            "__prepare__",
-            (name_expr, bases_expr),
-            kwargs=(),
-        )
-        precomputed = self._emit_prepared_namespace_body_writes(
-            cd,
-            info,
-            ns_obj,
-            ns_info,
-            method_objects,
-        )
-        name_obj = self.parent._emit_str_literal(cd.name)
-        bases_obj = self.parent._emit_as_object(bases_expr)
-        result = self.parent._call_user(
-            meta_info.methods["__new__"],
-            [meta_cls_ptr, name_obj, bases_obj, ns_obj],
-            self._fresh(f"{metaclass_name}.__new__.ret"),
-            None,
-        )
-        result_ty = _classgen_value_type_or_none(result)
-        if result_ty is not None and _classgen_ir_type_is_pointer(result_ty):
-            return result, precomputed
-        return None
+        return self._emit_prepared_namespace_constructor(cd, info, meta_info, ns_info, method_objects)
 
     def _maybe_emit_metaclass_generic_prepared_namespace_constructor(
         self,
@@ -6511,39 +6478,80 @@ class ClassLowering:
             return None
         if "__prepare__" not in meta_info.methods or "__new__" not in meta_info.methods:
             return None
-        meta_cls_ptr = self._load_class_object(
-            meta_info,
-            f".meta.{metaclass_name}",
-        )
+        return self._emit_prepared_namespace_constructor(cd, info, meta_info, None, method_objects)
+
+    def _emit_prepared_namespace_constructor(self, cd, info, meta_info, ns_info, method_objects):
+        parent = self.parent
+        previous = parent._current_try_err_block()
+        target = previous if previous is not None else parent._ensure_fn_err_exit()
+        saved_cpy = parent._cpy_operand_cleanup_block
+        # Register outputs before the hook runs; __prepare__ publishes its
+        # NEW owner at the return instruction, before argument cleanup.
+        result_root = parent._new_slot_call_root("namespace.class.result")
+        namespace_root = parent._new_slot_call_root("class.definition.namespace.prepared")
+        cleanup = parent._slot_call_cleanup_block((result_root, namespace_root), target)
+        parent._try_err_block = cleanup
+        parent._cpy_operand_cleanup_block = cleanup
+        meta_cls_ptr = self._load_class_object(meta_info, f".meta.{meta_info.name}")
         name_expr = self._class_name_expr(cd)
         bases_expr = self._class_bases_tuple_expr(cd)
-        ns_obj = self.parent._emit_direct_method_call(
-            meta_info.methods["__prepare__"],
-            meta_cls_ptr,
-            meta_info,
-            "__prepare__",
-            (name_expr, bases_expr),
-            kwargs=(),
-        )
-        precomputed = self._emit_prepared_namespace_body_writes(
-            cd,
-            info,
-            ns_obj,
-            None,
-            method_objects,
-        )
-        name_obj = self.parent._emit_str_literal(cd.name)
-        bases_obj = self.parent._emit_as_object(bases_expr)
-        result = self.parent._call_user(
-            meta_info.methods["__new__"],
-            [meta_cls_ptr, name_obj, bases_obj, ns_obj],
-            self._fresh(f"{metaclass_name}.__new__.ret"),
-            None,
-        )
-        result_ty = _classgen_value_type_or_none(result)
-        if result_ty is not None and _classgen_ir_type_is_pointer(result_ty):
-            return result, precomputed
-        return None
+        try:
+            parent._emit_direct_method_call(
+                meta_info.methods["__prepare__"], meta_cls_ptr, meta_info,
+                "__prepare__", (name_expr, bases_expr), kwargs=(),
+                result_slot=namespace_root,
+            )
+            parent._guard_cpy_value_not_null(parent.builder.load(namespace_root))
+            # Existing mapping hook ABIs accept raw operands. One counted
+            # lease keeps the namespace address stable for the entire body;
+            # default readers independently acquire values from this owner.
+            token = parent.builder.call(
+                parent.runtime["pcc_gc_foreign_lease_acquire"], [parent._as_gc_ptr(namespace_root)],
+                name=self._fresh("namespace.body.lease"),
+            )
+            parent._slot_call_check_status(token, "prepared namespace lease", cd.span)
+            leased_cleanup = parent._slot_call_cleanup_block(
+                (result_root, namespace_root), target, ((namespace_root, token),),
+            )
+            parent._try_err_block = leased_cleanup
+            parent._cpy_operand_cleanup_block = leased_cleanup
+            ns_obj = parent.builder.load(namespace_root, name=self._fresh("namespace.body.current"))
+            precomputed = self._emit_prepared_namespace_body_writes(
+                cd, info, ns_obj, ns_info, method_objects, namespace_root,
+            )
+            parent._cpy_operand_cleanup_block = parent._current_try_err_block()
+            name_obj = parent._emit_str_literal(cd.name)
+            bases_obj = parent._emit_as_object(bases_expr)
+            parent._call_user(
+                meta_info.methods["__new__"], [meta_cls_ptr, name_obj, bases_obj, ns_obj],
+                self._fresh(f"{meta_info.name}.__new__.ret"), cd.span,
+                result_slot=result_root,
+            )
+            # The class result stays owned while retiring the mapping lease
+            # and namespace root can dispose user objects.
+            released = parent.builder.call(
+                parent.runtime["pcc_gc_foreign_lease_release"], [parent._as_gc_ptr(namespace_root), token],
+                name=self._fresh("namespace.body.release"),
+            )
+            parent._try_err_block = cleanup
+            parent._cpy_operand_cleanup_block = cleanup
+            parent._slot_call_check_status(released, "prepared namespace release", cd.span)
+            parent._release_slot_call_roots((namespace_root,))
+            result = parent._take_slot_call_root(result_root)
+        finally:
+            parent._try_err_block = previous
+            parent._cpy_operand_cleanup_block = saved_cpy
+        # Published methods remain pinned until the outer class-body
+        # transaction copies them. Its error edge no longer owns these roots.
+        for method_obj in method_objects.values():
+            method_target = parent._current_try_err_block()
+            if method_target is None:
+                method_target = parent._ensure_fn_err_exit()
+            parent._try_err_block = parent._make_cpy_operand_cleanup_block(
+                (), (), method_target, "namespace.method.after_namespace.unwind",
+                pinned_pcc=((method_obj, False),),
+            )
+        return result, precomputed
 
     def _maybe_emit_metaclass_dynamic_constructor(
         self,

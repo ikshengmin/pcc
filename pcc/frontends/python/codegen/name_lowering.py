@@ -111,6 +111,7 @@ class NameLoweringMixin:
             descriptor_name = {
                 "py_os_open_function": "open", "py_os_close_function": "close",
                 "py_file_fdopen_function": "fdopen", "py_os_mkdir_function": "mkdir",
+                "py_os_pwrite_function": "pwrite", "py_os_ftruncate_function": "ftruncate",
             }.get(runtime_name)
             span = expr.span if expr is not None else None
             if descriptor_name is not None and "os" in getattr(self, "_sibling_module_inits", ()):
@@ -969,9 +970,10 @@ class NameLoweringMixin:
             builtin_value = self._native_builtin_value_for_name(expr.ident)
             if builtin_value == "tempfile.TemporaryDirectory":
                 return self._emit_owned_namespace_runtime_value("py_tempdir_type", (), expr)
-            if builtin_value in ("os.fdopen", "os.open", "os.close", "os.mkdir"):
+            if builtin_value in ("os.fdopen", "os.open", "os.close", "os.mkdir", "os.pwrite", "os.ftruncate"):
                 provider = {"os.fdopen": "py_file_fdopen_function", "os.open": "py_os_open_function",
-                            "os.close": "py_os_close_function", "os.mkdir": "py_os_mkdir_function"}[builtin_value]
+                            "os.close": "py_os_close_function", "os.mkdir": "py_os_mkdir_function",
+                            "os.pwrite": "py_os_pwrite_function", "os.ftruncate": "py_os_ftruncate_function"}[builtin_value]
                 return self._emit_owned_namespace_runtime_value(provider, (), expr)
             if builtin_value is not None and builtin_value.startswith("os.O_"):
                 flag = native_os_descriptor_constant(builtin_value[3:], self._target_sys_platform_text())

@@ -7,13 +7,18 @@ delegates to extern libc.
 
 from __future__ import annotations
 
-from pcc.extern import extern, c_int, c_int64, c_str, c_ptr, c_rawptr
+from pcc.extern import (
+    c_int, c_int64, c_obj, c_ptr, c_rawptr, c_str, extern,
+)
 
 _getenv = extern("getenv", (c_str,), c_rawptr)
 _setenv = extern("setenv", (c_str, c_str, c_int), c_int)
 _getcwd = extern("getcwd", (c_str, c_int64), c_rawptr)
 _access = extern("pcc_platform_access", (c_str, c_int64), c_int64)
 _getpid = extern("pcc_platform_getpid", (), c_int64)
+_walk_scan = extern("py_os_walk_scan", (c_obj, c_obj, c_obj), c_obj)
+_walk_prefix = extern("py_os_walk_prefix", (c_obj,), c_obj)
+_path_islink_result = extern("py_os_path_islink_result", (c_obj,), c_obj)
 
 
 # POSIX file-access constants.
@@ -74,6 +79,52 @@ def fspath(path):
     if not isinstance(result, (str, bytes)):
         raise TypeError("__fspath__() must return str or bytes")
     return result
+
+
+def walk(top, topdown=True, onerror=None, followlinks=False):
+    """Yield owned directory rows, retaining the caller's mutable dirnames."""
+    # This is an ordinary generator: path conversion and directory access
+    # start at first next(), and normal generator frames own all suspended
+    # values. No directory stream survives the synchronous scan boundary.
+    pending = [(False, fspath(top))]
+    while pending:
+        emit, value = pending.pop()
+        if emit:
+            yield value
+            continue
+        root = value
+        try:
+            scanned = _walk_scan(root, topdown, followlinks)
+            if isinstance(scanned, BaseException):
+                raise scanned
+            directories, files, children = scanned
+        except OSError as error:
+            if onerror is not None:
+                onerror(error)
+            continue
+        row = root, directories, files
+        if topdown:
+            yield row
+            if directories:
+                prefix = _walk_prefix(root)
+                if isinstance(prefix, BaseException):
+                    raise prefix
+                # Read the identical list exposed in the row. Recheck links
+                # only after the caller's pruning, reordering and replacement.
+                for child in reversed(directories):
+                    child_path = prefix + child
+                    if followlinks:
+                        pending.append((False, child_path))
+                    else:
+                        linked = _path_islink_result(child_path)
+                        if isinstance(linked, BaseException):
+                            raise linked
+                        if not linked:
+                            pending.append((False, child_path))
+        else:
+            pending.append((True, row))
+            for child in reversed(children):
+                pending.append((False, child))
 
 
 class _path:

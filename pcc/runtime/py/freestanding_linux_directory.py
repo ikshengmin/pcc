@@ -1,7 +1,9 @@
 """Owned Linux directory streams over getdents64."""
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_ptr
+from pcc.extern import (
+    c_abi_export, c_int32, c_ptr, c_void, extern,
+)
 from pcc.unsafe import (
     malloc, free, null, ptr_is_null, ptr_add, load_i8, load_i64,
     store_i64, close, syscall6, target_platform_machine,
@@ -9,16 +11,20 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+pcc_errno_set = extern("pcc_errno_set", (c_int32,), c_void)
+
 
 @c_abi_export("pcc_linux_directory_open")
 def directory_open(path: c_ptr) -> c_ptr:
     arm: i64 = 1 if load_i8(target_platform_machine(), 0) == 97 else 0
     fd: i64 = syscall6(56 if arm else 257, -100, path, 65536 | 524288, 0, 0, 0)
     if fd < 0:
+        pcc_errno_set(0 - fd)
         return null()
     stream = malloc(32800)
     if ptr_is_null(stream):
         close(fd)
+        pcc_errno_set(12)
         return null()
     store_i64(stream, 0, fd)
     store_i64(stream, 8, 0)

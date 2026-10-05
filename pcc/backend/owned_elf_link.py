@@ -4,12 +4,40 @@ import os
 import hashlib
 
 from .elf_x86_64 import (
-    EM_AARCH64, ElfError, link_static_executable, parse_relocatable,
+    EM_AARCH64, ElfError, _link_static_executable_image, parse_relocatable,
     parse_static_executable,
     read_archive_payloads,
 )
 from .macho_internal_inputs import read_internal_input_manifest
 from .self_backend_target_match import is_aarch64_linux_triple, is_x86_64_linux_triple
+
+
+
+_IMAGE_CHUNK_BYTES = 1024 * 1024
+
+
+def _image_chunks(image: bytearray):
+    # Native file.write and hashlib each snapshot bytearray inputs. Publish
+    # bounded immutable copies so both APIs retain bytes without another copy.
+    for offset in range(0, len(image), _IMAGE_CHUNK_BYTES):
+        yield bytes(image[offset:offset + _IMAGE_CHUNK_BYTES])
+
+
+def _write_image_chunks(stream, image: bytearray) -> None:
+    for chunk in _image_chunks(image):
+        position = 0
+        while position < len(chunk):
+            count = stream.write(chunk[position:])
+            if count is None or count <= 0 or count > len(chunk) - position:
+                raise OSError("owned ELF image write made invalid progress")
+            position += count
+
+
+def _image_sha256(image: bytearray) -> str:
+    digest = hashlib.sha256()
+    for chunk in _image_chunks(image):
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 def assemble(text: str, target: str):
@@ -73,7 +101,7 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
                 inputs.append(assemble(stream.read(), target))
         else:
             with open(path, "rb") as stream:
-                inputs.append(parse_relocatable(stream.read()))
+                inputs.append(parse_relocatable(stream.read(), compact_relocations=True))
     archive_data = []
     for path in archives:
         with open(path, "rb") as stream:
@@ -87,8 +115,8 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     from .linux_thread_intrinsics import assembly as thread_assembly
     inputs.append(assemble(thread_assembly(expected == EM_AARCH64), target))
     selections = [] if map_path else None
-    image = link_static_executable(inputs, archives=archive_data, entry=entry,
-                                   archive_selections=selections)
+    image = _link_static_executable_image(inputs, archives=archive_data, entry=entry,
+                                   archive_selections=selections, compact_archive_relocations=True)
     parse_static_executable(image)
     map_text = ""
     if map_path:
@@ -104,7 +132,7 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
             payloads.append(member_bytes)
         archive_hashes = [hashlib.sha256(data).hexdigest() for data in archive_data]
         lines = ["# pcc owned ELF link map v1", "# target " + target, "# entry " + entry,
-                 "# image sha256=" + hashlib.sha256(image).hexdigest()]
+                 "# image sha256=" + _image_sha256(image)]
         for index, member in selections:
             lines.append(str(archives[index]) + "(" + member + ")"
                          + " archive_sha256=" + archive_hashes[index]
@@ -113,7 +141,7 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     temporary = output + ".pcc-link.tmp"
     try:
         with open(temporary, "wb") as stream:
-            stream.write(image)
+            _write_image_chunks(stream, image)
         os.chmod(temporary, 0o755)
         os.replace(temporary, output)
         if map_path:

@@ -6,7 +6,12 @@ path objects are coerced through py_obj_str before reading UTF-8 bytes.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET,
+    PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_PINNED,
+    PY_TYPE_BYTES, PY_TYPE_INT, PY_TYPE_LIST,
+    PY_TYPE_STR, PY_TYPE_TUPLE,
+)
 from pcc.extern import (
     extern, c_abi_export, c_double, c_ptr, c_int32, c_int64, c_void,
 )
@@ -78,6 +83,35 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 
+py_bool_from_bit = extern("py_bool_from_bit", (c_int32,), c_ptr)
+py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
+py_file_fspath = extern("py_file_fspath", (c_ptr,), c_ptr)
+py_text_encode_ids = extern("py_text_encode_ids", (c_ptr, c_int64, c_int64), c_ptr)
+py_err_occurred = extern("py_err_occurred", (), c_int64)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+_FS_PATH = 0
+_FS_NORMALIZED = 1
+_FS_ENCODED = 2
+_FS_QUERY_CLASS = 3
+_FS_QUERY_ERROR = 4
+_FS_RESULT = 5
+_FS_ENTRY_ERROR = 6
+_FS_EXIT_ERROR = 7
+_FS_SLOT_COUNT = 8
+
+define_global_i32("pcc_os_fsencode_frame_map", _FS_SLOT_COUNT)
+define_global_i32("pcc_os_fsencode_borrowed_map", -1)
 define_global_i32("pcc_os_path_abspath_frame_map", 3)
 define_global_i32("pcc_os_path_normpath_frame_map", 2)
 define_global_i32("pcc_os_path_relpath_frame_map", 4)
@@ -623,23 +657,214 @@ def py_os_path_isfile(path) -> int:
     return 0
 
 
+def _fs_fail(kind: int, message) -> int:
+    if not py_err_occurred():
+        py_raise_owned(py_exc_new(kind, message))
+    return -1
+
+
+def _fs_open(slots, tokens) -> None:
+    memset(slots, 0, _FS_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _FS_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_os_fsencode_frame_map"), slots)
+    py_tls_exc_swap_slot(ptr_add(slots, _FS_ENTRY_ERROR * C_POINTER_SIZE))
+
+
+def _fs_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(slot, 0)):
+        return _fs_fail(19, cstr("filesystem encoding returned no owner"))
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        return _fs_fail(7, cstr("filesystem encoding could not lease its owner"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return -1 if py_err_occurred() else 0
+
+
+def _fs_copy(slots, tokens, index: int, source, borrowed: int) -> int:
+    destination = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = pcc_gc_root_copy_borrowed_lease(destination, source) if borrowed else pcc_gc_root_copy_lease(destination, source)
+    if token < 0:
+        return _fs_fail(7, cstr("filesystem encoding requires an authoritative owner"))
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    return 0
+
+
+def _fs_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * C_POINTER_SIZE)) != 0:
+        pcc_platform_abort()
+        return
+    store_i64(tokens, index * C_POINTER_SIZE, 0)
+    pcc_gc_store_root(slot, null())
+
+
+def _fs_close(slots, tokens, keep_result: int = 0) -> None:
+    py_tls_exc_swap_slot(ptr_add(slots, _FS_EXIT_ERROR * C_POINTER_SIZE))
+    index: int = _FS_RESULT
+    while index >= _FS_PATH:
+        if not keep_result or index != _FS_RESULT:
+            _fs_drop(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    if not ptr_is_null(load_ptr(slots, _FS_EXIT_ERROR * C_POINTER_SIZE)):
+        pcc_gc_store_root(ptr_add(slots, _FS_ENTRY_ERROR * C_POINTER_SIZE), null())
+        py_clear_exception()
+        py_tls_exc_swap_slot(ptr_add(slots, _FS_EXIT_ERROR * C_POINTER_SIZE))
+    else:
+        py_tls_exc_swap_slot(ptr_add(slots, _FS_ENTRY_ERROR * C_POINTER_SIZE))
+    if not keep_result:
+        pcc_gc_frame_leave(slots)
+
+
+def _fs_encode(slots, tokens) -> int:
+    # Normalize via the shared special-method protocol. Bytes retain their
+    # exact contents; text follows the runtime filesystem codec contract.
+    path = load_ptr(slots, _FS_PATH * C_POINTER_SIZE)
+    native_path: int = 0
+    if not ptr_is_null(path) and not is_tagged_int(path):
+        kind: int = load_i32(path, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        native_path = kind == PY_TYPE_STR or kind == PY_TYPE_BYTES
+    if native_path:
+        if _fs_copy(slots, tokens, _FS_NORMALIZED,
+                    ptr_add(slots, _FS_PATH * C_POINTER_SIZE), 0) != 0:
+            return -1
+    else:
+        store_ptr(slots, _FS_NORMALIZED * C_POINTER_SIZE, py_file_fspath(path))
+        if _fs_adopt(slots, tokens, _FS_NORMALIZED) != 0:
+            return -1
+    path = load_ptr(slots, _FS_NORMALIZED * C_POINTER_SIZE)
+    if load_i32(path, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BYTES:
+        return _fs_copy(slots, tokens, _FS_ENCODED,
+                        ptr_add(slots, _FS_NORMALIZED * C_POINTER_SIZE), 0)
+    store_ptr(slots, _FS_ENCODED * C_POINTER_SIZE, py_text_encode_ids(path, 0, 3))
+    return _fs_adopt(slots, tokens, _FS_ENCODED)
+
+
+@c_abi_export("py_os_fsencode_slots")
+def py_os_fsencode_slots(path_slot, output_slot) -> int:
+    """Publish filesystem-encoded bytes from an authoritative path owner."""
+    if ptr_is_null(path_slot) or ptr_is_null(output_slot):
+        return _fs_fail(7, cstr("filesystem encoding requires input and output roots"))
+    slots = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    _fs_open(slots, tokens)
+    status: int = -1
+    if not ptr_is_null(load_ptr(output_slot, 0)):
+        _fs_fail(7, cstr("filesystem encoding output must be empty"))
+    elif _fs_copy(slots, tokens, _FS_PATH, path_slot, 0) == 0:
+        status = _fs_encode(slots, tokens)
+        if status == 0:
+            encoded = ptr_add(slots, _FS_ENCODED * C_POINTER_SIZE)
+            if pcc_gc_root_move(output_slot, encoded) != 0:
+                status = _fs_fail(7, cstr("filesystem encoding could not publish its owner"))
+            else:
+                token: int = load_i64(tokens, _FS_ENCODED * C_POINTER_SIZE)
+                store_i64(tokens, _FS_ENCODED * C_POINTER_SIZE, 0)
+                if pcc_gc_foreign_lease_release(output_slot, token) != 0:
+                    pcc_platform_abort()
+                    status = -1
+    _fs_close(slots, tokens)
+    return status
+
+
+def _fs_suppress_link_error(slots, tokens) -> None:
+    # os.path.islink suppresses OSError and ValueError (including encoding
+    # errors), but preserves TypeError and arbitrary PathLike exceptions.
+    # Cached exception classes already have mapped owning slots; copy from
+    # those slots without allocating a fresh matcher or using a raw class.
+    error = ptr_add(slots, _FS_QUERY_ERROR * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(error)
+    if ptr_is_null(load_ptr(error, 0)):
+        return
+    matched: int = 0
+    if _fs_adopt(slots, tokens, _FS_QUERY_ERROR) == 0:
+        kind: int = 2
+        while True:
+            if _fs_copy(slots, tokens, _FS_QUERY_CLASS,
+                        ptr_add(global_addr("py_exc_classes"), kind * C_POINTER_SIZE), 0) != 0:
+                break
+            matched = py_exc_matches(load_ptr(error, 0),
+                                      load_ptr(slots, _FS_QUERY_CLASS * C_POINTER_SIZE))
+            _fs_drop(slots, tokens, _FS_QUERY_CLASS)
+            if matched or kind == 14:
+                break
+            kind = 14
+    py_clear_exception()
+    if matched:
+        _fs_drop(slots, tokens, _FS_QUERY_ERROR)
+        py_clear_exception()
+    else:
+        if pcc_gc_foreign_lease_release(error, load_i64(tokens, _FS_QUERY_ERROR * C_POINTER_SIZE)) != 0:
+            pcc_platform_abort()
+            return
+        store_i64(tokens, _FS_QUERY_ERROR * C_POINTER_SIZE, 0)
+        py_tls_exc_swap_slot(error)
+
+
+def _fs_link_query(slots, tokens) -> int:
+    result: int = 0
+    if _fs_encode(slots, tokens) == 0:
+        encoded = load_ptr(slots, _FS_ENCODED * C_POINTER_SIZE)
+        raw = ptr_add(encoded, PYBYTESOBJECT_DATA_OFFSET)
+        length: int = load_i64(encoded, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+        index: int = 0
+        while index < length and load_i8(raw, index) != 0:
+            index = index + 1
+        if index == length:
+            result = is_symlink(raw)
+    if py_err_occurred():
+        _fs_suppress_link_error(slots, tokens)
+    return result
+
+
 @c_abi_export("py_os_path_islink")
 def py_os_path_islink(path) -> int:
-    item, owned = _coerce_path_str(path)
-    if ptr_is_null(item) != 0:
-        py_decref(owned)
-        return 0
-    raw = py_str_utf8(item)
-    length: int = py_str_byte_len(item)
-    index: int = 0
-    while index < length:
-        if load_i8(raw, index) == 0:
-            py_decref(owned)
-            return 0
-        index = index + 1
-    result: int = is_symlink(raw)
-    py_decref(owned)
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, path)
+    pcc_gc_frame_enter(global_addr("pcc_os_fsencode_borrowed_map"), borrowed)
+    slots = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    _fs_open(slots, tokens)
+    result: int = 0
+    if _fs_copy(slots, tokens, _FS_PATH, borrowed, 1) == 0:
+        result = _fs_link_query(slots, tokens)
+    _fs_close(slots, tokens)
+    store_ptr(borrowed, 0, null())
+    pcc_gc_frame_leave(borrowed)
     return result
+
+
+@c_abi_export("py_os_path_islink_result")
+def py_os_path_islink_result(path):
+    """Return an owned bool or exception for an ordinary c_obj wrapper."""
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, path)
+    pcc_gc_frame_enter(global_addr("pcc_os_fsencode_borrowed_map"), borrowed)
+    slots = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    _fs_open(slots, tokens)
+    result: int = 0
+    if _fs_copy(slots, tokens, _FS_PATH, borrowed, 1) == 0:
+        result = _fs_link_query(slots, tokens)
+    output = ptr_add(slots, _FS_RESULT * C_POINTER_SIZE)
+    if py_err_occurred():
+        py_tls_exc_swap_slot(output)
+    else:
+        pcc_gc_store_root(output, py_bool_from_bit(result))
+    _fs_close(slots, tokens, 1)
+    pcc_py_gc_minor_graph_lock()
+    value = load_ptr(output, 0)
+    prior_pin: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+    pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave(slots)
+    store_ptr(borrowed, 0, null())
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(output, prior_pin)
 
 
 @c_abi_export("py_os_path_isabs")

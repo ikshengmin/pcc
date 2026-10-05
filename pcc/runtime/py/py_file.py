@@ -1227,7 +1227,9 @@ def py_file_flush(file):
     f = _checked_open_file(file)
     if ptr_is_null(f):
         return null()
-    fflush(load_ptr(f, 16))
+    if fflush(load_ptr(f, 16)) != 0:
+        _file_raise_errno(pcc_errno_get())
+        return null()
     none = global_load_ptr("py_None")
     py_incref(none)
     return none

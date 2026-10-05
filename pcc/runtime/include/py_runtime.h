@@ -1718,6 +1718,9 @@ PyObject *py_namedtempfile_function(void);
 PyObject *py_file_fspath(PyObject *path);
 PyObject *py_os_open_function(void);
 PyObject *py_os_close_function(void);
+PyObject *py_os_pwrite_function(void);
+PyObject *py_os_ftruncate_function(void);
+int64_t py_fcntl_getfl(int64_t fd, PyObject *keeper);
 PyObject *py_os_mkdir_function(void);
 PyObject *py_file_fdopen_options(PyObject *descriptor, PyObject *mode, PyObject *encoding,
                                 PyObject *errors, PyObject *newline, int64_t closefd,

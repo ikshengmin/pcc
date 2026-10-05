@@ -160,6 +160,41 @@ class ElfRelocation:
 
 
 @dataclass(frozen=True)
+class _PackedElfRelocations:
+    """Private immutable RELA storage for an explicitly compact parse.
+
+    Iteration/indexing project independent immutable records. No consumer may
+    depend on projection identity; ordinary public parses still return tuples.
+    Copy mutable input so subsequent caller changes cannot alter validation.
+    """
+
+    payload: bytes
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "payload", bytes(self.payload))
+        if len(self.payload) % _RELA.size:
+            raise ElfError("packed ELF relocation table is truncated")
+
+    def __len__(self) -> int:
+        return len(self.payload) // _RELA.size
+
+    def __iter__(self):
+        for position in range(0, len(self.payload), _RELA.size):
+            offset, info, addend = _RELA.unpack_from(self.payload, position)
+            yield ElfRelocation(offset, info >> 32, info & 0xFFFFFFFF, addend)
+
+    def __getitem__(self, index):
+        if not isinstance(index, int):
+            raise TypeError("ELF relocation index must be an integer")
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError("ELF relocation index out of range")
+        offset, info, addend = _RELA.unpack_from(self.payload, index * _RELA.size)
+        return ElfRelocation(offset, info >> 32, info & 0xFFFFFFFF, addend)
+
+
+@dataclass(frozen=True)
 class ElfSection:
     name: str
     type: int
@@ -167,7 +202,7 @@ class ElfSection:
     align: int
     data: bytes = b""
     mem_size: int = 0
-    relocations: tuple[ElfRelocation, ...] = ()
+    relocations: tuple[ElfRelocation, ...] | _PackedElfRelocations = ()
 
     @property
     def size(self) -> int:
@@ -478,7 +513,7 @@ def emit_relocatable(obj: ElfObject) -> bytes:
     return bytes(image)
 
 
-def _unpack_elf_header(data: bytes) -> tuple:
+def _unpack_elf_header(data: bytes | bytearray) -> tuple:
     if len(data) < _ELF_HEADER.size:
         raise ElfError("ELF file is shorter than its header")
     values = _ELF_HEADER.unpack_from(data, 0)
@@ -494,7 +529,7 @@ def _unpack_elf_header(data: bytes) -> tuple:
     return values
 
 
-def parse_relocatable(data: bytes) -> ElfObject:
+def parse_relocatable(data: bytes, *, compact_relocations: bool = False) -> ElfObject:
     """Parse a finite external ELF64 x86_64 relocatable object."""
     header = _unpack_elf_header(data)
     if header[1] != ET_REL:
@@ -634,16 +669,20 @@ def parse_relocatable(data: bytes) -> ElfObject:
         target = source_to_model[source_target] - 1
         if mutable_sections[target].relocations:
             raise ElfError(f"section {mutable_sections[target].name!r} has multiple RELA tables")
-        relocations: list[ElfRelocation] = []
         payload = section_payload(rela_index)
-        for offset in range(0, len(payload), _RELA.size):
-            r_offset, r_info, addend = _RELA.unpack_from(payload, offset)
-            symbol_index, reloc_type = r_info >> 32, r_info & 0xFFFFFFFF
-            relocations.append(ElfRelocation(r_offset, symbol_index, reloc_type, addend))
+        if compact_relocations:
+            relocations = _PackedElfRelocations(payload)
+        else:
+            rows: list[ElfRelocation] = []
+            for offset in range(0, len(payload), _RELA.size):
+                r_offset, r_info, addend = _RELA.unpack_from(payload, offset)
+                symbol_index, reloc_type = r_info >> 32, r_info & 0xFFFFFFFF
+                rows.append(ElfRelocation(r_offset, symbol_index, reloc_type, addend))
+            relocations = tuple(rows)
         old = mutable_sections[target]
         mutable_sections[target] = ElfSection(
             old.name, old.type, old.flags, old.align, old.data, old.mem_size,
-            tuple(relocations),
+            relocations,
         )
     return ElfObject(tuple(mutable_sections), tuple(symbols), header[2])
 
@@ -731,11 +770,11 @@ def read_archive_payloads(data: bytes) -> list[tuple[str, bytes]]:
     return pending
 
 
-def read_archive(data: bytes) -> tuple[ElfArchiveMember, ...]:
+def read_archive(data: bytes, *, compact_relocations: bool = False) -> tuple[ElfArchiveMember, ...]:
     members: list[ElfArchiveMember] = []
     for name, payload in read_archive_payloads(data):
         try:
-            obj = parse_relocatable(payload)
+            obj = parse_relocatable(payload, compact_relocations=compact_relocations)
         except ElfError as exc:
             raise ElfError(f"archive member {name!r} is not a proven ELF object: {exc}") from exc
         defined, undefined = _object_symbol_sets(obj)
@@ -834,8 +873,26 @@ def link_static_executable(
     entry: str = "_start",
     base_address: int = _BASE,
     archive_selections: list[tuple[int, str]] | None = None,
+    compact_archive_relocations: bool = False,
 ) -> bytes:
-    """Link a static, fixed-address ELF executable with no dynamic surface."""
+    """Public immutable ELF image; private publication may retain the builder."""
+    return bytes(_link_static_executable_image(
+        objects, archives=archives, entry=entry, base_address=base_address,
+        archive_selections=archive_selections,
+        compact_archive_relocations=compact_archive_relocations,
+    ))
+
+
+def _link_static_executable_image(
+    objects: list[ElfObject],
+    *,
+    archives: list[bytes] = (),
+    entry: str = "_start",
+    base_address: int = _BASE,
+    archive_selections: list[tuple[int, str]] | None = None,
+    compact_archive_relocations: bool = False,
+) -> bytearray:
+    """Build a private mutable image, fully validated before publication."""
     if not objects:
         raise ElfError("static ELF link requires at least one explicit object")
     if base_address < 0x10000 or base_address % _PAGE:
@@ -853,7 +910,7 @@ def link_static_executable(
             undefined.add(entry)
         selected_names = [] if archive_selections is not None else None
         selected, _remaining = select_archive_members(
-            read_archive(archive_data),
+            read_archive(archive_data, compact_relocations=compact_archive_relocations),
             undefined,
             already_defined=set(definitions),
             selected_names=selected_names,
@@ -987,7 +1044,7 @@ def link_static_executable(
     rw_memory_end = memory_cursor
 
     image_size = max(rx_file_end, rw_file_end, header_bytes)
-    image = bytearray(b"\0" * image_size)
+    image = bytearray(image_size)
     for object_index, section_index, section in alloc_sections:
         if section.type == SHT_NOBITS:
             continue
@@ -1172,10 +1229,10 @@ def link_static_executable(
     for program_header in program_headers:
         image[phoff:phoff + _PROGRAM_HEADER.size] = program_header
         phoff += _PROGRAM_HEADER.size
-    return bytes(image)
+    return image
 
 
-def parse_static_executable(data: bytes) -> dict[str, int]:
+def parse_static_executable(data: bytes | bytearray) -> dict[str, int]:
     """Validate the final no-dynamic ELF shape and return useful fields."""
     header = _unpack_elf_header(data)
     if header[1] != ET_EXEC:

@@ -52,6 +52,11 @@ def stat_size(path: c_ptr) -> i64:
 
 @c_abi_export("pcc_win_is_symlink")
 def is_symlink(path: c_ptr) -> i64:
+    return 1 if lstat_kind(path) == 3 else 0
+
+
+@c_abi_export("pcc_win_lstat_kind")
+def lstat_kind(path: c_ptr) -> i64:
     if ptr_is_null(path):
         return 0
     wide = utf16(path)
@@ -70,6 +75,10 @@ def is_symlink(path: c_ptr) -> i64:
         # FILE_ATTRIBUTE_TAG_INFO.ReparseTag == IO_REPARSE_TAG_SYMLINK.
         # Junctions and other reparse points do not satisfy os.path.islink.
         if (load_i32(info, 4) & 4294967295) == 2684354572:
+            result = 3
+        elif load_i32(info, 0) & 16:
+            result = 2
+        else:
             result = 1
     CloseHandle(handle)
     return result

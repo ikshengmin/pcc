@@ -10,6 +10,7 @@ _SIGNATURES = {
     "open_file": ("i", "pii"), "sync_file": ("i", "i"),
     "getpid": ("i", ""), "getcwd": ("p", "pi"),
     "stat_kind": ("i", "p"), "stat_mtime": ("d", "p"),
+    "lstat_kind": ("i", "p"),
     "stat_size": ("i", "p"), "is_symlink": ("i", "p"),
     "access": ("i", "pi"), "mkdir": ("i", "pi"),
     "unlinkat": ("i", "pi"), "rename_file": ("i", "pp"),
