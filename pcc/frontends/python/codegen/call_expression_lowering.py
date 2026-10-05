@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from pcc.frontends.python.codegen.cpy_import_state import (
+    live_import_global_slot,
+    live_import_name_slot,
+)
+
 import sys
 import os
 from pcc.ir.compat import ir
@@ -432,6 +437,8 @@ class CallExpressionLoweringMixin:
         )
 
         for global_name, (gv, declared_ty) in self._module_globals.items():
+            if live_import_global_slot(self, global_name) is not None:
+                continue
             if getattr(self, "_cpy_module_flags", {}).get(global_name, False):
                 continue
             init_flag = self._module_global_init_flags.get(global_name)
@@ -476,6 +483,8 @@ class CallExpressionLoweringMixin:
             "_native_extension_module_env",
             {},
         ).items():
+            if live_import_global_slot(self, import_name) is not None:
+                continue
             imported = self.builder.load(
                 gv,
                 name=self._fresh(f"globals.import.{import_name}"),
@@ -503,6 +512,8 @@ class CallExpressionLoweringMixin:
             self.builder.position_at_end(continue_bb)
 
         for class_name, info in self.class_lowering.classes.items():
+            if live_import_global_slot(self, class_name) is not None:
+                continue
             if class_name in getattr(
                 self,
                 "_hoisted_class_capture_params",
@@ -1039,6 +1050,8 @@ class CallExpressionLoweringMixin:
             self._emit_post_call_err_check(self._expr_span_or_none(expr))
             return result
         name = func_name
+        if live_import_name_slot(self, name) is not None:
+            return self._emit_slot_call_object(expr, name + ".obj.call")
         if (self._funcdef_is_continuation_factory(self.current_func_def)
                 and name in self._vthread_may_park_func_names):
             raise L1CodegenError("factory methods must defer parking calls with continuation()")

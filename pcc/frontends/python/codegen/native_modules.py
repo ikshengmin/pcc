@@ -11,6 +11,10 @@ from pcc.frontends.python.export_meta import decode_type
 from pcc.frontends.python.py_ast import Attr, Call, ClassDef, DynType, Expr, For, FuncDef, If, Import, ImportFrom, IntType, IntLit, Lambda, Name, NoneLit, NoneType, SourceSpan, StrLit, Subscript, Try, While, With
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.cpy_import_state import (
+    live_import_expr_binding,
+    live_import_global_slot,
+)
 from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call
 from pcc.frontends.python.codegen.vthread_effect_analysis import (
@@ -483,6 +487,7 @@ class NativeModuleAliasMixin:
                 args,
                 kwargs,
                 builtin_value + ".value",
+                expr,
             )
         if builtin_value == "os.urandom":
             return self._emit_native_os_urandom_call(args, kwargs)
@@ -561,6 +566,7 @@ class NativeModuleAliasMixin:
                 expr.args,
                 expr.kwargs,
                 "time." + attr.name,
+                expr,
             )
         if module_name == "os" and attr.name == "urandom":
             return self._emit_native_os_urandom_call(expr.args, expr.kwargs)
@@ -990,6 +996,7 @@ class NativeModuleAliasMixin:
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
         result_name: str,
+        expr: Call,
     ) -> Optional[ir.Value]:
         if builtin_value == "time.sleep":
             if len(args) != 1 or kwargs:
@@ -1009,15 +1016,7 @@ class NativeModuleAliasMixin:
         if builtin_value == "time.strftime":
             if len(args) != 1 or kwargs:
                 return None
-            result = self.builder.call(
-                self.runtime["py_time_strftime"],
-                [self._emit_as_object(args[0])],
-                name=self._fresh(result_name),
-            )
-            self._emit_post_call_err_check(args[0].span)
-            # `py_time_strftime` returns a new string; see the note below.
-            self._note_owned_object_value(result)
-            return result
+            return self._emit_owned_unary_runtime_call(expr, "py_time_strftime")
         if len(args) > 0 or len(kwargs) > 0:
             return None
         runtime_name = {
@@ -1030,21 +1029,24 @@ class NativeModuleAliasMixin:
         }.get(builtin_value)
         if runtime_name is None:
             return None
-        result = self.builder.call(
-            self.runtime[runtime_name],
-            [],
-            name=self._fresh(result_name),
-        )
-        # All three build their result with `py_float_from_f64`, so this is a
-        # NEW reference. The shape classifier sees only a DynType Call on a
-        # module-level function and answers "not owned", so no release was
-        # ever emitted and every clock read leaked its float -- two per
-        # request in the gateway handler benchmark. Recording the owner at
-        # emission is exact: only this emitter knows its argument gates fired
-        # instead of falling through to generic dispatch. Same class of defect
-        # as `_native_re_call_returns_owned_object` documents for re.
-        self._note_owned_object_value(result)
-        return result
+        sink = self._slot_call_result_sink(expr)
+        output = sink if sink is not None else self._new_slot_call_root(result_name + ".result")
+        previous = self._current_try_err_block()
+        saved_cpy = self._cpy_operand_cleanup_block
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        if sink is None:
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            # Clock reads build NEW objects. Publish the actual producer's
+            # result before any status, lease or operand cleanup can park.
+            self._slot_call_runtime_call(runtime_name, (), result_slot=output, span=expr.span)
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh(result_name + ".current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_native_os_urandom_call(
         self,
@@ -2428,6 +2430,8 @@ class NativeModuleAliasMixin:
         """Return ``(module_name, export_info)`` for ``alias.attr`` when
         ``alias`` names a native sibling submodule or a literal dynamic
         import of one."""
+        if live_import_global_slot(self, alias_name) is not None:
+            return None
         module_name = self._native_module_aliases.get(alias_name)
         if module_name is None:
             module_name = self._native_module_object_for_name(alias_name)
@@ -2476,6 +2480,8 @@ class NativeModuleAliasMixin:
         spelling stays CPython-compatible; this only changes how pcc's
         native module alias table is queried.
         """
+        if live_import_expr_binding(self, module_expr):
+            return None
         if isinstance(module_expr, Name):
             return self._native_module_alias_export_info(
                 module_expr.ident,
@@ -2549,6 +2555,8 @@ class NativeModuleAliasMixin:
         return None
 
     def _native_module_name_for_object_expr(self, expr: Expr) -> Optional[str]:
+        if live_import_expr_binding(self, expr):
+            return None
         if isinstance(expr, Name):
             module_name = self._native_module_object_for_name(expr.ident)
             if module_name is not None:
@@ -3478,6 +3486,8 @@ class NativeModuleAliasMixin:
         attr = expr.func
         if not isinstance(attr, Attr):
             return None
+        if live_import_expr_binding(self, attr.obj):
+            return self._emit_slot_call_object(expr, "import.method." + attr.name)
         export = self._native_module_expr_export_info(attr.obj, attr.name)
         if export is None:
             module_name = None

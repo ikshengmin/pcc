@@ -6,9 +6,20 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, DynType, Expr, IntType, Name, Subscript, TupleExpr, Type
+from pcc.frontends.python.py_ast import (
+    Attr, DynType, Expr, IntType, Name, NoneLit, NoneType, Slice,
+    Subscript, TupleExpr, Type,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.local_bound_lowering import mark_local_bound
+from pcc.frontends.python.codegen.cpy_import_state import (
+    live_import_expr_binding,
+    retire_live_import_staging,
+)
+from pcc.frontends.python.codegen.attr_store_lowering import (
+    emit_live_import_attribute_store,
+    live_import_attribute_store,
+)
 
 _I8 = ir.IntType(8)
 _I1 = ir.IntType(1)
@@ -63,6 +74,9 @@ class AssignmentStoreLoweringMixin:
                 published,
                 self._release_context_label("module_publish_box"),
             )
+        # The dictionary owns this binding. The registered global remains an
+        # empty staging slot so replacement/deletion can finalize its old value.
+        retire_live_import_staging(self, name)
 
     def _coerce_unpack_name_like(self, lhs: Expr) -> Expr:
         if isinstance(lhs, Name):
@@ -90,6 +104,59 @@ class AssignmentStoreLoweringMixin:
     def _store_unpack_root_target(self, lhs: Expr, root, value_ty: Type) -> None:
         """Publish a retained literal element without exposing a stale SSA value."""
         lhs = self._coerce_unpack_name_like(lhs)
+        if isinstance(lhs, TupleExpr):
+            previous = self._current_try_err_block()
+            error = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            items = []
+            try:
+                for index in range(len(lhs.elems)):
+                    item = self._new_slot_call_root("unpack.nested.item")
+                    items.append(item)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(items), error)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_runtime_call(
+                        "py_obj_getitem_i64", (root,), result_slot=item,
+                        suffix_args=(ir.Constant(_I64, index),), span=lhs.span,
+                    )
+                for index, target in enumerate(lhs.elems):
+                    self._store_unpack_root_target(target, items[index], DynType(name="dyn"))
+                self._release_slot_call_roots(tuple(items))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return
+        if isinstance(lhs, Attr) and live_import_attribute_store(self, lhs):
+            emit_live_import_attribute_store(self, lhs, root)
+            return
+        if isinstance(lhs, Subscript) and live_import_expr_binding(self, lhs.obj):
+            receiver = self._emit_slot_call_operand(lhs.obj, "import.item.receiver")
+            previous = self._current_try_err_block()
+            error = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            roots = [receiver]
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if isinstance(lhs.idx, Slice):
+                    for part in (lhs.idx.lo, lhs.idx.hi, lhs.idx.step):
+                        if part is None:
+                            part = NoneLit(span=lhs.idx.span, ty=NoneType(name="None"))
+                        roots.append(self._emit_slot_call_operand(part, "import.item.bound"))
+                        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error)
+                        self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_runtime_call("py_obj_set_slice", tuple(roots) + (root,), span=lhs.span)
+                else:
+                    key = self._emit_slot_call_operand(lhs.idx, "import.item.key")
+                    roots.append(key)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_runtime_call("py_obj_assign_subscript", (receiver, key, root), span=lhs.span)
+                self._release_slot_call_roots(tuple(roots))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return
         local_name = isinstance(lhs, Name) and not (
             lhs.ident in self._module_globals
             and (self.current_func_def is None or lhs.ident in self._current_global_names)

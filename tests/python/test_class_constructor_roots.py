@@ -49,8 +49,11 @@ class _C3Memory(_Memory):
         parsed=ast.parse(PORT.read_text(),filename=str(PORT))
         functions=[node for node in parsed.body if isinstance(node,ast.FunctionDef)
                    and (node.name in {"py_class_new", "py_class_is_str_subclass", "py_class_is_tuple_subclass",
-                                      "_ptr_is_class", "_ptr_can_have_header"}
+                                      "_ptr_is_class", "_ptr_can_have_header", "_class_is_structseq"}
                         or node.name.startswith("_class_construct_"))]
+        functions[:0] = [node for node in parsed.body if isinstance(node, ast.Assign)
+                         and any(isinstance(target, ast.Name) and target.id == "_STRUCTSEQ_CLASS_FLAG"
+                                 for target in node.targets)]
         exec(compile(ast.Module(body=functions,type_ignores=[]),str(PORT),"exec"),self.namespace)
         dispatch = PORT.with_name("py_obj_ops_dispatch.py")
         parsed = ast.parse(dispatch.read_text(), filename=str(dispatch))

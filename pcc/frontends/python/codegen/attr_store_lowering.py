@@ -7,9 +7,39 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.export_meta import decode_type
 from pcc.frontends.python.py_ast import Attr, DynType, Expr, IntType, Name, Type
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
 
 
 _I32 = ir.IntType(32)
+
+
+def live_import_attribute_store(host, target):
+    # Keep the existing proven managed-provider cell+dictionary writer.
+    # Other imported object receivers must use their actual current value.
+    return live_import_expr_binding(host, target.obj) and not (
+        isinstance(target.obj, Name)
+        and target.obj.ident in getattr(host, "_native_module_aliases", {})
+    )
+
+
+def emit_live_import_attribute_store(host, target, value_root):
+    receiver = host._emit_slot_call_operand(target.obj, "import.store.receiver")
+    previous = host._current_try_err_block()
+    error = previous if previous is not None else host._ensure_fn_err_exit()
+    saved_cpy = host._cpy_operand_cleanup_block
+    host._try_err_block = host._slot_call_cleanup_block((receiver,), error)
+    host._cpy_operand_cleanup_block = host._try_err_block
+    try:
+        status = host._slot_call_runtime_call(
+            "py_obj_setattr", (receiver, value_root),
+            suffix_args=(host._attr_name_ptr(host.class_lowering.private_field_key(target.name)),),
+            argument_order=(0, 2, 1), span=target.span,
+        )
+        host._emit_attribute_error_if_status_failed(status, target.name, target.span)
+        host._release_slot_call_roots((receiver,))
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
 
 
 class AttrStoreLoweringMixin:
@@ -436,6 +466,20 @@ class AttrStoreLoweringMixin:
             self._class_attr_runtime_state[(info.name, runtime_attr_name)] = state
 
     def _emit_attr_store(self, target: Attr, value_expr: Expr) -> None:
+        if live_import_attribute_store(self, target):
+            value_root = self._emit_slot_call_operand(value_expr, "import.store.value")
+            previous = self._current_try_err_block()
+            error = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((value_root,), error)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                emit_live_import_attribute_store(self, target, value_root)
+                self._release_slot_call_roots((value_root,))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return
         if isinstance(target.obj, Name) and hasattr(self, "class_lowering"):
             info = self.class_lowering.classes.get(target.obj.ident)
             if info is not None and self.class_lowering.uses_live_class_attribute(info, target.name, value_expr.ty):

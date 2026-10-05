@@ -67,6 +67,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_REFCOUNT_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PY_FLAG_GC_MALLOC_ALLOC,
+    PY_FLAG_GC_PINNED,
     PY_FLAG_IMMORTAL,
     PYPROPERTYOBJECT_FDEL_OFFSET,
     PYPROPERTYOBJECT_FGET_OFFSET,
@@ -180,6 +181,9 @@ py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
 py_dict_get = extern("py_dict_get", (c_ptr, c_ptr), c_ptr)
 py_dict_len = extern("py_dict_len", (c_ptr,), c_int64)
 py_dict_keys = extern("py_dict_keys", (c_ptr,), c_ptr)
+py_dict_items = extern("py_dict_items", (c_ptr,), c_ptr)
+py_dict_storage_slots = extern("py_dict_storage_slots", (c_ptr, c_ptr), c_int64)
+py_dict_get_default_slots = extern("py_dict_get_default_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 py_dict_update = extern("py_dict_update", (c_ptr, c_ptr), c_void)
 py_dict_del = extern("py_dict_del", (c_ptr, c_ptr), c_int64)
 py_builtin_type_class_tag = extern("py_builtin_type_class_tag", (c_ptr,), c_int32)
@@ -187,6 +191,11 @@ py_subs_alloc_user_tag = extern("py_subs_alloc_user_tag", (), c_int32)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_bool_from_bit = extern("py_bool_from_bit", (c_int32,), c_ptr)
+py_slice_index_i64 = extern("py_slice_index_i64", (c_ptr, c_int64), c_int64)
+py_str_tailmatch_range = extern(
+    "py_str_tailmatch_range", (c_ptr, c_ptr, c_int64, c_int64, c_int64), c_int64
+)
+py_str_count_range = extern("py_str_count_range", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
 pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
 pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
@@ -1032,33 +1041,94 @@ def _instance_bound_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     return pcc_gc_take_pinned_slot(slots, prior_result_pin)
 
 
-@c_abi_export("py_instance_bind_method")
-def py_instance_bind_method(method, self_obj, name):
-    if ptr_is_null(method) != 0 or ptr_is_null(self_obj) != 0:
-        return null()
-    captures = py_tuple_new(2)
-    if ptr_is_null(captures) != 0:
-        return null()
-    py_tuple_set_item(captures, 0, method)
-    py_tuple_set_item(captures, 1, self_obj)
+_BOUND_BIND_METHOD = 1
+_BOUND_BIND_RECEIVER = 2
+_BOUND_BIND_CAPTURES = 3
+_BOUND_BIND_WRAPPED = 4
+_BOUND_BIND_RESULT = 12
+
+define_global_i32("pcc_bound_bind_borrowed_map", -2)
+define_global_i32("pcc_bound_bind_result_map", 1)
+
+
+def _instance_bind_method_body(slots, tokens, name) -> int:
+    if _special_tuple_new(slots, tokens, _BOUND_BIND_CAPTURES, 2) != 0:
+        return -1
+    py_tuple_set_item(load_ptr(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE), 0,
+        load_ptr(slots, _BOUND_BIND_METHOD * C_POINTER_SIZE))
+    py_tuple_set_item(load_ptr(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE), 1,
+        load_ptr(slots, _BOUND_BIND_RECEIVER * C_POINTER_SIZE))
+    method = load_ptr(slots, _BOUND_BIND_METHOD * C_POINTER_SIZE)
     bound_name = name
     if _ptr_can_have_header(method) and load_i32(method, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
         method_name = load_ptr(method, 72)
         if ptr_is_null(method_name) == 0:
             bound_name = method_name
-    bound_captures = _wrap_bound_captures(method, captures)
-    bound = py_func_new_bound(
-        function_addr("pcc_instance_bound_method_entry"),
-        bound_captures,
-        bound_name,
-        self_obj,
-    )
-    if ptr_is_null(bound) == 0:
-        atomic_rmw_i32("or", bound, 12, PY_FLAG_FUNC_TRANSPARENT_CALL, "relaxed")
-    if ptr_eq(bound_captures, captures) == 0:
-        py_decref(bound_captures)
-    py_decref(captures)
-    return bound
+    wrapped = _wrap_bound_captures(load_ptr(slots, _BOUND_BIND_METHOD * C_POINTER_SIZE),
+        load_ptr(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE))
+    # The signature wrapper may return the original borrowed captures or a
+    # new owning tuple. Keep these contracts distinct instead of double-adopting.
+    if ptr_eq(wrapped, load_ptr(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE)) != 0:
+        if _special_copy(slots, tokens, _BOUND_BIND_WRAPPED,
+                ptr_add(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE), 0) != 0:
+            return -1
+    else:
+        store_ptr(slots, _BOUND_BIND_WRAPPED * C_POINTER_SIZE, wrapped)
+        if _special_adopt(slots, tokens, _BOUND_BIND_WRAPPED) != 0:
+            return -1
+    if py_err_occurred() != 0:
+        return -1
+    store_ptr(slots, _BOUND_BIND_RESULT * C_POINTER_SIZE,
+        py_func_new_bound(function_addr("pcc_instance_bound_method_entry"),
+            load_ptr(slots, _BOUND_BIND_WRAPPED * C_POINTER_SIZE), bound_name,
+            load_ptr(slots, _BOUND_BIND_RECEIVER * C_POINTER_SIZE)))
+    if _special_adopt(slots, tokens, _BOUND_BIND_RESULT) != 0:
+        return -1
+    bound = load_ptr(slots, _BOUND_BIND_RESULT * C_POINTER_SIZE)
+    if ptr_is_null(bound) != 0:
+        return _special_error(cstr("bound method allocation failed"))
+    atomic_rmw_i32("or", bound, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_FUNC_TRANSPARENT_CALL, "relaxed")
+    return 0
+
+
+@c_abi_export("py_instance_bind_method")
+def py_instance_bind_method(method, self_obj, name):
+    if ptr_is_null(method) != 0 or ptr_is_null(self_obj) != 0:
+        return null()
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, method)
+    store_ptr(borrowed, C_POINTER_SIZE, self_obj)
+    pcc_gc_frame_enter(global_addr("pcc_bound_bind_borrowed_map"), borrowed)
+    output = stack_alloc(C_POINTER_SIZE)
+    store_ptr(output, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_bound_bind_result_map"), output)
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _BOUND_BIND_METHOD, borrowed, 1)
+        if status == 0:
+            status = _special_copy(slots, tokens, _BOUND_BIND_RECEIVER, ptr_add(borrowed, C_POINTER_SIZE), 1)
+        if status == 0:
+            status = _instance_bind_method_body(slots, tokens, name)
+        if status == 0:
+            status = _special_publish(slots, tokens, output)
+    if status != 0:
+        _special_error(cstr("method binding failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    value = load_ptr(output, 0)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_gc_frame_leave(output)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(output, prior)
 
 
 def _bound_method_function_slot_locked(bound):
@@ -1255,6 +1325,15 @@ def _attr_res_method_cacheable() -> int:
     if backend == 3 or backend == 4:
         return 0
     return 1
+
+
+# Class-only semantic flag. This bit has a distinct meaning on function
+# objects; it is outside all collector bits and is read only after a class check.
+_STRUCTSEQ_CLASS_FLAG = 8388608
+
+
+def _class_is_structseq(cls) -> bool:
+    return _ptr_is_class(cls) and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & _STRUCTSEQ_CLASS_FLAG) != 0
 
 
 def _instance_reserved_owner_slot(inst, cls):
@@ -1462,6 +1541,9 @@ def py_instance_vars(inst):
         return null()
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
     if not _ptr_is_class(cls):
+        py_raise_owned(py_exc_new(3, cstr("vars() argument has no __dict__")))
+        return null()
+    if _class_is_structseq(cls):
         py_raise_owned(py_exc_new(3, cstr("vars() argument has no __dict__")))
         return null()
     out = py_dict_new()
@@ -3282,45 +3364,100 @@ def py_instance_delattr(inst, name) -> int:
     return rc
 
 
+# Namespace application reuses the special-call frame and exception protocol.
+# The source storage and its eager item snapshot are independent owners.
+_CLASS_APPLY_CLASS = 1
+_CLASS_APPLY_NAMESPACE = 2
+_CLASS_APPLY_STORAGE = 3
+_CLASS_APPLY_ITEMS = 4
+_CLASS_APPLY_PAIR = 5
+_CLASS_APPLY_KEY = 6
+_CLASS_APPLY_VALUE = 7
+_CLASS_APPLY_SLOT_COUNT = 14
+
+define_global_i32("pcc_class_apply_borrowed_map", -2)
+
+
+def _class_apply_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
+    if _special_adopt(slots, tokens, index) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, index * C_POINTER_SIZE)) != 0 or py_err_occurred() != 0:
+        return _special_error(cstr("class namespace snapshot item acquisition failed"))
+    return 0
+
+
+def _class_apply_namespace_body(slots: c_ptr, tokens: c_ptr) -> int:
+    if not _ptr_is_class(load_ptr(slots, _CLASS_APPLY_CLASS * C_POINTER_SIZE)):
+        return _special_error(cstr("namespace destination must be a class"))
+    if py_dict_storage_slots(ptr_add(slots, _CLASS_APPLY_NAMESPACE * C_POINTER_SIZE),
+            ptr_add(slots, _CLASS_APPLY_STORAGE * C_POINTER_SIZE)) != 0:
+        return -1
+    if _class_apply_adopt(slots, tokens, _CLASS_APPLY_STORAGE) != 0:
+        return -1
+    store_ptr(slots, _CLASS_APPLY_ITEMS * C_POINTER_SIZE,
+              py_dict_items(load_ptr(slots, _CLASS_APPLY_STORAGE * C_POINTER_SIZE)))
+    if _class_apply_adopt(slots, tokens, _CLASS_APPLY_ITEMS) != 0:
+        return -1
+    count: int = py_list_len(load_ptr(slots, _CLASS_APPLY_ITEMS * C_POINTER_SIZE))
+    index: int = 0
+    while index < count:
+        store_ptr(slots, _CLASS_APPLY_PAIR * C_POINTER_SIZE,
+                  py_list_get(load_ptr(slots, _CLASS_APPLY_ITEMS * C_POINTER_SIZE), index))
+        if _class_apply_adopt(slots, tokens, _CLASS_APPLY_PAIR) != 0:
+            return -1
+        store_ptr(slots, _CLASS_APPLY_KEY * C_POINTER_SIZE,
+                  py_tuple_get(load_ptr(slots, _CLASS_APPLY_PAIR * C_POINTER_SIZE), 0))
+        if _class_apply_adopt(slots, tokens, _CLASS_APPLY_KEY) != 0:
+            return -1
+        store_ptr(slots, _CLASS_APPLY_VALUE * C_POINTER_SIZE,
+                  py_tuple_get(load_ptr(slots, _CLASS_APPLY_PAIR * C_POINTER_SIZE), 1))
+        if _class_apply_adopt(slots, tokens, _CLASS_APPLY_VALUE) != 0:
+            return -1
+        # Retain the actual key, including non-string dictionary keys. Its
+        # separate lease protects equality/hash callbacks and name bytes.
+        if py_class_write_namespace_key_slots(ptr_add(slots, _CLASS_APPLY_CLASS * C_POINTER_SIZE),
+                ptr_add(slots, _CLASS_APPLY_KEY * C_POINTER_SIZE),
+                ptr_add(slots, _CLASS_APPLY_VALUE * C_POINTER_SIZE)) != 0:
+            return -1
+        _special_drop(slots, tokens, _CLASS_APPLY_VALUE)
+        _special_drop(slots, tokens, _CLASS_APPLY_KEY)
+        _special_drop(slots, tokens, _CLASS_APPLY_PAIR)
+        index = index + 1
+    return 0
+
+
+def _class_apply_namespace_bound(class_slot: c_ptr, namespace_slot: c_ptr, borrowed: int) -> int:
+    slots = stack_alloc(_CLASS_APPLY_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_CLASS_APPLY_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_CLASS_APPLY_SLOT_COUNT * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == _CLASS_APPLY_SLOT_COUNT:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _CLASS_APPLY_CLASS, class_slot, borrowed)
+        if status == 0:
+            status = _special_copy(slots, tokens, _CLASS_APPLY_NAMESPACE, namespace_slot, borrowed)
+        if status == 0:
+            status = _class_apply_namespace_body(slots, tokens)
+    if status != 0:
+        _special_error(cstr("class namespace application failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    return status
+
+
 @c_abi_export("py_class_apply_namespace_dict")
 def py_class_apply_namespace_dict(cls, ns) -> int:
-    if not _ptr_is_class(cls):
-        return -1
-    if ptr_is_null(ns) != 0:
-        py_raise_owned(py_exc_new(3, cstr("type.__new__() argument 3 must be dict")))
-        return -1
-    if load_i32(ns, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_DICT:
-        py_raise_owned(py_exc_new(3, cstr("type.__new__() argument 3 must be dict")))
-        return -1
-    keys = py_dict_keys(ns)
-    if ptr_is_null(keys) != 0:
-        return -1
-    n: int = py_list_len(keys)
-    i: int = 0
-    while i < n:
-        key = py_list_get(keys, i)
-        if ptr_is_null(key) != 0:
-            py_decref(keys)
-            return -1
-        name = py_str_utf8(key)
-        if ptr_is_null(name) != 0:
-            py_decref(key)
-            py_decref(keys)
-            return -1
-        value = py_dict_get(ns, key)
-        if ptr_is_null(value) != 0:
-            py_decref(key)
-            py_decref(keys)
-            return -1
-        rc: int = py_class_setattr_raw(cls, name, value)
-        py_decref(value)
-        py_decref(key)
-        if rc != 0:
-            py_decref(keys)
-            return rc
-        i = i + 1
-    py_decref(keys)
-    return 0
+    # Compatibility raw ABI: callers keep their borrowed arguments stable
+    # through entry. The frame becomes authoritative before scratch opens.
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, cls)
+    store_ptr(borrowed, C_POINTER_SIZE, ns)
+    pcc_gc_frame_enter(global_addr("pcc_class_apply_borrowed_map"), borrowed)
+    status: int = _class_apply_namespace_bound(borrowed, ptr_add(borrowed, C_POINTER_SIZE), 1)
+    pcc_gc_frame_leave(borrowed)
+    return status
 
 
 @c_abi_export("py_isinstance")
@@ -3791,6 +3928,13 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     pcc_gc_frame_enter(global_addr("pcc_class_construct_borrowed_frame_map"), borrowed)
     if n_bases > 0 and ptr_is_null(handles):
         return _class_construct_finish(roots, borrowed, 0)
+    base_index: int = 0
+    while base_index < n_bases:
+        if _class_is_structseq(pcc_gc_load_ptr(null(), ptr_add(bases, base_index * C_POINTER_SIZE))):
+            _class_construct_input_leave(handles, n_bases)
+            py_raise_owned(py_exc_new(3, cstr("struct sequence type is not an acceptable base type")))
+            return _class_construct_finish(roots, borrowed, 0)
+        base_index = base_index + 1
 
     c = pcc_gc_alloc(PYCLASSOBJECT_SIZE, PY_TYPE_CLASS, 0)
     store_ptr(roots, 0, c)
@@ -3977,18 +4121,27 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     return _class_construct_finish(roots, borrowed, 1)
 
 
-@c_abi_export("py_class_new_from_objects")
-def py_class_new_from_objects(name_obj, bases_obj, namespace):
+# type(name, bases, namespace) protects every operand before allocations.
+_CLASS_OBJECTS_NAME = 1
+_CLASS_OBJECTS_BASES = 2
+_CLASS_OBJECTS_NAMESPACE = 3
+_CLASS_OBJECTS_BASE_SNAPSHOT = 4
+_CLASS_OBJECTS_BASE_ITEM = 5
+_CLASS_OBJECTS_RESULT = 12
+
+define_global_i32("pcc_class_objects_borrowed_map", -3)
+define_global_i32("pcc_class_objects_result_map", 1)
+
+
+def _class_new_from_objects_body(slots: c_ptr, tokens: c_ptr) -> int:
+    name_obj = load_ptr(slots, _CLASS_OBJECTS_NAME * C_POINTER_SIZE)
     if not _ptr_can_have_header(name_obj) or load_i32(name_obj, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_STR:
         py_raise_owned(py_exc_new(3, cstr("type.__new__() argument 1 must be str")))
-        return null()
-    name = py_str_utf8(name_obj)
-    if ptr_is_null(name) != 0:
-        return null()
+        return -1
+    bases_obj = load_ptr(slots, _CLASS_OBJECTS_BASES * C_POINTER_SIZE)
     n_bases: int = 0
     bases_kind: int = 0
-    none_obj = global_load_ptr("py_None")
-    if ptr_is_null(bases_obj) != 0 or ptr_eq(bases_obj, none_obj) != 0:
+    if ptr_is_null(bases_obj) != 0 or ptr_eq(bases_obj, global_load_ptr("py_None")) != 0:
         n_bases = 0
     elif _ptr_can_have_header(bases_obj) and load_i32(bases_obj, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE:
         n_bases = py_tuple_len(bases_obj)
@@ -3998,45 +4151,92 @@ def py_class_new_from_objects(name_obj, bases_obj, namespace):
         bases_kind = 2
     else:
         py_raise_owned(py_exc_new(3, cstr("type.__new__() argument 2 must be tuple")))
-        return null()
+        return -1
     if n_bases < 0 or n_bases > 2147483647:
         py_raise_owned(py_exc_new(3, cstr("too many base classes")))
-        return null()
-    base_array = null()
-    if n_bases > 0:
-        base_array = malloc(n_bases * 8)
-        if ptr_is_null(base_array) != 0:
-            return null()
-        i: int = 0
-        valid: int = 1
-        while i < n_bases:
-            item = null()
-            if bases_kind == 1:
-                item = py_tuple_get(bases_obj, i)
-            else:
-                item = py_list_get(bases_obj, i)
-            if not _ptr_is_class(item):
-                if ptr_is_null(item) == 0:
-                    py_decref(item)
-                valid = 0
-                i = n_bases
-            else:
-                store_ptr(base_array, i * 8, item)
-            i = i + 1
-        if valid == 0:
-            free(base_array)
+        return -1
+    store_ptr(slots, _CLASS_OBJECTS_BASE_SNAPSHOT * C_POINTER_SIZE, py_tuple_new(n_bases))
+    if _special_adopt(slots, tokens, _CLASS_OBJECTS_BASE_SNAPSHOT) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _CLASS_OBJECTS_BASE_SNAPSHOT * C_POINTER_SIZE)) != 0:
+        return _special_error(cstr("class bases snapshot allocation failed"))
+    index: int = 0
+    while index < n_bases:
+        if bases_kind == 1:
+            store_ptr(slots, _CLASS_OBJECTS_BASE_ITEM * C_POINTER_SIZE,
+                py_tuple_get(load_ptr(slots, _CLASS_OBJECTS_BASES * C_POINTER_SIZE), index))
+        else:
+            store_ptr(slots, _CLASS_OBJECTS_BASE_ITEM * C_POINTER_SIZE,
+                py_list_get(load_ptr(slots, _CLASS_OBJECTS_BASES * C_POINTER_SIZE), index))
+        if _special_adopt(slots, tokens, _CLASS_OBJECTS_BASE_ITEM) != 0:
+            return -1
+        if not _ptr_is_class(load_ptr(slots, _CLASS_OBJECTS_BASE_ITEM * C_POINTER_SIZE)):
             py_raise_owned(py_exc_new(3, cstr("type.__new__() base must be class")))
-            return null()
-    cls = py_class_new_abi(name, base_array, n_bases, null(), 0)
-    if ptr_is_null(base_array) == 0:
-        free(base_array)
-    if ptr_is_null(cls) != 0:
-        return null()
-    if ptr_is_null(namespace) == 0 and ptr_eq(namespace, none_obj) == 0:
-        if py_class_apply_namespace_dict(cls, namespace) != 0:
-            py_decref(cls)
-            return null()
-    return cls
+            return -1
+        py_tuple_set_item(load_ptr(slots, _CLASS_OBJECTS_BASE_SNAPSHOT * C_POINTER_SIZE), index,
+                         load_ptr(slots, _CLASS_OBJECTS_BASE_ITEM * C_POINTER_SIZE))
+        if py_err_occurred() != 0:
+            return -1
+        _special_drop(slots, tokens, _CLASS_OBJECTS_BASE_ITEM)
+        index = index + 1
+    # Both name bytes and the tuple's inline item array have independent
+    # address leases. Its traced elements remain authoritative to C3.
+    store_ptr(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE,
+        py_class_new_abi(py_str_utf8(load_ptr(slots, _CLASS_OBJECTS_NAME * C_POINTER_SIZE)),
+            ptr_add(load_ptr(slots, _CLASS_OBJECTS_BASE_SNAPSHOT * C_POINTER_SIZE), PYTUPLEOBJECT_ITEMS_OFFSET),
+            n_bases, null(), 0))
+    if _special_adopt(slots, tokens, _CLASS_OBJECTS_RESULT) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE)) != 0:
+        return _special_error(cstr("class construction failed"))
+    status: int = _class_apply_namespace_bound(ptr_add(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE),
+                                              ptr_add(slots, _CLASS_OBJECTS_NAMESPACE * C_POINTER_SIZE), 0)
+    if status != 0:
+        # This fresh class has not escaped. Classes remain immortal, so a
+        # decref alone would leave the partially installed namespace alive.
+        py_class_abort_definition_slots(ptr_add(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE))
+    return status
+
+
+@c_abi_export("py_class_new_from_objects")
+def py_class_new_from_objects(name_obj, bases_obj, namespace):
+    borrowed = stack_alloc(3 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, name_obj)
+    store_ptr(borrowed, C_POINTER_SIZE, bases_obj)
+    store_ptr(borrowed, 2 * C_POINTER_SIZE, namespace)
+    pcc_gc_frame_enter(global_addr("pcc_class_objects_borrowed_map"), borrowed)
+    output = stack_alloc(C_POINTER_SIZE)
+    store_ptr(output, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_class_objects_result_map"), output)
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _CLASS_OBJECTS_NAME, borrowed, 1)
+        if status == 0:
+            status = _special_copy(slots, tokens, _CLASS_OBJECTS_BASES, ptr_add(borrowed, C_POINTER_SIZE), 1)
+        if status == 0:
+            status = _special_copy(slots, tokens, _CLASS_OBJECTS_NAMESPACE, ptr_add(borrowed, 2 * C_POINTER_SIZE), 1)
+        if status == 0:
+            status = _class_new_from_objects_body(slots, tokens)
+        if status == 0:
+            status = _special_publish(slots, tokens, output)
+    if status != 0:
+        _special_error(cstr("class construction failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    prior: int = 0
+    value = load_ptr(output, 0)
+    if ptr_is_null(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_gc_frame_leave(output)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(output, prior)
 
 
 @c_abi_export("py_class_mark_slots_only")
@@ -4770,9 +4970,15 @@ def _class_write_namespace_body(slots: c_ptr, tokens: c_ptr, name: c_ptr, value_
         return -1
     if ptr_is_null(load_ptr(key_slot, 0)) != 0:
         return _special_error(cstr("class namespace key allocation failed"))
+    return _class_write_namespace_commit(slots, tokens, name, remove)
+
+
+def _class_write_namespace_commit(slots: c_ptr, tokens: c_ptr, name: c_ptr, remove: int) -> int:
+    class_slot = ptr_add(slots, _CLASS_WRITE_CLASS * C_POINTER_SIZE)
+    key_slot = ptr_add(slots, _CLASS_WRITE_KEY * C_POINTER_SIZE)
     # Discovery is conservative: a failed installation may leave this hint
     # positive, but no successful __del__ installation may leave it zero.
-    if _strs_eq(name, cstr("__del__")) != 0 and remove == 0:
+    if ptr_is_null(name) == 0 and _strs_eq(name, cstr("__del__")) != 0 and remove == 0:
         _note_class_defines_del()
     context = stack_alloc(_CLASS_WRITE_CONTEXT_COUNT * C_POINTER_SIZE)
     store_ptr(context, _CLASS_WRITE_CONTEXT_OWNER_SLOT * C_POINTER_SIZE, class_slot)
@@ -4826,6 +5032,115 @@ def py_class_write_namespace_slots(class_slot: c_ptr, name: c_ptr, value_slot: c
             status = _class_write_namespace_body(slots, tokens, name, value_slot, remove)
     if status < 0:
         _special_error(cstr("class namespace write failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+@c_abi_export("py_class_write_namespace_key_slots")
+def py_class_write_namespace_key_slots(class_slot: c_ptr, key_slot: c_ptr, value_slot: c_ptr) -> int:
+    """Install an actual dictionary key while retaining each owning source.
+
+    Class construction copies the dictionary, including arbitrary non-string
+    keys and embedded NULs. Such keys have no native C-string method alias.
+    """
+    if ptr_is_null(class_slot) != 0 or ptr_is_null(key_slot) != 0 or ptr_is_null(value_slot) != 0:
+        return _special_error(cstr("class namespace item requires owner, key and value slots"))
+    slots = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == _CLASS_WRITE_SLOT_COUNT:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _CLASS_WRITE_CLASS, class_slot, 0)
+        if status == 0:
+            status = _special_copy(slots, tokens, _CLASS_WRITE_KEY, key_slot, 0)
+        if status == 0:
+            status = _special_copy(slots, tokens, _CLASS_WRITE_VALUE, value_slot, 0)
+        if status == 0:
+            name = null()
+            key = load_ptr(slots, _CLASS_WRITE_KEY * C_POINTER_SIZE)
+            if _ptr_can_have_header(key) and load_i32(key, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR:
+                candidate = py_str_utf8(key)
+                if strlen(candidate) == load_i64(key, PYSTROBJECT_BYTE_LEN_OFFSET):
+                    name = candidate
+            status = _class_write_namespace_commit(slots, tokens, name, 0)
+    if status < 0:
+        _special_error(cstr("class namespace item write failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    return status
+
+
+# Read-only metadata selection shares the namespace writer's class/dict/key
+# slots. The original class is separate from the current immutable MRO entry.
+_CLASS_READ_CURRENT = 1
+_CLASS_READ_ORIGINAL = 2
+_CLASS_READ_DICT = 3
+_CLASS_READ_KEY = 4
+_CLASS_READ_ABSENT = 5
+_CLASS_READ_RESULT = 12
+
+
+def _class_read_namespace_body(slots: c_ptr, tokens: c_ptr, name: c_ptr, result_slot: c_ptr) -> int:
+    original = load_ptr(slots, _CLASS_READ_ORIGINAL * C_POINTER_SIZE)
+    if not _ptr_is_class(original):
+        return _special_error(cstr("class namespace read requires a class"))
+    store_ptr(slots, _CLASS_READ_KEY * C_POINTER_SIZE, py_str_new(name, strlen(name)))
+    if _class_apply_adopt(slots, tokens, _CLASS_READ_KEY) != 0:
+        return -1
+    count: int = load_i32(load_ptr(slots, _CLASS_READ_ORIGINAL * C_POINTER_SIZE), PYCLASSOBJECT_N_MRO_OFFSET)
+    index: int = 0
+    while index < count:
+        # The leased class owns immutable MRO storage. Acquire the current
+        # class independently before selecting its owning dictionary slot.
+        mro = load_ptr(load_ptr(slots, _CLASS_READ_ORIGINAL * C_POINTER_SIZE), PYCLASSOBJECT_MRO_OFFSET)
+        if _special_copy(slots, tokens, _CLASS_READ_CURRENT, ptr_add(mro, index * C_POINTER_SIZE), 1) != 0:
+            return -1
+        acquired: int = _class_write_acquire_namespace(slots, tokens, 0)
+        if acquired < 0:
+            return -1
+        if acquired != 0:
+            if py_dict_get_default_slots(ptr_add(slots, _CLASS_READ_DICT * C_POINTER_SIZE),
+                    ptr_add(slots, _CLASS_READ_KEY * C_POINTER_SIZE),
+                    ptr_add(slots, _CLASS_READ_ABSENT * C_POINTER_SIZE),
+                    ptr_add(slots, _CLASS_READ_RESULT * C_POINTER_SIZE)) != 0:
+                return -1
+            if ptr_is_null(load_ptr(slots, _CLASS_READ_RESULT * C_POINTER_SIZE)) == 0:
+                if _special_adopt(slots, tokens, _CLASS_READ_RESULT) != 0:
+                    return -1
+                return _special_publish(slots, tokens, result_slot)
+        _special_drop(slots, tokens, _CLASS_READ_DICT)
+        _special_drop(slots, tokens, _CLASS_READ_CURRENT)
+        index = index + 1
+    return 0
+
+
+@c_abi_export("py_class_read_namespace_slots")
+def py_class_read_namespace_slots(class_slot: c_ptr, name: c_ptr, result_slot: c_ptr) -> int:
+    """Own raw class metadata selected through the MRO, without descriptors.
+
+    The caller owns class_slot and the empty registered result_slot. An absent
+    entry returns success with NULL; a Python None value remains a real owner.
+    This is an internal namespace API, not Python attribute lookup.
+    """
+    if ptr_is_null(class_slot) != 0 or ptr_is_null(name) != 0 or ptr_is_null(result_slot) != 0:
+        return _special_error(cstr("class namespace read requires owner, name and result slots"))
+    slots = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_CLASS_WRITE_SLOT_COUNT * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == _CLASS_WRITE_SLOT_COUNT:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _CLASS_READ_ORIGINAL, class_slot, 0)
+        if status == 0:
+            status = _class_read_namespace_body(slots, tokens, name, result_slot)
+    if status < 0:
+        _special_error(cstr("class namespace read failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
     return status
 
@@ -5295,6 +5610,9 @@ def _tuple_new_body(slots, tokens) -> int:
     cls = load_ptr(slots, _TUPLE_NEW_CLASS * C_POINTER_SIZE)
     if py_class_is_tuple_subclass(cls) == 0:
         py_raise_owned(py_exc_new(3, cstr("tuple.__new__ requires a tuple subtype")))
+        return -1
+    if _class_is_structseq(cls):
+        py_raise_owned(py_exc_new(3, cstr("tuple.__new__ is not safe for a struct sequence type")))
         return -1
     if _special_validate_arguments(slots) != 0:
         return -1
@@ -5910,7 +6228,7 @@ def py_tuple_iter_next(receiver, index: int):
     return _tuple_view_rooted(receiver, null(), _TUPLE_VIEW_ITER_NEXT, index)
 
 
-def _tuple_method_name(operation: int):
+def _tuple_method_name(operation: int) -> c_ptr:
     if operation == 1:
         return cstr("__len__")
     if operation == 2:
@@ -6425,3 +6743,492 @@ def py_tuple_getattr(receiver, name):
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
     return pcc_gc_take_pinned_slot(output, prior)
+
+
+
+
+# First-class string search descriptors. These are the supported family, not
+# a claim that the complete str namespace has been implemented.
+_STR_METHOD_RECEIVER = 1
+_STR_METHOD_ARGS = 2
+_STR_METHOD_ARGUMENT = 3
+_STR_METHOD_TEXT = 4
+_STR_METHOD_NEEDLE = 5
+_STR_METHOD_START = 6
+_STR_METHOD_END = 7
+_STR_METHOD_ITEM = 8
+_STR_METHOD_CLASS = 10
+_STR_METHOD_RESULT = 12
+_STR_METHOD_COUNT = 0
+_STR_METHOD_STARTSWITH = 1
+_STR_METHOD_ENDSWITH = 2
+
+define_global_i32("pcc_str_method_borrowed_map", -1)
+define_global_i32("pcc_str_method_result_map", 1)
+
+
+def _str_method_payload(slots, tokens, source_index: int, output_index: int) -> int:
+    value = load_ptr(slots, source_index * C_POINTER_SIZE)
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        py_raise_owned(py_exc_new(3, cstr("string method requires a str argument")))
+        return -1
+    if load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR:
+        return _special_copy(slots, tokens, output_index,
+            ptr_add(slots, source_index * C_POINTER_SIZE), 0)
+    if not _ptr_is_instance(value):
+        py_raise_owned(py_exc_new(3, cstr("string method requires a str argument")))
+        return -1
+    if _special_copy(slots, tokens, _STR_METHOD_CLASS,
+            ptr_add(value, PYINSTANCEOBJECT_CLS_OFFSET), 1) != 0:
+        return -1
+    cls = load_ptr(slots, _STR_METHOD_CLASS * C_POINTER_SIZE)
+    if py_class_is_str_subclass(cls) == 0:
+        py_raise_owned(py_exc_new(3, cstr("string method requires a str argument")))
+        return -1
+    value = load_ptr(slots, source_index * C_POINTER_SIZE)
+    source = _instance_builtin_payload_slot(value, cls)
+    if _special_copy(slots, tokens, output_index, source, 0) != 0:
+        return -1
+    _special_drop(slots, tokens, _STR_METHOD_CLASS)
+    if ptr_is_null(load_ptr(slots, output_index * C_POINTER_SIZE)) != 0:
+        return _special_error(cstr("str subtype has no initialized payload"))
+    return 0
+
+
+def _str_method_match_one(slots, tokens, source_index: int, start: int, end: int, suffix: int) -> int:
+    if _str_method_payload(slots, tokens, source_index, _STR_METHOD_NEEDLE) != 0:
+        return -1
+    result: int = py_str_tailmatch_range(
+        load_ptr(slots, _STR_METHOD_TEXT * C_POINTER_SIZE),
+        load_ptr(slots, _STR_METHOD_NEEDLE * C_POINTER_SIZE), start, end, suffix)
+    _special_drop(slots, tokens, _STR_METHOD_NEEDLE)
+    return result
+
+
+def _str_method_body(slots, tokens, operation: int) -> int:
+    args = load_ptr(slots, _STR_METHOD_ARGS * C_POINTER_SIZE)
+    nargs: int = 0
+    if ptr_is_null(args) == 0 and is_tagged_int(args) == 0:
+        if load_i32(args, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE:
+            nargs = py_tuple_len(args)
+    # The namespace function is unbound; ordinary descriptor binding prepends
+    # exactly one receiver. Its signature is entirely positional-only.
+    if nargs < 2 or nargs > 4:
+        py_raise_owned(py_exc_new(3, cstr("string search method requires 1 to 3 arguments")))
+        return -1
+    if _special_tuple_item(slots, tokens, _STR_METHOD_RECEIVER, _STR_METHOD_ARGS, 0) != 0:
+        return -1
+    if _str_method_payload(slots, tokens, _STR_METHOD_RECEIVER, _STR_METHOD_TEXT) != 0:
+        return -1
+    if _special_tuple_item(slots, tokens, _STR_METHOD_ARGUMENT, _STR_METHOD_ARGS, 1) != 0:
+        return -1
+    # count validates its string argument before invoking either __index__;
+    # startswith/endswith validate their prefix only after both bounds.
+    if operation == _STR_METHOD_COUNT:
+        if _str_method_payload(slots, tokens, _STR_METHOD_ARGUMENT, _STR_METHOD_NEEDLE) != 0:
+            return -1
+    start: int = 0
+    end: int = 9223372036854775807
+    if nargs >= 3:
+        if _special_tuple_item(slots, tokens, _STR_METHOD_START, _STR_METHOD_ARGS, 2) != 0:
+            return -1
+        start = py_slice_index_i64(load_ptr(slots, _STR_METHOD_START * C_POINTER_SIZE), 0)
+        if py_err_occurred() != 0:
+            return -1
+    if nargs == 4:
+        if _special_tuple_item(slots, tokens, _STR_METHOD_END, _STR_METHOD_ARGS, 3) != 0:
+            return -1
+        end = py_slice_index_i64(load_ptr(slots, _STR_METHOD_END * C_POINTER_SIZE), end)
+        if py_err_occurred() != 0:
+            return -1
+    result: int = 0
+    if operation == _STR_METHOD_COUNT:
+        # The older counting primitive takes boxed machine bounds. Normalize
+        # through the shared slice protocol first, while every source is leased.
+        _special_drop(slots, tokens, _STR_METHOD_START)
+        _special_drop(slots, tokens, _STR_METHOD_END)
+        store_ptr(slots, _STR_METHOD_START * C_POINTER_SIZE, py_int_from_i64(start))
+        if _special_adopt(slots, tokens, _STR_METHOD_START) != 0:
+            return -1
+        if ptr_is_null(load_ptr(slots, _STR_METHOD_START * C_POINTER_SIZE)) != 0:
+            return _special_error(cstr("string count start allocation failed"))
+        store_ptr(slots, _STR_METHOD_END * C_POINTER_SIZE, py_int_from_i64(end))
+        if _special_adopt(slots, tokens, _STR_METHOD_END) != 0:
+            return -1
+        if ptr_is_null(load_ptr(slots, _STR_METHOD_END * C_POINTER_SIZE)) != 0:
+            return _special_error(cstr("string count end allocation failed"))
+        result = py_str_count_range(load_ptr(slots, _STR_METHOD_TEXT * C_POINTER_SIZE),
+            load_ptr(slots, _STR_METHOD_NEEDLE * C_POINTER_SIZE),
+            load_ptr(slots, _STR_METHOD_START * C_POINTER_SIZE),
+            load_ptr(slots, _STR_METHOD_END * C_POINTER_SIZE))
+        store_ptr(slots, _STR_METHOD_RESULT * C_POINTER_SIZE, py_int_from_i64(result))
+    else:
+        suffix: int = 1 if operation == _STR_METHOD_ENDSWITH else 0
+        argument = load_ptr(slots, _STR_METHOD_ARGUMENT * C_POINTER_SIZE)
+        is_tuple: int = 0
+        if ptr_is_null(argument) == 0 and is_tagged_int(argument) == 0:
+            is_tuple = 1 if load_i32(argument, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE else 0
+        if is_tuple != 0:
+            length: int = py_tuple_len(argument)
+            index: int = 0
+            while index < length:
+                if _special_tuple_item(slots, tokens, _STR_METHOD_ITEM, _STR_METHOD_ARGUMENT, index) != 0:
+                    return -1
+                result = _str_method_match_one(slots, tokens, _STR_METHOD_ITEM, start, end, suffix)
+                _special_drop(slots, tokens, _STR_METHOD_ITEM)
+                if result != 0:
+                    break
+                index = index + 1
+        else:
+            result = _str_method_match_one(slots, tokens, _STR_METHOD_ARGUMENT, start, end, suffix)
+        if result < 0 or py_err_occurred() != 0:
+            return -1
+        store_ptr(slots, _STR_METHOD_RESULT * C_POINTER_SIZE, py_bool_from_bit(result))
+    return _special_adopt(slots, tokens, _STR_METHOD_RESULT)
+
+
+def _str_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
+    # Operation is an immediate tagged integer; read it before any safepoint.
+    operation: int = py_int_value_i64(load_ptr(captures, PYTUPLEOBJECT_ITEMS_OFFSET))
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, args)
+    pcc_gc_frame_enter(global_addr("pcc_str_method_borrowed_map"), borrowed)
+    output = stack_alloc(C_POINTER_SIZE)
+    store_ptr(output, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_str_method_result_map"), output)
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _STR_METHOD_ARGS, borrowed, 1)
+        if status == 0:
+            status = _str_method_body(slots, tokens, operation)
+        if status == 0:
+            status = _special_publish(slots, tokens, output)
+    if status != 0:
+        _special_error(cstr("string descriptor failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    value = load_ptr(output, 0)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_gc_frame_leave(output)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(output, prior)
+
+
+_STR_TYPE_CLASS = 1
+_STR_TYPE_CAPTURES = 2
+_STR_TYPE_FUNCTION = 3
+_STR_TYPE_RESULT = 12
+
+
+def _str_type_install_method(slots, tokens, operation: int) -> int:
+    name = cstr("count")
+    if operation == _STR_METHOD_STARTSWITH:
+        name = cstr("startswith")
+    elif operation == _STR_METHOD_ENDSWITH:
+        name = cstr("endswith")
+    if _special_tuple_new(slots, tokens, _STR_TYPE_CAPTURES, 1) != 0:
+        return -1
+    py_tuple_set_item(load_ptr(slots, _STR_TYPE_CAPTURES * C_POINTER_SIZE), 0, py_int_from_i64(operation))
+    store_ptr(slots, _STR_TYPE_FUNCTION * C_POINTER_SIZE,
+        py_func_new_bound(_str_method_entry, load_ptr(slots, _STR_TYPE_CAPTURES * C_POINTER_SIZE), name, null()))
+    if _special_adopt(slots, tokens, _STR_TYPE_FUNCTION) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _STR_TYPE_FUNCTION * C_POINTER_SIZE)) != 0:
+        return _special_error(cstr("string descriptor allocation failed"))
+    if py_class_write_namespace_slots(ptr_add(slots, _STR_TYPE_CLASS * C_POINTER_SIZE), name,
+            ptr_add(slots, _STR_TYPE_FUNCTION * C_POINTER_SIZE), 0) != 0:
+        return -1
+    # The owning namespace is canonical. The native table is only a borrowed
+    # compatibility alias, matching the existing instance/class lookup paths.
+    cls = load_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE)
+    before: int = load_i32(cls, PYCLASSOBJECT_N_METHODS_OFFSET)
+    py_class_add_method(cls, name, load_ptr(slots, _STR_TYPE_FUNCTION * C_POINTER_SIZE))
+    cls = load_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE)
+    if load_i32(cls, PYCLASSOBJECT_N_METHODS_OFFSET) != before + 1:
+        return _special_error(cstr("string descriptor table publication failed"))
+    _special_drop(slots, tokens, _STR_TYPE_FUNCTION)
+    _special_drop(slots, tokens, _STR_TYPE_CAPTURES)
+    return -1 if py_err_occurred() != 0 else 0
+
+
+def _str_type_fill(slots, tokens) -> int:
+    if ptr_is_null(global_load_ptr("pcc_type_cls_str")) == 0:
+        return _special_copy(slots, tokens, _STR_TYPE_RESULT, global_addr("pcc_type_cls_str"), 0)
+    store_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE,
+        py_class_new(cstr("str"), null(), 0, null(), 0))
+    if _special_adopt(slots, tokens, _STR_TYPE_CLASS) != 0:
+        return -1
+    if ptr_is_null(load_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE)) != 0:
+        return _special_error(cstr("str type allocation failed"))
+    operation: int = _STR_METHOD_COUNT
+    while operation <= _STR_METHOD_ENDSWITH:
+        if _str_type_install_method(slots, tokens, operation) != 0:
+            return -1
+        operation = operation + 1
+    # Failed construction never publishes a half-populated type.
+    pcc_gc_store_root(global_addr("pcc_type_cls_str"), load_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE))
+    return _special_copy(slots, tokens, _STR_TYPE_RESULT,
+        ptr_add(slots, _STR_TYPE_CLASS * C_POINTER_SIZE), 0)
+
+
+@c_abi_export("py_str_type_new")
+def py_str_type_new() -> c_ptr:
+    output = stack_alloc(C_POINTER_SIZE)
+    store_ptr(output, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_str_method_result_map"), output)
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        mutex = _object_new_cache_mutex()
+        if ptr_is_null(mutex) == 0 and pcc_mutex_lock(mutex) == 0:
+            status = _str_type_fill(slots, tokens)
+            pcc_mutex_unlock(mutex)
+        if status == 0:
+            status = _special_publish(slots, tokens, output)
+    if status != 0:
+        _special_error(cstr("str type initialization failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    value = load_ptr(output, 0)
+    prior: int = 0
+    if ptr_is_null(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_gc_frame_leave(output)
+    return pcc_gc_take_pinned_slot(output, prior)
+
+
+@c_abi_export("py_str_getattr")
+def py_str_getattr(receiver: c_ptr, name: c_ptr) -> c_ptr:
+    # Do not expose a base-object fallback as an unimplemented str descriptor.
+    if (_strs_eq(name, cstr("count")) == 0
+            and _strs_eq(name, cstr("startswith")) == 0
+            and _strs_eq(name, cstr("endswith")) == 0):
+        return null()
+    # Exact str only. Subclasses retain ordinary hooks, instance attributes,
+    # overrides, and C3 lookup through their namespace-owned base descriptors.
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, receiver)
+    pcc_gc_frame_enter(global_addr("pcc_str_method_borrowed_map"), borrowed)
+    output = stack_alloc(C_POINTER_SIZE)
+    store_ptr(output, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_str_method_result_map"), output)
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, 1, borrowed, 1)
+        if status == 0:
+            store_ptr(slots, 4 * C_POINTER_SIZE, py_str_type_new())
+            status = _special_adopt(slots, tokens, 4)
+        record = stack_alloc(2 * C_POINTER_SIZE)
+        memset(record, 0, 2 * C_POINTER_SIZE)
+        if status == 0 and ptr_is_null(load_ptr(slots, 4 * C_POINTER_SIZE)) == 0:
+            plan = stack_alloc(256)
+            prepared: int = 0
+            pcc_py_gc_minor_graph_lock()
+            source = _special_lookup_locked(load_ptr(slots, 4 * C_POINTER_SIZE), name, record)
+            kind: int = load_i64(record, 0)
+            if kind == 1 or kind == 2:
+                token: int = pcc_gc_root_copy_lease_prepare_locked(ptr_add(slots, 5 * C_POINTER_SIZE),
+                    source, 1 if kind == 2 else 0, plan)
+                prepared = 1
+                if token < 0:
+                    status = -1
+                else:
+                    store_i64(tokens, 5 * C_POINTER_SIZE, token)
+            pcc_py_gc_minor_graph_unlock()
+            if prepared != 0:
+                pcc_gc_root_copy_lease_finish(plan)
+            if status == 0:
+                if kind == 0:
+                    status = 1
+                elif kind == 3:
+                    status = _special_error(cstr("str attribute requires a managed descriptor"))
+                else:
+                    status = _special_bind_attribute(slots, tokens, name, 0)
+                    if status == 0:
+                        status = _special_publish(slots, tokens, output)
+        elif status == 0:
+            status = -1
+    if status < 0:
+        _special_error(cstr("str attribute lookup failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    value = load_ptr(output, 0)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
+        pcc_gc_pin(value)
+    pcc_gc_frame_leave(output)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(output, prior)
+
+
+# Struct sequences retain an ordinary immutable tuple payload and keep their
+# non-sequence fields in the existing, separately traced reserved owner. They
+# are slots-only classes: no dynamic dictionary is exposed or synthesized.
+_STRUCTSEQ_RECEIVER = 1
+_STRUCTSEQ_HIDDEN = 2
+_STRUCTSEQ_VISIBLE = 3
+_STRUCTSEQ_RESULT = 12
+_STRUCTSEQ_SCRATCH_COUNT = 14
+_STRUCTSEQ_RETURN_COUNT = 2
+_STRUCTSEQ_RETURN_ENTRY_EXCEPTION = 1
+
+define_global_i32("pcc_structseq_borrowed_map", -3)
+define_global_i32("pcc_structseq_result_map", _STRUCTSEQ_RETURN_COUNT)
+
+
+def _structseq_exact_tuple(value) -> bool:
+    return (ptr_is_null(value) == 0 and is_tagged_int(value) == 0
+            and load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE)
+
+
+def _structseq_body(slots, tokens, create: int) -> int:
+    value = load_ptr(slots, _STRUCTSEQ_RECEIVER * C_POINTER_SIZE)
+    if create == 2:
+        status: int = py_dict_storage_slots(
+            ptr_add(slots, _STRUCTSEQ_RECEIVER * C_POINTER_SIZE),
+            ptr_add(slots, _STRUCTSEQ_RESULT * C_POINTER_SIZE))
+        if status != 0:
+            return -1
+        if ptr_is_null(load_ptr(slots, _STRUCTSEQ_RESULT * C_POINTER_SIZE)):
+            py_raise_owned(py_exc_new(3, cstr("struct sequence metadata requires dictionary storage")))
+            return -1
+        return _special_adopt(slots, tokens, _STRUCTSEQ_RESULT)
+    if create == 1:
+        if not _class_is_structseq(value):
+            py_raise_owned(py_exc_new(3, cstr("struct sequence type required")))
+            return -1
+        if not _structseq_exact_tuple(load_ptr(slots, _STRUCTSEQ_VISIBLE * C_POINTER_SIZE)) or not _structseq_exact_tuple(load_ptr(slots, _STRUCTSEQ_HIDDEN * C_POINTER_SIZE)):
+            py_raise_owned(py_exc_new(3, cstr("struct sequence fields require exact tuple owners")))
+            return -1
+        store_ptr(slots, _STRUCTSEQ_RESULT * C_POINTER_SIZE, py_instance_new(value))
+        if _special_adopt(slots, tokens, _STRUCTSEQ_RESULT) != 0:
+            return -1
+        instance = load_ptr(slots, _STRUCTSEQ_RESULT * C_POINTER_SIZE)
+        if ptr_is_null(instance) != 0:
+            return _special_error(cstr("struct sequence allocation failed"))
+        cls = load_ptr(slots, _STRUCTSEQ_RECEIVER * C_POINTER_SIZE)
+        payload_slot = _instance_builtin_payload_slot(instance, cls)
+        hidden_slot = _instance_reserved_owner_slot(instance, cls)
+        if ptr_is_null(payload_slot) != 0:
+            return _special_error(cstr("struct sequence tuple payload owner is missing"))
+        # All three source owners and the fresh instance have counted leases.
+        # Publication cannot expose an incomplete object: it has not escaped.
+        pcc_gc_store_ptr(instance, payload_slot,
+            load_ptr(slots, _STRUCTSEQ_VISIBLE * C_POINTER_SIZE))
+        pcc_gc_store_ptr(instance, hidden_slot,
+            load_ptr(slots, _STRUCTSEQ_HIDDEN * C_POINTER_SIZE))
+        return -1 if py_err_occurred() else 0
+    if not _special_native_instance(value):
+        py_raise_owned(py_exc_new(3, cstr("struct sequence receiver required")))
+        return -1
+    cls = pcc_gc_load_ptr(value, ptr_add(value, PYINSTANCEOBJECT_CLS_OFFSET))
+    if not _class_is_structseq(cls):
+        py_raise_owned(py_exc_new(3, cstr("struct sequence receiver required")))
+        return -1
+    owner_slot = _instance_reserved_owner_slot(value, cls)
+    if ptr_is_null(load_ptr(owner_slot, 0)) != 0:
+        return _special_error(cstr("struct sequence hidden fields are not initialized"))
+    return _special_copy(slots, tokens, _STRUCTSEQ_RESULT, owner_slot, 1)
+
+
+def _structseq_c_object(receiver, visible, hidden, create: int):
+    borrowed = stack_alloc(3 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, receiver)
+    store_ptr(borrowed, C_POINTER_SIZE, hidden)
+    store_ptr(borrowed, 2 * C_POINTER_SIZE, visible)
+    pcc_gc_frame_enter(global_addr("pcc_structseq_borrowed_map"), borrowed)
+    output = stack_alloc(_STRUCTSEQ_RETURN_COUNT * C_POINTER_SIZE)
+    memset(output, 0, _STRUCTSEQ_RETURN_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_structseq_result_map"), output)
+    entry_exception = ptr_add(output, _STRUCTSEQ_RETURN_ENTRY_EXCEPTION * C_POINTER_SIZE)
+    # Snapshot the incoming exception before any fallible handle registration.
+    # It has a distinct owner even if the first scratch root cannot register.
+    py_tls_exc_swap_slot(entry_exception)
+    slots = stack_alloc(_STRUCTSEQ_SCRATCH_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_STRUCTSEQ_SCRATCH_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_STRUCTSEQ_SCRATCH_COUNT * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == _STRUCTSEQ_SCRATCH_COUNT:
+        status = pcc_gc_root_move(slots, entry_exception)
+        if status == 0:
+            suspended = 1
+            status = _special_copy(slots, tokens, _STRUCTSEQ_RECEIVER, borrowed, 1)
+        if status == 0 and create == 1:
+            status = _special_copy(slots, tokens, _STRUCTSEQ_HIDDEN, ptr_add(borrowed, C_POINTER_SIZE), 1)
+        if status == 0 and create == 1:
+            status = _special_copy(slots, tokens, _STRUCTSEQ_VISIBLE, ptr_add(borrowed, 2 * C_POINTER_SIZE), 1)
+        if status == 0:
+            status = _structseq_body(slots, tokens, create)
+        if status == 0:
+            status = _special_publish(slots, tokens, output)
+    if status != 0:
+        # Application c_obj externs return one owned exception object on error;
+        # the semantic wrapper raises it under its ordinary Python handlers.
+        _special_error(cstr("struct sequence operation failed without an exception"))
+        py_tls_exc_swap_slot(output)
+    _special_close(slots, tokens, handles, count, suspended)
+    if suspended == 0:
+        py_clear_exception()
+        py_tls_exc_swap_slot(entry_exception)
+    pcc_py_gc_minor_graph_lock()
+    value = load_ptr(output, 0)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave(output)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(output, prior)
+
+
+@c_abi_export("py_structseq_new")
+def py_structseq_new(cls, visible, hidden):
+    return _structseq_c_object(cls, visible, hidden, 1)
+
+
+@c_abi_export("py_structseq_hidden")
+def py_structseq_hidden(receiver):
+    return _structseq_c_object(receiver, null(), null(), 0)
+
+
+@c_abi_export("py_class_mark_structseq")
+def py_class_mark_structseq(cls) -> None:
+    # Class publication still has an authoritative root. Validation performs
+    # no allocation on success and no managed pointer survives its error.
+    if not _ptr_is_class(cls) or py_class_is_tuple_subclass(cls) == 0:
+        py_raise_owned(py_exc_new(3, cstr("struct sequence requires a tuple subtype")))
+        return
+    if load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET) != 0 or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) == 0:
+        py_raise_owned(py_exc_new(3, cstr("struct sequence requires an empty slots-only layout")))
+        return
+    atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, _STRUCTSEQ_CLASS_FLAG, "relaxed")
+
+
+@c_abi_export("py_structseq_dict_storage")
+def py_structseq_dict_storage(mapping):
+    return _structseq_c_object(mapping, null(), null(), 2)

@@ -1589,14 +1589,8 @@ def _builtin_init_env(slots, tokens) -> int:
         ptr_add(load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE), offset), 0)
 
 
-def _builtin_init_dict(slots, tokens) -> int:
-    nargs: int = py_tuple_len(load_ptr(slots, _BUILTIN_INIT_ARGS_SLOT * C_POINTER_SIZE))
-    if nargs > 1:
-        py_raise_owned(py_exc_new(3, cstr("dict expected at most 1 argument")))
-        return -1
-    if (load_i32(load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE), PYOBJECTHEADER_FLAGS_OFFSET) & 4) == 0:
-        py_raise_owned(py_exc_new(3, cstr("dict.__init__ requires a dict instance")))
-        return -1
+def _builtin_init_dict_storage(slots, tokens) -> int:
+    """Acquire the actual item dictionary through its traced owners."""
     if _builtin_init_env(slots, tokens) != 0:
         return -1
     store_ptr(slots, _BUILTIN_INIT_KEY_SLOT * C_POINTER_SIZE, _dict_items_key())
@@ -1612,6 +1606,19 @@ def _builtin_init_dict(slots, tokens) -> int:
     if _builtin_init_adopt(slots, tokens, _BUILTIN_INIT_DICT_SLOT) != 0:
         return -1
     _builtin_init_drop(slots, tokens, _BUILTIN_INIT_TEMP_SLOT)
+    return 0
+
+
+def _builtin_init_dict(slots, tokens) -> int:
+    nargs: int = py_tuple_len(load_ptr(slots, _BUILTIN_INIT_ARGS_SLOT * C_POINTER_SIZE))
+    if nargs > 1:
+        py_raise_owned(py_exc_new(3, cstr("dict expected at most 1 argument")))
+        return -1
+    if (load_i32(load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE), PYOBJECTHEADER_FLAGS_OFFSET) & 4) == 0:
+        py_raise_owned(py_exc_new(3, cstr("dict.__init__ requires a dict instance")))
+        return -1
+    if _builtin_init_dict_storage(slots, tokens) != 0:
+        return -1
     if nargs == 1:
         if _builtin_init_copy(slots, tokens, _BUILTIN_INIT_SOURCE_SLOT,
                 ptr_add(load_ptr(slots, _BUILTIN_INIT_ARGS_SLOT * C_POINTER_SIZE), PYTUPLEOBJECT_ITEMS_OFFSET), 0) != 0:
@@ -1734,6 +1741,58 @@ def py_dict_subclass_init_slots(receiver_slot, from_class_slot, args_slot, kwarg
 @c_abi_export("py_exception_subclass_init_slots")
 def py_exception_subclass_init_slots(receiver_slot, from_class_slot, args_slot, kwargs_slot) -> int:
     return _builtin_init_dispatch(receiver_slot, from_class_slot, args_slot, kwargs_slot, 2)
+
+
+@c_abi_export("py_dict_storage_slots")
+def py_dict_storage_slots(receiver_slot, result_slot) -> int:
+    """Copy real dict storage into an empty registered owning result slot.
+
+    Exact dictionaries and native dict subclasses are accepted. This bypasses
+    user mapping protocols, including keys/getitem overrides and __missing__.
+    The caller owns both slots; no borrowed backing pointer escapes.
+    """
+    slots = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_BUILTIN_INIT_SLOT_COUNT * C_POINTER_SIZE)
+    count: int = _builtin_init_open(slots, tokens, handles)
+    suspended: int = 0
+    status: int = -1
+    if count == _BUILTIN_INIT_SLOT_COUNT:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_RECEIVER_SLOT, receiver_slot, 0)
+        if status == 0:
+            receiver = load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE)
+            if ptr_is_null(receiver) == 0 and _type_of(receiver) == PY_TYPE_DICT:
+                status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_DICT_SLOT,
+                    ptr_add(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE), 0)
+            elif _is_user_instance(receiver) != 0:
+                status = _builtin_init_copy(slots, tokens, _BUILTIN_INIT_CLASS_SLOT,
+                    ptr_add(load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE), PYINSTANCEOBJECT_CLS_OFFSET), 1)
+                if status == 0:
+                    cls = load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE)
+                    if ptr_is_null(cls) != 0 or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) == 0:
+                        status = 1
+                    else:
+                        status = _builtin_init_dict_storage(slots, tokens)
+            else:
+                status = 1
+        if status == 1:
+            py_raise_owned(py_exc_new(3, cstr("type.__new__() argument 3 must be dict")))
+            status = -1
+        if status == 0:
+            storage_slot = ptr_add(slots, _BUILTIN_INIT_DICT_SLOT * C_POINTER_SIZE)
+            status = pcc_gc_root_move(result_slot, storage_slot)
+            if status == 0:
+                token: int = load_i64(tokens, _BUILTIN_INIT_DICT_SLOT * C_POINTER_SIZE)
+                store_i64(tokens, _BUILTIN_INIT_DICT_SLOT * C_POINTER_SIZE, 0)
+                if pcc_gc_foreign_lease_release(result_slot, token) != 0:
+                    pcc_platform_abort()
+                    status = -1
+    if status != 0:
+        _builtin_init_error(cstr("dictionary storage acquisition failed without an exception"))
+    _builtin_init_close(slots, tokens, handles, count, suspended)
+    return status
 
 
 # Index entry owns slot addresses, including across the compiled thread-entry

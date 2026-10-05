@@ -118,6 +118,8 @@ py_obj_index_i64 = extern("py_obj_index_i64", (c_ptr,), c_int64)
 
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_len = extern("py_str_len", (c_ptr,), c_int64)
+py_str_type_new = extern("py_str_type_new", (), c_ptr)
+py_str_getattr = extern("py_str_getattr", (c_ptr, c_ptr), c_ptr)
 py_str_index = extern("py_str_index", (c_ptr, c_ptr), c_ptr)
 py_str_count = extern("py_str_count", (c_ptr, c_ptr), c_int64)
 py_str_count_range = extern(
@@ -1836,12 +1838,7 @@ def _builtin_type_class_for_tag(tag: int):
                 global_store_ptr("pcc_type_cls_float", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_STR:  # PY_TYPE_STR
-        cls = global_load_ptr("pcc_type_cls_str")
-        if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("str"), null(), 0, null(), 0)
-            if ptr_is_null(cls) == 0:
-                global_store_ptr("pcc_type_cls_str", cls)
-        return _return_builtin_type(cls)
+        return py_str_type_new()
     if tag == PY_TYPE_LIST:  # PY_TYPE_LIST
         cls = global_load_ptr("pcc_type_cls_list")
         if ptr_is_null(cls) != 0:
@@ -2858,74 +2855,6 @@ def _py_set_pop_bound(o):
     return fn
 
 
-def _py_str_count_bound_entry(captures, args):
-    s = py_tuple_get(captures, 0)
-    if ptr_is_null(s) != 0:
-        return null()
-    nargs: int = 0
-    if ptr_is_null(args) == 0:
-        if is_tagged_int(args) == 0:
-            if load_i32(args, 8) == PY_TYPE_TUPLE:  # PY_TYPE_TUPLE
-                nargs = py_tuple_len(args)
-    if nargs < 1 or nargs > 3:
-        py_decref(s)
-        exc = py_exc_new(3, cstr("str.count expected 1 to 3 arguments"))
-        py_raise_owned(exc)
-        return null()
-
-    sub = py_tuple_get(args, 0)
-    if ptr_is_null(sub) != 0:
-        py_decref(s)
-        return null()
-    if is_tagged_int(sub) != 0 or load_i32(sub, 8) != PY_TYPE_STR:  # PY_TYPE_STR
-        py_decref(sub)
-        py_decref(s)
-        exc = py_exc_new(3, cstr("str.count argument must be str"))
-        py_raise_owned(exc)
-        return null()
-
-    count: int = 0
-    if nargs >= 2:
-        start = py_tuple_get(args, 1)
-        end = null()
-        if nargs == 3:
-            end = py_tuple_get(args, 2)
-        if ptr_is_null(start) != 0 or (nargs == 3 and ptr_is_null(end) != 0):
-            if ptr_is_null(start) == 0:
-                py_decref(start)
-            if ptr_is_null(end) == 0:
-                py_decref(end)
-            py_decref(sub)
-            py_decref(s)
-            return null()
-        count = py_str_count_range(s, sub, start, end)
-        py_decref(start)
-        if ptr_is_null(end) == 0:
-            py_decref(end)
-    else:
-        count = py_str_count(s, sub)
-
-    out = py_int_from_i64(count)
-    py_decref(s)
-    py_decref(sub)
-    return out
-
-
-def _py_str_count_bound(o):
-    captures = py_tuple_new(1)
-    if ptr_is_null(captures) != 0:
-        return null()
-    py_tuple_set_item(captures, 0, o)
-    fn = py_func_new_bound(
-        _py_str_count_bound_entry,
-        captures,
-        cstr("count"),
-        o,
-    )
-    py_decref(captures)
-    return fn
-
-
 _PROPERTY_ACCESSOR_OWNER = 0
 _PROPERTY_ACCESSOR_RESULT = 1
 _PROPERTY_ACCESSOR_ERROR = 2
@@ -3086,8 +3015,10 @@ def py_obj_getattr(o, name):
         if tag == PY_TYPE_SET:  # PY_TYPE_SET
             return _py_set_pop_bound(o)
 
-    if tag == PY_TYPE_STR and _cstr_is_count(name) != 0:  # PY_TYPE_STR
-        return _py_str_count_bound(o)
+    if tag == PY_TYPE_STR:
+        result = py_str_getattr(o, name)
+        if ptr_is_null(result) == 0 or py_err_occurred() != 0:
+            return result
 
     if tag == PY_TYPE_TUPLE:
         result = py_tuple_getattr(o, name)

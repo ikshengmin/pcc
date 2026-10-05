@@ -717,6 +717,13 @@ class UnaryCallLoweringMixin:
         builtin_name = attr.obj.ident
         if builtin_name not in _CPY_BUILTIN_TYPE_NAMES:
             return None
+        if (builtin_name == "str"
+                and attr.name in ("count", "startswith", "endswith")
+                and self._name_returns_native_builtin_callable_value(builtin_name)):
+            # These descriptors belong to the canonical native str namespace.
+            # Resolve the callable before evaluating operands and preserve the
+            # positional-only runtime binder, including explicit receivers.
+            return self._emit_slot_call_object(expr, "str." + attr.name)
         if attr.name == "__new__":
             if builtin_name == "str":
                 # The allocator must receive the requested class. Rewriting

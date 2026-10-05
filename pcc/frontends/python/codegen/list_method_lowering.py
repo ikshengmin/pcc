@@ -597,6 +597,101 @@ class ListMethodLoweringMixin:
             return self.builder.load(output, name=self._fresh("dyn.count.output"))
         return self._take_slot_call_root(output)
 
+    def _emit_owned_list_extend(self, expr):
+        """Keep the iterable owned and propagate errors before releasing call leases."""
+        attr = expr.func
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("list.extend.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(attr.obj, "list.extend.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            tag = self._slot_call_runtime_call(
+                "py_obj_type_tag", (receiver,), span=expr.span,
+            )
+            is_list = self.builder.icmp_signed(
+                "==", tag, ir.Constant(_I64, PY_TYPE_LIST),
+                name=self._fresh("list.extend.is_list"),
+            )
+            function = self.current_function
+            list_block = function.append_basic_block(self._fresh("list.extend.list"))
+            generic_block = function.append_basic_block(self._fresh("list.extend.generic"))
+            done_block = function.append_basic_block(self._fresh("list.extend.done"))
+            self.builder.cbranch(is_list, list_block, generic_block)
+
+            self.builder.position_at_end(list_block)
+            item = self._emit_slot_call_operand(expr.args[0], "list.extend.item")
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_list_extend", (receiver, item), span=expr.span,
+            )
+            none_value = self._emit_none_literal()
+            self._publish_slot_call_owned(output, none_value, label="list extend result")
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots((item,))
+            self.builder.branch(done_block)
+
+            self.builder.position_at_end(generic_block)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Attribute resolution precedes argument evaluation. In particular,
+            # subclass overrides and user descriptors retain their existing binding
+            # and validation behavior through the ordinary callable protocol.
+            method = self._new_slot_call_root("list.extend.method")
+            branch_roots = list(roots) + [method]
+            self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_obj_getattr", (receiver,), result_slot=method,
+                suffix_args=(self._attr_name_ptr(attr.name),), span=expr.span,
+            )
+            current = self.builder.load(method, name=self._fresh("list.extend.callable"))
+            self._emit_attribute_error_if_null(current, attr.name, attr.span)
+            args = self._emit_slot_call_args_tuple(expr.args, "list.extend.args")
+            branch_roots.append(args)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            kwargs = self._emit_slot_call_kwargs_object(
+                (), None, expr.span, "list.extend.kwargs", method,
+            )
+            branch_roots.append(kwargs)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            status = self.builder.call(
+                self.runtime["py_obj_call_slots"],
+                [self._as_gc_ptr(method), self._as_gc_ptr(args),
+                 self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                name=self._fresh("list.extend.invoke"),
+            )
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, "extend method call", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            self._release_slot_call_roots(tuple(branch_roots[len(roots):]))
+            self.builder.branch(done_block)
+
+            self.builder.position_at_end(done_block)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_note_published(output)
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("list.extend.output"))
+        return self._take_slot_call_root(output)
+
     def _emit_dyn_list_method_with_runtime_guard(
         self,
         expr: Call,
@@ -613,6 +708,8 @@ class ListMethodLoweringMixin:
             return self._emit_owned_list_pop(expr)
         if attr.name == "count" and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_dyn_list_count(expr)
+        if attr.name == "extend" and not self._expr_looks_cpython(attr.obj):
+            return self._emit_owned_list_extend(expr)
 
         if (attr.name == "index" and len(expr.args) == 1
                 and not self._expr_looks_cpython(attr.obj)):
@@ -829,6 +926,8 @@ class ListMethodLoweringMixin:
         name = attr.name
         if name == "pop" and len(expr.args) <= 1 and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_list_pop(expr, list_ty)
+        if name == "extend" and len(expr.args) == 1 and not self._expr_looks_cpython(attr.obj):
+            return self._emit_owned_list_extend(expr)
         recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):
             return self._emit_cpy_method_call_src(

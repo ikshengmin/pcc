@@ -51,7 +51,7 @@ class TupleMemory(Memory):
                      'pcc_tuple_view_borrowed_map':-2,'pcc_tuple_view_result_map':1,
                      'pcc_tuple_attribute_borrowed_map':-1}
         names={'_ptr_is_class','_ptr_can_have_header','_ptr_is_instance','_ptr_is_class_of_validated_instance',
-               'py_class_is_tuple_subclass','_instance_storage_slot_count',
+               'py_class_is_tuple_subclass','_class_is_structseq','_instance_storage_slot_count',
                '_instance_builtin_payload_slot','py_tuple_payload','py_tuple_check',
                '_special_open','_special_error','_special_copy','_special_adopt',
                '_special_drop','_special_close','_special_publish','_special_tuple_item',
@@ -61,7 +61,7 @@ class TupleMemory(Memory):
         tree=ast.parse(PORT.read_text())
         body=[]
         for node in tree.body:
-            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id.startswith('_TUPLE_NEW_') for t in node.targets):
+            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id.startswith(('_TUPLE_NEW_', '_STRUCTSEQ_CLASS_FLAG')) for t in node.targets):
                 body.append(node)
             elif isinstance(node,ast.FunctionDef) and node.name in names:
                 node.decorator_list=[]

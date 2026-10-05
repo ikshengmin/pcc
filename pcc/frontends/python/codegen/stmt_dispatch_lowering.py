@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pcc.frontends.python.codegen.cpy_import_state import retire_live_import_staging
+
 import os
 import sys
 
@@ -467,6 +469,7 @@ class StmtDispatchLoweringMixin:
                         name=self._fresh(f"pcc.def.binding.publish.{stmt.name}"),
                     )
                     self._gc_release(fn_obj)
+                    retire_live_import_staging(self, stmt.name)
             return
         if isinstance(stmt, ClassDef):
             if self.current_func_def is None:

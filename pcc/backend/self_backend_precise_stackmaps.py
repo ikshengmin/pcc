@@ -6145,14 +6145,28 @@ def _validate_symbolic_plans(
     plans: tuple[FunctionStackMapPlan, ...], *, arch: int
 ) -> None:
     functions: list[FunctionStackMap] = []
+    # Plans already share immutable root-location tuples across safepoints.
+    # Preserve that sharing in the validation view: reconstructing every root
+    # for every record expands one large function into millions of objects.
+    # Retain the source tuple alongside its identity to prevent address reuse.
+    location_identities: dict[int, tuple] = {}
     for plan in sorted(plans, key=lambda item: item.function_id):
         records: list[SafepointRecord] = []
         for index, record in enumerate(plan.records):
+            identity = id(record.locations)
+            cached = None
+            if identity in location_identities:
+                cached = location_identities[identity]
+            if cached is not None and cached[0] is record.locations:
+                locations = cached[1]
+            else:
+                locations = _stack_locations(record.locations, arch=arch)
+                location_identities[identity] = (record.locations, locations)
             records.append(SafepointRecord(
                 safepoint_id=record.safepoint_id,
                 instruction_offset=index,
                 kind=record.kind,
-                locations=_stack_locations(record.locations, arch=arch),
+                locations=locations,
                 flags=record.flags,
                 exceptional_offset=0 if record.exceptional_block else NO_OFFSET,
                 continuation_id=record.continuation_id,
@@ -6164,7 +6178,10 @@ def _validate_symbolic_plans(
             frame_size=plan.frame_size,
             records=tuple(records),
         ))
-    validate_stack_map(PreciseStackMap(arch=arch, functions=tuple(functions)))
+    validate_stack_map(
+        PreciseStackMap(arch=arch, functions=tuple(functions)),
+        shared_locations=True,
+    )
 
 
 def build_x86_64_stack_map_payload(
@@ -6329,6 +6346,7 @@ def render_x86_64_stack_map_section(
     ordered_plans = sorted(plans, key=lambda item: item.function_id)
     location_lines: list[str] = []
     location_indices: dict[str, int] = {}
+    location_identities: dict[int, tuple] = {}
     location_count = 0
     lines = ['.section .pcc_stackmaps,"a",@progbits', ".p2align 3"]
     _append_bytes(lines, MAGIC)
@@ -6364,20 +6382,28 @@ def render_x86_64_stack_map_section(
             "  .long 0",
         ))
         for record in records:
-            packed_locations = _stack_locations(record.locations, arch=ARCH_X86_64)
-            key = ";".join(
-                ",".join(str(field) for field in (
-                    loc.kind, loc.flags, loc.size, loc.register,
-                    loc.base_index, loc.offset, loc.extent,
-                )) for loc in packed_locations
-            )
-            if key in location_indices:
-                location_index = location_indices[key]
+            identity = id(record.locations)
+            cached = None
+            if identity in location_identities:
+                cached = location_identities[identity]
+            if cached is not None and cached[0] is record.locations:
+                location_index = cached[1]
             else:
-                location_index = location_count
-                location_indices[key] = location_index
-                location_count += len(packed_locations)
-                _append_packed_location_lines(location_lines, packed_locations, arch=ARCH_X86_64)
+                packed_locations = _stack_locations(record.locations, arch=ARCH_X86_64)
+                key = ";".join(
+                    ",".join(str(field) for field in (
+                        loc.kind, loc.flags, loc.size, loc.register,
+                        loc.base_index, loc.offset, loc.extent,
+                    )) for loc in packed_locations
+                )
+                if key in location_indices:
+                    location_index = location_indices[key]
+                else:
+                    location_index = location_count
+                    location_indices[key] = location_index
+                    location_count += len(packed_locations)
+                    _append_packed_location_lines(location_lines, packed_locations, arch=ARCH_X86_64)
+                location_identities[identity] = (record.locations, location_index)
             exceptional = str(NO_OFFSET)
             if record.exceptional_block:
                 target = block_label(plan.function_name, record.exceptional_block)

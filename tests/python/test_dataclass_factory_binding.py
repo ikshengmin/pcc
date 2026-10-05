@@ -513,7 +513,7 @@ def test_prepared_layout_proof_reaches_imported_and_inherited_fields(tmp_path, m
     assert exports["app"]["Child"]["field_names"] == ("value", "chosen")
     compile_python_multi(paths, str(output), module_names=names, entry_module="app",
                          emit_llvm_only=True, backend="self", libpython_mode="off",
-                         ir_scaffold_mode="on")
+                         ir_scaffold_mode="on", target_triple="arm64-apple-darwin")
     text = output.read_text()
     for function in ("project", "inherited"):
         caller = _body(text, "user_app_" + function)

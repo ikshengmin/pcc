@@ -96,12 +96,18 @@ def _compile_runtime_module(name, source, ir_path, target):
     suppress_polls = name in _NO_IMPLICIT_POLL_MODULES
     names = list(_RUNTIME_IR_OUTPUT_ENV)
     names.append("PCC_PYTHON_IR_PASSES")
+    names.append("PCC_RUNTIME_DIR")
     if suppress_polls:
         names.append("PCC_WITH_THREADS")
     previous = {key: os.environ.get(key) for key in names}
     try:
         for key in _RUNTIME_IR_OUTPUT_ENV:
             os.environ.pop(key, None)
+        # The explicit build input owns its ABI-constant context, even when
+        # copied outside the compiler checkout or named simply runtime/py.
+        # Keep this scoped to the call so a previous runtime selection cannot
+        # leak into a later build (and restore it on a failed compile too).
+        os.environ["PCC_RUNTIME_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(source)))
         os.environ["PCC_PYTHON_IR_PASSES"] = runtime_python_ir_pass_mode()
         if suppress_polls:
             os.environ["PCC_WITH_THREADS"] = "0"

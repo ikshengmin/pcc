@@ -46,6 +46,10 @@ from pcc.frontends.python.py_ast import (
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
+from pcc.frontends.python.codegen.cpy_import_state import (
+    live_import_expr_binding,
+    live_import_name_slot,
+)
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 
@@ -323,6 +327,8 @@ class CallObjectLoweringMixin:
     def _slot_call_name_source(self, expr):
         """Return an existing native object slot, never a newly rooted load."""
         check_local_bound(self, expr)
+        if live_import_name_slot(self, expr.ident) is not None:
+            return None
         entry = self.env.get(expr.ident)
         if entry is not None:
             slot, ir_ty, declared_ty = entry
@@ -1000,7 +1006,7 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         return output
 
-    def _take_slot_call_root(self, slot):
+    def _take_slot_call_root(self, slot, keep_pinned=False):
         """Finish every parking operation before returning the root's owner."""
         _slot, flag, lifo = self._slot_call_root_record(slot)
         self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
@@ -1009,7 +1015,7 @@ class CallObjectLoweringMixin:
             [ir.Constant(_CSTR, None), self._as_gc_ptr(slot)],
             name=self._fresh("call.slot.take.current"),
         )
-        prior = self._extern_prior_pin(current)
+        prior = ir.Constant(_I64, 64) if keep_pinned else self._extern_prior_pin(current)
         self._gc_pin(current)
         self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
         if lifo:
@@ -1442,6 +1448,9 @@ class CallObjectLoweringMixin:
         return output
 
     def _emit_slot_call_attribute(self, expr, label):
+        runtime_name = expr.name
+        if live_import_expr_binding(self, expr.obj):
+            runtime_name = self.class_lowering.private_field_key(runtime_name)
         uname = self._emit_slot_call_os_uname_attr(expr, label)
         if uname is not None:
             return uname
@@ -1465,7 +1474,7 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = self._try_err_block
             self._slot_call_runtime_call(
                 "py_obj_getattr", (receiver,), result_slot=output,
-                suffix_args=(self._attr_name_ptr(expr.name),), span=expr.span,
+                suffix_args=(self._attr_name_ptr(runtime_name),), span=expr.span,
             )
             self._release_slot_call_roots((receiver,))
         finally:

@@ -70,10 +70,11 @@ def test_local_or_explicit_global_import_matches_binding_scope(tmp_path, monkeyp
                 "    except ValueError:\n        return None\n", "fcntl")
     probe = body(text, "user_consumer_probe")
     assert "@.pcc.ext.modref.fcntl" not in text
-    assert "name.dynamic.fcntl" not in probe
     if prefix:
         assert "@.modvar.consumer.fcntl" in probe
+        assert "name.dynamic.fcntl" in probe
     else:
+        assert "name.dynamic.fcntl" not in probe
         assert bool(re.search(r"%fcntl(?:\.[\w.]+)?\.addr[^\n]*= alloca ptr", probe)), "local module lacks an owning slot"
         assert "@pcc_gc_root_move" in probe
 
@@ -137,15 +138,16 @@ def test_guarded_module_import_has_a_checked_global_binding(tmp_path, monkeypatc
                 "try:\n    import fcntl\nexcept ImportError:\n    pass\n"
                 "def probe(descriptor):\n    return fcntl.fcntl(descriptor, fcntl.F_GETFL)\n", "fcntl")
     probe = body(text, "user_consumer_probe")
-    assert "@.modvar.consumer.fcntl_initialized" in probe
-    assert "name.dynamic.fcntl" not in probe
+    assert "name.dynamic.fcntl.missing" in probe
+    assert "@py_module_attr_get" in probe
 
 
 def test_from_import_global_is_unbound_until_the_statement_runs(tmp_path, monkeypatch):
     text = emit(tmp_path, monkeypatch,
                 "def probe():\n    return value\nprobe()\nfrom provider import value\n")
     probe = body(text, "user_consumer_probe")
-    assert "@.modvar.consumer.value_initialized" in probe
+    assert "name.dynamic.value.missing" in probe
+    assert "@py_module_attr_get" in probe
 
 
 def test_synthetic_default_provider_retains_original_consumer_signatures():

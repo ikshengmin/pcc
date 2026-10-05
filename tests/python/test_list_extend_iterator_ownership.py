@@ -268,3 +268,86 @@ def test_list_extend_iteration_owns_every_live_value(failure, relocate, alias):
     if model.pending:
         allowed.add(model.pending[0].name)
     assert survivors <= allowed
+
+
+_EXTEND_CALLER_CASES = {
+    "literal": "def probe(source):\n    target = []\n    return target.extend(source)\n",
+    "annotated": "def probe(target: list[int], source):\n    return target.extend(source)\n",
+    "dynamic": "def probe(target, source):\n    return target.extend(source)\n",
+    "raising_iterator": """def values():
+    yield 1
+    raise ValueError("iterator failed")
+def probe():
+    target = []
+    try:
+        target.extend(values())
+    except ValueError:
+        return target
+    else:
+        raise AssertionError("void call swallowed iterator failure")
+""",
+}
+
+
+def _extend_caller_ir(source, target):
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.type_infer import infer_module
+    module = infer_module(parse_and_lift(source, "extend_caller.py", "extend_caller"))
+    codegen = L1CodeGen(module, ir_scaffold_mode="on")
+    codegen._target_triple = target
+    codegen._strict_no_libpython = True
+    codegen._prefer_native_callable_values = True
+    return str(codegen.generate(module))
+
+
+@pytest.mark.parametrize("name", _EXTEND_CALLER_CASES)
+@pytest.mark.parametrize("target", (
+    "x86_64-unknown-linux-gnu", "arm64-apple-darwin",
+    "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc",
+))
+def test_extend_caller_owner_boundaries_reach_owned_objects(name, target):
+    """Backend validation covers both static and dynamic call/result owners.
+
+    This emits objects only. The unchanged scalar_predicates native control
+    in test_owned_walk_native.py executes the iterator exception regression.
+    """
+    from pcc.backend.owned_object_emit import emit_owned_object
+    text = _extend_caller_ir(_EXTEND_CALLER_CASES[name], target)
+    assert "strict.nolib.stub:" not in text
+    assert emit_owned_object(text, target)
+
+
+def test_extend_exception_reference_retains_partial_mutation():
+    namespace = {}
+    exec(_EXTEND_CALLER_CASES["raising_iterator"], namespace)
+    assert namespace["probe"]() == [1]
+
+
+@pytest.mark.parametrize("name", _EXTEND_CALLER_CASES)
+def test_extend_checks_pending_error_before_any_cleanup_or_next_call(name):
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+    module = parse_self_backend_module(_extend_caller_ir(
+        _EXTEND_CALLER_CASES[name], "x86_64-unknown-linux-gnu",
+    ))
+    probe = next(function for function in module.functions
+                 if function.name == "user_extend_caller_probe")
+    matched = 0
+    blocks = get_indexed_function_kernel(probe).materialize_legacy_blocks(probe)
+    for block in blocks:
+        calls = [instruction for instruction in block.instructions
+                 if instruction.kind == "call"]
+        for index, call in enumerate(calls):
+            if call.data[2] != "py_list_extend":
+                continue
+            matched += 1
+            # Any lease/root retirement may run a finalizer, and any later
+            # user call can overwrite the iterator's TLS exception. Inspect
+            # the pending error first and branch before either can occur.
+            assert index + 1 < len(calls), "extend does not inspect its exception"
+            error_check = calls[index + 1]
+            assert error_check.data[2] == "py_err_occurred"
+            assert index + 2 == len(calls), "effectful call precedes the error edge"
+            assert block.terminator.kind == "br_cond"
+    assert matched == 1

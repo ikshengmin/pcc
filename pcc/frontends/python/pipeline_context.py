@@ -16,6 +16,7 @@ from pcc.frontends.python.codegen.typed_int_bounded_proof import compute_bounded
 from pcc.frontends.python.codegen.layer1_support import _default_native_module_exports
 from pcc.frontends.python.codegen.vthread_effect_analysis import annotate_closed_world_vthread_effect_summaries, annotate_closed_world_vthread_effects, build_closed_world_vthread_effect_summary, closed_world_vthread_effect_export_surface, read_closed_world_vthread_effect_summary, write_closed_world_vthread_effect_summary
 from pcc.frontends.python.export_meta import encode_type
+from pcc.frontends.python.private_names import mangle_private_name
 from pcc.frontends.python.raw_pointer_types import raw_pointer_annotation_names, verified_c_abi_export_symbol
 from pcc.frontends.python.pipeline_freestanding import (
     source_declares_freestanding_module,
@@ -614,12 +615,11 @@ def build_closed_world_context(
                                 and _closed_world_is_node(constructor_obj, _Name)
                                 and _py_ast_field_value(constructor_obj, "ident", "") == "self"
                             ):
-                                constructor_field_names.add(
-                                    _py_ast_field_value(constructor_target, "name", "")
+                                constructor_field_name = mangle_private_name(
+                                    stmt_name,
+                                    _py_ast_field_value(constructor_target, "name", ""),
                                 )
-                                constructor_field_name = _py_ast_field_value(
-                                    constructor_target, "name", ""
-                                )
+                                constructor_field_names.add(constructor_field_name)
                                 constructor_value = _py_ast_field_value(
                                     constructor_stmt, "value", None
                                 )
@@ -635,7 +635,9 @@ def build_closed_world_context(
                     continue
                 for declared_target in _py_ast_field_value(declared_stmt, "targets", ()):
                     if _closed_world_is_node(declared_target, _Name):
-                        declared_name = _py_ast_field_value(declared_target, "ident", "")
+                        declared_name = mangle_private_name(
+                            stmt_name, _py_ast_field_value(declared_target, "ident", ""),
+                        )
                         declared_field_annotations[declared_name] = assignment_storage_annotation(
                             declared_ann, declared_stmt.value, declared_stmt.has_value,
                         ) if not class_is_valueclass else declared_ann
@@ -689,6 +691,7 @@ def build_closed_world_context(
                                         if slot_value is not None:
                                             slot_names.append(slot_value)
                             for slot_name in slot_names:
+                                slot_name = mangle_private_name(stmt_name, slot_name)
                                 if (
                                     slot_name not in ("__dict__", "__weakref__")
                                     and slot_name not in field_names
@@ -697,7 +700,9 @@ def build_closed_world_context(
                         if class_uses_declared_fields and _closed_world_is_node(
                             target, _Name
                         ):
-                            target_ident = _py_ast_field_value(target, "ident", "")
+                            target_ident = mangle_private_name(
+                                stmt_name, _py_ast_field_value(target, "ident", ""),
+                            )
                             body_ann = _export_annotation_or_none(body_stmt)
                             if class_is_dataclass and body_ann is None:
                                 # Dataclasses only turn annotated class-body
@@ -794,7 +799,9 @@ def build_closed_world_context(
                                 == "self"
                             ):
                                 continue
-                            target_name = _py_ast_field_value(target, "name", "")
+                            target_name = mangle_private_name(
+                                stmt_name, _py_ast_field_value(target, "name", ""),
+                            )
                             if target_name not in field_names:
                                 field_names.append(target_name)
                             # Constructor ownership is independent of method

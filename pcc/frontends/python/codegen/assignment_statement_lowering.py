@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from pcc.frontends.python.codegen.cpy_import_state import (
+    live_import_expr_binding,
+    live_import_name_slot,
+)
+from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_SET
+
 import sys
 import os
 from pcc.ir.compat import ir
@@ -162,6 +168,106 @@ def _assign_list_elem(ty):
         return ty.elem
     except AttributeError:
         return DynType(name="dyn")
+
+
+def _emit_live_import_augassign(host, stmt, op):
+    """Keep the loaded binding alive across RHS callbacks and replacement."""
+    code = {"+": 0, "-": 1, "*": 2, "/": 3, "//": 4, "%": 5}.get(op)
+    declared = host._module_globals[stmt.target.ident][1]
+    set_update = (isinstance(declared, SetType)
+                  and isinstance(stmt.value.ty, (SetType, DynType))
+                  and op in ("|", "&", "-", "^"))
+    if code is None and not set_update:
+        combined = BinOp(span=stmt.span, ty=DynType(name="dyn"), op=op,
+                         lhs=stmt.target, rhs=stmt.value)
+        result = host._emit_slot_call_operand(combined, "import.augassign.result")
+        roots = [result]
+    else:
+        result = host._new_slot_call_root("import.augassign.result")
+        roots = [result]
+    previous = host._current_try_err_block()
+    target = previous if previous is not None else host._ensure_fn_err_exit()
+    saved_cpy = host._cpy_operand_cleanup_block
+    try:
+        host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
+        host._cpy_operand_cleanup_block = host._try_err_block
+        if code is not None or set_update:
+            for expr in (stmt.target, stmt.value):
+                roots.append(host._emit_slot_call_operand(expr, "import.augassign.input"))
+                host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
+                host._cpy_operand_cleanup_block = host._try_err_block
+            if set_update:
+                tags = [host._slot_call_runtime_call("py_obj_type_tag", (slot,), span=stmt.span)
+                        for slot in roots[1:]]
+                valid = host.builder.and_(
+                    host.builder.icmp_signed("==", tags[0], ir.Constant(_I64, PY_TYPE_SET)),
+                    host.builder.icmp_signed("==", tags[1], ir.Constant(_I64, PY_TYPE_SET)),
+                )
+                ready = host.current_function.append_basic_block(host._fresh("import.set.ready"))
+                bad = host.current_function.append_basic_block(host._fresh("import.set.bad"))
+                host.builder.cbranch(valid, ready, bad)
+                host.builder.position_at_end(bad)
+                host._emit_builtin_exception_and_branch("TypeError", "set binary operator requires set operands", stmt.span)
+                host.builder.position_at_end(ready)
+                helper = {"|": "py_set_update", "&": "py_set_intersection_update",
+                          "-": "py_set_difference_update", "^": "py_set_symmetric_difference_update"}[op]
+                host._slot_call_runtime_call(helper, tuple(roots[1:]), span=stmt.span)
+                host._slot_call_copy_source(result, roots[1], span=stmt.span)
+            else:
+                host._slot_call_runtime_call(
+                    "py_obj_inplace_op", tuple(roots[1:]), result_slot=result,
+                    suffix_args=(ir.Constant(_I64, code),), span=stmt.span,
+                )
+        host._store_unpack_root_target(stmt.target, result, DynType(name="dyn"))
+        host._release_slot_call_roots(tuple(roots))
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+
+
+def _emit_live_import_sequence_unpack(host, stmt, target):
+    """Own sequence elements before target evaluation can replace bindings."""
+    source = host._emit_slot_call_operand(stmt.value, "import.unpack.source")
+    roots = [source]
+    previous = host._current_try_err_block()
+    error = previous if previous is not None else host._ensure_fn_err_exit()
+    saved_cpy = host._cpy_operand_cleanup_block
+    try:
+        host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
+        host._cpy_operand_cleanup_block = host._try_err_block
+        if isinstance(stmt.value.ty, SetType):
+            count = host._slot_call_runtime_call("py_obj_len", (source,), span=stmt.span)
+            valid = host.builder.icmp_signed("==", count, ir.Constant(_I64, len(target.elems)))
+            ready = host.current_function.append_basic_block(host._fresh("import.unpack.set.ready"))
+            bad = host.current_function.append_basic_block(host._fresh("import.unpack.set.bad"))
+            host.builder.cbranch(valid, ready, bad)
+            host.builder.position_at_end(bad)
+            host._emit_builtin_exception_and_branch("ValueError", "cannot unpack set: arity mismatch", stmt.span)
+            host.builder.position_at_end(ready)
+            sequence = host._new_slot_call_root("import.unpack.set.items")
+            roots.append(sequence)
+            host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
+            host._cpy_operand_cleanup_block = host._try_err_block
+            host._slot_call_runtime_call("py_list_new", (), result_slot=sequence,
+                                        suffix_args=(ir.Constant(_I64, 0),), span=stmt.span)
+            host._slot_call_runtime_call("py_list_extend", (sequence, source), span=stmt.span)
+            source = sequence
+        item_start = len(roots)
+        for index in range(len(target.elems)):
+            item = host._new_slot_call_root("import.unpack.item")
+            roots.append(item)
+            host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
+            host._cpy_operand_cleanup_block = host._try_err_block
+            host._slot_call_runtime_call(
+                "py_obj_getitem_i64", (source,), result_slot=item,
+                suffix_args=(ir.Constant(_I64, index),), span=stmt.span,
+            )
+        for index, lhs in enumerate(target.elems):
+            host._store_unpack_root_target(lhs, roots[item_start + index], DynType(name="dyn"))
+        host._release_slot_call_roots(tuple(roots))
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
 
 
 class AssignmentStatementLoweringMixin:
@@ -1369,6 +1475,15 @@ class AssignmentStatementLoweringMixin:
             return self._emit_starred_unpack_assign(stmt, target, star_indices)
 
         rhs = stmt.value
+        live_target = any(
+            (isinstance(lhs, (Attr, Subscript)) and live_import_expr_binding(self, lhs.obj))
+            or (isinstance(lhs, Name) and live_import_name_slot(self, lhs.ident) is not None)
+            for lhs in target.elems
+        )
+        if live_target and (not _assign_is_tuple_expr(rhs) or any(
+                self._is_starred_unpack_expr(elem) for elem in rhs.elems)):
+            _emit_live_import_sequence_unpack(self, stmt, target)
+            return
         if _assign_is_tuple_expr(rhs) and any(
             self._is_starred_unpack_expr(e) for e in rhs.elems
         ):
@@ -1414,7 +1529,8 @@ class AssignmentStatementLoweringMixin:
                         and isinstance(elem.ty, (IntType, BoolType))
                     )
                     managed = (
-                        (self._is_object(elem.ty) or planned_exact_int)
+                        (self._is_object(elem.ty) or planned_exact_int
+                         or isinstance(lhs, (Attr, Subscript)) and live_import_expr_binding(self, lhs.obj))
                         and not getattr(self, "_freestanding_module", False)
                         and not self._expr_returns_unsafe_raw_pointer(elem)
                         and not self._expr_looks_cpython(elem)
@@ -1838,6 +1954,9 @@ class AssignmentStatementLoweringMixin:
             check_local_bound(self, stmt.target)
         op_bare = stmt.op.rstrip("=")
         if isinstance(stmt.target, Name):
+            if live_import_name_slot(self, stmt.target.ident) is not None:
+                _emit_live_import_augassign(self, stmt, op_bare)
+                return
             if (
                 isinstance(stmt.target.ty, IntType)
                 and getattr(self, "_exact_int_env_flags", {}).get(

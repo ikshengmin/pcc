@@ -4,10 +4,9 @@ import os
 import hashlib
 
 from .elf_x86_64 import (
-    EM_AARCH64, ElfError, _link_static_executable_image, parse_relocatable,
-    parse_static_executable,
-    read_archive_payloads,
+    EM_AARCH64, ElfError, _link_static_executable_image, parse_static_executable,
 )
+from .owned_elf_inputs import ElfInputStore, file_sha256
 from .macho_internal_inputs import read_internal_input_manifest
 from .self_backend_target_match import is_aarch64_linux_triple, is_x86_64_linux_triple
 
@@ -83,6 +82,7 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     archives = list(archives)
     if manifest and (assembly or objects):
         raise ElfError("manifest cannot be mixed with direct internal inputs")
+    manifest_hash = file_sha256(manifest) if manifest else ""
     ordered = read_internal_input_manifest(manifest) if manifest else (
         [("ASM", path) for path in assembly] + [("PCO", path) for path in objects]
     )
@@ -92,20 +92,13 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
                for candidate in (map_path, map_path + ".pcc-link.tmp")
                for path in protected):
             raise ElfError("link map output aliases an input or executable")
-    inputs = []
-    for kind, path in ordered:
-        if os.path.abspath(path) == os.path.abspath(output):
-            raise ElfError("link output aliases an input")
-        if kind == "ASM":
-            with open(path, "r", encoding="utf-8") as stream:
-                inputs.append(assemble(stream.read(), target))
-        else:
-            with open(path, "rb") as stream:
-                inputs.append(parse_relocatable(stream.read(), compact_relocations=True))
-    archive_data = []
-    for path in archives:
-        with open(path, "rb") as stream:
-            archive_data.append(stream.read())
+    protected_inputs = [manifest] + [path for _kind, path in ordered] + archives
+    if any(path and os.path.realpath(candidate) == os.path.realpath(path)
+           for candidate in (output, output + ".pcc-link.tmp")
+           for path in protected_inputs):
+        raise ElfError("link output aliases an input")
+    store = ElfInputStore(target, archives)
+    inputs = [store.stage(path, kind=kind) for kind, path in ordered]
     if not inputs:
         raise ElfError("owned ELF link requires an input")
     expected = EM_AARCH64 if is_aarch64_linux_triple(target) else 62
@@ -115,28 +108,29 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     from .linux_thread_intrinsics import assembly as thread_assembly
     inputs.append(assemble(thread_assembly(expected == EM_AARCH64), target))
     selections = [] if map_path else None
-    image = _link_static_executable_image(inputs, archives=archive_data, entry=entry,
-                                   archive_selections=selections, compact_archive_relocations=True)
+    try:
+        image = _link_static_executable_image(
+            inputs, entry=entry, archive_selections=selections, _input_store=store,
+        )
+    finally:
+        store.clear()
+    store.verify()
+    if manifest and file_sha256(manifest) != manifest_hash:
+        raise ElfError("staged ELF manifest identity changed: " + manifest)
     parse_static_executable(image)
     map_text = ""
     if map_path:
         # These names come from the very selection that produced the image.
         # Preserve the actual parent archive identity; never invent a C-only
         # archive alias or manufacture a host-linker map.
-        payloads = []
-        for data in archive_data:
-            members = read_archive_payloads(data)
-            member_bytes = dict(members)
-            if len(member_bytes) != len(members):
-                raise ElfError("link map cannot identify duplicate archive member names")
-            payloads.append(member_bytes)
-        archive_hashes = [hashlib.sha256(data).hexdigest() for data in archive_data]
+        if any(store.duplicate_member_names):
+            raise ElfError("link map cannot identify duplicate archive member names")
         lines = ["# pcc owned ELF link map v1", "# target " + target, "# entry " + entry,
                  "# image sha256=" + _image_sha256(image)]
         for index, member in selections:
             lines.append(str(archives[index]) + "(" + member + ")"
-                         + " archive_sha256=" + archive_hashes[index]
-                         + " member_sha256=" + hashlib.sha256(payloads[index][member]).hexdigest())
+                         + " archive_sha256=" + store.archive_hashes[index]
+                         + " member_sha256=" + store.member_hashes[index][member])
         map_text = "\n".join(lines) + "\n"
     temporary = output + ".pcc-link.tmp"
     try:

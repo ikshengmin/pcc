@@ -258,3 +258,12 @@ def test_namespace_value_alias_does_not_become_borrowed_method_metadata(operatio
     assert model.run() == 1
     assert model.load(model.methods, model.env['PYCLASSMETHOD_FUNC_OFFSET']) == 0
     assert model.load(model.entries, model.env['DICTENTRY_VALUE_OFFSET']) == model.cls
+
+
+def test_non_string_namespace_key_invalidates_epoch_without_reading_c_name():
+    model = NamespaceCommitModel('insert')
+    model.store(model.context, model.env['_CLASS_NAMESPACE_CONTEXT_NAME'] * model.env['C_POINTER_SIZE'], 0)
+    assert model.run() == 1
+    assert model.epoch == 1 and not model.locked
+    assert model.load(model.methods, model.env['PYCLASSMETHOD_FUNC_OFFSET']) == model.raw
+    assert model.load(model.cls, model.env['PYCLASSOBJECT_DEL_METHOD_OFFSET']) == model.raw

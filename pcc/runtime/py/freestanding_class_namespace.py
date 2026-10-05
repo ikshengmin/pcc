@@ -53,6 +53,7 @@ from pcc.unsafe import (
 
 # Raw internal notification context: it contains a registered owner-slot
 # address and an immutable C-string address, never a managed object pointer.
+# The name is NULL for a non-string dictionary key (or an embedded NUL).
 _CLASS_NAMESPACE_CONTEXT_OWNER_SLOT: i64 = 0
 _CLASS_NAMESPACE_CONTEXT_NAME: i64 = 1
 _CLASS_NAMESPACE_CONTEXT_COUNT: i64 = 2
@@ -104,14 +105,14 @@ def py_class_namespace_commit_locked(context: c_ptr, dictionary: c_ptr) -> None:
     methods = load_ptr(cls, PYCLASSOBJECT_METHODS_OFFSET)
     count: i64 = load_i32(cls, PYCLASSOBJECT_N_METHODS_OFFSET)
     index: i64 = 0
-    if ptr_is_null(methods) == 0:
+    if ptr_is_null(name) == 0 and ptr_is_null(methods) == 0:
         while index < count:
             offset: i64 = index * PYCLASSMETHOD_SIZE
             candidate = load_ptr(methods, offset + PYCLASSMETHOD_NAME_OFFSET)
             if _class_namespace_same_name(candidate, name) != 0:
                 store_ptr(methods, offset + PYCLASSMETHOD_FUNC_OFFSET, null())
             index += 1
-    if _class_namespace_same_name(name, cstr("__del__")) != 0:
+    if ptr_is_null(name) == 0 and _class_namespace_same_name(name, cstr("__del__")) != 0:
         store_ptr(cls, PYCLASSOBJECT_DEL_METHOD_OFFSET, null())
     # Invalidate before deferred decrefs can reenter ordinary attribute lookup.
     atomic_rmw_i32("add", global_addr("py_class_attr_cache_epoch"), 0, 1, "release")

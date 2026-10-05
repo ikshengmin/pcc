@@ -675,6 +675,11 @@ def _runtime_archive_compiler_sources_newer_than(
 
 
 def _is_py_runtime_library_source(src_path: str) -> bool:
+    configured_runtime = str(os.environ.get(_PY_RUNTIME_DIR_ENV, "") or "").strip()
+    if configured_runtime and _pipeline_runtime_archive.is_library_source(
+        configured_runtime, src_path,
+    ):
+        return True
     return _pipeline_runtime_archive.is_library_source(_PY_RUNTIME_DIR, src_path)
 
 

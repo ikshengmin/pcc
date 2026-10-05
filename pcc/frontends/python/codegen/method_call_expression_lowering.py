@@ -523,16 +523,7 @@ class MethodCallExpressionLoweringMixin:
             and _method_ident(attr.obj) == "type"
         ):
             if len(expr.args) >= 4:
-                name_obj = self._emit_as_object(expr.args[1])
-                bases_obj = self._emit_as_object(expr.args[2])
-                ns_obj = self._emit_as_object(expr.args[3])
-                result = self.builder.call(
-                    self.runtime["py_class_new_from_objects"],
-                    [name_obj, bases_obj, ns_obj],
-                    name=self._fresh("type.new"),
-                )
-                self._emit_post_call_err_check(self._expr_span_or_none(expr))
-                return result
+                return self._emit_owned_dynamic_type_constructor(expr, expr.args[1:4])
             return self._emit_none_literal()
         if (
             attr.name == "__getattribute__"
@@ -1035,16 +1026,7 @@ class MethodCallExpressionLoweringMixin:
                 # cannot resolve it and historically returned NULL.  Route
                 # the foreign builtin base through the same native class
                 # constructor used for an explicit ``type.__new__`` call.
-                name_obj = self._emit_as_object(expr.args[1])
-                bases_obj = self._emit_as_object(expr.args[2])
-                ns_obj = self._emit_as_object(expr.args[3])
-                result = self.builder.call(
-                    self.runtime["py_class_new_from_objects"],
-                    [name_obj, bases_obj, ns_obj],
-                    name=self._fresh("super.type.new"),
-                )
-                self._emit_post_call_err_check(self._expr_span_or_none(expr))
-                return result
+                return self._emit_owned_dynamic_type_constructor(expr, expr.args[1:4])
             if (from_class is not None and attr.name == "__new__"
                     and self._class_has_tuple_base(from_class)):
                 return self._emit_tuple_super_new_slots(expr, from_class, super_args)

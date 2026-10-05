@@ -50,6 +50,7 @@ and module.
 from __future__ import annotations
 
 from pcc.frontends.python.codegen.generator_lowering import emit_function_auto_park_role
+from pcc.frontends.python.private_names import mangle_private_name as _mangle_private_name
 
 import os
 import sys
@@ -149,6 +150,7 @@ _AMBIGUOUS_METACLASS_RETURN = "__pcc_ambiguous_metaclass_return__"
 _NATIVE_DEFAULT_FUNC_SENTINEL = "__pcc_native_default_func_ref__"
 _NATIVE_DEFAULT_GLOBAL_SENTINEL = "__pcc_native_default_global_ref__"
 _DATACLASS_FACTORY_DEFAULT_SENTINEL = "__pcc_dataclass_factory_default__"
+_DATACLASS_PREPARED_DEFAULTS_OWNER = "<dataclass-defaults-owner>"
 
 
 def _classgen_dataclass_factory_default(parent, default):
@@ -2037,7 +2039,10 @@ class ClassInfo:
         self.runtime_decorators: tuple[Expr, ...] = ()
         self.metaclass_name: Optional[str] = None
         self.slots_only = False
+        self.struct_sequence = False
         self.dataclass_frozen = False
+        self.dataclass_init_args = None
+        self.dataclass_generated_init = False
         self.valueclass = False
 
 
@@ -2067,6 +2072,8 @@ class ClassLowering:
         # variable names.
         self._base_arr_pool: dict[tuple[str, ...], ir.GlobalVariable] = {}
         self._class_defs: list[ClassDef] = []
+        self._dataclass_init_args = {}
+        self._dataclass_generated_init = {}
         self._external_method_overrides = None
 
     # ------------------------------------------------------ declaration
@@ -2217,8 +2224,18 @@ class ClassLowering:
 
         info = ClassInfo(name=cd.name, global_var=gv, bases_ast=cd.bases)
         info.runtime_decorators = tuple(runtime_decorators)
+        for statement in cd.body:
+            if _is_ast_node(statement, Assign):
+                for target in statement.targets:
+                    if (_is_ast_node(target, Name)
+                            and target.ident == "__pcc_struct_sequence__"
+                            and _is_ast_node(statement.value, BoolLit)
+                            and statement.value.value):
+                        info.struct_sequence = True
         info.metaclass_name = self._resolve_metaclass_name_for_class(cd)
         info.dataclass_frozen = bool(dataclass_options.get("frozen", False))
+        info.dataclass_init_args = self._dataclass_init_args.get(cd.name)
+        info.dataclass_generated_init = self._dataclass_generated_init.get(cd.name, False)
         info.valueclass = valueclass
         info.field_names = list(fields_ordered.keys())
         if expanded:
@@ -2734,59 +2751,60 @@ class ClassLowering:
         # (fields declared on the base come FIRST in the synthetic
         # __init__, matching CPython's dataclass inheritance MRO).
         inherited_fields: list[tuple[str, Optional[Type], Optional[Expr]]] = []
-        for base_expr in cd.bases:
+        for base_expr in reversed(cd.bases):
             if not _is_ast_node(base_expr, Name):
                 continue
             base_info = self.classes.get(base_expr.ident)
             if base_info is None:
                 continue
             base_init = self._find_method_def(base_info.name, "__init__")
-            if base_init is None:
+            base_args = base_info.dataclass_init_args
+            if base_args is None and base_init is None:
                 continue
-            if base_info.expanded_cd is None and not any(
+            if base_args is None and base_info.expanded_cd is None and not any(
                 _is_ast_node(arg.default, Call)
                 and _is_ast_node(arg.default.func, Name)
                 and arg.default.func.ident == _DATACLASS_FACTORY_DEFAULT_SENTINEL
                 for arg in base_init.args
             ):
                 continue
-            default_index = 0
-            for s in (base_init,):
-                if _is_ast_node(s, FuncDef) and s.name == "__init__":
-                    for a in s.args:
-                        if a.name in ("", "self"):
-                            continue
-                        default = a.default
-                        if (
-                            _is_ast_node(default, Call)
-                            and _is_ast_node(default.func, Name)
-                            and default.func.ident == _DATACLASS_FACTORY_DEFAULT_SENTINEL
-                            and default.span.file == "<pcc-dataclass-factory>"
-                        ):
-                            span = default.span
-                            factory = Call(
-                                span, DynType("dyn"),
-                                Name(span, DynType("dyn"), "__pcc_dataclass_inherited_factory__"),
-                                (Name(cd.span, DynType("dyn"), base_expr.ident), IntLit(span, IntType("int"), default_index)), (),
-                            )
-                            default = Call(span, DynType("dyn"), default.func, (factory,), ())
-                        elif a.has_default:
-                            # Inherit the object already captured by the base
-                            # signature, not its class-local default expression.
-                            # That name is out of scope in the child, and even
-                            # a resolvable expression must not be evaluated twice.
-                            span = SourceSpan("<pcc-dataclass-default>", 0, 0, 0, 0)
-                            default = Call(
-                                span, DynType("dyn"),
-                                Name(span, DynType("dyn"), "__pcc_dataclass_inherited_default__"),
-                                (Name(cd.span, DynType("dyn"), base_expr.ident), IntLit(span, IntType("int"), default_index)), (),
-                            )
-                        inherited_fields.append(
-                            (a.name, _classgen_annotation_or_none(a), default)
-                        )
-                        if a.has_default:
-                            default_index += 1
-                    break
+            if base_args is None:
+                base_args = base_init.args
+            for default_index, a in enumerate(base_args):
+                if a.name in ("", "self"):
+                    continue
+                default = a.default
+                if (
+                    _is_ast_node(default, Call)
+                    and _is_ast_node(default.func, Name)
+                    and default.func.ident == _DATACLASS_FACTORY_DEFAULT_SENTINEL
+                    and default.span.file == "<pcc-dataclass-factory>"
+                ):
+                    span = default.span
+                    factory = Call(
+                        span, DynType("dyn"),
+                        Name(span, DynType("dyn"), "__pcc_dataclass_inherited_factory__"),
+                        (Name(cd.span, DynType("dyn"), base_expr.ident), IntLit(span, IntType("int"), default_index)), (),
+                    )
+                    default = Call(span, DynType("dyn"), default.func, (factory,), ())
+                elif a.has_default:
+                    # Inherit the object already captured by the base
+                    # declaration, not its class-local default expression.
+                    # That name is out of scope in the child, and even
+                    # a resolvable expression must not be evaluated twice.
+                    span = SourceSpan("<pcc-dataclass-default>", 0, 0, 0, 0)
+                    default = Call(
+                        span, DynType("dyn"),
+                        Name(span, DynType("dyn"), "__pcc_dataclass_inherited_default__"),
+                        (Name(cd.span, DynType("dyn"), base_expr.ident), IntLit(span, IntType("int"), default_index)), (),
+                    )
+                inherited = (a.name, _classgen_annotation_or_none(a), default)
+                for index, previous in enumerate(inherited_fields):
+                    if previous[0] == a.name:
+                        inherited_fields[index] = inherited
+                        break
+                else:
+                    inherited_fields.append(inherited)
 
         # Collect ``name: annotation [= default]`` class-body entries.
         fields: list[tuple[str, Optional[Type], Optional[Expr]]] = list(
@@ -2833,7 +2851,12 @@ class ClassLowering:
                     default = Name(default.span, ann or DynType("dyn"), name)
                 # Required fields have no initializer; explicit None remains
                 # a real default in the generated constructor signature.
-                fields.append((name, ann, default))
+                for index, previous in enumerate(fields):
+                    if previous[0] == name:
+                        fields[index] = (name, ann, default)
+                        break
+                else:
+                    fields.append((name, ann, default))
                 continue
             remaining_body.append(stmt)
 
@@ -2960,6 +2983,10 @@ class ClassLowering:
         user_has_init = any(
             _is_ast_node(s, FuncDef) and s.name == "__init__" for s in remaining_body
         )
+        # Field declarations remain separate from the live constructor. A
+        # user-defined or later rebound __init__ does not redefine fields.
+        self._dataclass_init_args[cd.name] = tuple(init_args)
+        self._dataclass_generated_init[cd.name] = not user_has_init
         new_body = list(remaining_body)
         if not user_has_init:
             new_body.append(synthetic_init)
@@ -5161,9 +5188,37 @@ class ClassLowering:
                 if original_name is not None and original_name != attr_name:
                     self.parent.env[original_name] = self.parent.env[attr_name]
                     namespace_bindings[original_name] = (self.parent.env[original_name][0], attr_name)
+            if info.dataclass_init_args is not None:
+                defaults_target = self.parent._current_try_err_block()
+                prepared_defaults = prepared_method_objects.get(_DATACLASS_PREPARED_DEFAULTS_OWNER)
+                if prepared_defaults is not None:
+                    defaults = self.parent._new_slot_call_root("dataclass.prepared.defaults")
+                    self.parent._try_err_block = self.parent._slot_call_cleanup_block((defaults,), defaults_target)
+                    self.parent._cpy_operand_cleanup_block = self.parent._try_err_block
+                    borrowed = self.parent._alloca_in_entry(_PTR, name=self._fresh("dataclass.prepared.owner"), init_null=True)
+                    self.parent.builder.store(prepared_defaults, borrowed)
+                    self.parent._slot_call_copy_source(defaults, borrowed, borrowed=True, span=cd.span)
+                else:
+                    initializer = namespace_methods.get("__init__", (None, None))[0]
+                    defaults = self._emit_dataclass_defaults_root(cd, info, initializer)
+                self.parent._try_err_block = self.parent._slot_call_cleanup_block((defaults,), defaults_target)
+                self.parent._cpy_operand_cleanup_block = self.parent._try_err_block
+                status = self.parent.builder.call(
+                    runtime["py_class_write_namespace_slots"],
+                    [self.parent._as_gc_ptr(class_body_root),
+                     self._cname_ptr("__pcc_dataclass_defaults__"),
+                     self.parent._as_gc_ptr(defaults), ir.Constant(_I64, 0)],
+                )
+                self.parent._slot_call_check_status(status, "dataclass declaration defaults", cd.span)
+                self.parent._release_slot_call_roots((defaults,))
+                self.parent._try_err_block = defaults_target
+                self.parent._cpy_operand_cleanup_block = defaults_target
         finally:
-            for method_obj in prepared_method_objects.values():
-                self.parent._gc_unpin(method_obj)
+            for method_name, method_obj in prepared_method_objects.items():
+                if method_name == _DATACLASS_PREPARED_DEFAULTS_OWNER:
+                    self.parent.builder.call(runtime["py_func_release_default_snapshot"], [method_obj])
+                else:
+                    self.parent._gc_unpin(method_obj)
             # Factory captures and methods can interleave. Their lexical
             # module frames must unwind in actual reverse registration order.
             for lifetime_kind, lifetime_root, owns_lifetime in reversed(class_body_lifetimes):
@@ -5202,6 +5257,16 @@ class ClassLowering:
                 runtime["py_class_add_method"],
                 [cls_ptr, self._cname_ptr("__hash__"), none_obj],
             )
+        if info.struct_sequence:
+            seal = self.parent.module.globals.get("py_class_mark_structseq")
+            if seal is None:
+                seal = ir.Function(self.parent.module,
+                    ir.FunctionType(ir.VoidType(), [_PTR]),
+                    name="py_class_mark_structseq")
+            current_class = builder.load(class_body_root,
+                name=self._fresh("structseq.class.current"))
+            builder.call(seal, [current_class])
+            self.parent._emit_post_call_err_check()
         self.parent._leave_container_temp_root(class_body_root)
         self.parent._try_err_block = class_error_target
 
@@ -5365,6 +5430,69 @@ class ClassLowering:
                 suffix_args=(mname_ptr,), argument_order=(0, 2, 1), span=method_def.span,
             )
             parent._slot_call_check_status(status, "class method namespace publication", method_def.span)
+            return output
+        finally:
+            parent._try_err_block = previous
+            parent._cpy_operand_cleanup_block = saved_cpy
+
+    def _prepared_dataclass_defaults_cleanup(self, method_objects, target):
+        owner = method_objects.get(_DATACLASS_PREPARED_DEFAULTS_OWNER)
+        if owner is None:
+            return target
+        parent = self.parent
+        saved = parent.builder._block
+        cleanup = parent.current_function.append_basic_block(self._fresh("dataclass.prepared.owner.unwind"))
+        parent.builder.position_at_end(cleanup)
+        parent.builder.call(parent.runtime["py_func_release_default_snapshot"], [owner])
+        parent.builder.branch(target)
+        parent.builder.position_at_end(saved)
+        return cleanup
+
+    def _emit_dataclass_defaults_root(self, cd, info, initializer_root=None):
+        """Own a fresh declaration tuple independently of callable metadata.
+
+        This private native representation is not dataclasses.Field metadata.
+        Public __dataclass_fields__ inspection/mutation is not implemented by
+        compile-time expansion; it must not be silently treated as this tuple.
+        """
+        parent = self.parent
+        previous = parent._current_try_err_block()
+        target = previous if previous is not None else parent._ensure_fn_err_exit()
+        saved_cpy = parent._cpy_operand_cleanup_block
+        output = parent._new_slot_call_root("dataclass.declaration.defaults")
+        cleanup = parent._slot_call_cleanup_block((output,), target)
+        parent._try_err_block = cleanup
+        parent._cpy_operand_cleanup_block = cleanup
+        try:
+            if info.dataclass_generated_init and initializer_root is not None:
+                # Snapshot the full signature vector through independent
+                # child owners; no raw __defaults__ introspection helper.
+                status = parent.builder.call(
+                    parent.runtime["py_func_copy_signature_defaults_slots"],
+                    [parent._as_gc_ptr(initializer_root), parent._as_gc_ptr(output)],
+                )
+                parent._slot_call_note_published(output)
+                parent._slot_call_check_status(status, "dataclass signature snapshot", cd.span)
+            else:
+                # A user-written constructor is unrelated to field defaults.
+                # Capture the normalized field expressions while class-local
+                # names and factory captures still have lexical owners.
+                signature = parent._new_slot_call_root("dataclass.declaration.signature")
+                parent._try_err_block = parent._slot_call_cleanup_block((signature,), cleanup)
+                parent._cpy_operand_cleanup_block = parent._try_err_block
+                arguments = info.dataclass_init_args
+                value = parent._emit_native_func_signature(arguments)
+                parent._publish_slot_call_owned(signature, value, label="dataclass declaration signature")
+                status = parent.builder.call(
+                    parent.runtime["py_func_copy_default_slots"],
+                    [parent._as_gc_ptr(signature), ir.Constant(_I64, 4), parent._as_gc_ptr(output)],
+                )
+                parent._slot_call_note_published(output)
+                parent._slot_call_check_status(status, "dataclass declaration snapshot", cd.span)
+                parent._release_slot_call_roots((signature,))
+                parent._try_err_block = cleanup
+                parent._cpy_operand_cleanup_block = cleanup
+            parent._guard_cpy_value_not_null(parent.builder.load(output))
             return output
         finally:
             parent._try_err_block = previous
@@ -6347,6 +6475,13 @@ class ClassLowering:
         )
         try:
             factory_captures = self._emit_prepared_namespace_statements(cd, info, ns_obj, ns_info, precomputed, method_objects)
+            if info.dataclass_init_args is not None and not info.dataclass_generated_init:
+                # Prepared constructors already transport pinned method
+                # owners across __new__. Keep one explicit NEW tuple owner
+                # beside them until the class can own its declarations. Never
+                # expose this implementation value to the user namespace.
+                defaults = self._emit_dataclass_defaults_root(cd, info)
+                method_objects[_DATACLASS_PREPARED_DEFAULTS_OWNER] = self.parent._take_slot_call_root(defaults, keep_pinned=True)
         finally:
             self.parent._class_namespace_context = previous_namespace
             for capture_root, owns_capture in reversed(factory_captures):
@@ -6355,13 +6490,19 @@ class ClassLowering:
                 if owns_capture:
                     self.parent._gc_release(value)
             self.parent._try_err_block = previous_error_target
-            for method_obj in method_objects.values():
+            for method_name, method_obj in method_objects.items():
+                if method_name == _DATACLASS_PREPARED_DEFAULTS_OWNER:
+                    continue
                 target = self.parent._current_try_err_block()
                 if target is None:
                     target = self.parent._ensure_fn_err_exit()
                 self.parent._try_err_block = self.parent._make_cpy_operand_cleanup_block(
-                    (), (), target, "namespace.method.after_factory.unwind", pinned_pcc=((method_obj, False),),
+                    (), (), target, "namespace.method.after_factory.unwind",
+                    pinned_pcc=((method_obj, False),),
                 )
+            self.parent._try_err_block = self._prepared_dataclass_defaults_cleanup(
+                method_objects, self.parent._current_try_err_block(),
+            )
             for name, old_env in saved_env.items():
                 if old_env is missing_env:
                     self.parent.env.pop(name, None)
@@ -6534,7 +6675,8 @@ class ClassLowering:
                 name=self._fresh("namespace.body.release"),
             )
             parent._try_err_block = cleanup
-            parent._cpy_operand_cleanup_block = cleanup
+            parent._try_err_block = self._prepared_dataclass_defaults_cleanup(method_objects, cleanup)
+            parent._cpy_operand_cleanup_block = parent._try_err_block
             parent._slot_call_check_status(released, "prepared namespace release", cd.span)
             parent._release_slot_call_roots((namespace_root,))
             result = parent._take_slot_call_root(result_root)
@@ -6543,7 +6685,9 @@ class ClassLowering:
             parent._cpy_operand_cleanup_block = saved_cpy
         # Published methods remain pinned until the outer class-body
         # transaction copies them. Its error edge no longer owns these roots.
-        for method_obj in method_objects.values():
+        for method_name, method_obj in method_objects.items():
+            if method_name == _DATACLASS_PREPARED_DEFAULTS_OWNER:
+                continue
             method_target = parent._current_try_err_block()
             if method_target is None:
                 method_target = parent._ensure_fn_err_exit()
@@ -6551,6 +6695,9 @@ class ClassLowering:
                 (), (), method_target, "namespace.method.after_namespace.unwind",
                 pinned_pcc=((method_obj, False),),
             )
+        parent._try_err_block = self._prepared_dataclass_defaults_cleanup(
+            method_objects, parent._current_try_err_block(),
+        )
         return result, precomputed
 
     def _maybe_emit_metaclass_dynamic_constructor(
@@ -7176,7 +7323,7 @@ class ClassLowering:
             class_attr = self.emit_class_attr_load(info, attr_name)
             if class_attr is not None:
                 return class_attr
-        runtime_attr_name = self.mangle_private_attr_name(info, attr_name)
+        runtime_attr_name = self.private_field_key(attr_name)
         name_ptr = self._cname_ptr(runtime_attr_name)
         result = builder.call(
             runtime["py_obj_getattr"],
@@ -7203,7 +7350,7 @@ class ClassLowering:
                 [self_val, ir.Constant(_I32, idx), value],
             )
             return None
-        runtime_attr_name = self.mangle_private_attr_name(info, attr_name)
+        runtime_attr_name = self.private_field_key(attr_name)
         name_ptr = self._cname_ptr(runtime_attr_name)
         return builder.call(
             runtime["py_obj_setattr"],
@@ -7959,17 +8106,6 @@ def _dataclass_options(cd: ClassDef) -> dict:
             elif _classgen_str_eq(name, "order") and _is_ast_node(value, BoolLit):
                 opts[name] = bool(value.value)
     return opts
-
-
-def _mangle_private_name(class_name: str, name: str) -> str:
-    if not name.startswith("__"):
-        return name
-    if name.endswith("__"):
-        return name
-    cls = class_name.lstrip("_")
-    if not cls:
-        return name
-    return f"_{cls}{name}"
 
 
 def _simple_decorator_name(dec) -> Optional[str]:

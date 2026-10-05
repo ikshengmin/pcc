@@ -170,8 +170,9 @@ def posix_zone(text: c_ptr, timestamp: i64, output: c_ptr) -> i64:
         if load_i8(text, pos) != 44:
             return -1
         tm = stack_alloc(64)
-        if breakdown(timestamp, standard_offset, 0, cstr(""), tm) != 0:
-            return -1
+        calendar_status: i64 = breakdown(timestamp, standard_offset, 0, cstr(""), tm)
+        if calendar_status != 0:
+            return calendar_status
         year: i64 = load_i32(tm, 20) + 1900
         pos = rule(text, pos + 1, year, value)
         if pos < 0 or load_i8(text, pos) != 44:

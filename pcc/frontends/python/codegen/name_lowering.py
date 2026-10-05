@@ -28,6 +28,7 @@ from pcc.frontends.python.codegen.freestanding_abi_constants import (
 )
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
+from pcc.frontends.python.codegen.cpy_import_state import live_import_name_slot
 from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 
 _I1 = ir.IntType(1)
@@ -832,6 +833,8 @@ class NameLoweringMixin:
         if class_value is not None:
             return self._take_slot_call_root(class_value)
         check_local_bound(self, expr)
+        if live_import_name_slot(self, expr.ident) is not None:
+            return self._emit_owned_module_name_lookup(expr)
         slot = self.env.get(expr.ident)
         if slot is None:
             # Method-body ``__class__`` is a compiler-created cell in

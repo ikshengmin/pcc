@@ -16,6 +16,8 @@ __pcc_runtime_port__ = True
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PYTUPLEOBJECT_ITEMS_OFFSET,
+    PYTUPLEOBJECT_LEN_OFFSET,
     PY_FLAG_FUNC_AUTO_PARK,
     PY_FLAG_FUNC_CONTINUATION_FACTORY,
     PY_FLAG_FUNC_TRANSPARENT_CALL,
@@ -938,6 +940,201 @@ def _signature_diagnostic_close(slots, tokens, handles, count: int) -> None:
     while index < count:
         pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * 8))
         index = index + 1
+
+
+# Declaration snapshots use independent owners for every traversed child.
+# The first two slots also match _signature_diagnostic_copy_signature.
+_FUNC_DEFAULTS_FUNCTION = 0
+_FUNC_DEFAULTS_SIGNATURE = 1
+_FUNC_DEFAULTS_VALUES = 2
+_FUNC_DEFAULTS_ITEM = 3
+_FUNC_DEFAULTS_ERROR = 4
+_FUNC_DEFAULTS_COUNT = 5
+_FUNC_SNAPSHOT_RELEASE_VALUE = 0
+_FUNC_SNAPSHOT_RELEASE_ERROR = 1
+_FUNC_SNAPSHOT_RELEASE_COUNT = 2
+define_global_i32("pcc_func_snapshot_release_frame_map", 2)
+
+
+@c_abi_export("py_func_release_default_snapshot")
+def py_func_release_default_snapshot(snapshot: c_ptr) -> None:
+    """Consume a NEW pinned snapshot owner without an unpin/decref gap.
+
+    The caller transfers its owned reference and explicit legacy pin. The
+    pin keeps the input stable until the registered frame owns it; every
+    operation after unpinning uses the authoritative slot instead of SSA.
+    """
+    slots = stack_alloc(_FUNC_SNAPSHOT_RELEASE_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _FUNC_SNAPSHOT_RELEASE_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_func_snapshot_release_frame_map"), slots)
+    store_ptr(slots, _FUNC_SNAPSHOT_RELEASE_VALUE * C_POINTER_SIZE, snapshot)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slots, load_ptr(slots, 0))
+    pcc_py_gc_minor_graph_unlock()
+    error_slot = ptr_add(slots, _FUNC_SNAPSHOT_RELEASE_ERROR * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(error_slot)
+    pcc_gc_unpin(snapshot)
+    pcc_gc_store_root(slots, null())
+    py_clear_exception()
+    py_tls_exc_swap_slot(error_slot)
+    pcc_gc_frame_leave(slots)
+
+
+def _func_defaults_copy_item(source_slot, index: int, result_slot) -> int:
+    """Copy one tuple field under the graph lock; return its address lease."""
+    plan = stack_alloc(256)
+    prepared: int = 0
+    token: int = -1
+    pcc_py_gc_minor_graph_lock()
+    source = pcc_gc_resolve_root_slot_unlocked(source_slot, 0)
+    if _is_tuple(source) != 0:
+        length: int = load_i64(source, PYTUPLEOBJECT_LEN_OFFSET)
+        if index >= 0 and index < length:
+            token = pcc_gc_root_copy_lease_prepare_locked(
+                result_slot,
+                ptr_add(source, PYTUPLEOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE),
+                0, plan,
+            )
+            prepared = 1
+    pcc_py_gc_minor_graph_unlock()
+    if prepared != 0:
+        pcc_gc_root_copy_lease_finish(plan)
+    return token
+
+
+@c_abi_export("py_func_copy_default_slots")
+def py_func_copy_default_slots(defaults_slot: c_ptr, index: int, result_slot: c_ptr) -> int:
+    """Copy a declaration value between authoritative, independently owned slots."""
+    if py_err_occurred() != 0:
+        return -1
+    if ptr_is_null(defaults_slot) != 0 or ptr_is_null(result_slot) != 0:
+        _func_runtime_error_if_unset(cstr("function defaults"), cstr("missing default owner slot"))
+        return -1
+    if ptr_is_null(load_ptr(result_slot, 0)) == 0:
+        _func_runtime_error_if_unset(cstr("function defaults"), cstr("default output slot is not empty"))
+        return -1
+    token: int = _func_defaults_copy_item(defaults_slot, index, result_slot)
+    if token < 0:
+        _func_runtime_error_if_unset(cstr("function defaults"), cstr("default value owner transfer failed"))
+        return -1
+    if pcc_gc_foreign_lease_release(result_slot, token) != 0:
+        pcc_platform_abort()
+        return -1
+    if ptr_is_null(load_ptr(result_slot, 0)) != 0:
+        _func_runtime_error_if_unset(cstr("function defaults"), cstr("default value is absent"))
+        return -1
+    return 0
+
+
+def _func_defaults_close(slots, tokens, handles, registered: int) -> None:
+    if registered == _FUNC_DEFAULTS_COUNT:
+        error_slot = ptr_add(slots, _FUNC_DEFAULTS_ERROR * C_POINTER_SIZE)
+        py_tls_exc_swap_slot(error_slot)
+        index: int = _FUNC_DEFAULTS_ITEM
+        while index >= _FUNC_DEFAULTS_FUNCTION:
+            offset: int = index * C_POINTER_SIZE
+            slot = ptr_add(slots, offset)
+            if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
+                pcc_platform_abort()
+                return
+            store_i64(tokens, offset, 0)
+            pcc_gc_store_root(slot, null())
+            index = index - 1
+        py_clear_exception()
+        py_tls_exc_swap_slot(error_slot)
+    index = registered - 1
+    while index >= 0:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
+        index = index - 1
+
+
+def _func_defaults_fill(slots, tokens, result_slot) -> int:
+    signature_slot = ptr_add(slots, _FUNC_DEFAULTS_SIGNATURE * C_POINTER_SIZE)
+    values_slot = ptr_add(slots, _FUNC_DEFAULTS_VALUES * C_POINTER_SIZE)
+    item_slot = ptr_add(slots, _FUNC_DEFAULTS_ITEM * C_POINTER_SIZE)
+    if ptr_is_null(_checked_func(load_ptr(slots, 0))) != 0:
+        return -1
+    if _signature_diagnostic_copy_signature(slots, tokens) != 0:
+        return -1
+    token: int = _func_defaults_copy_item(signature_slot, 4, values_slot)
+    if token < 0:
+        return -1
+    store_i64(tokens, _FUNC_DEFAULTS_VALUES * C_POINTER_SIZE, token)
+    values = load_ptr(values_slot, 0)
+    if _is_tuple(values) == 0:
+        return -1
+    length: int = load_i64(values, PYTUPLEOBJECT_LEN_OFFSET)
+    # Publish NEW before any lease acquisition or allocation error check.
+    store_ptr(result_slot, 0, py_tuple_new(length))
+    result_token: int = pcc_gc_foreign_lease_acquire(result_slot)
+    if result_token < 0:
+        return -1
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), result_slot, load_ptr(result_slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    status: int = -1
+    if ptr_is_null(load_ptr(result_slot, 0)) == 0 and py_err_occurred() == 0:
+        status = 0
+        index: int = 0
+        while index < length and status == 0:
+            token = _func_defaults_copy_item(values_slot, index, item_slot)
+            if token < 0:
+                status = -1
+            else:
+                store_i64(tokens, _FUNC_DEFAULTS_ITEM * C_POINTER_SIZE, token)
+                if ptr_is_null(load_ptr(item_slot, 0)) != 0:
+                    status = -1
+                else:
+                    py_tuple_set_item(load_ptr(result_slot, 0), index, load_ptr(item_slot, 0))
+                    if py_err_occurred() != 0:
+                        status = -1
+                if status == 0:
+                    if pcc_gc_foreign_lease_release(item_slot, token) != 0:
+                        pcc_platform_abort()
+                        return -1
+                    store_i64(tokens, _FUNC_DEFAULTS_ITEM * C_POINTER_SIZE, 0)
+                    pcc_gc_store_root(item_slot, null())
+                index = index + 1
+    if pcc_gc_foreign_lease_release(result_slot, result_token) != 0:
+        pcc_platform_abort()
+        return -1
+    return status
+
+
+@c_abi_export("py_func_copy_signature_defaults_slots")
+def py_func_copy_signature_defaults_slots(function_slot: c_ptr, result_slot: c_ptr) -> int:
+    """Snapshot the full immutable default vector without touching __defaults__."""
+    if py_err_occurred() != 0:
+        return -1
+    if ptr_is_null(function_slot) != 0 or ptr_is_null(result_slot) != 0:
+        _func_runtime_error_if_unset(cstr("function defaults"), cstr("missing signature owner slot"))
+        return -1
+    if ptr_is_null(load_ptr(result_slot, 0)) == 0:
+        _func_runtime_error_if_unset(cstr("function defaults"), cstr("signature output slot is not empty"))
+        return -1
+    slots = stack_alloc(_FUNC_DEFAULTS_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FUNC_DEFAULTS_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_FUNC_DEFAULTS_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _FUNC_DEFAULTS_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _FUNC_DEFAULTS_COUNT * C_POINTER_SIZE)
+    memset(handles, 0, _FUNC_DEFAULTS_COUNT * C_POINTER_SIZE)
+    registered: int = 0
+    while registered < _FUNC_DEFAULTS_COUNT:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, registered * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            break
+        store_ptr(handles, registered * C_POINTER_SIZE, handle)
+        registered = registered + 1
+    status: int = -1
+    if registered == _FUNC_DEFAULTS_COUNT:
+        token: int = pcc_gc_root_copy_lease(slots, function_slot)
+        if token >= 0:
+            store_i64(tokens, 0, token)
+            status = _func_defaults_fill(slots, tokens, result_slot)
+    if status != 0:
+        _func_runtime_error_if_unset(cstr("function defaults"), cstr("signature default snapshot failed"))
+    _func_defaults_close(slots, tokens, handles, registered)
+    return status
 
 
 def _signature_error(fn, sig, nargs: int, kwargs):

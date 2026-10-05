@@ -460,3 +460,44 @@ def test_public_cache_reloads_registered_owner_after_alias_unpin_and_relocation(
     result = m.ns['py_sys_modules']()
     assert result is copied[0] and result.alive and not old.alive
     assert not m.frames and not m.leases
+
+
+def test_registered_dotted_module_without_compiled_parent_remains_importable():
+    m = CacheMemory()
+    m.register('filtered_parent.child')
+    module = m.import_module('filtered_parent.child')
+    assert module is m.module_cache.fields['filtered_parent.child']
+    assert m.error is None
+    assert 'filtered_parent' not in m.module_cache.fields
+    assert not m.frames and not m.leases
+
+
+def test_missing_parent_probe_preserves_real_allocation_error():
+    m = CacheMemory()
+    m.register('filtered_parent.child')
+    original = m.ns['py_sys_modules_find']
+    errors = []
+    def find(name):
+        if m.text(name) == 'filtered_parent':
+            m.raise_error('parent lookup allocation failure')
+            errors.append(m.error)
+            return None
+        return original(name)
+    m.ns['py_sys_modules_find'] = find
+    assert m.import_module('filtered_parent.child') is None
+    assert m.error is errors[-1]
+    assert m.error.text == 'parent lookup allocation failure'
+    assert not m.frames and not m.leases
+
+
+def test_absent_parent_does_not_replace_initializer_error():
+    m = CacheMemory()
+    seen = []
+    def initialize():
+        m.raise_error('child initializer failure')
+        seen.append(m.error)
+    m.register('filtered_parent.child', initialize)
+    assert m.import_module('filtered_parent.child') is None
+    assert m.error is seen[0]
+    assert 'filtered_parent.child' not in m.module_cache.fields
+    assert not m.frames and not m.leases

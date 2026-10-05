@@ -1,7 +1,7 @@
 """Linux localtime from TZif files using owned filesystem primitives."""
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_ptr, c_int64, extern
+from pcc.extern import c_abi_export, c_ptr, c_int32, c_int64, c_void, extern
 from pcc.unsafe import (
     open_readonly, read, close, malloc, free, ptr_is_null, null, ptr_add,
     load_i8, load_i32, load_i64, store_i8, global_addr, global_load_ptr,
@@ -10,6 +10,7 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+set_errno = extern("pcc_errno_set", (c_int32,), c_void)
 getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 breakdown = extern("pcc_time_breakdown", (c_int64, c_int64, c_int64, c_ptr, c_ptr), c_int64)
 posix_zone = extern("pcc_time_posix_zone", (c_ptr, c_int64, c_ptr), c_int64)
@@ -59,12 +60,13 @@ def zone_path() -> c_ptr:
     if load_i8(setting, 0) == 0 or same(setting, cstr("UTC")) or same(setting, cstr("UTC0")) or same(setting, cstr("GMT")) or same(setting, cstr("GMT0")):
         return cstr("")
     prefix = cstr("/usr/share/zoneinfo/")
-    prefix_size: i64 = 19
+    prefix_size: i64 = length(prefix)
     if load_i8(setting, 0) == 47:
         prefix_size = 0
     size: i64 = length(setting)
     path = malloc(prefix_size + size + 1)
     if ptr_is_null(path):
+        set_errno(12)
         return null()
     index: i64 = 0
     while index < prefix_size:
@@ -79,13 +81,26 @@ def zone_path() -> c_ptr:
 
 @c_abi_export("localtime_r")
 def localtime_r(clock: c_ptr, output: c_ptr) -> c_ptr:
+    # Unsupported TZif/rule forms have a distinct capability failure. More
+    # specific allocation, I/O and calendar failures replace this value.
+    set_errno(95)
     timestamp: i64 = load_i64(clock, 0)
     path = zone_path()
     if ptr_is_null(path):
+        set_errno(12)
         return null()
     if load_i8(path, 0) == 0:
-        if breakdown(timestamp, 0, 0, cstr("UTC"), output) == 0:
+        abbreviation = cstr("UTC")
+        setting = getenv(cstr("TZ"))
+        if not ptr_is_null(setting):
+            if load_i8(setting, 0) == 58:
+                setting = ptr_add(setting, 1)
+            if same(setting, cstr("GMT")) or same(setting, cstr("GMT0")):
+                abbreviation = cstr("GMT")
+        if breakdown(timestamp, 0, 0, abbreviation, output) == 0:
+            set_errno(0)
             return output
+        set_errno(75)
         return null()
     fd: i64 = open_readonly(path)
     free(path)
@@ -94,7 +109,10 @@ def localtime_r(clock: c_ptr, output: c_ptr) -> c_ptr:
         if ptr_is_null(setting) or load_i8(setting, 0) == 58:
             return null()
         zone = stack_alloc(32)
-        if posix_zone(setting, timestamp, zone) != 0:
+        zone_status: i64 = posix_zone(setting, timestamp, zone)
+        if zone_status != 0:
+            if zone_status < -1:
+                set_errno(0 - zone_status)
             return null()
         return finish(timestamp, load_i64(zone, 0), load_i64(zone, 8),
                       load_ptr(zone, 16), load_i64(zone, 24), output)
@@ -102,6 +120,7 @@ def localtime_r(clock: c_ptr, output: c_ptr) -> c_ptr:
     data = malloc(capacity + 1)
     if ptr_is_null(data):
         close(fd)
+        set_errno(12)
         return null()
     size: i64 = 0
     while size < capacity:
@@ -109,6 +128,7 @@ def localtime_r(clock: c_ptr, output: c_ptr) -> c_ptr:
         if result == -4:
             continue
         if result < 0:
+            set_errno(0 - result)
             size = 0
             break
         if result == 0:
@@ -180,8 +200,11 @@ def localtime_r(clock: c_ptr, output: c_ptr) -> c_ptr:
         if end < size and end > footer:
             store_i8(data, end, 0)
             zone = stack_alloc(32)
-            if posix_zone(ptr_add(data, footer), timestamp, zone) != 0:
+            zone_status: i64 = posix_zone(ptr_add(data, footer), timestamp, zone)
+            if zone_status != 0:
                 free(data)
+                if zone_status < -1:
+                    set_errno(0 - zone_status)
                 return null()
             offset = load_i64(zone, 0)
             daylight = load_i64(zone, 8)
@@ -197,7 +220,10 @@ def localtime_r(clock: c_ptr, output: c_ptr) -> c_ptr:
 def finish(timestamp: i64, offset: i64, daylight: i64, text: c_ptr, size: i64, output: c_ptr) -> c_ptr:
     label = intern_zone(text, size)
     if ptr_is_null(label):
+        set_errno(12)
         return null()
     if breakdown(timestamp, offset, daylight, label, output) == 0:
+        set_errno(0)
         return output
+    set_errno(75)
     return null()

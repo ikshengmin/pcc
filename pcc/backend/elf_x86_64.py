@@ -891,6 +891,7 @@ def _link_static_executable_image(
     base_address: int = _BASE,
     archive_selections: list[tuple[int, str]] | None = None,
     compact_archive_relocations: bool = False,
+    _input_store=None,
 ) -> bytearray:
     """Build a private mutable image, fully validated before publication."""
     if not objects:
@@ -905,12 +906,14 @@ def _link_static_executable_image(
         boundary_symbols.append(ElfSymbol(name, SHN_ABS, 0, 0, STB_GLOBAL, STT_NOTYPE))
     objects.append(ElfObject((), tuple(boundary_symbols), machine))
     definitions, undefined = _global_state(objects)
-    for archive_index, archive_data in enumerate(archives):
+    archive_inputs = archives if _input_store is None else _input_store.archives
+    for archive_index, archive_data in enumerate(archive_inputs):
         if entry not in definitions:
             undefined.add(entry)
         selected_names = [] if archive_selections is not None else None
         selected, _remaining = select_archive_members(
-            read_archive(archive_data, compact_relocations=compact_archive_relocations),
+            (read_archive(archive_data, compact_relocations=compact_archive_relocations)
+             if _input_store is None else _input_store.read_archive(archive_index)),
             undefined,
             already_defined=set(definitions),
             selected_names=selected_names,
@@ -966,7 +969,15 @@ def _link_static_executable_image(
                 got_seen.add(key)
                 got_identities.append(key)
 
-    rx_sections = [item for item in alloc_sections if not item[2].flags & SHF_WRITE]
+    metadata_sections = [
+        item for item in alloc_sections
+        if item[2].name == ".pcc_stackmaps"
+    ]
+    rx_sections = [
+        item for item in alloc_sections
+        if not item[2].flags & SHF_WRITE
+        and item[2].name != ".pcc_stackmaps"
+    ]
     if machine == EM_AARCH64:
         rx_sections.sort(key=lambda item: not bool(item[2].flags & SHF_EXECINSTR))
     rw_file_sections = [
@@ -996,7 +1007,7 @@ def _link_static_executable_image(
 
     has_rw = bool(rw_file_sections or tdata_sections or tbss_sections or bss_sections or got_identities)
     has_tls = bool(tdata_sections or tbss_sections)
-    phnum = 1 + int(has_rw) + int(has_tls)
+    phnum = 1 + int(has_rw) + int(has_tls) + int(bool(metadata_sections))
     header_bytes = _ELF_HEADER.size + phnum * _PROGRAM_HEADER.size
     placements: dict[tuple[int, int], _Placement] = {}
 
@@ -1043,13 +1054,36 @@ def _link_static_executable_image(
     rw_file_end = cursor
     rw_memory_end = memory_cursor
 
-    image_size = max(rx_file_end, rw_file_end, header_bytes)
+    metadata_file_start = 0
+    metadata_file_end = 0
+    metadata_address_start = 0
+    if metadata_sections:
+        # Metadata is read-only and may be much larger than the signed PC-relative
+        # window. Keep code, constants and writable globals together first.
+        # File and virtual positions differ when the RW segment ends in BSS.
+        metadata_align = max(_PAGE, max(item[2].align for item in metadata_sections))
+        metadata_file_start = _align(max(rx_file_end, rw_file_end), metadata_align)
+        metadata_address_start = _align(max(rx_file_end, rw_memory_end), metadata_align)
+        cursor = metadata_file_start
+        address_cursor = metadata_address_start
+        for object_index, section_index, section in metadata_sections:
+            cursor = _align(cursor, section.align)
+            address_cursor = _align(address_cursor, section.align)
+            placements[(object_index, section_index)] = _Placement(
+                cursor, base_address + address_cursor,
+            )
+            cursor += section.size
+            address_cursor += section.size
+        metadata_file_end = cursor
+    image_size = max(rx_file_end, rw_file_end, metadata_file_end, header_bytes)
+    if _input_store is not None:
+        _input_store.clear()
     image = bytearray(image_size)
     for object_index, section_index, section in alloc_sections:
         if section.type == SHT_NOBITS:
             continue
         placement = placements[(object_index, section_index)]
-        image[placement.file_offset:placement.file_offset + len(section.data)] = section.data
+        image[placement.file_offset:placement.file_offset + section.size] = section.data
 
     boundaries = {}
     for family in ("init", "fini"):
@@ -1167,6 +1201,8 @@ def _link_static_executable_image(
                 # accepted writer relocation was not deliberately linked.
                 raise ElfError(f"relocation type {relocation.type} has no link rule")
 
+    if _input_store is not None:
+        _input_store.clear()
     # Validate the exact bytes that will become executable metadata after all
     # function-address relocations have been applied.  The final ET_EXEC drops
     # section headers, so this is the last owned publication boundary at which
@@ -1178,7 +1214,7 @@ def _link_static_executable_image(
         payload = bytes(
             image[
                 placement.file_offset:
-                placement.file_offset + len(section.data)
+                placement.file_offset + section.size
             ]
         )
         try:
@@ -1218,6 +1254,15 @@ def _link_static_executable_image(
             base_address + tls_file_start, tls_file_end - tls_file_start,
             tls_memory_end - tls_file_start, tls_align,
         ))
+    if metadata_sections:
+        program_headers.append(_PROGRAM_HEADER.pack(
+            PT_LOAD, PF_R, metadata_file_start,
+            base_address + metadata_address_start,
+            base_address + metadata_address_start,
+            metadata_file_end - metadata_file_start,
+            metadata_file_end - metadata_file_start,
+            _PAGE,
+        ))
     ident = ELF_MAGIC + bytes((ELFCLASS64, ELFDATA2LSB, EV_CURRENT, ELFOSABI_SYSV))
     ident += b"\0" * (16 - len(ident))
     image[:_ELF_HEADER.size] = _ELF_HEADER.pack(
@@ -1240,7 +1285,7 @@ def parse_static_executable(data: bytes | bytearray) -> dict[str, int]:
     if header[6] != 0 or header[12] != 0:
         raise ElfError("final static image unexpectedly has section headers")
     phoff, phentsize, phnum = header[5], header[9], header[10]
-    if phentsize != _PROGRAM_HEADER.size or phnum not in (1, 2, 3):
+    if phentsize != _PROGRAM_HEADER.size or phnum not in (1, 2, 3, 4):
         raise ElfError("final static image has an unsupported program-header table")
     if phoff + phentsize * phnum > len(data):
         raise ElfError("program-header table is truncated")
@@ -1259,7 +1304,7 @@ def parse_static_executable(data: bytes | bytearray) -> dict[str, int]:
             raise ElfError("program header maps bytes outside the image")
         if align <= 0 or align & (align - 1):
             raise ElfError("program header has invalid alignment")
-    if load_count not in (1, 2) or tls_count > 1:
+    if load_count not in (1, 2, 3) or tls_count > 1:
         raise ElfError("final static image has an invalid LOAD/TLS topology")
     return {
         "entry": header[4],

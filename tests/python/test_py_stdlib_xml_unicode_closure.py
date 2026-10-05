@@ -377,13 +377,40 @@ def test_html_family_is_selected_by_recursive_stdlib_registry(module_name, suffi
     assert pipeline._classify_python_import(module_name) == 'native_stdlib'
 
 
+@pytest.fixture
+def html_package_source(monkeypatch):
+    """Give the compiler and reference the same explicit package source."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    for variable in ("PCC_PACKAGE_SITE", "PYTHONPATH"):
+        previous = os.environ.get(variable, "")
+        value = str(root) + (os.pathsep + previous if previous else "")
+        monkeypatch.setenv(variable, value)
+    return root
+
+
+def test_original_html_package_fixture_is_in_native_source_closure(
+    tmp_path, html_package_source,
+):
+    from pcc.frontends.python.pipeline import _collect_relative_module_closure
+    fixture = html_package_source / "tests/fixtures/html_parser_package_acquire.py"
+    source = tmp_path / fixture.name
+    source.write_bytes(fixture.read_bytes())
+    sources, modules = _collect_relative_module_closure(str(source))
+    actual = dict(zip(modules, sources))
+    assert actual["pcc.package.acquire"] == str(
+        html_package_source / "pcc/package/acquire.py"
+    )
+    assert source.read_bytes() == fixture.read_bytes()
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize('fixture_name', [
     'html_parser_streaming.py',
     'html_parser_package_acquire.py',
 ])
 def test_html_owned_native_subclass_execution(
-    fixture_name, tmp_path, monkeypatch, pcc_runtime_archive,
+    fixture_name, tmp_path, monkeypatch, pcc_runtime_archive, html_package_source,
 ):
     """Execute generic and original imported subclasses under every GC.
 

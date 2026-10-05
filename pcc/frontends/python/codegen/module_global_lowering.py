@@ -135,7 +135,11 @@ def _predeclare_owned_builtin_import_globals(host, stmt, scope_names) -> bool:
         local_name = as_name or imported_name
         if scope_names is not None and local_name not in scope_names:
             continue
-        host._ensure_module_global_name(local_name, DynType(name="dyn"))
+        slot, _declared = host._ensure_module_global_name(local_name, DynType(name="dyn"))
+        if module == "sys" and imported_name == "modules":
+            # Its executing producer uses _bind_owned_import_root. Plan the
+            # same live binding before any function consumer is generated.
+            host._native_extension_modules()[local_name] = slot
         # Imports execute at their source position and may be conditional or
         # fail part way through. Reuse the existing global bound-check set.
         if getattr(host, "_module_del_target_names", None) is None:

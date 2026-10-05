@@ -107,8 +107,8 @@ MAX_RECORDS = 8_000_000  # same rationale as MAX_LOCATIONS below: the pcc
                          # total is only summed here -- so this guards
                          # against absurd payloads, not legit closures.
 # Resource budget, not a wire-format bound. Materialized maps charge every
-# record's locations; compact consumers charge the physical table and actual
-# unique-slice work. Repeated references do not allocate or revalidate roots.
+# record's locations; compact consumers and explicit shared immutable views
+# charge physical storage and actual unique-slice/frame validation work.
 MAX_LOCATIONS = 128_000_000
 
 _HEADER = struct.Struct("<8sHBBIII")
@@ -498,7 +498,16 @@ def _validate_location(
         )
 
 
-def validate_stack_map(value: PreciseStackMap, *, final_image: bool = False) -> None:
+def validate_stack_map(
+    value: PreciseStackMap, *, final_image: bool = False,
+    shared_locations: bool = False,
+) -> None:
+    """Validate materialized maps or an explicitly shared immutable view.
+
+    Materialized consumers retain their logical-allocation budget. A shared
+    view charges each tuple/frame validation once, matching v2's unique-slice
+    work budget. All function and record checks still run for every owner.
+    """
     if value.arch not in ARCH_NAMES:
         raise PreciseStackMapError(f"unknown stack-map architecture {value.arch}")
     if len(value.functions) > MAX_FUNCTIONS:
@@ -507,6 +516,7 @@ def validate_stack_map(value: PreciseStackMap, *, final_image: bool = False) -> 
     seen_safepoints: set[int] = set()
     total_records = 0
     total_locations = 0
+    validated_locations: dict[tuple[int, int], tuple] = {}
     for function in value.functions:
         _check_uint(function.function_id, 64, "function id", nonzero=True)
         if function.function_id <= previous_function_id:
@@ -564,8 +574,26 @@ def validate_stack_map(value: PreciseStackMap, *, final_image: bool = False) -> 
                 raise PreciseStackMapError(
                     "suspended flag is reserved for continuation records"
                 )
+            _check_uint(len(record.locations), 16, "location count")
+            # Retain the exact immutable owner, and include the frame because
+            # a valid root offset in one function may exceed another's frame.
+            # Lists and tuple subclasses never take the shared fast path.
+            location_key = None
+            if (
+                shared_locations
+                and type(record.locations) is tuple
+                and type(function.frame_size) is int
+            ):
+                location_key = (id(record.locations), function.frame_size)
+                if location_key in validated_locations:
+                    if validated_locations[location_key] is record.locations:
+                        continue
             total_locations += len(record.locations)
             if total_locations > MAX_LOCATIONS:
+                if shared_locations:
+                    raise PreciseStackMapError(
+                        "too much stack-map location validation work"
+                    )
                 raise PreciseStackMapError("too many stack-map locations")
             # Inlined _validate_location: giant functions can carry millions
             # of managed locations, and decode_stack_map runs once per input
@@ -577,7 +605,22 @@ def validate_stack_map(value: PreciseStackMap, *, final_image: bool = False) -> 
             stack_registers = (29, 31) if value.arch == ARCH_AARCH64 else (6, 7)
             register_limit = _register_limit(value.arch)
             arch_name = ARCH_NAMES[value.arch]
+            cacheable_locations = location_key is not None
             for index, location in enumerate(record.locations):
+                # The public model also accepts structurally compatible
+                # values. Mutable lookalikes/subclasses must not borrow the
+                # immutable dataclass fast path merely by sharing a tuple.
+                if cacheable_locations and (
+                    type(location) is not StackMapLocation
+                    or type(location.kind) is not int
+                    or type(location.flags) is not int
+                    or type(location.size) is not int
+                    or type(location.register) is not int
+                    or type(location.base_index) is not int
+                    or type(location.offset) is not int
+                    or type(location.extent) is not int
+                ):
+                    cacheable_locations = False
                 kind = location.kind
                 flags = location.flags
                 if kind not in LOCATION_KINDS:
@@ -672,6 +715,8 @@ def validate_stack_map(value: PreciseStackMap, *, final_image: bool = False) -> 
                         "managed register location must reject stale "
                         "post-safepoint SSA use"
                     )
+            if cacheable_locations:
+                validated_locations[location_key] = record.locations
 
 
 def _location_key(location: "StackMapLocation") -> tuple:
@@ -687,9 +732,10 @@ def _location_key(location: "StackMapLocation") -> tuple:
 
 
 def encode_stack_map(value: PreciseStackMap, *, final_image: bool = False) -> bytes:
-    validate_stack_map(value, final_image=final_image)
+    validate_stack_map(value, final_image=final_image, shared_locations=True)
     table: list[tuple] = []
     table_index: dict[str, int] = {}
+    location_identities: dict[int, tuple] = {}
     body = bytearray()
     for function in value.functions:
         body += _FUNCTION.pack(
@@ -705,16 +751,36 @@ def encode_stack_map(value: PreciseStackMap, *, final_image: bool = False) -> by
             # self-host closure, so keep the hashed type to one that is
             # proven there.  `key in d` + subscript, never dict.get, which
             # mis-lowers under pcc1 into a raising getitem.
-            entries = [_location_key(item) for item in record.locations]
-            key = ";".join(
-                ",".join(str(field) for field in entry) for entry in entries
-            )
-            if key in table_index:
-                index = table_index[key]
+            identity = id(record.locations)
+            cached = None
+            if identity in location_identities:
+                cached = location_identities[identity]
+            if cached is not None and cached[0] is record.locations:
+                index = cached[1]
             else:
-                index = len(table)
-                table_index[key] = index
-                table.extend(entries)
+                entries = []
+                cacheable = type(record.locations) is tuple
+                for item in record.locations:
+                    fields = _location_key(item)
+                    entries.append(fields)
+                    if type(item) is not StackMapLocation:
+                        cacheable = False
+                    for field in fields:
+                        if type(field) is not int:
+                            cacheable = False
+                key = ";".join(
+                    ",".join(str(field) for field in entry) for entry in entries
+                )
+                if key in table_index:
+                    index = table_index[key]
+                else:
+                    index = len(table)
+                    if index + len(entries) > MAX_LOCATIONS:
+                        raise PreciseStackMapError("too many stack-map locations")
+                    table_index[key] = index
+                    table.extend(entries)
+                if cacheable:
+                    location_identities[identity] = (record.locations, index)
             body += _RECORD.pack(
                 record.safepoint_id,
                 record.instruction_offset,

@@ -1107,6 +1107,8 @@ void py_instance_copy_builtin_payload(PyObject *source, PyObject *destination);
 /* dict-subclass inherited-behavior fallback (py_protocol.c). */
 PyObject *py_dict_subclass_getattr(PyObject *o, const char *name);
 PyObject *py_dict_subclass_getitem(PyObject *o, PyObject *key);
+/* Actual exact-dict storage, copied from an owning input to an empty result. */
+int64_t py_dict_storage_slots(PyObject **receiver_slot, PyObject **result_slot);
 
 /* Install a method on the class. `name` is borrowed and must remain immutable
  * and alive for the class lifetime; `func` is borrowed (caller retains
@@ -1125,6 +1127,12 @@ PyObject *py_class_getattr(PyClassObject *cls, const char *name);
 int64_t py_class_setattr(PyClassObject *cls, const char *name, PyObject *value);
 int64_t py_class_setattr_raw(PyClassObject *cls, const char *name, PyObject *value);
 int64_t py_class_apply_namespace_dict(PyClassObject *cls, PyObject *ns);
+int64_t py_class_write_namespace_key_slots(PyObject **class_slot, PyObject **key_slot, PyObject **value_slot);
+int64_t py_class_read_namespace_slots(PyObject **class_slot, const char *name, PyObject **result_slot);
+/* Independent immutable signature snapshots and owned declaration reads. */
+int64_t py_func_copy_signature_defaults_slots(PyObject **function_slot, PyObject **result_slot);
+int64_t py_func_copy_default_slots(PyObject **defaults_slot, int64_t index, PyObject **result_slot);
+void py_func_release_default_snapshot(PyObject *snapshot);
 int64_t py_class_delattr(PyClassObject *cls, const char *name);
 void py_class_attrs_dispose(PyClassObject *cls);
 int64_t py_class_attrs_retarget(PyClassObject *from, PyClassObject *to);

@@ -10,6 +10,7 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, BytesType, Call, ClassType, DictType, DynType, Expr, IntLit, IntType, ListExpr, ListType, MemoryViewType, Name, Slice, StrLit, StrType, Subscript, TupleExpr, UnaryOp, TupleType, Type, ValueArrayType
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 _I8 = ir.IntType(8)
@@ -360,6 +361,20 @@ class SubscriptLoweringMixin:
         return got, elem_ty, None, None
 
     def _emit_subscript_store(self, target: Subscript, value_expr: Expr) -> None:
+        if live_import_expr_binding(self, target.obj):
+            root = self._emit_slot_call_operand(value_expr, "import.item.value")
+            previous = self._current_try_err_block()
+            error = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((root,), error)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                self._store_unpack_root_target(target, root, DynType(name="dyn"))
+                self._release_slot_call_roots((root,))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return
         rhs = self._emit_expr_as_pcc_object(value_expr)
         self._emit_subscript_store_value(
             target,
@@ -862,6 +877,11 @@ class SubscriptLoweringMixin:
         return None
 
     def _emit_subscript_load(self, expr: Subscript) -> ir.Value:
+        if live_import_expr_binding(self, expr.obj):
+            value = self._take_slot_call_root(self._emit_slot_call_subscript(expr, "import.item"))
+            if isinstance(expr.ty, IntType) and expr.ty.name == "int":
+                return value
+            return self._unbox_scalar_attr_result(value, expr.ty)
         if isinstance(expr.idx, Slice):
             return self._emit_slice_load(expr)
         if isinstance(expr.obj.ty, ValueArrayType):

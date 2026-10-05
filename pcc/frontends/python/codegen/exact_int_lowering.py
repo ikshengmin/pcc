@@ -10,6 +10,7 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import Assign, AugAssign, BinOp, BoolExpr, BoolLit, BoolType, Attr, Call, Compare, DictType, DynType, StrType, Expr, FloatType, For, FuncDef, If, IfExpr, ImportFrom, IntLit, IntType, ListType, Name, Slice, Subscript, TupleType, TupleExpr, Try, UnaryOp, While, With
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
 from pcc.frontends.python.codegen.vthread_effect_analysis import vthread_delegate_frame_name
 from pcc.frontends.python.py_ast import assignment_storage_annotation
 
@@ -488,6 +489,10 @@ class ExactIntLoweringMixin:
         if not isinstance(expr.ty, IntType):
             return None
         if isinstance(expr, Attr):
+            if live_import_expr_binding(self, expr.obj):
+                return self._take_slot_call_root(
+                    self._emit_slot_call_attribute(expr, "import.exact.attribute"),
+                )
             if self._is_valueclass_payload_type(expr.obj.ty):
                 # Payload fields belong to their explicit machine lane.
                 # Decline before evaluating a possibly effectful receiver;
@@ -927,6 +932,8 @@ class ExactIntLoweringMixin:
             if value < -(1 << 63) or value > (1 << 63) - 1:
                 return self._emit_int_literal_object(value)
         if isinstance(expr, Subscript):
+            if live_import_expr_binding(self, expr.obj):
+                return self._take_slot_call_root(self._emit_slot_call_subscript(expr, "import.exact.item"))
             return self._emit_subscript_load_object(expr)
         return None
 

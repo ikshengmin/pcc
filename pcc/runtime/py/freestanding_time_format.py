@@ -90,6 +90,12 @@ def days_from_civil(year: i64, month: i64, day: i64) -> i64:
 
 @c_abi_export("pcc_time_breakdown")
 def breakdown(seconds: i64, offset: i64, daylight: i64, zone: c_ptr, output: c_ptr) -> i64:
+    # Avoid wrapping at the explicit i64 platform boundary before checking
+    # the representable struct-tm year. Python timestamps remain arbitrary ints.
+    if offset > 0 and seconds > 9223372036854775807 - offset:
+        return -75
+    if offset < 0 and seconds < -9223372036854775808 - offset:
+        return -75
     adjusted: i64 = seconds + offset
     days: i64 = floor_div(adjusted, 86400)
     clock: i64 = floor_mod(adjusted, 86400)

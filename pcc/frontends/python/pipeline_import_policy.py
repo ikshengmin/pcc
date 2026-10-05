@@ -96,7 +96,9 @@ TEST_FACADE_IMPORT_MODULES = ("pytest", "pcc.test_runner")
 # when the application lives outside that tree. The literal semantic target is
 # shared with stdlib providers; compiler implementation modules stay excluded.
 # Gateway/web packages resolve through the package site after their repo split.
-PCC_OWNED_COMPONENT_IMPORT_PREFIXES: tuple[str, ...] = ("pcc.driver.python_target",)
+PCC_OWNED_COMPONENT_IMPORT_PREFIXES: tuple[str, ...] = (
+    "pcc.driver.python_target", "pcc.stdlib._structseq",
+)
 
 ANNOTATION_ONLY_IMPORT_MODULES = frozenset(
     {"llvmlite.binding", "llvmlite.ir"}
@@ -167,7 +169,7 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
     # it routes those attributes through CPython and stubs callers in strict
     # no-libpython mode, including compiler error reporting.
     {"os", "platform", "subprocess", "contextvars", "contextlib", "functools",
-     "json", "math"}
+     "json", "math", "time"}
 )
 
 # A shallow explicit multi-file compile normally admits every directly
@@ -176,7 +178,7 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
 # semantic objects that require its compiled provider.
 REQUIRED_COMPILED_STDLIB_PROVIDERS = frozenset(
     {"os", "platform", "subprocess", "contextvars", "contextlib", "functools",
-     "json", "math"}
+     "json", "math", "time"}
 )
 
 NATIVE_IMPORT_FROMS = {

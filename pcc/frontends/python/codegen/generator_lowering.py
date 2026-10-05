@@ -2056,6 +2056,8 @@ class GeneratorLoweringMixin:
             return False
         if self._expr_returns_unsafe_raw_pointer(expr):
             return False
+        if self._value_is_owned_object(value):
+            return False
         if isinstance(expr, Name):
             if expr.ident in getattr(self, "_owned_local_names", set()):
                 return True

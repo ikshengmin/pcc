@@ -2339,9 +2339,9 @@ class UserFunctionLoweringMixin:
     def _emit_native_func_default_root(self, expr: Expr):
         """Keep an ordinary native default owned until signature insertion.
 
-        Dataclass inheritance, value payload consumption and CPython bridges
-        retain their explicit producers below. They do not share the ordinary
-        call-operand marshalling contract.
+        Inherited dataclass values keep their declaration lookup owner until
+        insertion too. Value payloads and CPython bridges retain their explicit
+        producers below.
         """
         if self._is_valueclass_payload_type(getattr(expr, "ty", None)):
             return None
@@ -2358,7 +2358,7 @@ class UserFunctionLoweringMixin:
             )
             and len(expr.args) == 2
         ):
-            return None
+            return self._emit_inherited_dataclass_default_root(expr)
         old_prefer_native = self._prefer_native_callable_values
         self._prefer_native_callable_values = True
         try:
@@ -2366,67 +2366,54 @@ class UserFunctionLoweringMixin:
         finally:
             self._prefer_native_callable_values = old_prefer_native
 
+    def _emit_inherited_dataclass_default_root(self, expr):
+        """Resolve declaration metadata without surrendering its owner."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        result = self._new_slot_call_root("dataclass.inherited.default")
+        self._try_err_block = self._slot_call_cleanup_block((result,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        base = self._emit_slot_call_operand(expr.args[0], "dataclass.base")
+        defaults = self._new_slot_call_root("dataclass.base.declaration")
+        cleanup = self._slot_call_cleanup_block((result, base, defaults), target)
+        self._try_err_block = cleanup
+        self._cpy_operand_cleanup_block = cleanup
+        try:
+            # Declaration ownership survives ordinary class-attribute,
+            # __init__, and function __defaults__ rebinding. Do not infer
+            # dataclass fields from the live callable's signature.
+            status = self.builder.call(
+                self.runtime["py_class_read_namespace_slots"],
+                [self._as_gc_ptr(base), self._attr_name_ptr("__pcc_dataclass_defaults__"),
+                 self._as_gc_ptr(defaults)],
+            )
+            self._slot_call_note_published(defaults)
+            self._slot_call_check_status(status, "dataclass declaration lookup", expr.span)
+            self._emit_attribute_error_if_null(
+                self.builder.load(defaults), "__pcc_dataclass_defaults__", expr.span,
+            )
+            status = self.builder.call(
+                self.runtime["py_func_copy_default_slots"],
+                [self._as_gc_ptr(defaults), self._emit_expr_as_i64(expr.args[1]), self._as_gc_ptr(result)],
+            )
+            self._slot_call_note_published(result)
+            self._slot_call_check_status(status, "dataclass inherited value", expr.span)
+            self._guard_cpy_value_not_null(self.builder.load(result))
+            self._release_slot_call_roots((base, defaults))
+            self._try_err_block = self._slot_call_cleanup_block((result,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            return result
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_native_func_default_object(self, expr: Expr) -> ir.Value:
         # The dataclass capture caller still consumes one immediate raw owner.
         # Signature construction keeps the authoritative root instead.
         native_root = self._emit_native_func_default_root(expr)
         if native_root is not None:
             return self._take_slot_call_root(native_root)
-        if (
-            isinstance(expr, Call)
-            and isinstance(expr.func, Name)
-            and (
-                (expr.func.ident == "__pcc_dataclass_inherited_factory__"
-                 and expr.span.file == "<pcc-dataclass-factory>")
-                or (expr.func.ident == "__pcc_dataclass_inherited_default__"
-                    and expr.span.file == "<pcc-dataclass-default>")
-            )
-            and len(expr.args) == 2
-        ):
-            base = self._emit_expr(expr.args[0])
-            original_init = self.builder.call(
-                self.runtime["py_class_lookup"], [base, self._attr_name_ptr("__init__")],
-                name=self._fresh("dataclass.base.init"),
-            )
-            self._emit_attribute_error_if_null(original_init, "__init__", expr.span)
-            init_root = self._enter_container_temp_root(original_init, self._fresh("dataclass.base.init"))
-            previous_error_target = self._current_try_err_block()
-            previous_cpy_cleanup = self._cpy_operand_cleanup_block
-            cleanup_target = previous_error_target
-            if cleanup_target is None:
-                cleanup_target = self._ensure_fn_err_exit()
-            self._try_err_block = self._make_cpy_operand_cleanup_block(
-                (), (), cleanup_target, "dataclass.base.init.unwind", rooted_pcc_lifetimes=((init_root, False),),
-            )
-            self._cpy_operand_cleanup_block = self._try_err_block
-            try:
-                defaults = self.builder.call(
-                    self.runtime["py_func_get_defaults_metadata"], [original_init],
-                    name=self._fresh("dataclass.base.defaults"),
-                )
-                self._emit_attribute_error_if_null(defaults, "__defaults__", expr.span)
-                defaults_root = self._enter_container_temp_root(defaults, self._fresh("dataclass.base.defaults"))
-                self._try_err_block = self._make_cpy_operand_cleanup_block(
-                    (), (), cleanup_target, "dataclass.base.defaults.unwind",
-                    rooted_pcc_lifetimes=((init_root, False), (defaults_root, True)),
-                )
-                # NULL guards consult the operand cleanup before the try
-                # target. Both error routes must retire the newly entered
-                # roots, in reverse construction order, before the outer join.
-                self._cpy_operand_cleanup_block = self._try_err_block
-                factory = self.builder.call(
-                    self.runtime["py_tuple_get"], [defaults, self._emit_expr_as_i64(expr.args[1])],
-                    name=self._fresh("dataclass.inherited.factory"),
-                )
-                self._guard_cpy_value_not_null(factory)
-                self._leave_container_temp_root(defaults_root)
-                self._gc_release(defaults)
-                self._leave_container_temp_root(init_root)
-                self._note_owned_object_value(factory)
-                return factory
-            finally:
-                self._try_err_block = previous_error_target
-                self._cpy_operand_cleanup_block = previous_cpy_cleanup
         valueclass_payload = self._maybe_emit_valueclass_constructor_payload(
             getattr(expr, "ty", None),
             expr,

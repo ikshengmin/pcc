@@ -384,8 +384,10 @@ def _sys_modules_publish_parent(slots, tokens, name) -> None:
     store_ptr(slots, _SM_CURRENT * C_POINTER_SIZE, py_sys_modules_find(parent))
     _sys_modules_adopt(slots, tokens, _SM_CURRENT)
     if ptr_is_null(load_ptr(slots, _SM_CURRENT * C_POINTER_SIZE)):
-        if not py_err_occurred():
-            py_raise_owned(py_exc_new(4, parent))
+        # The compiled graph can register a dotted provider without a parent
+        # initializer (for example an elided compile-time package). A cache
+        # miss is not a Python subscription: publish only to an existing
+        # parent, preserving any real lookup error already in TLS.
         free(parent)
         return
     free(parent)

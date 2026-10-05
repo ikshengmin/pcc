@@ -18,6 +18,7 @@ LOCKED_NAMES = (
 )
 WRITER_NAMES = (
     '_class_write_acquire_namespace', '_class_write_namespace_body',
+    '_class_write_namespace_commit',
     'py_class_write_namespace_slots',
 )
 
@@ -485,3 +486,21 @@ def test_namespace_retry_actual_helpers_release_old_owner_before_reacquire(remov
     assert model.run() == 0
     assert model.mutations == [model.winner]
     assert model.pending == 'incoming-error'
+
+
+@pytest.mark.parametrize('existing,relocate,retarget', ((False, True, False), (True, True, False), (True, False, True)))
+def test_dictionary_key_writer_owns_key_and_reuses_transaction(existing, relocate, retarget):
+    model = NamespaceWriterModel(existing=existing, relocate=relocate, retarget=retarget)
+    key_input = 8024
+    model.store(key_input, 0, model.key)
+    model.registered.add(key_input)
+    model.env['_ptr_can_have_header'] = lambda _: False
+    load_functions(ROOT / 'pcc/runtime/py/py_class.py', ('py_class_write_namespace_key_slots',), model.env)
+    result = model.env['py_class_write_namespace_key_slots'](model.input_class, key_input, model.input_value)
+    assert result == 0
+    assert not model.locked and not model.leased and not model.plans
+    assert model.registered == {model.input_class, key_input, model.input_value}
+    assert model.namespace_values[model.load(model.cls, model.env['PYCLASSOBJECT_ATTRS_OFFSET'])] == model.value
+    assert model.pending == 'incoming-error'
+    assert 'del-hint' not in model.events
+    assert 'allocate-key' not in model.events

@@ -5,10 +5,56 @@ from __future__ import annotations
 from typing import Optional
 
 from pcc.ir.compat import ir
-from pcc.frontends.python.py_ast import DynType
+from pcc.frontends.python.py_ast import Attr, DynType, Name
 
 _I8 = ir.IntType(8)
 _CSTR = _I8.as_pointer()
+
+
+def live_import_global_slot(host, name):
+    """Return a managed import's staging slot; its dictionary owns the binding.
+
+    Runtime ports and freestanding compile-time imports have no executing
+    Python module namespace. Their static ABI projections remain unchanged.
+    """
+    if getattr(host, "_runtime_port_module", False) or getattr(host, "_freestanding_module", False):
+        return None
+    slot = getattr(host, "_native_extension_module_env", {}).get(name)
+    entry = getattr(host, "_module_globals", {}).get(name)
+    if slot is not None and entry is not None and entry[0] is slot:
+        return slot
+    return None
+
+
+def live_import_name_slot(host, name):
+    slot = live_import_global_slot(host, name)
+    local = host.env.get(name)
+    if local is not None and local[0] is not slot:
+        return None
+    return slot
+
+
+def retire_live_import_staging(host, name, unpin=True):
+    staging = live_import_global_slot(host, name)
+    if staging is None:
+        return
+    if unpin:
+        current = host.builder.load(staging, name=host._fresh("import.publish.current"))
+        host._gc_unpin(current)
+    host.builder.call(
+        host.runtime["pcc_gc_store_root"],
+        [host._as_gc_ptr(staging), ir.Constant(_CSTR, None)],
+    )
+
+
+def live_import_expr_binding(host, expr):
+    """A real imported receiver cannot use historical provider metadata."""
+    while isinstance(expr, Attr):
+        expr = expr.obj
+    if not isinstance(expr, Name):
+        return False
+    # A lexical local shadow is also a real receiver, not the provider alias.
+    return live_import_global_slot(host, expr.ident) is not None
 
 
 class CpyImportStateMixin:
@@ -33,10 +79,11 @@ class CpyImportStateMixin:
         return self._cpy_module_env
 
     def _native_extension_module_global(self, local_name: str) -> ir.GlobalVariable:
-        """Share ordinary managed global storage with source-level bindings.
+        """Share registered source-write staging storage with managed imports.
 
         The old private modref globals were neither registered nor updated by
-        later Python assignments. Metadata must identify the real binding.
+        later Python assignments. Executed writes publish into the live module
+        dictionary and then retire the staging owner.
         """
         slot, _declared = self._ensure_module_global_name(local_name, DynType(name="dyn"))
         if getattr(self, "_module_del_target_names", None) is None:

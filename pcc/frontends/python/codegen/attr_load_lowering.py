@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
+
 from pcc.ir.compat import ir
 from pcc.driver.python_target import (
     PYTHON_TARGET_FULL_VERSION, PYTHON_TARGET_VERSION_INFO,
@@ -1020,6 +1022,13 @@ class AttrLoadLoweringMixin:
 
     def _emit_attr(self, expr: Attr) -> ir.Value:
         if not isinstance(expr.ty, RawPointerType):
+            if live_import_expr_binding(self, expr.obj):
+                value = self._take_slot_call_root(
+                    self._emit_slot_call_attribute(expr, "import.attribute"),
+                )
+                if isinstance(expr.ty, IntType) and expr.ty.name == "int":
+                    return value
+                return self._unbox_scalar_attr_result(value, expr.ty)
             namespace = self._emit_slot_call_namespace_attribute(expr, "namespace.attribute")
             if namespace is not None:
                 return self._take_slot_call_root(namespace)

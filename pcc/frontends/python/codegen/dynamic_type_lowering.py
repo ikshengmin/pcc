@@ -6,12 +6,9 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, Call, DictExpr, Name, StrLit, TupleExpr
-from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.py_ast import Attr, Call, Name
 
-_I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
-_CSTR = ir.IntType(8).as_pointer()
 
 
 class DynamicTypeLoweringMixin:
@@ -35,106 +32,42 @@ class DynamicTypeLoweringMixin:
             return self._emit_str_literal(enum_string_members[member_name])
         return ir.Constant(_I64, int(enum_members[member_name]))
 
+    def _emit_owned_dynamic_type_constructor(self, expr: Call, operands) -> ir.Value:
+        """Keep type operands alive across later evaluation and runtime entry."""
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("type.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        arguments = []
+        try:
+            for operand in operands:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                owner = self._emit_slot_call_operand(operand, "type.argument")
+                arguments.append(owner)
+                roots.append(owner)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_class_new_from_objects", tuple(arguments), result_slot=output,
+                span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(arguments))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("type.result.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _maybe_emit_dynamic_type_constructor(self, expr: Call) -> Optional[ir.Value]:
         if expr.kwargs or len(expr.args) != 3:
             return None
-        name_expr, bases_expr, ns_expr = expr.args
-        if not isinstance(name_expr, StrLit):
-            name_obj = self._emit_as_object(name_expr)
-            bases_obj = self._emit_as_object(bases_expr)
-            ns_obj = self._emit_as_object(ns_expr)
-            result = self.builder.call(
-                self.runtime["py_class_new_from_objects"],
-                [name_obj, bases_obj, ns_obj],
-                name=self._fresh("type.dynamic"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
-        if not isinstance(bases_expr, TupleExpr):
-            return None
-        ns_runtime_expr = None
-        if isinstance(ns_expr, DictExpr):
-            ns_dict_expr = ns_expr
-        elif isinstance(ns_expr, Name):
-            ns_dict_expr = getattr(self, "_literal_dict_expr_bindings", {}).get(
-                ns_expr.ident
-            )
-            if not isinstance(ns_dict_expr, DictExpr):
-                ns_dict_expr = None
-                ns_runtime_expr = ns_expr
-        else:
-            ns_dict_expr = None
-            ns_runtime_expr = ns_expr
-
-        base_values: list[ir.Value] = []
-        for base in bases_expr.elems:
-            if not isinstance(base, Name):
-                return None
-            base_info = self.class_lowering.classes.get(base.ident)
-            if base_info is None:
-                return None
-            base_values.append(
-                self.builder.load(
-                    base_info.global_var,
-                    name=self._fresh(f"type.base.{base.ident}"),
-                )
-            )
-        if base_values:
-            bases_ptr = self.class_lowering._load_bases_array(
-                name_expr.value,
-                base_values,
-            )
-            bases_ptr = self.builder.bitcast(
-                bases_ptr,
-                _CSTR,
-                name=self._fresh("type.bases.i8p"),
-            )
-        else:
-            bases_ptr = ir.Constant(_CSTR, None)
-
-        cls_obj = self.builder.call(
-            self.runtime["py_class_new"],
-            [
-                self._attr_name_ptr(name_expr.value),
-                bases_ptr,
-                ir.Constant(_I32, len(base_values)),
-                ir.Constant(_CSTR, None),
-                ir.Constant(_I32, 0),
-            ],
-            name=self._fresh(f"type.{name_expr.value}"),
-        )
-        if ns_dict_expr is not None:
-            for key_expr, value_expr in ns_dict_expr.pairs:
-                if not isinstance(key_expr, StrLit):
-                    return None
-                value = self._emit_expr_with_native_callable_values(value_expr)
-                value_obj = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    value,
-                    value_expr.ty,
-                )
-                self.builder.call(
-                    self.runtime["py_class_setattr"],
-                    [cls_obj, self._attr_name_ptr(key_expr.value), value_obj],
-                    name=self._fresh(f"type.attr.{key_expr.value}"),
-                )
-            return cls_obj
-
-        if ns_runtime_expr is not None:
-            ns_value = self._emit_expr(ns_runtime_expr)
-            ns_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                ns_value,
-                ns_runtime_expr.ty,
-            )
-            self.builder.call(
-                self.runtime["py_class_apply_namespace_dict"],
-                [cls_obj, ns_obj],
-                name=self._fresh("type.namespace"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-        return cls_obj
+        # Use the evaluated dictionary itself, including aliases, mutations
+        # and real dict subclasses. A remembered literal AST is not its owner.
+        return self._emit_owned_dynamic_type_constructor(expr, expr.args)

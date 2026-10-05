@@ -3,8 +3,16 @@ from __future__ import annotations
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, ByteArrayType, ClassType, Delete, DictType, DynType, IntType, ListType, Name, Slice, Subscript
+from pcc.frontends.python.py_ast import (
+    Attr, ByteArrayType, ClassType, Delete, DictType, DynType, IntType,
+    ListType, Name, NoneLit, NoneType, Slice, Subscript,
+)
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.cpy_import_state import (
+    live_import_global_slot,
+    live_import_expr_binding,
+    retire_live_import_staging,
+)
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound, local_bound_flag, mark_local_bound
 
@@ -43,6 +51,35 @@ class DeleteLoweringMixin:
             return
         gv, _declared_ty = entry
         flag = getattr(self, "_module_global_init_flags", {}).get(name)
+        if live_import_global_slot(self, name) is not None:
+            # Dictionary mutation can create or remove this binding without
+            # touching the source-write initialized flag. Lookup owns the
+            # current value and raises NameError for an absent dictionary key.
+            root = self._emit_slot_call_operand(
+                Name(span=None, ty=DynType(name="dyn"), ident=name),
+                "del.global.binding",
+            )
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((root,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                status = self.builder.call(
+                    self.runtime["py_module_attr_del"],
+                    [self._pooled_cstr_ptr(self.ast_module.name or "__main__", ".pcc.module.del.name"),
+                     self._attr_name_ptr(name)],
+                    name=self._fresh("del.global." + name),
+                )
+                self._slot_call_check_status(status, "module binding delete")
+                retire_live_import_staging(self, name)
+                if flag is not None:
+                    self.builder.store(ir.Constant(_I1, 0), flag)
+                self._release_slot_call_roots((root,))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return
         if flag is not None:
             # ``del x`` on an unbound or already-deleted global is an error.
             self._emit_module_global_bound_check(name, None)
@@ -138,6 +175,28 @@ class DeleteLoweringMixin:
                 self._unbind_module_global(target.ident)
                 continue
             if isinstance(target, Subscript):
+                if live_import_expr_binding(self, target.obj):
+                    roots = [self._emit_slot_call_operand(target.obj, "import.delete.receiver")]
+                    previous = self._current_try_err_block()
+                    error = previous if previous is not None else self._ensure_fn_err_exit()
+                    saved_cpy = self._cpy_operand_cleanup_block
+                    try:
+                        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error)
+                        self._cpy_operand_cleanup_block = self._try_err_block
+                        parts = (target.idx.lo, target.idx.hi, target.idx.step) if isinstance(target.idx, Slice) else (target.idx,)
+                        for part in parts:
+                            if part is None:
+                                part = NoneLit(span=target.span, ty=NoneType(name="None"))
+                            roots.append(self._emit_slot_call_operand(part, "import.delete.key"))
+                            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error)
+                            self._cpy_operand_cleanup_block = self._try_err_block
+                        helper = "py_obj_del_slice" if isinstance(target.idx, Slice) else "py_obj_delete_subscript"
+                        self._slot_call_runtime_call(helper, tuple(roots), span=target.span)
+                        self._release_slot_call_roots(tuple(roots))
+                    finally:
+                        self._try_err_block = previous
+                        self._cpy_operand_cleanup_block = saved_cpy
+                    continue
                 if self._emit_native_os_environ_delitem(target):
                     continue
                 if isinstance(target.idx, Slice):
@@ -250,6 +309,24 @@ class DeleteLoweringMixin:
                     f"{type(obj_ty).__name__} not yet wired"
                 )
             if isinstance(target, Attr):
+                if live_import_expr_binding(self, target.obj):
+                    receiver = self._emit_slot_call_operand(target.obj, "import.delete.receiver")
+                    previous = self._current_try_err_block()
+                    error = previous if previous is not None else self._ensure_fn_err_exit()
+                    saved_cpy = self._cpy_operand_cleanup_block
+                    self._try_err_block = self._slot_call_cleanup_block((receiver,), error)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    try:
+                        status = self._slot_call_runtime_call(
+                            "py_obj_delattr", (receiver,),
+                            suffix_args=(self._attr_name_ptr(self.class_lowering.private_field_key(target.name)),), span=target.span,
+                        )
+                        self._emit_attribute_error_if_status_failed(status, target.name, target.span)
+                        self._release_slot_call_roots((receiver,))
+                    finally:
+                        self._try_err_block = previous
+                        self._cpy_operand_cleanup_block = saved_cpy
+                    continue
                 if isinstance(target.obj, Name):
                     if (
                         hasattr(self, "class_lowering")
