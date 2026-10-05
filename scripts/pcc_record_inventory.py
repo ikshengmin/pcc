@@ -88,6 +88,12 @@ DATA_PLANE_CLASS_CONTRACT = {
     "self_backend_aarch64_fragments.py:AArch64EmissionFragments": "native_arena",
     "self_backend_module_symbols.py:PreparedModuleSymbols": "phase_shell",
     "self_backend_prepare.py:PreparedSelfBackendModule": "phase_shell",
+    # Text legalization owners: one module scope for lines/type/helper tables
+    # and one function scope for temporary names and its rewrite buffer.
+    "self_backend_half.py:_HalfModule": "phase_shell",
+    "self_backend_half.py:_HalfFunction": "phase_shell",
+    "self_backend_wide_int.py:_WideModule": "phase_shell",
+    "self_backend_wide_int.py:_WideFunction": "phase_shell",
     "self_backend_parse.py:_FunctionBlockPlane": "native_arena",
     "self_backend_targets.py:SelfBackendPlatformVerdict": "target_control",
     "self_backend_targets.py:SelfBackendTargetSpec": "target_control",
@@ -273,6 +279,12 @@ DIAGNOSTIC_PROJECTION_SITE_CONTRACT: dict[str, tuple[int, str]] = {
     ),
     "self_backend_precise_stackmaps.py:_root_group:_RootGroup": (
         3,
+        "legacy_or_unsupported",
+    ),
+    # The legacy x86_64 planner tracks local registry-frame lifetimes here;
+    # the normal AArch64 path uses the packed native root-state plane.
+    "self_backend_precise_stackmaps.py:_frame_protocol_enter_group:_RootGroup": (
+        1,
         "legacy_or_unsupported",
     ),
     "self_backend_precise_stackmaps.py:build_function_stack_map_plan.add_record:PlannedSafepoint": (

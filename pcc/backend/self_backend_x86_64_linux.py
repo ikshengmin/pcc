@@ -2929,29 +2929,39 @@ def _emit_function(
     symbol = _asm_symbol(func.name)
     lines = _emit_prologue(func)
     kernel = get_indexed_function_kernel(func)
-    kernel.materialize_legacy_blocks(func)
-    for block_id, block in enumerate(func.blocks):
-        if block.phis:
-            continue
-        phi_fact: CompilerInt2 = kernel.block_phi_fact(block_id)
-        if phi_fact.second == 0:
-            continue
-        projected = []
-        phi_index = 0
-        while phi_index < phi_fact.second:
-            projected.append(kernel.diagnostic_phi(block_id, phi_index))
-            phi_index += 1
-        block.phis = tuple(projected)
-    lines.extend(
-        emit_function_blocks(
-            func,
-            block_label=_block_label,
-            emit_instruction=_emit_instruction,
-            emit_terminator=_emit_terminator,
-            stack_map_plan=stack_map_plan,
-            indexed_kernel=kernel,
+    # Indexed input owns no legacy block graph. Keep the compatibility view
+    # alive only while this function emits; retaining it on every function
+    # duplicates the whole module's instructions alongside the indexed arenas.
+    original_blocks = func.blocks
+    original_block_map = func.block_map
+    try:
+        kernel.materialize_legacy_blocks(func)
+        for block_id, block in enumerate(func.blocks):
+            if block.phis:
+                continue
+            phi_fact: CompilerInt2 = kernel.block_phi_fact(block_id)
+            if phi_fact.second == 0:
+                continue
+            projected = []
+            phi_index = 0
+            while phi_index < phi_fact.second:
+                projected.append(kernel.diagnostic_phi(block_id, phi_index))
+                phi_index += 1
+            block.phis = tuple(projected)
+        lines.extend(
+            emit_function_blocks(
+                func,
+                block_label=_block_label,
+                emit_instruction=_emit_instruction,
+                emit_terminator=_emit_terminator,
+                stack_map_plan=stack_map_plan,
+                indexed_kernel=kernel,
+            )
         )
-    )
+    finally:
+        if not original_blocks:
+            func.blocks = original_blocks
+            func.block_map = original_block_map
     lines.append(stack_map_plan.end_label + ":")
     lines.append(f".size {symbol}, .-{symbol}")
     if _WINDOWS_ABI:
@@ -2993,6 +3003,19 @@ def emit_x86_64_linux_asm(ir_text: str) -> str:
     return _emit_x86_64_module(ir_text)
 
 
+def _append_assembly_chunk(
+    chunks: list[str], label_lines: list[str] | None, lines: list[str],
+) -> None:
+    # Keep finished text compact instead of retaining one Python object per
+    # assembly line until the module joins. Symbolic stack-map rendering only
+    # needs labels in their original relative order, not instruction lines.
+    chunks.append("\n".join(lines))
+    if label_lines is not None:
+        for line in lines:
+            if line.strip().endswith(":"):
+                label_lines.append(line)
+
+
 def _emit_prepared_x86_64_module(
     prepared, ir_text: str, *, stack_map_plans_out=None,
 ) -> str:
@@ -3027,23 +3050,32 @@ def _emit_prepared_x86_64_module(
             function_symbol=_asm_symbol,
         )
     }
-    lines = [".intel_syntax noprefix"]
-    lines.extend(emit_globals(prepared.globals_, _MODULE_SYMBOLS))
+    chunks = [".intel_syntax noprefix"]
+    label_lines = [] if stack_map_plans_out is None else None
+    global_lines = emit_globals(prepared.globals_, _MODULE_SYMBOLS)
+    if global_lines:
+        _append_assembly_chunk(chunks, label_lines, global_lines)
+    del global_lines
     for func in functions:
-        lines.extend(_emit_function(func, stack_map_plans[func.name]))
+        _append_assembly_chunk(
+            chunks, label_lines, _emit_function(func, stack_map_plans[func.name]),
+        )
+        # The stack-map plan retains scalar/root metadata, never the IR.
+        # Release completed functions before the next body adds assembly.
+        get_indexed_function_kernel(func).close_native_tables()
     if functions:
         plans = tuple(stack_map_plans[func.name] for func in functions)
         if stack_map_plans_out is None:
-            lines.extend(render_x86_64_stack_map_section(
-                lines, plans, function_symbol=_asm_symbol, block_label=_block_label,
+            _append_assembly_chunk(chunks, None, render_x86_64_stack_map_section(
+                label_lines, plans, function_symbol=_asm_symbol, block_label=_block_label,
             ))
         else:
             # Preserve section order/alignment while deferring metadata bytes
             # to the owned assembler's final variable-length label offsets.
             # Plans retain scalar/root metadata only, never the function IR.
             stack_map_plans_out.extend(plans)
-            lines.extend(('.section .pcc_stackmaps,"a",@progbits', '.p2align 3'))
-        for func in functions:
-            get_indexed_function_kernel(func).close_native_tables()
-    lines.append('.section .note.GNU-stack,"",@progbits')
-    return "\n".join(lines) + "\n"
+            chunks.extend(('.section .pcc_stackmaps,"a",@progbits', '.p2align 3'))
+    chunks.append('.section .note.GNU-stack,"",@progbits')
+    # The empty final chunk supplies the newline without copying the full text.
+    chunks.append("")
+    return "\n".join(chunks)

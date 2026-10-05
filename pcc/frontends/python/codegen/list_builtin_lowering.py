@@ -77,7 +77,13 @@ class ListBuiltinLoweringMixin:
                 "py_obj_getitem", (source, index), result_slot=item, span=expr.span,
             )
             self._slot_call_runtime_call("py_list_append", (output, item), span=expr.span)
-            self._release_slot_call_roots((item, index))
+            # These frames span the loop (and may sit below the keys frame).
+            # Dispose iteration values without unregistering reusable slots.
+            for slot in (item, index):
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
+                )
             self.builder.store(self.builder.sub(current, ir.Constant(_I64, 1)), counter)
             self.builder.branch(cond)
             self.builder.position_at_end(done)

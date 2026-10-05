@@ -43,6 +43,40 @@ def test_data_plane_class_contract_is_fail_closed_for_new_backend_classes() -> N
     assert site_report["stale_sites"] == []
     assert site_report["count_mismatches"] == []
     assert site_report["invalid_policies"] == []
+    assert site_report["sites"][
+        "self_backend_precise_stackmaps.py:_frame_protocol_enter_group:_RootGroup"
+    ] == {"count": 1, "policy": "legacy_or_unsupported"}
+
+
+def test_legalization_phase_shells_remain_visible_to_record_inventory() -> None:
+    from pcc.backend.self_backend_half import _HalfFunction, _HalfModule
+    from pcc.backend.self_backend_wide_int import _WideFunction, _WideModule
+
+    tool = _load_tool()
+    for filename, module_type, function_type in (
+        ("self_backend_half.py", _HalfModule, _HalfFunction),
+        ("self_backend_wide_int.py", _WideModule, _WideFunction),
+    ):
+        module = module_type("")
+        function = function_type(module, ".inventory")
+        function.emit("ret void")
+        payload = tool._graph_inventory((function,))
+
+        for family in (module_type, function_type):
+            assert tool.DATA_PLANE_CLASS_CONTRACT[
+                f"{filename}:{family.__name__}"
+            ] == "phase_shell"
+            assert payload["families"][family.__name__]["unique_objects"] == 1
+
+        list_owners = {
+            row["owner"] for row in payload["container_primary_owners"]["list"]
+        }
+        dict_owners = {
+            row["owner"] for row in payload["container_primary_owners"]["dict"]
+        }
+        assert f"{function_type.__name__}.out" in list_owners
+        assert f"{module_type.__name__}.lines" in list_owners
+        assert f"{module_type.__name__}.named_types" in dict_owners
 
 
 def test_data_plane_class_contract_reports_an_unclassified_new_class(

@@ -44,7 +44,7 @@ class _Align:
     fill: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _Label:
     name: str
 
@@ -72,7 +72,7 @@ class _SymbolDifference:
     width: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _Instruction:
     text: str
 
@@ -91,14 +91,14 @@ class _SectionPlan:
     entries: list[object] = field(default_factory=list)
 
 
-@dataclass
+@dataclass(slots=True)
 class _SymbolMeta:
     global_: bool = False
     type: int = STT_NOTYPE
     size: int | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _PendingRelocation:
     section_name: str
     offset: int
@@ -192,6 +192,45 @@ def _section_from_directive(line: str) -> str:
     return name
 
 
+_ASSEMBLY_LINE_CHUNK_CHARS = 65536
+_ASSEMBLY_LINE_BREAKS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+
+
+def _iter_assembly_lines(asm_text: str):
+    """Keep splitlines semantics without retaining the whole line list."""
+    position = 0
+    length = len(asm_text)
+    fragments: list[str] = []
+    while position < length:
+        end = min(position + _ASSEMBLY_LINE_CHUNK_CHARS, length)
+        # Do not separate the two characters of one CRLF boundary.
+        if end < length and asm_text[end - 1] == "\r" and asm_text[end] == "\n":
+            end += 1
+        chunk = asm_text[position:end]
+        position = end
+        for line in chunk.splitlines(True):
+            complete = line[-1] in "\r\n"
+            if not complete and line[-1] in _ASSEMBLY_LINE_BREAKS:
+                # Match the executing runtime's splitlines contract even when
+                # a less common separator happens to end a chunk.
+                complete = line[-1].splitlines() == [""]
+            if complete:
+                if line.endswith("\r\n"):
+                    line = line[:-2]
+                else:
+                    line = line[:-1]
+                if fragments:
+                    fragments.append(line)
+                    yield "".join(fragments)
+                    fragments = []
+                else:
+                    yield line
+            else:
+                fragments.append(line)
+    if fragments:
+        yield "".join(fragments)
+
+
 def _parse_file(asm_text: str):
     plans: dict[str, _SectionPlan] = {}
     order: list[str] = []
@@ -211,7 +250,7 @@ def _parse_file(asm_text: str):
             order.append(name)
         current = plans[name]
 
-    for raw_line in asm_text.splitlines():
+    for raw_line in _iter_assembly_lines(asm_text):
         line = raw_line.strip()
         if not line:
             continue
@@ -462,6 +501,7 @@ def _assemble_file(
         )
         stack_section.entries = [_Data(packed)]
         measured_sizes[".pcc_stackmaps"] = len(packed)
+        del packed
         for offset, symbol in function_relocations:
             pending.append(_PendingRelocation(
                 ".pcc_stackmaps", offset, symbol, R_X86_64_64, 0,
@@ -489,7 +529,11 @@ def _assemble_file(
         plan = plans[name]
         payload = bytearray()
         memory_size = 0
-        for entry in plan.entries:
+        for entry_index, entry in enumerate(plan.entries):
+            # Measurement and stack-map resolution have consumed the plan.
+            # Keep only this entry while encoding: later consumers use labels,
+            # metadata and encoded payloads, not the parsed instruction graph.
+            plan.entries[entry_index] = None
             if isinstance(entry, _Align):
                 target = _align(memory_size, entry.log2)
                 padding = target - memory_size
@@ -538,12 +582,16 @@ def _assemble_file(
                     ))
             else:
                 raise X86EncodeError("unknown assembly plan entry")
+        # Retire the final parsed payload before making the section byte copy.
+        # This also handles empty sections without retaining a previous entry.
+        entry = None
         if memory_size != measured_sizes[name]:
             raise X86EncodeError(
                 f"x86 assembly pass size drift in {name}: "
                 f"{memory_size} != {measured_sizes[name]}"
             )
         section_payloads[name] = bytes(payload)
+        plan.entries.clear()
 
     section_indices = {name: index for index, name in enumerate(order, start=1)}
     referenced = {relocation.symbol for relocation in pending}
@@ -579,7 +627,13 @@ def _assemble_file(
             symbol_type,
         )
         (global_symbols if meta.global_ else local_symbols).append(record)
-    for name in sorted((referenced | set(symbol_meta)) - set(labels)):
+    # Collect only undefined names. Copying the complete metadata/label maps
+    # into sets creates several million-label tables just to subtract them.
+    undefined_symbols = {name for name in referenced if name not in labels}
+    for name in symbol_meta:
+        if name not in labels:
+            undefined_symbols.add(name)
+    for name in sorted(undefined_symbols):
         meta = symbol_meta.get(name, _SymbolMeta())
         global_symbols.append(ElfSymbol(
             name, 0, 0, 0, STB_GLOBAL, meta.type,

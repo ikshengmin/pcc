@@ -757,7 +757,12 @@ class CallExpressionLoweringMixin:
                 suffix_args=(cur,), span=expr.span,
             )
             self._slot_call_runtime_call("py_list_append", (output, item), span=expr.span)
-            self._release_slot_call_roots((item,))
+            # The item frame spans the loop. Clear this iteration's owner,
+            # but keep the registered empty slot on the condition backedge.
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"],
+                [self._as_gc_ptr(item), ir.Constant(_CSTR, None)],
+            )
             self.builder.branch(step_bb)
 
             self.builder.position_at_end(step_bb)
