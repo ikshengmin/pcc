@@ -20,7 +20,9 @@ def emit_indexed_assembly(module, optimize=False, *, stack_map_plans_out=None):
     raise BackendUnavailable("indexed emission target is unavailable: " + module.triple)
 
 
-def encode_assembly_object(assembly, target, *, stack_map_plans=None):
+def encode_assembly_object(
+    assembly, target, *, stack_map_plans=None, consume_stack_map_plans=False,
+):
     if stack_map_plans is not None:
         if not is_x86_64_linux_triple(target):
             raise BackendUnavailable("packed stack maps require the Linux x86 target")
@@ -30,6 +32,7 @@ def encode_assembly_object(assembly, target, *, stack_map_plans=None):
         return emit_relocatable(assemble_file_with_stack_maps(
             assembly, stack_map_plans,
             function_symbol=_asm_symbol, block_label=_block_label,
+            consume_stack_map_plans=consume_stack_map_plans,
         ))
     if is_aarch64_linux_triple(target) or is_x86_64_linux_triple(target):
         from .owned_elf_link import assemble

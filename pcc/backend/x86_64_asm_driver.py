@@ -89,6 +89,7 @@ class _SectionPlan:
     flags: int
     align: int
     entries: list[object] = field(default_factory=list)
+    source_text: str = field(default="", repr=False, compare=False)
 
 
 @dataclass(slots=True)
@@ -231,7 +232,26 @@ def _iter_assembly_lines(asm_text: str):
         yield "".join(fragments)
 
 
-def _parse_file(asm_text: str):
+# A negative plan integer packs one validated instruction's character span.
+# Short spans stay in the native small-integer lane for ordinary object sizes;
+# oversized lines retain the ordinary text record without truncating anything.
+_INSTRUCTION_SPAN_BASE = 65536
+
+
+def _instruction_text(entry, source_text: str) -> str:
+    if isinstance(entry, _Instruction):
+        return entry.text
+    if not isinstance(entry, int) or entry >= 0:
+        raise X86EncodeError("invalid compact instruction record")
+    encoded = -entry - 1
+    start = encoded // _INSTRUCTION_SPAN_BASE
+    size = encoded % _INSTRUCTION_SPAN_BASE
+    if size == 0 or start + size > len(source_text):
+        raise X86EncodeError("compact instruction span is outside source")
+    return source_text[start:start + size]
+
+
+def _parse_file(asm_text: str, *, compact_instructions: bool = False):
     plans: dict[str, _SectionPlan] = {}
     order: list[str] = []
     symbols: dict[str, _SymbolMeta] = {}
@@ -246,11 +266,21 @@ def _parse_file(asm_text: str):
         if spec is None:
             raise X86EncodeError(f"section {name!r} is outside the ELF contract")
         if name not in plans:
-            plans[name] = _SectionPlan(name, spec[0], spec[1], spec[2])
+            plans[name] = _SectionPlan(
+                name, spec[0], spec[1], spec[2],
+                source_text=asm_text if compact_instructions else "",
+            )
             order.append(name)
         current = plans[name]
 
+    source_position = 0
     for raw_line in _iter_assembly_lines(asm_text):
+        raw_start = 0
+        if compact_instructions:
+            raw_start = asm_text.find(raw_line, source_position)
+            if raw_start < 0:
+                raise X86EncodeError("assembly line is outside its source")
+            source_position = raw_start + len(raw_line)
         line = raw_line.strip()
         if not line:
             continue
@@ -388,7 +418,11 @@ def _parse_file(asm_text: str):
             continue
         if current is None or not current.flags & SHF_EXECINSTR:
             raise X86EncodeError(f"instruction outside .text: {line!r}")
-        current.entries.append(_Instruction(line))
+        if compact_instructions and len(line) < _INSTRUCTION_SPAN_BASE:
+            start = raw_start + len(raw_line) - len(raw_line.lstrip())
+            current.entries.append(-(start * _INSTRUCTION_SPAN_BASE + len(line) + 1))
+        else:
+            current.entries.append(_Instruction(line))
     if not saw_syntax:
         raise X86EncodeError(
             "owned x86 assembly must begin with .intel_syntax noprefix"
@@ -424,9 +458,10 @@ def _measure_sections(plans, order, symbols):
                 if plan.type == SHT_NOBITS:
                     raise X86EncodeError(f"NOBITS section {name!r} has file data")
                 offset += entry.width
-            elif isinstance(entry, _Instruction):
+            elif isinstance(entry, (_Instruction, int)):
                 encoded = encode_instruction(
-                    entry.text, pc=offset, labels={}, section_name=name,
+                    _instruction_text(entry, plan.source_text),
+                    pc=offset, labels={}, section_name=name,
                 )
                 offset += len(encoded.code)
             elif isinstance(entry, _SizeHere):
@@ -472,17 +507,22 @@ def assemble_file_keeping_labels(asm_text: str, keep_labels) -> ElfObject:
 
 def assemble_file_with_stack_maps(
     asm_text: str, stack_map_plans, *, function_symbol, block_label,
+    consume_stack_map_plans: bool = False,
 ) -> ElfObject:
     """Assemble code plus structured maps, retaining the ordinary ELF checks."""
     return _assemble_file(
         asm_text, (), stack_map_plans, function_symbol, block_label,
+        consume_stack_map_plans,
     )
 
 
 def _assemble_file(
     asm_text: str, keep_labels, stack_map_plans, function_symbol, block_label,
+    consume_stack_map_plans: bool = False,
 ) -> ElfObject:
-    plans, order, symbol_meta = _parse_file(asm_text)
+    if consume_stack_map_plans and not isinstance(stack_map_plans, list):
+        raise X86EncodeError("consuming stack maps require a mutable plan list")
+    plans, order, symbol_meta = _parse_file(asm_text, compact_instructions=True)
     labels, measured_sizes = _measure_sections(plans, order, symbol_meta)
     pending: list[_PendingRelocation] = []
     if stack_map_plans:
@@ -503,6 +543,12 @@ def _assemble_file(
         stack_section.entries = [_Data(packed)]
         measured_sizes[".pcc_stackmaps"] = len(packed)
         del packed
+        del offsets
+        if consume_stack_map_plans:
+            # Final machine offsets and all root facts now live in the owned
+            # section bytes.  The caller explicitly gives up these plans;
+            # ordinary callers keep their original non-consuming behavior.
+            stack_map_plans.clear()
         for offset, symbol in function_relocations:
             pending.append(_PendingRelocation(
                 ".pcc_stackmaps", offset, symbol, R_X86_64_64, 0,
@@ -564,9 +610,9 @@ def _assemble_file(
                     raise X86EncodeError("symbol difference requires definitions in the same section: " + entry.left + " - " + entry.right)
                 payload.extend(_integer_payload(left[1] - right[1], entry.width, owner="symbol difference"))
                 memory_size += entry.width
-            elif isinstance(entry, _Instruction):
+            elif isinstance(entry, (_Instruction, int)):
                 encoded = encode_instruction(
-                    entry.text,
+                    _instruction_text(entry, plan.source_text),
                     pc=memory_size,
                     labels=local_branch_labels,
                     section_name=name,

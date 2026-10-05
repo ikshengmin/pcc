@@ -12,7 +12,13 @@ import subprocess
 import pytest
 
 from pcc.backend.owned_object_emit import emit_owned_object
+from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+from pcc.backend.self_backend_parse import parse_self_backend_module
 from pcc.frontends.python.pipeline import compile_python
+
+
+# These are cross-emission checks: frontend and emitter must use one target.
+_OBJECT_TARGET = "arm64-apple-darwin"
 
 
 BUILTINS = '''from dataclasses import dataclass, field
@@ -368,6 +374,81 @@ def _body(text, symbol):
     return match[1]
 
 
+def _assert_owned_dynamic_calls(text, symbol, expected_count):
+    """Check dispatch and authoritative roots, independently of IR spelling."""
+    match = re.search(
+        r"^define[^\n]*@" + re.escape(symbol) + r"\([^\n]*\)[^\n]*\{\n.*?^\}",
+        text, re.M | re.S,
+    )
+    assert match is not None, symbol
+    target = re.search(r'^target triple = "[^"\n]+"$', text, re.M)
+    assert target is not None
+    function = parse_self_backend_module(target[0] + "\n" + match[0]).functions[0]
+    kernel = get_indexed_function_kernel(function)
+    blocks = [kernel.diagnostic_block(i) for i in range(len(kernel.block_names))]
+    instructions = [(b, i, instruction) for b, block in enumerate(blocks)
+                    for i, instruction in enumerate(block.instructions)]
+    aliases = {instruction.data[1]: instruction.data[3]
+               for _, _, instruction in instructions
+               if instruction.kind == "cast" and instruction.data[0] == "bitcast"}
+
+    def slot(value):
+        seen = set()
+        while value in aliases:
+            assert value not in seen, "cyclic pointer aliases"
+            seen.add(value)
+            value = aliases[value]
+        return value
+
+    allocas = {instruction.data[0] for _, _, instruction in instructions
+               if instruction.kind == "alloca"}
+    calls = [(b, i, instruction.data) for b, i, instruction in instructions
+             if instruction.kind == "call"]
+    assert not any(call[2] in ("py_obj_call", "py_obj_call_method")
+                   for _, _, call in calls), "raw callable dispatch lost slot owners"
+    registrations = {slot(call[4][1][1]): (b, i) for b, i, call in calls
+                     if call[2] == "pcc_gc_frame_enter_lifo"}
+    releases = {slot(call[4][0][1]) for _, _, call in calls
+                if call[2] == "pcc_gc_frame_leave_lifo"}
+    predecessors = [set() for _ in blocks]
+    for b in range(len(blocks)):
+        for j in range(kernel.cfg_successor_count(b)):
+            predecessors[kernel.cfg_successor_id(b, j)].add(b)
+
+    def dominates(owner, use):
+        if owner[0] == use[0]:
+            return owner[1] < use[1]
+        pending, seen = [use[0]], {owner[0]}
+        while pending:
+            b = pending.pop()
+            if b in seen:
+                continue
+            if b == 0:
+                return False
+            seen.add(b)
+            pending.extend(predecessors[b])
+        return True
+
+    dispatches = [(b, i, call) for b, i, call in calls
+                  if call[2] == "py_obj_call_slots"]
+    assert len(dispatches) == expected_count
+    for b, i, call in dispatches:
+        assert call[1].describe() == "i64" and not call[3]
+        assert len(call[4]) == 4
+        for operand_type, value in call[4]:
+            assert operand_type.kind == "ptr"
+            root = slot(value)
+            assert root in allocas and root in registrations and root in releases
+            assert dominates(registrations[root], (b, i)), root
+        # A failed call must take its error edge before consuming the result.
+        check = blocks[b].instructions[i + 1]
+        assert check.kind == "icmp" and check.data[0] == "slt"
+        assert check.data[3:] == (call[0], "0")
+        branch = blocks[b].terminator
+        assert branch.kind == "br_cond" and branch.data[0] == check.data[1]
+        assert branch.data[1] != branch.data[2]
+
+
 @pytest.mark.parametrize("program,expected", list(PROGRAMS.values()), ids=list(PROGRAMS))
 def test_reference_factory_binding(program, expected):
     output = io.StringIO()
@@ -382,14 +463,14 @@ def test_factories_compile_as_callable_signature_defaults(tmp_path, monkeypatch,
     source = tmp_path / (name + ".py")
     output = tmp_path / (name + ".ll")
     source.write_text(program)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple="arm64-apple-darwin")
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     initializer = _body(text, "_pcc_py_module_init_" + name)
     assert "func.sig.factory" in initializer
     assert "field.list" not in initializer
     if name == "factory_custom":
         assert re.search(r"call ptr[^\n]*@user_factory_custom_make\(", initializer) is None
-    artifact = emit_owned_object(text, "arm64-apple-darwin")
+    artifact = emit_owned_object(text, _OBJECT_TARGET)
     assert artifact[:4] == b"\xcf\xfa\xed\xfe"
 
 
@@ -405,7 +486,7 @@ def test_runtime_field_is_not_exported_as_a_dataclass_factory(tmp_path, monkeypa
     source.write_text(ORDINARY)
     from pcc.frontends.python.pipeline import compile_python_multi
     provider = Path(__file__).resolve().parents[2] / "pcc" / "stdlib" / "dataclasses.py"
-    compile_python_multi([str(source), str(provider)], str(output), module_names=["ordinary", "dataclasses"], entry_module="ordinary", emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    compile_python_multi([str(source), str(provider)], str(output), module_names=["ordinary", "dataclasses"], entry_module="ordinary", emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     initializer = _body(text, "main")
     assert "func.sig.factory" not in initializer
@@ -415,9 +496,9 @@ def test_runtime_field_is_not_exported_as_a_dataclass_factory(tmp_path, monkeypa
     assert "strict.nolib.stub" not in _body(text, "user_ordinary_main")
     ordinary_calls = _body(text, "user_ordinary_main")
     assert re.search(r"call ptr[^\n]*@user_dataclasses_field\(", ordinary_calls) is None
-    assert "@py_obj_call(" in ordinary_calls
+    _assert_owned_dynamic_calls(text, "user_ordinary_main", expected_count=2)
     for module_text in re.split(r"^; ---- module: [^\n]* ----\n", text, flags=re.M)[1:]:
-        assert emit_owned_object(module_text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+        assert emit_owned_object(module_text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 @pytest.mark.parametrize("marker,annotation", [("runtime_port", "int"), ("freestanding", "i64")])
@@ -436,7 +517,7 @@ def test_raw_negative_default_keeps_direct_abi(tmp_path, monkeypatch, marker, an
         + "    return helper()\n"
     )
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     caller = _body(text, "raw_default")
     callee = "raw_helper" if marker == "freestanding" else "user_raw_defaults_helper"
@@ -444,7 +525,7 @@ def test_raw_negative_default_keeps_direct_abi(tmp_path, monkeypatch, marker, an
     assert "@py_obj_call(" not in caller
     assert "func.sig" not in caller
     assert "@py_func_new" not in caller
-    assert emit_owned_object(text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+    assert emit_owned_object(text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 def test_dataclass_physical_fields_match_exports_before_method_writes(tmp_path):
@@ -483,7 +564,7 @@ def test_prepared_factory_fields_use_runtime_names(tmp_path, monkeypatch):
     output = tmp_path / "prepared_fields.ll"
     source.write_text(PREPARED_ORDER)
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     initializer = _body(text, "user_prepared_fields_Box___init__")
     caller = _body(text, "user_prepared_fields_main")
@@ -492,7 +573,7 @@ def test_prepared_factory_fields_use_runtime_names(tmp_path, monkeypatch):
     assert "@py_instance_get_field(" not in caller
     assert "@py_obj_getattr(" in caller
     assert "strict.nolib.stub" not in initializer + caller
-    assert emit_owned_object(text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+    assert emit_owned_object(text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 def test_prepared_layout_proof_reaches_imported_and_inherited_fields(tmp_path, monkeypatch):
@@ -513,7 +594,7 @@ def test_prepared_layout_proof_reaches_imported_and_inherited_fields(tmp_path, m
     assert exports["app"]["Child"]["field_names"] == ("value", "chosen")
     compile_python_multi(paths, str(output), module_names=names, entry_module="app",
                          emit_llvm_only=True, backend="self", libpython_mode="off",
-                         ir_scaffold_mode="on", target_triple="arm64-apple-darwin")
+                         ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     for function in ("project", "inherited"):
         caller = _body(text, "user_app_" + function)
@@ -524,7 +605,7 @@ def test_prepared_layout_proof_reaches_imported_and_inherited_fields(tmp_path, m
     assert "@py_instance_set_field(" not in store
     assert "@py_obj_setattr(" in store
     for module_text in re.split(r"^; ---- module: [^\n]* ----\n", text, flags=re.M)[1:]:
-        assert emit_owned_object(module_text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+        assert emit_owned_object(module_text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 def test_definition_publishes_reassigned_function_slot_before_class_capture(tmp_path, monkeypatch):
@@ -532,7 +613,7 @@ def test_definition_publishes_reassigned_function_slot_before_class_capture(tmp_
     source = tmp_path / "promotion.py"
     output = tmp_path / "promotion.ll"
     source.write_text(CUSTOM)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     entry = _body(text, "main")
     class_creation = entry.find("@py_class_new(")
@@ -541,7 +622,7 @@ def test_definition_publishes_reassigned_function_slot_before_class_capture(tmp_
     published = any(slot in slots for slot, value in stores)
     assert published, "definition must populate the promoted function global before its capture"
     assert "pcc.assign.binding.publish.make" in entry or "pcc.def.binding.publish.make" in entry
-    assert emit_owned_object(text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+    assert emit_owned_object(text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 def test_factory_binder_runtime_reaches_owned_emitter(tmp_path):
@@ -567,8 +648,8 @@ def test_factory_execution_controls_reach_owned_emitter(tmp_path, monkeypatch, n
     source = tmp_path / ("factory_" + name + ".py")
     output = tmp_path / ("factory_" + name + ".ll")
     source.write_text(PROGRAMS[name][0])
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on")
-    assert emit_owned_object(output.read_text(), "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+    assert emit_owned_object(output.read_text(), _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 def test_factory_default_wire_keeps_omission_kind_and_origin():
@@ -595,7 +676,7 @@ def test_factory_identity_capture_follows_field_definition_order(tmp_path, monke
     source = tmp_path / "factory_order.py"
     output = tmp_path / "factory_order.ll"
     source.write_text(program)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     initializer = _body(text, "_pcc_py_module_init_factory_order")
     calls = list(re.finditer(r"call ptr[^\n]*@user_factory_order_mark\(", initializer))
@@ -610,7 +691,7 @@ def test_factory_identity_capture_follows_field_definition_order(tmp_path, monke
     assert values == [1, 2, 3]
     assert "class.factory.capture" in initializer
     assert "strict.nolib.stub" not in _body(text, "user_factory_order_main")
-    assert emit_owned_object(text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+    assert emit_owned_object(text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 @pytest.mark.parametrize("local", [False, True], ids=["program-main", "function-local"])
@@ -633,14 +714,14 @@ main()
     else:
         program = BUILTINS
     source.write_text(program)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     entry = _body(text, "user_factory_entry_main" if local else "main")
     capture_count = entry.count("class.factory.capture")
     assert capture_count > 0, "executing class entry must populate the capture slots"
     assert "func.sig.factory" in entry
     assert "strict.nolib.stub" not in entry
-    assert emit_owned_object(text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+    assert emit_owned_object(text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 def test_imported_custom_factory_uses_live_captured_signature(tmp_path, monkeypatch):
@@ -670,14 +751,14 @@ def main():
     print("DATACLASS_CROSS_OK")
 main()
 ''')
-    compile_python_multi([str(app), str(model)], str(output), module_names=["app", "model"], entry_module="app", emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    compile_python_multi([str(app), str(model)], str(output), module_names=["app", "model"], entry_module="app", emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     caller = _body(text, "user_app_main")
-    assert "@py_obj_call_method" in caller
+    _assert_owned_dynamic_calls(text, "user_app_main", expected_count=7)
     assert "@user_model_make(" not in caller
     assert "strict.nolib.stub" not in caller
     for module_text in re.split(r"^; ---- module: [^\n]* ----\n", text, flags=re.M)[1:]:
-        assert emit_owned_object(module_text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
+        assert emit_owned_object(module_text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
 @pytest.mark.integration
@@ -759,7 +840,10 @@ def host_binder(monkeypatch):
     this test owns omission selection, exact values and partial tuple unwind.
     """
     import pcc.unsafe as unsafe
-    for name in ("define_thread_local_i32", "define_global_i32"):
+    # Declaration-only intrinsics reserve native storage at module load. The
+    # binder model never reads that storage; execution intrinsics stay strict.
+    for name in ("define_thread_local_i32", "define_global_i32",
+                 "define_global_i64", "define_global_ptr_null"):
         monkeypatch.setattr(unsafe, name, lambda *args: None)
     path = Path(__file__).resolve().parents[2] / "pcc" / "runtime" / "py" / "py_func.py"
     spec = importlib.util.spec_from_file_location("factory_binding_host_py_func", path)
@@ -787,8 +871,28 @@ def host_binder(monkeypatch):
             state["error"] = error
             return None
 
+    def runtime_error_if_unset(helper, message):
+        if state["error"] is None:
+            state["error"] = RuntimeError(message)
+        return None
+
+    def validate_kwargs(kwargs):
+        # Model the owned keyword ABI called before either binder consumes it.
+        if kwargs is None or kwargs is none_value:
+            return 0
+        if not isinstance(kwargs, dict):
+            state["error"] = TypeError("call keyword arguments must be a dict")
+            return -1
+        if any(not isinstance(key, str) for key in kwargs):
+            state["error"] = TypeError("keywords must be strings")
+            return -1
+        return 0
+
     overrides = {
         "null": lambda: None,
+        "cstr": lambda value: value,
+        "py_err_occurred": lambda: int(state["error"] is not None),
+        "py_runtime_error_if_unset": runtime_error_if_unset,
         "ptr_is_null": lambda value: int(value is None),
         "is_tagged_int": lambda value: int(type(value) is int),
         "load_i32": lambda value, offset: runtime.PY_TYPE_TUPLE if isinstance(value, (tuple, list)) else runtime.PY_TYPE_DICT if isinstance(value, dict) else 0,
@@ -807,6 +911,7 @@ def host_binder(monkeypatch):
         "py_dict_del": lambda value, key: value.pop(key),
         "py_dict_len": len,
         "py_call_merge_kwargs": lambda value, kwargs: dict(kwargs or {}),
+        "py_call_validate_kwargs": validate_kwargs,
         "py_decref": release,
         "py_incref": lambda value: None,
         "_bind_dataclass_factory": factory_call,

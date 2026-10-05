@@ -124,6 +124,16 @@ def _text_key_index(mapping) -> tuple[dict[int, str], dict[int, list[str]]]:
     return by_id, by_bucket
 
 
+def clear_text_key_mapping(mapping) -> None:
+    """Retire one consumed mapping together with its equality lookup index."""
+    cache_key = id(mapping)
+    if cache_key in _TEXT_KEY_INDEX_CACHE:
+        entry = _TEXT_KEY_INDEX_CACHE[cache_key]
+        if entry[0] is mapping:
+            del _TEXT_KEY_INDEX_CACHE[cache_key]
+    mapping.clear()
+
+
 def _text_key_mapping_value_without_hash(mapping, existing_key):
     """Read an indexed key's current value without hashing that key again.
 

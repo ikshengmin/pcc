@@ -261,7 +261,7 @@ def _part_19(out):
     _append_method(out, '_emit_value_as_pcc_object_or_bridge', (('self', 'pos', False), ('value', 'pos', False), ('value_ty', 'pos', False), ('name_hint', 'pos', False), ('', 'kw_only', False), ('consume_valueclass_payload_fields', 'pos', True), ('cpy_owned_on_error', 'pos', True), ('rooted_pcc_on_error', 'pos', True), ('pinned_pcc_on_error', 'pos', True), ('pcc_release_on_error', 'pos', True), ('result_slot', 'pos', True)))
     _append_method(out, '_emit_value_array_subscript_load', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_resume_function', (('self', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False), ('ast_func_def', 'pos', False), ('n_args', 'pos', False)))
-    _append_method(out, '_emit_virtual_thread_spawn', (('self', 'pos', False), ('args', 'pos', False), ('kwargs', 'pos', False)))
+    _append_method(out, '_emit_virtual_thread_spawn', (('self', 'pos', False), ('args', 'pos', False), ('kwargs', 'pos', False), ('call_expr', 'pos', True)))
 
 
 def _part_20(out):
@@ -590,7 +590,7 @@ def _part_49(out):
     _append_method(out, '_emit_slot_call_module_value', (('self', 'pos', False), ('module_name', 'pos', False), ('attr_name', 'pos', False), ('span', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_conditional', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_short_circuit', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('need_truth', 'pos', True)))
-    _append_method(out, '_take_slot_call_root', (('self', 'pos', False), ('slot', 'pos', False)))
+    _append_method(out, '_take_slot_call_root', (('self', 'pos', False), ('slot', 'pos', False), ('keep_pinned', 'pos', True)))
     _append_method(out, '_slot_call_runtime_call', (('self', 'pos', False), ('runtime_name', 'pos', False), ('roots', 'pos', False), ('', 'kw_only', False), ('result_slot', 'pos', True), ('suffix_args', 'pos', True), ('argument_order', 'pos', True), ('span', 'pos', True), ('exception_slot', 'pos', True)))
 
 
@@ -679,6 +679,13 @@ def _part_57(out):
     _append_method(out, '_emit_next_filter_truth', (('self', 'pos', False), ('output', 'pos', False), ('predicate', 'pos', False), ('call_args', 'pos', False), ('pred_result', 'pos', False), ('none_obj', 'pos', False), ('span', 'pos', False)))
     _append_method(out, '_emit_owned_padding_method', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_ellipsis_literal', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_emit_virtual_thread_continuation_slot', (('self', 'pos', False), ('output', 'pos', False), ('arguments', 'pos', False), ('resume', 'pos', False)))
+
+
+def _part_58(out):
+    _append_method(out, '_emit_virtual_thread_generator_slot', (('self', 'pos', False), ('output', 'pos', False), ('fn', 'pos', False), ('formals', 'pos', False), ('arguments', 'pos', False)))
+    _append_method(out, '_emit_virtual_thread_spawn_allocation_check', (('self', 'pos', False), ('output', 'pos', False)))
+    _append_method(out, '_emit_virtual_thread_owned_spawn', (('self', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False), ('ast_func_def', 'pos', False), ('value_args', 'pos', False), ('runtime_formals', 'pos', False), ('call_expr', 'pos', False), ('generator', 'pos', False)))
 
 
 def _build_static_methods():
@@ -741,6 +748,7 @@ def _build_static_methods():
     _part_55(out)
     _part_56(out)
     _part_57(out)
+    _part_58(out)
     return tuple(out)
 
 L1_CODEGEN_STATIC_METHODS = _build_static_methods()

@@ -1684,6 +1684,7 @@ class NativeVirtualThreadLoweringMixin:
         self,
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
+        call_expr: Optional[Call] = None,
     ) -> Optional[ir.Value]:
         if kwargs or len(args) < 1:
             return None
@@ -1737,250 +1738,215 @@ class NativeVirtualThreadLoweringMixin:
         if len(value_args) != len(runtime_formals):
             return None
 
-        if target.ident in getattr(
-            self,
-            "_generator_func_names",
-            set(),
-        ) or self._funcdef_has_yield_sentinel(ast_func_def):
-            return self._emit_virtual_thread_generator_spawn(
-                target.ident,
-                fn,
-                ast_func_def,
-                value_args,
-                runtime_formals,
-            )
-
-        resume_fn = self._emit_virtual_thread_resume_function(
-            target.ident,
-            fn,
-            ast_func_def,
-            len(value_args),
-        )
-        frame_map = self._virtual_thread_frame_map(len(value_args))
-        frame_map_ptr = self.builder.bitcast(
-            frame_map,
-            _CSTR,
-            name=self._fresh("vthread.frame.map"),
+        generator = target.ident in getattr(
+            self, "_generator_func_names", set(),
+        ) or self._funcdef_has_yield_sentinel(ast_func_def)
+        return self._emit_virtual_thread_owned_spawn(
+            target.ident, fn, ast_func_def, value_args, runtime_formals,
+            call_expr, generator,
         )
 
-        boxed_slots: list[ir.Value] = []
-        if value_args:
-            slots_ty = ir.ArrayType(_CSTR, len(value_args))
-            slots_arr = self._alloca_in_entry(
-                slots_ty,
-                name=self._fresh("vthread.slots"),
+    def _emit_virtual_thread_continuation_slot(self, output, arguments, resume):
+        """Capture leased argument addresses and publish the NEW continuation."""
+        frame_map = self._virtual_thread_frame_map(len(arguments))
+        frame_map_ptr = self.builder.bitcast(frame_map, _CSTR)
+        resume_ptr = self.builder.bitcast(resume, _CSTR)
+        slots = []
+        slots_arg = ir.Constant(_CSTR, None)
+        if arguments:
+            array = self._alloca_in_entry(
+                ir.ArrayType(_CSTR, len(arguments)),
+                name=self._fresh("vthread.capture.slots"),
             )
-            for idx, (arg_expr, formal) in enumerate(zip(value_args, runtime_formals)):
-                raw = self._emit_expr(arg_expr)
-                obj = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    raw,
-                    formal.annotation or arg_expr.ty or DynType(name="dyn"),
-                )
-                boxed_slots.append(obj)
-                gep = self.builder.gep(
-                    slots_arr,
-                    [ir.Constant(_I32, 0), ir.Constant(_I32, idx)],
+            for index in range(len(arguments)):
+                slots.append(self.builder.gep(
+                    array, [ir.Constant(_I32, 0), ir.Constant(_I32, index)],
                     inbounds=True,
-                    name=self._fresh(f"vthread.slot.addr.{idx}"),
+                ))
+            slots_arg = self.builder.bitcast(slots[0], _CSTR)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        leases = []
+        try:
+            for root in arguments:
+                self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+                self._cpy_operand_cleanup_block = self._try_err_block
+                token = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(root)],
+                    name=self._fresh("vthread.capture.lease"),
                 )
-                self.builder.store(obj, gep)
-            slots_ptr = self.builder.gep(
-                slots_arr,
-                [ir.Constant(_I32, 0), ir.Constant(_I32, 0)],
-                inbounds=True,
-                name=self._fresh("vthread.slots.ptr"),
+                self._slot_call_check_status(token, "continuation argument lease")
+                leases.append((root, token))
+            self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+            self._cpy_operand_cleanup_block = self._try_err_block
+            for root, slot in zip(arguments, slots):
+                self.builder.store(self.builder.load(root), slot)
+            value = self.builder.call(
+                self.runtime["py_continuation_new_typed"],
+                [frame_map_ptr, slots_arg, resume_ptr],
+                name=self._fresh("vthread.cont"),
             )
-            slots_arg = self.builder.bitcast(
-                slots_ptr,
-                _CSTR,
-                name=self._fresh("vthread.slots.arg"),
-            )
-        else:
-            slots_arg = ir.Constant(_CSTR, None)
+            self._publish_slot_call_owned(output, value, label="virtual thread continuation")
+            self._emit_post_call_err_check(None)
+            self._emit_virtual_thread_spawn_allocation_check(output)
+            while leases:
+                root, token = leases.pop()
+                released = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(root), token],
+                )
+                self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_check_status(released, "continuation argument lease release")
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
-        resume_ptr = self.builder.bitcast(
-            resume_fn,
-            _CSTR,
-            name=self._fresh("vthread.resume.ptr"),
-        )
-        cont = self.builder.call(
-            self.runtime["py_continuation_new_typed"],
-            [frame_map_ptr, slots_arg, resume_ptr],
-            name=self._fresh("vthread.cont"),
-        )
-        for boxed in boxed_slots:
-            self._gc_release(boxed)
-        vt = self.builder.call(
-            self.runtime["py_virtual_thread_new"],
-            [cont],
-            name=self._fresh("vthread.new"),
-        )
-        self._gc_release(cont)
-        rc = self.builder.call(
-            self.runtime["py_virtual_thread_start"],
-            [vt],
-            name=self._fresh("vthread.start.rc"),
-        )
-        failed = self.builder.icmp_signed(
-            "!=",
-            rc,
-            ir.Constant(_I64, 0),
-            name=self._fresh("vthread.start.failed"),
-        )
-        ok_bb = self.current_function.append_basic_block(
-            name=self._fresh("vthread.start.ok"),
-        )
-        fail_bb = self.current_function.append_basic_block(
-            name=self._fresh("vthread.start.fail"),
-        )
-        self.builder.cbranch(failed, fail_bb, ok_bb)
-        self.builder.position_at_end(fail_bb)
-        # A failed enqueue never transfers the caller's vthread reference.
-        # Release it before allocating the replacement RuntimeError so a
-        # relocating collection cannot leave this SSA temporary stale.
-        self._gc_release(vt)
-        exc = self.builder.call(
-            self.runtime["py_exc_new"],
-            [
-                ir.Constant(_I64, 7),
-                self._ptr_to_cstr(
-                    self._cstr_global(
-                        "virtual thread start failed",
-                        self._fresh(".vthread.start.err"),
+    def _emit_virtual_thread_generator_slot(self, output, fn, formals, arguments):
+        """Call the generator factory under leases and publish before cleanup."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        leases = []
+        try:
+            for root in arguments:
+                self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+                self._cpy_operand_cleanup_block = self._try_err_block
+                token = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(root)],
+                    name=self._fresh("vthread.generator.lease"),
+                )
+                self._slot_call_check_status(token, "generator argument lease")
+                leases.append((root, token))
+            self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+            self._cpy_operand_cleanup_block = self._try_err_block
+            call_args = []
+            for index, (root, formal) in enumerate(zip(arguments, formals)):
+                value = self.builder.load(root)
+                if not isinstance(fn.args[index].type, ir.PointerType):
+                    value = marshal.marshal_from_object(
+                        self.builder, self.module, self.runtime, value,
+                        formal.annotation or DynType(name="dyn"),
                     )
-                ),
-            ],
-            name=self._fresh("vthread.start.exc"),
-        )
-        self.builder.call(self.runtime["py_raise"], [exc])
-        self._gc_release(exc)
-        err_target = getattr(self, "_try_err_block", None)
-        if err_target is None:
-            err_target = self._ensure_fn_err_exit()
-        self.builder.branch(err_target)
-        self.builder.position_at_end(ok_bb)
-        return vt
-
-    def _emit_virtual_thread_generator_spawn(
-        self,
-        name: str,
-        fn: ir.Function,
-        ast_func_def: FuncDef,
-        value_args: tuple[Expr, ...],
-        runtime_formals: tuple,
-    ) -> ir.Value:
-        call_args: list[ir.Value] = []
-        for arg_expr, formal in zip(value_args, runtime_formals):
-            raw = self._emit_expr(arg_expr)
-            call_args.append(
-                self._coerce(
-                    raw,
-                    arg_expr.ty,
-                    formal.annotation or DynType(name="dyn"),
+                    self._emit_post_call_err_check(None)
+                call_args.append(value)
+            value = self.builder.call(fn, call_args, name=self._fresh("vthread.gen"))
+            self._publish_slot_call_owned(output, value, label="virtual thread generator")
+            self._emit_post_call_err_check(None)
+            self._emit_virtual_thread_spawn_allocation_check(output)
+            while leases:
+                root, token = leases.pop()
+                released = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(root), token],
                 )
-            )
-        gen = self.builder.call(
-            fn,
-            call_args,
-            name=self._fresh(f"{name}.vthread.gen"),
-        )
+                self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_check_status(released, "generator argument lease release")
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
+    def _emit_virtual_thread_spawn_allocation_check(self, output):
+        # These runtime allocators may return NULL without setting TLS. Never
+        # turn that into a task with a None continuation or a successful spawn.
+        value = self.builder.load(output)
+        missing = self.builder.icmp_unsigned("==", value, ir.Constant(_CSTR, None))
+        status = self.builder.select(missing, ir.Constant(_I64, -1), ir.Constant(_I64, 0))
+        self._slot_call_check_status(status, "virtual thread allocation")
+
+    def _emit_virtual_thread_owned_spawn(
+        self, name, fn, ast_func_def, value_args, runtime_formals, call_expr, generator,
+    ):
+        """Keep every NEW owner in a slot through start and caller handoff."""
+        # Building an ordinary resume function changes the active builder.
+        # Complete it before registering any of this call's result roots.
+        resume = None
+        if not generator:
+            resume = self._emit_virtual_thread_resume_function(name, fn, ast_func_def, len(value_args))
+        sink = self._slot_call_result_sink(call_expr) if call_expr is not None else None
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("vthread.result")
+            roots.append(output)
+        cont = self._new_slot_call_root("vthread.continuation")
+        roots.append(cont)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
         direct_generator = str(
             os.environ.get("PCC_DIRECT_GENERATOR_TASKS", "1") or "1"
         ).strip().lower() in ("1", "true", "yes", "on")
-        if direct_generator:
-            cont = gen
-        else:
-            slots_ty = ir.ArrayType(_CSTR, 1)
-            slots_arr = self._alloca_in_entry(
-                slots_ty,
-                name=self._fresh("vthread.gen.slots"),
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            gen = cont
+            if generator and not direct_generator:
+                gen = self._new_slot_call_root("vthread.generator")
+                roots.append(gen)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            arguments = []
+            for argument in value_args:
+                root = self._emit_slot_call_operand(argument, "vthread.argument")
+                arguments.append(root)
+                roots.append(root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            if generator:
+                self._emit_virtual_thread_generator_slot(gen, fn, runtime_formals, arguments)
+            else:
+                self._emit_virtual_thread_continuation_slot(cont, arguments, resume)
+            self._release_slot_call_roots(tuple(arguments))
+            for _argument in arguments:
+                roots.pop()
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if generator and not direct_generator:
+                self._emit_virtual_thread_continuation_slot(
+                    cont, (gen,), self.runtime["py_virtual_thread_resume_generator"],
+                )
+                self._release_slot_call_roots((gen,))
+                roots.pop()
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call("py_virtual_thread_new", (cont,), result_slot=output)
+            self._emit_virtual_thread_spawn_allocation_check(output)
+            self._release_slot_call_roots((cont,))
+            roots.pop()
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            rc = self._slot_call_runtime_call("py_virtual_thread_start", (output,))
+            failed = self.builder.icmp_signed("!=", rc, ir.Constant(_I64, 0))
+            ok = self.current_function.append_basic_block(self._fresh("vthread.start.ok"))
+            fail = self.current_function.append_basic_block(self._fresh("vthread.start.fail"))
+            self.builder.cbranch(failed, fail, ok)
+            self.builder.position_at_end(fail)
+            # Clear the authoritative owner before allocating the replacement
+            # exception, retaining the caller's empty frame for its cleanup.
+            self.builder.call(
+                self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(output), ir.Constant(_CSTR, None)],
             )
-            gep = self.builder.gep(
-                slots_arr,
-                [ir.Constant(_I32, 0), ir.Constant(_I32, 0)],
-                inbounds=True,
-                name=self._fresh("vthread.gen.slot.addr"),
+            message = (
+                "virtual thread generator start failed"
+                if generator else "virtual thread start failed"
             )
-            self.builder.store(gen, gep)
-            slots_ptr = self.builder.gep(
-                slots_arr,
-                [ir.Constant(_I32, 0), ir.Constant(_I32, 0)],
-                inbounds=True,
-                name=self._fresh("vthread.gen.slots.ptr"),
+            exc = self.builder.call(
+                self.runtime["py_exc_new"],
+                [ir.Constant(_I64, 7), self._ptr_to_cstr(self._cstr_global(
+                    message, self._fresh(".vthread.start.err"),
+                ))], name=self._fresh("vthread.start.exc"),
             )
-            slots_arg = self.builder.bitcast(
-                slots_ptr,
-                _CSTR,
-                name=self._fresh("vthread.gen.slots.arg"),
-            )
-            frame_map = self._virtual_thread_frame_map(1)
-            frame_map_ptr = self.builder.bitcast(
-                frame_map,
-                _CSTR,
-                name=self._fresh("vthread.gen.frame.map"),
-            )
-            resume_ptr = self.builder.bitcast(
-                self.runtime["py_virtual_thread_resume_generator"],
-                _CSTR,
-                name=self._fresh("vthread.gen.resume.ptr"),
-            )
-            cont = self.builder.call(
-                self.runtime["py_continuation_new_typed"],
-                [frame_map_ptr, slots_arg, resume_ptr],
-                name=self._fresh("vthread.gen.cont"),
-            )
-            self._gc_release(gen)
-        vt = self.builder.call(
-            self.runtime["py_virtual_thread_new"],
-            [cont],
-            name=self._fresh("vthread.gen.new"),
-        )
-        self._gc_release(cont)
-        rc = self.builder.call(
-            self.runtime["py_virtual_thread_start"],
-            [vt],
-            name=self._fresh("vthread.gen.start.rc"),
-        )
-        failed = self.builder.icmp_signed(
-            "!=",
-            rc,
-            ir.Constant(_I64, 0),
-            name=self._fresh("vthread.gen.start.failed"),
-        )
-        ok_bb = self.current_function.append_basic_block(
-            name=self._fresh("vthread.gen.start.ok"),
-        )
-        fail_bb = self.current_function.append_basic_block(
-            name=self._fresh("vthread.gen.start.fail"),
-        )
-        self.builder.cbranch(failed, fail_bb, ok_bb)
-        self.builder.position_at_end(fail_bb)
-        self._gc_release(vt)
-        exc = self.builder.call(
-            self.runtime["py_exc_new"],
-            [
-                ir.Constant(_I64, 7),
-                self._ptr_to_cstr(
-                    self._cstr_global(
-                        "virtual thread generator start failed",
-                        self._fresh(".vthread.gen.start.err"),
-                    )
-                ),
-            ],
-            name=self._fresh("vthread.gen.start.exc"),
-        )
-        self.builder.call(self.runtime["py_raise"], [exc])
-        self._gc_release(exc)
-        err_target = getattr(self, "_try_err_block", None)
-        if err_target is None:
-            err_target = self._ensure_fn_err_exit()
-        self.builder.branch(err_target)
-        self.builder.position_at_end(ok_bb)
-        return vt
+            self.builder.call(self.runtime["py_raise"], [exc])
+            self._gc_release(exc)
+            self.builder.branch(self._try_err_block)
+            self.builder.position_at_end(ok)
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("vthread.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _emit_native_virtual_thread_value_call(
         self,
@@ -2028,7 +1994,7 @@ class NativeVirtualThreadLoweringMixin:
                 args=args[1:], kwargs=(),
             )
         if kind == "pcc.virtual_thread.spawn":
-            return self._emit_virtual_thread_spawn(args, kwargs)
+            return self._emit_virtual_thread_spawn(args, kwargs, call_expr)
         if kind == "pcc.virtual_thread.call":
             if call_expr is None:
                 raise L1CodegenError(

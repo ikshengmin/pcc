@@ -6,6 +6,7 @@ from typing import Optional
 
 from pcc.frontends.python.py_ast import Attr, BinOp, Call, Expr, For, If, Lambda, Name, Return, Stmt, Subscript, Try, While, With
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.cpy_import_state import live_import_name_slot
 
 _CPY_BUILTIN_FALLBACK = frozenset(
     {
@@ -29,6 +30,14 @@ class CpyReturnAnalysisMixin:
         """Best-effort predicate for expressions that already produce a
         CPython PyObject* at runtime."""
         if isinstance(expr, Name):
+            # A live managed import is loaded from the executing native
+            # module dictionary. A different import of the same package root
+            # can leave historical CPython alias metadata behind, but that
+            # metadata does not describe this binding or its call results.
+            # Match name/call lowering; a distinct lexical local still uses
+            # its own representation through live_import_name_slot's check.
+            if live_import_name_slot(self, expr.ident) is not None:
+                return False
             if expr.ident in getattr(self, "_cpy_module_env", {}):
                 return True
             if expr.ident in getattr(self, "_cpy_star_module_env", {}):

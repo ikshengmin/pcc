@@ -124,3 +124,36 @@ def test_structseq_registration_failure_keeps_entry_exception_separate(failed_ro
     assert result is not prior
     assert memory.error is prior
     memory.assert_balanced()
+
+
+@pytest.mark.parametrize('phase', ('register','copy','acquire','callback','release','drop','frame_enter','frame_leave'))
+@pytest.mark.parametrize('subclass', (False, True))
+def test_structseq_dict_storage_adapter_keeps_real_storage_owned(phase, subclass):
+    memory = StructSeqMemory(phase)
+    caller = Block()
+    storage = memory.wrap({'tm_zone': 'X'})
+    receiver = storage
+    if subclass:
+        receiver = memory.make(None, abi.PY_TYPE_INSTANCE)
+        receiver.fields[12] = 0
+        receiver.fields[abi.PYINSTANCEOBJECT_FIELDS_OFFSET] = storage
+    caller.fields[0] = receiver
+    memory.roots[('dictionary-caller', 0)] = caller
+
+    def storage_slots(source_slot, result_slot):
+        # The reused dictionary-storage owner is separately tested. This seam
+        # models its owning output contract and forces the adapter to keep it
+        # authoritative through publication and subsequent cleanup.
+        memory.collect('callback')
+        receiver = memory.read(source_slot, 0)
+        assert receiver.alive and receiver.leases > 0
+        value = receiver if receiver.tag == abi.PY_TYPE_DICT else memory.read(receiver, abi.PYINSTANCEOBJECT_FIELDS_OFFSET)
+        memory.retain(value)
+        memory.write(result_slot, 0, value)
+        return 0
+
+    memory.ns['py_dict_storage_slots'] = storage_slots
+    result = memory.ns['_structseq_c_object'](caller.fields[0], None, None, 2)
+    assert result.alive and result.tag == abi.PY_TYPE_DICT
+    assert result.value == {'tm_zone': 'X'}
+    memory.assert_balanced()

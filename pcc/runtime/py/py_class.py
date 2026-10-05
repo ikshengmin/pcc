@@ -721,178 +721,142 @@ def py_property_new(fget, fset, fdel):
     return descriptor
 
 
-def _func_signature_valid(signature) -> bool:
-    if not _ptr_can_have_header(signature):
-        return False
-    if load_i32(signature, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_TUPLE:
-        return False
-    if py_tuple_len(signature) < 5:
-        return False
-    magic = py_tuple_get(signature, 0)
-    if ptr_is_null(magic) != 0:
-        return False
-    expected = py_str_new(cstr("__pcc_func_signature_v1__"), 25)
-    ok: int = 0
-    if ptr_is_null(expected) == 0:
-        ok = py_str_eq(magic, expected)
-        py_decref(expected)
-    py_decref(magic)
-    return ok != 0
+# Each signature component keeps its own counted address lease while the
+# copied bound signature is allocated. A lease on the method does not pin its
+# captures, signature, vectors, or magic string recursively.
+_BOUND_SIGNATURE_METHOD = 1
+_BOUND_SIGNATURE_CAPTURES = 2
+_BOUND_SIGNATURE_FUNCTION_CAPTURES = 3
+_BOUND_SIGNATURE_SOURCE = 4
+_BOUND_SIGNATURE_VECTOR = 5
+_BOUND_SIGNATURE_OUTPUT_VECTOR = 6
+_BOUND_SIGNATURE_ITEM = 7
+_BOUND_SIGNATURE_OUTPUT = 8
+_BOUND_SIGNATURE_RESULT = 12
 
 
-def _func_signature(func):
-    if not _ptr_can_have_header(func):
-        return null()
-    if load_i32(func, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
-        return null()
-    captures = pcc_gc_load_ptr(func, ptr_add(func, 64))
+def _bound_signature_original_captures(slots, tokens) -> int:
+    return _special_copy(slots, tokens, _BOUND_SIGNATURE_RESULT,
+        ptr_add(slots, _BOUND_SIGNATURE_CAPTURES * C_POINTER_SIZE), 0)
+
+
+def _bound_signature_wrap_body(slots, tokens) -> int:
+    method = load_ptr(slots, _BOUND_SIGNATURE_METHOD * C_POINTER_SIZE)
+    if not _ptr_can_have_header(method):
+        return _bound_signature_original_captures(slots, tokens)
+    if load_i32(method, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
+        return _bound_signature_original_captures(slots, tokens)
+    if _special_copy(slots, tokens, _BOUND_SIGNATURE_FUNCTION_CAPTURES,
+            ptr_add(method, 64), 0) != 0:
+        return -1
+    captures = load_ptr(slots, _BOUND_SIGNATURE_FUNCTION_CAPTURES * C_POINTER_SIZE)
     if not _ptr_can_have_header(captures):
-        return null()
+        return _bound_signature_original_captures(slots, tokens)
     if load_i32(captures, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_TUPLE or py_tuple_len(captures) != 2:
-        return null()
-    candidate = py_tuple_get(captures, 1)
-    if not _func_signature_valid(candidate):
-        if ptr_is_null(candidate) == 0:
-            py_decref(candidate)
-        return null()
-    return candidate
-
-
-def _bound_signature(func):
-    signature = _func_signature(func)
-    if ptr_is_null(signature) != 0:
-        return null()
-    names = py_tuple_get(signature, 1)
-    kinds = py_tuple_get(signature, 2)
-    has_defaults = py_tuple_get(signature, 3)
-    defaults = py_tuple_get(signature, 4)
-    if (
-        ptr_is_null(names) != 0
-        or ptr_is_null(kinds) != 0
-        or ptr_is_null(has_defaults) != 0
-        or ptr_is_null(defaults) != 0
-    ):
-        if ptr_is_null(names) == 0:
-            py_decref(names)
-        if ptr_is_null(kinds) == 0:
-            py_decref(kinds)
-        if ptr_is_null(has_defaults) == 0:
-            py_decref(has_defaults)
-        if ptr_is_null(defaults) == 0:
-            py_decref(defaults)
-        py_decref(signature)
-        return null()
-    n: int = py_tuple_len(names)
-    if (
-        n <= 0
-        or py_tuple_len(kinds) != n
-        or py_tuple_len(has_defaults) != n
-        or py_tuple_len(defaults) != n
-    ):
-        py_decref(names)
-        py_decref(kinds)
-        py_decref(has_defaults)
-        py_decref(defaults)
-        py_decref(signature)
-        return null()
-    out_names = py_tuple_new(n - 1)
-    out_kinds = py_tuple_new(n - 1)
-    out_has_defaults = py_tuple_new(n - 1)
-    out_defaults = py_tuple_new(n - 1)
-    out_signature = py_tuple_new(5)
-    if (
-        ptr_is_null(out_names) != 0
-        or ptr_is_null(out_kinds) != 0
-        or ptr_is_null(out_has_defaults) != 0
-        or ptr_is_null(out_defaults) != 0
-        or ptr_is_null(out_signature) != 0
-    ):
-        if ptr_is_null(out_names) == 0:
-            py_decref(out_names)
-        if ptr_is_null(out_kinds) == 0:
-            py_decref(out_kinds)
-        if ptr_is_null(out_has_defaults) == 0:
-            py_decref(out_has_defaults)
-        if ptr_is_null(out_defaults) == 0:
-            py_decref(out_defaults)
-        if ptr_is_null(out_signature) == 0:
-            py_decref(out_signature)
-        py_decref(names)
-        py_decref(kinds)
-        py_decref(has_defaults)
-        py_decref(defaults)
-        py_decref(signature)
-        return null()
-    i: int = 1
-    valid: int = 1
-    while i < n:
-        name = py_tuple_get(names, i)
-        kind = py_tuple_get(kinds, i)
-        has_default = py_tuple_get(has_defaults, i)
-        default_obj = py_tuple_get(defaults, i)
-        if (
-            ptr_is_null(name) != 0
-            or ptr_is_null(kind) != 0
-            or ptr_is_null(has_default) != 0
-            or ptr_is_null(default_obj) != 0
-        ):
-            valid = 0
-        if valid != 0:
-            py_tuple_set_item(out_names, i - 1, name)
-            py_tuple_set_item(out_kinds, i - 1, kind)
-            py_tuple_set_item(out_has_defaults, i - 1, has_default)
-            py_tuple_set_item(out_defaults, i - 1, default_obj)
-        if ptr_is_null(name) == 0:
-            py_decref(name)
-        if ptr_is_null(kind) == 0:
-            py_decref(kind)
-        if ptr_is_null(has_default) == 0:
-            py_decref(has_default)
-        if ptr_is_null(default_obj) == 0:
-            py_decref(default_obj)
-        if valid == 0:
-            i = n
-        i = i + 1
-    magic = null()
-    if valid != 0:
-        magic = py_tuple_get(signature, 0)
-        if ptr_is_null(magic) != 0:
-            valid = 0
-    if valid != 0:
-        py_tuple_set_item(out_signature, 0, magic)
-        py_tuple_set_item(out_signature, 1, out_names)
-        py_tuple_set_item(out_signature, 2, out_kinds)
-        py_tuple_set_item(out_signature, 3, out_has_defaults)
-        py_tuple_set_item(out_signature, 4, out_defaults)
-    if ptr_is_null(magic) == 0:
-        py_decref(magic)
-    py_decref(out_names)
-    py_decref(out_kinds)
-    py_decref(out_has_defaults)
-    py_decref(out_defaults)
-    py_decref(names)
-    py_decref(kinds)
-    py_decref(has_defaults)
-    py_decref(defaults)
-    py_decref(signature)
+        return _bound_signature_original_captures(slots, tokens)
+    if _special_tuple_item(slots, tokens, _BOUND_SIGNATURE_SOURCE,
+            _BOUND_SIGNATURE_FUNCTION_CAPTURES, 1) != 0:
+        return -1
+    signature = load_ptr(slots, _BOUND_SIGNATURE_SOURCE * C_POINTER_SIZE)
+    if not _ptr_can_have_header(signature):
+        return _bound_signature_original_captures(slots, tokens)
+    if load_i32(signature, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_TUPLE or py_tuple_len(signature) < 5:
+        return _bound_signature_original_captures(slots, tokens)
+    if _special_tuple_item(slots, tokens, _BOUND_SIGNATURE_ITEM,
+            _BOUND_SIGNATURE_SOURCE, 0) != 0:
+        return -1
+    valid: int = _special_name_equal(
+        load_ptr(slots, _BOUND_SIGNATURE_ITEM * C_POINTER_SIZE),
+        cstr("__pcc_func_signature_v1__"), 25)
+    _special_drop(slots, tokens, _BOUND_SIGNATURE_ITEM)
     if valid == 0:
-        py_decref(out_signature)
-        return null()
-    return out_signature
+        return _bound_signature_original_captures(slots, tokens)
+
+    # Validate all four vectors before copying them. Signatureless builtin
+    # adapters retain their original two-capture convention; allocation or
+    # ownership errors must never silently discard a compiled signature.
+    count: int = -1
+    part: int = 1
+    while part <= 4:
+        if _special_tuple_item(slots, tokens, _BOUND_SIGNATURE_VECTOR,
+                _BOUND_SIGNATURE_SOURCE, part) != 0:
+            return -1
+        vector = load_ptr(slots, _BOUND_SIGNATURE_VECTOR * C_POINTER_SIZE)
+        if not _ptr_can_have_header(vector):
+            return _bound_signature_original_captures(slots, tokens)
+        if load_i32(vector, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_TUPLE:
+            return _bound_signature_original_captures(slots, tokens)
+        length: int = py_tuple_len(vector)
+        if part == 1:
+            count = length
+        if length != count or count <= 0:
+            return _bound_signature_original_captures(slots, tokens)
+        _special_drop(slots, tokens, _BOUND_SIGNATURE_VECTOR)
+        part = part + 1
+
+    if _special_tuple_new(slots, tokens, _BOUND_SIGNATURE_OUTPUT, 5) != 0:
+        return -1
+    if _special_tuple_item(slots, tokens, _BOUND_SIGNATURE_ITEM,
+            _BOUND_SIGNATURE_SOURCE, 0) != 0:
+        return -1
+    py_tuple_set_item(load_ptr(slots, _BOUND_SIGNATURE_OUTPUT * C_POINTER_SIZE),
+        0, load_ptr(slots, _BOUND_SIGNATURE_ITEM * C_POINTER_SIZE))
+    _special_drop(slots, tokens, _BOUND_SIGNATURE_ITEM)
+    part = 1
+    while part <= 4:
+        if _special_tuple_item(slots, tokens, _BOUND_SIGNATURE_VECTOR,
+                _BOUND_SIGNATURE_SOURCE, part) != 0:
+            return -1
+        if _special_tuple_new(slots, tokens, _BOUND_SIGNATURE_OUTPUT_VECTOR, count - 1) != 0:
+            return -1
+        index: int = 1
+        while index < count:
+            if _special_tuple_item(slots, tokens, _BOUND_SIGNATURE_ITEM,
+                    _BOUND_SIGNATURE_VECTOR, index) != 0:
+                return -1
+            py_tuple_set_item(load_ptr(slots, _BOUND_SIGNATURE_OUTPUT_VECTOR * C_POINTER_SIZE),
+                index - 1, load_ptr(slots, _BOUND_SIGNATURE_ITEM * C_POINTER_SIZE))
+            _special_drop(slots, tokens, _BOUND_SIGNATURE_ITEM)
+            if py_err_occurred() != 0:
+                return -1
+            index = index + 1
+        py_tuple_set_item(load_ptr(slots, _BOUND_SIGNATURE_OUTPUT * C_POINTER_SIZE),
+            part, load_ptr(slots, _BOUND_SIGNATURE_OUTPUT_VECTOR * C_POINTER_SIZE))
+        _special_drop(slots, tokens, _BOUND_SIGNATURE_OUTPUT_VECTOR)
+        _special_drop(slots, tokens, _BOUND_SIGNATURE_VECTOR)
+        if py_err_occurred() != 0:
+            return -1
+        part = part + 1
+    if _special_tuple_new(slots, tokens, _BOUND_SIGNATURE_RESULT, 2) != 0:
+        return -1
+    py_tuple_set_item(load_ptr(slots, _BOUND_SIGNATURE_RESULT * C_POINTER_SIZE),
+        0, load_ptr(slots, _BOUND_SIGNATURE_CAPTURES * C_POINTER_SIZE))
+    py_tuple_set_item(load_ptr(slots, _BOUND_SIGNATURE_RESULT * C_POINTER_SIZE),
+        1, load_ptr(slots, _BOUND_SIGNATURE_OUTPUT * C_POINTER_SIZE))
+    return 0
 
 
-def _wrap_bound_captures(method, captures):
-    signature = _bound_signature(method)
-    if ptr_is_null(signature) != 0:
-        return captures
-    wrapped = py_tuple_new(2)
-    if ptr_is_null(wrapped) != 0:
-        py_decref(signature)
-        return captures
-    py_tuple_set_item(wrapped, 0, captures)
-    py_tuple_set_item(wrapped, 1, signature)
-    py_decref(signature)
-    return wrapped
+def _wrap_bound_captures(method_slot, captures_slot, result_slot) -> int:
+    slots = stack_alloc(14 * C_POINTER_SIZE)
+    tokens = stack_alloc(14 * C_POINTER_SIZE)
+    handles = stack_alloc(14 * C_POINTER_SIZE)
+    count: int = _special_open(slots, tokens, handles)
+    status: int = -1
+    suspended: int = 0
+    if count == 14:
+        py_tls_exc_swap_slot(slots)
+        suspended = 1
+        status = _special_copy(slots, tokens, _BOUND_SIGNATURE_METHOD, method_slot, 0)
+        if status == 0:
+            status = _special_copy(slots, tokens, _BOUND_SIGNATURE_CAPTURES, captures_slot, 0)
+        if status == 0:
+            status = _bound_signature_wrap_body(slots, tokens)
+        if status == 0:
+            status = _special_publish(slots, tokens, result_slot)
+    if status != 0:
+        _special_error(cstr("bound signature copy failed without an exception"))
+    _special_close(slots, tokens, handles, count, suspended)
+    return status
 
 
 def _call_pyfunc_bound_args(func, bound_args):
@@ -1064,18 +1028,13 @@ def _instance_bind_method_body(slots, tokens, name) -> int:
         method_name = load_ptr(method, 72)
         if ptr_is_null(method_name) == 0:
             bound_name = method_name
-    wrapped = _wrap_bound_captures(load_ptr(slots, _BOUND_BIND_METHOD * C_POINTER_SIZE),
-        load_ptr(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE))
-    # The signature wrapper may return the original borrowed captures or a
-    # new owning tuple. Keep these contracts distinct instead of double-adopting.
-    if ptr_eq(wrapped, load_ptr(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE)) != 0:
-        if _special_copy(slots, tokens, _BOUND_BIND_WRAPPED,
-                ptr_add(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE), 0) != 0:
-            return -1
-    else:
-        store_ptr(slots, _BOUND_BIND_WRAPPED * C_POINTER_SIZE, wrapped)
-        if _special_adopt(slots, tokens, _BOUND_BIND_WRAPPED) != 0:
-            return -1
+    if _wrap_bound_captures(
+            ptr_add(slots, _BOUND_BIND_METHOD * C_POINTER_SIZE),
+            ptr_add(slots, _BOUND_BIND_CAPTURES * C_POINTER_SIZE),
+            ptr_add(slots, _BOUND_BIND_WRAPPED * C_POINTER_SIZE)) != 0:
+        return -1
+    if _special_adopt(slots, tokens, _BOUND_BIND_WRAPPED) != 0:
+        return -1
     if py_err_occurred() != 0:
         return -1
     store_ptr(slots, _BOUND_BIND_RESULT * C_POINTER_SIZE,

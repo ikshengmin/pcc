@@ -11,6 +11,7 @@ import pytest
 from pcc.runtime.py import py_abi_constants as abi
 from tests.python.test_dict_super_slot_roots import DictMemory
 from tests.python.test_set_call_slot_roots import Block, Object
+from tests.python.runtime_model_declarations import global_i32_declarations
 
 
 ROOT = Path(__file__).resolve().parents[2] / 'pcc/runtime/py'
@@ -54,11 +55,11 @@ class NamespaceMemory(DictMemory):
         ):
             path = ROOT / file
             body = []
-            for node in ast.parse(path.read_text()).body:
+            module = ast.parse(path.read_text())
+            self.maps.update(global_i32_declarations(module, self.ns))
+            for node in module.body:
                 if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id.startswith(('_CLASS_APPLY_', '_CLASS_OBJECTS_', '_DICT_MATERIALIZE_', '_CLASS_READ_', '_CLASS_WRITE_')) for t in node.targets):
                     body.append(node)
-                elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == 'define_global_i32':
-                    self.maps[ast.literal_eval(node.value.args[0])] = ast.literal_eval(node.value.args[1])
                 elif isinstance(node, ast.FunctionDef) and (node.name in names or node.name.startswith(prefixes)):
                     node.decorator_list = []
                     body.append(node)

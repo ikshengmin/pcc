@@ -778,6 +778,7 @@ def run_codegen_worker(
                                             direct_stack_map_plans
                                             if direct_packed_stack_maps else None
                                         ),
+                                        consume_stack_map_plans=direct_packed_stack_maps,
                                     )
                                     direct_stack_map_plans.clear()
                                     if not validate_direct:

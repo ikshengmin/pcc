@@ -297,12 +297,12 @@ payload:
     class ObservedInstruction(assembler._Instruction):
         pass
     parse = assembler._parse_file
-    def observed_parse(text):
-        plans, order, symbols = parse(text)
+    def observed_parse(text, **kwargs):
+        plans, order, symbols = parse(text, **kwargs)
         for plan in plans.values():
             for index, entry in enumerate(plan.entries):
-                if isinstance(entry, assembler._Instruction):
-                    record = ObservedInstruction(entry.text)
+                if isinstance(entry, (assembler._Instruction, int)):
+                    record = ObservedInstruction(assembler._instruction_text(entry, plan.source_text))
                     references.append(weakref.ref(record))
                     plan.entries[index] = record
         return plans, order, symbols

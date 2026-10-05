@@ -82,8 +82,8 @@ class StringMemory(Memory):
             "_bound_signature","_func_signature","_func_signature_valid"}
         body=[]
         for node in _TREES["py_class.py"].body:
-            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id.startswith(("_STR_METHOD_","_STR_TYPE_","_BOUND_BIND_")) for t in node.targets):body.append(node)
-            elif isinstance(node,ast.FunctionDef) and (node.name in names or node.name.startswith(("_str_method_","_str_type_"))):
+            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id.startswith(("_STR_METHOD_","_STR_TYPE_","_BOUND_BIND_","_BOUND_SIGNATURE_")) for t in node.targets):body.append(node)
+            elif isinstance(node,ast.FunctionDef) and (node.name in names or node.name.startswith(("_str_method_","_str_type_","_bound_signature_"))):
                 node.decorator_list=[];body.append(node)
         exec(_compile_once(body,PORT),self.ns)
         dispatch=PORT.with_name("py_obj_ops_dispatch.py")

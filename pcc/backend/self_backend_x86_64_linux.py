@@ -38,6 +38,8 @@ from .self_backend_ir import (
     TypeDesc,
     _align_to,
     aggregate_member_info,
+    clear_text_key_mapping,
+    reset_operand_intern,
 )
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_parse import (
@@ -49,7 +51,7 @@ from .self_backend_parse import (
 from .self_backend_prepare import prepare_module_for_target
 from .self_backend_precise_stackmaps import (
     FunctionStackMapPlan,
-    build_stack_map_plans,
+    build_function_stack_map_plan,
     render_x86_64_stack_map_section,
 )
 from .self_backend_target_passes import run_self_target_memory_pass_pipeline
@@ -3041,15 +3043,11 @@ def _emit_prepared_x86_64_module(
         if global_.tls_model:
             tls_globals[global_.name] = global_
     _TLS_GLOBALS = tls_globals
-    stack_map_plans = {
-        plan.function_name: plan
-        for plan in build_stack_map_plans(
-            functions,
-            prepared.globals_,
-            target="x86_64-linux",
-            function_symbol=_asm_symbol,
-        )
-    }
+    # A plan depends only on its function and the immutable module globals.
+    # Construct it at that function's emission boundary so completed kernels
+    # retire before the next plan adds root-state and liveness storage.
+    # Retain the final plans for target-final stack-map offsets below.
+    stack_map_plans = {}
     chunks = [".intel_syntax noprefix"]
     label_lines = [] if stack_map_plans_out is None else None
     global_lines = emit_globals(prepared.globals_, _MODULE_SYMBOLS)
@@ -3057,12 +3055,30 @@ def _emit_prepared_x86_64_module(
         _append_assembly_chunk(chunks, label_lines, global_lines)
     del global_lines
     for func in functions:
+        plan = build_function_stack_map_plan(
+            func,
+            prepared.globals_,
+            target="x86_64-linux",
+            identity_name=_asm_symbol(func.name),
+        )
+        stack_map_plans[func.name] = plan
         _append_assembly_chunk(
-            chunks, label_lines, _emit_function(func, stack_map_plans[func.name]),
+            chunks, label_lines, _emit_function(func, plan),
         )
         # The stack-map plan retains scalar/root metadata, never the IR.
         # Release completed functions before the next body adds assembly.
         get_indexed_function_kernel(func).close_native_tables()
+        if not func.blocks:
+            # Direct indexed functions are consumed above.  Their compatibility
+            # slots are no longer needed by selection; stack-map plans retain
+            # scalar offsets and types, never these lookup dictionaries.
+            # Retire both the direct and equality-bucket projections before
+            # another function or the final assembly/object buffers allocate.
+            clear_text_key_mapping(func.value_slots)
+            func.value_slot_buckets.clear()
+            clear_text_key_mapping(func.alloca_slots)
+            func.alloca_slot_buckets.clear()
+            clear_text_key_mapping(func.value_types)
     if functions:
         plans = tuple(stack_map_plans[func.name] for func in functions)
         if stack_map_plans_out is None:
@@ -3078,4 +3094,5 @@ def _emit_prepared_x86_64_module(
     chunks.append('.section .note.GNU-stack,"",@progbits')
     # The empty final chunk supplies the newline without copying the full text.
     chunks.append("")
+    reset_operand_intern()
     return "\n".join(chunks)

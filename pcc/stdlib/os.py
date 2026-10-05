@@ -7,8 +7,12 @@ delegates to extern libc.
 
 from __future__ import annotations
 
+from pcc.unsafe import (
+    load_i32, stack_alloc, store_i32, strlen, sync_file,
+)
+
 from pcc.extern import (
-    c_int, c_int64, c_obj, c_ptr, c_rawptr, c_str, extern,
+    c_int, c_int64, c_obj, c_ptr, c_rawptr, c_str, c_void, extern,
 )
 
 _getenv = extern("getenv", (c_str,), c_rawptr)
@@ -16,6 +20,11 @@ _setenv = extern("setenv", (c_str, c_str, c_int), c_int)
 _getcwd = extern("getcwd", (c_str, c_int64), c_rawptr)
 _access = extern("pcc_platform_access", (c_str, c_int64), c_int64)
 _getpid = extern("pcc_platform_getpid", (), c_int64)
+_fd_integer = extern("py_int_to_i64", (c_obj, c_rawptr), c_int64)
+_errno_message = extern("pcc_errno_message_into", (c_int, c_rawptr, c_int64), c_int)
+_new_text = extern("py_str_new", (c_rawptr, c_int64), c_obj)
+_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
+_error_pending = extern("py_err_occurred", (), c_int64)
 _walk_scan = extern("py_os_walk_scan", (c_obj, c_obj, c_obj), c_obj)
 _walk_prefix = extern("py_os_walk_prefix", (c_obj,), c_obj)
 _path_islink_result = extern("py_os_path_islink_result", (c_obj,), c_obj)
@@ -35,6 +44,52 @@ def getpid() -> int:
     # The portable owned platform ABI selects the target process primitive.
     # Keep this live on every call, including after a fork.
     return _getpid()
+
+
+def fsync(fd):
+    """Synchronize an integer descriptor or an object exposing fileno()."""
+    if isinstance(fd, bool):
+        import warnings
+        warnings.warn(
+            "bool is used as a file descriptor", RuntimeWarning, stacklevel=2,
+        )
+    descriptor = fd
+    if not isinstance(descriptor, int):
+        try:
+            method = fd.fileno
+        except AttributeError:
+            raise TypeError("argument must be an int, or have a fileno() method.") from None
+        descriptor = method()
+        if not isinstance(descriptor, int):
+            raise TypeError(type(fd).__name__ + ".fileno() must return an int, not "
+                            + type(descriptor).__name__)
+    # Convert the integer payload directly, without invoking __index__ or
+    # overloaded comparisons. Validate before the platform's C-int narrowing.
+    overflow = stack_alloc(4)
+    store_i32(overflow, 0, 0)
+    number = _fd_integer(descriptor, overflow)
+    if load_i32(overflow, 0) or number < -2147483648 or number > 2147483647:
+        raise OverflowError("Python int too large to convert to C int")
+    if number < 0:
+        raise ValueError("file descriptor cannot be a negative integer (" + str(number) + ")")
+    # fd and descriptor remain ordinary rooted locals until this call exits;
+    # a temporary file object must not close between fileno and the syscall.
+    status = sync_file(number)
+    while status == -4:
+        _thread_safepoint()
+        if _error_pending():
+            raise
+        status = sync_file(number)
+    if status < 0:
+        buffer = stack_alloc(256)
+        result = _errno_message(-status, buffer, 256)
+        if result < 0:
+            raise OSError(-status, "file synchronization failed")
+        message = _new_text(buffer, strlen(buffer))
+        if message is None:
+            raise MemoryError("file synchronization error message allocation failed")
+        raise OSError(-status, message)
+    return None
 
 
 def getenv(key: str, default: str = "") -> str:
