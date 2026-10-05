@@ -9,6 +9,237 @@ from __future__ import annotations
 
 _HEX = "0123456789ABCDEF"
 
+# Public scheme classifications used by urljoin, including caller extensions.
+uses_relative = [
+    "", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https",
+    "shttp", "mms", "prospero", "rtsp", "rtsps", "rtspu", "sftp", "svn",
+    "svn+ssh", "ws", "wss",
+]
+uses_netloc = [
+    "", "ftp", "http", "gopher", "nntp", "telnet", "imap", "wais", "file",
+    "mms", "https", "shttp", "snews", "prospero", "rtsp", "rtsps", "rtspu",
+    "rsync", "svn", "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss",
+    "itms-services",
+]
+
+# Complete Unicode 17.0 NFKC preimage of /?#@: outside ASCII. URL authority
+# validation only needs this predicate, not a partial normalization function.
+# ASCII delimiters cannot compose away under NFC; concatenation/composition
+# therefore cannot introduce a delimiter absent from each character's NFKC.
+_URL_NFKC_DELIMITERS = (
+    "\u2047\u2048\u2049\u2100\u2101\u2105\u2106\u2a74\ufe13\ufe16"
+    "\ufe55\ufe56\ufe5f\ufe6b\uff03\uff0f\uff1a\uff1f\uff20"
+)
+
+
+def _urljoin_ipv4(address: str) -> bool:
+    octets = address.split(".")
+    if len(octets) != 4:
+        return False
+    for octet in octets:
+        if not octet or len(octet) > 3 or (len(octet) > 1 and octet[0] == "0"):
+            return False
+        value = 0
+        for ch in octet:
+            if ch < "0" or ch > "9":
+                return False
+            value = value * 10 + ord(ch) - 48
+        if value > 255:
+            return False
+    return True
+
+
+def _urljoin_ipv6(address: str) -> bool:
+    host, marker, scope = address.partition("%")
+    if marker and (not scope or "%" in scope):
+        return False
+    compressed = "::" in host
+    if compressed:
+        left, right = host.split("::", 1)
+        groups = left.split(":") if left else []
+        if right:
+            groups = groups + right.split(":")
+    else:
+        groups = host.split(":")
+    count = len(groups)
+    for index in range(len(groups)):
+        group = groups[index]
+        if "." in group and index == len(groups) - 1:
+            if not host.endswith(group) or not _urljoin_ipv4(group):
+                return False
+            count += 1
+        else:
+            if not group or len(group) > 4:
+                return False
+            for ch in group:
+                if ch not in "0123456789abcdefABCDEF":
+                    return False
+    if compressed:
+        return count < 8
+    return count == 8
+
+
+def _urljoin_check_authority(authority: str) -> None:
+    if ("[" in authority) != ("]" in authority):
+        raise ValueError("Invalid IPv6 URL")
+    if "[" in authority:
+        host_port = authority.rpartition("@")[2]
+        before, opening, tail = host_port.partition("[")
+        if opening:
+            host, _closing, port = tail.partition("]")
+            if before or (port and not port.startswith(":")):
+                raise ValueError("Invalid IPv6 URL")
+        else:
+            host = host_port.partition(":")[0]
+        if host.startswith(("v", "V")):
+            version, dot, address = host[1:].partition(".")
+            valid = bool(version) and bool(dot) and bool(address)
+            for ch in version:
+                if ch not in "0123456789abcdefABCDEF":
+                    valid = False
+            if not valid:
+                raise ValueError("IPvFuture address is invalid")
+        elif not _urljoin_ipv6(host):
+            if _urljoin_ipv4(host):
+                raise ValueError("An IPv4 address cannot be in brackets")
+            raise ValueError("'" + host + "' does not appear to be an IPv4 or IPv6 address")
+    for ch in authority:
+        if ch in _URL_NFKC_DELIMITERS:
+            raise ValueError(
+                "netloc '" + authority + "' contains invalid characters under NFKC normalization"
+            )
+
+
+def _urljoin_split(text: str, allow_fragments):
+    # Preserve absent delimiters as None, including an explicit empty query,
+    # fragment or authority. urlparse's older six-field subset cannot carry
+    # that distinction. Only leading C0/space is stripped; trailing space stays.
+    rest = text.lstrip(
+        "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f"
+        "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f "
+    ).replace("\t", "").replace("\r", "").replace("\n", "")
+    fragments = bool(allow_fragments)
+    scheme = None
+    colon = rest.find(":")
+    if colon > 0 and rest[0] in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        valid = True
+        for ch in rest[:colon]:
+            if ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-":
+                valid = False
+        if valid:
+            scheme = rest[:colon].lower()
+            rest = rest[colon + 1:]
+    authority = None
+    if rest.startswith("//"):
+        rest = rest[2:]
+        end = _first_authority_sep(rest)
+        if end < 0:
+            authority = rest
+            rest = ""
+        else:
+            authority = rest[:end]
+            rest = rest[end:]
+        # CPython checks bracket syntax before splitting query and fragment.
+        _urljoin_check_authority(authority)
+    fragment = None
+    if fragments and "#" in rest:
+        rest, fragment = rest.split("#", 1)
+    query = None
+    if "?" in rest:
+        rest, query = rest.split("?", 1)
+    return scheme, authority, rest, query, fragment
+
+
+def _urljoin_unsplit(scheme, authority, path: str, query, fragment) -> str:
+    if authority is not None:
+        if path and not path.startswith("/"):
+            path = "/" + path
+        path = "//" + authority + path
+    elif path.startswith("//"):
+        path = "//" + path
+    if scheme:
+        path = scheme + ":" + path
+    if query is not None:
+        path = path + "?" + query
+    if fragment is not None:
+        path = path + "#" + fragment
+    return path
+
+
+def _urljoin_text(base: str, url: str, allow_fragments) -> str:
+    base_scheme, base_authority, base_path, base_query, base_fragment = _urljoin_split(
+        base, allow_fragments,
+    )
+    scheme, authority, path, query, fragment = _urljoin_split(url, allow_fragments)
+    if scheme is None:
+        scheme = base_scheme
+    if scheme != base_scheme or (scheme and scheme not in uses_relative):
+        return url
+    if not scheme or scheme in uses_netloc:
+        if authority:
+            return _urljoin_unsplit(scheme, authority, path, query, fragment)
+        authority = base_authority
+    if not path:
+        path = base_path
+        if query is None:
+            query = base_query
+            if fragment is None:
+                fragment = base_fragment
+        return _urljoin_unsplit(scheme, authority, path, query, fragment)
+
+    if path.startswith("/"):
+        segments = path.split("/")
+    else:
+        prefix = base_path.split("/")
+        if prefix[-1] != "":
+            prefix.pop()
+        combined = prefix + path.split("/")
+        segments = []
+        for index in range(len(combined)):
+            if combined[index] or index == 0 or index == len(combined) - 1:
+                segments.append(combined[index])
+    resolved: list[str] = []
+    for segment in segments:
+        if segment == "..":
+            if resolved:
+                resolved.pop()
+        elif segment != ".":
+            resolved.append(segment)
+    if segments[-1] == "." or segments[-1] == "..":
+        resolved.append("")
+    path = "/".join(resolved)
+    if not path:
+        path = "/"
+    return _urljoin_unsplit(scheme, authority, path, query, fragment)
+
+
+def urljoin(base, url, allow_fragments=True):
+    """Resolve a URL reference, preserving Python's text/ASCII-bytes contract."""
+    # These are identity-preserving public short circuits, even for objects
+    # that would otherwise fail coercion. Do not eagerly decode or validate.
+    if not base:
+        return url
+    if not url:
+        return base
+    text_input = None
+    for argument in (base, url):
+        if argument:
+            if text_input is None:
+                text_input = isinstance(argument, str)
+            elif text_input != isinstance(argument, str):
+                raise TypeError("Cannot mix str and non-str arguments")
+    if text_input is None:
+        for argument in (base, url):
+            if argument is not None:
+                text_input = isinstance(argument, str)
+                break
+    if text_input is not False:
+        return _urljoin_text(base, url, allow_fragments)
+    decoded_base = base.decode("ascii", "strict") if base else "" if base is not None else None
+    decoded_url = url.decode("ascii", "strict") if url else "" if url is not None else None
+    result = _urljoin_text(decoded_base, decoded_url, allow_fragments)
+    return result.encode("ascii")
+
 
 def _is_unreserved(ch: str) -> bool:
     # RFC 3986 unreserved set: ALPHA / DIGIT / "-" / "." / "_" / "~"

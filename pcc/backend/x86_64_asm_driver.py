@@ -382,7 +382,8 @@ def _parse_file(asm_text: str):
             name = line[:-1].strip()
             if not name:
                 raise X86EncodeError("empty label")
-            symbols.setdefault(name, _SymbolMeta())
+            # Labels carry no metadata by themselves. Keep their definitions
+            # in the plan; only explicit declarations need a metadata entry.
             current.entries.append(_Label(name))
             continue
         if current is None or not current.flags & SHF_EXECINSTR:

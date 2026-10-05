@@ -998,8 +998,9 @@ class AssignmentStatementLoweringMixin:
             # Python locals are rebindable. When the storage ABI stays the
             # same PyObject* shape, keep the existing alloca but update the
             # codegen type so later loads/augassigns use the current inferred
-            # type instead of the first assignment's type.
-            declared_ty = local_target_ty
+            # type instead of the first assignment's type. A planned mixed
+            # local keeps its authoritative object-storage semantic type.
+            declared_ty = self._local_slot_decl_type(target.ident, local_target_ty)
             self.env[target.ident] = (alloca, ir_ty, declared_ty)
         if (
             (boxed_int_target or exact_int_value is not None)

@@ -43,7 +43,9 @@ def runtime_build_config() -> dict:
 # The Makefile compiles this module without the runtime pass list and with
 # automatic safepoint polls off; the owned builder mirrors both settings.
 _THREAD_KERNEL_MODULE = "freestanding_thread_kernel_pthread"
-_NO_IMPLICIT_POLL_MODULES = (_THREAD_KERNEL_MODULE, "py_runtime_log", "py_tempfile")
+_NO_IMPLICIT_POLL_MODULES = (
+    _THREAD_KERNEL_MODULE, "py_runtime_log", "py_tempfile", "py_os_mkdir",
+)
 
 
 def runtime_ir_passes(runtime_dir: str) -> str:

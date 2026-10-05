@@ -7,7 +7,7 @@ import pytest
 from pcc.frontends.python.owned_runtime_build import _compile_runtime_module, _RUNTIME_IR_OUTPUT_ENV
 
 
-@pytest.mark.parametrize("module", ["freestanding_thread_kernel_pthread", "py_runtime_log"])
+@pytest.mark.parametrize("module", ["freestanding_thread_kernel_pthread", "py_runtime_log", "py_tempfile", "py_os_mkdir"])
 @pytest.mark.parametrize("previous", [None, "0", "1"])
 @pytest.mark.parametrize("fail", [False, True])
 def test_raw_runtime_disables_implicit_polls_and_restores_environment(monkeypatch, module, previous, fail):
@@ -47,7 +47,7 @@ def test_managed_runtime_modules_retain_thread_polls(monkeypatch):
     assert calls == ["1"]
 
 
-@pytest.mark.parametrize("module", ["py_threading", "freestanding_thread_kernel_pthread", "py_runtime_log"])
+@pytest.mark.parametrize("module", ["py_threading", "freestanding_thread_kernel_pthread", "py_runtime_log", "py_tempfile", "py_os_mkdir"])
 @pytest.mark.parametrize("configured", [False, True])
 @pytest.mark.parametrize("fail", [False, True])
 def test_runtime_ir_masks_direct_and_deferred_modes_and_restores(monkeypatch, module, configured, fail):

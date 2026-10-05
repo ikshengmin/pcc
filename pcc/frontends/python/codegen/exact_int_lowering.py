@@ -263,13 +263,9 @@ def mixed_scalar_object_local_names(host, fd: FuncDef, global_names) -> tuple[st
     ``int`` is deliberately NOT included here; it keeps its own planner, whose
     consumers project the exact-int object lane.
 
-    ``bool`` is not included either, and that is a known gap rather than a
-    judgement that it is safe: the same mix is possible (``x = a > b`` on one
-    branch, ``x = SomeClass()`` on the other) and today the object is coerced
-    through ``py_obj_truthy``.  Including it made two owned-local store paths
-    reachable that still write a raw ``i1`` into the object slot
-    (``<name>.owned.cont``), so closing it needs those covered first.  See
-    ``tests/python/test_mixed_float_object_local_slot.py``.
+    Boolean and floating bindings share one object slot with later object
+    writes. Store consumers must box raw scalars and preserve already-boxed
+    pointers rather than coercing them back into the first semantic type.
     """
     if getattr(host, "_freestanding_module", False):
         # Same boundary as the exact-int planner: the freestanding subset
@@ -293,7 +289,7 @@ def mixed_scalar_object_local_names(host, fd: FuncDef, global_names) -> tuple[st
         if name not in seen:
             seen.add(name)
             order.append(name)
-        if isinstance(binding_ty, FloatType):
+        if isinstance(binding_ty, (FloatType, BoolType)):
             scalar_bindings.add(name)
         elif isinstance(binding_ty, IntType):
             # An int binding is an object only when ints are boxed; either way

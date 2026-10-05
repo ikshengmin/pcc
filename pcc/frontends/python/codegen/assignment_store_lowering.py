@@ -472,15 +472,18 @@ class AssignmentStoreLoweringMixin:
             target.ident in getattr(self, "_planned_object_local_names", set())
             and isinstance(_ir_ty, ir.PointerType)
             and self._ir_type_matches(_ir_ty, _CSTR)
-            and not isinstance(value.type, ir.PointerType)
         ):
-            value = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                value,
-                value_ty,
-            )
+            # The slot owns the common object representation. Raw scalars
+            # need boxing; an existing object must not be truth-unboxed just
+            # because this binding's semantic type is Boolean.
+            if not isinstance(value.type, ir.PointerType):
+                value = marshal.marshal_to_object(
+                    self.builder,
+                    self.module,
+                    self.runtime,
+                    value,
+                    value_ty,
+                )
         else:
             value = self._coerce(value, value_ty, declared_ty)
         self.builder.store(value, alloca)

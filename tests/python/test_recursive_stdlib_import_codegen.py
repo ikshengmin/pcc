@@ -120,6 +120,50 @@ def test_dotted_pcc_stdlib_import_routes_to_native_submodule():
     assert "@user_urllib_parse_quote" in ir_text
 
 
+def test_owned_urljoin_provider_and_result_handoff_ir(tmp_path, monkeypatch):
+    """A wrapper result remains owned when passed to a dynamic slot call.
+
+    This reproduces the local result handoff that failed for page_url. The
+    callee is a generic callback, so no package installer special case applies.
+    Only host IR emission is checked here; native execution is a separate gate.
+    """
+    from pcc.frontends.python.pipeline import compile_python
+
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "1")
+    monkeypatch.setenv("PCC_PY_FRONTEND_IN_PROCESS_CODEGEN", "1")
+    source = tmp_path / "urljoin_handoff.py"
+    output = tmp_path / "urljoin_handoff.ll"
+    source.write_text(
+        "import urllib.parse\n"
+        "def resolve(base, ref):\n"
+        "    return urllib.parse.urljoin(base, ref)\n"
+        "def invoke(callback, base, ref):\n"
+        "    page_url = resolve(base, ref)\n"
+        "    return callback(page_url)\n"
+        "def main():\n"
+        "    print(resolve('https://example.test/a/b', '../c?x#f'))\n"
+        "main()\n",
+        encoding="utf-8",
+    )
+    compile_python(
+        str(source), str(output), emit_llvm_only=True,
+        recursive_stdlib=True, libpython_mode="off", ir_scaffold_mode="on",
+        backend="self",
+    )
+    text = output.read_text(encoding="utf-8")
+    has_public_provider = "@user_urllib_parse_urljoin" in text
+    has_resolution_helper = "@user_urllib_parse__urljoin_text" in text
+    assert has_public_provider, "owned urljoin export is missing"
+    assert has_resolution_helper, "owned URL resolution body is missing"
+    assert not re.search(r"\bcall\b[^\n]*@py_cpy_", text)
+    assert "strict_nolib_unavailable" not in text
+    invoke = re.search(r"^define [^\n]*@user_[^\n(]*_invoke\([^\n]*\).*?^}",
+                       text, re.M | re.S)
+    assert invoke is not None
+    assert "@pcc_gc_root_copy_lease" in invoke.group(0)
+    assert "@py_obj_call_slots" in invoke.group(0)
+
+
 def test_native_sibling_import_alias_value_position_stays_native():
     """A function-local ``import pkg.sub as sub; return sub`` should not
     re-materialize the native sibling module through CPython fallback."""

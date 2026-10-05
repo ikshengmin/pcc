@@ -396,3 +396,107 @@ def test_undefined_symbol_discovery_does_not_copy_all_defined_names(monkeypatch)
         'external_a', 'external_z',
     ]
     assert elf.emit_relocatable(obj) == expected
+
+
+def test_temporary_labels_do_not_allocate_default_symbol_metadata():
+    count = 4096
+    text = '.intel_syntax noprefix\n.text\n.globl probe\n.type probe, @function\nprobe:\n'
+    text += ''.join('.Ltemporary_' + str(index) + ':\n' for index in range(count))
+    text += '  ret\n.size probe, .-probe\n'
+    plans, order, symbols = assembler._parse_file(text)
+    # Parser metadata should scale with declarations, while every label must
+    # remain available for duplicate checks and final branch/map resolution.
+    metadata_count = len(symbols)
+    assert metadata_count == 1
+    assert set(symbols) == {'probe'}
+    labels, sizes = assembler._measure_sections(plans, order, symbols)
+    assert len(labels) == count + 1
+    assert sizes['.text'] == 1
+    assert symbols['probe'] == assembler._SymbolMeta(True, elf.STT_FUNC, 1)
+    obj = assembler.assemble_file(text)
+    assert [symbol.name for symbol in obj.symbols] == ['', 'probe']
+
+
+@pytest.mark.parametrize('declarations_first', [True, False])
+def test_sparse_label_metadata_preserves_declarations_and_publication(declarations_first):
+    declarations = '''.type local_fn, @function
+.size local_fn, 1
+.globl global_fn
+.type global_fn, @function
+.size global_fn, 1
+.globl entry
+.type entry, @function
+.size sized_target, 8
+.type typed_target, @object
+.type external_called, @function
+.globl external_declared
+.type external_typed, @function
+'''
+    body = '''.text
+local_fn:
+  ret
+global_fn:
+  ret
+entry:
+  call local_fn
+  call global_fn
+  call external_called
+  jmp .Lend
+.Lend:
+  ret
+.size entry, .-entry
+.data
+plain_target:
+  .quad 0
+sized_target:
+  .quad 0
+typed_target:
+  .quad 0
+references:
+  .quad plain_target
+  .quad external_data
+'''
+    text = '.intel_syntax noprefix\n.text\n'
+    text += declarations + body if declarations_first else body + declarations
+    _plans, _order, metadata = assembler._parse_file(text)
+    assert set(metadata) == {
+        'local_fn', 'global_fn', 'entry', 'sized_target', 'typed_target',
+        'external_called', 'external_declared', 'external_typed',
+    }
+    obj = assembler.assemble_file(text)
+    symbols = {symbol.name: symbol for symbol in obj.symbols if symbol.name}
+    assert set(symbols) == set(metadata) | {'plain_target', 'external_data'}
+    assert symbols['local_fn'].binding == elf.STB_LOCAL
+    assert symbols['local_fn'].type == elf.STT_FUNC
+    assert symbols['local_fn'].size == 1
+    assert symbols['global_fn'].binding == elf.STB_GLOBAL
+    assert symbols['entry'].size == 21
+    assert symbols['sized_target'].size == 8
+    for name in ('plain_target', 'sized_target', 'typed_target'):
+        assert symbols[name].type == elf.STT_OBJECT
+        assert symbols[name].binding == elf.STB_LOCAL
+    for name in ('external_called', 'external_declared', 'external_typed', 'external_data'):
+        assert symbols[name].section_index == 0
+        assert symbols[name].binding == elf.STB_GLOBAL
+    assert symbols['external_called'].type == elf.STT_FUNC
+    assert symbols['external_typed'].type == elf.STT_FUNC
+    text_section = next(section for section in obj.sections if section.name == '.text')
+    assert [obj.symbols[relocation.symbol_index].name for relocation in text_section.relocations] == [
+        'global_fn', 'external_called',
+    ]
+    kept = assembler.assemble_file_keeping_labels(text, ('.Lend',))
+    assert {symbol.name for symbol in kept.symbols if symbol.name} == set(symbols) | {'.Lend'}
+    assert elf.parse_relocatable(elf.emit_relocatable(obj)) == obj
+
+
+@pytest.mark.parametrize(('body', 'diagnostic'), [
+    ('.text\n.Lsame:\n.Lsame:\n', "duplicate assembly label '.Lsame'"),
+    ('.text\nsame:\n.data\nsame:\n', "duplicate assembly label 'same'"),
+    ('.text\n.size missing, 1\n', "assembly metadata names symbols without definitions: ['missing']"),
+    ('.text\n.size missing, .-missing\n', ".size references non-local symbol 'missing'"),
+    ('.text\nprobe:\n ret\n.size probe, 1\n.size probe, 2\n', "conflicting .size directives for 'probe'"),
+])
+def test_sparse_label_metadata_preserves_definition_errors(body, diagnostic):
+    with pytest.raises(X86EncodeError) as error:
+        assembler.assemble_file('.intel_syntax noprefix\n' + body)
+    assert str(error.value) == diagnostic

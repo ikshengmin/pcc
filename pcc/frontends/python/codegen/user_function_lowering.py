@@ -2367,12 +2367,14 @@ class UserFunctionLoweringMixin:
             self._emit_attribute_error_if_null(original_init, "__init__", expr.span)
             init_root = self._enter_container_temp_root(original_init, self._fresh("dataclass.base.init"))
             previous_error_target = self._current_try_err_block()
+            previous_cpy_cleanup = self._cpy_operand_cleanup_block
             cleanup_target = previous_error_target
             if cleanup_target is None:
                 cleanup_target = self._ensure_fn_err_exit()
             self._try_err_block = self._make_cpy_operand_cleanup_block(
                 (), (), cleanup_target, "dataclass.base.init.unwind", rooted_pcc_lifetimes=((init_root, False),),
             )
+            self._cpy_operand_cleanup_block = self._try_err_block
             try:
                 defaults = self.builder.call(
                     self.runtime["py_func_get_defaults_metadata"], [original_init],
@@ -2382,8 +2384,12 @@ class UserFunctionLoweringMixin:
                 defaults_root = self._enter_container_temp_root(defaults, self._fresh("dataclass.base.defaults"))
                 self._try_err_block = self._make_cpy_operand_cleanup_block(
                     (), (), cleanup_target, "dataclass.base.defaults.unwind",
-                    rooted_pcc_lifetimes=((defaults_root, True), (init_root, False)),
+                    rooted_pcc_lifetimes=((init_root, False), (defaults_root, True)),
                 )
+                # NULL guards consult the operand cleanup before the try
+                # target. Both error routes must retire the newly entered
+                # roots, in reverse construction order, before the outer join.
+                self._cpy_operand_cleanup_block = self._try_err_block
                 factory = self.builder.call(
                     self.runtime["py_tuple_get"], [defaults, self._emit_expr_as_i64(expr.args[1])],
                     name=self._fresh("dataclass.inherited.factory"),
@@ -2396,6 +2402,7 @@ class UserFunctionLoweringMixin:
                 return factory
             finally:
                 self._try_err_block = previous_error_target
+                self._cpy_operand_cleanup_block = previous_cpy_cleanup
         valueclass_payload = self._maybe_emit_valueclass_constructor_payload(
             getattr(expr, "ty", None),
             expr,

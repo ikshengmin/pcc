@@ -119,6 +119,45 @@ main()
 '''
 
 
+def _inherited_signature_program(frozen, factory):
+    decorator = "@dataclass(frozen=True)" if frozen else "@dataclass"
+    default = "field(default_factory=list)" if factory else "()"
+    identity = "is not" if factory else "is"
+    return f'''from dataclasses import dataclass, field
+try:
+    {decorator}
+    class Base:
+        first: object = {default}
+        second: object = None
+    {decorator}
+    class Child(Base):
+        third: object = ()
+    {decorator}
+    class Grandchild(Child):
+        pass
+except Exception:
+    raise
+def main():
+    left = Grandchild()
+    right = Grandchild()
+    assert left.first {identity} right.first
+    assert left.second is None
+    assert left.third == ()
+    print("INHERITED_SIGNATURE_ROOTS_OK")
+main()
+'''
+
+
+INHERITED_SIGNATURE_PROGRAMS = [
+    pytest.param(_inherited_signature_program(frozen, factory),
+                 "INHERITED_SIGNATURE_ROOTS_OK\n",
+                 id=("frozen" if frozen else "plain") +
+                    ("-factory" if factory else "-default"))
+    for frozen in (False, True)
+    for factory in (False, True)
+]
+
+
 def _body(text, symbol):
     match = re.search(r"^define[^\n]*@" + re.escape(symbol) + r"\([^\n]*\)[^\n]*\{\n(.*?)^\}", text, re.M | re.S)
     assert match is not None, symbol
@@ -253,15 +292,88 @@ def test_failed_signature_releases_partial_default_owners_at_emitter(tmp_path, m
     output = tmp_path / "failed_default_owners.ll"
     source.write_text(FAILED_DEFAULTS)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   target_triple="arm64-apple-darwin23.6.0")
     ir_text = output.read_text()
     assert "func.signature.tuples.unwind" in ir_text
     object_bytes = emit_owned_object(ir_text, "arm64-apple-darwin23.6.0")
     assert object_bytes[:4] == b"\xcf\xfa\xed\xfe"
 
 
+@pytest.mark.parametrize("source_text,expected", INHERITED_SIGNATURE_PROGRAMS)
+def test_inherited_signature_null_guard_retires_nested_roots(tmp_path, monkeypatch, source_text, expected):
+    reference = io.StringIO()
+    with contextlib.redirect_stdout(reference):
+        exec(source_text, {})
+    assert reference.getvalue() == expected
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    source = tmp_path / "inherited_signatures.py"
+    output = tmp_path / "inherited_signatures.ll"
+    source.write_text(source_text)
+    compile_python(str(source), str(output), emit_llvm_only=True,
+                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   target_triple="x86_64-unknown-linux-gnu")
+    ir_text = output.read_text()
+    initializer = _body(ir_text, "_pcc_py_module_init_inherited_signatures")
+    # The tuple lookup's NULL edge must first retire both inherited-metadata
+    # roots. A try-only cleanup override used to bypass this block entirely.
+    guards = re.findall(
+        r"%dataclass\.inherited\.factory[^\n]* = call ptr[^\n]*@py_tuple_get[^\n]*\n"
+        r"[^\n]*\n  br i1 [^\n]*label %([^,\n]+),", initializer,
+    )
+    assert len(guards) >= 5  # two Child defaults, three Grandchild defaults
+    for target in guards:
+        assert target.startswith("dataclass.base.defaults.unwind.")
+        block = re.search(r"^" + re.escape(target) + r":\n(.*?)(?=^\S|\Z)",
+                          initializer, re.M | re.S).group(1)
+        # The strict root-set validator cannot itself establish stack order.
+        # Inspect the actual leave operands as well: metadata was entered last.
+        leaves = re.findall(
+            r"%gc\.frame\.lifo\.leave\.ptr[^\n]* = bitcast ptr "
+            r"%dataclass\.base\.(defaults|init)\.[^\n]*\n"
+            r"  call void \(ptr\) @pcc_gc_frame_leave_lifo", block,
+        )
+        assert leaves == ["defaults", "init"]
+        assert "br label %func.signature.tuples.unwind." in block
+    object_bytes = emit_owned_object(ir_text, "x86_64-unknown-linux-gnu")
+    assert object_bytes[:4] == b"\x7fELF"
+
+
+def test_inherited_signature_roots_reach_direct_object_worker(tmp_path, monkeypatch):
+    from pcc.frontends.python import pipeline, pipeline_frontend_workers as workers
+
+    for name in (
+        "PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "PCC_DIRECT_INDEXED_KERNEL_EMIT",
+        "PCC_DIRECT_INDEXED_KERNEL_FUSE_USES",
+        "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK",
+        "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND",
+        "PCC_DIRECT_INDEXED_NATIVE_OBJECT",
+    ):
+        monkeypatch.setenv(name, "1")
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_SIDECAR", "0")
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    source = tmp_path / "inherited_signatures.py"
+    source.write_text(_inherited_signature_program(True, False))
+    manifest = tmp_path / "worker.manifest"
+    result = tmp_path / "result.tsv"
+    workers.write_worker_manifest(
+        str(manifest), str(result), str(tmp_path), "", "", [str(source)],
+        ["inherited_signatures"], [0], entry_module="inherited_signatures",
+        sibling_inits=(), libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+    )
+    assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
+    object_path = tmp_path / "module_0.direct.pco"
+    assert object_path.stat().st_size > 0
+    assert "\tPCO\t" + str(object_path) in result.read_text()
+
+
 @pytest.mark.integration
-@pytest.mark.parametrize("source_text,expected", [(PROGRAM, EXPECTED), (PREPARED, "True\nTrue\n[1]\n"), (FAILED_DEFAULTS, "DEFAULT_OWNERS_RELEASED\n")], ids=["plain", "prepared", "factory-owner-unwind"])
+@pytest.mark.parametrize("source_text,expected", [
+    pytest.param(PROGRAM, EXPECTED, id="plain"),
+    pytest.param(PREPARED, "True\nTrue\n[1]\n", id="prepared"),
+    pytest.param(FAILED_DEFAULTS, "DEFAULT_OWNERS_RELEASED\n", id="factory-owner-unwind"),
+    *INHERITED_SIGNATURE_PROGRAMS,
+])
 def test_native_class_definition_defaults(tmp_path, pcc_runtime_archive, python_program_compiler, source_text, expected):
     source = tmp_path / "class_defaults.py"
     binary = tmp_path / "class_defaults"
