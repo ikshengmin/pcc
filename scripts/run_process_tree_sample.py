@@ -247,6 +247,12 @@ def _owned_session_pids(root_pid, observed_sessions, current_pids):
 
 
 def _recorded_environment(environment: dict[str, str]) -> dict[str, str]:
+    if environment.get("PCC_STAGE1_CHECKPOINT_STAGE") == "1":
+        # The source launcher binds unknown settings by digest.  Preserve that
+        # privacy boundary in durable watchdog receipts too.
+        from bootstrap_stage1_checkpoint import recorded_guard_environment
+
+        return recorded_guard_environment(environment)
     fixed = {
         "HOME",
         "LANG",

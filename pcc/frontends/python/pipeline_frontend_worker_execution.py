@@ -78,6 +78,95 @@ def _freeze_worker_survivors() -> None:
     gc.freeze()
 
 
+def _validate_stage1_checkpoint_worker(manifest, native_worker_executable):
+    """Check the original full worker context; a skip mask cannot replace it."""
+    from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+
+    root = manifest["checkpoint_root"]
+    build_digest = manifest["checkpoint_build_digest"]
+    graph_digest = manifest["checkpoint_graph_digest"]
+    if (
+        native_worker_executable()
+        or os.environ.get("PCC_STAGE1_CHECKPOINT_STAGE") != "1"
+        or os.environ.get("PCC_STAGE1_CHECKPOINT_DIR") != root
+        or os.environ.get("PCC_STAGE1_CHECKPOINT_BUILD") != build_digest
+    ):
+        raise _worker_failure("Stage1 checkpoint worker owner or identity differs")
+    if str(os.environ.get("PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND", "")).strip().lower() not in (
+        "1", "true", "yes", "on",
+    ):
+        raise _worker_failure("Stage1 checkpoint requires frontend release before object validation")
+    for name in (
+        "PCC_DIRECT_INDEXED_KERNEL_VALIDATE", "PCC_TEXT_INDEXED_KERNEL_EMIT",
+        "PCC_DIRECT_INDEXED_SIDECAR",
+    ):
+        if str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on"):
+            raise _worker_failure("unsupported Stage1 checkpoint route: " + name)
+    graph = checkpoint.load_graph(root, build_digest, graph_digest)
+    if (
+        graph["target"] != host_target_triple()
+        or graph["module_names"] != manifest["module_names"]
+        or manifest["assigned_indices"] not in graph["original_chunks"]
+        or graph["entry_module"] != manifest["entry_module"]
+        or graph["sibling_inits"] != list(manifest["sibling_inits"])
+        or graph["libpython_mode"] != manifest["libpython_mode"]
+        or graph["ir_scaffold_mode"] != manifest["ir_scaffold_mode"]
+        or graph["exports_sha256"] != checkpoint.file_sha256(manifest["exports_path"])
+        or graph["runtime_path"] != os.path.abspath(str(os.environ.get("PCC_RUNTIME_ARCHIVE", "") or ""))
+        or graph["runtime_sha256"] != checkpoint.file_sha256(graph["runtime_path"])
+    ):
+        raise _worker_failure("Stage1 checkpoint worker graph differs")
+    sources = graph["sources"]
+    if len(sources) != len(manifest["src_paths"]):
+        raise _worker_failure("Stage1 checkpoint source count differs")
+    for index, source in enumerate(sources):
+        if (
+            source["index"] != index
+            or source["module_name"] != manifest["module_names"][index]
+            or source["source_path"] != os.path.abspath(manifest["src_paths"][index])
+            or source["source_sha256"] != checkpoint.file_sha256(source["source_path"])
+        ):
+            raise _worker_failure("Stage1 checkpoint source identity differs")
+    return graph
+
+
+def _validate_stage1_checkpoint_module_context(manifest, graph, index) -> None:
+    from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+    from pcc.ir.compat import ir
+
+    # Named struct declarations otherwise survive an earlier module in the
+    # shared Context and enter direct capture. Do not silently skip warming it.
+    if ir.global_context.identified_types:
+        raise _worker_failure(
+            "Stage1 checkpoint cannot reuse a shared identified-type context"
+        )
+    source = graph["sources"][index]
+    ast_path = os.path.join(manifest["ast_dir"], "module_" + str(index) + ".json")
+    if (
+        checkpoint.file_sha256(ast_path) != source["ast_sha256"]
+        or checkpoint.file_sha256(source["source_path"]) != source["source_sha256"]
+        or _direct_owned_pass_names(manifest["module_names"][index]) != source["passes"]
+    ):
+        raise _worker_failure("Stage1 checkpoint module inputs changed")
+
+
+def _stage1_checkpoint_result_line(record, index, module_name, ir_dir, timing):
+    ir_path = os.path.join(ir_dir, "module_" + str(index) + ".ll")
+    with open(ir_path, "w", encoding="utf-8") as stream:
+        stream.write("")
+    line = (
+        "OK\t" + str(index) + "\t" + module_name
+        + "\t" + ("1" if record["needs_libpython"] else "0")
+        + "\t" + ("1" if record["needs_native_extension_exports"] else "0")
+        + "\t" + str(record["ir_bytes_before_passes"]) + "\t" + ir_path
+    )
+    if timing:
+        # Historical costs stay in the receipt; they are not new attempt CPU.
+        line += "\t0\t0\t0"
+    return line + "\tPCO\t" + record["artifact_path"] + "\tREUSED\t1"
+
+
 def run_export_worker(
     manifest,
     *,
@@ -328,6 +417,16 @@ def run_codegen_worker(
         exports_path = str(manifest.get("exports_path", "") or "")
         ast_dir = str(manifest.get("ast_dir", "") or "")
         worker_timing = worker_timing_enabled()
+        checkpoint_root = str(manifest.get("checkpoint_root", "") or "")
+        checkpoint_graph = None
+        checkpoint_skip_indices = []
+        if checkpoint_root:
+            from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+
+            checkpoint_graph = _validate_stage1_checkpoint_worker(
+                manifest, native_worker_executable,
+            )
+            checkpoint_skip_indices = manifest["checkpoint_skip_indices"]
         unique_external_class_preload = None
         indexed_exports = False
         lazy_ast_dir = ""
@@ -393,6 +492,23 @@ def run_codegen_worker(
             _freeze_worker_survivors()
         for index in assigned_indices:
             module_name = module_names[index]
+            if checkpoint_root:
+                _validate_stage1_checkpoint_module_context(manifest, checkpoint_graph, index)
+                if index in checkpoint_skip_indices:
+                    restored = checkpoint.load_module(
+                        checkpoint_root, manifest["checkpoint_build_digest"],
+                        manifest["checkpoint_graph_digest"], index, module_name,
+                        assigned_indices, ir_dir,
+                    )
+                    if restored is not None:
+                        result_lines.append(_stage1_checkpoint_result_line(
+                            restored, index, module_name, ir_dir, worker_timing,
+                        ))
+                        sys.stderr.write(
+                            "pcc Stage1 checkpoint reused index=" + str(index)
+                            + " module=" + module_name + "\n"
+                        )
+                        continue
             if lazy_ast_dir:
                 parse_started = time.monotonic() if worker_timing else 0.0
                 parsed_modules[index] = read_ast_wire(
@@ -808,6 +924,11 @@ def run_codegen_worker(
                                     del undefined
                                 with open(direct_path, "wb") as stream:
                                     stream.write(encoded)
+                                if checkpoint_root:
+                                    # A large Stage1 object can itself be 174 MB.
+                                    # Release the emitter buffer before the
+                                    # durable writer reads and validates it.
+                                    del encoded
                                 direct_marker = "PCO"
                             else:
                                 direct_path = os.path.join(
@@ -914,6 +1035,37 @@ def run_codegen_worker(
                 )
             if direct_path:
                 result_line += "\t" + direct_marker + "\t" + direct_path
+            if checkpoint_root:
+                _validate_stage1_checkpoint_module_context(manifest, checkpoint_graph, index)
+                if direct_marker != "PCO":
+                    raise _worker_failure("Stage1 checkpoint requires a direct object")
+                checkpoint_record = {
+                    "needs_libpython": bool(
+                        direct_needs_libpython or ir_needs_libpython(ir_text)
+                    ),
+                    "needs_native_extension_exports": bool(needs_native_extension_exports),
+                    "ir_bytes_before_passes": len(ir_text),
+                    "ir_text": "",
+                    "artifact_kind": "PCO",
+                    "artifact_path": direct_path,
+                    "parse_ms": parse_ms_by_index.get(index, 0),
+                    "infer_ms": infer_ms,
+                    "codegen_ms": codegen_ms,
+                }
+                # The normal IR sidecar and TSV metadata are already complete.
+                # Owned passes can leave a large canonical text buffer; it is
+                # not an input to direct-object linking or receipt validation.
+                ir_text = ""
+                checkpoint.publish_module(
+                    checkpoint_root, manifest["checkpoint_build_digest"],
+                    manifest["checkpoint_graph_digest"], index, module_name,
+                    assigned_indices,
+                    checkpoint_record,
+                )
+                sys.stderr.write(
+                    "pcc Stage1 checkpoint committed index=" + str(index)
+                    + " module=" + module_name + "\n"
+                )
             result_lines.append(result_line)
         with open(result_path, "w", encoding="utf-8") as stream:
             for line in result_lines:

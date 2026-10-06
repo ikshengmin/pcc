@@ -1724,6 +1724,64 @@ def _remove_direct_native_object_dir(path: str) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _validate_stage1_checkpoint_link(
+    artifacts, runtime_archive, needs_libpython, needs_native_exports, ir_bytes,
+) -> None:
+    """Revalidate every durable object and actual link input before linking."""
+    root = str(os.environ.get("PCC_STAGE1_CHECKPOINT_DIR", "") or "")
+    if not root:
+        return
+    if (
+        os.environ.get("PCC_STAGE1_CHECKPOINT_STAGE") != "1"
+        or _python_frontend_worker_executable()
+    ):
+        raise PyPipelineError("native stages cannot consume Stage1 checkpoints")
+    from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+
+    build_digest = str(os.environ.get("PCC_STAGE1_CHECKPOINT_BUILD", "") or "")
+    summary = checkpoint.summarize(root, build_digest)
+    if (
+        summary["missing_modules"]
+        or summary["rejected_modules"]
+        or summary["unique_completed_modules"] != len(artifacts)
+        or summary["module_count"] != len(artifacts)
+    ):
+        raise PyPipelineError("Stage1 checkpoint is incomplete or corrupt before link")
+    graph = checkpoint.load_graph(root, build_digest, summary["graph_digest"])
+    if (
+        os.path.abspath(runtime_archive) != graph["runtime_path"]
+        or checkpoint.file_sha256(runtime_archive) != graph["runtime_sha256"]
+        or [item[0] for item in artifacts] != graph["module_names"]
+    ):
+        raise PyPipelineError("Stage1 checkpoint runtime or module order changed")
+    expected_libpython = False
+    expected_native_exports = False
+    expected_ir_bytes = 0
+    for index, artifact in enumerate(artifacts):
+        name, kind, path = artifact
+        receipt = summary["modules"][index]
+        source = graph["sources"][index]
+        if (
+            receipt["index"] != index
+            or receipt["module_name"] != name
+            or kind != "PCO"
+            or checkpoint.file_sha256(path) != receipt["object_sha256"]
+            or checkpoint.file_sha256(source["source_path"]) != source["source_sha256"]
+        ):
+            raise PyPipelineError("Stage1 checkpoint link input changed: " + name)
+        expected_libpython = expected_libpython or receipt["needs_libpython"]
+        expected_native_exports = (
+            expected_native_exports or receipt["needs_native_extension_exports"]
+        )
+        expected_ir_bytes += receipt["ir_bytes_before_passes"]
+    if (
+        needs_libpython != expected_libpython
+        or needs_native_exports != expected_native_exports
+        or ir_bytes != expected_ir_bytes
+    ):
+        raise PyPipelineError("Stage1 checkpoint link metadata differs")
+
+
 def _link_with_self_backend_assembly_texts(
     assembly_texts: list[tuple[str, str]],
     out_path: str,
@@ -2750,6 +2808,10 @@ def _write_python_frontend_worker_manifest(
     ir_scaffold_mode: str,
     verbose: bool,
     job_kind: str = "codegen",
+    checkpoint_root: str = "",
+    checkpoint_build_digest: str = "",
+    checkpoint_graph_digest: str = "",
+    checkpoint_skip_indices=(),
 ) -> None:
     _pipeline_frontend_workers.write_worker_manifest(
         path,
@@ -2766,6 +2828,10 @@ def _write_python_frontend_worker_manifest(
         ir_scaffold_mode=ir_scaffold_mode,
         verbose=verbose,
         job_kind=job_kind,
+        checkpoint_root=checkpoint_root,
+        checkpoint_build_digest=checkpoint_build_digest,
+        checkpoint_graph_digest=checkpoint_graph_digest,
+        checkpoint_skip_indices=checkpoint_skip_indices,
     )
 
 
@@ -3732,6 +3798,10 @@ def compile_python_multi(
             runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
         else:
             runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
+        _validate_stage1_checkpoint_link(
+            module_direct_artifacts, runtime, any_needs_libpython,
+            any_needs_native_extension_exports, total_ir_bytes_before_passes,
+        )
         assembly_count = 0
         native_count = 0
         assembly_bytes = 0

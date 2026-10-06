@@ -3,7 +3,7 @@
 
 Usage:
   scripts/bootstrap.py [--stage N] [--from-stage N] [--reuse-stage1]
-                       [--out-dir DIR] [--clean]
+                       [--stage1-checkpoint DIR] [--out-dir DIR] [--clean]
 
   scripts/bootstrap.py --stage 1
       Build pcc1.  ``--stage 3 --reuse-stage1`` reuses an existing
@@ -156,6 +156,9 @@ class Options:
         self.start_stage = 1
         self.stage_limit = 3
         self.clean = False
+        self.stage1_checkpoint = None
+        self.checkpoint_attempt = None
+        self.checkpoint_guard_dir = None
         self.executable_suffix = ".exe" if os.name == "nt" else ""
 
     def stage_output(self, stage: int) -> Path:
@@ -261,6 +264,10 @@ def parse_args(argv: list[str], options: Options) -> Options:
     )
     parser.add_argument("--reuse-stage1", action="store_true")
     parser.add_argument(
+        "--stage1-checkpoint", metavar="DIR",
+        help="durably checkpoint host Stage1 objects; resume only an identical build",
+    )
+    parser.add_argument(
         "--backend",
         choices=("self",),
         default=None,
@@ -281,6 +288,13 @@ def parse_args(argv: list[str], options: Options) -> Options:
         options.out_dir = Path(args.out_dir)
     if args.reuse_stage1:
         options.reuse_stage1 = True
+    if args.stage1_checkpoint:
+        options.stage1_checkpoint = Path(args.stage1_checkpoint)
+        if options.reuse_stage1 or options.start_stage != 1 or options.clean:
+            raise BootstrapError(
+                "--stage1-checkpoint cannot combine with --reuse-stage1, "
+                "--clean or --from-stage > 1"
+            )
     if args.backend is not None:
         options.backend = args.backend
         options.backend_explicit = True
@@ -358,6 +372,8 @@ def _host_python_command() -> list[str]:
 
 def stage_environment(stage: int, options: Options) -> dict[str, str]:
     environment = options.child_env()
+    if stage != 1 or options.checkpoint_attempt is None:
+        environment = _without_stage1_checkpoint(environment)
     frontend_jobs = (
         options.stage1_py_frontend_jobs
         if stage == 1
@@ -386,6 +402,13 @@ def stage_environment(stage: int, options: Options) -> dict[str, str]:
         }
     )
     return environment
+
+
+def _without_stage1_checkpoint(environment: dict[str, str]) -> dict[str, str]:
+    return {
+        name: value for name, value in environment.items()
+        if not name.startswith("PCC_STAGE1_CHECKPOINT_")
+    }
 
 
 def _plan_paths(stage: int, out_exe: Path, options: Options) -> tuple[str, str, str]:
@@ -481,7 +504,7 @@ def stage_exec_barrier(out_exe: Path, stage: int, options: Options) -> int:
     subprocess.run(
         [str(out_exe), "--help"],
         cwd=str(ROOT),
-        env=options.child_env(),
+        env=_without_stage1_checkpoint(options.child_env()),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
@@ -502,7 +525,7 @@ def stage_exec_barrier(out_exe: Path, stage: int, options: Options) -> int:
         # Without it the stage's own compile would still "pass" and corrupt the
         # object free list much later in the allocator.  Set
         # PCC_BOOTSTRAP_SMOKE_REFCOUNT_AUDIT=0 to run the smoke without it.
-        environment = options.child_env()
+        environment = _without_stage1_checkpoint(options.child_env())
         environment.update(
             {
                 "PCC_RUNTIME_CC": options.runtime_cc,
@@ -727,15 +750,21 @@ def _run_guarded(
             ).returncode,
             None,
         )
-    guard_dir = Path(
-        tempfile.mkdtemp(prefix=f"stage{stage}.process.", dir=str(options.out_dir))
-    )
+    if options.checkpoint_guard_dir is not None:
+        guard_dir = Path(options.checkpoint_guard_dir)
+        guard_dir.mkdir(parents=True, exist_ok=False)
+    else:
+        guard_dir = Path(
+            tempfile.mkdtemp(prefix=f"stage{stage}.process.", dir=str(options.out_dir))
+        )
     print(
         f"process-tree guard: {guard_dir}/result.json "
         f"cap={options.max_tree_rss_bytes} timeout={options.stage_timeout}s"
     )
     if os.name == "nt":  # pragma: no cover - Windows host
         return _windows_guarded_run(guard_dir, options, target, environment), guard_dir
+    if options.checkpoint_attempt is not None:
+        options.checkpoint_attempt.request_guard_launch()
     completed = subprocess.run(
         _posix_guard_command(guard_dir, options, target),
         cwd=str(ROOT),
@@ -752,6 +781,20 @@ def _run_guarded(
 
 def run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> None:
     """Compile one stage, gate it natively, and report its receipt."""
+
+    if stage == 1 and options.stage1_checkpoint is not None:
+        from scripts.bootstrap_stage1_checkpoint import (
+            CheckpointError,
+            run_checkpointed_stage,
+        )
+        try:
+            return run_checkpointed_stage(stage, out_exe, cmd, options, _run_stage)
+        except (CheckpointError, OSError, subprocess.TimeoutExpired) as exc:
+            raise BootstrapError("Stage1 checkpoint: " + str(exc)) from exc
+    return _run_stage(stage, out_exe, cmd, options)
+
+
+def _run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> None:
 
     if options.profile_dir:
         Path(options.profile_dir).mkdir(parents=True, exist_ok=True)
@@ -860,9 +903,13 @@ def run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> No
             stage_returncode = 127
     barrier_returncode = 0
     if stage_returncode == 0:
+        if options.checkpoint_attempt is not None:
+            options.checkpoint_attempt.verify_inputs()
         barrier_returncode = stage_exec_barrier(out_exe, stage, options)
         if barrier_returncode != 0:
             stage_returncode = barrier_returncode
+        elif options.checkpoint_attempt is not None:
+            options.checkpoint_attempt.verify_inputs()
     barrier_end_ms = now_ms()
     barrier_elapsed_ms = barrier_end_ms - barrier_start_ms
     stage_elapsed_ms = barrier_end_ms - stage_start_ms
@@ -898,6 +945,10 @@ def run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> No
             f"elapsed_ms={stage_elapsed_ms} rc=0 output=<missing:{out_exe}>"
         )
         raise BootstrapError("<stage produced no artifact>", exit_code=1)
+    if options.checkpoint_attempt is not None:
+        # Checkpoint success is published only after durable module validation,
+        # immutable attempt accounting and the final receipt have all succeeded.
+        return
     print(
         f"PCC_BOOTSTRAP_STAGE_RESULT stage={stage} "
         f"elapsed_ms={stage_elapsed_ms} output={out_exe} rc=0"

@@ -19,6 +19,7 @@ WORKER_MANIFEST_V1 = "pcc.frontends.python.codegen_worker.v1"
 WORKER_MANIFEST_V2 = "pcc.frontends.python.codegen_worker.v2"
 WORKER_MANIFEST_V3 = "pcc.frontends.python.codegen_worker.v3"
 WORKER_MANIFEST_V4 = "pcc.frontends.python.codegen_worker.v4"
+WORKER_MANIFEST_V5 = "pcc.frontends.python.codegen_worker.v5"
 
 # Source-Python workers retain the decoded ASTs, inferred types, LLVM builder
 # state, and generated IR for every module assigned to their process.  One
@@ -574,9 +575,26 @@ def write_worker_manifest(
     ir_scaffold_mode: str,
     verbose: bool,
     job_kind: str = "codegen",
+    checkpoint_root: str = "",
+    checkpoint_build_digest: str = "",
+    checkpoint_graph_digest: str = "",
+    checkpoint_skip_indices=(),
 ) -> None:
+    if checkpoint_root:
+        _validate_checkpoint_manifest(
+            checkpoint_root,
+            checkpoint_build_digest,
+            checkpoint_graph_digest,
+            assigned_indices,
+            checkpoint_skip_indices,
+            len(module_names),
+            job_kind,
+        )
     with open(path, "w", encoding="utf-8") as stream:
-        stream.write(WORKER_MANIFEST_V4 + "\n")
+        stream.write(
+            (WORKER_MANIFEST_V5 if checkpoint_root else WORKER_MANIFEST_V4)
+            + "\n"
+        )
         stream.write(result_path + "\n")
         stream.write(ir_dir + "\n")
         stream.write(exports_path + "\n")
@@ -604,6 +622,43 @@ def write_worker_manifest(
         stream.write(str(len(assigned_indices)) + "\n")
         for index in assigned_indices:
             stream.write(str(index) + "\n")
+        if checkpoint_root:
+            stream.write(checkpoint_root + "\n")
+            stream.write(checkpoint_build_digest + "\n")
+            stream.write(checkpoint_graph_digest + "\n")
+            stream.write(str(len(checkpoint_skip_indices)) + "\n")
+            for index in checkpoint_skip_indices:
+                stream.write(str(index) + "\n")
+
+
+def _validate_checkpoint_manifest(
+    root, build_digest, graph_digest, assigned_indices, skip_indices,
+    module_count, job_kind,
+) -> None:
+    if (
+        job_kind != "codegen"
+        or not os.path.isabs(root)
+        or "\n" in root
+        or "\r" in root
+    ):
+        raise FrontendWorkerContractError("invalid Stage1 checkpoint worker root")
+    for digest in (build_digest, graph_digest):
+        if len(digest) != 64 or any(
+            char not in "0123456789abcdef" for char in digest
+        ):
+            raise FrontendWorkerContractError("invalid Stage1 checkpoint identity")
+    seen = set()
+    for index in assigned_indices:
+        if type(index) is not int or index < 0 or index >= module_count or index in seen:
+            raise FrontendWorkerContractError("invalid Stage1 checkpoint assignment")
+        seen.add(index)
+    if not seen:
+        raise FrontendWorkerContractError("empty Stage1 checkpoint assignment")
+    skipped = set()
+    for index in skip_indices:
+        if type(index) is not int or index not in seen or index in skipped:
+            raise FrontendWorkerContractError("invalid Stage1 checkpoint skip mask")
+        skipped.add(index)
 
 
 def read_worker_manifest(path: str):
@@ -615,6 +670,7 @@ def read_worker_manifest(path: str):
         WORKER_MANIFEST_V2,
         WORKER_MANIFEST_V3,
         WORKER_MANIFEST_V4,
+        WORKER_MANIFEST_V5,
     ):
         raise FrontendWorkerContractError(
             "invalid frontend codegen worker manifest"
@@ -637,7 +693,7 @@ def read_worker_manifest(path: str):
             position += 1
             job_kind = lines[position]
             position += 1
-        if version == WORKER_MANIFEST_V4:
+        if version in (WORKER_MANIFEST_V4, WORKER_MANIFEST_V5):
             exports_path = lines[position]
             position += 1
             job_kind = lines[position]
@@ -671,6 +727,8 @@ def read_worker_manifest(path: str):
                 raise FrontendWorkerContractError(
                     "invalid frontend worker module entry"
                 )
+            if version == WORKER_MANIFEST_V5 and parts[0] != str(index):
+                raise FrontendWorkerContractError("invalid Stage1 checkpoint module ordinal")
             src_paths.append(parts[2])
             module_names.append(parts[1])
             position += 1
@@ -683,6 +741,33 @@ def read_worker_manifest(path: str):
             assigned_indices.append(int(lines[position]))
             position += 1
             index += 1
+        checkpoint_root = ""
+        checkpoint_build_digest = ""
+        checkpoint_graph_digest = ""
+        checkpoint_skip_indices = []
+        if version == WORKER_MANIFEST_V5:
+            checkpoint_root = lines[position]
+            checkpoint_build_digest = lines[position + 1]
+            checkpoint_graph_digest = lines[position + 2]
+            position += 3
+            skip_count = int(lines[position])
+            position += 1
+            if skip_count < 0:
+                raise ValueError("negative checkpoint skip count")
+            index = 0
+            while index < skip_count:
+                checkpoint_skip_indices.append(int(lines[position]))
+                position += 1
+                index += 1
+            _validate_checkpoint_manifest(
+                checkpoint_root,
+                checkpoint_build_digest,
+                checkpoint_graph_digest,
+                assigned_indices,
+                checkpoint_skip_indices,
+                len(module_names),
+                job_kind,
+            )
     except (IndexError, ValueError) as exc:
         raise FrontendWorkerContractError(
             "truncated or malformed frontend codegen worker manifest"
@@ -705,6 +790,10 @@ def read_worker_manifest(path: str):
         "src_paths": src_paths,
         "module_names": module_names,
         "assigned_indices": assigned_indices,
+        "checkpoint_root": checkpoint_root,
+        "checkpoint_build_digest": checkpoint_build_digest,
+        "checkpoint_graph_digest": checkpoint_graph_digest,
+        "checkpoint_skip_indices": checkpoint_skip_indices,
     }
 
 

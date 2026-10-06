@@ -728,6 +728,63 @@ def _codegen_safe_worker_jobs(jobs: int, native_owned_lanes: bool,
     return _compiled_native_auto_jobs(jobs)
 
 
+def _prepare_stage1_checkpoint_graph(
+    root, build_digest, src_paths, module_names, chunks, exports_path,
+    ast_dir, entry_module, sibling_inits, libpython_mode, ir_scaffold_mode,
+    worker_prefix, jobs,
+):
+    """Bind the newly generated full graph before admitting any old object."""
+    from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+    from pcc.frontends.python.pipeline_frontend_worker_execution import (
+        _direct_owned_pass_names,
+    )
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+
+    sources = []
+    for index, module_name in enumerate(module_names):
+        source_path = os.path.abspath(src_paths[index])
+        ast_path = os.path.join(ast_dir, "module_" + str(index) + ".json")
+        sources.append({
+            "index": index,
+            "module_name": module_name,
+            "source_path": source_path,
+            "source_sha256": checkpoint.file_sha256(source_path),
+            "ast_sha256": checkpoint.file_sha256(ast_path),
+            "ast_size": os.path.getsize(ast_path),
+            "passes": _direct_owned_pass_names(module_name),
+        })
+    runtime_path = str(os.environ.get("PCC_RUNTIME_ARCHIVE", "") or "")
+    if not runtime_path:
+        raise checkpoint.CheckpointError("Stage1 checkpoint runtime is missing")
+    graph = {
+        "stage": 1,
+        "producer_role": "host-pcc0",
+        "owner": "cpython",
+        "backend": "self",
+        "target": host_target_triple(),
+        "module_names": list(module_names),
+        "original_chunks": [list(chunk) for chunk in chunks],
+        "sources": sources,
+        "entry_module": entry_module,
+        "sibling_inits": list(sibling_inits),
+        "libpython_mode": libpython_mode,
+        "ir_scaffold_mode": ir_scaffold_mode,
+        "worker_prefix": list(worker_prefix),
+        "jobs": jobs,
+        "exports_sha256": checkpoint.file_sha256(exports_path),
+        "exports_size": os.path.getsize(exports_path),
+        "runtime_path": os.path.abspath(runtime_path),
+        "runtime_sha256": checkpoint.file_sha256(runtime_path),
+        "worker_schema": "pcc.frontends.python.codegen_worker.v5",
+        "ast_schema": "pcc.frontends.python.py_ast.v1",
+        "export_reader_by_chunk": [
+            "module_indexed" if len(chunk) == 1 else "full_graph"
+            for chunk in chunks
+        ],
+    }
+    return checkpoint.prepare_graph(root, build_digest, graph)
+
+
 def compile_parallel(
     src_paths,
     module_names,
@@ -905,11 +962,24 @@ def compile_parallel_uncached(
     auto_source_lanes: bool = True,
     run_worker_manifest_in_process=None,
 ):
+    checkpoint_root = str(
+        os.environ.get("PCC_STAGE1_CHECKPOINT_DIR", "") or ""
+    )
+    checkpoint_build_digest = str(
+        os.environ.get("PCC_STAGE1_CHECKPOINT_BUILD", "") or ""
+    )
+    checkpoint_graph_digest = ""
     if jobs < 1 or not can_spawn_worker():
+        if checkpoint_root:
+            raise pipeline_error("Stage1 checkpoint requires source workers")
         return None
     worker_prefix = worker_command_prefix()
     if not worker_prefix:
+        if checkpoint_root:
+            raise pipeline_error("Stage1 checkpoint requires a worker interpreter")
         return None
+    if checkpoint_root and action_cache_plan is not None:
+        raise pipeline_error("Stage1 checkpoint cannot share the frontend action cache")
     noop_result = _load_noop_action_result(
         action_cache_plan,
         src_paths,
@@ -930,6 +1000,28 @@ def compile_parallel_uncached(
     # A numeric worker count limits concurrency; it must not turn off the
     # native export/codegen ownership and memory-safe deferred pipeline.
     native_owned_lanes = compiled_native_worker
+    if checkpoint_root:
+        if (
+            native_owned_lanes
+            or os.environ.get("PCC_STAGE1_CHECKPOINT_STAGE") != "1"
+            or not checkpoint_build_digest
+            or not artifact_dir
+            or libpython_mode != "off"
+            or action_cache_plan is not None
+            or str(os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", ""))
+            .strip().lower() not in ("1", "true", "yes", "on")
+            or str(os.environ.get("PCC_DIRECT_INDEXED_NATIVE_OBJECT", "1"))
+            .strip().lower() in ("0", "false", "no", "off")
+            or str(os.environ.get("PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND", ""))
+            .strip().lower() not in ("1", "true", "yes", "on")
+        ):
+            raise pipeline_error("unsupported Stage1 checkpoint worker route")
+        for name in (
+            "PCC_DIRECT_INDEXED_KERNEL_VALIDATE", "PCC_TEXT_INDEXED_KERNEL_EMIT",
+            "PCC_DIRECT_INDEXED_SIDECAR",
+        ):
+            if str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on"):
+                raise pipeline_error("unsupported Stage1 checkpoint route: " + name)
     native_auto_source_lanes = auto_source_lanes and compiled_native_worker
     chunk_count = chunk_count_for_workers(len(src_paths), jobs, worker_prefix)
     chunks = codegen_chunks(src_paths, chunk_count)
@@ -1133,6 +1225,31 @@ def compile_parallel_uncached(
                 )
             )
         scheduled_chunks = oversized_chunks + safe_chunks
+        checkpoint_skip_masks = []
+        if checkpoint_root:
+            from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+
+            # An action-cache hit must never filter these assignments: the
+            # original chunk length selects the worker's export reader.
+            if scheduled_chunks != chunks:
+                raise pipeline_error("Stage1 checkpoint assignments changed")
+            checkpoint_graph_digest = _prepare_stage1_checkpoint_graph(
+                checkpoint_root, checkpoint_build_digest, src_paths,
+                module_names, chunks, exports_path, ast_dir, entry_module,
+                sibling_inits, libpython_mode, ir_scaffold_mode,
+                worker_prefix, jobs,
+            )
+            for chunk in scheduled_chunks:
+                skip_mask = []
+                for index in chunk:
+                    record = checkpoint.load_module(
+                        checkpoint_root, checkpoint_build_digest,
+                        checkpoint_graph_digest, index, module_names[index],
+                        chunk, ir_dir,
+                    )
+                    if record is not None:
+                        skip_mask.append(index)
+                checkpoint_skip_masks.append(skip_mask)
         oversized_chunk_count = len(oversized_chunks)
         safe_jobs = jobs
         deferred_codegen_plan = str(
@@ -1216,6 +1333,13 @@ def compile_parallel_uncached(
                 libpython_mode=libpython_mode,
                 ir_scaffold_mode=ir_scaffold_mode,
                 verbose=verbose,
+                checkpoint_root=checkpoint_root,
+                checkpoint_build_digest=checkpoint_build_digest,
+                checkpoint_graph_digest=checkpoint_graph_digest,
+                checkpoint_skip_indices=(
+                    checkpoint_skip_masks[worker_index]
+                    if checkpoint_root else ()
+                ),
             )
             result_paths.append(result_path)
             manifest_paths.append(manifest_path)
@@ -1395,6 +1519,7 @@ def compile_parallel_uncached(
         worker_codegen_sum_ms = 0
         worker_codegen_max_ms = 0
         worker_codegen_max_index = -1
+        checkpoint_hits = 0
         for result_path in result_paths:
             with open(result_path, "r", encoding="utf-8") as stream:
                 result_text = stream.read()
@@ -1407,14 +1532,29 @@ def compile_parallel_uncached(
                     raise pipeline_error(message)
                 if parts[0] != "OK" or len(parts) < 7:
                     raise pipeline_error("invalid frontend worker result")
+                if "REUSED" in parts:
+                    checkpoint_hits += 1
                 index = int(parts[1])
                 module_name = parts[2]
+                if checkpoint_root and (
+                    index < 0
+                    or index >= len(module_names)
+                    or module_name != module_names[index]
+                    or module_ir_by_index[index] is not None
+                    or parts[3] not in ("0", "1")
+                    or parts[4] not in ("0", "1")
+                ):
+                    raise pipeline_error("invalid Stage1 checkpoint worker result binding")
                 needs_libpython = parts[3] == "1"
                 needs_native_exports = parts[4] == "1"
                 try:
                     ir_bytes_before_passes = int(parts[5])
                 except ValueError:
+                    if checkpoint_root:
+                        raise pipeline_error("invalid Stage1 checkpoint IR byte count")
                     ir_bytes_before_passes = 0
+                if checkpoint_root and ir_bytes_before_passes < 0:
+                    raise pipeline_error("negative Stage1 checkpoint IR byte count")
                 assembly_path = ""
                 native_object_path = ""
                 marker_index = 7
@@ -1605,6 +1745,12 @@ def compile_parallel_uncached(
         )
         for name, value in counters:
             profile_counter(profile, name, value)
+        if checkpoint_root:
+            profile_counter(profile, "multi_frontend_checkpoint_hits", checkpoint_hits)
+            profile_counter(
+                profile, "multi_frontend_checkpoint_compiled",
+                len(module_names) - checkpoint_hits,
+            )
         profile_end(profile, "multi_frontend_codegen_result_read", started)
         result = (
             module_ir_texts,

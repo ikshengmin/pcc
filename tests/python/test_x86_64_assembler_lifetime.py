@@ -500,3 +500,193 @@ def test_sparse_label_metadata_preserves_definition_errors(body, diagnostic):
     with pytest.raises(X86EncodeError) as error:
         assembler.assemble_file('.intel_syntax noprefix\n' + body)
     assert str(error.value) == diagnostic
+
+
+def test_sizing_memo_preserves_real_pc_branches_relocations_and_pass_reset(monkeypatch):
+    text = '''.intel_syntax noprefix
+.text
+.globl probe
+.type probe, @function
+probe:
+.Lback:
+  call external
+  call external
+  jmp .Lforward
+  jmp .Lforward
+.Lforward:
+  jne .Lback
+  jne .Lback
+  ret
+.size probe, .-probe
+'''
+    original = assembler.encode_instruction
+    calls = []
+    def tracked(line, *, pc, labels, section_name):
+        calls.append((line, pc, bool(labels)))
+        return original(line, pc=pc, labels=labels, section_name=section_name)
+    monkeypatch.setattr(assembler, 'encode_instruction', tracked)
+    first = assembler.assemble_file(text)
+    section = next(section for section in first.sections if section.name == '.text')
+    assert section.data.hex() == (
+        'e800000000e800000000e905000000e900000000'
+        '0f85e6ffffff0f85e0ffffffc3'
+    )
+    assert [(rel.offset, first.symbols[rel.symbol_index].name, rel.addend)
+            for rel in section.relocations] == [(1, 'external', -4), (6, 'external', -4)]
+    assert [pc for line, pc, final in calls if final and line == 'jmp .Lforward'] == [10, 15]
+    assert [pc for line, pc, final in calls if final and line == 'jne .Lback'] == [20, 26]
+    assert len([call for call in calls if not call[2]]) == 4
+    assert len([call for call in calls if call[2]]) == 7
+    calls.clear()
+    second = assembler.assemble_file(text)
+    assert elf.emit_relocatable(second) == elf.emit_relocatable(first)
+    assert len([call for call in calls if not call[2]]) == 4
+
+
+def test_sizing_memo_does_not_skip_final_branch_range_validation():
+    # Measurement is sparse; final encoding rejects the first jump before any
+    # multi-GiB zero payload can be allocated.
+    text = '''.intel_syntax noprefix
+.text
+probe:
+  jne .Lfar
+  jne .Lfar
+  .zero 2147483648
+.Lfar:
+  ret
+'''
+    with pytest.raises(X86EncodeError, match='outside rel32 range'):
+        assembler.assemble_file(text)
+
+
+def test_sizing_memo_repeated_invalid_instruction_still_fails_first(monkeypatch):
+    original = assembler.encode_instruction
+    invalid_calls = []
+    def tracked(line, **kwargs):
+        if line == 'vzeroupper':
+            invalid_calls.append(line)
+        return original(line, **kwargs)
+    monkeypatch.setattr(assembler, 'encode_instruction', tracked)
+    text = '.intel_syntax noprefix\n.text\nprobe:\n ret\n ret\n vzeroupper\n vzeroupper\n'
+    for expected_count in (1, 2):
+        with pytest.raises(X86EncodeError, match='not proven'):
+            assembler.assemble_file(text)
+        assert len(invalid_calls) == expected_count
+
+
+@pytest.mark.parametrize(('entry_limit', 'byte_limit', 'instructions', 'expected_calls'), [
+    (2, 1_048_576, ['mov eax, 1', 'mov eax, 2', 'mov eax, 1', 'mov eax, 3', 'mov eax, 2'], 4),
+    (4096, 48, ['call α', 'call β', 'call α', 'call γ', 'call α'], 4),
+    (4096, 20, ['call α', 'call α', 'ret', 'ret'], 3),
+])
+def test_sizing_memo_bounds_entries_and_unicode_key_storage(
+    monkeypatch, entry_limit, byte_limit, instructions, expected_calls,
+):
+    monkeypatch.setattr(assembler, '_INSTRUCTION_SIZE_CACHE_MAX_ENTRIES', entry_limit)
+    monkeypatch.setattr(assembler, '_INSTRUCTION_SIZE_CACHE_MAX_KEY_BYTES', byte_limit)
+    original = assembler.encode_instruction
+    calls = []
+    def tracked(line, **kwargs):
+        calls.append(line)
+        return original(line, **kwargs)
+    monkeypatch.setattr(assembler, 'encode_instruction', tracked)
+    text = '.intel_syntax noprefix\n.text\n' + '\n'.join(instructions) + '\n'
+    plans, order, symbols = assembler._parse_file(text, compact_instructions=True)
+    _, sizes = assembler._measure_sections(plans, order, symbols)
+    assert len(calls) == expected_calls
+    expected_size = sum(len(original(line, pc=0, labels={}, section_name='.text').code)
+                        for line in instructions)
+    assert sizes['.text'] == expected_size
+
+
+def test_sizing_memo_oversized_miss_does_not_retain_encoded_graph(monkeypatch):
+    monkeypatch.setattr(assembler, '_INSTRUCTION_SIZE_CACHE_MAX_KEY_BYTES', 256)
+    giant = 'call ' + 'x' * (assembler._INSTRUCTION_SPAN_BASE + 17)
+    original = assembler.encode_instruction
+    giant_results = []
+    giant_calls = []
+    def tracked(line, **kwargs):
+        if line == 'mov eax, 42':
+            assert giant_results and all(ref() is None for ref in giant_results)
+        result = original(line, **kwargs)
+        if line == giant:
+            giant_calls.append(line)
+            giant_results.append(weakref.ref(result))
+        return result
+    monkeypatch.setattr(assembler, 'encode_instruction', tracked)
+    text = '.intel_syntax noprefix\n.text\nret\n' + giant + '\nret\nret\n' + giant + '\nret\nmov eax, 42\n'
+    plans, order, symbols = assembler._parse_file(text, compact_instructions=True)
+    assert any(isinstance(entry, assembler._Instruction) and entry.text == giant
+               for entry in plans['.text'].entries)
+    _, sizes = assembler._measure_sections(plans, order, symbols)
+    assert sizes['.text'] == 19
+    assert len(giant_calls) == 2
+    assert all(ref() is None for ref in giant_results)
+
+
+def test_sizing_memo_accepts_zero_length_and_bypasses_string_subclasses(monkeypatch):
+    class ObservedText(str):
+        strips = 0
+        def strip(self, *args):
+            self.strips += 1
+            return super().strip(*args)
+        def __hash__(self):
+            raise AssertionError('custom text must not become a memo key')
+    special = ObservedText('ret')
+    section = assembler._SectionPlan('.text', elf.SHT_PROGBITS, elf.SHF_ALLOC, 1)
+    section.entries = [assembler._Instruction(''), assembler._Instruction(''),
+                       assembler._Instruction(special), assembler._Instruction(special)]
+    original = assembler.encode_instruction
+    empty_calls = []
+    def tracked(line, **kwargs):
+        if not line:
+            empty_calls.append(line)
+        return original(line, **kwargs)
+    monkeypatch.setattr(assembler, 'encode_instruction', tracked)
+    _, sizes = assembler._measure_sections({'.text': section}, ['.text'], {})
+    assert sizes['.text'] == 2
+    assert empty_calls == ['']
+    assert special.strips == 2
+
+
+def test_sizing_memo_owned_native_calls_and_backward_branch_execute(tmp_path):
+    import platform
+    import subprocess
+    import sys
+
+    if sys.platform != 'linux' or platform.machine().lower() not in ('x86_64', 'amd64'):
+        pytest.skip('native x86_64 Linux execution required')
+    entry = assembler.assemble_file('''.intel_syntax noprefix
+.text
+.globl _start
+.type _start, @function
+_start:
+  xor edi, edi
+  call increment
+  call increment
+  mov ecx, 2
+.Lloop:
+  add edi, 1
+  sub ecx, 1
+  jne .Lloop
+  add edi, 38
+  mov eax, 60
+  syscall
+.size _start, .-_start
+''')
+    function = assembler.assemble_file('''.intel_syntax noprefix
+.text
+.globl increment
+.type increment, @function
+increment:
+  add edi, 1
+  ret
+.size increment, .-increment
+''')
+    image = elf.link_static_executable([entry, function])
+    elf.parse_static_executable(image)
+    executable = tmp_path / 'sizing-memo-native'
+    executable.write_bytes(image)
+    executable.chmod(0o755)
+    completed = subprocess.run([str(executable)], capture_output=True, timeout=5)
+    assert completed.returncode == 42, (completed.returncode, completed.stdout, completed.stderr)

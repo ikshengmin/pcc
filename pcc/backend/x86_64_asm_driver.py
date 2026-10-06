@@ -430,6 +430,10 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
     return plans, order, symbols
 
 
+_INSTRUCTION_SIZE_CACHE_MAX_ENTRIES = 4096
+_INSTRUCTION_SIZE_CACHE_MAX_KEY_BYTES = 1_048_576
+
+
 def _measure_sections(plans, order, symbols):
     labels: dict[str, tuple[str, int]] = {}
     sizes: dict[str, int] = {}
@@ -437,6 +441,8 @@ def _measure_sections(plans, order, symbols):
     for name in order:
         plan = plans[name]
         offset = 0
+        instruction_sizes: dict[str, int] = {}
+        instruction_key_bytes = 0
         for entry in plan.entries:
             if isinstance(entry, _Align):
                 offset = _align(offset, entry.log2)
@@ -459,11 +465,38 @@ def _measure_sections(plans, order, symbols):
                     raise X86EncodeError(f"NOBITS section {name!r} has file data")
                 offset += entry.width
             elif isinstance(entry, (_Instruction, int)):
-                encoded = encode_instruction(
-                    _instruction_text(entry, plan.source_text),
-                    pc=offset, labels={}, section_name=name,
-                )
-                offset += len(encoded.code)
+                instruction_text = _instruction_text(entry, plan.source_text)
+                # With no resolved labels, this fixed-near-branch dialect has
+                # PC-independent lengths. Reuse only successful lengths; final
+                # emission still encodes every instruction at its real PC.
+                cacheable = type(instruction_text) is str
+                key_bytes = 0
+                if cacheable:
+                    # Unicode character storage uses at most four bytes per
+                    # character. The separate entry cap bounds key/dict
+                    # metadata, even for many distinct short instructions.
+                    key_bytes = 4 * len(instruction_text)
+                    cacheable = (
+                        _INSTRUCTION_SIZE_CACHE_MAX_ENTRIES > 0
+                        and key_bytes <= _INSTRUCTION_SIZE_CACHE_MAX_KEY_BYTES
+                    )
+                instruction_size = instruction_sizes.get(instruction_text) if cacheable else None
+                if instruction_size is None:
+                    # Do not retain a throwaway encoded relocation graph from
+                    # an oversized miss through the following cache hits.
+                    instruction_size = len(encode_instruction(
+                        instruction_text, pc=offset, labels={}, section_name=name,
+                    ).code)
+                    if cacheable:
+                        if (
+                            len(instruction_sizes) >= _INSTRUCTION_SIZE_CACHE_MAX_ENTRIES
+                            or instruction_key_bytes + key_bytes > _INSTRUCTION_SIZE_CACHE_MAX_KEY_BYTES
+                        ):
+                            instruction_sizes.clear()
+                            instruction_key_bytes = 0
+                        instruction_sizes[instruction_text] = instruction_size
+                        instruction_key_bytes += key_bytes
+                offset += instruction_size
             elif isinstance(entry, _SizeHere):
                 start = labels.get(entry.symbol)
                 if start is None or start[0] != name:
