@@ -1436,9 +1436,11 @@ class Preprocessor:
                 argument = raw[body[index].text]
                 replacement = [_MacroToken(token.leading, self._stringify_argument(argument))]
             elif parameter is not None:
-                pasted = ((index > 0 and body[index - 1].text == "##")
-                          or (index + 1 < len(body) and body[index + 1].text == "##"))
-                if pasted:
+                adjacent_to_paste = (
+                    (index > 0 and body[index - 1].text == "##")
+                    or (index + 1 < len(body) and body[index + 1].text == "##")
+                )
+                if adjacent_to_paste:
                     replacement = raw[parameter]
                 else:
                     if parameter not in expanded:

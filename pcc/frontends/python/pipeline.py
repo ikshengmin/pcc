@@ -2138,6 +2138,80 @@ _ir_needs_libpython = _pipeline_libpython.ir_needs_libpython
 _ensure_libpython_main_thread_init = _pipeline_libpython.ensure_main_thread_init
 
 
+def _prepare_single_source_compile_closure(
+    src_path: str,
+    module_name: str,
+    *,
+    emit_llvm_only: bool,
+    libpython_mode: str,
+    ir_scaffold_mode: str,
+    recursive_stdlib: bool,
+    python_library: bool,
+    profile: Optional[dict] = None,
+) -> tuple[list[str], list[str], bool]:
+    """Discover the single-entry inputs and effective recursive-stdlib mode.
+
+    Shared with discovery-only diagnostics. Multi-file admission remains in
+    ``_prepare_multi_source_compile_closure`` at the multi-compile boundary.
+    Callers supply the same resolved modes used by ``compile_python``.
+    """
+    should_auto_close = (not emit_llvm_only) or module_name.endswith(".__main__")
+    t = _profile_begin(profile)
+    auto_srcs, auto_mods = (
+        _collect_relative_module_closure(
+            src_path,
+            include_same_package_absolute=(module_name.endswith(".__main__")),
+            recurse_same_package_absolute=(libpython_mode == "off"),
+        )
+        if should_auto_close
+        else ([str(os.path.abspath(src_path))], [module_name])
+    )
+    _profile_end(profile, "collect_relative_module_closure", t)
+    t = _profile_begin(profile)
+    auto_srcs, auto_mods = _filter_ir_scaffold_closure(
+        auto_srcs,
+        auto_mods,
+        ir_scaffold_mode=ir_scaffold_mode,
+    )
+    _profile_end(profile, "filter_ir_scaffold_closure", t)
+    t = _profile_begin(profile)
+    auto_seen = {mod_name: src_path for src_path, mod_name in zip(auto_srcs, auto_mods)}
+    _expand_native_extension_module_object_ports(
+        auto_srcs,
+        auto_mods,
+        auto_seen,
+    )
+    _profile_end(profile, "expand_native_extension_module_object_ports", t)
+    if should_auto_close and libpython_mode != "on":
+        # Runtime providers must be admitted before choosing the single-file
+        # path. In auto mode, missing providers otherwise become CPython
+        # imports even though an owned implementation is available.
+        _expand_required_native_builtin_providers(auto_srcs, auto_mods, auto_seen)
+    t = _profile_begin(profile)
+    _validate_package_site_no_libpython_abi(
+        auto_srcs,
+        libpython_mode=libpython_mode,
+    )
+    _profile_end(profile, "validate_package_site_abi", t)
+    _profile_counter(profile, "auto_files", len(auto_srcs))
+    effective_recursive_stdlib = recursive_stdlib
+    if (
+        not effective_recursive_stdlib
+        and libpython_mode == "off"
+        and not python_library
+        # A plain emit-only request is a per-module IR diagnostic. Expanding
+        # its stdlib imports changes that request into a multi-module compile,
+        # multiplying parse/type/codegen work and changing when the
+        # no-libpython gate runs. Executable builds and package entrypoints
+        # still close their runtime graph automatically; callers that want a
+        # standalone closure dump can request recursive_stdlib explicitly.
+        and should_auto_close
+        and _sources_use_native_stdlib(auto_srcs)
+    ):
+        effective_recursive_stdlib = True
+    return auto_srcs, auto_mods, effective_recursive_stdlib
+
+
 def compile_python(
     src_path: str,
     out_path: str,
@@ -2226,60 +2300,20 @@ def compile_python(
         )
 
         gpu_source_has_kernels = source_contains_gpu_kernel(gpu_source, src_path)
-    should_auto_close = (not emit_llvm_only) or module_name.endswith(".__main__")
-    t = _profile_begin(profile)
-    auto_srcs, auto_mods = (
-        _collect_relative_module_closure(
-            src_path,
-            include_same_package_absolute=(module_name.endswith(".__main__")),
-            recurse_same_package_absolute=(libpython_mode == "off"),
-        )
-        if should_auto_close
-        else ([str(os.path.abspath(src_path))], [module_name])
-    )
-    _profile_end(profile, "collect_relative_module_closure", t)
-    t = _profile_begin(profile)
-    auto_srcs, auto_mods = _filter_ir_scaffold_closure(
+    (
         auto_srcs,
         auto_mods,
-        ir_scaffold_mode=ir_scaffold_mode,
-    )
-    _profile_end(profile, "filter_ir_scaffold_closure", t)
-    t = _profile_begin(profile)
-    auto_seen = {mod_name: src_path for src_path, mod_name in zip(auto_srcs, auto_mods)}
-    _expand_native_extension_module_object_ports(
-        auto_srcs,
-        auto_mods,
-        auto_seen,
-    )
-    _profile_end(profile, "expand_native_extension_module_object_ports", t)
-    if should_auto_close and libpython_mode != "on":
-        # Runtime providers must be admitted before choosing the single-file
-        # path. In auto mode, missing providers otherwise become CPython
-        # imports even though an owned implementation is available.
-        _expand_required_native_builtin_providers(auto_srcs, auto_mods, auto_seen)
-    t = _profile_begin(profile)
-    _validate_package_site_no_libpython_abi(
-        auto_srcs,
+        effective_recursive_stdlib,
+    ) = _prepare_single_source_compile_closure(
+        src_path,
+        module_name,
+        emit_llvm_only=emit_llvm_only,
         libpython_mode=libpython_mode,
+        ir_scaffold_mode=ir_scaffold_mode,
+        recursive_stdlib=recursive_stdlib,
+        python_library=python_library,
+        profile=profile,
     )
-    _profile_end(profile, "validate_package_site_abi", t)
-    _profile_counter(profile, "auto_files", len(auto_srcs))
-    effective_recursive_stdlib = recursive_stdlib
-    if (
-        not effective_recursive_stdlib
-        and libpython_mode == "off"
-        and not python_library
-        # A plain emit-only request is a per-module IR diagnostic.  Expanding
-        # its stdlib imports changes that request into a multi-module compile,
-        # multiplying parse/type/codegen work and changing when the
-        # no-libpython gate runs.  Executable builds and package entrypoints
-        # still close their runtime graph automatically; callers that want a
-        # standalone closure dump can request recursive_stdlib explicitly.
-        and should_auto_close
-        and _sources_use_native_stdlib(auto_srcs)
-    ):
-        effective_recursive_stdlib = True
     if gpu_source_has_kernels and effective_recursive_stdlib:
         raise PyPipelineError(
             "--gpu-backend=metal currently supports @gpu.kernel only in "

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Standalone OFF/ON probes for modules in the actual tightened Stage1 closure.
+"""Standalone OFF/ON probes for the production Stage1 source closure.
 
-Runs each module in the tight closure through codegen WITH
-``ir_scaffold_mode='on'`` and reports per-module fallback counts so we
-can see where Path A stands. Modules that hit
+Runs selected modules through standalone codegen in the requested scaffold
+modes and reports per-module fallback counts. Source discovery uses the
+configured production Stage1 path; standalone emissions do not reproduce
+its closed-world export context. Modules that hit
 ``ScaffoldUnsupportedError`` are reported as failed (the error itself
 names the missing method/symbol — that's the Phase-3+ migration TODO).
 
@@ -102,7 +103,7 @@ def main(argv=None) -> int:
     sys.path.insert(0, str(root))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--module", action="append", default=[],
-                        help="exact tightened-closure module name; repeat to select several")
+                        help="exact production-closure module name; repeat to select several")
     parser.add_argument("--mode", choices=("off", "on", "both"), default="both")
     parser.add_argument("--emit-ir-dir", type=Path,
                         help="write per-module/mode .ll or .error.txt and receipt.json")
@@ -110,17 +111,17 @@ def main(argv=None) -> int:
     entry = root / "pcc" / "__main__.py"
     srcs, mods = _tightened_closure(str(entry))
     if len(srcs) != len(mods) or len(set(mods)) != len(mods):
-        parser.error("tightened closure has mismatched or duplicate module entries")
+        parser.error("production closure has mismatched or duplicate module entries")
     unknown = sorted(set(args.module) - set(mods))
     if unknown:
-        parser.error("module outside tightened closure: " + ", ".join(unknown))
+        parser.error("module outside production closure: " + ", ".join(unknown))
     selected = [(src, mod) for src, mod in zip(srcs, mods)
                 if not args.module or mod in args.module]
     modes = ("off", "on") if args.mode == "both" else (args.mode,)
     artifact_dir = args.emit_ir_dir.resolve() if args.emit_ir_dir is not None else None
     if artifact_dir is not None:
         artifact_dir.mkdir(parents=True, exist_ok=True)
-    print(f"closure: {len(srcs)} files (tight)", flush=True)
+    print(f"closure: {len(srcs)} files (production discovery; standalone codegen)", flush=True)
     print()
     records = []
     results = []
