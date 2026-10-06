@@ -20,6 +20,7 @@ from pcc.frontends.python.py_ast import (
     TupleType,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
@@ -218,11 +219,16 @@ class NativeOsLoweringMixin:
 
     def _is_os_environ_attr(self, expr: Expr) -> bool:
         """Recognise the ``os.environ`` attribute expression."""
+        if live_import_expr_binding(self, expr):
+            # A managed module owns a real mapping. Read that live attribute,
+            # including replacements or deletion, through normal dispatch.
+            return False
         return (
             isinstance(expr, Attr)
             and expr.name == "environ"
             and isinstance(expr.obj, Name)
             and self._native_builtin_module_for_name(expr.obj.ident) == "os"
+            and self._native_module_attr_global_if_exists("os", "environ") is None
         )
 
     def _emit_native_os_environ_call(self,

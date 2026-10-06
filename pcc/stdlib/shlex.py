@@ -71,7 +71,7 @@ def quote(s: str) -> str:
     if not s:
         return "''"
     for c in s:
-        if not (c.isalnum() or c in "_-./:="):
+        if c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-":
             return "'" + s.replace("'", "'\"'\"'") + "'"
     return s
 

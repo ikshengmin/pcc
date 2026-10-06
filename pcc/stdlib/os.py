@@ -8,7 +8,7 @@ delegates to extern libc.
 from __future__ import annotations
 
 from pcc.unsafe import (
-    load_i32, stack_alloc, store_i32, strlen, sync_file,
+    load_i32, ptr_is_null, stack_alloc, store_i32, strlen, sync_file,
 )
 
 from pcc.extern import (
@@ -28,6 +28,13 @@ _error_pending = extern("py_err_occurred", (), c_int64)
 _walk_scan = extern("py_os_walk_scan", (c_obj, c_obj, c_obj), c_obj)
 _walk_prefix = extern("py_os_walk_prefix", (c_obj,), c_obj)
 _path_islink_result = extern("py_os_path_islink_result", (c_obj,), c_obj)
+_environ_get = extern("py_os_getenv", (c_obj, c_obj), c_obj)
+_environ_getitem = extern("py_os_environ_getitem", (c_obj,), c_obj)
+_environ_setitem = extern("py_os_environ_setitem", (c_obj, c_obj), c_obj)
+_environ_unset = extern("py_os_unsetenv", (c_obj,), c_obj)
+_environ_contains = extern("py_os_environ_contains", (c_obj,), c_int)
+_environ_snapshot = extern("py_os_environ_snapshot", (), c_obj)
+_module_attribute = extern("py_module_attr_get", (c_str, c_str), c_obj)
 
 
 # POSIX file-access constants.
@@ -92,15 +99,114 @@ def fsync(fd):
     return None
 
 
-def getenv(key: str, default: str = "") -> str:
-    # In the self-host runtime, ``_getenv`` returns either a valid
-    # C-string pointer or NULL. The pcc→C-string marshalling
-    # converts the Python str to a NUL-terminated buffer, and the
-    # return value is marshalled back through py_str_new when the
-    # pointer is non-NULL. Both conversions are P6C.1 FFI work.
-    raise NotImplementedError(
-        "os.getenv needs the P6C.1 extern string-return marshalling"
-    )
+def getenv(key, default=None):
+    # LOAD_GLOBAL must observe replacements and deletion in this provider's
+    # registered namespace.  The object ABI transfers an independent owner;
+    # a missing NULL is distinct from an explicit Python None binding.
+    mapping = _module_attribute(__name__, "environ")
+    if _error_pending():
+        raise
+    if ptr_is_null(mapping):
+        raise NameError("name 'environ' is not defined")
+    return mapping.get(key, default)
+
+
+class _EnvironView:
+    def __init__(self, mapping, kind):
+        self._mapping = mapping
+        self._kind = kind
+
+    def __len__(self):
+        return len(self._mapping)
+
+    def __iter__(self):
+        for key in self._mapping:
+            if self._kind == 0:
+                yield key
+            elif self._kind == 1:
+                yield self._mapping[key]
+            else:
+                yield key, self._mapping[key]
+
+    def __contains__(self, value):
+        if self._kind == 0:
+            return value in self._mapping
+        for candidate in self:
+            if candidate == value:
+                return True
+        return False
+
+
+class _Environ:
+    """A live environment mapping backed by the owned platform helpers."""
+
+    def __getitem__(self, key):
+        value = _environ_getitem(key)
+        if _error_pending():
+            raise
+        return value
+
+    def __setitem__(self, key, value):
+        _environ_setitem(key, value)
+        if _error_pending():
+            raise
+
+    def __delitem__(self, key):
+        previous = _environ_getitem(key)
+        if _error_pending():
+            raise
+        _environ_unset(key)
+        if _error_pending():
+            raise
+
+    def __contains__(self, key):
+        found = _environ_contains(key)
+        if _error_pending():
+            raise
+        return found != 0
+
+    def __iter__(self):
+        for key in self.copy():
+            yield key
+
+    def __len__(self):
+        return len(self.copy())
+
+    def get(self, key, default=None):
+        value = _environ_get(key, default)
+        if _error_pending():
+            raise
+        return value
+
+    def copy(self):
+        value = _environ_snapshot()
+        if _error_pending():
+            raise
+        return value
+
+    def keys(self):
+        return _EnvironView(self, 0)
+
+    def values(self):
+        return _EnvironView(self, 1)
+
+    def items(self):
+        return _EnvironView(self, 2)
+
+    def pop(self, key, *default):
+        if len(default) > 1:
+            raise TypeError("pop expected at most 2 arguments")
+        try:
+            value = self[key]
+        except KeyError:
+            if default:
+                return default[0]
+            raise
+        del self[key]
+        return value
+
+
+environ = _Environ()
 
 
 def exists(path: str) -> bool:

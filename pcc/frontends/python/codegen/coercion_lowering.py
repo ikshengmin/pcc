@@ -383,6 +383,14 @@ class CoercionLoweringMixin:
                 "pcc.array cannot cross an object or Any boundary; "
                 "select an element first"
             )
+        if isinstance(from_ty, DynType) and isinstance(to_ty, DynType):
+            # Inference may widen a method call while its declared native
+            # return still produces a registered valueclass payload.  Keep
+            # that exact semantic type when crossing the dynamic boundary;
+            # a matching physical struct layout is not type provenance.
+            source = self._valueclass_payload_source(v)
+            if source is not None and self._is_valueclass_payload_type(source[3]):
+                from_ty = source[3]
         if (isinstance(to_ty, IntType) and self._int_exprs_are_boxed()
                 and to_ty.name not in ("pcc.i64", "pcc.u64")):
             if isinstance(v.type, ir.PointerType):

@@ -337,7 +337,7 @@ class UnaryCallLoweringMixin:
 
     def _call_user(
         self,
-        fn: ir.Function,
+        fn: ir.Value,
         args_ir: list[ir.Value],
         call_name: str,
         span: Optional[SourceSpan] = None,
@@ -357,6 +357,17 @@ class UnaryCallLoweringMixin:
         style (CPython ceval.c) is portable, debuggable, and keeps
         libc++abi out of the runtime link.
         """
+        # Direct declarations and typed indirect callees carry the same ABI
+        # signature through different owners. A bitcast Value has its
+        # FunctionType in the pointer type; it is not a Function declaration.
+        function_type = None
+        if isinstance(fn, ir.Function):
+            function_type = fn.function_type
+        elif isinstance(fn.type, ir.PointerType):
+            function_type = fn.type.pointee
+        if not isinstance(function_type, ir.FunctionType):
+            raise TypeError("user call requires a declared function signature")
+        return_type = function_type.return_type
         # An operand computed before a park boundary may have been defined in
         # a block that does not dominate this one (may_park splits a function
         # at every park).  Global-backed operands are re-derived here; every
@@ -364,7 +375,7 @@ class UnaryCallLoweringMixin:
         args_ir = [self._value_available_at_insertion_point(a) for a in args_ir]
         publication_cleanup = None
         if (result_slot is not None and pinned_arg_temps
-                and isinstance(fn.function_type.return_type, ir.PointerType)):
+                and isinstance(return_type, ir.PointerType)):
             error_target = self._current_try_err_block()
             if error_target is None:
                 error_target = self._ensure_fn_err_exit()
@@ -374,9 +385,12 @@ class UnaryCallLoweringMixin:
                 (), (), error_target, "call.publication.arguments.cleanup",
                 pinned_arg_temps,
             )
-        if aggregate_result_ty is None:
+        # An indirect pointer's SSA name is not a declaration identity. Its
+        # caller must supply semantic aggregate metadata; a struct ABI alone
+        # cannot establish a valueclass layout or an ownership contract.
+        if aggregate_result_ty is None and isinstance(fn, ir.Function):
             declared = self._native_symbol_funcdefs.get(fn.name)
-            if declared is None and isinstance(fn.function_type.return_type, ir.LiteralStructType):
+            if declared is None and isinstance(return_type, ir.LiteralStructType):
                 for info in self.class_lowering.classes.values():
                     for method_name, method in info.methods.items():
                         if method is fn:
@@ -388,7 +402,7 @@ class UnaryCallLoweringMixin:
                         break
             aggregate_result_ty = None if declared is None else declared.return_ty
         aggregate_output = None
-        if isinstance(fn.function_type.return_type, ir.LiteralStructType) and self._is_valueclass_payload_type(aggregate_result_ty):
+        if isinstance(return_type, ir.LiteralStructType) and self._is_valueclass_payload_type(aggregate_result_ty):
             aggregate_output = self._new_owned_valueclass_payload(aggregate_result_ty, "value.call.result")
             self._clear_owned_valueclass_payload(aggregate_output)
         # Earlier aggregate arguments remain in their authoritative slots while
