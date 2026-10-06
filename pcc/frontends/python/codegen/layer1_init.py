@@ -115,6 +115,13 @@ class Layer1InitMixin:
         self._fn_err_exit_finish_blocks: dict[str, ir.Block] = {}
         self._fn_err_exit_for_target_slots: dict[str, list] = {}
         self._fn_valueclass_payload_root_slots: dict[str, list] = {}
+        self._slot_call_root_records: list = []
+        self._slot_call_root_record_index: dict = {}
+        self._slot_call_result_sinks: list = []
+        self._valueclass_payload_sources: list = []
+        self._valueclass_payload_source_index: dict = {}
+        self._fn_valueclass_error_slots: dict = {}
+        self._valueclass_payload_temporaries: dict[str, list] = {}
         # Function-exit blocks whose cleanup already emitted root leaves;
         # a slot registered later retro-patches its leave into each site
         # (entry enters always run, so every exit must leave every slot).

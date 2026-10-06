@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Run one command with process-tree RSS sampling and a hard watchdog.
 
-The target runs in a fresh process group.  Every sample reconstructs its
-descendants from ``ps`` and records synchronized aggregate RSS; stdout/stderr
-remain durable separate artifacts.  The optional repository performance lock
-uses the same implementation as PCC's A/B tools.
+The target runs in a fresh session. Every sample records synchronized aggregate
+RSS, retaining observed descendants after reparenting by their OS process-start
+identity. Stdout/stderr remain durable separate artifacts. The optional
+repository performance lock uses the same implementation as PCC's A/B tools.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import datetime as dt
+import errno
 import json
 import os
 from pathlib import Path
@@ -21,8 +23,17 @@ import signal
 import subprocess
 import sys
 import time
+from typing import NamedTuple
 
-import run_pcc_compile_ab as compile_ab
+if os.name == "nt":
+    # The shared memory selector also serves the Windows Job-object guard;
+    # the POSIX performance-lock implementation imports fcntl.
+    compile_ab = None
+else:
+    try:
+        from . import run_pcc_compile_ab as compile_ab
+    except ImportError:
+        import run_pcc_compile_ab as compile_ab
 
 
 _INTERRUPT_REQUESTED = False
@@ -41,6 +52,144 @@ _MIN_PRESSURED_SWAP_FREE_BYTES = 4 * _GIB
 # this multiple of the required budget; the hard reclaimable floor below still
 # fails closed on a genuinely memory-starved host.
 _SWAP_PRESSURE_RECLAIMABLE_MARGIN = 2
+_DARWIN_PROC_PIDINFO = None
+
+
+class _ProcessIdentity(NamedTuple):
+    session_id: int
+    parent_pid: int
+    start_time: tuple[int, int]
+
+
+class _DarwinBsdInfo(ctypes.Structure):
+    # Public Darwin proc_bsdinfo ABI, including both kernel start-time fields:
+    # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info.h
+    _fields_ = [
+        (name, ctypes.c_uint32)
+        for name in (
+            "flags", "status", "xstatus", "pid", "ppid", "uid", "gid",
+            "ruid", "rgid", "svuid", "svgid", "reserved",
+        )
+    ] + [
+        ("comm", ctypes.c_char * 16),
+        ("name", ctypes.c_char * 32),
+        ("nfiles", ctypes.c_uint32),
+        ("pgid", ctypes.c_uint32),
+        ("jobc", ctypes.c_uint32),
+        ("ttydev", ctypes.c_uint32),
+        ("ttypgid", ctypes.c_uint32),
+        ("nice", ctypes.c_int32),
+        ("start_sec", ctypes.c_uint64),
+        ("start_usec", ctypes.c_uint64),
+    ]
+
+
+def _darwin_bsd_info(pid: int) -> _DarwinBsdInfo | None:
+    global _DARWIN_PROC_PIDINFO
+    if _DARWIN_PROC_PIDINFO is None:
+        function = ctypes.CDLL("/usr/lib/libproc.dylib").proc_pidinfo
+        function.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+            ctypes.c_void_p, ctypes.c_int,
+        ]
+        function.restype = ctypes.c_int
+        _DARWIN_PROC_PIDINFO = function
+    info = _DarwinBsdInfo()
+    # PROC_PIDTBSDINFO = 3. A short result is not a usable process identity.
+    size = ctypes.sizeof(info)
+    if _DARWIN_PROC_PIDINFO(pid, 3, 0, ctypes.byref(info), size) != size:
+        return None
+    return info if info.pid == pid else None
+
+
+def _process_identity(pid: int) -> _ProcessIdentity | None:
+    """Read a kernel start identity; ps's second-resolution lstart is unsafe."""
+    try:
+        if sys.platform.startswith("linux"):
+            # comm can contain spaces and closing parentheses. Fields after its
+            # final ')' start at stat field 3; starttime is field 22.
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            return _ProcessIdentity(
+                int(fields[3]), int(fields[1]), (int(fields[19]), 0),
+            )
+        if sys.platform == "darwin":
+            before = _darwin_bsd_info(pid)
+            if before is None:
+                return None
+            session_id = os.getsid(pid)
+            after = _darwin_bsd_info(pid)
+            if after is None or (before.start_sec, before.start_usec) != (
+                after.start_sec, after.start_usec,
+            ):
+                return None
+            return _ProcessIdentity(
+                session_id, after.ppid, (after.start_sec, after.start_usec),
+            )
+    except (OSError, IndexError, ValueError):
+        return None
+    raise ProcessTreeSampleError("process identities unavailable on " + sys.platform)
+
+
+def _owned_process_pids(observed_processes, current_pids):
+    """Retain proven births and discover children in their live sessions.
+
+    A numeric session ID alone cannot establish ownership after its last known
+    process exits: both PIDs and SIDs can be reused. Only a matching start
+    identity anchors a session, and a reused observed PID is never readmitted.
+    Fresh kernel parent IDs also avoid trusting a stale ps ancestry row.
+    """
+    current = {}
+    for pid in current_pids:
+        identity = _process_identity(pid)
+        if identity is not None:
+            previous = observed_processes.get(pid)
+            if previous is None or previous.start_time == identity.start_time:
+                current[pid] = identity
+    owned = current.keys() & observed_processes.keys()
+    while True:
+        sessions = {current[pid].session_id for pid in owned}
+        discovered = {
+            pid for pid, identity in current.items()
+            if pid not in owned and (
+                identity.parent_pid in owned or identity.session_id in sessions
+            )
+        }
+        if not discovered:
+            break
+        owned.update(discovered)
+    observed_processes.update({pid: current[pid] for pid in owned})
+    return owned
+
+
+def _owned_tree_rows(table, observed_processes):
+    return {
+        pid: table[pid] for pid in sorted(_owned_process_pids(observed_processes, table))
+    }
+
+
+def _signal_owned_pid(pid, expected_identity, signum):
+    """Revalidate the process birth at delivery; pin Linux targets with pidfds."""
+    descriptor = None
+    try:
+        if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
+            try:
+                descriptor = os.pidfd_open(pid, 0)
+            except OSError as exc:
+                if exc.errno != errno.ENOSYS:
+                    return False
+        current = _process_identity(pid)
+        if current is None or current.start_time != expected_identity.start_time:
+            return False
+        if descriptor is None:
+            os.kill(pid, signum)
+        else:
+            signal.pidfd_send_signal(descriptor, signum)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _request_interrupt(_signum, _frame) -> None:
@@ -175,30 +324,39 @@ def _termination_process_states(timeout_s: float) -> dict[int, str] | None:
 
 def _terminate_owned_processes(
     process: subprocess.Popen[bytes],
-    observed_sessions: dict[int, int],
+    observed_processes: dict[int, _ProcessIdentity],
 ) -> None:
-    def signal_owned(signum: int) -> None:
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signum)
-        owned = _owned_session_pids(
-            process.pid, observed_sessions, observed_sessions,
+    term_signaled: set[int] = set()
+
+    def signal_owned(signum: int, states=None) -> None:
+        owned = _owned_process_pids(
+            observed_processes,
+            observed_processes if states is None else states,
         )
         for pid in sorted(owned):
             if pid == os.getpid():
                 continue
+            if pid == process.pid and process.returncode is not None:
+                # poll()/wait() retired this child. Its numeric PID/PGID is
+                # never a signal target again, including after successful exit.
+                continue
+            if signum == signal.SIGTERM and pid in term_signaled:
+                continue
+            if _signal_owned_pid(pid, observed_processes[pid], signum):
+                if signum == signal.SIGTERM:
+                    term_signaled.add(pid)
+        if process.pid not in observed_processes and process.returncode is None:
+            # Identity telemetry can fail before the first sample. Popen owns
+            # this unreaped child and checks its exit state before signaling.
             with contextlib.suppress(ProcessLookupError, PermissionError):
-                # The process-group signal already reached these children.
-                # A duplicate SIGTERM can interrupt their final output flush.
-                if os.getpgid(pid) != process.pid:
-                    os.kill(pid, signum)
+                process.send_signal(signum)
 
     previous_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         deadline = time.monotonic() + 2.0
-        signal_owned(signal.SIGTERM)
+        signal_owned(signal.SIGTERM, _termination_process_states(0.25))
         while True:
-            root_exited = process.poll() is not None
             remaining_s = deadline - time.monotonic()
             if remaining_s <= 0:
                 break
@@ -206,13 +364,11 @@ def _terminate_owned_processes(
             if states is None:
                 # Failed liveness telemetry cannot extend the hard deadline.
                 break
-            owned = _owned_session_pids(process.pid, observed_sessions, states)
-            for pid in owned:
-                if pid not in observed_sessions:
-                    with contextlib.suppress(ProcessLookupError, PermissionError):
-                        observed_sessions[pid] = os.getsid(pid)
-                        if os.getpgid(pid) != process.pid:
-                            os.kill(pid, signal.SIGTERM)
+            # Discover children before reaping the root, while its start
+            # identity can still establish ownership of its surviving session.
+            signal_owned(signal.SIGTERM, states)
+            owned = _owned_session_pids(process.pid, observed_processes, states)
+            root_exited = process.poll() is not None
             if root_exited and not any(
                 not states[pid].startswith("Z") for pid in owned
             ):
@@ -227,23 +383,8 @@ def _terminate_owned_processes(
         signal.signal(signal.SIGINT, previous_sigint)
 
 
-def _owned_session_pids(root_pid, observed_sessions, current_pids):
-    """Find surviving children, including observed nested private sessions.
-
-    A nested build harness may call setsid() before launching its workers.
-    Keep a nested session only while a recorded PID still belongs to it;
-    reused PIDs in other sessions are not ownership evidence.
-    """
-    live_sessions = {}
-    for pid in current_pids:
-        with contextlib.suppress(ProcessLookupError):
-            live_sessions[pid] = os.getsid(pid)
-    owned_sessions = {root_pid}
-    for pid, session in observed_sessions.items():
-        if live_sessions.get(pid) == session:
-            owned_sessions.add(session)
-    return {pid for pid, session in live_sessions.items()
-            if pid != root_pid and session in owned_sessions}
+def _owned_session_pids(root_pid, observed_processes, current_pids):
+    return _owned_process_pids(observed_processes, current_pids) - {root_pid}
 
 
 def _recorded_environment(environment: dict[str, str]) -> dict[str, str]:
@@ -318,11 +459,7 @@ def _parse_swapusage(raw: str) -> tuple[int, int, int]:
     return values["total"], values["used"], values["free"]
 
 
-def _darwin_resource_preflight(
-    *,
-    max_tree_rss_bytes: int,
-    reserve_bytes: int,
-) -> dict[str, int]:
+def _darwin_resource_observation() -> dict[str, int]:
     if sys.platform != "darwin":
         raise ProcessTreeSampleError(
             "Darwin memory preflight is unavailable on " + sys.platform
@@ -351,8 +488,20 @@ def _darwin_resource_preflight(
     swap_total_bytes, swap_used_bytes, swap_free_bytes = _parse_swapusage(
         swap.stdout
     )
-    required_bytes = int(max_tree_rss_bytes) + int(reserve_bytes)
     disk_free_bytes = shutil.disk_usage("/").free
+    return {
+        "platform": "darwin", "reclaimable_bytes": reclaimable_bytes,
+        "disk_free_bytes": disk_free_bytes, "swap_total_bytes": swap_total_bytes,
+        "swap_used_bytes": swap_used_bytes, "swap_free_bytes": swap_free_bytes,
+    }
+
+
+def _validate_darwin_resource_observation(
+    *, max_tree_rss_bytes: int, reserve_bytes: int, reclaimable_bytes: int,
+    disk_free_bytes: int, swap_total_bytes: int, swap_used_bytes: int,
+    swap_free_bytes: int, platform: str = "darwin",
+) -> dict:
+    required_bytes = int(max_tree_rss_bytes) + int(reserve_bytes)
     if reclaimable_bytes < required_bytes:
         raise ProcessTreeSampleError(
             "insufficient reclaimable memory for guarded process tree"
@@ -385,6 +534,169 @@ def _darwin_resource_preflight(
         "swap_free_bytes": swap_free_bytes,
         "swap_pressure_waived_by_reclaimable": bool(ample_physical_headroom),
     }
+
+
+def _darwin_resource_preflight(*, max_tree_rss_bytes: int, reserve_bytes: int) -> dict:
+    return _validate_darwin_resource_observation(
+        max_tree_rss_bytes=max_tree_rss_bytes, reserve_bytes=reserve_bytes,
+        **_darwin_resource_observation(),
+    )
+
+
+def _linux_memory_observation(proc_root: Path = Path("/proc")) -> dict:
+    """MemAvailable capped by every visible ancestor cgroup memory limit."""
+    memory = {}
+    for line in (proc_root / "meminfo").read_text().splitlines():
+        fields = line.split()
+        if len(fields) >= 2:
+            memory[fields[0].rstrip(":")] = int(fields[1]) * 1024
+    if memory.get("MemAvailable", 0) <= 0:
+        raise ProcessTreeSampleError("Linux MemAvailable is unavailable")
+    available = memory["MemAvailable"]
+    memberships = []
+    for line in (proc_root / "self/cgroup").read_text().splitlines():
+        _identifier, controllers, path = line.split(":", 2)
+        if not controllers or "memory" in controllers.split(","):
+            memberships.append(("cgroup2" if not controllers else "cgroup", path))
+    limits = []
+    matched_memberships = set()
+    for line in (proc_root / "self/mountinfo").read_text().splitlines():
+        fields = line.split()
+        separator = fields.index("-")
+        kind = fields[separator + 1]
+        if kind not in ("cgroup", "cgroup2"):
+            continue
+        if kind == "cgroup" and "memory" not in fields[separator + 3].split(","):
+            continue
+        decode = lambda text: re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), text)
+        mount_root = Path(decode(fields[3]))
+        mount = Path(decode(fields[4]))
+        for member_kind, member_path in memberships:
+            if member_kind != kind:
+                continue
+            try:
+                relative = Path(os.path.normpath(member_path)).relative_to(mount_root)
+            except ValueError:
+                # A cgroup namespace can report its own root as '/', while
+                # mountinfo retains the host-side root of that same mount.
+                if member_path == "/":
+                    relative = Path(".")
+                else:
+                    continue
+            matched_memberships.add((member_kind, member_path))
+            current = mount / relative
+            while True:
+                limit_file = current / ("memory.max" if kind == "cgroup2" else "memory.limit_in_bytes")
+                usage_file = current / ("memory.current" if kind == "cgroup2" else "memory.usage_in_bytes")
+                if limit_file.is_file():
+                    raw = limit_file.read_text().strip()
+                    if raw != "max":
+                        limit = int(raw)
+                        usage = int(usage_file.read_text().strip())
+                        if limit < 0 or usage < 0:
+                            raise ProcessTreeSampleError("invalid Linux cgroup memory observation")
+                        remaining = max(0, limit - usage)
+                        available = min(available, remaining)
+                        limits.append({"path": str(current), "limit_bytes": limit,
+                                       "usage_bytes": usage, "remaining_bytes": remaining})
+                if current == mount:
+                    break
+                current = current.parent
+    return {"platform": "linux", "available_bytes": available,
+            "mem_available_bytes": memory["MemAvailable"], "cgroup_limits": limits,
+            "cgroup_limits_verified": all(member in matched_memberships for member in memberships)}
+
+
+def _windows_memory_observation() -> dict:
+    import ctypes
+
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("length", ctypes.c_uint32), ("load", ctypes.c_uint32)] + [
+            (name, ctypes.c_uint64) for name in (
+                "total_physical", "available_physical", "total_pagefile",
+                "available_pagefile", "total_virtual", "available_virtual",
+                "available_extended_virtual",
+            )
+        ]
+
+    status = MemoryStatus()
+    status.length = ctypes.sizeof(status)
+    query = ctypes.WinDLL("kernel32", use_last_error=True).GlobalMemoryStatusEx
+    query.argtypes = [ctypes.POINTER(MemoryStatus)]
+    query.restype = ctypes.c_int
+    if not query(ctypes.byref(status)):
+        raise ProcessTreeSampleError("Windows available physical memory is unavailable")
+    return {"platform": "win32", "available_bytes": int(status.available_physical)}
+
+
+def _host_memory_observation() -> dict:
+    if sys.platform == "darwin":
+        return _darwin_resource_observation()
+    if sys.platform.startswith("linux"):
+        return _linux_memory_observation()
+    if sys.platform == "win32":
+        return _windows_memory_observation()
+    raise ProcessTreeSampleError("automatic memory budget is unavailable on " + sys.platform)
+
+
+def select_tree_memory_budget(
+    explicit: int, *, default_ceiling: int = 16 * _GIB,
+    reserve_bytes: int = 8 * _GIB, external_budget=None, observation=None,
+) -> dict:
+    """Select auto limits; keep explicit and already-guarded caps authoritative."""
+    if explicit < 0 or default_ceiling <= 0 or reserve_bytes < 0:
+        raise ProcessTreeSampleError("invalid memory budget selection")
+    if external_budget not in (None, ""):
+        try:
+            guarded = int(external_budget)
+        except (TypeError, ValueError) as exc:
+            raise ProcessTreeSampleError("active worker tree budget is invalid") from exc
+        if guarded <= 0:
+            raise ProcessTreeSampleError("active worker tree budget must be positive")
+        if explicit and explicit != guarded:
+            raise ProcessTreeSampleError(
+                "explicit memory budget differs from the active guard cap; "
+                "restart under a matching guard (explicit=" + str(explicit)
+                + ", guard=" + str(guarded) + ")"
+            )
+        return {"max_tree_rss_bytes": explicit or guarded,
+                "selection_kind": "explicit" if explicit else "external_guard",
+                "explicit_requested_bytes": explicit, "external_guard_bytes": guarded}
+    # Non-Darwin explicit limits retain their existing guard contract. The
+    # Darwin reserve/swap admission remains mandatory for explicit caps.
+    if explicit and observation is None and sys.platform != "darwin":
+        return {"max_tree_rss_bytes": explicit, "selection_kind": "explicit",
+                "explicit_requested_bytes": explicit, "platform": sys.platform}
+    observed = _host_memory_observation() if observation is None else dict(observation)
+    if (not explicit and observed["platform"] == "linux"
+            and not observed.get("cgroup_limits_verified", False)):
+        raise ProcessTreeSampleError(
+            "Linux cgroup memory limits cannot be verified; provide an explicit or inherited guard cap"
+        )
+    preflight = None
+    if observed["platform"] == "darwin":
+        memory_limit = observed["reclaimable_bytes"]
+        pressured = (observed["swap_total_bytes"] > 0
+                     and observed["swap_used_bytes"] * 2 > observed["swap_total_bytes"]
+                     and observed["swap_free_bytes"] < _MIN_PRESSURED_SWAP_FREE_BYTES)
+        if pressured:
+            memory_limit //= _SWAP_PRESSURE_RECLAIMABLE_MARGIN
+        maximum = min(memory_limit, observed["disk_free_bytes"]) - reserve_bytes
+    else:
+        # Preserve the old half-memory default, using observed availability
+        # and container headroom instead of the machine's total physical RAM.
+        maximum = int(observed["available_bytes"]) // 2
+    selected = explicit or min(default_ceiling, maximum)
+    if selected <= 0:
+        raise ProcessTreeSampleError("available resources cannot admit a positive automatic tree budget")
+    if observed["platform"] == "darwin":
+        preflight = _validate_darwin_resource_observation(
+            max_tree_rss_bytes=selected, reserve_bytes=reserve_bytes, **observed,
+        )
+    return {"max_tree_rss_bytes": selected,
+            "selection_kind": "explicit" if explicit else "automatic",
+            "explicit_requested_bytes": explicit, "default_ceiling_bytes": default_ceiling,
+            "observation": observed, "resource_preflight": preflight}
 
 
 def _process_snapshot(
@@ -451,6 +763,15 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         path.parent.mkdir(parents=True, exist_ok=True)
     cwd = Path(args.cwd).expanduser().resolve()
     environment = os.environ.copy()
+    # Read-only observation transport for the shared host/native worker policy.
+    # The guard below remains the only enforcement owner. Its synchronized
+    # rows include wrappers and descendants that self RSS cannot observe.
+    worker_state_path = str(result_path) + ".worker-rss.tsv"
+    if args.max_tree_rss_bytes > 0:
+        if Path(worker_state_path).exists():
+            raise ProcessTreeSampleError("refusing existing output: " + worker_state_path)
+        environment["PCC_WORKER_TREE_STATE_PATH"] = worker_state_path
+        environment["PCC_WORKER_TREE_BUDGET_BYTES"] = str(args.max_tree_rss_bytes)
     started_utc = dt.datetime.now(dt.timezone.utc).isoformat()
     started = time.monotonic()
     payload: dict[str, object] = {
@@ -498,7 +819,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     )
     samples: list[dict[str, object]] = []
     known_pids: set[int] = set()
-    observed_sessions: dict[int, int] = {}
+    observed_processes: dict[int, _ProcessIdentity] = {}
     peak_tree_rss = 0
     peak_process_count = 0
     process_table_retry_count = 0
@@ -557,18 +878,29 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             deadline = started + args.timeout
             next_progress = started
             try:
+                root_identity = _process_identity(process.pid)
+                if root_identity is None:
+                    raise ProcessTreeSampleError("cannot identify the launched process")
+                observed_processes[process.pid] = root_identity
                 while True:
                     table, retries = _process_table(
                         timeouts_s=process_table_timeouts,
                         include_command=args.max_tree_rss_bytes <= 0,
                     )
                     process_table_retry_count += retries
-                    tree = _tree_rows(process.pid, table)
+                    tree = _owned_tree_rows(table, observed_processes)
                     known_pids.update(tree)
-                    for pid in tree:
-                        with contextlib.suppress(ProcessLookupError):
-                            observed_sessions[pid] = os.getsid(pid)
                     tree_rss = sum(row[1] for row in tree.values())
+                    if args.max_tree_rss_bytes > 0:
+                        state_tmp = worker_state_path + ".tmp"
+                        with open(state_tmp, "w", encoding="utf-8") as state_stream:
+                            state_stream.write(
+                                "pcc.worker-tree-rss.v1\n" + str(time.monotonic())
+                                + "\n" + str(args.max_tree_rss_bytes) + "\n"
+                            )
+                            for pid, row in tree.items():
+                                state_stream.write(str(pid) + "\t" + str(row[0]) + "\t" + str(row[1]) + "\n")
+                        os.replace(state_tmp, worker_state_path)
                     process_count = len(tree)
                     peak_tree_rss = max(peak_tree_rss, tree_rss)
                     peak_process_count = max(peak_process_count, process_count)
@@ -667,7 +999,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                         and tree_rss > args.max_tree_rss_bytes
                     ):
                         memory_limited = True
-                        _terminate_owned_processes(process, observed_sessions)
+                        _terminate_owned_processes(process, observed_processes)
                         returncode = process.returncode
                         break
                     returncode = process.poll()
@@ -682,33 +1014,30 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                         )
                         process_table_retry_count += retries
                         remaining = _owned_session_pids(
-                            process.pid, observed_sessions, after_exit,
+                            process.pid, observed_processes, after_exit,
                         )
                         if remaining:
                             known_pids.update(remaining)
-                            for pid in remaining:
-                                with contextlib.suppress(ProcessLookupError):
-                                    observed_sessions[pid] = os.getsid(pid)
                             payload["post_exit_cleanup_pids"] = sorted(remaining)
-                            _terminate_owned_processes(process, observed_sessions)
+                            _terminate_owned_processes(process, observed_processes)
                         break
                     if _INTERRUPT_REQUESTED:
                         interrupted = True
-                        _terminate_owned_processes(process, observed_sessions)
+                        _terminate_owned_processes(process, observed_processes)
                         returncode = process.returncode
                         break
                     if now >= deadline:
                         timed_out = True
-                        _terminate_owned_processes(process, observed_sessions)
+                        _terminate_owned_processes(process, observed_processes)
                         returncode = process.returncode
                         break
                     time.sleep(args.interval)
             except KeyboardInterrupt:
-                _terminate_owned_processes(process, observed_sessions)
+                _terminate_owned_processes(process, observed_processes)
                 interrupted = True
                 returncode = process.returncode
             except BaseException as exc:
-                _terminate_owned_processes(process, observed_sessions)
+                _terminate_owned_processes(process, observed_processes)
                 process_table_retry_count += int(
                     getattr(exc, "retry_count", 0) or 0
                 )
@@ -814,4 +1143,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Keep repeated CLI interrupts cooperative through receipt flush. Ignore
+    # them during interpreter finalization, which resets Python handlers to the
+    # OS default before the process has exited. Imported run() restores callers.
+    signal.signal(signal.SIGINT, _request_interrupt)
+    exit_code = main()
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    raise SystemExit(exit_code)

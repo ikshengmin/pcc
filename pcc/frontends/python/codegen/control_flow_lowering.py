@@ -329,6 +329,8 @@ class ControlFlowLoweringMixin:
 
     def _emit_if_expr(self, expr: IfExpr) -> ir.Value:
         """Lower ``then_e if cond else else_e`` into a diamond CFG plus phi."""
+        if self._valueclass_payload_pointer_field_paths(expr.ty):
+            return self._emit_valueclass_payload_expr(expr, expr.ty)
         static_cond = self._static_bool_condition(expr.cond)
         raw_manual_join = (
             (getattr(self, "_runtime_port_module", False) or getattr(self, "_freestanding_module", False))

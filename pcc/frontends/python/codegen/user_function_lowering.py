@@ -1911,6 +1911,251 @@ class UserFunctionLoweringMixin:
         self.builder.position_at_end(saved_block)
         return cleanup
 
+    def _emit_native_adapter_scalar_from_root(self, source_root, target_ty):
+        """Unbox a scalar while the object's authoritative owner is leased."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        token = self.builder.call(
+            self.runtime["pcc_gc_foreign_lease_acquire"],
+            [self._as_gc_ptr(source_root)],
+            name=self._fresh("native.adapter.scalar.lease"),
+        )
+        self._slot_call_check_status(token, "adapter scalar lease")
+        self._try_err_block = self._slot_call_cleanup_block(
+            (), target, ((source_root, token),),
+        )
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            current = self.builder.load(
+                source_root, name=self._fresh("native.adapter.scalar.object"),
+            )
+            value = marshal.marshal_from_object(
+                self.builder, self.module, self.runtime, current, target_ty,
+            )
+            # A conversion can invoke Python. Select the error edge while
+            # its exception is still in TLS, before retiring the lease.
+            self._emit_post_call_err_check()
+            released = self.builder.call(
+                self.runtime["pcc_gc_foreign_lease_release"],
+                [self._as_gc_ptr(source_root), token],
+                name=self._fresh("native.adapter.scalar.release"),
+            )
+            self._try_err_block = target
+            self._cpy_operand_cleanup_block = target
+            self._slot_call_check_status(released, "adapter scalar lease release")
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return value
+
+    def _emit_native_aggregate_adapter_body(
+        self, adapter_ir, full_fn, original_args, free_names, return_ty, adapter_fd,
+    ):
+        """Forward a valueclass signature through producer-owned input roots."""
+        previous = self._current_try_err_block()
+        saved_cpy = self._cpy_operand_cleanup_block
+        saved_rooted_names = self._gc_rooted_local_names
+        saved_rooted_order = self._gc_rooted_local_order
+        saved_owned_flags = self._owned_local_flag_slots
+        saved_owned_allocas = self._owned_local_flag_allocas
+        saved_alloca_function = self._entry_alloca_insert_before_function
+        saved_alloca_index = self._entry_alloca_insert_index
+        saved_edge_function = self._entry_inline_edge_anchor_function
+        saved_edge_record = self._entry_inline_edge_anchor_record
+        self._gc_rooted_local_names = set()
+        self._gc_rooted_local_order = []
+        self._owned_local_flag_slots = {}
+        self._owned_local_flag_allocas = {}
+        try:
+            # Both ABI parameters borrow the runtime caller's carriers. Store
+            # them before registration, then copy from those borrowed slots;
+            # never turn a delayed load of either carrier into a new owner.
+            borrowed_captures = self._alloca_in_entry(
+                _CSTR, name=self._fresh("native.adapter.captures.borrowed"),
+            )
+            borrowed_args = self._alloca_in_entry(
+                _CSTR, name=self._fresh("native.adapter.args.borrowed"),
+            )
+            self.builder.store(adapter_ir.args[0], borrowed_captures)
+            self.builder.store(adapter_ir.args[1], borrowed_args)
+            for slot in (borrowed_captures, borrowed_args):
+                self._ensure_local_gc_frame_root(
+                    self._fresh("native.adapter.parameter"), slot, _CSTR,
+                    self._gc_one_slot_borrowed_frame_map(), allow_module=True,
+                )
+
+            native_formals = (
+                tuple(arg for arg in adapter_fd.args if arg.name != "")
+                if adapter_fd is not None else original_args
+            )
+            native_param_names = (
+                tuple(arg.name for arg in native_formals)
+                if adapter_fd is not None
+                else tuple(arg.name for arg in original_args) + tuple(free_names)
+            )
+            formal_types = {
+                arg.name: arg.annotation or DynType(name="dyn")
+                for arg in native_formals
+            }
+            input_names = tuple(arg.name for arg in original_args) + tuple(free_names)
+            full_fn_arg_types = tuple(getattr(full_fn.function_type, "args", ()))
+            param_ir_types = {}
+            for index, name in enumerate(native_param_names):
+                param_ir_ty = getattr(full_fn.args[index], "type", None)
+                if param_ir_ty is None and index < len(full_fn_arg_types):
+                    param_ir_ty = full_fn_arg_types[index]
+                param_ir_types[name] = param_ir_ty
+
+            # Every lexical root is entered before the first fallible copy.
+            # The output stays at the bottom until all inputs are disposed.
+            output = self._new_slot_call_root("native.adapter.result")
+            captures = self._new_slot_call_root("native.adapter.captures")
+            args = self._new_slot_call_root("native.adapter.args")
+            roots = [output, captures, args]
+            input_roots = {}
+            for name in input_names:
+                root = self._new_slot_call_root("native.adapter.input." + name)
+                input_roots[name] = root
+                roots.append(root)
+            error_exit = self._ensure_fn_err_exit()
+            unwind = adapter_ir.append_basic_block(
+                name=self._fresh("native.adapter.aggregate.unwind"),
+            )
+            # Fill this edge after lowering so it includes leaves allocated
+            # by unboxing and _call_user. They are entry-initialized even on
+            # an earlier failure, and clearing their flags makes err.exit's
+            # function-owned cleanup harmless after TLS has been restored.
+            self._try_err_block = unwind
+            self._cpy_operand_cleanup_block = unwind
+            self._slot_call_copy_source(captures, borrowed_captures, borrowed=True)
+            self._slot_call_copy_source(args, borrowed_args, borrowed=True)
+
+            forwarded = {}
+            for index, name in enumerate(input_names):
+                is_capture = index >= len(original_args)
+                item_index = index - len(original_args) if is_capture else index
+                root = input_roots[name]
+                self._slot_call_runtime_call(
+                    "py_tuple_get" if is_capture else "py_tuple_get_known",
+                    (captures if is_capture else args,), result_slot=root,
+                    suffix_args=(ir.Constant(_I64, item_index),),
+                )
+                if isinstance(param_ir_types[name], ir.PointerType):
+                    # Load pointer formals only after every input has been
+                    # evaluated and all their counted call leases are held.
+                    continue
+                target_ty = formal_types.get(name, DynType(name="dyn"))
+                if self._is_valueclass_payload_type(target_ty):
+                    forwarded[name] = self._emit_valueclass_payload_from_root(
+                        root, target_ty,
+                    )
+                else:
+                    forwarded[name] = self._emit_native_adapter_scalar_from_root(
+                        root, target_ty,
+                    )
+
+            leases = []
+            for name in native_param_names:
+                if not isinstance(param_ir_types[name], ir.PointerType):
+                    continue
+                root = input_roots[name]
+                self._try_err_block = self._slot_call_cleanup_block(
+                    (), unwind, tuple(leases),
+                )
+                self._cpy_operand_cleanup_block = self._try_err_block
+                token = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_acquire"],
+                    [self._as_gc_ptr(root)],
+                    name=self._fresh("native.adapter.argument.lease"),
+                )
+                self._slot_call_check_status(token, "adapter argument lease")
+                leases.append((root, token))
+            self._try_err_block = self._slot_call_cleanup_block(
+                (), unwind, tuple(leases),
+            )
+            self._cpy_operand_cleanup_block = self._try_err_block
+            call_args = []
+            for name in native_param_names:
+                if isinstance(param_ir_types[name], ir.PointerType):
+                    call_args.append(self.builder.load(
+                        input_roots[name], name=self._fresh("native.adapter.argument"),
+                    ))
+                else:
+                    call_args.append(forwarded[name])
+            ret_ir_ty = full_fn.function_type.return_type
+            result = self._call_user(
+                full_fn, call_args,
+                "" if isinstance(ret_ir_ty, ir.VoidType) else "result",
+                result_slot=output if isinstance(ret_ir_ty, ir.PointerType) else None,
+                aggregate_result_ty=return_ty,
+            )
+            # _call_user has published object or aggregate results and
+            # selected its exception edge before an input lease is retired.
+            while leases:
+                root, token = leases.pop()
+                released = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_release"],
+                    [self._as_gc_ptr(root), token],
+                    name=self._fresh("native.adapter.argument.release"),
+                )
+                self._try_err_block = self._slot_call_cleanup_block(
+                    (), unwind, tuple(leases),
+                )
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_check_status(released, "adapter argument lease release")
+            self._try_err_block = unwind
+            self._cpy_operand_cleanup_block = unwind
+
+            if isinstance(ret_ir_ty, ir.VoidType):
+                none_gv = declare_runtime_global(self.module, "py_None")
+                none_value = self.builder.load(none_gv, name=self._fresh("native.adapter.none"))
+                self._publish_slot_call_owned(output, none_value, label="adapter None result")
+            elif not isinstance(ret_ir_ty, ir.PointerType):
+                if self._is_valueclass_payload_type(return_ty):
+                    self._emit_valueclass_payload_to_object(
+                        result, return_ty, result_slot=output,
+                    )
+                else:
+                    boxed = marshal.marshal_to_object(
+                        self.builder, self.module, self.runtime,
+                        result, return_ty or DynType(name="dyn"),
+                    )
+                    self._publish_slot_call_owned(output, boxed, label="adapter scalar result")
+                self._emit_post_call_err_check()
+
+            self._emit_owned_valueclass_cleanup()
+            self._release_slot_call_roots(tuple(roots[1:]))
+            # This emitter still has the enclosing function's env. Clean
+            # only the adapter's actual registry, never its lexical names.
+            for record in reversed(self._fn_gc_root_slot_registry.get(adapter_ir.name, ())):
+                self._emit_gc_frame_leave_for_slot(record[1])
+            self.builder.ret(self._take_slot_call_root(output))
+
+            payload_roots = tuple(
+                record[2]
+                for record in self._fn_valueclass_payload_root_slots.get(adapter_ir.name, ())
+                if not record[3]
+            )
+            cleanup = self._slot_call_cleanup_block(
+                payload_roots + tuple(roots), error_exit,
+            )
+            success_block = self.builder._block
+            self.builder.position_at_end(unwind)
+            self.builder.branch(cleanup)
+            self.builder.position_at_end(success_block)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+            self._gc_rooted_local_names = saved_rooted_names
+            self._gc_rooted_local_order = saved_rooted_order
+            self._owned_local_flag_slots = saved_owned_flags
+            self._owned_local_flag_allocas = saved_owned_allocas
+            self._entry_alloca_insert_before_function = saved_alloca_function
+            self._entry_alloca_insert_index = saved_alloca_index
+            self._entry_inline_edge_anchor_function = saved_edge_function
+            self._entry_inline_edge_anchor_record = saved_edge_record
+
     def _emit_native_func_adapter(
         self,
         orig_name: str,
@@ -1955,9 +2200,10 @@ class UserFunctionLoweringMixin:
         self._current_entry_block = entry
         self._try_err_block = None
 
+        boundary_formals = adapter_fd.args if adapter_fd is not None else original_args
         raw_boundary = isinstance(return_ty, RawPointerType)
         if not raw_boundary:
-            for ast_arg in original_args:
+            for ast_arg in boundary_formals:
                 if isinstance(ast_arg.annotation, RawPointerType):
                     raw_boundary = True
                     break
@@ -1981,7 +2227,7 @@ class UserFunctionLoweringMixin:
                 native_index += 1
         array_boundary = isinstance(return_ty, ValueArrayType)
         if not array_boundary:
-            for ast_arg in original_args:
+            for ast_arg in boundary_formals:
                 if isinstance(ast_arg.annotation, ValueArrayType):
                     array_boundary = True
                     break
@@ -2005,6 +2251,25 @@ class UserFunctionLoweringMixin:
             self.current_function = saved_current_function
             self._current_entry_block = saved_entry_block
             self._try_err_block = saved_try_err_block
+            return adapter_ir
+
+        aggregate_boundary = self._is_valueclass_payload_type(return_ty)
+        aggregate_formals = adapter_fd.args if adapter_fd is not None else original_args
+        if not aggregate_boundary:
+            aggregate_boundary = any(
+                self._is_valueclass_payload_type(arg.annotation)
+                for arg in aggregate_formals if arg.name != ""
+            )
+        if aggregate_boundary:
+            try:
+                self._emit_native_aggregate_adapter_body(
+                    adapter_ir, full_fn, original_args, free_names, return_ty, adapter_fd,
+                )
+            finally:
+                self.builder = saved_builder
+                self.current_function = saved_current_function
+                self._current_entry_block = saved_entry_block
+                self._try_err_block = saved_try_err_block
             return adapter_ir
 
         forwarded: list[ir.Value] = []
@@ -2343,8 +2608,6 @@ class UserFunctionLoweringMixin:
         insertion too. Value payloads and CPython bridges retain their explicit
         producers below.
         """
-        if self._is_valueclass_payload_type(getattr(expr, "ty", None)):
-            return None
         if self._expr_looks_cpython(expr):
             return None
         if (

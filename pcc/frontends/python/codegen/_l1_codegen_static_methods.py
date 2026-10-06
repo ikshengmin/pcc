@@ -50,7 +50,7 @@ def _part_0(out):
     _append_method(out, '_as_gc_ptr', (('self', 'pos', False), ('value', 'pos', False), ('', 'kw_only', False), ('name', 'pos', True)))
     _append_method(out, '_attr_expr_returns_owned_object', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_builder_block_is_terminated', (('self', 'pos', False),))
-    _append_method(out, '_call_user', (('self', 'pos', False), ('fn', 'pos', False), ('args_ir', 'pos', False), ('call_name', 'pos', False), ('span', 'pos', True), ('root_result', 'pos', True), ('pinned_arg_temps', 'pos', True), ('result_slot', 'pos', True)))
+    _append_method(out, '_call_user', (('self', 'pos', False), ('fn', 'pos', False), ('args_ir', 'pos', False), ('call_name', 'pos', False), ('span', 'pos', True), ('root_result', 'pos', True), ('pinned_arg_temps', 'pos', True), ('result_slot', 'pos', True), ('aggregate_result_ty', 'pos', True)))
     _append_method(out, '_callable_expr_returns_cpython', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_class_attr_descriptor_class', (('self', 'pos', False), ('class_name', 'pos', False), ('attr_name', 'pos', False)))
 
@@ -244,7 +244,7 @@ def _part_17(out):
 
 def _part_18(out):
     _append_method(out, '_emit_operator_getter', (('self', 'pos', False), ('getter_name', 'pos', False), ('key', 'pos', False)))
-    _append_method(out, '_emit_owned_local_cleanup', (('self', 'pos', False), ('skip_name', 'pos', True)))
+    _append_method(out, '_emit_owned_local_cleanup', (('self', 'pos', False), ('skip_name', 'pos', True), ('skip_payload', 'pos', True)))
     _append_method(out, '_emit_pcc_args_list', (('self', 'pos', False), ('arg_exprs', 'pos', False), ('name_hint', 'pos', False), ('cpy_live_owned', 'pos', True), ('cpy_temp_root_out', 'pos', True)))
     _append_method(out, '_emit_post_call_err_check', (('self', 'pos', False), ('span', 'pos', True), ('', 'kw_only', False), ('release_on_error', 'pos', True), ('cpy_release_on_error', 'pos', True), ('rooted_release_on_error', 'pos', True), ('pinned_release_on_error', 'pos', True), ('lifo_owned_root_slots_on_error', 'pos', True)))
     _append_method(out, '_emit_print_float_value', (('self', 'pos', False), ('value', 'pos', False)))
@@ -271,8 +271,8 @@ def _part_20(out):
     _append_method(out, '_ensure_module_global_name', (('self', 'pos', False), ('name', 'pos', False), ('target_ty', 'pos', False)))
     _append_method(out, '_ensure_native_module_alias_class_export', (('self', 'pos', False), ('alias_name', 'pos', False), ('attr_name', 'pos', False)))
     _append_method(out, '_ensure_borrowed_local_gc_root', (('self', 'pos', False), ('name', 'pos', False), ('alloca', 'pos', False), ('ir_ty', 'pos', False)))
-    _append_method(out, '_ensure_local_gc_frame_root', (('self', 'pos', False), ('name', 'pos', False), ('alloca', 'pos', False), ('ir_ty', 'pos', False), ('frame_map', 'pos', True)))
-    _append_method(out, '_ensure_owned_local_flag', (('self', 'pos', False), ('name', 'pos', False), ('alloca', 'pos', True)))
+    _append_method(out, '_ensure_local_gc_frame_root', (('self', 'pos', False), ('name', 'pos', False), ('alloca', 'pos', False), ('ir_ty', 'pos', False), ('frame_map', 'pos', True), ('', 'kw_only', False), ('allow_module', 'pos', True)))
+    _append_method(out, '_ensure_owned_local_flag', (('self', 'pos', False), ('name', 'pos', False), ('alloca', 'pos', True), ('', 'kw_only', False), ('allow_module', 'pos', True)))
 
 
 def _part_21(out):
@@ -687,6 +687,30 @@ def _part_58(out):
     _append_method(out, '_emit_virtual_thread_generator_slot', (('self', 'pos', False), ('output', 'pos', False), ('fn', 'pos', False), ('formals', 'pos', False), ('arguments', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_spawn_allocation_check', (('self', 'pos', False), ('output', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_owned_spawn', (('self', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False), ('ast_func_def', 'pos', False), ('value_args', 'pos', False), ('runtime_formals', 'pos', False), ('call_expr', 'pos', False), ('generator', 'pos', False)))
+    _append_method(out, '_clear_owned_valueclass_payload', (('self', 'pos', False), ('slot', 'pos', False)))
+    _append_method(out, '_copy_valueclass_payload', (('self', 'pos', False), ('destination', 'pos', False), ('value', 'pos', False), ('ty', 'pos', False), ('module_destination', 'pos', True)))
+    _append_method(out, '_copy_valueclass_payload_fields', (('self', 'pos', False), ('destination', 'pos', False), ('destination_path', 'pos', False), ('value', 'pos', False), ('ty', 'pos', False), ('module_destination', 'pos', True)))
+    _append_method(out, '_emit_owned_valueclass_cleanup', (('self', 'pos', False), ('skip_payload', 'pos', True)))
+
+
+def _part_59(out):
+    _append_method(out, '_emit_valueclass_return', (('self', 'pos', False), ('value', 'pos', False), ('ty', 'pos', False)))
+    _append_method(out, '_load_valueclass_payload', (('self', 'pos', False), ('slot', 'pos', False), ('ty', 'pos', False), ('path', 'pos', True), ('module_source', 'pos', True)))
+    _append_method(out, '_new_owned_valueclass_payload', (('self', 'pos', False), ('ty', 'pos', False), ('label', 'pos', False)))
+    _append_method(out, '_statement_uses_managed_valueclass', (('self', 'pos', False), ('stmt', 'pos', False)))
+    _append_method(out, '_valueclass_payload_owned_roots', (('self', 'pos', False), ('slot', 'pos', False)))
+    _append_method(out, '_valueclass_payload_source', (('self', 'pos', False), ('value', 'pos', False)))
+    _append_method(out, '_ensure_valueclass_error_owner', (('self', 'pos', False),))
+    _append_method(out, '_emit_valueclass_payload_expr', (('self', 'pos', False), ('expr', 'pos', False), ('ty', 'pos', False)))
+
+
+def _part_60(out):
+    _append_method(out, '_emit_valueclass_payload_from_root', (('self', 'pos', False), ('source', 'pos', False), ('ty', 'pos', False)))
+    _append_method(out, '_emit_native_adapter_scalar_from_root', (('self', 'pos', False), ('source_root', 'pos', False), ('target_ty', 'pos', False)))
+    _append_method(out, '_emit_native_aggregate_adapter_body', (('self', 'pos', False), ('adapter_ir', 'pos', False), ('full_fn', 'pos', False), ('original_args', 'pos', False), ('free_names', 'pos', False), ('return_ty', 'pos', False), ('adapter_fd', 'pos', False)))
+    _append_method(out, '_valueclass_indexed_element_type', (('self', 'pos', False), ('ty', 'pos', False)))
+    _append_method(out, '_emit_rooted_valueclass_indexed_loop', (('self', 'pos', False), ('iterable', 'pos', False), ('target', 'pos', False), ('statement', 'pos', True), ('comprehension', 'pos', True)))
+    _append_method(out, '_emit_direct_method_receiver', (('self', 'pos', False), ('expression', 'pos', False), ('info', 'pos', False), ('method_name', 'pos', False)))
 
 
 def _build_static_methods():
@@ -750,6 +774,8 @@ def _build_static_methods():
     _part_56(out)
     _part_57(out)
     _part_58(out)
+    _part_59(out)
+    _part_60(out)
     return tuple(out)
 
 L1_CODEGEN_STATIC_METHODS = _build_static_methods()

@@ -99,12 +99,12 @@ def test_budget_jobs_unifies_cpu_memory_and_risk_cap() -> None:
         workers.budget_jobs(10, 1, host_peak, 10)
 
 
-def test_host_auto_jobs_derive_from_the_memory_budget(monkeypatch) -> None:
+def test_host_auto_jobs_are_a_cpu_ceiling_before_phase_admission(monkeypatch) -> None:
     workers = pipeline_frontend_workers
     monkeypatch.delenv("PCC_WORKER_TREE_BUDGET_BYTES", raising=False)
     assert workers.frontend_jobs(111, "auto", 64) == 10
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(8 * 1024**3))
-    assert workers.frontend_jobs(111, "auto", 64) == 3
+    assert workers.frontend_jobs(111, "auto", 64) == 10
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(32 * 1024**3))
     assert workers.frontend_jobs(111, "auto", 64) == 10
     # numeric override stays authoritative regardless of the budget.
@@ -167,7 +167,7 @@ def test_chunking_is_balanced_stable_and_native_workers_are_one_module_each(
         2,
         ["python3"],
         native_predicate=lambda _path: False,
-    ) == 8
+    ) == 111
 
 
 def test_codegen_lanes_extract_oversized_sources_largest_first(tmp_path: Path):
@@ -492,12 +492,20 @@ def test_deferred_execution_samples_driver_after_input_preparation(monkeypatch):
     def prepared(_commands, _manifests):
         current[0] = 128 * 1024**2
         return [512 * 1024**2], [0]
-    monkeypatch.setattr(scheduler, "_frontend_floors_and_order", prepared)
+    def prepared_tasks(_commands):
+        prepared(_commands, [])
+        return [{"class": "native:frontend", "inputs": [1024], "estimate_bytes": 0,
+                 "report_path": "resource.rss", "restartable": True}]
+    monkeypatch.setattr(scheduler, "resource_tasks_for_commands", prepared_tasks)
     calls = []
-    monkeypatch.setattr(scheduler, "run_chained_worker_processes", lambda *args: calls.append(args))
+    def launch(*args, **kwargs):
+        assert current[0] == 128 * 1024**2
+        calls.append(args)
+    monkeypatch.setattr(scheduler, "run_resource_worker_processes", launch)
     scheduler.run_frontend_pco_commands(["compile"], ["manifest"], ["emit"], ["sidecar"], 0, 1)
     assert len(calls) == 1
-    assert calls[0][-2:] == (8, 7 * gib)  # weighted auto does not consume plan safe_jobs
+    assert calls[0][-2:] == (8, 8 * gib)  # actual owner RSS is charged inside the shared pool
+    assert calls[0][1][1]["depends_on"] == 0
 
 
 def test_empty_deferred_work_does_not_query_memory_or_spawn(monkeypatch):

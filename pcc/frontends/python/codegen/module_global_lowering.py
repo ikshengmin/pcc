@@ -800,9 +800,7 @@ class ModuleGlobalLoweringMixin:
             and declared_ty is not None
             and self._is_valueclass_payload_type(declared_ty)
         ):
-            self._clear_module_global_valueclass_payload_roots(gv, declared_ty)
-            self.builder.store(value, gv)
-            self._refresh_module_global_valueclass_payload_roots(gv, declared_ty)
+            self._copy_valueclass_payload(gv, value, declared_ty, module_destination=True)
             self._mark_module_global_initialized(gv)
             return
         # Raw pcc.unsafe/extern pointers (stack_alloc/calloc/ptr_add/...) are NOT

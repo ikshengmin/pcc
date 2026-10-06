@@ -1012,6 +1012,8 @@ class NameLoweringMixin:
                 # ordinary globals keep a plain load with no added branch.
                 if self._module_global_needs_bound_check(expr.ident):
                     self._emit_module_global_bound_check(expr.ident, expr)
+                if self._is_valueclass_payload_type(_declared_ty) and isinstance(gv.value_type, ir.LiteralStructType):
+                    return self._load_valueclass_payload(gv, _declared_ty, module_source=True)
                 val = self.builder.load(
                     gv,
                     name=self._fresh(expr.ident),
@@ -1291,8 +1293,13 @@ class NameLoweringMixin:
                     + "' is not defined (import it or declare it with extern())"
                 )
             return self._emit_owned_module_name_lookup(expr)
-        alloca, ir_ty, _ = slot
+        alloca, ir_ty, declared_ty = slot
         module_binding = self._module_globals.get(expr.ident)
+        if self._is_valueclass_payload_type(declared_ty) and isinstance(ir_ty, ir.LiteralStructType):
+            module_source = module_binding is not None and module_binding[0] is alloca
+            if module_source and self._module_global_needs_bound_check(expr.ident):
+                self._emit_module_global_bound_check(expr.ident, expr)
+            return self._load_valueclass_payload(alloca, declared_ty, module_source=module_source)
         if (
             module_binding is not None
             and module_binding[0] is alloca

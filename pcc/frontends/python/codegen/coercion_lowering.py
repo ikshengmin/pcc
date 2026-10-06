@@ -300,6 +300,21 @@ class CoercionLoweringMixin:
             )
             self._emit_post_call_err_check(None)
             return self.builder.trunc(i32, _I1, name=self._fresh("truthy_obj_i1"))
+        if isinstance(ty, ClassType) and self._is_valueclass_payload_type(ty) and isinstance(v.type, ir.LiteralStructType):
+            output = self._new_slot_call_root("value.truth")
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cleanup = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                self._emit_valueclass_payload_to_object(v, ty, result_slot=output)
+                result = self._slot_call_runtime_call("py_obj_truthy", (output,))
+                self._release_slot_call_roots((output,))
+                return self.builder.trunc(result, _I1, name=self._fresh("value.truth.result"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cleanup
         if isinstance(ty, ClassType):
             # valueclass payloads box (always-truthy valuebox unless a user
             # __bool__/__len__ runs via py_obj_truthy); instance pointers

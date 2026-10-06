@@ -344,6 +344,7 @@ class UnaryCallLoweringMixin:
         root_result: bool = False,
         pinned_arg_temps: tuple[tuple[ir.Value, bool], ...] = (),
         result_slot=None,
+        aggregate_result_ty=None,
     ) -> ir.Value:
         """Call a user function; after the call, check py_err_occurred()
         and branch to the active error-propagation block if a Python
@@ -373,7 +374,36 @@ class UnaryCallLoweringMixin:
                 (), (), error_target, "call.publication.arguments.cleanup",
                 pinned_arg_temps,
             )
-        result = self.builder.call(fn, args_ir, name=call_name)
+        if aggregate_result_ty is None:
+            declared = self._native_symbol_funcdefs.get(fn.name)
+            if declared is None and isinstance(fn.function_type.return_type, ir.LiteralStructType):
+                for info in self.class_lowering.classes.values():
+                    for method_name, method in info.methods.items():
+                        if method is fn:
+                            declared = self.class_lowering._find_method_def(info.name, method_name)
+                            if declared is not None:
+                                self._native_symbol_funcdefs[fn.name] = declared
+                            break
+                    if declared is not None:
+                        break
+            aggregate_result_ty = None if declared is None else declared.return_ty
+        aggregate_output = None
+        if isinstance(fn.function_type.return_type, ir.LiteralStructType) and self._is_valueclass_payload_type(aggregate_result_ty):
+            aggregate_output = self._new_owned_valueclass_payload(aggregate_result_ty, "value.call.result")
+            self._clear_owned_valueclass_payload(aggregate_output)
+        # Earlier aggregate arguments remain in their authoritative slots while
+        # later operands evaluate. Reload immediately at the actual ABI call.
+        current_args = []
+        for argument in args_ir:
+            source = self._valueclass_payload_source(argument)
+            if source is not None:
+                argument = self._load_valueclass_payload(source[1], source[3], source[2], source[4])
+            current_args.append(argument)
+        result = self.builder.call(fn, current_args, name=call_name)
+        if aggregate_output is not None:
+            self.builder.store(result, aggregate_output)
+            for field_slot in self._valueclass_payload_owned_roots(aggregate_output):
+                self._slot_call_note_published(field_slot)
         root_slot = None
         root_ptr = None
         if result_slot is not None and isinstance(result.type, ir.PointerType):
@@ -455,6 +485,8 @@ class UnaryCallLoweringMixin:
             # manage raw/borrowed results explicitly. Their pointer ABI alone
             # does not prove an owner that the caller may consume.
             self._note_owned_object_value(result)
+        if aggregate_output is not None:
+            return self._load_valueclass_payload(aggregate_output, aggregate_result_ty)
         return result
 
     def _emit_arg_for_abi_param(
@@ -520,15 +552,12 @@ class UnaryCallLoweringMixin:
                 raw = self._emit_expr(ast_arg)
                 return self._truthy(raw, ast_arg.ty)
         if (self._is_valueclass_payload_type(target_ty)
-                and not self._valueclass_payload_pointer_field_paths(target_ty)
                 and str(param_ir_ty) == str(self._valueclass_payload_ir_type(target_ty))):
             # A direct aggregate parameter needs the initialized payload,
             # not an ordinary instance followed by valuebox field reads.
             # Pointer-bearing fields need owners across later operands; do
             # not apply this scalar (possibly nested) shortcut to that shape.
-            payload = self._maybe_emit_valueclass_constructor_payload(
-                target_ty, ast_arg,
-            )
+            payload = self._emit_valueclass_payload_expr(ast_arg, target_ty)
             if payload is not None:
                 return payload
         if self._is_object(target_ty) and isinstance(ast_arg, Call):
@@ -1078,7 +1107,7 @@ class UnaryCallLoweringMixin:
             hint_info, dunder_name
         ):
             return None
-        obj_val = self._emit_expr(receiver_expr)
+        obj_val = self._emit_direct_method_receiver(receiver_expr, info, dunder_name)
         method_fn = info.methods[dunder_name]
         return self._emit_direct_method_call(
             method_fn,

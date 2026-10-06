@@ -300,6 +300,7 @@ class ModuleLifecycleLoweringMixin:
 
         self.builder.position_at_end(done_bb)
         if not self._builder_block_is_terminated():
+            self._emit_owned_local_cleanup()
             self.builder.ret_void()
 
         setattr(self, "builder", saved_builder)
@@ -527,6 +528,7 @@ class ModuleLifecycleLoweringMixin:
             self._emit_module_teardown_call(self.module.name or "mod")
             for sibling_mod in reversed(self._sibling_module_inits):
                 self._emit_module_teardown_call(sibling_mod)
+            self._emit_owned_local_cleanup()
             self.builder.ret(exit_code)
 
         setattr(self, "builder", saved_builder)

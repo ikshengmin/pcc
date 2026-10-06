@@ -1131,6 +1131,8 @@ class OwnershipLoweringMixin:
         alloca: ir.Value,
         ir_ty: ir.Type,
         frame_map: ir.Value | None = None,
+        *,
+        allow_module: bool = False,
     ) -> None:
         if getattr(self, "_freestanding_module", False):
             # Freestanding modules have no GC service, so there is nothing for
@@ -1143,7 +1145,7 @@ class OwnershipLoweringMixin:
             # stopped compiling. `_UNSAFE_RAW_POINTER_RETURNS` only names
             # unsafe intrinsics, so it cannot cover a module's own exports.
             return
-        if self.current_func_def is None:
+        if self.current_func_def is None and not allow_module:
             return
         if name in getattr(self, "_current_global_names", set()):
             return
@@ -1321,6 +1323,8 @@ class OwnershipLoweringMixin:
         self,
         name: str,
         alloca: Optional[ir.Value] = None,
+        *,
+        allow_module: bool = False,
     ) -> ir.Value:
         if not hasattr(self, "_owned_local_flag_allocas"):
             self._owned_local_flag_allocas = {}
@@ -1335,7 +1339,7 @@ class OwnershipLoweringMixin:
             self._owned_local_flag_allocas[name] = alloca
         else:
             self._owned_local_flag_allocas.pop(name, None)
-        if alloca is not None and self.current_func_def is not None:
+        if alloca is not None and (self.current_func_def is not None or allow_module):
             fn = self.current_function
             if fn is not None and name not in self._current_global_names:
                 entries = self._fn_err_exit_owned_slots.setdefault(fn.name, [])
@@ -1459,8 +1463,11 @@ class OwnershipLoweringMixin:
         self._weak_dict_env_flags.pop(target.ident, None)
         return True
 
-    def _emit_owned_local_cleanup(self, skip_name: Optional[str] = None) -> None:
+    def _emit_owned_local_cleanup(self, skip_name: Optional[str] = None, skip_payload=None) -> None:
+        self._emit_owned_valueclass_cleanup(skip_payload)
         if self.current_func_def is None:
+            for record in reversed(self._fn_gc_root_slot_registry.get(self.current_function.name, ())):
+                self._emit_gc_frame_leave_for_slot(record[1])
             return
         # In raw-int-scaffold mode, object-local ownership handling is
         # conservative for C-ABI-exporting/runtime modules, but user
@@ -1538,8 +1545,11 @@ class OwnershipLoweringMixin:
             if fn.name in self._fn_gc_root_slot_registry:
                 registry = self._fn_gc_root_slot_registry[fn.name]
         emitted_slot_leaves: list = []
+        payload_handoff_roots = self._valueclass_payload_owned_roots(skip_payload) if skip_payload is not None else ()
         for entry in reversed(registry):
             entry_alloca = entry[1]
+            if any(root is entry_alloca for root in payload_handoff_roots):
+                continue
             already = False
             for done in emitted_slot_leaves:
                 if done is entry_alloca:

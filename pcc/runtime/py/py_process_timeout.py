@@ -17,6 +17,7 @@ from pcc.unsafe import (
     open_readonly,
     ptr_is_null,
     seek_file,
+    stack_alloc,
     store_i32,
     store_i64,
     store_i8,
@@ -464,6 +465,39 @@ def _spawn_worker_spec(specs, index: int) -> int:
     py_decref(env)
     py_decref(spec)
     return pid
+
+
+@c_abi_export("pcc_worker_process_start")
+def pcc_worker_process_start(specs, index: int) -> int:
+    """Expose the existing owned spawn boundary to the shared scheduler."""
+    if index < 0 or index >= py_obj_len(specs):
+        return -1
+    return _spawn_worker_spec(specs, index)
+
+
+@c_abi_export("pcc_worker_process_poll")
+def pcc_worker_process_poll(pid: int) -> int:
+    if pid <= 0:
+        return 127
+    status = stack_alloc(4)
+    waited = platform_waitpid(pid, status, 1)
+    if waited == 0:
+        return 2147483647
+    if waited != pid:
+        return 127
+    return normalize_wait_status(load_i32(status, 0))
+
+
+@c_abi_export("pcc_worker_process_stop")
+def pcc_worker_process_stop(pid: int) -> int:
+    if pid <= 0:
+        return -1
+    status = stack_alloc(4)
+    # The shared controller calls this only for its still-owned, unreaped
+    # child. Kill before waitpid releases the PID, never afterwards.
+    platform_kill(-pid, 9)
+    platform_waitpid(pid, status, 0)
+    return 0
 
 
 def _followup_file_size(paths, index: int) -> int:

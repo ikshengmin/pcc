@@ -20,14 +20,13 @@ def _load_tool():
     return module
 
 
-def test_stage1_jobs_auto_resolves_from_the_unified_budget_formula() -> None:
+def test_stage1_jobs_auto_is_only_the_cpu_ceiling() -> None:
     tool = _load_tool()
     gib = 1024**3
     # Explicit numeric jobs stay authoritative.
     assert tool._resolve_frontend_jobs("2", 64 * gib) == 2
-    # auto derives from the shared budget formula: (8 GiB - 1 GiB reserve)
-    # // 2 GiB measured host worker peak = 3.
-    assert tool._resolve_frontend_jobs("auto", 8 * gib) == 3
+    # Phase admission uses real inputs and the spawning process's RSS later.
+    assert tool._resolve_frontend_jobs("auto", 8 * gib) == tool._resolve_frontend_jobs("auto", 6 * gib)
     # A wide budget is cpu/hard-cap bound, never more than 10.
     assert tool._resolve_frontend_jobs("auto", 64 * gib) <= 10
     assert tool._resolve_frontend_jobs("auto", 64 * gib) >= 1
@@ -37,13 +36,28 @@ def test_stage1_jobs_auto_resolves_from_the_unified_budget_formula() -> None:
         tool._resolve_frontend_jobs("fast", 8 * gib)
 
 
-def test_stage1_default_memory_budget_names_its_ceiling() -> None:
+def test_stage1_default_memory_budget_names_its_ceiling(monkeypatch) -> None:
+    from scripts import run_process_tree_sample as guard
+
     tool = _load_tool()
+    monkeypatch.delenv("PCC_WORKER_TREE_BUDGET_BYTES", raising=False)
+    monkeypatch.setattr(guard, "_host_memory_observation", lambda: {
+        "platform": "linux", "available_bytes": 6 * 1024**3,
+        "cgroup_limits_verified": True,
+    })
     explicit = tool._host_memory_budget_bytes(123)
     assert explicit == 123
     derived = tool._host_memory_budget_bytes(0)
-    # Half of physical memory, or 0 when the probe is unavailable.
-    assert derived >= 0
+    assert derived == 3 * 1024**3
+
+
+def test_stage1_default_adopts_guard_and_rejects_conflicting_explicit_cap(monkeypatch):
+    tool = _load_tool()
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * 1024**3))
+    assert tool._host_memory_budget_bytes(0) == 6 * 1024**3
+    assert tool._host_memory_budget_bytes(6 * 1024**3) == 6 * 1024**3
+    with pytest.raises(ValueError, match="restart under a matching guard"):
+        tool._host_memory_budget_bytes(4 * 1024**3)
 
 
 def test_stage1_thread_mode_is_explicit_and_receipt_bound() -> None:

@@ -311,7 +311,6 @@ class CallExpressionLoweringMixin:
             set(),
         )
         key_obj = self._emit_as_object(sub.idx)
-        self_val = self.builder.load(self.env["self"][0], name=self._fresh("self"))
         merge_bb = self.builder.function.append_basic_block(
             name=self._fresh("method.dict.dispatch.end")
         )
@@ -339,6 +338,8 @@ class CallExpressionLoweringMixin:
             self.builder.cbranch(cond, match_bb, next_bb)
 
             self.builder.position_at_end(match_bb)
+            receiver = Name(span=self._expr_span_or_none(expr), ty=self.env["self"][2], ident="self")
+            self_val = self._emit_direct_method_receiver(receiver, method_info, method_name)
             result = self._emit_direct_method_call(
                 method_fn,
                 self_val,
@@ -2417,13 +2418,8 @@ class CallExpressionLoweringMixin:
             if hint is not None:
                 info = self._resolve_method_mro(hint, "__call__")
                 if info is not None:
-                    obj_val = self._emit_name(
-                        Name(
-                            span=self._expr_span_or_none(expr),
-                            ty=DynType(name="dyn"),
-                            ident=name,
-                        )
-                    )
+                    receiver = Name(span=self._expr_span_or_none(expr), ty=DynType(name="dyn"), ident=name)
+                    obj_val = self._emit_direct_method_receiver(receiver, info, "__call__")
                     method_fn = info.methods["__call__"]
                     return self._emit_direct_method_call(
                         method_fn,
@@ -2879,6 +2875,7 @@ class CallExpressionLoweringMixin:
             pinned_arg_temps=tuple(pinned_arg_temps),
             result_slot=(None if returns_cpython or synchronous_park_result
                          else output_sink),
+            aggregate_result_ty=ast_func_def.return_ty,
         )
         for arg_value, owned in pinned_arg_temps:
             self._gc_unpin(arg_value)

@@ -9,8 +9,14 @@ import os
 
 from pcc.frontends.python.pipeline_exports import _indexed_native_export_metadata, _indexed_native_export_rows
 from pcc.frontends.python.pipeline_pass_config import parallel_cpu_budget
-from pcc.frontends.python.pipeline_frontend_workers import compiled_native_auto_jobs, compiled_native_worker_budget
-from pcc.frontends.python.worker_process_pool import run_chained_worker_processes, run_weighted_worker_processes, run_worker_processes
+from pcc.frontends.python.pipeline_frontend_workers import (
+    compiled_native_auto_jobs, compiled_native_worker_budget,
+    resource_tasks_for_commands,
+)
+from pcc.frontends.python.worker_process_pool import (
+    run_chained_worker_processes, run_resource_worker_processes,
+    run_weighted_worker_processes, run_worker_processes,
+)
 
 
 _GIB = 1073741824
@@ -161,6 +167,12 @@ def run_pco_commands(commands, sidecars, oversized, safe_jobs):
         raise ValueError("PCO command/sidecar inventory mismatch")
     if not commands:
         return
+    resource_pool = _resource_width_and_budget(safe_jobs)
+    if resource_pool is not None:
+        tasks = _pco_resource_tasks(sidecars)
+        run_resource_worker_processes(commands, tasks, resource_pool[0], resource_pool[1],
+                                      trace_path=sidecars[0] + ".pco-admission.tsv")
+        return
     raw = str(os.environ.get("PCC_PY_FRONTEND_JOBS", "") or "").strip().lower()
     budget_raw = str(os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", "") or "")
     budget = int(budget_raw) if budget_raw.isdigit() else 0
@@ -195,6 +207,38 @@ def _requested_width_and_budget():
     return min(parallel_cpu_budget(), _MAX_WIDTH), budget
 
 
+def _resource_width_and_budget(fallback_width):
+    raw_budget = str(os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", "") or "")
+    budget = int(raw_budget) if raw_budget.isdigit() else 0
+    if budget <= 0:
+        return None
+    raw = str(os.environ.get("PCC_PY_FRONTEND_JOBS", "auto") or "auto").strip().lower()
+    if raw in ("auto", "on", "true", "yes"):
+        width = parallel_cpu_budget()
+    else:
+        try:
+            width = int(raw)
+        except ValueError:
+            width = fallback_width
+    return max(1, min(width, _MAX_WIDTH)), budget
+
+
+def _pco_resource_tasks(sidecars, primary_count=0):
+    raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0") or "0")
+    cost = ([_PCO_BASE, _PCO_PER_SIDECAR_MB] if raw_gc == "0"
+            else [_PCO_LEGACY_BASE, _PCO_LEGACY_PER_SIDECAR_MB])
+    tasks = []
+    for index, path in enumerate(sidecars):
+        tasks.append({
+            "class": os.path.dirname(path) + "|native-pco|" + raw_gc,
+            "inputs": [0], "estimate_bytes": 0,
+            "input_path": path, "input_cost": cost, "input_ready": False,
+            "report_path": path + ".pco-rss", "restartable": True,
+            "depends_on": index if primary_count else -1,
+        })
+    return tasks
+
+
 
 def _budgeted_width_and_budget():
     requested = _requested_width_and_budget()
@@ -210,6 +254,14 @@ def run_frontend_commands(commands, manifests, oversized, safe_jobs):
     if len(commands) != len(manifests):
         raise ValueError("frontend command/manifest inventory mismatch")
     if not commands:
+        return
+    resource_pool = _resource_width_and_budget(safe_jobs)
+    if resource_pool is not None:
+        tasks = resource_tasks_for_commands(commands)
+        if tasks is None:
+            raise ValueError("resource admission requires frontend worker manifests")
+        run_resource_worker_processes(commands, tasks, resource_pool[0], resource_pool[1],
+                                      trace_path=manifests[0] + ".admission.tsv")
         return
     pool = _requested_width_and_budget()
     if pool is None:
@@ -248,6 +300,18 @@ def run_frontend_pco_commands(
     if len(manifests) != count or len(pco_commands) != count or len(sidecars) != count:
         raise ValueError("frontend/PCO command inventory mismatch")
     if count == 0:
+        return
+    resource_pool = _resource_width_and_budget(safe_jobs)
+    chain = str(os.environ.get("PCC_FRONTEND_PCO_CHAIN", "1") or "1").strip().lower()
+    if resource_pool is not None and chain not in ("0", "off", "no", "false"):
+        tasks = resource_tasks_for_commands(frontend_commands)
+        if tasks is None:
+            raise ValueError("resource admission requires frontend worker manifests")
+        tasks.extend(_pco_resource_tasks(sidecars, count))
+        run_resource_worker_processes(
+            list(frontend_commands) + list(pco_commands), tasks,
+            resource_pool[0], resource_pool[1], trace_path=manifests[0] + ".chained-admission.tsv",
+        )
         return
     pool = _requested_width_and_budget()
     chain = str(os.environ.get("PCC_FRONTEND_PCO_CHAIN", "1") or "1").strip().lower()

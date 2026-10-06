@@ -107,11 +107,11 @@ def build_configuration(target):
 
 def shared_stage1_jobs(cpu_budget, rss_limit):
     from pcc.frontends.python.pipeline_frontend_workers import (
-        budget_jobs, HOST_SOURCE_WORKER_PEAK_BYTES, HOST_SOURCE_WORKER_AUTO_CAP,
+        frontend_jobs, HOST_SOURCE_WORKER_AUTO_CAP,
     )
 
-    return budget_jobs(min(cpu_budget, os.cpu_count() or 1), rss_limit,
-                       HOST_SOURCE_WORKER_PEAK_BYTES, HOST_SOURCE_WORKER_AUTO_CAP)
+    return frontend_jobs(HOST_SOURCE_WORKER_AUTO_CAP, "auto",
+                         min(cpu_budget, os.cpu_count() or 1))
 
 
 def normalized_image(data):

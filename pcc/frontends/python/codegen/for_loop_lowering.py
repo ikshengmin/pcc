@@ -995,6 +995,126 @@ class ForLoopLoweringMixin:
             name=self._fresh("cpy.iter.ptr"),
         )
 
+    def _valueclass_indexed_element_type(self, ty):
+        element = None
+        if isinstance(ty, ListType):
+            element = ty.elem
+        elif isinstance(ty, DictType):
+            element = ty.key
+        elif isinstance(ty, TupleType) and ty.elems:
+            first = ty.elems[0]
+            if ty.name == "tuple_variadic" or self._tuple_elems_are_uniform(ty.elems, first):
+                element = first
+        return element if self._is_valueclass_payload_type(element) else None
+
+    def _emit_rooted_valueclass_indexed_loop(self, iterable, target, statement=None, comprehension=None):
+        """Keep typed collection projection in slots from iterator to target."""
+        from pcc.frontends.python.codegen.method_call_lowering import _method_abi_type_matches
+
+        iterable_type = iterable.ty
+        element_type = self._valueclass_indexed_element_type(iterable_type)
+        if element_type is None:
+            raise L1CodegenError("valueclass indexed loop requires a proven element type")
+        previous_error = self._current_try_err_block()
+        target_error = previous_error if previous_error is not None else self._ensure_fn_err_exit()
+        previous_cleanup = self._cpy_operand_cleanup_block
+        source_name = self._fresh("value.loop.source")
+        source_entry = _for_prepare_owned_object_target(self, source_name, iterable_type)
+        source = source_entry[0]
+        source_flag = self._ensure_owned_local_flag(source_name, source)
+        self._slot_call_root_records.append((source, source_flag, False))
+        incoming = self._emit_slot_call_operand(iterable, "value.loop.input")
+        input_roots = [incoming]
+        self._try_err_block = self._slot_call_cleanup_block(tuple(input_roots), target_error)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        if isinstance(iterable_type, DictType):
+            keys = self._new_slot_call_root("value.loop.keys")
+            input_roots.append(keys)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(input_roots), target_error)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call("py_dict_keys", (incoming,), result_slot=keys)
+            incoming = keys
+        status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(source), self._as_gc_ptr(incoming)])
+        self._slot_call_check_status(status, "valueclass iterable move", iterable.span)
+        self._slot_call_note_published(source)
+        self._release_slot_call_roots(tuple(input_roots))
+
+        element_ir_type = self._storage_ir_type(element_type)
+        target_entry = self.env.get(target.ident)
+        if target_entry is not None and isinstance(target_entry[1], ir.PointerType):
+            target_entry = _for_prepare_owned_object_target(self, target.ident, element_type)
+        elif target_entry is None:
+            target_slot = self._alloca_in_entry(element_ir_type, name=self._fresh(target.ident + ".payload"))
+            target_entry = (target_slot, element_ir_type, element_type)
+            self.env[target.ident] = target_entry
+        elif not _method_abi_type_matches(self, target_entry[1], element_ir_type):
+            raise L1CodegenError("valueclass loop target has an incompatible physical payload layout")
+        target_slot = target_entry[0]
+        object_target = isinstance(target_entry[1], ir.PointerType)
+        if not object_target:
+            self._ensure_valueclass_payload_gc_roots(target.ident, target_slot, element_type, borrowed=False)
+        hidden_target_roots = self._valueclass_payload_owned_roots(target_slot) if comprehension is not None and not object_target else ()
+        cleanup_roots = (source,) + hidden_target_roots
+        cleanup = self._slot_call_cleanup_block(cleanup_roots, target_error)
+        self._try_err_block = cleanup
+        self._cpy_operand_cleanup_block = cleanup
+        index_slot = self._alloca_in_entry(_I64, name=self._fresh("value.loop.index"))
+        self.builder.store(ir.Constant(_I64, 0), index_slot)
+        function = self.current_function
+        condition = function.append_basic_block(self._fresh("value.loop.condition"))
+        body = function.append_basic_block(self._fresh("value.loop.body"))
+        step = function.append_basic_block(self._fresh("value.loop.step"))
+        done = function.append_basic_block(self._fresh("value.loop.done"))
+        self.builder.branch(condition)
+        self.builder.position_at_end(condition)
+        index = self.builder.load(index_slot, name=self._fresh("value.loop.current.index"))
+        tuple_source = isinstance(iterable_type, TupleType)
+        length = self._slot_call_runtime_call("py_tuple_len" if tuple_source else "py_list_len", (source,), span=iterable.span)
+        more = self.builder.icmp_signed("<", index, length)
+        self.builder.cbranch(more, body, done)
+        self.builder.position_at_end(body)
+        element = self._new_slot_call_root("value.loop.element")
+        element_cleanup = self._slot_call_cleanup_block((element,), cleanup)
+        self._try_err_block = element_cleanup
+        self._cpy_operand_cleanup_block = element_cleanup
+        self._slot_call_runtime_call("py_tuple_get" if tuple_source else "py_list_get", (source,), result_slot=element,
+                                     suffix_args=(index,), span=iterable.span)
+        if object_target:
+            self._emit_release_owned_local_if_flagged(target.ident, target_slot)
+            status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(target_slot), self._as_gc_ptr(element)])
+            self._slot_call_check_status(status, "valueclass object loop target move", iterable.span)
+            flag = self._ensure_owned_local_flag(target.ident, target_slot)
+            self.builder.store(ir.Constant(_I1, 1), flag)
+        else:
+            payload = self._emit_valueclass_payload_from_root(element, element_type)
+            self._copy_valueclass_payload(target_slot, payload, element_type)
+            self._clear_owned_valueclass_payload(self._valueclass_payload_source(payload)[1])
+        self._release_slot_call_roots((element,))
+        self._try_err_block = cleanup
+        self._cpy_operand_cleanup_block = cleanup
+        mark_bound_target(self, target)
+        if statement is not None:
+            self.loop_stack.append((step, done, self._loop_finally_base()))
+            self._emit_stmts(statement.body)
+            self.loop_stack.pop()
+        else:
+            kind, container, generators, tuple_unpacks, level, element_expr, key_expr, value_expr = comprehension
+            self._emit_comprehension_after_bind(kind, container, generators, tuple_unpacks, level,
+                                                element_expr, key_expr, value_expr)
+        if not self._builder_block_is_terminated():
+            self.builder.branch(step)
+        self.builder.position_at_end(step)
+        current = self.builder.load(index_slot)
+        self.builder.store(self.builder.add(current, ir.Constant(_I64, 1)), index_slot)
+        self._emit_application_safepoint()
+        self.builder.branch(condition)
+        self.builder.position_at_end(done)
+        self._release_slot_call_roots(cleanup_roots)
+        if comprehension is not None and object_target:
+            self._emit_release_owned_local_if_flagged(target.ident, target_slot)
+        self._try_err_block = previous_error
+        self._cpy_operand_cleanup_block = previous_cleanup
+
     def _emit_for_list_index(
         self,
         stmt: For,
@@ -2284,6 +2404,10 @@ class ForLoopLoweringMixin:
             range_list = self._emit_range_value_call(stmt.iter)
             return self._emit_for_obj_iterator(stmt, range_list)
         if not is_range_call:
+            if (not self._generator_ctx_stack and isinstance(stmt.target, Name)
+                    and self._valueclass_indexed_element_type(stmt.iter.ty) is not None
+                    and not self._expr_looks_cpython(stmt.iter)):
+                return self._emit_rooted_valueclass_indexed_loop(stmt.iter, stmt.target, statement=stmt)
             # CPython iterable? Use PyObject_GetIter + PyIter_Next.
             iter_val = self._emit_expr(stmt.iter)
             if iter_val in getattr(self, "_cpy_values", ()):

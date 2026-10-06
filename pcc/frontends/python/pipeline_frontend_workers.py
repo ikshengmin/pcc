@@ -10,6 +10,7 @@ from pcc.extern import c_int64, extern
 
 
 _native_current_rss_bytes = extern("pcc_os_current_rss_bytes", (), c_int64)
+_native_peak_rss_bytes = extern("pcc_os_peak_rss_bytes", (), c_int64)
 _native_gc_backend = extern("pcc_gc_backend", (), c_int64)
 
 
@@ -21,14 +22,11 @@ WORKER_MANIFEST_V3 = "pcc.frontends.python.codegen_worker.v3"
 WORKER_MANIFEST_V4 = "pcc.frontends.python.codegen_worker.v4"
 WORKER_MANIFEST_V5 = "pcc.frontends.python.codegen_worker.v5"
 
-# Source-Python workers retain the decoded ASTs, inferred types, LLVM builder
-# state, and generated IR for every module assigned to their process.  One
-# process per concurrency slot therefore turns a large compiler closure into a
-# handful of long-lived heaps and leaves the other slots idle behind the
-# slowest shard.  A small number of sequential shards per slot bounds that
-# retained state while keeping interpreter/import startup amortized.  This is
-# a chunk-count policy only: ``jobs`` remains the hard concurrency ceiling.
-SOURCE_WORKER_CHUNKS_PER_JOB = 4
+# Export batches retain all lifted ASTs until publication. Keep their size
+# independent of the number of active processes. Codegen is one module per
+# task on both execution owners, so both use the existing indexed export view
+# and no completed module's allocator/IR state survives into the next task.
+SOURCE_WORKER_MODULES_PER_CHUNK = 8
 
 # Source size is a deliberately cheap, pre-codegen proxy for the retained
 # frontend heap.  In the compiler closure, sources at or above this boundary
@@ -107,6 +105,8 @@ def _host_coordinator_rss_bytes() -> int:
     ru_maxrss is a high-water mark, so it can over-reserve but cannot understate
     the host's resident high water. No subprocess or third-party sampler is used.
     """
+    if sys.platform == "win32":
+        return _host_windows_rss_bytes(True)
     try:
         import resource
         value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
@@ -115,10 +115,42 @@ def _host_coordinator_rss_bytes() -> int:
     return value if sys.platform == "darwin" else value * 1024
 
 
+def _host_windows_rss_bytes(peak: bool) -> int:
+    """Host-only Win32 projection of the same working-set API as pcc1."""
+    try:
+        import ctypes
+
+        class Counters(ctypes.Structure):
+            _fields_ = [("cb", ctypes.c_uint32), ("faults", ctypes.c_uint32)] + [
+                (name, ctypes.c_size_t) for name in (
+                    "peak_working_set", "working_set", "peak_paged", "paged",
+                    "peak_nonpaged", "nonpaged", "pagefile", "peak_pagefile",
+                )
+            ]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel.K32GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32]
+        kernel.K32GetProcessMemoryInfo.restype = ctypes.c_int32
+        counters = Counters()
+        counters.cb = ctypes.sizeof(counters)
+        if not kernel.K32GetProcessMemoryInfo(kernel.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+            return -1
+        return int(counters.peak_working_set if peak else counters.working_set)
+    except (ImportError, OSError, ValueError, AttributeError):
+        return -1
+
+
 def _coordinator_rss_bytes() -> int:
     if sys.implementation.name == "pcc":
         # This is the existing owned Darwin/Linux boundary, not a host oracle.
         return _native_current_rss_bytes()
+    return _host_coordinator_rss_bytes()
+
+
+def _worker_peak_rss_bytes() -> int:
+    if sys.implementation.name == "pcc":
+        return _native_peak_rss_bytes()
     return _host_coordinator_rss_bytes()
 
 
@@ -195,12 +227,9 @@ def frontend_jobs(job_count_hint: int, raw: str, cpu_budget: int) -> int:
     if normalized in ("0", "off", "false", "no"):
         return 1
     if normalized in _AUTO_VALUES:
-        jobs = budget_jobs(
-            int(cpu_budget),
-            worker_tree_budget_bytes(os.environ.get(WORKER_TREE_BUDGET_ENV, "")),
-            HOST_SOURCE_WORKER_PEAK_BYTES,
-            HOST_SOURCE_WORKER_AUTO_CAP,
-        )
+        # This is a CPU ceiling. Real admission belongs to the spawning
+        # process, once actual graph/AST inputs and its resident RSS are known.
+        jobs = max(1, min(int(cpu_budget), HOST_SOURCE_WORKER_AUTO_CAP))
     else:
         try:
             jobs = int(normalized)
@@ -544,19 +573,9 @@ def codegen_chunk_count(
     jobs = int(jobs)
     if src_count <= 1:
         return 1
-    if worker_prefix:
-        worker_executable = str(worker_prefix[0])
-        worker_base = os.path.basename(worker_executable).lower()
-        if not worker_base.startswith("python") and native_predicate(
-            worker_executable
-        ):
-            return src_count
-    if jobs < 1:
-        jobs = 1
-    chunk_count = jobs * SOURCE_WORKER_CHUNKS_PER_JOB
-    if chunk_count > src_count:
-        return src_count
-    return chunk_count
+    # A smaller machine must not receive larger heaps or a different export
+    # view. Singleton host/native workers share the same dependency closure.
+    return src_count
 
 
 def write_worker_manifest(
@@ -871,6 +890,88 @@ def run_worker_commands(commands, max_parallel=None) -> None:
     if max_parallel > len(commands):
         max_parallel = len(commands)
 
-    from pcc.frontends.python.worker_process_pool import run_worker_processes
+    from pcc.frontends.python.worker_process_pool import (
+        run_resource_worker_processes, run_worker_processes,
+    )
 
+    budget = worker_tree_budget_bytes(os.environ.get(WORKER_TREE_BUDGET_ENV, ""))
+    if budget > 0:
+        tasks = resource_tasks_for_commands(commands)
+        if tasks is not None:
+            run_resource_worker_processes(
+                commands, tasks, max_parallel, budget,
+                trace_path=str(tasks[0]["report_path"]) + ".admission.tsv",
+            )
+            return
     run_worker_processes(commands, max_parallel)
+
+
+def _artifact_size(path: str) -> int:
+    with open(path, "rb") as stream:
+        stream.seek(0, 2)
+        return int(stream.tell())
+
+
+def resource_tasks_for_commands(commands):
+    """Describe the actual worker inputs without changing their export view.
+
+    Source, AST and export sizes are demand features, not RSS bytes. A zero
+    initial estimate requests measured calibration, never a fixed 2 GiB guess.
+    The same planner sees host and native execution classes separately.
+    """
+    import shlex
+    from pcc.frontends.python.pipeline_stage1_checkpoint import file_sha256
+
+    worker_arg = "--pcc-python-multi-codegen-worker"
+    tasks = []
+    input_hashes = {}
+    for command in commands:
+        argv = shlex.split(command)
+        if worker_arg not in argv:
+            return None
+        position = argv.index(worker_arg)
+        if position + 1 >= len(argv):
+            raise FrontendWorkerContractError("frontend worker manifest argument is missing")
+        path = argv[position + 1]
+        manifest = read_worker_manifest(path)
+        indices = manifest["assigned_indices"]
+        source_sizes = [_artifact_size(manifest["src_paths"][index]) for index in indices]
+        ast_sizes = []
+        ast_dir = str(manifest.get("ast_dir", "") or "")
+        if manifest["job_kind"] != "export" and ast_dir:
+            ast_sizes = [_artifact_size(os.path.join(ast_dir, "module_" + str(index) + ".json"))
+                         for index in indices]
+        exports_path = str(manifest.get("exports_path", "") or "")
+        export_bytes = _artifact_size(exports_path) if exports_path else 0
+        identity_paths = [path] + [manifest["src_paths"][index] for index in indices]
+        if manifest["job_kind"] != "export" and ast_dir:
+            identity_paths.extend(os.path.join(ast_dir, "module_" + str(index) + ".json") for index in indices)
+        if exports_path:
+            identity_paths.append(exports_path)
+        identities = []
+        for input_path in identity_paths:
+            if input_path not in input_hashes:
+                input_hashes[input_path] = file_sha256(input_path)
+            identities.append(input_hashes[input_path])
+        # The command prefix identifies the execution owner, including a
+        # selected native compiler; the private manifest directory isolates
+        # samples from another compile with different source/options.
+        owner = " ".join(argv[:position])
+        execution_class = (
+            os.path.dirname(path) + "|" + owner + "|" + manifest["job_kind"]
+            + "|" + ("module-indexed" if len(indices) == 1 else "full-graph")
+            + "|" + str(os.environ.get("PCC_GC_BACKEND", "0"))
+            + "|" + str(os.environ.get("PCC_PYTHON_IR_PASSES", ""))
+            + "|" + str(os.environ.get("PCC_DIRECT_INDEXED_SIDECAR", ""))
+            + "|" + str(os.environ.get("PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND", ""))
+        )
+        tasks.append({
+            "class": execution_class,
+            "inputs": [sum(source_sizes), max(source_sizes, default=0),
+                       sum(ast_sizes), max(ast_sizes, default=0), export_bytes, len(indices)],
+            "estimate_bytes": 0,
+            "report_path": path + ".rss",
+            "restartable": True,
+            "source_identity": "|".join(identities),
+        })
+    return tasks

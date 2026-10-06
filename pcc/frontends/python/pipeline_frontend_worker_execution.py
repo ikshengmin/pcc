@@ -7,6 +7,7 @@ import sys
 import time
 
 from pcc.frontends.python.pipeline_closed_world import _closed_world_boxed_int_functions
+from pcc.frontends.python.worker_resource_plan import publish_worker_resource
 
 
 def _worker_failure(message: str) -> Exception:
@@ -389,12 +390,17 @@ def run_codegen_worker(
     result_path = ""
     try:
         manifest = read_manifest(manifest_path)
+        publish_worker_resource("manifest")
         result_path = str(manifest["result_path"])
         job_kind = str(manifest.get("job_kind", "codegen"))
         if job_kind == "export":
-            return run_export_worker_callback(manifest)
+            status = run_export_worker_callback(manifest)
+            publish_worker_resource("complete" if status == 0 else "failed")
+            return status
         if job_kind == "summary":
-            return run_summary_worker_callback(manifest)
+            status = run_summary_worker_callback(manifest)
+            publish_worker_resource("complete" if status == 0 else "failed")
+            return status
         from pcc.frontends.python.type_infer import infer_module
         from pcc.frontends.python.codegen.layer1 import L1CodeGen
 
@@ -488,6 +494,7 @@ def run_codegen_worker(
             )
 
         result_lines: list[str] = []
+        publish_worker_resource("exports")
         if lazy_ast_dir:
             _freeze_worker_survivors()
         for index in assigned_indices:
@@ -531,6 +538,7 @@ def run_codegen_worker(
                     + "\n"
                 )
             ast_module = parsed_modules[index]
+            publish_worker_resource("ast:" + str(index))
             needs_native_extension_exports = module_imports_native_extension(
                 ast_module,
                 native_modules=module_names,
@@ -555,6 +563,7 @@ def run_codegen_worker(
                         module_name,
                     ),
                 )
+                publish_worker_resource("infer:" + str(index))
                 if worker_timing:
                     infer_ms = int((time.monotonic() - infer_started) * 1000)
                     sys.stderr.write(
@@ -678,6 +687,7 @@ def run_codegen_worker(
                     and not direct_passes
                 )
                 generated_module = codegen.generate(typed_module)
+                publish_worker_resource("codegen:" + str(index))
                 ir_text = str(generated_module) if render_ir_text else ""
                 if direct_passes:
                     from pcc.frontends.python.compiled_owned_passes import run_owned_passes
@@ -686,6 +696,7 @@ def run_codegen_worker(
                     ir_text = run_owned_passes(
                         ir_text, direct_passes, libpython_mode == "off",
                     )
+                    publish_worker_resource("passes:" + str(index))
                     if worker_timing:
                         sys.stderr.write(
                             "pcc direct owned passes module=" + module_name
@@ -873,6 +884,7 @@ def run_codegen_worker(
                                 + "\n"
                             )
                         if emit_direct:
+                            publish_worker_resource("emit:" + str(index))
                             if indexed_sidecar_output:
                                 pass
                             elif native_object_output:
@@ -930,6 +942,7 @@ def run_codegen_worker(
                                     # durable writer reads and validates it.
                                     del encoded
                                 direct_marker = "PCO"
+                                publish_worker_resource("object:" + str(index))
                             else:
                                 direct_path = os.path.join(
                                     ir_dir,
@@ -1070,6 +1083,7 @@ def run_codegen_worker(
         with open(result_path, "w", encoding="utf-8") as stream:
             for line in result_lines:
                 stream.write(line + "\n")
+        publish_worker_resource("complete")
         return 0
     except Exception as exc:
         exc_type = type(exc).__name__

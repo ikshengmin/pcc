@@ -192,11 +192,18 @@ def test_indexed_module_codec_requires_the_published_preparation_boundary(
 
 
 @pytest.mark.parametrize("optimize", [False, True])
+@pytest.mark.parametrize("telemetry", [False, True])
 def test_indexed_module_fresh_emit_matches_the_text_assembly_oracle(
     tmp_path,
     monkeypatch,
     optimize,
+    telemetry,
 ):
+    if telemetry:
+        monkeypatch.setenv("PCC_WORKER_RESOURCE_REPORT", str(tmp_path / "rss"))
+        monkeypatch.setenv("PCC_WORKER_RESOURCE_TOKEN", "telemetry-identity")
+    else:
+        monkeypatch.delenv("PCC_WORKER_RESOURCE_REPORT", raising=False)
     module = _direct_module(monkeypatch)
     sidecar = tmp_path / "module.pidx"
     output = tmp_path / "module.pco"
@@ -212,6 +219,11 @@ def test_indexed_module_fresh_emit_matches_the_text_assembly_oracle(
     emit_indexed_module_file(str(sidecar), str(output), "PCO", optimize=optimize)
 
     assert output.read_bytes() == expected
+    if telemetry:
+        from pcc.frontends.python.worker_resource_plan import read_worker_resource
+        import os
+        observed = read_worker_resource(str(tmp_path / "rss"), os.getpid(), "telemetry-identity")
+        assert observed is not None and observed[0] == "complete"
     assert not (tmp_path / "module.pco.tmp").exists()
 
 

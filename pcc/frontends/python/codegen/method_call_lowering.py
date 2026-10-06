@@ -511,6 +511,7 @@ class MethodCallLoweringMixin:
             list(args_ir),
             call_name,
             root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
+            aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
             pinned_arg_temps=_method_pinned_arg_cleanup(arg_provenance),
         )
         if method_may_park:
@@ -543,6 +544,16 @@ class MethodCallLoweringMixin:
         _method_release_arg_provenance(self, arg_provenance)
         return result
 
+    def _emit_direct_method_receiver(self, expression, info, method_name):
+        method = info.methods[method_name]
+        definition = self.class_lowering._find_method_def(info.name, method_name)
+        if definition is not None and definition.args and method.args:
+            receiver_type = definition.args[0].annotation
+            if (self._is_valueclass_payload_type(receiver_type)
+                    and isinstance(method.args[0].type, ir.LiteralStructType)):
+                return self._emit_valueclass_payload_expr(expression, receiver_type)
+        return self._emit_expr(expression)
+
     def _emit_direct_method_call(
         self,
         method_fn: ir.Function,
@@ -568,12 +579,7 @@ class MethodCallLoweringMixin:
                 and self._is_valueclass_payload_type(receiver_ty)
                 and isinstance(self_val.type, ir.PointerType)
             ):
-                payload = self._emit_object_to_valueclass_payload(
-                    self_val,
-                    receiver_ty,
-                )
-                if payload is not None:
-                    self_val = payload
+                raise L1CodegenError("aggregate method receiver must request its rooted payload before evaluation")
         args_ir: list[ir.Value] = [self_val]
         # Always resolve positional → full arg list so defaults land on
         # omitted trailing params, not just when kwargs were supplied.
@@ -682,6 +688,7 @@ class MethodCallLoweringMixin:
             args_ir,
             call_name,
             root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
+            aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
             pinned_arg_temps=_method_pinned_arg_cleanup(arg_provenance),
             result_slot=None if method_may_park else result_slot,
         )
@@ -764,6 +771,7 @@ class MethodCallLoweringMixin:
             list(args_ir),
             call_name,
             root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
+            aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
             pinned_arg_temps=_method_pinned_arg_cleanup(arg_provenance),
         )
         _method_release_arg_provenance(self, arg_provenance)
@@ -929,6 +937,7 @@ class MethodCallLoweringMixin:
                 args_ir,
                 raw_call_name,
                 root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
+            aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
                 pinned_arg_temps=_method_pinned_arg_cleanup(arg_provenance),
             )
             raw_exit = self.builder.block
@@ -956,6 +965,7 @@ class MethodCallLoweringMixin:
             args_ir,
             call_name,
             root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
+            aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
             pinned_arg_temps=_method_pinned_arg_cleanup(arg_provenance),
         )
         _method_release_arg_provenance(self, arg_provenance)
@@ -1037,6 +1047,7 @@ class MethodCallLoweringMixin:
             args_ir,
             call_name,
             root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
+            aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
             pinned_arg_temps=_method_pinned_arg_cleanup(tuple(arg_provenance)),
         )
         _method_release_arg_provenance(self, tuple(arg_provenance))

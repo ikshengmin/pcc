@@ -357,6 +357,10 @@ class AttrLoadLoweringMixin:
                 actual_ir_ty = payload_slot.value_type
                 module_source = True
             if payload_slot is not None:
+                if isinstance(actual_ir_ty, ir.PointerType):
+                    # A boxed binding takes ordinary rooted getattr below.
+                    # Decide before evaluating the receiver; never retry it.
+                    return None
                 if not isinstance(actual_ir_ty, ir.LiteralStructType) or str(actual_ir_ty) != str(payload_ir_ty):
                     raise L1CodegenError("valueclass attribute requires its actual aggregate payload slot")
                 if module_source:
@@ -365,17 +369,16 @@ class AttrLoadLoweringMixin:
                     if self._module_global_needs_bound_check(base.ident):
                         self._emit_module_global_bound_check(base.ident, base)
         if payload_slot is None:
-            if self._valueclass_payload_pointer_field_paths(payload_ty):
-                raise L1CodegenError("temporary valueclass pointer payload requires a producer-owned output slot")
-            # A scalar-only aggregate carries no heap references across the
-            # materialization below. Evaluate it once and preserve its layout.
             payload = self._maybe_emit_valueclass_constructor_payload(payload_ty, base)
             if payload is None:
-                payload = self._emit_expr(base)
-            if not isinstance(payload.type, ir.LiteralStructType) or str(payload.type) != str(payload_ir_ty):
-                raise L1CodegenError("valueclass attribute requires an actual aggregate result")
-            payload_slot = self._alloca_in_entry(payload_ir_ty, name=self._fresh("value.attribute.payload"))
-            self.builder.store(payload, payload_slot)
+                # Calls, subscripts and boxed intermediate attributes already
+                # have ordinary output-slot producers. Let rooted getattr
+                # evaluate that receiver once instead of guessing its ABI.
+                return None
+            source = self._valueclass_payload_source(payload)
+            if source is None:
+                raise L1CodegenError("valueclass constructor lost its payload source")
+            return self._emit_slot_call_valueclass_field(source[1], source[2] + path, field_ty, source[4], label, expr.span)
         return self._emit_slot_call_valueclass_field(payload_slot, path, field_ty,
                                                      module_source, label, expr.span)
 
@@ -931,36 +934,36 @@ class AttrLoadLoweringMixin:
         return fn_obj
 
     def _maybe_emit_valueclass_payload_attr(self, expr: Attr):
-        alloca = None
         declared_ty = self._valueclass_payload_expr_type(expr.obj)
-        if isinstance(expr.obj, Name):
-            slot = self.env.get(expr.obj.ident)
-            if slot is not None:
-                alloca, _ir_ty, declared_ty = slot
-        if declared_ty is None:
-            return None
         if not self._is_valueclass_payload_type(declared_ty):
             return None
         field_info = self._valueclass_field_info(declared_ty, expr.name)
         if field_info is None:
             return None
-        field_idx, _field_ty = field_info
-        if alloca is not None:
-            payload = self.builder.load(
-                alloca,
-                name=self._fresh(f"value.{expr.obj.ident}.payload"),
-            )
-        else:
+        index, field_ty = field_info
+        base = expr.obj
+        while isinstance(base, Attr):
+            base = base.obj
+        physical = None
+        if isinstance(base, Name):
+            entry = self.env.get(base.ident)
+            global_entry = self._module_globals.get(base.ident)
+            physical = entry[1] if entry is not None else (None if global_entry is None else global_entry[0].value_type)
+        if isinstance(physical, ir.LiteralStructType):
             payload = self._emit_expr(expr.obj)
-            if isinstance(payload.type, ir.PointerType):
+        else:
+            payload = self._maybe_emit_valueclass_constructor_payload(declared_ty, expr.obj)
+            if payload is None:
                 return None
-        return self.builder.extract_value(
-            payload,
-            [field_idx],
-            name=self._fresh(
-                f"value.{getattr(expr.obj, 'ident', 'payload')}.{expr.name}"
-            ),
-        )
+        source = self._valueclass_payload_source(payload)
+        if source is not None and self._is_valueclass_payload_type(field_ty):
+            return self._load_valueclass_payload(source[1], field_ty, source[2] + (index,), source[4])
+        if (source is not None
+                and isinstance(self._valueclass_field_payload_ir_type(field_ty), ir.PointerType)
+                and not isinstance(field_ty, RawPointerType)):
+            root = self._emit_slot_call_valueclass_field(source[1], source[2] + (index,), field_ty, source[4], "value.attribute", expr.span)
+            return self._take_slot_call_root(root)
+        return self.builder.extract_value(payload, [index], name=self._fresh("value.attribute.scalar"))
 
     def _maybe_emit_valueclass_payload_attr_from_dyn(self, expr: Attr):
         if not isinstance(expr.obj, Name):

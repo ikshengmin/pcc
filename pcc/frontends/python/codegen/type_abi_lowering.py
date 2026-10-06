@@ -403,6 +403,8 @@ class TypeAbiLoweringMixin:
         paths: list[tuple[int, ...]] = []
         for idx, (_field_name, field_ty) in enumerate(ty.fields):
             field_path = prefix + (idx,)
+            if isinstance(field_ty, RawPointerType):
+                continue
             if self._is_valueclass_payload_type(field_ty):
                 paths.extend(
                     self._valueclass_payload_pointer_field_paths(
@@ -477,41 +479,337 @@ class TypeAbiLoweringMixin:
         *,
         borrowed: bool = True,
     ) -> None:
-        if self.current_func_def is None:
-            return
+        """Register actual managed leaves, with ownership attached to storage.
+
+        Parameters borrow their caller's leaves. Every constructed or copied
+        local payload owns each managed leaf independently; a struct copy is
+        never evidence that the copied pointers carry new references.
+        """
         if name in getattr(self, "_current_global_names", set()):
-            return
-        paths = self._valueclass_payload_pointer_field_paths(ty)
-        if not paths:
             return
         fn = self.current_function
         if fn is None:
             return
-        if not hasattr(self, "_fn_valueclass_payload_root_slots"):
-            self._fn_valueclass_payload_root_slots = {}
         registry = self._fn_valueclass_payload_root_slots.setdefault(fn.name, [])
-        frame_map = (
-            self._gc_one_slot_borrowed_frame_map()
-            if borrowed
-            else self._gc_one_slot_frame_map()
-        )
-        for path in paths:
-            already_registered = False
-            for record in registry:
-                if record[0] is payload_alloca and record[1] == path:
-                    already_registered = True
-                    break
-            if already_registered:
+        for path in self._valueclass_payload_pointer_field_paths(ty):
+            if any(record[0] is payload_alloca and record[1] == path for record in registry):
                 continue
-            path_suffix = "_".join(str(i) for i in path)
+            suffix = "_".join(str(index) for index in path)
             field_slot = self._emit_entry_valueclass_payload_field_slot(
-                payload_alloca,
-                path,
-                self._fresh(f"{name}.value.root.{path_suffix}"),
+                payload_alloca, path, self._fresh(name + ".value.root." + suffix),
+            )
+            root_name = name + ".$valuefield." + suffix
+            frame_map = self._gc_one_slot_borrowed_frame_map() if borrowed else self._gc_one_slot_frame_map()
+            self._ensure_local_gc_frame_root(
+                root_name, field_slot, _CSTR, frame_map, allow_module=True,
             )
             registry.append((payload_alloca, path, field_slot, borrowed))
-            root_name = f"{name}.$valuefield.{path_suffix}"
-            self._ensure_local_gc_frame_root(root_name, field_slot, _CSTR, frame_map)
+            if not borrowed:
+                flag = self._ensure_owned_local_flag(root_name, field_slot, allow_module=True)
+                self._slot_call_root_records.append((field_slot, flag, False))
+                self._ensure_valueclass_error_owner()
+                # A loop can reach an earlier emitted return after a later
+                # lexical producer ran on its preceding iteration. New leaf
+                # owners need retroactive disposal, as well as frame leave.
+                for site in self._fn_gc_root_exit_sites.get(fn.name, ()):
+                    anchor = next((item for item in site._instrs if self._instruction_opname_text(item) != "phi"), None)
+                    if anchor is not None:
+                        saved = self.builder._block
+                        self.builder.position_before(anchor)
+                        self.builder.store(ir.Constant(_I1, 0), flag)
+                        self.builder.call(self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(field_slot), ir.Constant(_CSTR, None)])
+                        self.builder.position_at_end(saved)
+
+    def _ensure_valueclass_error_owner(self):
+        """Keep the selecting exception alive while payload finalizers run."""
+        function = self.current_function
+        if function.name in self._fn_valueclass_error_slots:
+            return
+        error = self._ensure_fn_err_exit()
+        finish = self._fn_err_exit_finish_blocks[function.name]
+        slot = self._alloca_in_entry(_CSTR, name=self._fresh("value.error.exception"), init_null=True)
+        self._fn_valueclass_error_slots[function.name] = slot
+        self._ensure_local_gc_frame_root(self._fresh("value.error.owner"), slot, _CSTR, allow_module=True)
+        swap = self.module.globals.get("py_tls_exc_swap_slot")
+        if swap is None:
+            swap = ir.Function(self.module, ir.FunctionType(ir.VoidType(), [_CSTR]), name="py_tls_exc_swap_slot")
+        saved = self.builder._block
+        self.builder.position_before(error._instrs[0])
+        self.builder.call(swap, [self._as_gc_ptr(slot)])
+        self.builder.position_before(finish._instrs[0])
+        self.builder.call(self.runtime["py_clear_exception"], [])
+        self.builder.call(swap, [self._as_gc_ptr(slot)])
+        self.builder.position_at_end(saved)
+
+    def _valueclass_payload_source(self, value):
+        record = self._valueclass_payload_source_index.get(id(value))
+        if record is not None and record[0] is value:
+            return record
+        return None
+
+    def _load_valueclass_payload(self, slot, ty, path=(), module_source=False):
+        address = slot
+        if path:
+            indices = [ir.Constant(_I32, 0)]
+            indices.extend(ir.Constant(_I32, index) for index in path)
+            address = self.builder.gep(slot, indices, inbounds=True, name=self._fresh("value.payload.address"))
+        value = self.builder.load(address, name=self._fresh("value.payload.current"))
+        record = (value, slot, path, ty, module_source)
+        self._valueclass_payload_sources.append(record)
+        self._valueclass_payload_source_index[id(value)] = record
+        return value
+
+    def _new_owned_valueclass_payload(self, ty, label):
+        slot = self._alloca_in_entry(self._valueclass_payload_ir_type(ty), name=self._fresh(label))
+        self._ensure_valueclass_payload_gc_roots(self._fresh(label + ".owner"), slot, ty, borrowed=False)
+        self._valueclass_payload_temporaries.setdefault(self.current_function.name, []).append((slot, ty))
+        # One static producer can execute repeatedly in a comprehension or
+        # loop. Its previous independent owner must be gone before reuse.
+        self._clear_owned_valueclass_payload(slot)
+        return slot
+
+    def _valueclass_payload_owned_roots(self, slot):
+        return tuple(record[2] for record in self._fn_valueclass_payload_root_slots.get(
+            self.current_function.name, (),
+        ) if record[0] is slot and not record[3])
+
+    def _clear_owned_valueclass_payload(self, slot):
+        self._release_slot_call_roots(self._valueclass_payload_owned_roots(slot))
+
+    def _copy_valueclass_payload(self, destination, value, ty, module_destination=False):
+        """Copy scalars and acquire exactly one owner for each managed leaf."""
+        source = self._valueclass_payload_source(value)
+        if source is None:
+            if self._valueclass_payload_pointer_field_paths(ty):
+                raise L1CodegenError("managed valueclass copy requires its producer-owned payload slot")
+            self.builder.store(value, destination)
+            return
+        if source[1] is destination and not source[2]:
+            return
+        self._copy_valueclass_payload_fields(destination, (), value, ty, module_destination)
+
+    def _copy_valueclass_payload_fields(self, destination, destination_path, value, ty, module_destination=False):
+        source = self._valueclass_payload_source(value)
+        if source is None:
+            raise L1CodegenError("nested valueclass copy requires a payload source")
+        for index, (_name, field_ty) in enumerate(ty.fields):
+            dst_path = destination_path + (index,)
+            src_path = source[2] + (index,)
+            if self._is_valueclass_payload_type(field_ty):
+                nested = self._load_valueclass_payload(source[1], field_ty, src_path, source[4])
+                self._copy_valueclass_payload_fields(destination, dst_path, nested, field_ty, module_destination)
+            elif isinstance(self._valueclass_field_payload_ir_type(field_ty), ir.PointerType) and not isinstance(field_ty, RawPointerType):
+                src, borrowed = self._slot_call_valueclass_field_source(source[1], src_path, source[4])
+                dst = self._module_global_valueclass_payload_field_slot(destination, dst_path, name="value.copy.global") if module_destination else self._slot_call_valueclass_field_source(destination, dst_path, False)[0]
+                self.builder.call(self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(dst), ir.Constant(_CSTR, None)])
+                self._slot_call_copy_source(dst, src, borrowed)
+                if not module_destination:
+                    self._slot_call_note_published(dst)
+            else:
+                src_indices = [ir.Constant(_I32, 0)] + [ir.Constant(_I32, item) for item in src_path]
+                dst_indices = [ir.Constant(_I32, 0)] + [ir.Constant(_I32, item) for item in dst_path]
+                src = self.builder.gep(source[1], src_indices, inbounds=True, name=self._fresh("value.copy.scalar.source"))
+                dst = self.builder.gep(destination, dst_indices, inbounds=True, name=self._fresh("value.copy.scalar.destination"))
+                self.builder.store(self.builder.load(src), dst)
+
+    def _emit_owned_valueclass_cleanup(self, skip_payload=None):
+        roots = tuple(record[2] for record in self._fn_valueclass_payload_root_slots.get(
+            self.current_function.name, (),
+        ) if not record[3] and record[0] is not skip_payload)
+        self._release_slot_call_roots(roots)
+
+    def _statement_uses_managed_valueclass(self, stmt):
+        pending = [stmt]
+        while pending:
+            node = pending.pop()
+            if node is None or isinstance(node, (str, int, float, bool)):
+                continue
+            if isinstance(node, (tuple, list)):
+                pending.extend(node)
+                continue
+            ty = self._valueclass_payload_expr_type(node)
+            if ty is not None and self._valueclass_payload_pointer_field_paths(ty):
+                return True
+            # Function/class bodies own their statements separately. This
+            # walk covers only this statement's evaluated operands/defaults.
+            for attr in ("value", "expr", "lhs", "rhs", "left", "right", "operand", "cond",
+                         "then_e", "else_e", "obj", "idx", "lo", "hi", "step", "func", "args",
+                         "kwargs", "elems", "pairs", "targets", "target", "iter", "exc", "cause",
+                         "items", "default", "decorators"):
+                child = getattr(node, attr, None)
+                if child is not None:
+                    pending.append(child)
+        return False
+
+    def _emit_valueclass_return(self, value, ty):
+        """Secure return leaves before finally and local owner destruction."""
+        if not self._valueclass_payload_pointer_field_paths(ty):
+            self._emit_pending_finally_blocks()
+            if not self._builder_block_is_terminated():
+                self._emit_owned_local_cleanup()
+                self.builder.ret(value)
+            return
+        output = self._new_owned_valueclass_payload(ty, "value.return")
+        handoff = self._alloca_in_entry(self._valueclass_payload_ir_type(ty), name=self._fresh("value.return.handoff"))
+        self._copy_valueclass_payload(output, value, ty)
+        self._emit_pending_finally_blocks()
+        if self._builder_block_is_terminated():
+            return
+        self._emit_owned_local_cleanup(skip_payload=output)
+        roots = self._valueclass_payload_owned_roots(output)
+        paths = self._valueclass_payload_pointer_field_paths(ty)
+        pins = []
+        self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
+        for index, root in enumerate(roots):
+            current = self.builder.call(self.runtime["pcc_gc_load_ptr"], [ir.Constant(_CSTR, None), self._as_gc_ptr(root)])
+            prior = self._extern_prior_pin(current)
+            self._gc_pin(current)
+            pins.append((root, prior, paths[index]))
+        self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
+        for root in reversed(roots):
+            self._emit_gc_frame_leave_for_slot(root)
+        self.builder.store(self.builder.load(output), handoff)
+        first_handoff = None
+        # Reverse the pin nesting too: two leaves may alias the same object.
+        # Each take restores the pin state observed before its matching pin.
+        # No operation after the first take can park or invoke Python.
+        for root, prior, path in reversed(pins):
+            _slot, flag, _lifo = self._slot_call_root_record(root)
+            if flag is not None:
+                self.builder.store(ir.Constant(_I1, 0), flag)
+            current = self.builder.call(self.runtime["pcc_gc_take_pinned_slot"], [self._as_gc_ptr(root), prior],
+                                        name=self._fresh("value.return.take"))
+            if first_handoff is None:
+                first_handoff = self.builder._block._instrs[-1]
+            indices = [ir.Constant(_I32, 0)] + [ir.Constant(_I32, index) for index in path]
+            field = self.builder.gep(handoff, indices, inbounds=True, name=self._fresh("value.return.field"))
+            self.builder.store(current, field)
+        self._return_handoff_sites.append((self.current_function, self.builder._block, first_handoff))
+        self.builder.ret(self.builder.load(handoff, name=self._fresh("value.return.payload")))
+
+    def _emit_valueclass_payload_expr(self, expr, ty):
+        """Select a target-typed payload without re-evaluating its expression."""
+        if not self._is_valueclass_payload_type(ty):
+            return None
+        payload = self._maybe_emit_valueclass_constructor_payload(ty, expr)
+        if payload is not None:
+            return payload
+        from pcc.frontends.python.py_ast import Call, Name
+
+        if isinstance(expr, Name):
+            entry = self.env.get(expr.ident)
+            global_entry = self._module_globals.get(expr.ident)
+            actual = entry[1] if entry is not None else (None if global_entry is None else global_entry[0].value_type)
+            if isinstance(actual, ir.LiteralStructType):
+                return self._emit_expr(expr)
+        direct_call = isinstance(expr, Call) and not self._expr_looks_cpython(expr)
+        source = self._new_slot_call_root("value.unbox.source") if direct_call else self._emit_slot_call_operand(expr, "value.unbox.source")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cleanup = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((source,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            if direct_call:
+                if self._expr_returns_unsafe_raw_pointer(expr):
+                    raise L1CodegenError("raw pointer cannot become a valueclass object projection")
+                self._slot_call_result_sinks.append((expr, source, False))
+                try:
+                    value = self._emit_expr(expr)
+                finally:
+                    _expression, _slot, published = self._slot_call_result_sinks.pop()
+                if isinstance(value.type, ir.LiteralStructType):
+                    record = self._valueclass_payload_source(value)
+                    if record is None and self._valueclass_payload_pointer_field_paths(ty):
+                        raise L1CodegenError("native valueclass call requires a producer-owned aggregate result")
+                    self._release_slot_call_roots((source,))
+                    return value if record is None else self._load_valueclass_payload(record[1], ty, record[2], record[4])
+                if not published:
+                    if not self._owned_release_needed(value, expr):
+                        raise L1CodegenError("boxed valueclass call requires an owning output-slot producer")
+                    self._publish_slot_call_owned(source, value, label="valueclass call result")
+            payload = self._emit_valueclass_payload_from_root(source, ty)
+            self._release_slot_call_roots((source,))
+            record = self._valueclass_payload_source(payload)
+            return self._load_valueclass_payload(record[1], ty, record[2], record[4])
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cleanup
+
+    def _emit_valueclass_payload_from_root(self, source, ty):
+        """Project one existing object owner into independently owned leaves."""
+        self._slot_call_root_record(source)
+        payload_type = self._valueclass_payload_ir_type(ty)
+        if payload_type is None:
+            raise L1CodegenError("rooted valueclass projection requires a concrete payload type")
+        class_name = self._ensure_class_type_registered(ty)
+        info = self.class_lowering.classes.get(class_name)
+        if info is None:
+            raise L1CodegenError("rooted valueclass projection requires its registered class")
+        output = self._new_owned_valueclass_payload(ty, "value.unbox.payload")
+        output_roots = self._valueclass_payload_owned_roots(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cleanup = self._cpy_operand_cleanup_block
+        cls = self._new_slot_call_root("value.unbox.class")
+        self._try_err_block = self._slot_call_cleanup_block(output_roots + (cls,), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            self._slot_call_copy_source(cls, info.global_var)
+            matches = self._slot_call_runtime_call("py_obj_isinstance", (source, cls))
+            good = self.builder.icmp_signed("!=", matches, ir.Constant(_I64, 0))
+            ready = self.current_function.append_basic_block(self._fresh("value.unbox.ready"))
+            wrong = self.current_function.append_basic_block(self._fresh("value.unbox.wrong.type"))
+            self.builder.cbranch(good, ready, wrong)
+            self.builder.position_at_end(wrong)
+            self._emit_builtin_exception_and_branch("TypeError", "expected " + ty.name + " valueclass instance", None)
+            self.builder.position_at_end(ready)
+            self._release_slot_call_roots((cls,))
+            payload_cleanup = self._slot_call_cleanup_block(output_roots, target)
+            self._try_err_block = payload_cleanup
+            self._cpy_operand_cleanup_block = payload_cleanup
+            from pcc.frontends.python.codegen import marshal
+
+            for index, (_name, field_ty) in enumerate(ty.fields):
+                field = self._new_slot_call_root("value.unbox.field")
+                field_cleanup = self._slot_call_cleanup_block((field,), payload_cleanup)
+                self._try_err_block = field_cleanup
+                self._cpy_operand_cleanup_block = field_cleanup
+                self._slot_call_runtime_call("py_valuebox_get_field", (source,), result_slot=field,
+                                             suffix_args=(ir.Constant(_I32, index),))
+                if self._is_valueclass_payload_type(field_ty):
+                    nested = self._emit_valueclass_payload_from_root(field, field_ty)
+                    self._copy_valueclass_payload_fields(output, (index,), nested, field_ty)
+                    nested_source = self._valueclass_payload_source(nested)
+                    self._clear_owned_valueclass_payload(nested_source[1])
+                elif isinstance(field_ty, RawPointerType):
+                    raise L1CodegenError("Python object cannot implicitly become a raw valueclass pointer")
+                elif isinstance(self._valueclass_field_payload_ir_type(field_ty), ir.PointerType):
+                    destination = self._slot_call_valueclass_field_source(output, (index,), False)[0]
+                    status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(destination), self._as_gc_ptr(field)])
+                    self._slot_call_check_status(status, "valueclass unbox field move")
+                    self._slot_call_note_published(destination)
+                else:
+                    token = self.builder.call(self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(field)])
+                    self._slot_call_check_status(token, "valueclass scalar projection lease")
+                    self._try_err_block = self._slot_call_cleanup_block((), field_cleanup, ((field, token),))
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    scalar = marshal.marshal_from_object(self.builder, self.module, self.runtime,
+                                                         self.builder.load(field), field_ty)
+                    self._emit_post_call_err_check(None)
+                    released = self.builder.call(self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(field), token])
+                    self._try_err_block = field_cleanup
+                    self._cpy_operand_cleanup_block = field_cleanup
+                    self._slot_call_check_status(released, "valueclass scalar projection release")
+                    destination = self.builder.gep(output, [ir.Constant(_I32, 0), ir.Constant(_I32, index)], inbounds=True)
+                    self.builder.store(scalar, destination)
+                self._release_slot_call_roots((field,))
+                self._try_err_block = payload_cleanup
+                self._cpy_operand_cleanup_block = payload_cleanup
+            return self._load_valueclass_payload(output, ty)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cleanup
 
     def _valueclass_field_info(
         self,
@@ -533,175 +831,56 @@ class TypeAbiLoweringMixin:
         ty: Type,
         *,
         consume_fields: bool = False,
+        result_slot=None,
     ) -> Optional[ir.Value]:
-        if not isinstance(ty, ClassType):
-            return None
+        source = self._valueclass_payload_source(value)
+        if source is not None:
+            ty = source[3]
         if not self._is_valueclass_payload_type(ty):
             return None
         if isinstance(value.type, ir.PointerType):
             return value
-        if not hasattr(self, "class_lowering"):
-            return None
-        class_name = self._ensure_class_type_registered(ty)
-        if class_name is None:
-            return None
-        info = self.class_lowering.classes.get(class_name)
-        if info is None:
-            return None
-
-        from pcc.frontends.python.codegen import marshal
-
-        cls_ptr = self.builder.load(
-            info.global_var,
-            name=self._fresh(f"value.{ty.name}.class"),
+        if source is None:
+            if self._valueclass_payload_pointer_field_paths(ty):
+                raise L1CodegenError("valueclass boxing requires a producer-owned payload slot")
+            slot = self._alloca_in_entry(self._valueclass_payload_ir_type(ty), name=self._fresh("value.scalar.payload"))
+            self.builder.store(value, slot)
+            source = (value, slot, (), ty, False)
+        root = self._emit_slot_call_valueclass_field(
+            source[1], source[2], ty, source[4], "value.box", None,
         )
-        inst = self.builder.call(
-            self.runtime["py_valuebox_new"],
-            [cls_ptr],
-            name=self._fresh(f"value.{ty.name}.box"),
-        )
-        for idx, (_field_name, field_ty) in enumerate(ty.fields):
-            field_value = self.builder.extract_value(
-                value,
-                [idx],
-                name=self._fresh(f"value.{ty.name}.box.field{idx}"),
-            )
-            # A scalar or nested payload field is boxed here into a new
-            # reference (or an immortal); a pointer field is the payload's.
-            boxed_here = not isinstance(field_value.type, ir.PointerType)
-            field_obj = self._emit_valueclass_payload_to_object(
-                field_value,
-                field_ty,
-                consume_fields=consume_fields,
-            )
-            if field_obj is None:
-                field_obj = marshal.marshal_to_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    field_value,
-                    field_ty,
-                )
-            self.builder.call(
-                self.runtime["py_valuebox_set_field"],
-                [inst, ir.Constant(_I32, idx), field_obj],
-            )
-            # The box took its own reference (set_field stores through the
-            # write barrier).  Drop ours when it was created here -- a nested
-            # valuebox or a boxed int/float leaked one reference per field --
-            # or when the caller transfers the payload's pointer fields.
-            if (boxed_here or consume_fields) and isinstance(
-                field_obj.type, ir.PointerType
-            ):
-                if field_obj not in getattr(self, "_cpy_values", ()):
-                    self._gc_release(
-                        field_obj,
-                        self._release_context_label("valuebox_field_transfer"),
-                    )
-        return inst
+        # consume_fields was a syntax guess about all leaves. Ownership now
+        # belongs to actual payload slots and is discharged by their scope.
+        if result_slot is not None:
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cleanup = self._cpy_operand_cleanup_block
+            self._try_err_block = self._slot_call_cleanup_block((root,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(result_slot), self._as_gc_ptr(root)])
+                self._slot_call_check_status(status, "valueclass boxed result move")
+                self._slot_call_note_published(result_slot)
+                self._release_slot_call_roots((root,))
+                return self.builder.load(result_slot, name=self._fresh("value.box.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cleanup
+        return self._take_slot_call_root(root)
 
-    def _emit_object_to_valueclass_payload(
-        self,
-        value: ir.Value,
-        ty: Type,
-    ) -> Optional[ir.Value]:
-        if not isinstance(ty, ClassType):
-            return None
-        payload_ty = self._valueclass_payload_ir_type(ty)
-        if payload_ty is None:
+    def _emit_object_to_valueclass_payload(self, value: ir.Value, ty: Type, source_root=None) -> Optional[ir.Value]:
+        payload_type = self._valueclass_payload_ir_type(ty)
+        if payload_type is None:
             return None
         if not isinstance(value.type, ir.PointerType):
-            if str(value.type) == str(payload_ty):
-                return value
-            return None
-
-        from pcc.frontends.python.codegen import marshal
-
-        if not hasattr(self, "class_lowering"):
-            return None
-        class_name = self._ensure_class_type_registered(ty)
-        if class_name is None:
-            return None
-        info = self.class_lowering.classes.get(class_name)
-        if info is None:
-            return None
-        cls_ptr = self.builder.load(
-            info.global_var,
-            name=self._fresh(f"value.{ty.name}.unbox.class"),
-        )
-        is_instance = self.builder.call(
-            self.runtime["py_obj_isinstance"],
-            [value, cls_ptr],
-            name=self._fresh(f"value.{ty.name}.unbox.isinstance"),
-        )
-        is_instance_ok = self.builder.icmp_signed(
-            "!=",
-            is_instance,
-            ir.Constant(_I64, 0),
-            name=self._fresh(f"value.{ty.name}.unbox.isinstance.ok"),
-        )
-        fn = self.current_function
-        fail_bb = fn.append_basic_block(
-            name=self._fresh(f"value.{ty.name}.unbox.typeerror"),
-        )
-        ok_bb = fn.append_basic_block(
-            name=self._fresh(f"value.{ty.name}.unbox.ok"),
-        )
-        self.builder.cbranch(is_instance_ok, ok_bb, fail_bb)
-
-        self.builder.position_at_end(fail_bb)
-        exc = self.builder.call(
-            self.runtime["py_exc_new"],
-            [
-                ir.Constant(_I64, _PY_EXC_TYPEERROR),
-                self._ptr_to_cstr(
-                    self._cstr_global(
-                        f"expected {ty.name} valueclass instance",
-                        self._fresh(f".err.value.{ty.name}.unbox"),
-                    )
-                ),
-            ],
-            name=self._fresh(f"value.{ty.name}.unbox.exc"),
-        )
-        self.builder.call(self.runtime["py_raise"], [exc])
-        err_target = self._current_try_err_block()
-        if err_target is None:
-            err_target = self._ensure_fn_err_exit()
-        self.builder.branch(err_target)
-
-        self.builder.position_at_end(ok_bb)
-
-        payload_slot = self._alloca_in_entry(
-            payload_ty,
-            name=self._fresh(f"value.{ty.name}.unbox.tmp"),
-        )
-        zero = ir.Constant(_I32, 0)
-        for idx, (_field_name, field_ty) in enumerate(ty.fields):
-            field_obj = self.builder.call(
-                self.runtime["py_valuebox_get_field"],
-                [value, ir.Constant(_I32, idx)],
-                name=self._fresh(f"value.{ty.name}.unbox.field{idx}.obj"),
-            )
-            field_value = self._emit_object_to_valueclass_payload(field_obj, field_ty)
-            if field_value is None:
-                field_value = marshal.marshal_from_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    field_obj,
-                    field_ty,
-                )
-            field_ptr = self.builder.gep(
-                payload_slot,
-                [zero, ir.Constant(_I32, idx)],
-                inbounds=True,
-                name=self._fresh(f"value.{ty.name}.unbox.field{idx}"),
-            )
-            self.builder.store(field_value, field_ptr)
-        return self.builder.load(
-            payload_slot,
-            name=self._fresh(f"value.{ty.name}.unbox.payload"),
-        )
+            if str(value.type) != str(payload_type):
+                return None
+            if self._valueclass_payload_pointer_field_paths(ty) and self._valueclass_payload_source(value) is None:
+                raise L1CodegenError("managed valueclass conversion requires its producer-owned payload slot")
+            return value
+        if source_root is None:
+            raise L1CodegenError("boxed valueclass projection requires an authoritative object root before evaluation")
+        return self._emit_valueclass_payload_from_root(source_root, ty)
 
     def _is_scalar(self, ty: Type) -> bool:
         return isinstance(ty, (IntType, FloatType, BoolType, RawPointerType))

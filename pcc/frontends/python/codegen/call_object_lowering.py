@@ -1551,6 +1551,7 @@ class CallObjectLoweringMixin:
             boxed_valueclass = self._emit_valueclass_payload_to_object(
                 valueclass_payload,
                 arg.ty,
+                result_slot=self._slot_call_result_sink(arg),
             )
             if boxed_valueclass is not None:
                 return boxed_valueclass
@@ -1564,7 +1565,7 @@ class CallObjectLoweringMixin:
                 result_slot=self._slot_call_result_sink(arg),
             )
 
-        boxed_valueclass = self._emit_valueclass_payload_to_object(raw, arg.ty)
+        boxed_valueclass = self._emit_valueclass_payload_to_object(raw, arg.ty, result_slot=self._slot_call_result_sink(arg))
         if boxed_valueclass is not None:
             return boxed_valueclass
 

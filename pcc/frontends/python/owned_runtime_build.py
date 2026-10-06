@@ -73,6 +73,8 @@ def runtime_modules(runtime_dir: str, target: str, threads: bool = False) -> lis
     names = [name for name in names if name not in ("freestanding_thread_kernel", "freestanding_thread_kernel_pthread")]
     names.append("freestanding_thread_kernel_pthread" if threads else "freestanding_thread_kernel")
     if target_os_name(target) == "win32":
+        names = [name for name in names if name != "freestanding_platform_rss"]
+        names.append("freestanding_windows_rss")
         names.extend(("freestanding_windows", "freestanding_windows_process", "freestanding_windows_start", "freestanding_windows_socket", "freestanding_windows_system", "freestanding_windows_file_lock", "freestanding_windows_time", "freestanding_time_format", "freestanding_windows_directory", "freestanding_windows_signal", "freestanding_signal_set"))
         if threads:
             names.append("freestanding_windows_threads")

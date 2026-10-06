@@ -36,6 +36,7 @@ from pcc.frontends.python.py_ast import (
     ListType,
     MemoryViewType,
     Name,
+    RawPointerType,
     NoneType,
     Slice,
     SetType,
@@ -262,8 +263,10 @@ def _emit_live_import_sequence_unpack(host, stmt, target):
                 "py_obj_getitem_i64", (source,), result_slot=item,
                 suffix_args=(ir.Constant(_I64, index),), span=stmt.span,
             )
+        element_types = _assign_tuple_elems(stmt.value.ty)
         for index, lhs in enumerate(target.elems):
-            host._store_unpack_root_target(lhs, roots[item_start + index], DynType(name="dyn"))
+            element_type = element_types[index] if len(element_types) == len(target.elems) else DynType(name="dyn")
+            host._store_unpack_root_target(lhs, roots[item_start + index], element_type)
         host._release_slot_call_roots(tuple(roots))
     finally:
         host._try_err_block = previous
@@ -440,45 +443,51 @@ class AssignmentStatementLoweringMixin:
         if len(resolved_args) != len(fields):
             return None
 
-        payload_slot = self._alloca_in_entry(
-            payload_ty,
-            name=self._fresh(f"value.{class_name}.tmp"),
-        )
-        zero = ir.Constant(ir.IntType(32), 0)
-        for idx, ((_field_name, field_ty), arg_expr) in enumerate(
-            zip(fields, resolved_args)
-        ):
-            if self._is_valueclass_payload_type(field_ty):
-                nested_payload = self._maybe_emit_valueclass_constructor_payload(
-                    field_ty,
-                    arg_expr,
-                )
-                if nested_payload is not None:
-                    field_value = nested_payload
-                else:
-                    raw_value = self._emit_expr(arg_expr)
-                    field_value = self._coerce(raw_value, arg_expr.ty, field_ty)
-            elif isinstance(field_ty, IntType):
-                field_value = self._emit_expr_as_i64(arg_expr)
-            else:
-                raw_value = self._emit_expr(arg_expr)
-                if isinstance(field_ty, FloatType):
-                    field_value = self._to_double(raw_value, arg_expr.ty)
+        payload_slot = self._new_owned_valueclass_payload(target_ty, "value." + class_name + ".constructor")
+        roots = self._valueclass_payload_owned_roots(payload_slot)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cleanup = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block(roots, target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            zero = ir.Constant(ir.IntType(32), 0)
+            for index, ((_field_name, field_ty), arg_expr) in enumerate(zip(fields, resolved_args)):
+                field_ptr = self.builder.gep(payload_slot, [zero, ir.Constant(ir.IntType(32), index)],
+                                             inbounds=True, name=self._fresh("value.constructor.field"))
+                if self._is_valueclass_payload_type(field_ty):
+                    nested = self._emit_valueclass_payload_expr(arg_expr, field_ty)
+                    self._copy_valueclass_payload_fields(payload_slot, (index,), nested, field_ty)
+                elif isinstance(field_ty, IntType):
+                    self.builder.store(self._emit_expr_as_i64(arg_expr), field_ptr)
+                elif isinstance(field_ty, FloatType):
+                    raw = self._emit_expr(arg_expr)
+                    self.builder.store(self._to_double(raw, arg_expr.ty), field_ptr)
+                    self._gc_release_if_owned(raw, arg_expr)
                 elif isinstance(field_ty, BoolType):
-                    field_value = self._truthy(raw_value, arg_expr.ty)
+                    raw = self._emit_expr(arg_expr)
+                    self.builder.store(self._truthy(raw, arg_expr.ty), field_ptr)
+                    self._gc_release_if_owned(raw, arg_expr)
+                elif isinstance(field_ty, RawPointerType):
+                    raw = self._emit_expr(arg_expr)
+                    self.builder.store(self._coerce(raw, arg_expr.ty, field_ty, arg_expr), field_ptr)
                 else:
-                    field_value = self._coerce(raw_value, arg_expr.ty, field_ty)
-            field_ptr = self.builder.gep(
-                payload_slot,
-                [zero, ir.Constant(ir.IntType(32), idx)],
-                inbounds=True,
-                name=self._fresh(f"value.{class_name}.field{idx}"),
-            )
-            self.builder.store(field_value, field_ptr)
-        return self.builder.load(
-            payload_slot,
-            name=self._fresh(f"value.{class_name}.payload"),
-        )
+                    source = self._emit_slot_call_operand(arg_expr, "value.constructor.field")
+                    destination = self._slot_call_valueclass_field_source(payload_slot, (index,), False)[0]
+                    field_error = self._try_err_block
+                    field_cleanup = self._cpy_operand_cleanup_block
+                    self._try_err_block = self._slot_call_cleanup_block((source,), field_error)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(destination), self._as_gc_ptr(source)])
+                    self._slot_call_check_status(status, "valueclass constructor field move", arg_expr.span)
+                    self._slot_call_note_published(destination)
+                    self._release_slot_call_roots((source,))
+                    self._try_err_block = field_error
+                    self._cpy_operand_cleanup_block = field_cleanup
+            return self._load_valueclass_payload(payload_slot, target_ty)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cleanup
 
     def _emit_assign(self, stmt: Assign) -> None:
         from pcc.frontends.python.codegen.local_bound_lowering import mark_bound_target
@@ -931,10 +940,7 @@ class AssignmentStatementLoweringMixin:
             valueclass_target_ty
         ) and self._is_valueclass_payload_type(stmt.value.ty):
             valueclass_target_ty = stmt.value.ty
-        valueclass_payload = self._maybe_emit_valueclass_constructor_payload(
-            valueclass_target_ty,
-            stmt.value,
-        )
+        valueclass_payload = self._emit_valueclass_payload_expr(stmt.value, valueclass_target_ty)
         if valueclass_payload is not None:
             value = valueclass_payload
             local_target_ty = valueclass_target_ty
@@ -1357,10 +1363,17 @@ class AssignmentStatementLoweringMixin:
                 self.runtime["pcc_gc_store_root_take"],
                 [self._as_gc_ptr(alloca), value],
             )
+        elif self._is_valueclass_payload_type(declared_ty) and isinstance(ir_ty, ir.LiteralStructType):
+            # Rebinding a parameter must not change its borrowed physical
+            # slots into owning slots. Give the new binding its own storage.
+            registry = self._fn_valueclass_payload_root_slots.get(self.current_function.name, ())
+            if any(record[0] is alloca and record[3] for record in registry):
+                alloca = self._alloca_in_entry(ir_ty, name=self._fresh(target.ident + ".owned.payload"))
+                self.env[target.ident] = (alloca, ir_ty, declared_ty)
+            self._ensure_valueclass_payload_gc_roots(target.ident, alloca, declared_ty, borrowed=False)
+            self._copy_valueclass_payload(alloca, value, declared_ty)
         else:
             self.builder.store(value, alloca)
-        if self._is_valueclass_payload_type(declared_ty):
-            self._ensure_valueclass_payload_gc_roots(target.ident, alloca, declared_ty)
         if (
             rhs_local_copy_is_owned
             or rhs_emitted_value_is_owned
@@ -1475,6 +1488,12 @@ class AssignmentStatementLoweringMixin:
             return self._emit_starred_unpack_assign(stmt, target, star_indices)
 
         rhs = stmt.value
+        payload_target = any(self._is_valueclass_payload_type(getattr(lhs, "ty", None)) for lhs in target.elems)
+        payload_element = any(self._is_valueclass_payload_type(item) for item in _assign_tuple_elems(rhs.ty))
+        if (payload_target or payload_element) and (not _assign_is_tuple_expr(rhs) or any(
+                self._is_starred_unpack_expr(elem) for elem in rhs.elems)):
+            _emit_live_import_sequence_unpack(self, stmt, target)
+            return
         live_target = any(
             (isinstance(lhs, (Attr, Subscript)) and live_import_expr_binding(self, lhs.obj))
             or (isinstance(lhs, Name) and live_import_name_slot(self, lhs.ident) is not None)
@@ -1529,7 +1548,7 @@ class AssignmentStatementLoweringMixin:
                         and isinstance(elem.ty, (IntType, BoolType))
                     )
                     managed = (
-                        (self._is_object(elem.ty) or planned_exact_int
+                        (self._is_object(elem.ty) or self._is_valueclass_payload_type(elem.ty) or planned_exact_int
                          or isinstance(lhs, (Attr, Subscript)) and live_import_expr_binding(self, lhs.obj))
                         and not getattr(self, "_freestanding_module", False)
                         and not self._expr_returns_unsafe_raw_pointer(elem)

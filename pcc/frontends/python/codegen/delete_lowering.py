@@ -92,7 +92,9 @@ class DeleteLoweringMixin:
             self.builder.call(self.runtime["py_cpy_decref"], [value])
         else:
             value_type = getattr(gv, "value_type", None)
-            if isinstance(value_type, ir.PointerType):
+            if self._is_valueclass_payload_type(_declared_ty):
+                self._clear_module_global_valueclass_payload_roots(gv, _declared_ty)
+            elif isinstance(value_type, ir.PointerType):
                 value = self.builder.load(
                     gv, name=self._fresh(f"del.global.value.{name}")
                 )
@@ -130,7 +132,9 @@ class DeleteLoweringMixin:
                     slot = self.env.get(target.ident)
                     if slot is not None:
                         alloca, ir_ty, _decl_ty = slot
-                        if isinstance(ir_ty, ir.PointerType):
+                        if self._is_valueclass_payload_type(_decl_ty) and isinstance(ir_ty, ir.LiteralStructType):
+                            self._clear_owned_valueclass_payload(alloca)
+                        elif isinstance(ir_ty, ir.PointerType):
                             if target.ident in self._owned_local_names:
                                 self._emit_release_owned_local_if_flagged(target.ident, alloca)
                             else:

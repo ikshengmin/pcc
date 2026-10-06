@@ -259,7 +259,9 @@ def _build_vthread_effect_summaries(
     summary_chunks = [list(range(index, min(index + 8, len(module_names))))
                       for index in range(0, len(module_names), 8)]
     selected_worker_environment = ""
-    if len(worker_prefix) == 1:
+    if len(worker_prefix) == 1 and _worker_tree_budget_bytes(
+        os.environ.get(_WORKER_TREE_BUDGET_ENV, "")
+    ) <= 0:
         ast_sizes = [
             _summary_input_size_bytes(os.path.join(ast_dir, "module_" + str(index) + ".json"))
             for index in range(len(module_names))
@@ -348,6 +350,12 @@ def _build_vthread_effect_summaries(
 
 def _summary_worker_parallelism(max_parallel: int, worker_prefix) -> int:
     """Choose bounded summary width without multiplying native worker memory."""
+    if _worker_tree_budget_bytes(os.environ.get(_WORKER_TREE_BUDGET_ENV, "")) > 0:
+        raw = str(os.environ.get("PCC_PY_FRONTEND_SUMMARY_JOBS", "") or "").strip()
+        try:
+            return max(1, min(max_parallel, int(raw))) if raw else max(1, max_parallel)
+        except ValueError:
+            return 1
     if max_parallel <= 1:
         return _compiled_native_summary_jobs(1) if len(worker_prefix) == 1 else 1
     raw = str(
@@ -719,6 +727,8 @@ def build_shared_exports(
 
 def _codegen_safe_worker_jobs(jobs: int, native_owned_lanes: bool,
                               safe_chunk_count: int, deferred_plan: str) -> int:
+    if _worker_tree_budget_bytes(os.environ.get(_WORKER_TREE_BUDGET_ENV, "")) > 0:
+        return max(1, jobs)
     if not native_owned_lanes or safe_chunk_count == 0:
         return jobs
     if deferred_plan:
@@ -1025,12 +1035,15 @@ def compile_parallel_uncached(
     native_auto_source_lanes = auto_source_lanes and compiled_native_worker
     chunk_count = chunk_count_for_workers(len(src_paths), jobs, worker_prefix)
     chunks = codegen_chunks(src_paths, chunk_count)
-    # Export workers only parse/lift and publish AST/export sidecars.  Giving
-    # that phase the shorter codegen shards would repeat interpreter startup
-    # and export merging without reducing retained codegen state.  Keep one
-    # export shard per active slot, then consume the same sidecars from the
-    # bounded, shorter-lived codegen shards below.
-    export_chunks = codegen_chunks(src_paths, jobs)
+    # Export startup is amortized over a fixed-size batch, independently of
+    # admission width. Host/native codegen below remains singleton so its
+    # decoded export graph and module-local state have one-module lifetimes.
+    from pcc.frontends.python.pipeline_frontend_workers import SOURCE_WORKER_MODULES_PER_CHUNK
+
+    export_chunks = [
+        list(range(index, min(index + SOURCE_WORKER_MODULES_PER_CHUNK, len(src_paths))))
+        for index in range(0, len(src_paths), SOURCE_WORKER_MODULES_PER_CHUNK)
+    ]
     export_oversized_chunk_count = 0
     export_safe_jobs = jobs
     if native_owned_lanes:
@@ -1045,7 +1058,11 @@ def compile_parallel_uncached(
         export_requested = jobs
         if native_auto_source_lanes:
             export_requested = max(jobs, _parallel_cpu_budget())
-        export_safe_jobs = _compiled_native_export_jobs(export_requested)
+        export_safe_jobs = (
+            export_requested if _worker_tree_budget_bytes(
+                os.environ.get(_WORKER_TREE_BUDGET_ENV, "")
+            ) > 0 else _compiled_native_export_jobs(export_requested)
+        )
         if _worker_tree_budget_bytes(
             os.environ.get(_WORKER_TREE_BUDGET_ENV, "")
         ) > 0:
@@ -1216,7 +1233,7 @@ def compile_parallel_uncached(
         # their budget is already applied by frontend_jobs.  Mirroring the
         # export lane's native-only predicate here is what keeps the Stage2
         # memory policy from throttling host Stage1.
-        if native_owned_lanes and jobs > 1:
+        if native_owned_lanes:
             oversized_chunks, safe_chunks = (
                 _split_codegen_chunks_by_source_size(
                     src_paths,

@@ -1420,9 +1420,7 @@ class MethodCallExpressionLoweringMixin:
                         kwargs=expr.kwargs,
                         park_expr=expr,
                     )
-                self_val = self.builder.load(
-                    self.env["self"][0], name=self._fresh("self")
-                )
+                self_val = self._emit_direct_method_receiver(attr.obj, method_info, attr.name)
                 method_fn = method_info.methods[attr.name]
                 try:
                     return self._emit_direct_method_call(
@@ -1790,7 +1788,7 @@ class MethodCallExpressionLoweringMixin:
                             kwargs=expr.kwargs,
                             park_expr=expr,
                         )
-                    obj_val = self._emit_expr(attr.obj)
+                    obj_val = self._emit_direct_method_receiver(attr.obj, info, attr.name)
                     if kind == "classmethod":
                         obj_val = self.builder.load(
                             info.global_var, name=self._fresh(".cls.recv")
@@ -1858,7 +1856,7 @@ class MethodCallExpressionLoweringMixin:
                         kwargs=expr.kwargs,
                         park_expr=expr,
                     )
-                obj_val = self._emit_expr(attr.obj)
+                obj_val = self._emit_direct_method_receiver(attr.obj, info, attr.name)
                 if kind == "classmethod":
                     obj_val = self.builder.load(
                         info.global_var, name=self._fresh(".cls.recv")
@@ -1982,7 +1980,7 @@ class MethodCallExpressionLoweringMixin:
                             kwargs=expr.kwargs,
                             park_expr=expr,
                         )
-                    obj_val = self._emit_expr(attr.obj)
+                    obj_val = self._emit_direct_method_receiver(attr.obj, candidate_info, attr.name)
                     if kind == "classmethod":
                         obj_val = self.builder.load(
                             candidate_info.global_var,

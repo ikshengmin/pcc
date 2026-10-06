@@ -331,11 +331,38 @@ class L1CodeGenEntrypointMixin:
                 "",
                 self._codegen_trace_span(stmt),
             )
+        payload_scope = self._statement_uses_managed_valueclass(stmt)
+        previous_error = self._try_err_block
+        previous_cleanup = self._cpy_operand_cleanup_block
+        scope_function = self.current_function
+        temporary_start = len(self._valueclass_payload_temporaries.get(scope_function.name, ()))
+        scope_error = None
+        scope_target = None
+        if payload_scope:
+            scope_target = self._current_try_err_block()
+            if scope_target is None:
+                scope_target = self._ensure_fn_err_exit()
+            scope_error = scope_function.append_basic_block(self._fresh("value.statement.error"))
+            self._try_err_block = scope_error
+            self._cpy_operand_cleanup_block = scope_error
         try:
             StmtDispatchLoweringMixin._emit_stmt_impl(self, stmt)
         except BaseException as exc:
             self._codegen_trace_dump(exc)
             raise
+        finally:
+            self._try_err_block = previous_error
+            self._cpy_operand_cleanup_block = previous_cleanup
+        if payload_scope:
+            temporaries = self._valueclass_payload_temporaries.get(scope_function.name, ())[temporary_start:]
+            roots = tuple(root for slot, _ty in temporaries for root in self._valueclass_payload_owned_roots(slot))
+            if not self._builder_block_is_terminated():
+                self._release_slot_call_roots(roots)
+            continuation = self.builder._block
+            cleanup = self._slot_call_cleanup_block(roots, scope_target)
+            self.builder.position_at_end(scope_error)
+            self.builder.branch(cleanup)
+            self.builder.position_at_end(continuation)
 
     def _emit_expr(self, expr: Expr) -> ir.Value:
         if self._codegen_trace_is_enabled():

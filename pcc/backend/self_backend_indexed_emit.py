@@ -7,6 +7,7 @@ import sys
 
 from pcc.extern import c_int64, extern
 from pcc.unsafe import darwin_current_rss_bytes
+from pcc.frontends.python.worker_resource_plan import publish_worker_resource
 
 from .native_object import encode_native_object_from_sections
 from .self_backend_aarch64_darwin import (
@@ -27,6 +28,7 @@ _pcc_os_heap_capacity_bytes: "extern" = extern(
 
 
 def _debug_phase(phase: str) -> None:
+    publish_worker_resource("complete" if phase == "publish-complete" else phase)
     if str(os.environ.get("PCC_DEBUG_INDEXED_EMIT", "") or "").strip():
         rss_bytes = -1
         heap_in_use_bytes = -1
@@ -92,6 +94,7 @@ def emit_indexed_module_file(
             with open(temporary, "wb") as stream:
                 stream.write(payload)
             os.replace(temporary, output_path)
+            _debug_phase("publish-complete")
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

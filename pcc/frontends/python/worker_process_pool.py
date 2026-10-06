@@ -18,6 +18,14 @@ _native_chained_pool = extern(
     "pcc_chained_worker_process_pool",
     (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64), c_int64,
 )
+_native_worker_start = extern("pcc_worker_process_start", (c_ptr, c_int64), c_int64)
+_native_worker_poll = extern("pcc_worker_process_poll", (c_int64,), c_int64)
+_native_worker_stop = extern("pcc_worker_process_stop", (c_int64,), c_int64)
+_WORKER_RUNNING = 2147483647
+_HOST_WORKERS = {}
+_NATIVE_LIVE_WORKERS = set()
+_NATIVE_COMPLETED_WORKERS = {}
+_RESOURCE_OBSERVATIONS = []
 
 
 def _command_spec(command):
@@ -34,6 +42,292 @@ def _command_spec(command):
     if not argv:
         raise ValueError("worker command has no executable")
     return argv, [key + "=" + value for key, value in env.items()]
+
+
+def _start_resource_worker(specs, index):
+    if sys.implementation.name == "pcc":
+        pid = _native_worker_start(specs, index)
+        if pid > 0:
+            _NATIVE_LIVE_WORKERS.add(pid)
+        return pid
+    argv, vector = specs[index]
+    env = dict(item.split("=", 1) for item in vector)
+    process = (subprocess.Popen(argv, env=env, creationflags=512)
+               if sys.platform == "win32"
+               else subprocess.Popen(argv, env=env, process_group=0))
+    _HOST_WORKERS[process.pid] = process
+    return process.pid
+
+
+def _poll_resource_worker(pid):
+    if sys.implementation.name == "pcc":
+        if pid in _NATIVE_COMPLETED_WORKERS:
+            return _NATIVE_COMPLETED_WORKERS[pid]
+        if pid not in _NATIVE_LIVE_WORKERS:
+            raise ValueError("cannot poll an unowned worker")
+        result = _native_worker_poll(pid)
+        if result != _WORKER_RUNNING:
+            _NATIVE_LIVE_WORKERS.remove(pid)
+            _NATIVE_COMPLETED_WORKERS[pid] = result
+        return result
+    result = _HOST_WORKERS[pid].poll()
+    return _WORKER_RUNNING if result is None else result
+
+
+def _retire_resource_worker(pid):
+    if sys.implementation.name == "pcc":
+        if pid not in _NATIVE_COMPLETED_WORKERS:
+            raise ValueError("cannot retire a live or unowned worker")
+        del _NATIVE_COMPLETED_WORKERS[pid]
+        return
+    process = _HOST_WORKERS[pid]
+    if process.returncode is None:
+        raise ValueError("cannot retire a live worker")
+    del _HOST_WORKERS[pid]
+    # poll already reaped the child. Never signal this PID/group now: it can
+    # have been reused. Detached descendants remain charged by the tree guard.
+    process.wait(timeout=2)
+
+
+def _stop_resource_worker(pid):
+    if sys.implementation.name == "pcc":
+        if pid in _NATIVE_COMPLETED_WORKERS:
+            del _NATIVE_COMPLETED_WORKERS[pid]
+        elif pid in _NATIVE_LIVE_WORKERS:
+            _native_worker_stop(pid)
+            _NATIVE_LIVE_WORKERS.remove(pid)
+        return
+    process = _HOST_WORKERS.get(pid)
+    if process is None:
+        return
+    if process.returncode is not None:
+        _retire_resource_worker(pid)
+        return
+    try:
+        if sys.platform == "win32":
+            process.kill()
+        else:
+            os.killpg(pid, 9)
+    except (ProcessLookupError, PermissionError):
+        pass
+    process.wait(timeout=2)
+    _retire_resource_worker(pid)
+
+
+def _resource_event(path, event, index, pid, reservation, available, peak):
+    if path:
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write(
+                event + "\t" + str(index) + "\t" + str(pid) + "\t"
+                + str(reservation) + "\t" + str(available) + "\t" + str(peak)
+                + "\t" + str(time.monotonic()) + "\n"
+            )
+
+
+def run_resource_worker_processes(commands, tasks, width, tree_budget,
+                                 observations=None, trace_path=""):
+    """Use one byte-admission loop on CPython and owned native process APIs.
+
+    Fresh-process task reports carry measured high-water RSS. The optional
+    guard snapshot adds wrappers, ancestors, and worker descendants to the
+    accounting. Without that transport the stated budget has local process
+    scope (this driver and its children); no ancestor RSS is invented.
+    """
+    from pcc.frontends.python.pipeline_frontend_workers import _coordinator_rss_bytes
+    from pcc.frontends.python.worker_resource_plan import (
+        RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, STATE_MAX_AGE_SECONDS, TREE_STATE_ENV,
+        WorkerMemoryError, available_worker_bytes, choose_task,
+        estimated_task_bytes, peak_reservation, read_tree_state,
+        read_worker_resource, require_task_fits,
+    )
+
+    if len(commands) != len(tasks) or width <= 0 or tree_budget <= 0:
+        raise WorkerMemoryError("invalid resource worker inventory or budget")
+    if not commands:
+        return
+    if observations is None:
+        observations = _RESOURCE_OBSERVATIONS
+    specs = []
+    for command, task in zip(commands, tasks):
+        argv, vector = _command_spec(command)
+        report = str(task["report_path"])
+        if not report:
+            raise WorkerMemoryError("resource worker needs a private RSS report path")
+        vector = [entry for entry in vector
+                  if not entry.startswith(RESOURCE_REPORT_ENV + "=")]
+        vector.append(RESOURCE_REPORT_ENV + "=" + report)
+        specs.append((argv, vector))
+    tree_path = str(os.environ.get(TREE_STATE_ENV, "") or "")
+    owner_pid = os.getpid()
+    pending = sorted(range(len(tasks)), key=lambda index: (
+        -sum(tasks[index]["inputs"]), index,
+    ))
+    active = []
+    attempt_tokens = {}
+    retries = [0 for _task in tasks]
+    completed = set()
+    unavailable_since = time.monotonic()
+    fresh_after = unavailable_since
+    preflight_done = False
+    try:
+        while pending or active:
+            survivors = []
+            for index, pid, reservation, exclusive, observed_peak in active:
+                report = read_worker_resource(str(tasks[index]["report_path"]), pid, attempt_tokens[pid])
+                if report is not None:
+                    observed_peak = max(observed_peak, report[2])
+                    if not exclusive:
+                        reservation = max(reservation, peak_reservation(observed_peak))
+                result = _poll_resource_worker(pid)
+                if result == _WORKER_RUNNING:
+                    survivors.append((index, pid, reservation, exclusive, observed_peak))
+                    continue
+                _retire_resource_worker(pid)
+                fresh_after = time.monotonic()
+                active = [item for item in active if item[1] != pid]
+                if result:
+                    _resource_event(trace_path, "failed", index, pid, reservation, 0, observed_peak)
+                    raise subprocess.CalledProcessError(result, commands[index])
+                # The child may publish complete and exit between the earlier
+                # live read and poll. Only a fresh post-success read can bind
+                # completion to this PID and this exact scheduled attempt.
+                report = read_worker_resource(str(tasks[index]["report_path"]), pid, attempt_tokens[pid])
+                if report is None or report[0] != "complete":
+                    _resource_event(trace_path, "unverified-retire", index, pid, reservation, 0, observed_peak)
+                    raise WorkerMemoryError("completed worker did not publish final peak RSS: task=" + str(index))
+                observed_peak = max(observed_peak, report[2])
+                _resource_event(trace_path, "retire", index, pid, reservation, 0, observed_peak)
+                observations.append((tasks[index]["class"], tasks[index]["inputs"], observed_peak))
+                completed.add(index)
+            active = survivors
+            if not pending and not active:
+                break
+            owner_rss = _coordinator_rss_bytes()
+            state = read_tree_state(tree_path, tree_budget, owner_pid,
+                                    [item[1] for item in active], fresh_after)
+            if tree_path and state is None:
+                if time.monotonic() - unavailable_since > STATE_MAX_AGE_SECONDS:
+                    raise WorkerMemoryError("worker tree RSS state is missing, stale, or incompatible")
+                time.sleep(0.01)
+                continue
+            unavailable_since = time.monotonic()
+            outside = 0 if state is None else state[0]
+            available = available_worker_bytes(tree_budget, owner_rss, outside)
+            if state is not None:
+                updated = []
+                for index, pid, reservation, exclusive, peak in active:
+                    current_subtree = state[1].get(pid, 0)
+                    peak = max(peak, current_subtree)
+                    if not exclusive and peak > 0:
+                        reservation = max(reservation, peak_reservation(peak))
+                    updated.append((index, pid, reservation, exclusive, peak))
+                active = updated
+            if len(active) == 1 and active[0][4] > 0:
+                measured_demand = peak_reservation(active[0][4])
+                if active[0][3] and measured_demand > available:
+                    raise WorkerMemoryError(
+                        "exclusive calibration exceeded safe worker space: task=" + str(active[0][0])
+                        + " observed_peak_so_far_bytes=" + str(active[0][4])
+                        + " available_worker_bytes=" + str(available)
+                        + " budget=" + str(tree_budget)
+                        + "; full-task peak is unknown; tree cap is unchanged"
+                    )
+                require_task_fits(active[0][0], measured_demand, available, tree_budget)
+            # Reservations can increase while peers are alive. Do not merely
+            # stop launching and wait for the outer breaker to kill the tree:
+            # retire a restartable peer, retain its measured demand, and queue
+            # it once. A second cancellation is an explicit failed estimate,
+            # not an unbounded retry or a relaxed process-tree cap.
+            while len(active) > 1 and sum(item[2] for item in active) > available:
+                index, pid, reservation, exclusive, observed_peak = active[-1]
+                if not tasks[index].get("restartable", False):
+                    raise WorkerMemoryError("live worker reservations exceed the budget; task cannot be restarted")
+                _stop_resource_worker(pid)
+                active.pop()
+                _resource_event(trace_path, "cancel", index, pid, reservation, available, observed_peak)
+                if retries[index] >= 1:
+                    raise WorkerMemoryError("worker peak estimate remains unstable after one bounded retry: task=" + str(index))
+                retries[index] += 1
+                if observed_peak > 0:
+                    tasks[index]["estimate_bytes"] = max(
+                        tasks[index]["estimate_bytes"], peak_reservation(observed_peak),
+                    )
+                pending.insert(0, index)
+            if not preflight_done:
+                for index in pending:
+                    demand = estimated_task_bytes(tasks[index], observations)
+                    if demand:
+                        require_task_fits(index, demand, available, tree_budget)
+                preflight_done = True
+            while pending and len(active) < width:
+                reservations = [item[2] for item in active]
+                if any(item[3] for item in active):
+                    break
+                ready = []
+                for item in pending:
+                    dependency = tasks[item].get("depends_on", -1)
+                    if dependency >= 0 and dependency not in completed:
+                        continue
+                    input_path = str(tasks[item].get("input_path", "") or "")
+                    if input_path and not tasks[item].get("input_ready", False):
+                        with open(input_path, "rb") as stream:
+                            stream.seek(0, 2)
+                            size = int(stream.tell())
+                        tasks[item]["inputs"] = [size]
+                        cost = tasks[item].get("input_cost", [])
+                        if cost:
+                            tasks[item]["estimate_bytes"] = cost[0] + size * cost[1] // 1000000
+                        from pcc.frontends.python.pipeline_stage1_checkpoint import file_sha256
+                        tasks[item]["source_identity"] = file_sha256(input_path)
+                        tasks[item]["input_ready"] = True
+                    ready.append(item)
+                index, demand, exclusive = choose_task(
+                    ready, tasks, observations, reservations, width, available,
+                )
+                if index < 0:
+                    if not active:
+                        if not ready:
+                            raise WorkerMemoryError("resource worker dependency graph cannot make progress")
+                        first = ready[0]
+                        require_task_fits(first, estimated_task_bytes(tasks[first], observations),
+                                          available, tree_budget)
+                    _resource_event(trace_path, "backoff", -1, 0, sum(reservations), available, 0)
+                    break
+                require_task_fits(index, demand, available, tree_budget)
+                report_path = str(tasks[index]["report_path"])
+                if os.path.exists(report_path):
+                    os.unlink(report_path)
+                import hashlib
+
+                attempt = (
+                    str(owner_pid) + "|" + str(index) + "|" + str(retries[index])
+                    + "|" + str(time.monotonic()) + "|" + tasks[index]["class"]
+                    + "|" + repr(tasks[index]["inputs"])
+                    + "|" + str(tasks[index].get("source_identity", ""))
+                )
+                token = hashlib.sha256(attempt.encode("utf-8")).hexdigest()
+                argv, vector = specs[index]
+                vector = [entry for entry in vector if not entry.startswith(RESOURCE_TOKEN_ENV + "=")]
+                vector.append(RESOURCE_TOKEN_ENV + "=" + token)
+                specs[index] = (argv, vector)
+                pid = _start_resource_worker(specs, index)
+                if pid <= 0:
+                    raise subprocess.CalledProcessError(127, commands[index])
+                pending.remove(index)
+                attempt_tokens[pid] = token
+                active.append((index, pid, demand, exclusive, 0))
+                _resource_event(trace_path, "calibrate" if exclusive else "start",
+                                index, pid, demand, available, 0)
+                if exclusive:
+                    break
+                # Refresh live reports and the synchronized tree before the
+                # next launch; startup can invalidate an earlier reservation.
+                break
+            if active:
+                time.sleep(0.01)
+    finally:
+        for _index, pid, _reservation, _exclusive, _peak in active:
+            _stop_resource_worker(pid)
 
 
 def _host_pool(specs, width):

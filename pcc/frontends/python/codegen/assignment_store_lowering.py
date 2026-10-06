@@ -157,6 +157,16 @@ class AssignmentStoreLoweringMixin:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
             return
+        if isinstance(lhs, Name):
+            entry = self.env.get(lhs.ident)
+            global_entry = self._module_globals.get(lhs.ident)
+            declared = entry[2] if entry is not None else (global_entry[1] if global_entry is not None else lhs.ty)
+            physical = entry[1] if entry is not None else (global_entry[0].value_type if global_entry is not None else self._local_slot_ir_type(lhs.ident, declared))
+            if self._is_valueclass_payload_type(declared) and isinstance(physical, ir.LiteralStructType):
+                payload = self._emit_valueclass_payload_from_root(root, declared)
+                self._store_unpack_target(lhs, payload, declared, value_is_owned=False)
+                self._clear_owned_valueclass_payload(self._valueclass_payload_source(payload)[1])
+                return
         local_name = isinstance(lhs, Name) and not (
             lhs.ident in self._module_globals
             and (self.current_func_def is None or lhs.ident in self._current_global_names)
@@ -553,10 +563,12 @@ class AssignmentStoreLoweringMixin:
                 )
         else:
             value = self._coerce(value, value_ty, declared_ty)
-        self.builder.store(value, alloca)
+        if self._is_valueclass_payload_type(declared_ty) and isinstance(_ir_ty, ir.LiteralStructType):
+            self._ensure_valueclass_payload_gc_roots(target.ident, alloca, declared_ty, borrowed=False)
+            self._copy_valueclass_payload(alloca, value, declared_ty)
+        else:
+            self.builder.store(value, alloca)
         mark_local_bound(self, target.ident)
-        if self._is_valueclass_payload_type(declared_ty):
-            self._ensure_valueclass_payload_gc_roots(target.ident, alloca, declared_ty)
 
     def _store_value_at_subscript(
         self,

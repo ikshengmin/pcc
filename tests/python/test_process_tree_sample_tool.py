@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 
 import pytest
@@ -33,9 +34,139 @@ def _load_tool_module():
 
 def test_nested_session_cleanup_excludes_reused_pids_and_unrelated_sessions(monkeypatch):
     tool = _load_tool_module()
-    live = {10: 10, 12: 11, 13: 11, 20: 99, 21: 20, 30: 30}
-    monkeypatch.setattr(tool.os, "getsid", lambda pid: live[pid])
-    assert tool._owned_session_pids(10, {10: 10, 11: 11, 12: 11, 20: 20}, live) == {12, 13}
+    identity = tool._ProcessIdentity
+    observed = {
+        10: identity(10, 1, (100, 0)),
+        11: identity(11, 10, (110, 0)),
+        12: identity(11, 11, (120, 0)),
+        20: identity(20, 10, (200, 0)),
+    }
+    live = {
+        10: identity(10, 1, (101, 0)),  # Reused root PID and session ID.
+        12: identity(11, 1, (120, 0)),  # Proven surviving orphan.
+        13: identity(11, 1, (130, 0)),  # Its session remains owned.
+        20: identity(20, 1, (201, 0)),  # Same SID, different process start.
+        21: identity(20, 1, (210, 0)),
+        30: identity(30, 1, (300, 0)),
+    }
+    monkeypatch.setattr(tool, "_process_identity", live.get)
+    assert tool._owned_session_pids(10, observed, live) == {12, 13}
+
+
+def test_owned_rss_retains_orphans_and_rejects_stale_parent_pid(monkeypatch):
+    tool = _load_tool_module()
+    identity = tool._ProcessIdentity
+    observed = {10: identity(10, 1, (100, 0))}
+    live = {
+        10: identity(10, 1, (100, 0)),
+        11: identity(11, 10, (110, 0)),
+        12: identity(11, 11, (120, 0)),
+    }
+    monkeypatch.setattr(tool, "_process_identity", live.get)
+    rows = {10: (1, 100, "driver"), 11: (10, 200, "leader"),
+            12: (11, 300, "resident")}
+    assert tool._owned_tree_rows(rows, observed) == rows
+    del live[11]
+    live[12] = identity(11, 1, (120, 0))
+    live[13] = identity(11, 12, (130, 0))
+    live[20] = identity(20, 1, (200, 0))
+    rows = {10: (1, 100, "driver"), 12: (1, 300, "resident"),
+            13: (12, 400, "new owned child"),
+            20: (10, 1000, "stale ps parent from a previous PID occupant")}
+    owned = tool._owned_tree_rows(rows, observed)
+    assert set(owned) == {10, 12, 13}
+    assert sum(row[1] for row in owned.values()) == 800
+    live[12] = identity(11, 1, (121, 0))
+    del live[13]
+    assert set(tool._owned_tree_rows(rows, observed)) == {10}
+
+
+def test_cleanup_never_signals_a_reaped_root_or_reused_descendant(monkeypatch):
+    tool = _load_tool_module()
+    identity = tool._ProcessIdentity
+    observed = {
+        10: identity(10, 1, (100, 0)),
+        12: identity(10, 10, (120, 0)),
+        13: identity(10, 10, (130, 0)),
+    }
+    live = {
+        10: identity(10, 1, (101, 0)),
+        12: identity(10, 1, (120, 0)),
+        13: identity(10, 1, (131, 0)),
+    }
+    signaled = []
+
+    class ReapedProcess:
+        pid = 10
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout):
+            return self.returncode
+
+    monkeypatch.setattr(tool, "_process_identity", live.get)
+    monkeypatch.setattr(tool, "_termination_process_states",
+                        lambda _timeout: {pid: "Z" for pid in live})
+    monkeypatch.setattr(tool, "_signal_owned_pid",
+                        lambda pid, _identity, signum: signaled.append((pid, signum)))
+    monkeypatch.setattr(tool.os, "killpg", lambda *_args: pytest.fail("stale PGID"))
+    tool._terminate_owned_processes(ReapedProcess(), observed)
+    assert signaled
+    assert {pid for pid, _signum in signaled} == {12}
+
+
+def test_signal_rechecks_start_identity_immediately_before_delivery(monkeypatch):
+    tool = _load_tool_module()
+    identity = tool._ProcessIdentity
+    original = identity(10, 1, (100, 10))
+    monkeypatch.setattr(tool, "_process_identity",
+                        lambda _pid: identity(10, 1, (100, 11)))
+    monkeypatch.setattr(tool.os, "kill", lambda *_args: pytest.fail("reused PID"))
+    if hasattr(tool.os, "pidfd_open"):
+        monkeypatch.setattr(tool.os, "pidfd_open", lambda *_args: 91)
+        monkeypatch.setattr(tool.os, "close", lambda _fd: None)
+        monkeypatch.setattr(tool.signal, "pidfd_send_signal",
+                            lambda *_args: pytest.fail("reused pidfd"))
+    tool._signal_owned_pid(10, original, signal.SIGTERM)
+
+
+def test_linux_identity_parses_kernel_ticks_after_a_complex_process_name(monkeypatch):
+    tool = _load_tool_module()
+    fields = ["S", "10", "20", "30"] + ["0"] * 15 + ["987654321"]
+    raw = "123 (a name with ) parentheses) " + " ".join(fields)
+    monkeypatch.setattr(tool.sys, "platform", "linux")
+    monkeypatch.setattr(tool.Path, "read_text", lambda _path: raw)
+    assert tool._process_identity(123) == tool._ProcessIdentity(30, 10, (987654321, 0))
+
+
+@pytest.mark.parametrize("reused_during_read", [False, True])
+def test_darwin_identity_uses_both_kernel_start_time_fields(
+    monkeypatch, reused_during_read,
+):
+    tool = _load_tool_module()
+    calls = []
+
+    def pidinfo(pid, flavor, arg, pointer, size):
+        assert (pid, flavor, arg, size) == (123, 3, 0, 136)
+        info = pointer._obj
+        info.pid = pid
+        info.ppid = 10
+        info.start_sec = 1723456789
+        info.start_usec = 100 + (int(reused_during_read) if calls else 0)
+        calls.append(pid)
+        return size
+
+    monkeypatch.setattr(tool.sys, "platform", "darwin")
+    monkeypatch.setattr(tool, "_DARWIN_PROC_PIDINFO", pidinfo)
+    monkeypatch.setattr(tool.os, "getsid", lambda _pid: 99)
+    identity = tool._process_identity(123)
+    assert len(calls) == 2
+    if reused_during_read:
+        assert identity is None
+    else:
+        assert identity == tool._ProcessIdentity(99, 10, (1723456789, 100))
 
 
 def test_process_tree_sampler_records_child_rss_and_completion(tmp_path: Path):
@@ -129,6 +260,133 @@ def test_parent_exit_cleans_an_orphaned_child_process_group(tmp_path: Path, nest
                 os.kill(child_pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+
+
+@pytest.mark.parametrize("nested_session", [False, True])
+def test_resident_grandchild_stays_charged_after_worker_leader_is_reaped(
+    tmp_path: Path, nested_session: bool,
+):
+    tool = _load_tool_module()
+    resident = tmp_path / "resident.py"
+    resident.write_text(textwrap.dedent("""\
+        import os, signal, sys, time
+        from pathlib import Path
+        directory = Path(sys.argv[1])
+        memory = bytearray(24 * 1024 * 1024)
+        for offset in range(0, len(memory), 4096):
+            memory[offset] = 1
+        def terminate(*_args):
+            (directory / 'terminated').write_text('resident cleaned')
+            raise SystemExit(0)
+        signal.signal(signal.SIGTERM, terminate)
+        (directory / 'resident.pid').write_text(str(os.getpid()))
+        time.sleep(15)
+        """), encoding="utf-8")
+    leader = tmp_path / "leader.py"
+    leader.write_text(textwrap.dedent("""\
+        import subprocess, sys, time
+        from pathlib import Path
+        directory = Path(sys.argv[1])
+        child = subprocess.Popen(
+            [sys.executable, str(directory / 'resident.py'), str(directory)],
+            process_group=0)
+        while not (directory / 'leader-exit').exists():
+            time.sleep(0.01)
+        """), encoding="utf-8")
+    driver = tmp_path / "driver.py"
+    driver.write_text(textwrap.dedent("""\
+        import json, os, subprocess, sys, time
+        from pathlib import Path
+        directory = Path(sys.argv[1])
+        leader = subprocess.Popen(
+            [sys.executable, str(directory / 'leader.py'), str(directory)],
+            start_new_session=sys.argv[2] == 'True')
+        while not (directory / 'resident.pid').exists():
+            time.sleep(0.01)
+        resident_pid = int((directory / 'resident.pid').read_text())
+        state_path = Path(os.environ['PCC_WORKER_TREE_STATE_PATH'])
+        while True:
+            if state_path.exists():
+                rows = [line.split() for line in state_path.read_text().splitlines()[3:]]
+                if any(int(row[0]) == resident_pid and int(row[2]) >= 24 * 1024 * 1024
+                       for row in rows):
+                    break
+            time.sleep(0.01)
+        (directory / 'leader-exit').touch()
+        assert leader.wait(timeout=3) == 0
+        (directory / 'reaped.json').write_text(json.dumps({
+            'driver': os.getpid(), 'leader': leader.pid, 'resident': resident_pid,
+            'reaped_at': time.monotonic()}))
+        while not (directory / 'finish').exists():
+            time.sleep(0.01)
+        """), encoding="utf-8")
+    result = tmp_path / "result.json"
+    samples = tmp_path / "samples.tsv"
+    state_path = Path(str(result) + ".worker-rss.tsv")
+    guard = subprocess.Popen(
+        [sys.executable, str(TOOL), "--result", str(result),
+         "--samples", str(samples), "--stdout", str(tmp_path / "stdout"),
+         "--stderr", str(tmp_path / "stderr"), "--cwd", str(ROOT),
+         "--timeout", "10", "--interval", "0.02",
+         "--max-tree-rss-bytes", str(128 * 1024 * 1024),
+         "--no-performance-lock", "--", sys.executable, str(driver),
+         str(tmp_path), str(nested_session)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    resident_identity = None
+    resident_pid = 0
+    try:
+        deadline = time.monotonic() + 6
+        ready_path = tmp_path / "reaped.json"
+        while not ready_path.exists() and time.monotonic() < deadline:
+            assert guard.poll() is None
+            time.sleep(0.01)
+        assert ready_path.exists(), "the worker leader must be observed and reaped"
+        ready = json.loads(ready_path.read_text())
+        resident_pid = ready["resident"]
+        resident_identity = tool._process_identity(resident_pid)
+        assert resident_identity is not None
+        orphan_sample_times = set()
+        while time.monotonic() < deadline and len(orphan_sample_times) < 3:
+            state = state_path.read_text().splitlines()
+            assert state[0] == "pcc.worker-tree-rss.v1"
+            assert int(state[2]) == 128 * 1024 * 1024
+            rows = {int(fields[0]): (int(fields[1]), int(fields[2]))
+                    for fields in (line.split() for line in state[3:])}
+            sampled_at = float(state[1])
+            if sampled_at > ready["reaped_at"] and resident_pid in rows:
+                assert rows[resident_pid][0] != ready["leader"]
+                assert rows[resident_pid][1] >= 24 * 1024 * 1024
+                assert ready["driver"] in rows
+                assert ready["leader"] not in rows
+                orphan_sample_times.add(sampled_at)
+            time.sleep(0.02)
+        assert len(orphan_sample_times) >= 3, "live orphan RSS vanished after leader reap"
+        # The very same retained rows must feed the aggregate guard, not just
+        # the scheduler's observation sidecar.
+        sample = samples.read_text().splitlines()[-1].split("\t")
+        assert int(sample[1]) >= 24 * 1024 * 1024
+        assert int(sample[2]) >= 2
+        assert int(sample[3]) == resident_pid
+        (tmp_path / "finish").touch()
+        output, errors = guard.communicate(timeout=5)
+        assert guard.returncode == 0, output + errors
+        receipt = json.loads(result.read_text())
+        assert receipt["status"] == "COMPLETE"
+        assert resident_pid in receipt["post_exit_cleanup_pids"]
+        assert (tmp_path / "terminated").read_text() == "resident cleaned"
+        state = subprocess.run(
+            ["ps", "-p", str(resident_pid), "-o", "stat="],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip()
+        assert not state or state.startswith("Z"), state
+    finally:
+        (tmp_path / "finish").touch()
+        if guard.poll() is None:
+            guard.send_signal(signal.SIGINT)
+            guard.communicate(timeout=6)
+        if resident_identity is not None:
+            tool._signal_owned_pid(resident_pid, resident_identity, signal.SIGKILL)
 
 
 def test_process_tree_sampler_double_sigint_cleans_target_and_writes_receipt(
@@ -759,6 +1017,8 @@ def test_termination_returns_for_exited_child_and_excludes_unrelated_session(
         ],
         start_new_session=True,
     )
+    root_identity = tool._process_identity(process.pid)
+    assert root_identity is not None
     unrelated = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(10)"],
         start_new_session=True,
@@ -770,14 +1030,15 @@ def test_termination_returns_for_exited_child_and_excludes_unrelated_session(
         child_pid = int(child_pid_file.read_text(encoding="utf-8"))
         if root_exited:
             process.wait(timeout=3)
-        # A PID now in a different session is no longer ownership evidence.
-        observed_sessions = {
-            process.pid: process.pid,
-            child_pid: child_pid,
-            unrelated.pid: process.pid,
+        # Neither an exited child nor a reused PID with a different birth can
+        # establish ownership, even when a recorded session number matches.
+        observed_processes = {
+            process.pid: root_identity,
+            child_pid: tool._ProcessIdentity(child_pid, process.pid, (-1, 0)),
+            unrelated.pid: tool._ProcessIdentity(process.pid, process.pid, (-1, 0)),
         }
         started = time.monotonic()
-        tool._terminate_owned_processes(process, observed_sessions)
+        tool._terminate_owned_processes(process, observed_processes)
         assert time.monotonic() - started < 1
         assert process.poll() is not None
         assert unrelated.poll() is None

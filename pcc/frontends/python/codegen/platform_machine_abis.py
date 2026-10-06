@@ -13,6 +13,7 @@ PLATFORM_MACHINE_ABIS = {
     'UnlockFileEx': ('(c_ptr,c_int,c_int,c_int,c_ptr)', 'c_int'),
     "CompareStringOrdinal": ("(c_ptr,c_int,c_ptr,c_int,c_int)", "c_int"),
     "GetCurrentProcess": ("()", "c_ptr"),
+    "K32GetProcessMemoryInfo": ("(c_ptr,c_ptr,c_int)", "c_int"),
     "DuplicateHandle": ("(c_ptr,c_ptr,c_ptr,c_ptr,c_int,c_int,c_int)", "c_int"),
     "InitializeProcThreadAttributeList": ("(c_ptr,c_int,c_int,c_ptr)", "c_int"),
     "UpdateProcThreadAttribute": ("(c_ptr,c_int,c_int64,c_ptr,c_int64,c_ptr,c_ptr)", "c_int"),

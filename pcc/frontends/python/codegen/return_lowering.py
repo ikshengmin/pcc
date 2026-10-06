@@ -528,10 +528,7 @@ class ReturnLoweringMixin:
             valueclass_target_ty
         ) and self._is_valueclass_payload_type(stmt.value.ty):
             valueclass_target_ty = stmt.value.ty
-        valueclass_payload = self._maybe_emit_valueclass_constructor_payload(
-            valueclass_target_ty,
-            stmt.value,
-        )
+        valueclass_payload = self._emit_valueclass_payload_expr(stmt.value, valueclass_target_ty)
         valueclass_payload_fields_owned = False
         if exact_i64_return:
             # Compute in Python's arbitrary-precision object projection first;
@@ -660,6 +657,9 @@ class ReturnLoweringMixin:
             # and err.exit leaves them again (the precise stack map rejected
             # the join, and the frames were left twice).
             self._guard_cpy_value_not_null(value)
+        if isinstance(value.type, ir.LiteralStructType) and self._is_valueclass_payload_type(self.current_func_def.return_ty):
+            self._emit_valueclass_return(value, self.current_func_def.return_ty)
+            return
         value = self._retain_borrowed_return_value(value, stmt)
         if self._finally_stack and self._return_value_needs_cleanup_root(value, stmt):
             self._emit_owned_return_through_finally(value, stmt)

@@ -1263,6 +1263,12 @@ class ComprehensionLoweringMixin:
                     val_expr,
                 )
                 return
+        if (self._valueclass_indexed_element_type(iter_e.ty) is not None
+                and not self._expr_looks_cpython(iter_e)):
+            self._emit_rooted_valueclass_indexed_loop(
+                iter_e, target, comprehension=(kind, container, generators, tuple_unpacks, idx, elt_expr, key_expr, val_expr),
+            )
+            return
         iter_val = self._emit_expr(iter_e)
         if iter_val in getattr(self, "_cpy_values", ()):
             self._emit_cpy_iter_loop(

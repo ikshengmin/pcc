@@ -125,6 +125,10 @@ class Options:
         self.max_tree_rss_bytes = _env_int(
             env, "PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES", SAFE_MAX_TREE_RSS_BYTES
         )
+        self.requested_tree_rss_bytes = (
+            self.max_tree_rss_bytes if env.get("PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES") else 0
+        )
+        self.memory_budget_selection = {}
         self.stage_timeout = _env_int(env, "PCC_BOOTSTRAP_STAGE_TIMEOUT", 1800)
         self.smoke_refcount_audit = (
             env.get("PCC_BOOTSTRAP_SMOKE_REFCOUNT_AUDIT") or "1"
@@ -623,6 +627,7 @@ def write_stage_result_json(
         "stage": int(stage),
         "output": str(out_exe),
         "backend": options.backend,
+        "memory_budget_selection": options.memory_budget_selection,
         "compile_wall_ms": int(compile_elapsed_ms),
         "publish_barrier_ms": int(barrier_elapsed_ms),
         "wall_ms": int(stage_elapsed_ms),
@@ -779,9 +784,29 @@ def _run_guarded(
     return completed.returncode, guard_dir
 
 
+def _resolve_tree_memory_budget(options: Options) -> None:
+    from scripts.run_process_tree_sample import ProcessTreeSampleError, select_tree_memory_budget
+
+    external = options.env.get("PCC_WORKER_TREE_BUDGET_BYTES")
+    if options.external_memory_guard == "1" and not external and not options.requested_tree_rss_bytes:
+        raise BootstrapError("external memory guard needs an explicit or inherited tree cap")
+    try:
+        selection = select_tree_memory_budget(
+            options.requested_tree_rss_bytes, default_ceiling=SAFE_MAX_TREE_RSS_BYTES,
+            reserve_bytes=options.host_memory_reserve_bytes, external_budget=external,
+        )
+    except ProcessTreeSampleError as exc:
+        raise BootstrapError(str(exc)) from exc
+    selection["external_memory_guard"] = options.external_memory_guard == "1"
+    options.memory_budget_selection = selection
+    options.max_tree_rss_bytes = selection["max_tree_rss_bytes"]
+    print("PCC_BOOTSTRAP_MEMORY_BUDGET " + json.dumps(selection, sort_keys=True))
+
+
 def run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> None:
     """Compile one stage, gate it natively, and report its receipt."""
 
+    _resolve_tree_memory_budget(options)
     if stage == 1 and options.stage1_checkpoint is not None:
         from scripts.bootstrap_stage1_checkpoint import (
             CheckpointError,
