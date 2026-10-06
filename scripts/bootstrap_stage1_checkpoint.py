@@ -469,6 +469,11 @@ def ensure_build(root: Path, payload: dict) -> str:
 
 
 def _cpu() -> tuple[float, float]:
+    """CPU charged to this launcher and child chains that were actually reaped.
+
+    Killed/orphaned descendants may never be charged to RUSAGE_CHILDREN.
+    A terminal watchdog receipt alone does not establish complete CPU accounting.
+    """
     own = resource.getrusage(resource.RUSAGE_SELF)
     children = resource.getrusage(resource.RUSAGE_CHILDREN)
     return own.ru_utime + children.ru_utime, own.ru_stime + children.ru_stime
@@ -527,10 +532,14 @@ def summarize_attempts(root: Path) -> dict:
         first_start = min(first_start or started["started_at_utc"], started["started_at_utc"])
         if finish_path.exists():
             finished = read_json(finish_path)
-            elapsed, used_cpu = finished.get("active_wall_ms"), finished.get("total_cpu_ms")
+            elapsed = finished.get("active_wall_ms")
+            used_cpu = finished.get("total_cpu_ms_lower_bound", finished.get("total_cpu_ms"))
             status = finished.get("status")
             unknown_wall = unknown_wall or finished.get("active_wall_exact") is False
-            unknown_cpu = unknown_cpu or finished.get("total_cpu_exact") is False
+            # Legacy launched receipts incorrectly claimed exact CPU when only
+            # their guard was terminal. Keep their value as a lower bound.
+            unknown_cpu = unknown_cpu or (finished.get("total_cpu_exact") is not True
+                                          or finished.get("guard_launch_requested") is not False)
             last_end = max(last_end or finished["finished_at_utc"], finished["finished_at_utc"])
         else:
             status, elapsed, used_cpu = "UNFINISHED", None, None
@@ -625,11 +634,16 @@ class Attempt:
                 accounting_complete = False
         cpu_now = _cpu()
         elapsed = int((time.monotonic() - self.started) * 1000)
+        cpu_lower_bound = int(max(0, sum(cpu_now) - sum(self.cpu_started)) * 1000)
+        # No existing guard field proves that every descendant was reaped.
+        # Preserve exact wall time independently of this CPU coverage gap.
+        cpu_complete = not self.guard_launch_requested
         result = {"schema": "pcc.stage1-checkpoint.attempt-finish.v1", "attempt_id": self.id,
             "build_identity_sha256": self.identity, "status": status, "returncode": returncode,
             "finished_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(), "active_wall_ms": elapsed,
-            "total_cpu_ms": int(max(0, sum(cpu_now) - sum(self.cpu_started)) * 1000),
-            "active_wall_exact": accounting_complete, "total_cpu_exact": accounting_complete,
+            "total_cpu_ms": cpu_lower_bound if cpu_complete else None,
+            "total_cpu_ms_lower_bound": cpu_lower_bound,
+            "active_wall_exact": accounting_complete, "total_cpu_exact": cpu_complete,
             "cpu_scope": "launcher_and_reaped_children_including_guard_and_barrier",
             "measurement_end": "after_input_object_and_output_validation_before_ledger_publication",
             "guard_launch_requested": self.guard_launch_requested,

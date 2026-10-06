@@ -7,6 +7,8 @@ import importlib._bootstrap_external
 import json
 import os
 from pathlib import Path
+import shlex
+import signal
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -225,14 +227,130 @@ def test_attempt_accounting_retains_failures_and_gaps(tmp_path):
         _terminal_guard(guard, status="TIMEOUT" if name == "one" else "COMPLETE")
         checkpoint.write_immutable_json(tmp_path / "attempts" / (name + ".finished.json"), {
             "active_wall_ms": wall, "total_cpu_ms": cpu, "status": status,
-            "finished_at_utc": utc, "guard_launch_requested": True})
+            "finished_at_utc": utc, "guard_launch_requested": True,
+            "total_cpu_exact": True})
     checkpoint.check_prior_attempts(tmp_path)
     result = checkpoint.summarize_attempts(tmp_path)
     assert result["attempt_count"] == 2
     assert result["cumulative_active_wall_ms"] == 8000
-    assert result["cumulative_cpu_ms"] == 6300
+    assert result["cumulative_cpu_ms"] is None
+    assert result["cumulative_cpu_ms_lower_bound"] == 6300
+    assert result["unknown_cpu_intervals"] is True
     assert result["first_start_to_last_finish_wall_ms"] == 65000
     assert result["uninterrupted_performance_acceptance"] is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="exercises the POSIX process-tree guard")
+@pytest.mark.parametrize("mode", ["waited", "timeout", "orphan"])
+def test_real_guard_cpu_accounting_does_not_claim_unreaped_descendants(tmp_path, mode):
+    """A terminal guard does not prove that descendant CPU reached the launcher."""
+    child_receipt = tmp_path / "child-cpu.json"
+    worker = tmp_path / "cpu_worker.py"
+    worker.write_text("""import json
+import os
+import resource
+import sys
+import time
+from pathlib import Path
+started = time.process_time()
+while time.process_time() - started < 0.6:
+    pass
+usage = resource.getrusage(resource.RUSAGE_SELF)
+Path(sys.argv[1]).write_text(json.dumps({
+    "pid": os.getpid(), "session": os.getsid(0),
+    "cpu_ms": (usage.ru_utime + usage.ru_stime) * 1000,
+}))
+if sys.argv[2] != "waited":
+    time.sleep(30)
+""")
+    target = tmp_path / "cpu_parent.py"
+    target.write_text("""import subprocess
+import sys
+import time
+from pathlib import Path
+child = subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2], sys.argv[3]])
+if sys.argv[3] == "waited":
+    raise SystemExit(child.wait(timeout=8))
+while not Path(sys.argv[2]).is_file():
+    time.sleep(0.01)
+if sys.argv[3] == "timeout":
+    time.sleep(30)
+else:
+    # Give the guard time to observe the child before its parent exits.
+    time.sleep(0.35)
+""")
+    options = _options(tmp_path)
+    attempt = checkpoint.Attempt(
+        options.stage1_checkpoint, "a" * 64, options, [sys.executable], {}, _payload(),
+    )
+    attempt.request_guard_launch()
+    guard_dir = attempt.guard_dir
+    guard_tool = Path(bootstrap.__file__).with_name("run_process_tree_sample.py")
+    output = tmp_path / "probe-output"
+    output.write_bytes(b"host accounting probe")
+    try:
+        run = subprocess.run(
+            [sys.executable, str(guard_tool), "--result", str(guard_dir / "result.json"),
+             "--samples", str(guard_dir / "samples.tsv"),
+             "--stdout", str(guard_dir / "target.stdout"),
+             "--stderr", str(guard_dir / "target.stderr"), "--cwd", str(tmp_path),
+             "--timeout", "2.5", "--interval", "0.1", "--max-tree-rss-bytes", "134217728",
+             "--no-performance-lock", "--", sys.executable, str(target),
+             str(worker), str(child_receipt), mode],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert run.returncode == (124 if mode == "timeout" else 0), run.stdout + run.stderr
+        guard = checkpoint.read_json(guard_dir / "result.json")
+        expected_status = "TIMEOUT" if mode == "timeout" else "COMPLETE"
+        assert guard["status"] == expected_status
+        summary = attempt.finish(expected_status, run.returncode, output, modules={})
+        finished = checkpoint.read_json(
+            options.stage1_checkpoint / "attempts" / (attempt.id + ".finished.json")
+        )
+        child = json.loads(child_receipt.read_text())
+        measured_cpu = finished.get("total_cpu_ms_lower_bound", finished["total_cpu_ms"])
+        # Preserve independent evidence, not a CPU estimate derived from RSS.
+        (tmp_path / "cpu-proof.json").write_text(json.dumps({
+            "mode": mode, "child": child, "finished": finished, "summary": summary,
+        }, indent=2))
+        assert child["cpu_ms"] >= 600
+        if mode == "waited":
+            assert measured_cpu >= child["cpu_ms"]
+            assert not guard.get("post_exit_cleanup_pids")
+        else:
+            # Missing CPU is observable: the worker alone used more than the
+            # launcher's entire charged CPU, despite a terminal guard receipt.
+            assert measured_cpu < child["cpu_ms"]
+            state = subprocess.run(
+                ["ps", "-p", str(child["pid"]), "-o", "stat="],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip()
+            assert not state or state.startswith("Z"), state
+            if mode == "orphan":
+                assert child["pid"] in guard["post_exit_cleanup_pids"]
+        assert finished["active_wall_exact"] is True
+        assert finished["total_cpu_exact"] is False
+        assert finished["total_cpu_ms"] is None
+        assert finished["total_cpu_ms_lower_bound"] == measured_cpu
+        assert summary["cumulative_cpu_ms"] is None
+        assert summary["cumulative_cpu_ms_lower_bound"] == measured_cpu
+        assert summary["unknown_cpu_intervals"] is True
+        checkpoint.check_prior_attempts(options.stage1_checkpoint)
+    finally:
+        if child_receipt.exists():
+            child = json.loads(child_receipt.read_text())
+            try:
+                command = subprocess.run(
+                    ["ps", "-p", str(child["pid"]), "-o", "command="],
+                    capture_output=True, text=True, timeout=2,
+                )
+                expected = [sys.executable, str(worker), str(child_receipt), mode]
+                if (command.returncode == 0
+                        and shlex.split(command.stdout.strip()) == expected
+                        and os.getsid(child["pid"]) == child["session"]):
+                    os.kill(child["pid"], signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired, ValueError):
+                pass
 
 
 def test_lost_launcher_terminal_guard_is_only_a_lower_bound(tmp_path):
