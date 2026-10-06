@@ -16,23 +16,40 @@ from pcc.unsafe import (
 from pcc.stdlib import _structseq
 
 
+# PCC calls the owned runtime ABI directly: its "time" import resolves to
+# this provider. The sys implementation guard also preserves interpreted use.
+_time_time: "extern" = extern("py_time_time", (), c_obj)
+_time_monotonic: "extern" = extern("py_time_monotonic", (), c_obj)
+_time_perf_counter: "extern" = extern("py_time_perf_counter", (), c_obj)
+_time_strftime: "extern" = extern("py_time_strftime", (c_obj,), c_obj)
+_time_sleep: "extern" = extern("py_time_sleep", (c_obj,), c_obj)
+
+
 def time() -> float:
     """Seconds since the epoch, as a float."""
-    return float(_native_time.time())
+    if _native_sys.implementation.name != "pcc":
+        return float(_native_time.time())
+    return float(_time_time())
 
 
 def monotonic() -> float:
-    return float(_native_time.monotonic())
+    if _native_sys.implementation.name != "pcc":
+        return float(_native_time.monotonic())
+    return float(_time_monotonic())
 
 
 def perf_counter() -> float:
-    return float(_native_time.perf_counter())
+    if _native_sys.implementation.name != "pcc":
+        return float(_native_time.perf_counter())
+    return float(_time_perf_counter())
 
 
 def strftime(fmt: str, /, *time_tuple) -> str:
     if time_tuple:
         raise NotImplementedError("owned time.strftime explicit-tuple formatting is not implemented")
-    return str(_native_time.strftime(fmt))
+    if _native_sys.implementation.name != "pcc":
+        return str(_native_time.strftime(fmt))
+    return str(_time_strftime(fmt))
 
 
 _nanosleep: "extern" = extern(
@@ -44,7 +61,10 @@ _nanosleep: "extern" = extern(
 
 def sleep(seconds: float) -> None:
     """Use the same owned delay/error protocol as time.sleep dispatch."""
-    _native_time.sleep(seconds)
+    if _native_sys.implementation.name != "pcc":
+        _native_time.sleep(seconds)
+        return
+    _time_sleep(seconds)
 
 
 _index_value = extern("py_obj_index", (c_obj,), c_obj)

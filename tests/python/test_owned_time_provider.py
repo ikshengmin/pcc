@@ -9,6 +9,7 @@ import math
 import operator
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -151,3 +152,116 @@ def test_timestamp_float_subclass_can_supply_index_protocol(timestamp):
     value = IndexedFloat(42.0)
     assert timestamp(value) == 18
     assert time.gmtime(value) == time.gmtime(18)
+
+
+@pytest.mark.parametrize('name', ('time', 'monotonic', 'perf_counter'))
+def test_owned_clock_wrapper_uses_abi_result_and_propagates_error(name):
+    calls = []
+    def clock():
+        calls.append(name)
+        return 12.5
+    ns = functions(ROOT / 'pcc/stdlib/time.py', (name,),
+                   {'_time_' + name: clock,
+                    '_native_sys': SimpleNamespace(implementation=SimpleNamespace(name='pcc'))})
+    assert ns[name]() == 12.5
+    assert calls == [name]
+    error = ValueError('clock ABI error')
+    def fail():
+        raise error
+    ns['_time_' + name] = fail
+    with pytest.raises(ValueError) as caught:
+        ns[name]()
+    assert caught.value is error
+
+
+def test_owned_format_and_sleep_wrappers_preserve_abi_protocol():
+    calls = []
+    def formatter(fmt):
+        calls.append(('format', fmt))
+        return 'owned-clock'
+    def sleeper(seconds):
+        calls.append(('sleep', seconds))
+        if seconds < 0:
+            raise ValueError('sleep length must be non-negative')
+        return None
+    ns = functions(ROOT / 'pcc/stdlib/time.py', ('strftime', 'sleep'),
+                   {'_time_strftime': formatter, '_time_sleep': sleeper,
+                    '_native_sys': SimpleNamespace(implementation=SimpleNamespace(name='pcc'))})
+    assert ns['strftime']('owned-clock') == 'owned-clock'
+    assert ns['sleep'](0) is None
+    with pytest.raises(ValueError, match='^sleep length must be non-negative$'):
+        ns['sleep'](-1)
+    with pytest.raises(NotImplementedError, match='explicit-tuple formatting'):
+        ns['strftime']('%Y', tuple(range(9)))
+    assert calls == [('format', 'owned-clock'), ('sleep', 0), ('sleep', -1)]
+
+
+def test_owned_time_provider_context_emits_owned_calls_without_recursion(tmp_path):
+    import re
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.pipeline_context import build_closed_world_context
+    from pcc.frontends.python.type_infer import infer_module
+
+    # Match the real sibling-import publication that makes time's own alias
+    # live; standalone lowering can shortcut the original bug to the ABI.
+    names = ['time', 'sys', 'pcc.stdlib._structseq']
+    paths = [str(ROOT / 'pcc/stdlib' / name)
+             for name in ('time.py', 'sys.py', '_structseq.py')]
+    modules, exports, derived = build_closed_world_context(paths, names)
+    external = {name: value for name, value in exports.items() if name != 'time'}
+    module = infer_module(modules[0], external_exports=external, derived_class_map=derived)
+    generator = L1CodeGen(module, emit_cpy_main_exitcode=False, ir_scaffold_mode='on')
+    generator._strict_no_libpython = True
+    generator._prefer_native_callable_values = True
+    generator._skip_program_main = True
+    generator._sibling_module_inits = names
+    generator._native_module_exports = external
+    text = str(generator.generate())
+    (tmp_path / 'time.ll').write_text(text)
+    assert '@py_compiled_module_import_by_name(' in text
+    assert not re.search(r'call[^\n]*@py_cpy_', text)
+    for name in ('time', 'monotonic', 'perf_counter', 'strftime', 'sleep'):
+        body = re.search(r'^define [^\n]*@user_time_' + name + r'\([^\n]*\n.*?^}',
+                         text, re.M | re.S).group()
+        assert re.search(r'call ptr[^\n]*@py_time_' + name + r'\(', body)
+        assert not re.search(r'call[^\n]*@py_obj_call_slots\(', body)
+        assert not re.search(r'call[^\n]*@py_module_attr_get\(', body)
+        if name in ('time', 'monotonic', 'perf_counter'):
+            finish = re.search(r'^err.finish:\n(.*?)(?=\n\n)', body, re.M | re.S).group(1)
+            assert 'ret double 0x0000000000000000' in finish
+            assert 'unreachable' not in finish
+
+
+@pytest.mark.integration
+def test_native_owned_time_provider_callbacks(
+    tmp_path, pcc_runtime_archive, python_program_compiler,
+):
+    import os
+    import subprocess
+
+    source = ROOT / 'tests/fixtures/owned_time_provider_callbacks.py'
+    output = tmp_path / 'owned_time_provider_callbacks'
+    python_program_compiler(str(source), str(output), backend='self',
+                            libpython_mode='off', ir_scaffold_mode='on',
+                            runtime_archive=str(pcc_runtime_archive))
+    for backend in range(5):
+        result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,
+                                env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
+        assert result.returncode == 0, (backend, result.stdout, result.stderr)
+        assert result.stdout == 'LOOP_CLOCK_ENTER\nOWNED_TIME_OK\n'
+
+
+def test_owned_time_provider_preserves_plain_cpython_calls():
+    from pcc.stdlib import time as owned_time
+
+    assert owned_time.time() > 1_000_000_000.0
+    for clock in (owned_time.monotonic, owned_time.perf_counter):
+        first = clock()
+        assert isinstance(first, float)
+        assert clock() >= first
+    assert owned_time.strftime('owned-clock') == time.strftime('owned-clock')
+    assert owned_time.sleep(0) is None
+    with pytest.raises(ValueError, match='^sleep length must be non-negative$'):
+        owned_time.sleep(-1)
+    with pytest.raises(NotImplementedError, match='explicit-tuple formatting'):
+        owned_time.strftime('%Y', tuple(range(9)))

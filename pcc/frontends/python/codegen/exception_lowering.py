@@ -1812,8 +1812,8 @@ class ExceptionLoweringMixin:
     def _ensure_fn_err_exit(self) -> ir.Block:
         """Return the current function's error-exit epilogue block,
         creating it on first use. The epilogue returns the function's
-        sentinel value (NULL for PyObject*, 0 for integer return
-        types, undef void for void returns).
+        sentinel value (NULL for PyObject*, zero for integer and floating
+        return types, undef void for void returns).
         """
         fn = self.current_function
         fn_name = fn.name
@@ -1868,6 +1868,10 @@ class ExceptionLoweringMixin:
                 self.builder.ret(status)
             else:
                 self.builder.ret(ir.Constant(ret_ty, 0))
+        elif isinstance(ret_ty, (ir.FloatType, ir.DoubleType)):
+            # The caller checks TLS after the call returns. A floating error
+            # path must return its typed sentinel rather than trap first.
+            self.builder.ret(ir.Constant(ret_ty, 0.0))
         elif isinstance(ret_ty, ir.LiteralStructType):
             self.builder.ret(self._zero_of(ret_ty))
         else:
