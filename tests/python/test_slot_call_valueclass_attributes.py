@@ -96,10 +96,11 @@ def test_scalar_only_temporary_payload_is_evaluated_once(tmp_path):
     assert len(re.findall(r'\bcall [^\n]*@user_binding_make\(', body)) == 1
 
 
-def test_unproven_temporary_pointer_payload_remains_rejected():
+def test_constructor_temporary_pointer_payload_has_an_owned_projection():
     source = PREFIX.replace('FIELD', 'list') + 'def probe():\n    return take(value=Record([1]).value)\n'
-    with pytest.raises(L1CodegenError, match='temporary valueclass pointer payload requires'):
-        _emit(source)
+    # Constructors now publish their leaves in registered owning slots. The
+    # same program executes in the aggregate ownership native regression.
+    _emit(source)
 
 
 def test_raw_pointer_field_is_not_admitted_as_a_managed_owner():

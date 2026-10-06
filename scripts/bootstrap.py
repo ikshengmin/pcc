@@ -79,6 +79,18 @@ class BootstrapError(RuntimeError):
         self.exit_code = exit_code
 
 
+def _configured_host_memory_reserve_bytes(environment):
+    from scripts.run_process_tree_sample import (
+        ProcessTreeSampleError,
+        configured_host_memory_reserve_bytes,
+    )
+
+    try:
+        return configured_host_memory_reserve_bytes(environment)
+    except ProcessTreeSampleError as exc:
+        raise BootstrapError(str(exc)) from exc
+
+
 class Options:
     """Resolved bootstrap settings (environment defaults + CLI overrides)."""
 
@@ -136,11 +148,7 @@ class Options:
         self.smoke_refcount_probe_mode = (
             env.get("PCC_BOOTSTRAP_SMOKE_REFCOUNT_PROBE_MODE") or "2"
         )
-        self.host_memory_reserve_bytes = _env_int(
-            env,
-            "PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES",
-            SAFE_MAX_HOST_MEMORY_RESERVE_BYTES,
-        )
+        self.host_memory_reserve_bytes = _configured_host_memory_reserve_bytes(env)
         self.external_memory_guard = (
             env.get("PCC_BOOTSTRAP_EXTERNAL_MEMORY_GUARD") or "0"
         )
@@ -800,6 +808,7 @@ def _resolve_tree_memory_budget(options: Options) -> None:
     selection["external_memory_guard"] = options.external_memory_guard == "1"
     options.memory_budget_selection = selection
     options.max_tree_rss_bytes = selection["max_tree_rss_bytes"]
+    validate_settings(options)
     print("PCC_BOOTSTRAP_MEMORY_BUDGET " + json.dumps(selection, sort_keys=True))
 
 

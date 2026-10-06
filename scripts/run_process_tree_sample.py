@@ -43,6 +43,7 @@ _PROCESS_TABLE_TIMEOUTS_S = (5.0, 20.0)
 # the RSS cap and process-group watchdog remain active on the next sample.
 _SAFETY_PROCESS_TABLE_TIMEOUTS_S = (1.0, 3.0)
 _GIB = 1024 * 1024 * 1024
+DEFAULT_HOST_MEMORY_RESERVE_BYTES = 8 * _GIB
 _MIN_PRESSURED_SWAP_FREE_BYTES = 4 * _GIB
 # On a large-RAM / small-swap host (e.g. 96 GiB RAM with a 4 GiB dynamic swap)
 # ``vm.swapusage`` always looks "pressured" relative to the tiny swap file even
@@ -639,11 +640,30 @@ def _host_memory_observation() -> dict:
     raise ProcessTreeSampleError("automatic memory budget is unavailable on " + sys.platform)
 
 
+def configured_host_memory_reserve_bytes(environment=None) -> int:
+    """Parse the existing shared Bootstrap reserve without observing memory."""
+    environment = os.environ if environment is None else environment
+    key = "PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES"
+    raw = str(environment.get(key, "") or "").strip()
+    try:
+        value = int(raw) if raw else DEFAULT_HOST_MEMORY_RESERVE_BYTES
+    except ValueError as exc:
+        raise ProcessTreeSampleError("invalid bootstrap resource limit: " + key + "=" + raw) from exc
+    if value <= 0:
+        raise ProcessTreeSampleError("invalid bootstrap resource limit: " + key + "=" + str(value))
+    if (value > DEFAULT_HOST_MEMORY_RESERVE_BYTES
+            and environment.get("PCC_BOOTSTRAP_UNSAFE_HIGH_MEMORY_JOBS") != "1"):
+        raise ProcessTreeSampleError("unsafe bootstrap resource limit: " + key + "=" + str(value))
+    return value
+
+
 def select_tree_memory_budget(
     explicit: int, *, default_ceiling: int = 16 * _GIB,
-    reserve_bytes: int = 8 * _GIB, external_budget=None, observation=None,
+    reserve_bytes=None, external_budget=None, observation=None,
 ) -> dict:
     """Select auto limits; keep explicit and already-guarded caps authoritative."""
+    if reserve_bytes is None:
+        reserve_bytes = configured_host_memory_reserve_bytes()
     if explicit < 0 or default_ceiling <= 0 or reserve_bytes < 0:
         raise ProcessTreeSampleError("invalid memory budget selection")
     if external_budget not in (None, ""):
@@ -661,12 +681,14 @@ def select_tree_memory_budget(
             )
         return {"max_tree_rss_bytes": explicit or guarded,
                 "selection_kind": "explicit" if explicit else "external_guard",
-                "explicit_requested_bytes": explicit, "external_guard_bytes": guarded}
+                "explicit_requested_bytes": explicit, "external_guard_bytes": guarded,
+                "configured_host_memory_reserve_bytes": reserve_bytes}
     # Non-Darwin explicit limits retain their existing guard contract. The
     # Darwin reserve/swap admission remains mandatory for explicit caps.
     if explicit and observation is None and sys.platform != "darwin":
         return {"max_tree_rss_bytes": explicit, "selection_kind": "explicit",
-                "explicit_requested_bytes": explicit, "platform": sys.platform}
+                "explicit_requested_bytes": explicit, "platform": sys.platform,
+                "configured_host_memory_reserve_bytes": reserve_bytes}
     observed = _host_memory_observation() if observation is None else dict(observation)
     if (not explicit and observed["platform"] == "linux"
             and not observed.get("cgroup_limits_verified", False)):
@@ -696,6 +718,7 @@ def select_tree_memory_budget(
     return {"max_tree_rss_bytes": selected,
             "selection_kind": "explicit" if explicit else "automatic",
             "explicit_requested_bytes": explicit, "default_ceiling_bytes": default_ceiling,
+            "configured_host_memory_reserve_bytes": reserve_bytes,
             "observation": observed, "resource_preflight": preflight}
 
 

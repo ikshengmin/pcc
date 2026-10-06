@@ -72,6 +72,13 @@ class AttrLoadLoweringMixin:
             return None
         if isinstance(expr.obj, Attr):
             if (module == "sys" and isinstance(expr.obj.obj, Name)
+                    and expr.obj.name == "implementation"
+                    and self._native_module_attr_global_if_exists("sys", "implementation") is None):
+                if expr.name == "name":
+                    return ("str", "pcc")
+                if expr.name == "cache_tag":
+                    return ("none", None)
+            if (module == "sys" and isinstance(expr.obj.obj, Name)
                     and expr.obj.name == "version_info"
                     and self._native_module_attr_global_if_exists("sys", "version_info") is None):
                 versions = {"major": PYTHON_TARGET_MAJOR, "minor": PYTHON_TARGET_MINOR,
@@ -369,15 +376,12 @@ class AttrLoadLoweringMixin:
                     if self._module_global_needs_bound_check(base.ident):
                         self._emit_module_global_bound_check(base.ident, base)
         if payload_slot is None:
-            payload = self._maybe_emit_valueclass_constructor_payload(payload_ty, base)
+            payload = self._emit_valueclass_payload_expr(base, payload_ty)
             if payload is None:
-                # Calls, subscripts and boxed intermediate attributes already
-                # have ordinary output-slot producers. Let rooted getattr
-                # evaluate that receiver once instead of guessing its ABI.
                 return None
             source = self._valueclass_payload_source(payload)
             if source is None:
-                raise L1CodegenError("valueclass constructor lost its payload source")
+                raise L1CodegenError("valueclass attribute lost its producer-owned payload source")
             return self._emit_slot_call_valueclass_field(source[1], source[2] + path, field_ty, source[4], label, expr.span)
         return self._emit_slot_call_valueclass_field(payload_slot, path, field_ty,
                                                      module_source, label, expr.span)
@@ -952,7 +956,7 @@ class AttrLoadLoweringMixin:
         if isinstance(physical, ir.LiteralStructType):
             payload = self._emit_expr(expr.obj)
         else:
-            payload = self._maybe_emit_valueclass_constructor_payload(declared_ty, expr.obj)
+            payload = self._emit_valueclass_payload_expr(expr.obj, declared_ty)
             if payload is None:
                 return None
         source = self._valueclass_payload_source(payload)
@@ -1338,18 +1342,6 @@ class AttrLoadLoweringMixin:
             version_part = self._emit_sys_version_info_attr(expr.name)
             if version_part is not None:
                 return version_part
-        if (
-            isinstance(expr.obj, Attr)
-            and isinstance(expr.obj.obj, Name)
-            and expr.obj.name == "implementation"
-            and self._native_builtin_module_for_name(expr.obj.obj.ident) == "sys"
-        ):
-            # Mirror the pcc-owned implementation descriptor in
-            # pcc/stdlib/sys.py without materializing a CPython object.
-            if expr.name == "name":
-                return self._emit_str_literal("pcc")
-            if expr.name == "cache_tag":
-                return self._emit_none_literal()
         native_module_type_name = self._maybe_emit_native_module_type_name(expr)
         if native_module_type_name is not None:
             return native_module_type_name

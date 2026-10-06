@@ -141,3 +141,81 @@ def test_external_bootstrap_requires_a_known_cap():
     options = bootstrap.Options({"PCC_BOOTSTRAP_EXTERNAL_MEMORY_GUARD": "1"})
     with pytest.raises(bootstrap.BootstrapError, match="explicit or inherited"):
         bootstrap._resolve_tree_memory_budget(options)
+
+
+def test_bootstrap_revalidates_inherited_cap_and_honors_existing_override():
+    environment = {"PCC_WORKER_TREE_BUDGET_BYTES": str(32 * GIB)}
+    options = bootstrap.Options(environment)
+    with pytest.raises(bootstrap.BootstrapError, match="unsafe bootstrap resource limit"):
+        bootstrap._resolve_tree_memory_budget(options)
+    environment["PCC_BOOTSTRAP_UNSAFE_HIGH_MEMORY_JOBS"] = "1"
+    options = bootstrap.Options(environment)
+    bootstrap._resolve_tree_memory_budget(options)
+    assert options.max_tree_rss_bytes == 32 * GIB
+    assert options.memory_budget_selection["external_guard_bytes"] == 32 * GIB
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "wrong", "8.5"])
+def test_shared_reserve_parser_rejects_invalid_or_nonpositive_values(raw):
+    environment = {"PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES": raw}
+    with pytest.raises(guard.ProcessTreeSampleError, match="invalid bootstrap resource limit"):
+        guard.configured_host_memory_reserve_bytes(environment)
+    with pytest.raises(bootstrap.BootstrapError, match="invalid bootstrap resource limit"):
+        bootstrap.Options(environment)
+
+
+def test_shared_reserve_default_and_unsafe_upper_gate():
+    assert guard.configured_host_memory_reserve_bytes({}) == 8 * GIB
+    environment = {"PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES": str(16 * GIB)}
+    with pytest.raises(guard.ProcessTreeSampleError, match="unsafe bootstrap resource limit"):
+        guard.configured_host_memory_reserve_bytes(environment)
+    environment["PCC_BOOTSTRAP_UNSAFE_HIGH_MEMORY_JOBS"] = "1"
+    assert guard.configured_host_memory_reserve_bytes(environment) == 16 * GIB
+
+
+@pytest.mark.parametrize("reserve,available", [(8 * GIB, 306 * GIB // 10), (GIB // 2, 10 * GIB)])
+def test_configured_reserve_parity_across_bootstrap_stage1_stage2(monkeypatch, reserve, available):
+    key = "PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES"
+    monkeypatch.setenv(key, str(reserve))
+    monkeypatch.delenv("PCC_WORKER_TREE_BUDGET_BYTES", raising=False)
+    observation = darwin_observation(reclaimable_bytes=available)
+    monkeypatch.setattr(guard, "_host_memory_observation", lambda: observation)
+    monkeypatch.setattr(guard, "_darwin_resource_observation", lambda: observation)
+    expected = available // 2 - reserve
+    selection = stage1._host_memory_budget_selection(0)
+    assert selection["max_tree_rss_bytes"] == expected
+    assert selection["configured_host_memory_reserve_bytes"] == reserve
+    options = bootstrap.Options({key: str(reserve)})
+    bootstrap._resolve_tree_memory_budget(options)
+    assert options.max_tree_rss_bytes == expected
+    assert options.memory_budget_selection["resource_preflight"]["reserve_bytes"] == reserve
+
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    spec = importlib.util.spec_from_file_location("stage2_reserve_parity", root / "scripts/run_pcc_stage2_from_receipt.py")
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    monkeypatch.setattr(tool.memory_guard, "_host_memory_observation", lambda: observation)
+    monkeypatch.setattr(tool.memory_guard, "_darwin_resource_observation", lambda: observation)
+    args = tool._parser().parse_args(["--stage1-dir", "a", "--output-dir", "b"])
+    selected = tool._select_stage2_memory_budget(args)
+    assert selected["max_tree_rss_bytes"] == expected
+    assert selected["configured_host_memory_reserve_bytes"] == reserve
+    monkeypatch.setattr(tool.sys, "platform", "darwin")
+    assert tool._stage2_resource_preflight(expected)["reserve_bytes"] == reserve
+    values = {key: value for key, value in observation.items() if key != "platform"}
+    assert tool._validate_resource_observation(max_tree_rss_bytes=expected, **values)["reserve_bytes"] == reserve
+
+
+def test_options_and_help_do_not_probe_resources(monkeypatch):
+    def unexpected_observation():
+        raise AssertionError("availability read before admission")
+    monkeypatch.setattr(guard, "_host_memory_observation", unexpected_observation)
+    options = bootstrap.Options({})
+    assert options.host_memory_reserve_bytes == 8 * GIB
+    with pytest.raises(SystemExit) as caught:
+        bootstrap.parse_args(["--help"], options)
+    assert caught.value.code == 0
+    with pytest.raises(SystemExit) as caught:
+        stage1.main(["--help"])
+    assert caught.value.code == 0

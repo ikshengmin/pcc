@@ -64,11 +64,16 @@ def _canonical_sha256(value: object) -> str:
 def _host_memory_budget_selection(explicit: int) -> dict:
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    from scripts.run_process_tree_sample import ProcessTreeSampleError, select_tree_memory_budget
+    from scripts.run_process_tree_sample import (
+        ProcessTreeSampleError,
+        configured_host_memory_reserve_bytes,
+        select_tree_memory_budget,
+    )
 
     try:
         return select_tree_memory_budget(
             explicit, external_budget=os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES"),
+            reserve_bytes=configured_host_memory_reserve_bytes(),
         )
     except ProcessTreeSampleError as exc:
         raise ValueError(str(exc)) from exc

@@ -941,6 +941,29 @@ DIRECT_PAYLOAD_EXPECTED = (
 )
 
 
+# This is the original constructor-temporary attribute probe, with a driver
+# that keeps and mutates its result across explicit collections.
+CONSTRUCTOR_ATTRIBUTE_PROGRAM = """import pcc
+@pcc.valueclass
+class Record:
+    value: list
+
+def take(*, value):
+    return value
+def probe():
+    return take(value=Record([1]).value)
+
+import gc
+value = probe()
+gc.collect()
+assert value == [1]
+value.append(2)
+gc.collect()
+assert value == [1, 2]
+print('CONSTRUCTOR_ATTRIBUTE_OWNER_OK')
+"""
+
+
 CASES = SCENARIOS[:2] + (
     Case("original-name", ORIGINAL_NAME_PROGRAM, "VALUECLASS_NAME_OWNERS_OK\n"),
 ) + SCENARIOS[2:] + (
@@ -951,6 +974,7 @@ CASES = SCENARIOS[:2] + (
         "del:shutdown",
     ),
     Case("original-valuebox", VALUEBOX_PROGRAM, "\n".join(VALUEBOX_EXPECTED) + "\n"),
+    Case("original-constructor-attribute", CONSTRUCTOR_ATTRIBUTE_PROGRAM, "CONSTRUCTOR_ATTRIBUTE_OWNER_OK\n"),
 )
 
 

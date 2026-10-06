@@ -923,15 +923,50 @@ def resource_tasks_for_commands(commands):
     from pcc.frontends.python.pipeline_stage1_checkpoint import file_sha256
 
     worker_arg = "--pcc-python-multi-codegen-worker"
+    preload_arg = "--pcc-preload-delta-worker"
     tasks = []
     input_hashes = {}
     for command in commands:
         argv = shlex.split(command)
+        if preload_arg in argv:
+            position = argv.index(preload_arg)
+            if worker_arg in argv or argv.count(preload_arg) != 1:
+                raise FrontendWorkerContractError("ambiguous frontend worker command")
+            if position < 1 or len(argv) != position + 4:
+                raise FrontendWorkerContractError(
+                    "preload delta worker requires exports, roots and output paths"
+                )
+            exports_path, roots_path, out_path = argv[position + 1:]
+            with open(roots_path, "r", encoding="utf-8") as stream:
+                roots = [line for line in stream.read().splitlines() if line]
+            identities = []
+            for input_path in (exports_path, roots_path):
+                if input_path not in input_hashes:
+                    input_hashes[input_path] = file_sha256(input_path)
+                identities.append(input_hashes[input_path])
+            # Every preload task uses this complete graph. Keep its reader
+            # class separate from indexed codegen and bind measurements to
+            # this graph, execution owner and collector in the private state.
+            owner = " ".join(argv[:position])
+            tasks.append({
+                "class": (
+                    os.path.dirname(roots_path) + "|" + owner
+                    + "|preload-delta|full-graph|"
+                    + str(os.environ.get("PCC_GC_BACKEND", "0"))
+                    + "|" + identities[0]
+                ),
+                "inputs": [_artifact_size(exports_path), _artifact_size(roots_path), len(roots)],
+                "estimate_bytes": 0,
+                "report_path": out_path + ".rss",
+                "restartable": True,
+                "source_identity": "|".join(identities),
+            })
+            continue
         if worker_arg not in argv:
             return None
         position = argv.index(worker_arg)
-        if position + 1 >= len(argv):
-            raise FrontendWorkerContractError("frontend worker manifest argument is missing")
+        if position < 1 or argv.count(worker_arg) != 1 or len(argv) != position + 2:
+            raise FrontendWorkerContractError("frontend worker requires one manifest argument")
         path = argv[position + 1]
         manifest = read_worker_manifest(path)
         indices = manifest["assigned_indices"]

@@ -21,7 +21,10 @@ from scripts import bootstrap
 
 
 def _options(tmp_path, **environment):
-    settings = {"PCC_BOOTSTRAP_OUT_DIR": str(tmp_path / "out"), **environment}
+    # The mocked compiler/receipt fixtures have a known guard cap; automatic
+    # availability and platform reserve selection have separate fixtures.
+    settings = {"PCC_BOOTSTRAP_OUT_DIR": str(tmp_path / "out"),
+                "PCC_WORKER_TREE_BUDGET_BYTES": str(1024**3), **environment}
     return bootstrap.validate_settings(bootstrap.Options(settings))
 
 

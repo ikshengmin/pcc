@@ -2955,6 +2955,7 @@ _run_python_frontend_worker_commands = (
 
 
 _PRELOAD_DELTA_MIN_ROOTS = 16
+_PRELOAD_DELTA_ROOTS_PER_CHUNK = 8
 
 
 def _build_unique_external_class_preload_index(native_exports, work_dir=""):
@@ -2987,13 +2988,17 @@ def _build_unique_external_class_preload_index(native_exports, work_dir=""):
         return build_unique_external_class_preload_index(native_exports)
 
     def root_deltas(roots, global_by_key):
-        # Only reserve child memory when this callback will actually spawn.
-        # Tiny/empty root sets use the already-resident coordinator directly.
+        # Budgeted workers use the shared measured admission loop after the
+        # export/roots inputs exist. Jobs is only its CPU ceiling. Keep the
+        # conservative legacy width when no byte budget was supplied.
         selected_jobs = jobs
         if (
             len(roots) >= _PRELOAD_DELTA_MIN_ROOTS
             and len(prefix) == 1
             and _is_native_worker_executable(prefix[0])
+            and _pipeline_frontend_workers.worker_tree_budget_bytes(
+                os.environ.get(_pipeline_frontend_workers.WORKER_TREE_BUDGET_ENV, "")
+            ) <= 0
         ):
             try:
                 selected_jobs = _pipeline_frontend_workers.compiled_native_preload_jobs(jobs)
@@ -3030,15 +3035,19 @@ def _preload_deltas_in_workers(native_exports, roots, prefix, jobs, work_dir):
         width = max(1, min(jobs, len(roots)))
         commands = []
         outputs = []
-        for index in range(width):
-            chunk = roots[index * len(roots) // width:(index + 1) * len(roots) // width]
-            if not chunk:
-                continue
+        # Changing concurrency must not change a task's retained delta heap.
+        # Contiguous fixed-size shards preserve root order on collection.
+        for start in range(0, len(roots), _PRELOAD_DELTA_ROOTS_PER_CHUNK):
+            index = start // _PRELOAD_DELTA_ROOTS_PER_CHUNK
+            chunk = roots[start:start + _PRELOAD_DELTA_ROOTS_PER_CHUNK]
             roots_path = os.path.join(state, "roots_" + str(index) + ".txt")
             out_path = os.path.join(state, "deltas_" + str(index) + ".json")
             created.append(roots_path)
             created.append(out_path)
             created.append(out_path + ".partial")
+            created.append(out_path + ".rss")
+            created.append(out_path + ".rss.tmp")
+            created.append(out_path + ".rss.admission.tsv")
             with open(roots_path, "w", encoding="utf-8") as stream:
                 stream.write("\n".join(chunk) + "\n")
             parts = [_shell_quote_arg(part) for part in prefix]

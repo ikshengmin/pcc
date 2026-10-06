@@ -44,9 +44,13 @@ def _parameter_annotation(filename, function_name):
     return ast.unparse(parameter.annotation)
 
 
-def _generate(source):
+def _generate(source, target=None):
     module = type_infer.infer_module(parse_and_lift(source, "<payload>", "payload"))
-    return str(L1CodeGen(module, ir_scaffold_mode="on").generate(module))
+    codegen = L1CodeGen(module, ir_scaffold_mode="on")
+    if target is not None:
+        codegen._target_triple = target
+        codegen.module.triple = target
+    return str(codegen.generate(module))
 
 
 @pytest.mark.parametrize("filename,function_name", RECEIVERS)
@@ -70,7 +74,7 @@ def test_legacy_text_payload_interfaces_remain_tuple_only():
 
 @pytest.mark.parametrize("target", ("arm64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"))
 def test_both_payload_forms_reach_the_owned_emitter(target):
-    text = _generate(PAYLOAD_PROGRAM)
+    text = _generate(PAYLOAD_PROGRAM, target=target)
     assert "@py_obj_type_tag(" in text
     assert len(emit_owned_object(text, target)) > 0
 

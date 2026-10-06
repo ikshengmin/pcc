@@ -523,7 +523,10 @@ def test_empty_deferred_work_does_not_query_memory_or_spawn(monkeypatch):
 
 
 @pytest.mark.parametrize("root_count", [16, 20])
-def test_large_preload_roots_fall_back_to_parent_when_child_does_not_fit(monkeypatch, tmp_path, root_count):
+@pytest.mark.parametrize("frontend_jobs,expected_jobs", [("auto", 6), ("3", 3)])
+def test_budgeted_preload_jobs_are_a_cpu_ceiling_for_measured_admission(
+    monkeypatch, tmp_path, root_count, frontend_jobs, expected_jobs,
+):
     from pcc.frontends.python import type_infer
     workers = pipeline_frontend_workers
     roots = ["root" + str(i) for i in range(root_count)]
@@ -531,23 +534,22 @@ def test_large_preload_roots_fall_back_to_parent_when_child_does_not_fit(monkeyp
     observed = []
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(4 * 1024**3))
     monkeypatch.setenv("PCC_PRELOAD_DELTA_JOBS", "6")
-    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
-    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: observed.append("rss") or 128 * 1024**2)
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", frontend_jobs)
     monkeypatch.setattr(pipeline, "_python_frontend_worker_command_prefix", lambda: ["native-worker"])
     monkeypatch.setattr(pipeline, "_is_native_worker_executable", lambda _path: True)
     def forbidden(*args, **kwargs):
-        raise AssertionError("4 GiB cannot hold the preload child; must use parent")
-    monkeypatch.setattr(pipeline, "_preload_deltas_in_workers", forbidden)
-    visited = []
-    def serial_delta(_exports, root, _global):
-        visited.append(root)
-        return expected[root]
-    monkeypatch.setattr(type_infer, "preload_root_delta", serial_delta)
+        raise AssertionError("budgeted preload must measure the spawning owner after preparing inputs")
+    monkeypatch.setattr(workers, "compiled_native_preload_jobs", forbidden)
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", forbidden)
+    def spawn(exports, assigned_roots, prefix, jobs, work_dir):
+        observed.append((assigned_roots, prefix, jobs, work_dir))
+        return expected
+    monkeypatch.setattr(pipeline, "_preload_deltas_in_workers", spawn)
+    monkeypatch.setattr(type_infer, "preload_root_delta", forbidden)
     monkeypatch.setattr(type_infer, "build_unique_external_class_preload_index",
                         lambda _exports, root_deltas=None: root_deltas(roots, {}))
     assert pipeline._build_unique_external_class_preload_index({}, str(tmp_path)) == expected
-    assert visited == roots
-    assert observed == ["rss"]
+    assert observed == [(roots, ["native-worker"], expected_jobs, str(tmp_path))]
 
 
 def test_worker_only_summary_still_rejects_insufficient_memory(monkeypatch):

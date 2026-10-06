@@ -28,7 +28,7 @@ class Stage2ReceiptError(RuntimeError):
 
 
 _GIB = 1024 * 1024 * 1024
-_HOST_MEMORY_RESERVE_BYTES = 8 * _GIB
+_HOST_MEMORY_RESERVE_BYTES = memory_guard.DEFAULT_HOST_MEMORY_RESERVE_BYTES
 _MIN_PRESSURED_SWAP_FREE_BYTES = 4 * _GIB
 # See process-tree-guard-swap-false-positive-highram.md: waive the tiny-swap
 # refusal when reclaimable physical memory clears this multiple of the budget.
@@ -155,7 +155,11 @@ def _parse_swapusage(raw):
 
 def _validate_resource_observation(**observation):
     return _memory_call(memory_guard._validate_darwin_resource_observation,
-                        reserve_bytes=_HOST_MEMORY_RESERVE_BYTES, **observation)
+                        reserve_bytes=_configured_host_memory_reserve_bytes(), **observation)
+
+
+def _configured_host_memory_reserve_bytes():
+    return _memory_call(memory_guard.configured_host_memory_reserve_bytes)
 
 
 def _stage2_resource_preflight(max_tree_rss_bytes: int) -> dict:
@@ -164,14 +168,14 @@ def _stage2_resource_preflight(max_tree_rss_bytes: int) -> dict:
                 "darwin_preflight": "not_applicable"}
     return _memory_call(memory_guard._darwin_resource_preflight,
                         max_tree_rss_bytes=max_tree_rss_bytes,
-                        reserve_bytes=_HOST_MEMORY_RESERVE_BYTES)
+                        reserve_bytes=_configured_host_memory_reserve_bytes())
 
 
 def _select_stage2_memory_budget(args):
     return _memory_call(
         memory_guard.select_tree_memory_budget, args.max_tree_rss_bytes,
         default_ceiling=stage_ab.DEFAULT_MAX_TREE_RSS_BYTES,
-        reserve_bytes=_HOST_MEMORY_RESERVE_BYTES,
+        reserve_bytes=_configured_host_memory_reserve_bytes(),
         external_budget=os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES"),
     )
 

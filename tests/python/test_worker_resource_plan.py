@@ -1,7 +1,10 @@
 """Resource admission executes bounded real children before any bootstrap run."""
 
+import hashlib
+import json
 import os
 from pathlib import Path
+import platform
 import shlex
 import subprocess
 import sys
@@ -12,6 +15,8 @@ import pytest
 from pcc.frontends.python import pipeline_frontend_workers as workers
 from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
+from tests.python.owned_regression_support import explicit_owned_runtime
+from tests.python.process_timeout import run_process_group_timeout
 
 
 MIB = 1024 ** 2
@@ -292,3 +297,186 @@ def test_host_chunk_count_is_independent_of_admitted_concurrency():
                                          native_predicate=lambda _: False)
               for jobs in (1, 2, 4, 10)]
     assert counts == [454, 454, 454, 454]
+
+
+RESOURCE_NATIVE_DRIVER = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures" / "native" / "worker_resource_admission.py"
+)
+RESOURCE_PORTABLE_CASES = (
+    "oversized", "calibration", "growth", "failure", "spawn_failure",
+)
+RESOURCE_LINUX_HANDLE_CASES = ("handles",)
+RESOURCE_DRIVER_CASES = RESOURCE_PORTABLE_CASES + RESOURCE_LINUX_HANDLE_CASES
+
+
+def _resource_driver_environment(owner, collector):
+    environment = dict(os.environ)
+    environment.pop("LC_ALL", None)
+    # Match the existing host policy tests' local owner/worker accounting.
+    # The enclosing process-tree watchdog and its cap remain unchanged.
+    for key in (policy.TREE_STATE_ENV, policy.RESOURCE_REPORT_ENV,
+                policy.RESOURCE_TOKEN_ENV):
+        environment.pop(key, None)
+    environment.update({
+        "PCC_TEST_RESOURCE_OWNER": owner,
+        "PCC_GC_BACKEND": str(collector),
+        "PCC_TEST_SETPGID_NR": "109" if platform.machine().lower() in ("x86_64", "amd64") else "154",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PCC_TEST_NO_NATIVE_PROVISIONING": "1",
+        "PCC_NO_AUTO_PCC1": "1",
+    })
+    if owner == "pcc":
+        environment.update({
+            "PATH": "", "PCC_HOST_PYTHON": "/nonexistent/host-python",
+            "PCC_HOST_PCC": "/nonexistent/host-pcc",
+            "PCC_RUNTIME_CC": "/nonexistent/runtime-compiler",
+        })
+    return environment
+
+
+def _execute_resource_driver(prefix, case, directory, owner, collector):
+    directory.mkdir()
+    environment = _resource_driver_environment(owner, collector)
+    command = [*prefix, case, str(directory)]
+    result = run_process_group_timeout(command, env=environment, timeout=20)
+    (directory / "driver.stdout").write_text(result.stdout)
+    (directory / "driver.stderr").write_text(result.stderr)
+    record = {
+        "case": case,
+        "boundary": "linux_owned_setpgid_handle_lifecycle" if case == "handles" else "shared_admission_policy",
+        "owner": owner, "requested_collector": collector,
+        "qualification_scope": "resource_component",
+        "pcc1_stage2_worker_dispatch_proved": False,
+        "child_launch_contract": "emitted_driver_self_spawn" if owner == "pcc" else "cpython_reference",
+        "command": command, "returncode": result.returncode,
+        "stdout": result.stdout, "stderr": result.stderr,
+        "policy_accounting_scope": "local_driver_and_workers",
+        "outer_tree_cap_bytes": environment.get("PCC_WORKER_TREE_BUDGET_BYTES"),
+        "artifacts": {},
+    }
+    # Retain every PID, attempt token, overlap witness and admission event.
+    # No normalization substitutes for the assertions executed by the driver.
+    for path in sorted(directory.iterdir()):
+        if path.is_file():
+            record["artifacts"][path.name] = {
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size": path.stat().st_size,
+            }
+    receipt_path = directory / "execution.json"
+    receipt_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    assert result.returncode == 0, record
+    assert result.stdout == "RESOURCE_ACCEPTANCE_OK " + case + "\n", record
+    assert result.stderr == "", record
+    assert (directory / "complete").read_text() == owner + "\t" + str(collector)
+    if case in RESOURCE_PORTABLE_CASES:
+        budget = (directory / "budget.tsv").read_text().strip().split("\t")
+        assert int(budget[0]) > 0 and int(budget[1]) > 0
+        assert budget[4] == "measured-lower-bound-not-a-sufficient-budget"
+        assert (directory / "configured-budget").read_text() == budget[0]
+    # Actual child owner/collector readings must match the selected execution.
+    # The native readings come from the owned pcc_gc_backend ABI, not merely
+    # from echoing the environment selector.
+    starts = sorted(directory.glob("started.*"))
+    for path in starts:
+        fields = path.read_text().split("\t")
+        assert fields[1:3] == [owner, str(collector)], (path, fields)
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(fields[0]), 0)
+    if case in ("oversized", "spawn_failure"):
+        assert starts == []
+    elif case == "calibration":
+        assert len(starts) == 4
+    elif case == "growth":
+        assert len(starts) == 3
+    else:
+        assert len(starts) == 2
+    return record
+
+
+@pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
+@pytest.mark.parametrize("case", RESOURCE_DRIVER_CASES)
+def test_resource_acceptance_driver_matches_cpython(case, tmp_path):
+    """The same real-child contract is retained as an executable host oracle."""
+    _execute_resource_driver(
+        [sys.executable, "-B", str(RESOURCE_NATIVE_DRIVER)],
+        case, tmp_path / case, "cpython", 0,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(probe=lambda: sys.platform.startswith("linux") and platform.machine().lower() in (
+    "x86_64", "amd64", "aarch64", "arm64",
+))
+def test_resource_acceptance_driver_native_five_collectors(
+    tmp_path, explicit_owned_runtime, python_program_compiler, request, capfd,
+):
+    """Compile once, then execute real native policy/handles on all five GCs.
+
+    Requires an explicitly selected source-matched runtime; the maintained
+    fixture forbids provisioning a runtime or a compiler. The Linux-only
+    moved-group no-signal witness is recorded separately from shared policy.
+    """
+    binary = tmp_path / "resource-admission.out"
+    receipt = {
+        "status": "COMPILING",
+        "compiler_parameter": request.node.callspec.params["python_program_compiler"],
+        "compiler_module": python_program_compiler.__module__,
+        "backend": "self", "libpython": "off", "ir_scaffold": "on",
+        "qualification_scope": "native_resource_component",
+        "pcc1_stage2_worker_dispatch_proved": False,
+        "native_child_launch_contract": "same_PCC_emitted_ELF_self_spawn",
+        "source": str(RESOURCE_NATIVE_DRIVER),
+        "source_sha256": hashlib.sha256(RESOURCE_NATIVE_DRIVER.read_bytes()).hexdigest(),
+        "runtime_archive": str(explicit_owned_runtime),
+        "runtime_sha256": hashlib.sha256(explicit_owned_runtime.read_bytes()).hexdigest(),
+        "executions": [],
+    }
+    receipt_path = tmp_path / "native-resource-acceptance.json"
+
+    def save():
+        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+
+    save()
+    try:
+        python_program_compiler(
+            str(RESOURCE_NATIVE_DRIVER), str(binary), backend="self",
+            libpython_mode="off", ir_scaffold_mode="on",
+            runtime_archive=str(explicit_owned_runtime),
+        )
+    except Exception as error:
+        receipt["status"] = "COMPILE_FAILED"
+        receipt["error"] = type(error).__name__ + ": " + str(error)
+        save()
+        raise
+    finally:
+        captured = capfd.readouterr()
+        (tmp_path / "compile.stdout").write_text(captured.out)
+        (tmp_path / "compile.stderr").write_text(captured.err)
+    assert binary.is_file()
+    magic = binary.read_bytes()[:4]
+    assert magic == b"\x7fELF", "native resource driver must be an ELF executable"
+    receipt["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+    receipt["status"] = "RUNNING"
+    save()
+    for collector in range(5):
+        for case in RESOURCE_DRIVER_CASES:
+            try:
+                record = _execute_resource_driver(
+                    [str(binary)], case,
+                    tmp_path / ("gc" + str(collector) + "-" + case),
+                    "pcc", collector,
+                )
+            except BaseException as error:
+                receipt["status"] = "NATIVE_EXECUTION_FAILED"
+                receipt["failed_case"] = case
+                receipt["failed_collector"] = collector
+                receipt["error"] = type(error).__name__ + ": " + str(error)
+                save()
+                raise
+            receipt["executions"].append(record)
+            save()
+    assert len(receipt["executions"]) == 5 * len(RESOURCE_DRIVER_CASES)
+    receipt["status"] = "PASS"
+    save()

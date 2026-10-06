@@ -40,7 +40,8 @@ def test_adapter_error_edges_stay_in_the_adapter(tmp_path, monkeypatch, direct):
     source.write_text(PROGRAM)
     output = tmp_path / "adapter_scope.ll"
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   target_triple="arm64-apple-darwin")
     text = output.read_text()
     assert "native.adapter.input.unwind" in text
     assert emit_owned_object(text, "arm64-apple-darwin")[:4] == b"\xcf\xfa\xed\xfe"
