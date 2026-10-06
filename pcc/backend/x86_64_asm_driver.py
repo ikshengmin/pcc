@@ -236,6 +236,59 @@ def _iter_assembly_lines(asm_text: str):
 # Short spans stay in the native small-integer lane for ordinary object sizes;
 # oversized lines retain the ordinary text record without truncating anything.
 _INSTRUCTION_SPAN_BASE = 65536
+_INSTRUCTION_SPAN_CODEC = struct.Struct("<q")
+_INSTRUCTION_SPAN_CHUNK_BYTES = 8192
+_INSTRUCTION_SPAN_MIN_RUN = 5
+
+
+def _append_instruction_span(entries: list[object], span: int) -> None:
+    # Keep short runs in their original representation. On the supported host
+    # five spans are the first bytearray payload smaller than its boxed ints,
+    # even before the removed list slots. Labels/directives stop promotion.
+    if (
+        entries
+        and isinstance(entries[-1], bytearray)
+        and len(entries[-1]) < _INSTRUCTION_SPAN_CHUNK_BYTES
+    ):
+        run = entries[-1]
+    else:
+        preceding = _INSTRUCTION_SPAN_MIN_RUN - 1
+        promote = (
+            len(entries) >= preceding
+            and _INSTRUCTION_SPAN_MIN_RUN * _INSTRUCTION_SPAN_CODEC.size
+            <= _INSTRUCTION_SPAN_CHUNK_BYTES
+        )
+        offset = 1
+        while promote and offset <= preceding:
+            previous = entries[-offset]
+            if not isinstance(previous, int) or previous >= 0:
+                promote = False
+            offset += 1
+        if not promote:
+            entries.append(span)
+            return
+        run = bytearray()
+        for offset in range(preceding, 0, -1):
+            run.extend(_INSTRUCTION_SPAN_CODEC.pack(entries[-offset]))
+        for offset in range(preceding):
+            entries.pop()
+        entries.append(run)
+    run.extend(_INSTRUCTION_SPAN_CODEC.pack(span))
+
+
+def _iter_plan_entries(plan: _SectionPlan, *, consume: bool = False):
+    for index, entry in enumerate(plan.entries):
+        if consume:
+            plan.entries[index] = None
+        if isinstance(entry, bytearray):
+            if len(entry) % _INSTRUCTION_SPAN_CODEC.size:
+                raise X86EncodeError("truncated compact instruction span run")
+            for offset in range(0, len(entry), _INSTRUCTION_SPAN_CODEC.size):
+                yield _INSTRUCTION_SPAN_CODEC.unpack_from(entry, offset)[0]
+            if consume:
+                entry.clear()
+        else:
+            yield entry
 
 
 def _instruction_text(entry, source_text: str) -> str:
@@ -420,7 +473,13 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
             raise X86EncodeError(f"instruction outside .text: {line!r}")
         if compact_instructions and len(line) < _INSTRUCTION_SPAN_BASE:
             start = raw_start + len(raw_line) - len(raw_line.lstrip())
-            current.entries.append(-(start * _INSTRUCTION_SPAN_BASE + len(line) + 1))
+            span = -(start * _INSTRUCTION_SPAN_BASE + len(line) + 1)
+            if span >= -(1 << 63):
+                _append_instruction_span(current.entries, span)
+            else:
+                # Preserve arbitrarily large source offsets without wrapping
+                # them into the fixed-width private transport.
+                current.entries.append(_Instruction(line))
         else:
             current.entries.append(_Instruction(line))
     if not saw_syntax:
@@ -443,7 +502,7 @@ def _measure_sections(plans, order, symbols):
         offset = 0
         instruction_sizes: dict[str, int] = {}
         instruction_key_bytes = 0
-        for entry in plan.entries:
+        for entry in _iter_plan_entries(plan):
             if isinstance(entry, _Align):
                 offset = _align(offset, entry.log2)
             elif isinstance(entry, _Label):
@@ -609,11 +668,9 @@ def _assemble_file(
         plan = plans[name]
         payload = bytearray()
         memory_size = 0
-        for entry_index, entry in enumerate(plan.entries):
-            # Measurement and stack-map resolution have consumed the plan.
-            # Keep only this entry while encoding: later consumers use labels,
-            # metadata and encoded payloads, not the parsed instruction graph.
-            plan.entries[entry_index] = None
+        # Measurement and stack-map resolution have consumed the plan. Retire
+        # each record/run while encoding; later readers use final payloads.
+        for entry in _iter_plan_entries(plan, consume=True):
             if isinstance(entry, _Align):
                 target = _align(memory_size, entry.log2)
                 padding = target - memory_size

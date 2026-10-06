@@ -300,6 +300,7 @@ payload:
     def observed_parse(text, **kwargs):
         plans, order, symbols = parse(text, **kwargs)
         for plan in plans.values():
+            plan.entries = list(assembler._iter_plan_entries(plan))
             for index, entry in enumerate(plan.entries):
                 if isinstance(entry, (assembler._Instruction, int)):
                     record = ObservedInstruction(assembler._instruction_text(entry, plan.source_text))
@@ -690,3 +691,130 @@ increment:
     executable.chmod(0o755)
     completed = subprocess.run([str(executable)], capture_output=True, timeout=5)
     assert completed.returncode == 42, (completed.returncode, completed.stdout, completed.stderr)
+
+
+def test_packed_instruction_spans_bound_storage_and_preserve_entry_order():
+    text, count = _many_instruction_lines()
+    plans, order, symbols = assembler._parse_file(text, compact_instructions=True)
+    section = plans['.text']
+    runs = [entry for entry in section.entries if isinstance(entry, bytearray)]
+    assert runs
+    assert all(0 < len(run) <= assembler._INSTRUCTION_SPAN_CHUNK_BYTES for run in runs)
+    boxed = [entry for entry in section.entries if isinstance(entry, int)]
+    assert len(boxed) < assembler._INSTRUCTION_SPAN_MIN_RUN
+    assert sum(map(len, runs)) == (count + 1 - len(boxed)) * 8
+    projected = list(assembler._iter_plan_entries(section))
+    instructions = [assembler._instruction_text(entry, section.source_text)
+                    for entry in projected if isinstance(entry, int)]
+    assert instructions == ['nop'] * count + ['ret']
+    # Both ordinary records and instructions retain their source order.
+    assert isinstance(projected[0], assembler._Label)
+    assert isinstance(projected[-1], assembler._SizeHere)
+    labels, sizes = assembler._measure_sections(plans, order, symbols)
+    assert sizes['.text'] == count + 1
+    assert labels['probe'] == ('.text', 0)
+
+
+@pytest.mark.parametrize('text', ['\n'.join(VALID_LINES), _mixed_lines(VALID_LINES)])
+def test_packed_span_object_matches_unpacked_parser_on_same_input(monkeypatch, text):
+    actual = elf.emit_relocatable(assembler.assemble_file(text))
+    parse = assembler._parse_file
+    def unpacked(source, **kwargs):
+        return parse(source, compact_instructions=False)
+    monkeypatch.setattr(assembler, '_parse_file', unpacked)
+    expected = elf.emit_relocatable(assembler.assemble_file(text))
+    assert actual == expected
+
+
+def test_packed_span_runs_retire_during_final_encoding(monkeypatch):
+    monkeypatch.setattr(assembler, '_INSTRUCTION_SPAN_CHUNK_BYTES', 40)
+    text = '.intel_syntax noprefix\n.text\nprobe:\n' + '  nop\n' * 19 + '  ret\n'
+    parse = assembler._parse_file
+    measure = assembler._measure_sections
+    encode = assembler.encode_instruction
+    runs = []
+    measured = False
+    final_calls = 0
+    def tracked_parse(source, **kwargs):
+        result = parse(source, **kwargs)
+        runs.extend(entry for plan in result[0].values() for entry in plan.entries
+                    if isinstance(entry, bytearray))
+        return result
+    def tracked_measure(*args, **kwargs):
+        nonlocal measured
+        result = measure(*args, **kwargs)
+        assert all(len(run) == 40 for run in runs)
+        measured = True
+        return result
+    def tracked_encode(*args, **kwargs):
+        nonlocal final_calls
+        if measured:
+            assert all(not run for run in runs[:final_calls // 5])
+            final_calls += 1
+        return encode(*args, **kwargs)
+    monkeypatch.setattr(assembler, '_parse_file', tracked_parse)
+    monkeypatch.setattr(assembler, '_measure_sections', tracked_measure)
+    monkeypatch.setattr(assembler, 'encode_instruction', tracked_encode)
+    obj = assembler.assemble_file(text)
+    assert final_calls == 20
+    assert len(runs) == 4 and all(not run for run in runs)
+    assert obj.sections[0].data == b'\x90' * 19 + b'\xc3'
+
+
+def test_packed_span_corruption_is_rejected():
+    section = assembler._SectionPlan('.text', elf.SHT_PROGBITS, elf.SHF_ALLOC, 1)
+    section.entries = [bytearray(b'\0')]
+    with pytest.raises(X86EncodeError, match='truncated compact instruction span run'):
+        list(assembler._iter_plan_entries(section))
+    section.entries = [bytearray(assembler._INSTRUCTION_SPAN_CODEC.pack(0))]
+    with pytest.raises(X86EncodeError, match='invalid compact instruction record'):
+        assembler._measure_sections({'.text': section}, ['.text'], {})
+
+
+def test_packed_span_signed_width_preserves_boundary():
+    entries = []
+    assembler._append_instruction_span(entries, -(1 << 63))
+    assembler._append_instruction_span(entries, -1)
+    assembler._append_instruction_span(entries, -7)
+    assembler._append_instruction_span(entries, -8)
+    assembler._append_instruction_span(entries, -9)
+    assert len(entries) == 1 and isinstance(entries[0], bytearray)
+    section = assembler._SectionPlan('.text', elf.SHT_PROGBITS, elf.SHF_ALLOC, 1)
+    section.entries = entries
+    assert list(assembler._iter_plan_entries(section)) == [-(1 << 63), -1, -7, -8, -9]
+
+
+def test_packed_span_native_mixed_runs_calls_and_branches_execute(tmp_path, monkeypatch):
+    # Exercise packed runs plus boxed short tails in the existing owned-link
+    # witness, including external calls and a backward conditional branch.
+    monkeypatch.setattr(assembler, '_INSTRUCTION_SPAN_CHUNK_BYTES', 40)
+    test_sizing_memo_owned_native_calls_and_backward_branch_execute(tmp_path)
+
+
+@pytest.mark.parametrize('run_length', [1, 2, 3, 4, 5, 1024, 1025, 1026])
+def test_label_dense_span_storage_never_inflates_host_representation(monkeypatch, run_length):
+    import sys
+
+    text = '.intel_syntax noprefix\n.text\n'
+    for index in range(12):
+        text += '.Lblock' + str(index) + ':\n' + '  nop\n' * run_length
+    compact, order, _ = assembler._parse_file(text, compact_instructions=True)
+    with monkeypatch.context() as context:
+        # This is the original compact parser representation, with identical
+        # source spans and label objects. It is not the larger text-record path.
+        context.setattr(assembler, '_append_instruction_span', lambda entries, span: entries.append(span))
+        boxed, boxed_order, _ = assembler._parse_file(text, compact_instructions=True)
+    assert order == boxed_order
+    def retained(plans):
+        return sum(sys.getsizeof(plan.entries) + sum(sys.getsizeof(entry) for entry in plan.entries)
+                   for plan in plans.values())
+    assert retained(compact) <= retained(boxed)
+    for name in order:
+        assert list(assembler._iter_plan_entries(compact[name])) == boxed[name].entries
+        runs = [entry for entry in compact[name].entries if isinstance(entry, bytearray)]
+        if run_length < assembler._INSTRUCTION_SPAN_MIN_RUN:
+            assert not runs
+            assert retained(compact) == retained(boxed)
+        else:
+            assert runs and all(len(run) <= 8192 for run in runs)
+    assert elf.emit_relocatable(assembler.assemble_file(text))
