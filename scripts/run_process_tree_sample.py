@@ -152,32 +152,75 @@ def _tree_rows(
     return selected
 
 
+def _termination_process_states(timeout_s: float) -> dict[int, str] | None:
+    """Read liveness within the remaining grace, excluding exited zombies."""
+    try:
+        run = subprocess.run(
+            ["ps", "-Ao", "pid=,stat="],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if run.returncode != 0:
+        return None
+    states = {}
+    for line in run.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdigit():
+            states[int(fields[0])] = fields[1]
+    return states
+
+
 def _terminate_owned_processes(
     process: subprocess.Popen[bytes],
-    known_pids: set[int],
+    observed_sessions: dict[int, int],
 ) -> None:
+    def signal_owned(signum: int) -> None:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signum)
+        owned = _owned_session_pids(
+            process.pid, observed_sessions, observed_sessions,
+        )
+        for pid in sorted(owned):
+            if pid == os.getpid():
+                continue
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                # The process-group signal already reached these children.
+                # A duplicate SIGTERM can interrupt their final output flush.
+                if os.getpgid(pid) != process.pid:
+                    os.kill(pid, signum)
+
     previous_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGTERM)
-        for pid in sorted(known_pids):
-            if pid == os.getpid():
-                continue
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.kill(pid, signal.SIGTERM)
         deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
+        signal_owned(signal.SIGTERM)
+        while True:
+            root_exited = process.poll() is not None
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0:
                 break
-            time.sleep(0.05)
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGKILL)
-        for pid in sorted(known_pids):
-            if pid == os.getpid():
-                continue
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.kill(pid, signal.SIGKILL)
+            states = _termination_process_states(min(0.25, remaining_s))
+            if states is None:
+                # Failed liveness telemetry cannot extend the hard deadline.
+                break
+            owned = _owned_session_pids(process.pid, observed_sessions, states)
+            for pid in owned:
+                if pid not in observed_sessions:
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        observed_sessions[pid] = os.getsid(pid)
+                        if os.getpgid(pid) != process.pid:
+                            os.kill(pid, signal.SIGTERM)
+            if root_exited and not any(
+                not states[pid].startswith("Z") for pid in owned
+            ):
+                break
+            # The supervisor may exit first. Its living descendants retain
+            # only the remainder of the same bounded grace to finish flushing.
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        signal_owned(signal.SIGKILL)
         with contextlib.suppress(subprocess.TimeoutExpired):
             process.wait(timeout=2)
     finally:
@@ -618,7 +661,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                         and tree_rss > args.max_tree_rss_bytes
                     ):
                         memory_limited = True
-                        _terminate_owned_processes(process, known_pids)
+                        _terminate_owned_processes(process, observed_sessions)
                         returncode = process.returncode
                         break
                     returncode = process.poll()
@@ -637,26 +680,29 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                         )
                         if remaining:
                             known_pids.update(remaining)
+                            for pid in remaining:
+                                with contextlib.suppress(ProcessLookupError):
+                                    observed_sessions[pid] = os.getsid(pid)
                             payload["post_exit_cleanup_pids"] = sorted(remaining)
-                            _terminate_owned_processes(process, remaining)
+                            _terminate_owned_processes(process, observed_sessions)
                         break
                     if _INTERRUPT_REQUESTED:
                         interrupted = True
-                        _terminate_owned_processes(process, known_pids)
+                        _terminate_owned_processes(process, observed_sessions)
                         returncode = process.returncode
                         break
                     if now >= deadline:
                         timed_out = True
-                        _terminate_owned_processes(process, known_pids)
+                        _terminate_owned_processes(process, observed_sessions)
                         returncode = process.returncode
                         break
                     time.sleep(args.interval)
             except KeyboardInterrupt:
-                _terminate_owned_processes(process, known_pids)
+                _terminate_owned_processes(process, observed_sessions)
                 interrupted = True
                 returncode = process.returncode
             except BaseException as exc:
-                _terminate_owned_processes(process, known_pids)
+                _terminate_owned_processes(process, observed_sessions)
                 process_table_retry_count += int(
                     getattr(exc, "retry_count", 0) or 0
                 )

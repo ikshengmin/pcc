@@ -639,3 +639,150 @@ def test_reclaimable_hard_floor_still_fails_closed(monkeypatch):
         tool.ProcessTreeSampleError, match="insufficient reclaimable memory"
     ):
         tool._darwin_resource_preflight(max_tree_rss_bytes=_CAP, reserve_bytes=_RESERVE)
+
+
+@pytest.mark.parametrize("nested_session", [False, True])
+@pytest.mark.parametrize("child_action", ["flush", "ignore"])
+def test_timeout_preserves_descendant_grace_and_cleans_tree(
+    tmp_path: Path,
+    nested_session: bool,
+    child_action: str,
+):
+    # The supervisor exits immediately on SIGTERM; its child either needs time
+    # to flush after that exit or ignores SIGTERM and must be killed at the bound.
+    worker = tmp_path / "worker.py"
+    worker.write_text(
+        "import os, signal, sys, time\n"
+        "from pathlib import Path\n"
+        "directory = Path(sys.argv[1])\n"
+        "action = sys.argv[2]\n"
+        "def terminate(signum, frame):\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "    (directory / 'term').write_text('received')\n"
+        "    if action == 'ignore':\n"
+        "        return\n"
+        "    time.sleep(0.3)\n"
+        "    print('profile flushed', flush=True)\n"
+        "    (directory / 'flushed').write_text('complete')\n"
+        "    raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM, terminate)\n"
+        "os.write(int(sys.argv[3]), b'ready\\n')\n"
+        "os.close(int(sys.argv[3]))\n"
+        "while True:\n"
+        "    time.sleep(0.1)\n",
+        encoding="utf-8",
+    )
+    supervisor = tmp_path / "supervisor.py"
+    supervisor.write_text(
+        "import json, os, signal, subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "directory = Path(sys.argv[1])\n"
+        "ready_read, ready_write = os.pipe()\n"
+        "child = subprocess.Popen(\n"
+        "    [sys.executable, str(directory / 'worker.py'), str(directory),\n"
+        "     sys.argv[2], str(ready_write)],\n"
+        "    start_new_session=sys.argv[3] == 'True', pass_fds=(ready_write,))\n"
+        "os.close(ready_write)\n"
+        "assert os.read(ready_read, 6) == b'ready\\n'\n"
+        "os.close(ready_read)\n"
+        "signal.signal(signal.SIGTERM, lambda *_: os._exit(0))\n"
+        "(directory / 'ready.json').write_text(json.dumps([os.getpid(), child.pid]))\n"
+        "while True:\n"
+        "    time.sleep(0.1)\n",
+        encoding="utf-8",
+    )
+    result = tmp_path / "result.json"
+    command = [
+        sys.executable, str(TOOL), "--result", str(result),
+        "--samples", str(tmp_path / "samples.tsv"),
+        "--stdout", str(tmp_path / "target.stdout"),
+        "--stderr", str(tmp_path / "target.stderr"),
+        "--cwd", str(ROOT), "--timeout", "1", "--interval", "0.02",
+        "--max-tree-rss-bytes", str(128 * 1024 * 1024),
+        "--no-performance-lock", "--", sys.executable, str(supervisor),
+        str(tmp_path), child_action, str(nested_session),
+    ]
+    pids = []
+    try:
+        run = subprocess.run(command, capture_output=True, text=True, timeout=8)
+        pids = json.loads((tmp_path / "ready.json").read_text(encoding="utf-8"))
+        assert run.returncode == 124, run.stdout + run.stderr
+        receipt = json.loads(result.read_text(encoding="utf-8"))
+        assert receipt["status"] == "TIMEOUT"
+        assert receipt["returncode"] == 0  # The supervisor exited on SIGTERM.
+        assert receipt["timeout_s"] == 1
+        assert receipt["max_tree_rss_bytes"] == 128 * 1024 * 1024
+        assert set(pids) <= {row["pid"] for row in receipt["terminal_processes"]}
+        assert (tmp_path / "term").read_text(encoding="utf-8") == "received"
+        assert receipt["elapsed_s"] < 4
+        if child_action == "flush":
+            assert (tmp_path / "flushed").read_text(encoding="utf-8") == "complete"
+            assert (tmp_path / "target.stdout").read_text(encoding="utf-8") == (
+                "profile flushed\n"
+            )
+            assert receipt["elapsed_s"] < 2.5  # Do not always spend all grace.
+        else:
+            assert not (tmp_path / "flushed").exists()
+            assert receipt["elapsed_s"] >= 3
+        for pid in pids:
+            state = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "stat="],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip()
+            assert not state or state.startswith("Z"), (pid, state)
+    finally:
+        ready = tmp_path / "ready.json"
+        if ready.exists():
+            pids = json.loads(ready.read_text(encoding="utf-8"))
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize("root_exited", [False, True])
+def test_termination_returns_for_exited_child_and_excludes_unrelated_session(
+    tmp_path: Path, root_exited: bool,
+):
+    tool = _load_tool_module()
+    child_pid_file = tmp_path / "child.pid"
+    process = subprocess.Popen(
+        [
+            sys.executable, "-c",
+            "import subprocess, sys, time; from pathlib import Path; "
+            "child = subprocess.Popen([sys.executable, '-c', 'pass'], "
+            "start_new_session=True); child.wait(); "
+            "Path(sys.argv[1]).write_text(str(child.pid)); "
+            "time.sleep(0 if sys.argv[2] == 'True' else 10)",
+            str(child_pid_file), str(root_exited),
+        ],
+        start_new_session=True,
+    )
+    unrelated = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(10)"],
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while not child_pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+        if root_exited:
+            process.wait(timeout=3)
+        # A PID now in a different session is no longer ownership evidence.
+        observed_sessions = {
+            process.pid: process.pid,
+            child_pid: child_pid,
+            unrelated.pid: process.pid,
+        }
+        started = time.monotonic()
+        tool._terminate_owned_processes(process, observed_sessions)
+        assert time.monotonic() - started < 1
+        assert process.poll() is not None
+        assert unrelated.poll() is None
+    finally:
+        for owned in (process, unrelated):
+            if owned.poll() is None:
+                owned.kill()
+            owned.wait(timeout=3)
