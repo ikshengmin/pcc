@@ -57,7 +57,10 @@ import sys
 from typing import Optional, cast
 
 from pcc.ir.compat import ir
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_STR
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+)
 from pcc.ir.ir import (
     IRBuilder_current_instruction_count,
     IRBuilder_emit_raw,
@@ -4916,11 +4919,21 @@ class ClassLowering:
                     self._load_class_object(base_info, f".base.{b.ident}")
                 )
                 continue
-            if b.ident == "str":
+            if b.ident == "tuple" and (
+                self.parent._native_builtin_value_for_name(b.ident) != "builtins.tuple"
+                or self.parent._iterator_builtin_is_shadowed(b.ident)
+            ):
+                raise ClassLoweringError(
+                    "native class base 'tuple' is rebound and is not a resolved class"
+                )
+            if b.ident in ("str", "tuple"):
+                # Canonical builtin bases participate in native C3 and layout.
+                # User classes with either name were resolved above.
+                base_tag = PY_TYPE_STR if b.ident == "str" else PY_TYPE_TUPLE
                 base_values.append(builder.call(
                     runtime["py_builtin_type_for_tag"],
-                    [ir.Constant(_I64, PY_TYPE_STR)],
-                    name=self._fresh(".base.str"),
+                    [ir.Constant(_I64, base_tag)],
+                    name=self._fresh(f".base.{b.ident}"),
                 ))
                 continue
             exc_tag = _builtin_exception_tag_for_base_name(b.ident)

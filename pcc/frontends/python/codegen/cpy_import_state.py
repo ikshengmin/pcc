@@ -38,6 +38,12 @@ def retire_live_import_staging(host, name, unpin=True):
     staging = live_import_global_slot(host, name)
     if staging is None:
         return
+    # An inferred import can reuse a scalar ABI projection allocated before
+    # its live dictionary binding was discovered. Publication boxes that
+    # value separately; this projection never acquired a GC owner or pin.
+    # Keep its ABI contents and retire only an actual object staging slot.
+    if not isinstance(staging.value_type, ir.PointerType):
+        return
     if unpin:
         current = host.builder.load(staging, name=host._fresh("import.publish.current"))
         host._gc_unpin(current)
