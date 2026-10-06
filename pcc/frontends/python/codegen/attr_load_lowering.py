@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
+from pcc.frontends.python.codegen.cpy_import_state import (
+    live_import_expr_binding,
+    live_import_name_slot,
+)
 
 from pcc.ir.compat import ir
 from pcc.driver.python_target import (
@@ -279,6 +282,43 @@ class AttrLoadLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cleanup
         return output
+
+    def _emit_slot_call_valueclass_name(self, expr, label):
+        """Box an actual aggregate binding through its registered field roots."""
+        if not isinstance(expr, Name) or live_import_name_slot(self, expr.ident) is not None:
+            return None
+        entry = self.env.get(expr.ident)
+        global_entry = self._module_globals.get(expr.ident)
+        module_source = False
+        if entry is not None:
+            payload_slot, actual_ir_ty, payload_ty = entry
+            module_source = global_entry is not None and global_entry[0] is payload_slot
+        elif global_entry is not None:
+            payload_slot, payload_ty = global_entry
+            actual_ir_ty = payload_slot.value_type
+            module_source = True
+        else:
+            return None
+        # Object-projected Names already have an authoritative ordinary root.
+        # An annotation alone cannot turn that pointer into an aggregate.
+        if isinstance(actual_ir_ty, ir.PointerType) or not self._is_valueclass_payload_type(payload_ty):
+            return None
+        payload_ir_ty = self._valueclass_payload_ir_type(payload_ty)
+        if not isinstance(actual_ir_ty, ir.LiteralStructType) or str(actual_ir_ty) != str(payload_ir_ty):
+            raise L1CodegenError("valueclass name requires its actual aggregate payload slot")
+        check_local_bound(self, expr)
+        if getattr(self, "_cpy_env_flags", {}).get(expr.ident, False):
+            raise L1CodegenError("CPython valueclass binding requires an explicit output-slot bridge")
+        if module_source:
+            if getattr(self, "_cpy_module_flags", {}).get(expr.ident, False):
+                raise L1CodegenError("CPython valueclass global requires an explicit output-slot bridge")
+            if self._module_global_needs_bound_check(expr.ident):
+                self._emit_module_global_bound_check(expr.ident, expr)
+        # The empty path boxes the whole payload, without consuming its
+        # fields or returning a raw box across field-allocation cleanup.
+        return self._emit_slot_call_valueclass_field(
+            payload_slot, (), payload_ty, module_source, label, expr.span,
+        )
 
     def _emit_slot_call_valueclass_attribute(self, expr, label):
         owner_ty = self._valueclass_payload_expr_type(expr.obj)

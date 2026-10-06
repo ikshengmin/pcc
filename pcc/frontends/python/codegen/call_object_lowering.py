@@ -452,6 +452,9 @@ class CallObjectLoweringMixin:
         published = self._slot_call_published_module_ref(expr)
         if published is not None:
             return self._emit_slot_call_module_value(published[0], published[1], expr.span, label)
+        payload_value = self._emit_slot_call_valueclass_name(expr, label)
+        if payload_value is not None:
+            return payload_value
         if isinstance(expr, (UnaryOp, BinOp)):
             if self._slot_call_literal_integer_kind(expr):
                 return self._emit_slot_call_literal_integer(expr, label)

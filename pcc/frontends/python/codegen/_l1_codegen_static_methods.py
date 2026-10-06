@@ -654,13 +654,14 @@ def _part_55(out):
     _append_method(out, '_emit_class_namespace_name_root', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_slot_call_valueclass_field_source', (('self', 'pos', False), ('payload_slot', 'pos', False), ('path', 'pos', False), ('module_source', 'pos', False)))
     _append_method(out, '_emit_slot_call_valueclass_field', (('self', 'pos', False), ('payload_slot', 'pos', False), ('path', 'pos', False), ('field_ty', 'pos', False), ('module_source', 'pos', False), ('label', 'pos', False), ('span', 'pos', False)))
+    _append_method(out, '_emit_slot_call_valueclass_name', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_valueclass_attribute', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_lambda_adapter_name_root', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_slot_call_unary_runtime', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_emit_slot_call_unary', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
 
 
 def _part_56(out):
+    _append_method(out, '_emit_slot_call_unary', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
     _append_method(out, '_set_call_operands', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_set_algebra_call', (('self', 'pos', False), ('expr', 'pos', False), ('dynamic', 'pos', True), ('', 'kw_only', False), ('receiver_slot', 'pos', True), ('output_slot', 'pos', True)))
     _append_method(out, '_emit_for_unpack_assign', (('self', 'pos', False), ('stmt', 'pos', False), ('name', 'pos', False)))
@@ -668,10 +669,10 @@ def _part_56(out):
     _append_method(out, '_emit_generator_yield_value', (('self', 'pos', False), ('value', 'pos', False), ('', 'kw_only', False), ('resume_err_target', 'pos', True), ('resume_args_target', 'pos', True), ('result_slot', 'pos', True)))
     _append_method(out, '_emit_generator_take_send', (('self', 'pos', False),))
     _append_method(out, '_generator_frame_helper', (('self', 'pos', False), ('operation', 'pos', False)))
-    _append_method(out, '_iterator_builtin_is_shadowed', (('self', 'pos', False), ('name', 'pos', False)))
 
 
 def _part_57(out):
+    _append_method(out, '_iterator_builtin_is_shadowed', (('self', 'pos', False), ('name', 'pos', False)))
     _append_method(out, '_emit_iterator_callable_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_iterator_install_cleanup', (('self', 'pos', False), ('roots', 'pos', False), ('target', 'pos', False)))
     _append_method(out, '_emit_next_owned_step', (('self', 'pos', False), ('iterator', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('found', 'pos', False), ('exhausted', 'pos', False)))
@@ -679,10 +680,10 @@ def _part_57(out):
     _append_method(out, '_emit_next_filter_truth', (('self', 'pos', False), ('output', 'pos', False), ('predicate', 'pos', False), ('call_args', 'pos', False), ('pred_result', 'pos', False), ('none_obj', 'pos', False), ('span', 'pos', False)))
     _append_method(out, '_emit_owned_padding_method', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_ellipsis_literal', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_emit_virtual_thread_continuation_slot', (('self', 'pos', False), ('output', 'pos', False), ('arguments', 'pos', False), ('resume', 'pos', False)))
 
 
 def _part_58(out):
+    _append_method(out, '_emit_virtual_thread_continuation_slot', (('self', 'pos', False), ('output', 'pos', False), ('arguments', 'pos', False), ('resume', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_generator_slot', (('self', 'pos', False), ('output', 'pos', False), ('fn', 'pos', False), ('formals', 'pos', False), ('arguments', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_spawn_allocation_check', (('self', 'pos', False), ('output', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_owned_spawn', (('self', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False), ('ast_func_def', 'pos', False), ('value_args', 'pos', False), ('runtime_formals', 'pos', False), ('call_expr', 'pos', False), ('generator', 'pos', False)))

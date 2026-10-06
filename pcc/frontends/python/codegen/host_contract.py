@@ -688,6 +688,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_class_namespace_name_root",
     "_slot_call_valueclass_field_source",
     "_emit_slot_call_valueclass_field",
+    "_emit_slot_call_valueclass_name",
     "_emit_slot_call_valueclass_attribute",
     "_emit_lambda_adapter_name_root",
     "_slot_call_unary_runtime",
