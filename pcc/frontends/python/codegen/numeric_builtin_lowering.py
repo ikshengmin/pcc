@@ -1727,15 +1727,37 @@ class NumericBuiltinLoweringMixin:
         # this, max("abc") / max(["a","b"]) bailed to a name lookup (runtime
         # "NameError: name 'max'"). Returns the extreme element object directly.
         if not expr.kwargs and self._min_max_needs_object_compare(arg_ty):
-            src_obj = self._emit_as_object(arg)
-            want_max = ir.Constant(_I64, 1 if name == "max" else 0)
-            res = self.builder.call(
-                self.runtime["py_obj_min_max"],
-                [src_obj, want_max],
-                name=self._fresh(f"{name}.obj"),
-            )
-            self._emit_post_call_err_check(getattr(arg, "span", None))
-            return res
+            # The selected element is NEW even when it aliases an item in the
+            # iterable. Publish it before error checks or iterable cleanup,
+            # which can invoke callbacks and move or release that element.
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root(name + ".result")
+                roots.append(output)
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cleanup = self._cpy_operand_cleanup_block
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                source = self._emit_slot_call_operand(arg, name + ".iterable")
+                roots.append(source)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_min_max", (source,), result_slot=output,
+                    suffix_args=(ir.Constant(_I64, 1 if name == "max" else 0),),
+                    span=expr.span,
+                )
+                self._release_slot_call_roots((source,))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh(name + ".current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cleanup
         is_class_iter = isinstance(arg_ty, ClassType)
         if not is_class_iter and not isinstance(
             arg_ty, (ListType, TupleType, DynType)

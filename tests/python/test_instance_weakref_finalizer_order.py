@@ -21,7 +21,7 @@ class DeallocationModel(FinalizerModel):
         self.ns.update(
             PYOBJECTHEADER_REFCOUNT_OFFSET=0, PYOBJECTHEADER_TYPE_TAG_OFFSET=8,
             PYINSTANCEOBJECT_CLS_OFFSET=16, PYCLASSOBJECT_N_FIELDS_OFFSET=24,
-            PYINSTANCEOBJECT_FIELDS_OFFSET=32,
+            PYINSTANCEOBJECT_FIELDS_OFFSET=32, PYCLASSOBJECT_INSTANCE_SIZE_OFFSET=88,
             _pcc_debug_bad_incref=lambda *args: pytest.fail('invalid refcount tail'),
             py_gen_finalize_from_dealloc=lambda value: 0,
             pcc_refcount_forget=lambda value: None,
@@ -35,12 +35,14 @@ class DeallocationModel(FinalizerModel):
             pcc_gc_pointer_is_managed=lambda value: int(value in self.nodes),
             _dealloc_ptr_is_instance=lambda value: True,
             pcc_gc_load_ptr=lambda owner, slot: self.load(slot),
-            _instance_reserved_owner_slot=lambda value, cls: value + 32,
             pcc_gc_store_ptr=lambda owner, slot, value: self.store(slot, 0, value),
             pcc_gc_free_object_memory=self.free,
         )
         _functions(RUNTIME / 'py_obj.py', {'_py_decref_finish'}, self.ns)
-        _functions(RUNTIME / 'py_class.py', {'py_instance_dealloc'}, self.ns)
+        _functions(RUNTIME / 'py_class.py', {
+            '_instance_storage_slot_count', '_instance_reserved_owner_slot',
+            '_instance_builtin_payload_slot', 'py_instance_dealloc',
+        }, self.ns)
 
     def callback(self, function, value):
         self.lifecycle.append('finalizer')
@@ -114,3 +116,38 @@ def test_builtin_and_extension_keep_generic_invalidation(backend, tag):
     model.finish()
     assert model.calls == 0 and model.freed
     assert model.lifecycle.index('weakref') < model.lifecycle.index('generic-dealloc')
+
+
+@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('resurrect', (False, True))
+def test_builtin_payload_owner_is_detached_only_on_terminal_deallocation(backend, resurrect):
+    model = DeallocationModel(backend, resurrect=resurrect)
+    cls = model.load(1000, 16)
+    # One declared field, the reserved owner and one builtin payload owner.
+    model.store(cls, model.ns['PYCLASSOBJECT_N_FIELDS_OFFSET'], 1)
+    model.store(cls, model.ns['PYCLASSOBJECT_INSTANCE_SIZE_OFFSET'], 32 + 3 * 8)
+    reserved = model.ns['_instance_reserved_owner_slot'](1000, cls)
+    payload = model.ns['_instance_builtin_payload_slot'](1000, cls)
+    assert reserved == 1040 and payload == 1048
+    model.store(reserved, 0, 7000)
+    model.store(payload, 0, 8000)
+    detached = []
+
+    def detach(owner, slot, value):
+        assert owner == 1000 and value == 0
+        assert model.calls == 1 and not model.weakref_live and not model.freed
+        detached.append((slot, model.load(slot)))
+        model.store(slot, 0, value)
+
+    model.ns['pcc_gc_store_ptr'] = detach
+    model.finish()
+    if resurrect:
+        assert detached == []
+        assert model.load(reserved) == 7000 and model.load(payload) == 8000
+        model.store(1000, 0, 0)
+        model.store(1000, 12, model.load(1000, 12) | TERMINAL)
+        model.finish()
+    assert detached == [(reserved, 7000), (payload, 8000)]
+    assert model.load(reserved) == model.load(payload) == 0
+    assert model.calls == 1 and model.freed
+    assert model.count() == model.active() == model.depth == 0

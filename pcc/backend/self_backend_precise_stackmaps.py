@@ -6214,6 +6214,7 @@ def build_x86_64_stack_map_payload(
     native_pack = packed_scalars.uses_native_storage
     try:
         for plan in ordered_plans:
+            record_chunks: list[bytes] = []
             symbol = function_symbol(plan.function_name)
             start = target_offsets.get(symbol)
             end = target_offsets.get(plan.end_label)
@@ -6286,6 +6287,7 @@ def build_x86_64_stack_map_payload(
                             POINTER_SIZE, 6, NO_BASE, offset, POINTER_SIZE,
                         ))
                     content = b"".join(parts)
+                    del parts
                     if content in location_indices:
                         location_index = location_indices[content]
                     else:
@@ -6310,7 +6312,7 @@ def build_x86_64_stack_map_payload(
                     )
                     packed_scalars.append2(0, location_index)
                 else:
-                    chunks.append(_STACK_MAP_RECORD_CODEC.pack(
+                    record_chunks.append(_STACK_MAP_RECORD_CODEC.pack(
                         record.safepoint_id, instruction_offset, exceptional_offset,
                         record.continuation_id, len(record.locations), 0,
                         record.kind, record.flags, 0, location_index,
@@ -6319,12 +6321,24 @@ def build_x86_64_stack_map_payload(
             if native_pack and len(packed_scalars):
                 chunks.append(_pack_stack_map_record_arena(packed_scalars))
                 packed_scalars.clear()
+            elif record_chunks:
+                # Retain final bytes per function, rather than one Python
+                # object per safepoint across the entire module.
+                chunks.append(b"".join(record_chunks))
+            record_chunks.clear()
+            del records
+        # All records now own their encoded location indices.  These lookup
+        # caches have no further reader and need not overlap final payloads.
+        location_identities.clear()
+        location_indices.clear()
+        packed_scalars.close()
         _check_uint(location_count, 32, "location table count")
         chunks[0] = _STACK_MAP_HEADER_CODEC.pack(
             MAGIC, VERSION, ARCH_X86_64, POINTER_SIZE,
             len(ordered_plans), location_count, 0,
         )
         chunks.extend(location_chunks)
+        location_chunks.clear()
         return b"".join(chunks), tuple(relocations)
     finally:
         packed_scalars.close()

@@ -26,8 +26,17 @@ def emit(tmp_path,monkeypatch,program,*,port=None,target=None):
         module_names=['consumer','os'],entry_module='consumer',backend='self',
         libpython_mode='off',ir_scaffold_mode='on',emit_llvm_only=True,
         target_triple=target,profile=profile)
-    assert profile['counters']['multi_files']==2
-    return output.read_text()
+    # The two supplied modules can discover further native dependencies
+    # (for example os.fsync imports warnings). Count the input contract and
+    # verify that every admitted module has one emitted initializer.
+    assert profile['counters']['multi_input_files'] == 2
+    text = output.read_text()
+    initializers = re.findall(r'^define [^\n]*@_pcc_py_module_top_([^ (]+)\(', text, re.M)
+    assert initializers.count('os') == 1
+    assert len(re.findall(r'^define [^\n]*@main\(', text, re.M)) == 1
+    assert len(initializers) == len(set(initializers)) == profile['counters']['multi_files'] - 1
+    assert profile['counters']['multi_ir_modules'] == profile['counters']['multi_files']
+    return text
 
 
 def body(text,name):

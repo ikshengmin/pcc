@@ -26,6 +26,60 @@ def _body(text, name="read_file"):
     return match.group(0)
 
 
+def _owned_open_call(body):
+    """Check the owned ABI and the actual slot-to-argument dataflow."""
+    calls = list(re.finditer(
+        r"(?m)^\s*(?P<result>%[^ ]+) = call ptr \(ptr, ptr, ptr, ptr, ptr\) "
+        r"@py_file_open_options\((?P<arguments>[^\n]*)\)\n", body,
+    ))
+    assert len(calls) == 1
+    call = calls[0]
+    arguments = call.group("arguments").split(", ")
+    assert len(arguments) == 5
+    roots = []
+    prefix = body[:call.start()]
+    for argument in arguments:
+        assert argument.startswith("ptr %"), argument
+        value = argument[4:]
+        loads = list(re.finditer(
+            r"(?m)^\s*" + re.escape(value) + r" = load ptr, ptr (?P<slot>%[^ ,\n]+)$",
+            prefix,
+        ))
+        assert len(loads) == 1, argument
+        slot = loads[0].group("slot")
+        roots.append(slot)
+        aliases = [slot] + re.findall(
+            r"(?m)^\s*(%[^ ]+) = bitcast ptr " + re.escape(slot) + r" to ptr$", prefix,
+        )
+        assert any(re.search(
+            r"@pcc_gc_foreign_lease_acquire\(ptr " + re.escape(alias) + r"\)", prefix,
+        ) for alias in aliases), slot
+    assert len(set(roots)) == 5
+    # The returned owner must be published before any potentially parking
+    # operation, including a lease, TLS inspection or operand retirement.
+    published = re.match(
+        r"\s*store ptr " + re.escape(call.group("result")) + r", ptr (?P<slot>%[^ ,\n]+)\n",
+        body[call.end():],
+    )
+    assert published is not None
+    assert "@py_cpy_" not in body
+    assert "strict.nolib.stub" not in body
+    return call, roots, published.group("slot")
+
+
+def _assert_producer_feeds_slot(body, function, slot):
+    producer = re.search(
+        r"(?m)^\s*(?P<value>%[^ ]+) = call ptr \(\) @user_owned_open_"
+        + re.escape(function) + r"\(\)\n", body,
+    )
+    assert producer is not None
+    assert re.match(
+        r"\s*store ptr " + re.escape(producer.group("value"))
+        + r", ptr " + re.escape(slot) + r"\n", body[producer.end():],
+    )
+    return producer.start()
+
+
 @pytest.mark.parametrize("binding", ("import builtins", "import builtins as io"))
 def test_qualified_builtin_open_read_stays_native(binding):
     alias = "io" if " as " in binding else "builtins"
@@ -34,7 +88,7 @@ def test_qualified_builtin_open_read_stays_native(binding):
         "        payload = source.read(128)\n"
         "    return bytes(payload)\n")
     body = _body(text)
-    assert "@py_file_open(" in body
+    _owned_open_call(body)
     assert "@py_file_read(" in body
     assert "@py_file_close(" in body
     assert "@py_cpy_" not in body
@@ -46,7 +100,7 @@ def test_qualified_open_ignores_unrelated_local_open_binding():
         "    with builtins.open(path, 'rb') as source:\n"
         "        return source.read()\n")
     body = _body(text)
-    assert "@py_file_open(" in body
+    _owned_open_call(body)
     assert "@py_file_close(" in body
     assert "@py_cpy_" not in body
 
@@ -57,7 +111,7 @@ def test_shadowed_callable_or_module_uses_actual_parameter(name):
     text = _emit("import builtins\ndef read_file(" + name + ", path):\n"
                  "    return " + call + "\n")
     body = _body(text)
-    assert "@py_file_open(" not in body
+    assert not re.search(r"@py_file_open(?:_options)?\(", body)
     assert "@py_cpy_" not in body
     assert "@py_obj_call" in body
 
@@ -69,10 +123,11 @@ def test_open_publishes_before_leases_tls_or_operand_disposal():
         "def read_file():\n"
         "    return consume(value=builtins.open(path_value(), mode_value()))\n")
     body = _body(text)
-    match = re.search(r"(?P<value>%[^ ]+) = call [^\n]*@py_file_open\([^\n]*\)\n(?P<next>[^\n]+)", body)
-    assert match is not None
-    assert match.group("next").strip().startswith("store ptr " + match.group("value") + ", ptr ")
-    assert body.index("@user_owned_open_path_value(") < body.index("@user_owned_open_mode_value(") < match.start()
+    call, roots, output = _owned_open_call(body)
+    path = _assert_producer_feeds_slot(body, "path_value", roots[0])
+    mode = _assert_producer_feeds_slot(body, "mode_value", roots[1])
+    assert path < mode < call.start()
+    assert output not in roots
     assert "@pcc_gc_foreign_lease_acquire(" in body
     assert "@py_tls_exc_swap_slot(" in body
 
@@ -95,12 +150,12 @@ def test_known_builtin_open_mutation_is_explicitly_unsupported():
               "def read_file(path):\n    return builtins.open(path)\n")
 
 
-def test_unsupported_open_options_keep_foreign_dispatch_explicit():
+@pytest.mark.parametrize("strict", (False, True))
+def test_open_encoding_operand_uses_owned_options_dispatch(strict):
     text = _emit("import builtins\ndef read_file(path, encoding):\n"
-        "    return builtins.open(path, 'r', encoding=encoding)\n", strict=False)
+        "    return builtins.open(path, 'r', encoding=encoding)\n", strict=strict)
     body = _body(text)
-    assert "@py_file_open(" not in body
-    assert "@py_cpy_" in body
+    _owned_open_call(body)
 
 
 @pytest.mark.parametrize("mutation", (
@@ -119,14 +174,14 @@ def test_unrelated_parameter_namespace_mutation_does_not_mask_builtin():
     text = _emit("import builtins\n"
         "def mutate(builtins, replacement):\n    builtins.open = replacement\n"
         "def read_file(path):\n    return builtins.open(path)\n")
-    assert "@py_file_open(" in _body(text)
+    _owned_open_call(_body(text))
 
 
 def test_rebound_module_alias_cannot_use_original_builtin_intrinsic():
     text = _emit("import builtins as io\n"
         "def read_file(io, path):\n    return io.open(path)\n")
     body = _body(text)
-    assert "@py_file_open(" not in body
+    assert not re.search(r"@py_file_open(?:_options)?\(", body)
     assert "@py_obj_call" in body
 
 
@@ -136,7 +191,7 @@ def test_imported_module_alias_rebinding_uses_new_local_value():
         "    io = target\n"
         "    return io.open(path)\n")
     body = _body(text)
-    assert "@py_file_open(" not in body
+    assert not re.search(r"@py_file_open(?:_options)?\(", body)
     assert "@py_obj_call" in body
 
 
@@ -145,3 +200,31 @@ def test_late_global_alias_rebinding_is_explicitly_unsupported():
         _emit("import builtins as io\n"
               "def read_file(path):\n    return io.open(path)\n"
               "io = None\n")
+
+
+@pytest.mark.parametrize("binding,callee", (
+    ("", "open"), ("import builtins\n", "builtins.open"),
+    ("import builtins as io\n", "io.open"),
+))
+def test_ordinary_and_qualified_open_share_owned_abi(binding, callee):
+    body = _body(_emit(binding + "def read_file(path):\n    return " + callee + "(path)\n"))
+    _owned_open_call(body)
+
+
+def test_open_option_evaluation_order_and_abi_argument_positions():
+    text = _emit("import builtins\n"
+        "def path_value():\n    return 'x'\n"
+        "def mode_value():\n    return 'r'\n"
+        "def encoding_value():\n    return 'utf-8'\n"
+        "def errors_value():\n    return 'strict'\n"
+        "def newline_value():\n    return None\n"
+        "def read_file():\n"
+        "    return builtins.open(path_value(), mode_value(), "
+        "newline=newline_value(), errors=errors_value(), encoding=encoding_value())\n")
+    body = _body(text)
+    call, roots, output = _owned_open_call(body)
+    positions = [_assert_producer_feeds_slot(body, name + "_value", roots[index])
+                 for index, name in enumerate(("path", "mode", "encoding", "errors", "newline"))]
+    assert positions[0] < positions[1] < positions[4] < positions[3] < positions[2] < call.start()
+    assert output not in roots
+    assert "@py_tls_exc_swap_slot(" in body

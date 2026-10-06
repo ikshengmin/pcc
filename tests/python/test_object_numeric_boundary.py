@@ -1,6 +1,7 @@
 """Ordinary numeric annotations use actual object protocols at owning sinks."""
 from __future__ import annotations
 
+import ast
 import math
 from pathlib import Path
 
@@ -28,6 +29,9 @@ from tests.python.test_slot_call_modulo_producers import (
 from tests.python.test_slot_call_operand_roots import (
     _emit as emit_operand,
 )
+
+
+from tests.python.test_tuple_subclass_slot_models import SelectionMemory
 
 
 SOURCE = Path(__file__).parents[2] / 'pcc/runtime/py/py_obj_ops_mod.py'
@@ -68,6 +72,96 @@ def test_original_arm64_shift_count_division_shape_has_an_owner():
     assert_floor_division_publication(text)
 
 
+class ModuloProtocolMemory(SelectionMemory):
+    """Real named wrapper and binary-selection bodies over stable host values.
+
+    Reuse the slot model's relocation/lease checks; only the final Python
+    callback invocation is modeled. This does not claim native execution.
+    """
+    def __init__(self, numeric):
+        super().__init__('callback')
+        self.numeric = numeric
+        self.classes = {}
+        self.maps.update(pcc_named_protocol_borrowed_map=-3,
+                         pcc_named_protocol_owned_map=7)
+        tree = ast.parse((RUNTIME / 'py_protocol_runtime.py').read_text())
+        body = []
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and (
+                node.name.startswith('_named_') or node.name in {
+                    '_write_handled', '_protocol_unary_pin_result',
+                    'py_user_binop_dispatch',
+                }
+            ):
+                node.decorator_list = []
+                body.append(node)
+            elif isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id.startswith('_NAMED_')
+                for target in node.targets
+            ):
+                body.append(node)
+        exec(compile(ast.Module(body=body, type_ignores=[]),
+                     str(RUNTIME / 'py_protocol_runtime.py'), 'exec'), self.ns)
+
+    def class_for(self, cls):
+        if cls in self.classes:
+            return self.classes[cls]
+        parents = [self.class_for(parent) for parent in cls.__mro__[1:]
+                   if parent is not object]
+        result = self.klass(cls.__name__, parents)
+        self.classes[cls] = result
+        for name in ('__mod__', '__rmod__'):
+            method = cls.__dict__.get(name)
+            if method is not None:
+                self.install(result, name, self.method(name, method))
+        return result
+
+    def operand(self, value):
+        result = self.make_instance(self.class_for(type(value)))
+        result.value = value
+        return result
+
+    def call_slots(self, callable_slot, args_slot, kwargs_slot, result_slot):
+        function = self.read(callable_slot, 0)
+        arguments = self.read(args_slot, 0)
+        values = [self.read(arguments, 24 + index * 8)
+                  for index in range(self.read(arguments, 16))]
+        self.collect('callback')
+        assert function.alive and function.leases > 0
+        assert all(value.alive and value.leases > 0 for value in values)
+        result = self.numeric.callback(function.value, *(value.value for value in values))
+        if self.numeric.pending is not None:
+            self.error = self.numeric.pending
+            return -1
+        if result is NotImplemented:
+            self.retain(self.not_implemented)
+            result = self.not_implemented
+        else:
+            # Alias returns are NEW owners of the same model object, not a
+            # fresh wrapper that could conceal independent owner cleanup.
+            alias = next((value for value in values if value.value is result), None)
+            if alias is not None:
+                self.retain(alias)
+                result = alias
+            else:
+                result = self.make(result, self.ns['PY_TYPE_INSTANCE'])
+                result.fields[12] = 0
+        self.write(result_slot, 0, result)
+        return 0
+
+    def dispatch(self, left, right, name, reflected, message):
+        first, second = self.operand(left), self.operand(right)
+        caller = self.roots_for(first, second)
+        result = self.ns['py_user_binop_dispatch'](
+            self.read(caller, 0), self.read(caller, 8), name, reflected, message,
+        )
+        self.numeric.pending = self.error
+        assert not self.frame_handles and self.depth == 0
+        assert all(obj.leases == 0 for obj in self.objects
+                   if obj.alive and obj not in (self.none, self.not_implemented))
+        return None if result is None else result.value
+
+
 class ModuloMemory(FloorMemory):
     def __init__(self):
         super().__init__()
@@ -84,6 +178,13 @@ class ModuloMemory(FloorMemory):
         )
         functions(RUNTIME / 'py_int_ops.py', {'py_int_mod'}, self.environment)
         functions(SOURCE, {'py_obj_mod'}, self.environment)
+        # FloorMemory's old raw-method environment does not supply today's
+        # named slot-dispatch owner closure. Execute that real closure in the
+        # established slot model and retain the original callback assertions.
+        self.environment['py_user_binop_dispatch'] = self.user_binop
+
+    def user_binop(self, left, right, name, reflected, message):
+        return ModuloProtocolMemory(self).dispatch(left, right, name, reflected, message)
 
     def modulo(self, left, right):
         def box(value):
@@ -158,3 +259,47 @@ def test_modulo_reflection_and_callback_failure_use_the_existing_protocol():
     memory = ModuloMemory()
     assert memory.modulo(Raising(), Right()) is None
     assert memory.pending is error
+
+
+@pytest.mark.parametrize('alias', ('left', 'right', 'new'))
+def test_modulo_named_slot_dispatch_preserves_callback_result_identity(alias):
+    marker = object()
+    class Left:
+        def __mod__(self, other):
+            return NotImplemented
+    class Right:
+        def __rmod__(self, other):
+            return {'left': other, 'right': self, 'new': marker}[alias]
+    left, right = Left(), Right()
+    memory = ModuloMemory()
+    assert memory.modulo(left, right) is {'left': left, 'right': right, 'new': marker}[alias]
+    assert memory.pending is None
+    assert [event for event in memory.events if event[0] == 'callback'] == [
+        ('callback', '__mod__'), ('callback', '__rmod__'),
+    ]
+
+
+def test_modulo_named_slot_dispatch_reflected_subclass_precedes_forward():
+    class Left:
+        def __mod__(self, other):
+            pytest.fail('subclass reflection must be tried first')
+    marker = object()
+    class Right(Left):
+        def __rmod__(self, other):
+            return marker
+    memory = ModuloMemory()
+    assert memory.modulo(Left(), Right()) is marker
+    assert memory.events == [('callback', '__rmod__')]
+    assert memory.pending is None
+
+
+def test_modulo_named_slot_dispatch_skips_same_type_reflection():
+    class Operand:
+        def __mod__(self, other):
+            return NotImplemented
+        def __rmod__(self, other):
+            pytest.fail('same-type reflected method must not be tried')
+    memory = ModuloMemory()
+    assert memory.modulo(Operand(), Operand()) is None
+    assert memory.pending == (3, 'unsupported operand type(s) for %')
+    assert [event for event in memory.events if event[0] == 'callback'] == [('callback', '__mod__')]

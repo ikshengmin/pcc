@@ -258,6 +258,11 @@ class NativeFilesLoweringMixin:
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
+        if attr.name in ("tell", "flush", "fileno") and not expr.args:
+            # These unary helpers return a NEW owner (boxed int or None).
+            # Publish through the original Call's sink before error checks,
+            # lease retirement or disposal, just like other owned producers.
+            return self._emit_owned_unary_runtime_call(expr, "py_file_" + attr.name)
         recv = self._emit_expr(attr.obj)
         if attr.name == "seek" and 1 <= len(expr.args) <= 2:
             offset_v = self._emit_expr(expr.args[0])
@@ -273,32 +278,6 @@ class NativeFilesLoweringMixin:
                 name=self._fresh("file.seek"),
             )
             # Raises ValueError (closed file) / OSError (bad seek).
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
-        if attr.name == "tell" and not expr.args:
-            result = self.builder.call(
-                self.runtime["py_file_tell"],
-                [recv],
-                name=self._fresh("file.tell"),
-            )
-            # Raises ValueError on a closed file.
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
-        if attr.name == "flush" and not expr.args:
-            result = self.builder.call(
-                self.runtime["py_file_flush"],
-                [recv],
-                name=self._fresh("file.flush"),
-            )
-            # Raises ValueError on a closed file.
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-            return result
-        if attr.name == "fileno" and not expr.args:
-            result = self.builder.call(
-                self.runtime["py_file_fileno"],
-                [recv],
-                name=self._fresh("file.fileno"),
-            )
             self._emit_post_call_err_check(getattr(expr, "span", None))
             return result
         if attr.name == "close" and not expr.args:
