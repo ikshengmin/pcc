@@ -59,6 +59,17 @@ def estimated_task_bytes(task, observations) -> int:
     return estimate
 
 
+def minimum_task_bytes(task) -> int:
+    """Retain explicit reservations and this task's observed lower bound.
+
+    Completed peaks borrowed from other inputs and their safety margins are
+    forecasts. They cannot prove that this unmeasured task exceeds the budget.
+    An incomplete same-task peak is actual evidence and remains a floor.
+    """
+    return max(0, int(task["estimate_bytes"]),
+               int(task.get("incomplete_peak_bytes", 0)))
+
+
 def available_worker_bytes(tree_budget: int, owner_rss: int,
                            outside_owner_rss: int = 0) -> int:
     if tree_budget <= 0 or owner_rss <= 0 or outside_owner_rss < 0:
@@ -92,7 +103,7 @@ def require_task_fits(task_index: int, demand: int, available: int,
 
 
 def choose_task(pending, tasks, observations, active_reservations,
-                width: int, available: int):
+                width: int, available: int, guarded_calibration: bool = False):
     """Pick a fitting task or reserve idle capacity for a calibration.
 
     Unknown demand is not represented by a fabricated fixed worker peak. The
@@ -111,6 +122,7 @@ def choose_task(pending, tasks, observations, active_reservations,
             return index, max(available, estimated_task_bytes(tasks[index], observations)), True
     remaining = available - sum(active_reservations)
     unknown = -1
+    forecast_only = -1
     for index in pending:
         demand = estimated_task_bytes(tasks[index], observations)
         if demand == 0:
@@ -118,8 +130,15 @@ def choose_task(pending, tasks, observations, active_reservations,
                 unknown = index
         elif demand <= remaining:
             return index, demand, False
+        elif (guarded_calibration and demand > available and forecast_only < 0
+              and minimum_task_bytes(tasks[index]) <= available):
+            forecast_only = index
     if not active_reservations and unknown >= 0 and available > 0:
         return unknown, available, True
+    if not active_reservations and forecast_only >= 0 and available > 0:
+        # Keep the complete forecast visible while reserving the entire idle
+        # lane. Fresh guard accounting must supervise this calibration.
+        return forecast_only, estimated_task_bytes(tasks[forecast_only], observations), True
     return -1, 0, False
 
 

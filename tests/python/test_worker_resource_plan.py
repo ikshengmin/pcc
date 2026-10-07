@@ -112,6 +112,168 @@ def test_live_peak_growth_backs_off_until_worker_retires(tmp_path, monkeypatch):
     assert pool._HOST_WORKERS == {}
 
 
+@pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
+@pytest.mark.parametrize("case", (
+    "forecast", "calibration", "measured-limit", "no-state", "stale-state",
+))
+def test_live_forecast_keeps_exclusive_worker_under_real_guard(tmp_path, case):
+    """A real allocation may exceed its padded forecast without reaching the cap."""
+    source = Path(workers.__file__).resolve().parents[3]
+    driver = tmp_path / "live_forecast.py"
+    driver.write_text('''
+import json
+import os
+from pathlib import Path
+import shlex
+import sys
+import time
+from pcc.frontends.python import pipeline_frontend_workers as workers
+from pcc.frontends.python import worker_process_pool as pool
+from pcc.frontends.python import worker_resource_plan as policy
+
+root = Path(sys.argv[1])
+case = sys.argv[2]
+mib = 1024 ** 2
+budget = int(os.environ["PCC_WORKER_TREE_BUDGET_BYTES"])
+if case == "no-state":
+    os.environ.pop(policy.TREE_STATE_ENV)
+trace = root / "admission.tsv"
+allocated = 512 * mib if case == "measured-limit" else 300 * mib
+commands = []
+tasks = []
+for index, allocation in enumerate((allocated, 4 * mib, 4 * mib, 4 * mib)):
+    delay = 6 if case == "stale-state" and index == 0 else 0.3
+    code = (
+        "import os,time;from pathlib import Path;"
+        "from pcc.frontends.python.worker_resource_plan import publish_worker_resource as report;"
+        + "payload=bytearray(" + str(allocation) + ");"
+        + "Path(" + repr(str(root / ("started" + str(index)))) + ").write_text(str(os.getpid()));"
+        + "report('allocated');"
+    )
+    if index >= 2:
+        peer = root / ("started" + str(5 - index))
+        code += (
+            "deadline=time.monotonic()+5\\n"
+            + "while not Path(" + repr(str(peer)) + ").exists():\\n"
+            + " assert time.monotonic()<deadline;time.sleep(0.005)\\n"
+            + "os.kill(int(Path(" + repr(str(peer)) + ").read_text()),0);"
+            + "Path(" + repr(str(root / ("overlap" + str(index)))) + ").touch();"
+        )
+    code += (
+        "time.sleep(" + str(delay) + ");report('complete');"
+        + "Path(" + repr(str(root / ("completed" + str(index)))) + ").touch()"
+    )
+    commands.append(shlex.join([sys.executable, "-B", "-c", code]))
+    tasks.append({"class": "live-forecast" if index < 2 else "fitting-tail", "inputs": [4 - index],
+                  "estimate_bytes": 0 if case == "calibration" and index == 0 else 64 * mib,
+                  "report_path": str(root / ("rss" + str(index))), "restartable": True})
+    if index >= 2:
+        tasks[index]["depends_on"] = 1
+if case == "calibration":
+    tasks[1]["depends_on"] = 0
+
+if case == "stale-state":
+    # Freeze an unmodified real snapshot after promotion. The guard itself
+    # keeps enforcing its original cap while the scheduler loses freshness.
+    frozen = root / "frozen-tree.tsv"
+    original_read = policy.read_tree_state
+    original_event = pool._resource_event
+    def read_state(path, tree_budget, owner_pid, active_pids, not_before=0.0):
+        return original_read(str(frozen) if frozen.exists() else path,
+                             tree_budget, owner_pid, active_pids, not_before)
+    def event(*args):
+        original_event(*args)
+        if args[1] == "exclusive" and not frozen.exists():
+            frozen.write_bytes(Path(os.environ[policy.TREE_STATE_ENV]).read_bytes())
+    policy.read_tree_state = read_state
+    pool._resource_event = event
+
+# Wait for the actual first allocation before returning its owned handle.
+# This makes the live forecast cross before the independent tail can launch.
+original_start = pool._start_resource_worker
+def start(specs, index):
+    pid = original_start(specs, index)
+    if index == 0:
+        deadline = time.monotonic() + 5
+        while not Path(tasks[index]["report_path"]).exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+    return pid
+pool._start_resource_worker = start
+observations = []
+error = None
+try:
+    pool.run_resource_worker_processes(commands, tasks, 2, budget,
+                                      observations=observations, trace_path=str(trace))
+except policy.WorkerMemoryError as exc:
+    error = str(exc)
+rows = [line.split("\\t") for line in trace.read_text().splitlines()]
+record = {"case": case, "budget": budget, "error": error, "events": rows,
+          "observations": observations, "owner_peak": workers._coordinator_rss_bytes()}
+(root / "outcome.json").write_text(json.dumps(record, indent=2) + "\\n")
+assert pool._HOST_WORKERS == {}, record
+for marker in root.glob("started*"):
+    try:
+        os.kill(int(marker.read_text()), 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError("worker survived retirement")
+if case in ("forecast", "calibration"):
+    assert error is None, record
+    assert all((root / ("completed" + str(index))).exists() for index in range(4)), record
+    assert (root / "overlap2").exists() and (root / "overlap3").exists(), record
+    assert len([row for row in rows if row[0] in ("start", "calibrate")]) == 4, record
+    assert not any(row[0] == "cancel" for row in rows), record
+    retired = next(index for index, row in enumerate(rows) if row[:2] == ["retire", "0"])
+    tail = next(index for index, row in enumerate(rows)
+                if row[1] == "1" and row[0] in ("start", "calibrate"))
+    assert retired < tail, record
+    assert rows[tail][0] == "calibrate" and int(rows[tail][3]) > int(rows[tail][4]), record
+    first = rows[0]
+    assert observations[0][2] > 300 * mib, record
+    assert policy.peak_reservation(observations[0][2]) > int(first[4]), record
+    if case == "forecast":
+        promoted = next(row for row in rows if row[0] == "exclusive")
+        assert int(promoted[3]) == policy.peak_reservation(int(promoted[5])), record
+        assert int(promoted[3]) > int(promoted[4]), record
+    else:
+        assert first[0] == "calibrate", record
+elif case == "measured-limit":
+    assert error and "live worker measured peak exceeds safe worker space" in error, record
+    assert not (root / "completed0").exists() and not (root / "started1").exists(), record
+elif case == "no-state":
+    assert error and "worker memory budget cannot admit" in error, record
+    assert not (root / "completed0").exists() and not (root / "started1").exists(), record
+else:
+    assert error and "missing, stale, or incompatible" in error, record
+    assert any(row[0] == "exclusive" for row in rows), record
+    assert not (root / "completed0").exists() and not (root / "started1").exists(), record
+print("LIVE_FORECAST_OK " + case)
+''')
+    guard = tmp_path / "guard.json"
+    env = dict(os.environ)
+    env.pop("LC_ALL", None)
+    env["PYTHONPATH"] = str(source)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PCC_NO_AUTO_PCC1"] = "1"
+    env["PCC_TEST_NO_NATIVE_PROVISIONING"] = "1"
+    result = run_process_group_timeout([
+        sys.executable, "-B", str(source / "scripts" / "run_process_tree_sample.py"),
+        "--result", str(guard), "--samples", str(tmp_path / "samples.tsv"),
+        "--stdout", str(tmp_path / "driver.stdout"), "--stderr", str(tmp_path / "driver.stderr"),
+        "--cwd", str(source), "--timeout", "12", "--interval", "0.01",
+        "--no-performance-lock", "--max-tree-rss-bytes", str(640 * MIB),
+        "--", sys.executable, "-B", str(driver), str(tmp_path), case,
+    ], env=env, timeout=15)
+    assert result.returncode == 0, (result, (tmp_path / "driver.stderr").read_text())
+    receipt = json.loads(guard.read_text())
+    assert receipt["status"] == "COMPLETE" and receipt["returncode"] == 0
+    assert receipt["max_tree_rss_bytes"] == 640 * MIB
+    assert 0 < receipt["peak_tree_rss_bytes"] < 640 * MIB
+    assert (tmp_path / "driver.stdout").read_text() == "LIVE_FORECAST_OK " + case + "\n"
+
+
 def test_failure_retires_running_peers_and_does_not_launch_tail(tmp_path, monkeypatch):
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
     slow, tail = tmp_path / "slow", tmp_path / "tail"

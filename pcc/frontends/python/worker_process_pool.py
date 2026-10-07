@@ -137,7 +137,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     from pcc.frontends.python.worker_resource_plan import (
         RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, STATE_MAX_AGE_SECONDS, TREE_STATE_ENV,
         WorkerMemoryError, available_worker_bytes, choose_task,
-        estimated_task_bytes, peak_reservation, read_tree_state,
+        estimated_task_bytes, minimum_task_bytes, peak_reservation, read_tree_state,
         read_worker_resource, require_task_fits,
     )
 
@@ -226,15 +226,39 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 active = updated
             if len(active) == 1 and active[0][4] > 0:
                 measured_demand = peak_reservation(active[0][4])
-                if active[0][3] and measured_demand > available:
-                    raise WorkerMemoryError(
-                        "exclusive calibration exceeded safe worker space: task=" + str(active[0][0])
-                        + " observed_peak_so_far_bytes=" + str(active[0][4])
-                        + " available_worker_bytes=" + str(available)
-                        + " budget=" + str(tree_budget)
-                        + "; full-task peak is unknown; tree cap is unchanged"
-                    )
-                require_task_fits(active[0][0], measured_demand, available, tree_budget)
+                if measured_demand > available and state is not None:
+                    index, pid, reservation, exclusive, peak = active[0]
+                    # A padded forecast controls admission of peers; it is
+                    # not a hard RSS limit for an already running worker.
+                    # Keep the forecast and hold this worker exclusively.
+                    # Only fresh guard accounting can authorize continuing;
+                    # measured peak, owner/outside reserve and fixed headroom
+                    # must still fit, and the outer aggregate cap is unchanged.
+                    if state[1].get(pid, 0) <= 0:
+                        raise WorkerMemoryError("live worker subtree RSS is unavailable: task=" + str(index))
+                    if peak > available:
+                        raise WorkerMemoryError(
+                            "live worker measured peak exceeds safe worker space: task=" + str(index)
+                            + " observed_peak_so_far_bytes=" + str(peak)
+                            + " available_worker_bytes=" + str(available)
+                            + " budget=" + str(tree_budget)
+                            + "; full-task peak is unknown; tree cap is unchanged"
+                        )
+                    reservation = max(reservation, measured_demand)
+                    active = [(index, pid, reservation, True, peak)]
+                    if not exclusive:
+                        _resource_event(trace_path, "exclusive", index, pid,
+                                        reservation, available, peak)
+                else:
+                    if active[0][3] and measured_demand > available:
+                        raise WorkerMemoryError(
+                            "exclusive calibration exceeded safe worker space: task=" + str(active[0][0])
+                            + " observed_peak_so_far_bytes=" + str(active[0][4])
+                            + " available_worker_bytes=" + str(available)
+                            + " budget=" + str(tree_budget)
+                            + "; full-task peak is unknown; tree cap is unchanged"
+                        )
+                    require_task_fits(active[0][0], measured_demand, available, tree_budget)
             # Reservations can increase while peers are alive. Do not merely
             # stop launching and wait for the outer breaker to kill the tree:
             # retire a restartable peer and queue it once for exclusive
@@ -260,7 +284,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 pending.insert(0, index)
             if not preflight_done:
                 for index in pending:
-                    demand = estimated_task_bytes(tasks[index], observations)
+                    demand = (minimum_task_bytes(tasks[index]) if state is not None
+                              else estimated_task_bytes(tasks[index], observations))
                     if demand:
                         require_task_fits(index, demand, available, tree_budget)
                 preflight_done = True
@@ -288,6 +313,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                     ready.append(item)
                 index, demand, exclusive = choose_task(
                     ready, tasks, observations, reservations, width, available,
+                    guarded_calibration=state is not None,
                 )
                 if index < 0:
                     if not active:
@@ -298,7 +324,9 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                                           available, tree_budget)
                     _resource_event(trace_path, "backoff", -1, 0, sum(reservations), available, 0)
                     break
-                require_task_fits(index, demand, available, tree_budget)
+                admission_demand = (max(1, minimum_task_bytes(tasks[index]))
+                                    if exclusive and state is not None else demand)
+                require_task_fits(index, admission_demand, available, tree_budget)
                 report_path = str(tasks[index]["report_path"])
                 if os.path.exists(report_path):
                     os.unlink(report_path)
