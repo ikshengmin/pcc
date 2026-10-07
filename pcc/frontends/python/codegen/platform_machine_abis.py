@@ -9,6 +9,9 @@ PLATFORM_MACHINE_ABIS = {
     # Owned C startup/lifecycle: exact finite raw-pointer and i32 boundaries.
     "exit": ("(c_int32,)", "c_void"),
     "fflush": ("(c_ptr,)", "c_int32"),
+    # Standard caller-buffer getcwd: borrowed raw buffer or NULL with errno.
+    # Linux/Windows provide owned leaves; Darwin uses the named libSystem ABI.
+    "getcwd": ("(c_ptr,c_size_t)", "c_ptr"),
     'LockFileEx': ('(c_ptr,c_int,c_int,c_int,c_int,c_ptr)', 'c_int'),
     'UnlockFileEx': ('(c_ptr,c_int,c_int,c_int,c_ptr)', 'c_int'),
     "CompareStringOrdinal": ("(c_ptr,c_int,c_ptr,c_int,c_int)", "c_int"),

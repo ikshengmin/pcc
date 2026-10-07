@@ -6,7 +6,7 @@ File descriptors above the three standard streams are native HANDLE values.
 
 from pcc import i64
 from pcc.extern import (
-    c_abi_export, c_abi_typed_export, c_int, c_int64, c_ptr, c_void, extern,
+    c_abi_export, c_abi_typed_export, c_int, c_int32, c_int64, c_ptr, c_void, extern,
 )
 from pcc.unsafe import (
     int_to_ptr, ptr_to_int, ptr_add, ptr_is_null, null, stack_alloc,
@@ -29,7 +29,7 @@ FormatMessageW = extern("FormatMessageW", (c_int, c_ptr, c_int, c_int, c_ptr, c_
 GetConsoleMode = extern("GetConsoleMode", (c_ptr, c_ptr), c_int)
 BCryptGenRandom = extern("BCryptGenRandom", (c_ptr, c_ptr, c_int, c_int), c_int)
 platform_abort = extern("pcc_platform_abort", (), c_void)
-pcc_errno_set = extern("pcc_errno_set", (c_int,), c_void)
+pcc_errno_set = extern("pcc_errno_set", (c_int32,), c_void)
 GetStdHandle = extern("GetStdHandle", (c_int,), c_ptr)
 ReadFile = extern("ReadFile", (c_ptr, c_ptr, c_int, c_ptr, c_ptr), c_int)
 WriteFile = extern("WriteFile", (c_ptr, c_ptr, c_int, c_ptr, c_ptr), c_int)
