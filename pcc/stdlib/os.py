@@ -1,11 +1,14 @@
-"""pcc.stdlib.os — skeleton replacement for ``os`` / ``os.path``.
+"""Ordinary ``os`` and ``os.path`` providers over the owned runtime ABI.
 
-Minimal surface: env, getcwd, listdir, exists, the ``os.path``
-helpers pcc uses (join, basename, dirname, exists). Heavy lifting
-delegates to extern libc.
+The same callables serve managed modules, saved imports and dynamic receivers.
+Native calls use the existing target-aware runtime helpers. Interpreted source
+use follows the host ``os`` module, as the ``time`` provider does.
 """
 
 from __future__ import annotations
+
+import os as _native_os
+import sys as _native_sys
 
 from pcc.unsafe import (
     load_i32, ptr_is_null, stack_alloc, store_i32, strlen, sync_file,
@@ -36,6 +39,59 @@ _environ_contains = extern("py_os_environ_contains", (c_obj,), c_int)
 _environ_snapshot = extern("py_os_environ_snapshot", (), c_obj)
 _module_attribute = extern("py_module_attr_get", (c_str, c_str), c_obj)
 
+# c_obj results transfer an independent owner (or the immortal None). Keep
+# each result in an ordinary local until the pending exception is checked.
+_os_platform = extern("py_sys_platform_str", (), c_obj)
+_os_getcwd = extern("py_os_getcwd_str", (), c_obj)
+_os_cpu_count = extern("py_os_cpu_count", (), c_obj)
+_os_uname = extern("py_os_uname", (), c_obj)
+_os_listdir = extern("py_os_listdir", (c_obj,), c_obj)
+_os_makedirs = extern("py_os_makedirs", (c_obj, c_int64, c_int), c_obj)
+_os_kill = extern("py_os_kill", (c_obj, c_obj), c_obj)
+_os_access = extern("py_os_access", (c_obj, c_int), c_int)
+_os_chmod = extern("py_os_chmod", (c_obj, c_int64), c_obj)
+_os_write = extern("py_os_write", (c_int, c_obj), c_int)
+_os_unlink = extern("py_os_unlink", (c_obj,), c_obj)
+_os_rmdir = extern("py_os_rmdir", (c_obj,), c_obj)
+_os_replace = extern("py_os_replace", (c_obj, c_obj), c_obj)
+_os_urandom = extern("py_os_urandom", (c_obj,), c_obj)
+_os_putenv = extern("py_os_putenv", (c_obj, c_obj), c_obj)
+_index_value = extern("py_obj_index", (c_obj,), c_obj)
+_errno_get = extern("pcc_errno_get", (), c_int)
+_http_download = extern("py_http_download_to_file", (c_obj, c_obj), c_int64)
+_file_digest = extern("py_sha256_file_hex", (c_obj,), c_obj)
+_file_digest_bounded = extern("py_sha256_file_hex_bounded", (c_obj, c_int64), c_obj)
+
+_path_split = extern("py_os_path_split", (c_obj,), c_obj)
+_path_isfile = extern("py_os_path_isfile", (c_obj,), c_int)
+_path_isdir = extern("py_os_path_isdir", (c_obj,), c_int)
+_path_getmtime = extern("py_os_path_getmtime", (c_obj,), c_obj)
+_path_getsize = extern("py_os_path_getsize", (c_obj,), c_obj)
+_path_abspath = extern("py_os_path_abspath", (c_obj,), c_obj)
+_path_commonprefix = extern("py_os_path_commonprefix", (c_obj,), c_obj)
+_path_normcase = extern("py_os_path_normcase", (c_obj,), c_obj)
+_path_splitdrive = extern("py_os_path_splitdrive", (c_obj,), c_obj)
+_path_expanduser = extern("py_os_path_expanduser", (c_obj,), c_obj)
+_path_expandvars = extern("py_os_path_expandvars", (c_obj,), c_obj)
+_path_relpath = extern("py_os_path_relpath", (c_obj, c_obj), c_obj)
+_path_realpath = extern("py_os_path_realpath", (c_obj,), c_obj)
+
+
+def _target_platform_name():
+    if _native_sys.implementation.name != "pcc":
+        return _native_sys.platform
+    result = _os_platform()
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise MemoryError('owned target platform result allocation failed')
+    return result
+
+
+# Platform ABI choices describe the executing target; later user writes to
+# sys.platform must not select a different kernel error convention.
+_platform_name = _target_platform_name()
+
 
 # POSIX file-access constants.
 F_OK: int = 0
@@ -43,8 +99,15 @@ R_OK: int = 4
 W_OK: int = 2
 X_OK: int = 1
 
-sep: str = "/"
-linesep: str = "\n"
+name: str = "nt" if _platform_name == "win32" else "posix"
+sep: str = "\\" if _platform_name == "win32" else "/"
+linesep: str = "\r\n" if _platform_name == "win32" else "\n"
+altsep = "/" if _platform_name == "win32" else None
+pathsep: str = ";" if _platform_name == "win32" else ":"
+curdir: str = "."
+pardir: str = ".."
+extsep: str = "."
+devnull: str = "nul" if _platform_name == "win32" else "/dev/null"
 
 
 def getpid() -> int:
@@ -242,6 +305,331 @@ def fspath(path):
     return result
 
 
+def _native_path_text(value):
+    # The legacy lexical/file helpers consume text, not repr(path). Convert
+    # the protocol once, before entering helpers that may read their input
+    # more than once. islink has its own complete bytes/PathLike boundary.
+    result = fspath(value)
+    if isinstance(result, bytes):
+        raise NotImplementedError("owned OS/path text helper does not support bytes paths")
+    return result
+
+
+def _native_file_path(value):
+    result = _native_path_text(value)
+    if "\0" in result:
+        raise ValueError("embedded null byte")
+    return result
+
+
+def _native_integer(value):
+    result = _index_value(value)
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise MemoryError('owned integer index result allocation failed')
+    return result
+
+
+def _native_c_int(value):
+    integer = _native_integer(value)
+    overflow = stack_alloc(4)
+    store_i32(overflow, 0, 0)
+    number = _fd_integer(integer, overflow)
+    if _error_pending():
+        raise
+    if load_i32(overflow, 0) or number < -2147483648 or number > 2147483647:
+        raise OverflowError("Python int too large to convert to C int")
+    return number
+
+
+def _os_error(number):
+    buffer = stack_alloc(256)
+    status = _errno_message(number, buffer, 256)
+    if status < 0:
+        raise OSError(number, "operating system call failed")
+    message = _new_text(buffer, strlen(buffer))
+    if _error_pending():
+        raise
+    raise OSError(number, message)
+
+
+def getcwd():
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.getcwd()
+    result = _os_getcwd()
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise RuntimeError("owned os.getcwd helper returned NULL without an exception")
+    return result
+
+
+def cpu_count():
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.cpu_count()
+    result = _os_cpu_count()
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise MemoryError('owned os.cpu_count result allocation failed')
+    return result if result > 0 else None
+
+
+class uname_result(tuple):
+    __slots__ = ()
+    n_fields = 5
+    n_sequence_fields = 5
+    n_unnamed_fields = 0
+
+    @property
+    def sysname(self):
+        return self[0]
+
+    @property
+    def nodename(self):
+        return self[1]
+
+    @property
+    def release(self):
+        return self[2]
+
+    @property
+    def version(self):
+        return self[3]
+
+    @property
+    def machine(self):
+        return self[4]
+
+
+def uname():
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.uname()
+    result = _os_uname()
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise MemoryError('owned os.uname result allocation failed')
+    return uname_result(result)
+
+
+def listdir(path="."):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.listdir(path)
+    if path is None:
+        path = "."
+    if isinstance(path, int):
+        raise NotImplementedError("owned os.listdir directory descriptors are not implemented")
+    value = _native_file_path(path)
+    result = _os_listdir(value)
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise RuntimeError('owned os.listdir helper returned NULL without an exception')
+    return result
+
+
+def makedirs(name, mode=0o777, exist_ok=False):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.makedirs(name, mode, exist_ok)
+    value = _native_file_path(name)
+    permission = _native_c_int(mode)
+    result = _os_makedirs(value, permission, bool(exist_ok))
+    if _error_pending():
+        raise
+    return result
+
+
+def kill(pid, signal, /):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.kill(pid, signal)
+    # The owned helper implements __index__, C-width checking and the
+    # ProcessLookupError/PermissionError distinctions for both live operands.
+    result = _os_kill(pid, signal)
+    if _error_pending():
+        raise
+    return result
+
+
+def access(path, mode, *, dir_fd=None, effective_ids=False, follow_symlinks=True):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.access(path, mode, dir_fd=dir_fd,
+                                 effective_ids=effective_ids,
+                                 follow_symlinks=follow_symlinks)
+    if dir_fd is not None or effective_ids or not follow_symlinks:
+        raise NotImplementedError("owned os.access only supports the default path lookup")
+    value = _native_file_path(path)
+    permission = _native_c_int(mode)
+    result = _os_access(value, permission)
+    if _error_pending():
+        raise
+    return result != 0
+
+
+def chmod(path, mode, *, dir_fd=None, follow_symlinks=True):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.chmod(path, mode, dir_fd=dir_fd,
+                                follow_symlinks=follow_symlinks)
+    if dir_fd is not None or not follow_symlinks or isinstance(path, int):
+        raise NotImplementedError("owned os.chmod only supports the default path lookup")
+    value = _native_file_path(path)
+    permission = _native_c_int(mode)
+    result = _os_chmod(value, permission)
+    if _error_pending():
+        raise
+    return result
+
+
+def write(fd, data, /):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.write(fd, data)
+    descriptor = _native_c_int(fd)
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise TypeError("a bytes-like object is required")
+    result = _os_write(descriptor, data)
+    if _error_pending():
+        raise
+    while result < 0:
+        # The existing write substrate uses the named libc call on Darwin;
+        # Linux/Windows return the portable negative-errno status directly.
+        number = _errno_get() if _platform_name == "darwin" else -result
+        if number != 4:
+            _os_error(number)
+        _thread_safepoint()
+        if _error_pending():
+            raise
+        result = _os_write(descriptor, data)
+        if _error_pending():
+            raise
+    return result
+
+
+def unlink(path, *, dir_fd=None):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.unlink(path, dir_fd=dir_fd)
+    if dir_fd is not None:
+        raise NotImplementedError("owned os.unlink dir_fd is not implemented")
+    result = _os_unlink(_native_file_path(path))
+    if _error_pending():
+        raise
+    return result
+
+
+def remove(path, *, dir_fd=None):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.remove(path, dir_fd=dir_fd)
+    if dir_fd is not None:
+        raise NotImplementedError("owned os.remove dir_fd is not implemented")
+    result = _os_unlink(_native_file_path(path))
+    if _error_pending():
+        raise
+    return result
+
+
+def rmdir(path, *, dir_fd=None):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.rmdir(path, dir_fd=dir_fd)
+    if dir_fd is not None:
+        raise NotImplementedError("owned os.rmdir dir_fd is not implemented")
+    result = _os_rmdir(_native_file_path(path))
+    if _error_pending():
+        raise
+    return result
+
+
+def replace(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.replace(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+    if src_dir_fd is not None or dst_dir_fd is not None:
+        raise NotImplementedError("owned os.replace directory descriptors are not implemented")
+    source = _native_file_path(src)
+    destination = _native_file_path(dst)
+    result = _os_replace(source, destination)
+    if _error_pending():
+        raise
+    return result
+
+
+def rename(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.rename(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+    if src_dir_fd is not None or dst_dir_fd is not None:
+        raise NotImplementedError("owned os.rename directory descriptors are not implemented")
+    if _platform_name == "win32":
+        raise NotImplementedError("owned os.rename destination-exists semantics on Windows are not implemented")
+    source = _native_file_path(src)
+    destination = _native_file_path(dst)
+    result = _os_replace(source, destination)
+    if _error_pending():
+        raise
+    return result
+
+
+def urandom(size, /):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.urandom(size)
+    count = _native_integer(size)
+    if count < 0:
+        raise ValueError("negative argument not allowed")
+    if count > 9223372036854775807:
+        raise OverflowError("Python int too large to convert to C ssize_t")
+    result = _os_urandom(count)
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise MemoryError("could not allocate random bytes")
+    return result
+
+
+def putenv(key, value, /):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.putenv(key, value)
+    result = _os_putenv(key, value)
+    if _error_pending():
+        raise
+    return result
+
+
+def unsetenv(key, /):
+    if _native_sys.implementation.name != "pcc":
+        return _native_os.unsetenv(key)
+    result = _environ_unset(key)
+    if _error_pending():
+        raise
+    return result
+
+
+def _pcc_http_download_to_file(url, destination):
+    target = _native_file_path(destination)
+    result = _http_download(url, target)
+    if _error_pending():
+        raise
+    return result
+
+
+def _pcc_sha256_file_hex(path):
+    result = _file_digest(_native_file_path(path))
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise MemoryError('owned os._pcc_sha256_file_hex result allocation failed')
+    return result
+
+
+def _pcc_sha256_file_hex_bounded(path, max_bytes):
+    value = _native_file_path(path)
+    limit = _native_integer(max_bytes)
+    if limit < -9223372036854775808 or limit > 9223372036854775807:
+        raise OverflowError("maximum file size does not fit in int64")
+    result = _file_digest_bounded(value, limit)
+    if _error_pending():
+        raise
+    if ptr_is_null(result):
+        raise MemoryError('owned os._pcc_sha256_file_hex_bounded result allocation failed')
+    return result
+
+
 def walk(top, topdown=True, onerror=None, followlinks=False):
     """Yield owned directory rows, retaining the caller's mutable dirnames."""
     # This is an ordinary generator: path conversion and directory access
@@ -289,7 +677,15 @@ def walk(top, topdown=True, onerror=None, followlinks=False):
 
 
 class _path:
-    """``os.path`` namespace."""
+    """The mutable path namespace, backed by ordinary saved-callable values."""
+
+    sep = sep
+    altsep = altsep
+    pathsep = pathsep
+    curdir = curdir
+    pardir = pardir
+    extsep = extsep
+    devnull = devnull
 
     @staticmethod
     def join(*parts: str) -> str:
@@ -308,12 +704,14 @@ class _path:
                 out = out + "/" + p
         return out
 
+
     @staticmethod
     def basename(p: str) -> str:
         i = len(p) - 1
         while i >= 0 and p[i] != "/":
             i = i - 1
         return p[i + 1 :]
+
 
     @staticmethod
     def dirname(p: str) -> str:
@@ -329,9 +727,19 @@ class _path:
             head = head.rstrip("/")
         return head
 
+
     @staticmethod
-    def exists(p: str) -> bool:
-        return exists(p)
+    def split(p):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.split(p)
+        value = _native_path_text(p)
+        result = _path_split(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.split result allocation failed')
+        return result
+
 
     @staticmethod
     def splitext(p: str):
@@ -348,6 +756,20 @@ class _path:
         if dot <= slash + 1:
             return (p, "")
         return (p[:dot], p[dot:])
+
+
+    @staticmethod
+    def normcase(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.normcase(path)
+        value = _native_path_text(path)
+        result = _path_normcase(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.normcase result allocation failed')
+        return result
+
 
     @staticmethod
     def normpath(p: str) -> str:
@@ -370,9 +792,139 @@ class _path:
             return "/" if absolute else "."
         return out
 
+
+    @staticmethod
+    def splitdrive(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.splitdrive(path)
+        value = _native_path_text(path)
+        result = _path_splitdrive(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.splitdrive result allocation failed')
+        return result
+
+
+    @staticmethod
+    def expanduser(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.expanduser(path)
+        value = _native_path_text(path)
+        result = _path_expanduser(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.expanduser result allocation failed')
+        return result
+
+
+    @staticmethod
+    def expandvars(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.expandvars(path)
+        value = _native_path_text(path)
+        result = _path_expandvars(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.expandvars result allocation failed')
+        return result
+
+
+    @staticmethod
+    def abspath(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.abspath(path)
+        value = _native_path_text(path)
+        result = _path_abspath(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise RuntimeError('owned os.path.abspath failed without an OS or allocation error status')
+        return result
+
+
+    @staticmethod
+    def exists(p: str) -> bool:
+        return exists(p)
+
+
+    @staticmethod
+    def isfile(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.isfile(path)
+        if isinstance(path, int):
+            raise NotImplementedError("owned os.path.isfile file descriptors are not implemented")
+        try:
+            value = _native_file_path(path)
+        except (OSError, ValueError):
+            return False
+        result = _path_isfile(value)
+        if _error_pending():
+            raise
+        return result != 0
+
+
+    @staticmethod
+    def isdir(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.isdir(path)
+        if isinstance(path, int):
+            raise NotImplementedError("owned os.path.isdir file descriptors are not implemented")
+        try:
+            value = _native_file_path(path)
+        except (OSError, ValueError):
+            return False
+        result = _path_isdir(value)
+        if _error_pending():
+            raise
+        return result != 0
+
+
     @staticmethod
     def isabs(p: str) -> bool:
         return p.startswith("/")
+
+    @staticmethod
+    def islink(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.islink(path)
+        # This ordinary-object ABI owns fspath, bytes paths and predicate
+        # suppression; it transfers a bool or the original exception object.
+        result = _path_islink_result(path)
+        if ptr_is_null(result):
+            raise RuntimeError("owned os.path.islink helper returned NULL without an exception")
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+    @staticmethod
+    def getmtime(filename):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.getmtime(filename)
+        value = _native_file_path(filename)
+        result = _path_getmtime(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.getmtime result allocation failed')
+        return result
+
+
+    @staticmethod
+    def getsize(filename):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.getsize(filename)
+        value = _native_file_path(filename)
+        result = _path_getsize(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.getsize result allocation failed')
+        return result
+
 
     @staticmethod
     def commonpath(paths) -> str:
@@ -391,6 +943,45 @@ class _path:
             prefix.append(part)
             i += 1
         return "/".join(prefix)
+
+    @staticmethod
+    def commonprefix(m):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.commonprefix(m)
+        values = [_native_path_text(value) for value in m]
+        result = _path_commonprefix(values)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.commonprefix result allocation failed')
+        return result
+
+    @staticmethod
+    def relpath(path, start=None):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.relpath(path, start)
+        value = _native_path_text(path)
+        origin = "." if start is None else _native_path_text(start)
+        result = _path_relpath(value, origin)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise RuntimeError('owned os.path.relpath failed without an OS or allocation error status')
+        return result
+
+    @staticmethod
+    def realpath(filename, *, strict=False):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.realpath(filename, strict=strict)
+        if strict:
+            raise NotImplementedError("owned os.path.realpath strict lookup is not implemented")
+        value = _native_file_path(filename)
+        result = _path_realpath(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise RuntimeError('owned os.path.realpath failed without an OS or allocation error status')
+        return result
 
 
 path = _path()

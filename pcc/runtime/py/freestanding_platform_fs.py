@@ -6,7 +6,7 @@ libc dependency there.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export
+from pcc.extern import c_abi_export, c_ptr, c_size_t, extern
 from pcc.unsafe import (
     windows_real_path, target_sys_platform,
     directory_open, directory_next, directory_error, directory_close,
@@ -15,7 +15,6 @@ from pcc.unsafe import (
     access,
     atomic_rmw_i64,
     define_global_i64,
-    getcwd,
     getpid,
     open_file_flags,
     global_addr,
@@ -34,6 +33,8 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+_getcwd_c = extern("getcwd", (c_ptr, c_size_t), c_ptr)
+
 
 define_global_i64("pcc_platform_mkdtemp_counter", 0)
 
@@ -46,7 +47,9 @@ def pcc_platform_access(path, mode: i64) -> i64:
 
 @c_abi_export("pcc_platform_getcwd")
 def pcc_platform_getcwd(buffer, size: i64):
-    return getcwd(buffer, size)
+    # A named standard ABI call reaches the owned Linux/Windows leaf or
+    # libSystem on Darwin. Its NULL result has a real errno status.
+    return _getcwd_c(buffer, size)
 
 
 @c_abi_export("pcc_platform_stat_kind")
@@ -118,7 +121,7 @@ def pcc_platform_realpath(path, output, size: i64):
         if _copy_cstr(pending, path, 8192) < 0:
             return null()
     else:
-        if ptr_is_null(getcwd(pending, 8192)):
+        if ptr_is_null(_getcwd_c(pending, 8192)):
             return null()
         cwd_len = _bounded_cstr_len(pending, 8192)
         if cwd_len < 0 or cwd_len + 2 >= 8192:

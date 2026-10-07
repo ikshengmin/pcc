@@ -185,6 +185,177 @@ def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path
     assert pool._HOST_WORKERS == {}
 
 
+@pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
+def test_progressive_retry_drains_peers_then_restores_concurrency(tmp_path, monkeypatch):
+    monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    child = tmp_path / "progressive.py"
+    child.write_text("""
+import os
+from pathlib import Path
+import sys
+import time
+from pcc.frontends.python.worker_resource_plan import (
+    RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, publish_worker_resource,
+)
+
+root = Path(sys.argv[1])
+index = int(sys.argv[2])
+growth = int(sys.argv[3])
+deadline = time.monotonic() + 6
+
+def wait_for(predicate):
+    while not predicate():
+        assert time.monotonic() < deadline, (index, "coordination timed out")
+        time.sleep(0.005)
+
+def exists(name):
+    return (root / name).exists()
+
+def seen(event, number):
+    trace = root / "progressive.tsv"
+    return trace.exists() and any(
+        line.split("\\t")[:2] == [event, str(number)]
+        for line in trace.read_text().splitlines()
+    )
+
+count = root / ("attempts" + str(index))
+attempt = int(count.read_text()) + 1 if count.exists() else 1
+count.write_text(str(attempt))
+record = str(os.getpid()) + "\\t" + os.environ[RESOURCE_TOKEN_ENV]
+(root / ("started." + str(index) + "." + str(attempt))).write_text(record)
+
+def overlap(name, peers):
+    records = [root / ("started." + str(peer) + ".1") for peer in peers]
+    wait_for(lambda: all(path.exists() for path in records))
+    pids = [int(path.read_text().split("\\t")[0]) for path in records]
+    for pid in pids:
+        os.kill(pid, 0)
+    (root / name).write_text(" ".join(str(pid) for pid in pids))
+
+payloads = [bytearray(4 * 1024 ** 2)]
+if index == 0:
+    wait_for(lambda: exists("first-phase"))
+    overlap("initial-overlap0", [0, 1])
+    wait_for(lambda: exists("initial-overlap1"))
+    payloads.append(bytearray(growth))
+    publish_worker_resource("leader-grown")
+    wait_for(lambda: seen("cancel", 1))
+    time.sleep(0.15)
+elif index == 1 and attempt == 1:
+    publish_worker_resource("first-phase")
+    (root / "first-phase").touch()
+    overlap("initial-overlap1", [0, 1])
+    wait_for(lambda: False)
+elif index == 1:
+    publish_worker_resource("retry-first-phase")
+    time.sleep(0.08)
+    payloads.append(bytearray(growth))
+    publish_worker_resource("retry-second-phase")
+    (root / "second-phase").write_text(str(time.monotonic()))
+    time.sleep(0.2)
+else:
+    # Old admission starts task 2 beside the draining leader, then admits
+    # the retry beside task 2. Keep task 2's report until the leader retires
+    # so only the retry's later growth can cause the second cancellation.
+    wait_for(lambda: seen("retire", 0))
+    publish_worker_resource("tail-small")
+    overlap("restored-overlap" + str(index), [2, 3])
+    wait_for(lambda: exists("restored-overlap" + str(5 - index)))
+    time.sleep(0.05)
+
+publish_worker_resource("complete")
+(root / ("complete." + str(index) + "." + str(attempt))).write_text(
+    Path(os.environ[RESOURCE_REPORT_ENV]).read_text()
+)
+""")
+    owner = workers._coordinator_rss_bytes()
+    startup_peak = max(owner, workers._worker_peak_rss_bytes())
+    growth = startup_peak + 128 * MIB
+    available = 2 * policy.peak_reservation(startup_peak + 32 * MIB) + 32 * MIB
+    budget = owner + policy.RSS_HEADROOM_BYTES + available
+    (tmp_path / "configured-budget").write_text(str(budget))
+    tasks = [task(tmp_path / ("rss" + str(index)), estimate=8 * MIB,
+                  inputs=(4 - index,), execution_class="host:progressive:" + str(index))
+             for index in range(4)]
+    commands = [shlex.join([sys.executable, "-B", str(child), str(tmp_path),
+                           str(index), str(growth)]) for index in range(4)]
+    trace = tmp_path / "progressive.tsv"
+    observations = []
+    reaped = set()
+    original_retire = pool._retire_resource_worker
+    original_killpg = os.killpg
+
+    def record_retire(pid):
+        original_retire(pid)
+        reaped.add(pid)
+
+    def reject_signal_after_reap(pid, number):
+        assert pid not in reaped
+        return original_killpg(pid, number)
+
+    monkeypatch.setattr(pool, "_retire_resource_worker", record_retire)
+    monkeypatch.setattr(os, "killpg", reject_signal_after_reap)
+    pool.run_resource_worker_processes(commands, tasks, 2, budget,
+                                      observations=observations, trace_path=str(trace))
+    rows = [line.split("\t") for line in trace.read_text().splitlines()]
+    cancelled = [row for row in rows if row[0] == "cancel"]
+    assert len(cancelled) == 1 and cancelled[0][1] == "1"
+    retry_starts = [row for row in rows if row[:2] == ["start", "1"]]
+    assert len(retry_starts) == 2
+    events = {(row[0], row[1]): row for row in rows if row[0] in ("start", "retire")}
+    assert float(events["retire", "0"][6]) < float(retry_starts[1][6])
+    assert int(retry_starts[1][3]) == int(retry_starts[1][4])
+    assert float(events["retire", "1"][6]) < float(events["start", "2"][6])
+    assert float(events["start", "3"][6]) < float(events["retire", "2"][6])
+    assert float(cancelled[0][6]) > float(retry_starts[0][6])
+    assert float(retry_starts[1][6]) < float((tmp_path / "second-phase").read_text())
+    assert [int((tmp_path / ("attempts" + str(index))).read_text())
+            for index in range(4)] == [1, 2, 1, 1]
+    first_attempt = (tmp_path / "started.1.1").read_text().split("\t")
+    retry_attempt = (tmp_path / "started.1.2").read_text().split("\t")
+    assert first_attempt[1] != retry_attempt[1]
+    assert cancelled[0][2] == first_attempt[0]
+    assert not (tmp_path / "complete.1.1").exists()
+    completed_report = policy.read_worker_resource(
+        str(tmp_path / "complete.1.2"), int(retry_attempt[0]), retry_attempt[1],
+    )
+    assert completed_report is not None and completed_report[0] == "complete"
+    assert completed_report[2] > int(cancelled[0][5]) > 0
+    assert tasks[1]["incomplete_peak_bytes"] == int(cancelled[0][5])
+    assert tasks[1]["estimate_bytes"] == 8 * MIB
+    assert tasks[1]["retry_calibration"] is False
+    assert len(observations) == 4
+    assert [sample[2] for sample in observations if sample[0] == tasks[1]["class"]] == [completed_report[2]]
+    for name, peers in (("initial-overlap", (0, 1)), ("restored-overlap", (2, 3))):
+        expected = [(tmp_path / ("started." + str(index) + ".1")).read_text().split("\t")[0]
+                    for index in peers]
+        for index in peers:
+            assert (tmp_path / (name + str(index))).read_text().split() == expected
+    for record in tmp_path.glob("started.*"):
+        pid = int(record.read_text().split("\t")[0])
+        assert pid in reaped
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+    assert (tmp_path / "configured-budget").read_text() == str(budget)
+    assert pool._HOST_WORKERS == {}
+
+
+def test_retry_calibration_barrier_preserves_known_minimum():
+    retry = task("unused-retry", estimate=8 * MIB)
+    retry["retry_calibration"] = True
+    retry["incomplete_peak_bytes"] = 384 * MIB
+    other = task("unused-other", estimate=8 * MIB)
+    available = 512 * MIB
+    # Even a smaller fitting task ahead of the retry cannot prolong the
+    # draining wave. Only completed observations may authorize a shared wave.
+    assert policy.choose_task([0, 1], [other, retry], [], [8 * MIB], 2, available) == (-1, 0, False)
+    index, demand, exclusive = policy.choose_task([0, 1], [other, retry], [], [], 2, available)
+    assert index == 1 and exclusive
+    assert demand == policy.peak_reservation(384 * MIB) > available
+    with pytest.raises(policy.WorkerMemoryError, match="estimated_minimum_budget_bytes"):
+        policy.require_task_fits(index, demand, available, 768 * MIB)
+
+
 def test_tree_accounting_includes_wrappers_and_child_descendants(tmp_path):
     state = tmp_path / "tree.tsv"
     state.write_text(policy.TREE_STATE_SCHEMA + "\n" + str(time.monotonic())

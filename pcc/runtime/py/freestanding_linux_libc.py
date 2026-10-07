@@ -42,6 +42,20 @@ def mkdir_c(path, mode: i64) -> i64:
     return mkdir(path, mode)
 
 
+@c_abi_typed_export("getcwd", "ptr", ("ptr", "u64"))
+def getcwd_c(buffer: c_ptr, size: i64) -> c_ptr:
+    # The standard caller-buffer ABI preserves the actual kernel errno.
+    # Do not pass through unsafe.getcwd, whose legacy pointer projection
+    # discards the negative status. Numbers match codegen/linux_syscalls.py.
+    machine = target_platform_machine()
+    number: i64 = 17 if load_i8(machine, 0) == 97 else 79
+    result: i64 = syscall6(number, buffer, size, 0, 0, 0, 0)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return null()
+    return buffer
+
+
 @c_abi_export("isatty")
 def isatty(fd: i64) -> i64:
     buffer = stack_alloc(128)

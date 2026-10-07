@@ -81,7 +81,8 @@ def test_field_owner_uses_real_mro_name_and_source_module():
 def test_l1_and_c_codegen_builder_writes_stay_within_verified_facts():
     # The slot-based and legacy lambda adapters each restore the caller's
     # saved builder on rejection, in addition to the shared successful exit.
-    expected_count = {"L1CodeGen": 34, "CCodeGenerator": 4}
+    # The aggregate adapter also restores the saved builder in its finally block.
+    expected_count = {"L1CodeGen": 35, "CCodeGenerator": 4}
     for root in (L1CodeGen, CCodeGenerator):
         writes = []
         for path, cls in _class_sources(root):

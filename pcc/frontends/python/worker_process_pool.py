@@ -198,6 +198,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 observed_peak = max(observed_peak, report[2])
                 _resource_event(trace_path, "retire", index, pid, reservation, 0, observed_peak)
                 observations.append((tasks[index]["class"], tasks[index]["inputs"], observed_peak))
+                if tasks[index].get("retry_calibration", False):
+                    tasks[index]["retry_calibration"] = False
                 completed.add(index)
             active = survivors
             if not pending and not active:
@@ -235,22 +237,25 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 require_task_fits(active[0][0], measured_demand, available, tree_budget)
             # Reservations can increase while peers are alive. Do not merely
             # stop launching and wait for the outer breaker to kill the tree:
-            # retire a restartable peer, retain its measured demand, and queue
-            # it once. A second cancellation is an explicit failed estimate,
-            # not an unbounded retry or a relaxed process-tree cap.
+            # retire a restartable peer and queue it once for exclusive
+            # calibration. Its unfinished peak is only a lower bound, not a
+            # completed demand estimate. Drain peers before that retry and
+            # keep the process-tree cap and one-retry limit unchanged.
             while len(active) > 1 and sum(item[2] for item in active) > available:
                 index, pid, reservation, exclusive, observed_peak = active[-1]
                 if not tasks[index].get("restartable", False):
                     raise WorkerMemoryError("live worker reservations exceed the budget; task cannot be restarted")
                 _stop_resource_worker(pid)
                 active.pop()
+                fresh_after = time.monotonic()
                 _resource_event(trace_path, "cancel", index, pid, reservation, available, observed_peak)
                 if retries[index] >= 1:
                     raise WorkerMemoryError("worker peak estimate remains unstable after one bounded retry: task=" + str(index))
                 retries[index] += 1
+                tasks[index]["retry_calibration"] = True
                 if observed_peak > 0:
-                    tasks[index]["estimate_bytes"] = max(
-                        tasks[index]["estimate_bytes"], peak_reservation(observed_peak),
+                    tasks[index]["incomplete_peak_bytes"] = max(
+                        int(tasks[index].get("incomplete_peak_bytes", 0)), observed_peak,
                     )
                 pending.insert(0, index)
             if not preflight_done:
@@ -316,7 +321,9 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 pending.remove(index)
                 attempt_tokens[pid] = token
                 active.append((index, pid, demand, exclusive, 0))
-                _resource_event(trace_path, "calibrate" if exclusive else "start",
+                # Keep the established retry launch event; exclusivity is
+                # the reservation and active state, not the event's name.
+                _resource_event(trace_path, "calibrate" if exclusive and retries[index] == 0 else "start",
                                 index, pid, demand, available, 0)
                 if exclusive:
                     break

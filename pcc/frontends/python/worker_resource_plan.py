@@ -48,6 +48,11 @@ def estimated_task_bytes(task, observations) -> int:
     A size envelope is an explicit extrapolation, not an absolute bound.
     """
     estimate = max(0, int(task["estimate_bytes"]))
+    incomplete_peak = int(task.get("incomplete_peak_bytes", 0))
+    if incomplete_peak > 0:
+        # A cancelled attempt establishes only a lower bound. It must never
+        # become a completed-task sample that authorizes concurrent retries.
+        estimate = max(estimate, peak_reservation(incomplete_peak))
     for key, inputs, peak in observations:
         if key == task["class"] and input_envelope_covers(inputs, task["inputs"]):
             estimate = max(estimate, peak_reservation(peak))
@@ -88,14 +93,22 @@ def require_task_fits(task_index: int, demand: int, available: int,
 
 def choose_task(pending, tasks, observations, active_reservations,
                 width: int, available: int):
-    """Pick a fitting known task; use one exclusive calibration if idle.
+    """Pick a fitting task or reserve idle capacity for a calibration.
 
     Unknown demand is not represented by a fabricated fixed worker peak. The
     initial task reserves all available child memory. Its actual observed peak
     can admit multiple subsequent workers whose input envelope it covers.
+    A cancelled attempt needs the same exclusive space for its bounded retry;
+    stop admitting peers until the active workers have drained. Preserve any
+    known minimum above that space so the caller refuses before launching.
     """
     if len(active_reservations) >= width:
         return -1, 0, False
+    for index in pending:
+        if tasks[index].get("retry_calibration", False):
+            if active_reservations:
+                return -1, 0, False
+            return index, max(available, estimated_task_bytes(tasks[index], observations)), True
     remaining = available - sum(active_reservations)
     unknown = -1
     for index in pending:

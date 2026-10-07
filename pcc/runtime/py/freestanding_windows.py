@@ -5,7 +5,9 @@ File descriptors above the three standard streams are native HANDLE values.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int, c_int64, c_ptr, c_void, extern
+from pcc.extern import (
+    c_abi_export, c_abi_typed_export, c_int, c_int64, c_ptr, c_void, extern,
+)
 from pcc.unsafe import (
     int_to_ptr, ptr_to_int, ptr_add, ptr_is_null, null, stack_alloc,
     load_i8, load_i32, load_i64, load_ptr, store_i8, store_i32, store_i64,
@@ -27,6 +29,7 @@ FormatMessageW = extern("FormatMessageW", (c_int, c_ptr, c_int, c_int, c_ptr, c_
 GetConsoleMode = extern("GetConsoleMode", (c_ptr, c_ptr), c_int)
 BCryptGenRandom = extern("BCryptGenRandom", (c_ptr, c_ptr, c_int, c_int), c_int)
 platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_errno_set = extern("pcc_errno_set", (c_int,), c_void)
 GetStdHandle = extern("GetStdHandle", (c_int,), c_ptr)
 ReadFile = extern("ReadFile", (c_ptr, c_ptr, c_int, c_ptr, c_ptr), c_int)
 WriteFile = extern("WriteFile", (c_ptr, c_ptr, c_int, c_ptr, c_ptr), c_int)
@@ -430,18 +433,35 @@ def chmod_file(path: c_ptr, mode: i64) -> i64:
 def getcwd(buffer: c_ptr, size: i64) -> c_ptr:
     count: i64 = GetCurrentDirectoryW(0, null())
     if count <= 0:
+        pcc_errno_set(0 - error())
         return null()
     wide = malloc(count * 2)
     if ptr_is_null(wide):
+        pcc_errno_set(12)  # ENOMEM in the owned cross-platform errno namespace.
         return null()
     got: i64 = GetCurrentDirectoryW(count, wide)
     ok: i64 = 0
-    if got > 0 and got < count:
+    failure: i64 = 0
+    if got <= 0:
+        failure = 0 - error()
+    elif got >= count:
+        # A concurrent cwd change grew the required buffer between queries.
+        failure = 34  # ERANGE, not a stale GetLastError value on success.
+    else:
         ok = WideCharToMultiByte(65001, 128, wide, -1, buffer, size, null(), null())
+        if not ok:
+            failure = 34 if GetLastError() == 122 else 0 - error()
+    # Capture the API status before freeing the conversion buffer.
     free(wide)
     if ok:
         return buffer
+    pcc_errno_set(failure)
     return null()
+
+
+@c_abi_typed_export("getcwd", "ptr", ("ptr", "u64"))
+def getcwd_c(buffer: c_ptr, size: i64) -> c_ptr:
+    return getcwd(buffer, size)
 
 
 @c_abi_export("pcc_win_clock_gettime")

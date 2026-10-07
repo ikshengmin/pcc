@@ -7,7 +7,10 @@ Darwin/Linux field offsets directly.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_INT, PY_TYPE_MEMORYVIEW, PY_TYPE_STR
+from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_INT,
+    PY_TYPE_MEMORYVIEW, PY_TYPE_STR,
+)
 
 from pcc.extern import (
     extern,
@@ -21,19 +24,25 @@ from pcc.extern import (
 )
 from pcc.unsafe import (
     cstr,
+    define_global_i32,
     define_global_ptr_null,
     free,
     global_load_ptr,
     global_store_ptr,
+    global_addr,
     is_tagged_int,
     load_i8,
     load_i32,
     load_i64,
+    load_ptr,
     malloc,
+    memset,
     null,
     ptr_add,
     ptr_is_null,
+    stack_alloc,
     store_i64,
+    store_ptr,
     strlen,
     target_platform_machine,
     target_sys_platform,
@@ -81,6 +90,115 @@ pcc_platform_realpath = extern(
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 py_program_argv = extern("py_program_argv", (c_int64,), c_ptr)
 py_program_mode = extern("py_program_mode", (), c_int32)
+
+py_err_occurred = extern("py_err_occurred", (), c_int64)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_incref = extern("py_incref", (c_ptr,), c_void)
+py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
+py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
+py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
+pcc_errno_get = extern("pcc_errno_get", (), c_int32)
+pcc_errno_exception_kind = extern("pcc_errno_exception_kind", (c_int32,), c_int64)
+pcc_errno_message_into = extern("pcc_errno_message_into", (c_int32, c_ptr, c_int64), c_int32)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+_CWD_EXCEPTION = 0
+_CWD_ERRNO = 1
+_CWD_MESSAGE = 2
+_CWD_ARGS = 3
+_CWD_PENDING = 4
+_CWD_SLOT_COUNT = 5
+define_global_i32("pcc_cwd_error_frame_map", _CWD_SLOT_COUNT)
+
+
+def _cwd_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(slot, 0)):
+        if not py_err_occurred():
+            py_raise_owned(py_exc_new(19, cstr("getcwd error allocation failed")))
+        return -1
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        if not py_err_occurred():
+            py_raise_owned(py_exc_new(7, cstr("getcwd error ownership lease failed")))
+        return -1
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    return -1 if py_err_occurred() else 0
+
+
+def _cwd_error_body(slots, tokens, number: int, message) -> None:
+    # The existing walk/file error builders use the same owning-slot and
+    # counted-lease protocol while constructing errno, strerror and args.
+    kind: int = pcc_errno_exception_kind(number)
+    store_ptr(slots, _CWD_EXCEPTION * C_POINTER_SIZE, py_exc_new(kind, message))
+    if _cwd_adopt(slots, tokens, _CWD_EXCEPTION) != 0:
+        return
+    store_ptr(slots, _CWD_ERRNO * C_POINTER_SIZE, py_int_from_i64(number))
+    if _cwd_adopt(slots, tokens, _CWD_ERRNO) != 0:
+        return
+    store_ptr(slots, _CWD_MESSAGE * C_POINTER_SIZE, py_str_new(message, strlen(message)))
+    if _cwd_adopt(slots, tokens, _CWD_MESSAGE) != 0:
+        return
+    store_ptr(slots, _CWD_ARGS * C_POINTER_SIZE, py_tuple_new(2))
+    if _cwd_adopt(slots, tokens, _CWD_ARGS) != 0:
+        return
+    py_tuple_set_item(load_ptr(slots, _CWD_ARGS * C_POINTER_SIZE), 0,
+                      load_ptr(slots, _CWD_ERRNO * C_POINTER_SIZE))
+    py_tuple_set_item(load_ptr(slots, _CWD_ARGS * C_POINTER_SIZE), 1,
+                      load_ptr(slots, _CWD_MESSAGE * C_POINTER_SIZE))
+    if not py_err_occurred():
+        py_obj_setattr(load_ptr(slots, _CWD_EXCEPTION * C_POINTER_SIZE), cstr("errno"),
+                       load_ptr(slots, _CWD_ERRNO * C_POINTER_SIZE))
+    if not py_err_occurred():
+        py_obj_setattr(load_ptr(slots, _CWD_EXCEPTION * C_POINTER_SIZE), cstr("strerror"),
+                       load_ptr(slots, _CWD_MESSAGE * C_POINTER_SIZE))
+    if not py_err_occurred():
+        py_obj_setattr(load_ptr(slots, _CWD_EXCEPTION * C_POINTER_SIZE), cstr("args"),
+                       load_ptr(slots, _CWD_ARGS * C_POINTER_SIZE))
+    if not py_err_occurred():
+        error = load_ptr(slots, _CWD_EXCEPTION * C_POINTER_SIZE)
+        py_incref(error)
+        py_raise_owned(error)
+
+
+def _cwd_os_error(number: int) -> None:
+    if number <= 0:
+        py_raise_owned(py_exc_new(7, cstr("getcwd platform failure did not publish errno")))
+        return
+    slots = stack_alloc(_CWD_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_CWD_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _CWD_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _CWD_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_cwd_error_frame_map"), slots)
+    message = stack_alloc(256)
+    pcc_errno_message_into(number, message, 256)
+    _cwd_error_body(slots, tokens, number, message)
+    pending = ptr_add(slots, _CWD_PENDING * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(pending)
+    index: int = _CWD_ARGS
+    while index >= _CWD_EXCEPTION:
+        slot = ptr_add(slots, index * C_POINTER_SIZE)
+        token: int = load_i64(tokens, index * C_POINTER_SIZE)
+        if pcc_gc_foreign_lease_release(slot, token) != 0:
+            pcc_platform_abort()
+            return
+        pcc_gc_store_root(slot, null())
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(pending)
+    pcc_gc_frame_leave(slots)
 
 
 def _type_of(obj) -> int:
@@ -231,10 +349,15 @@ def py_path_getcwd():
     if ptr_is_null(buf):
         buf = malloc(8192)
         if ptr_is_null(buf):
+            py_raise_owned(py_exc_new(19, cstr("could not allocate current directory buffer")))
             return null()
         global_store_ptr("py_path_getcwd_buf", buf)
     result = pcc_platform_getcwd(buf, 8192)
     if ptr_is_null(result):
+        # The platform leaf publishes errno before returning NULL. Capture
+        # it before formatting, allocation or any other operating-system call.
+        number: int = pcc_errno_get()
+        _cwd_os_error(number)
         return null()
     return buf
 
@@ -278,7 +401,13 @@ def py_platform_release_str():
 
 @c_abi_export("py_os_getcwd_str")
 def py_os_getcwd_str():
-    return _str_from_cstr(py_path_getcwd())
+    path = py_path_getcwd()
+    if ptr_is_null(path):
+        return null()
+    result = _str_from_cstr(path)
+    if ptr_is_null(result) and not py_err_occurred():
+        py_raise_owned(py_exc_new(19, cstr("could not allocate current directory string")))
+    return result
 
 
 @c_abi_export("py_sys_path_list")

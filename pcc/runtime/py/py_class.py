@@ -1493,6 +1493,9 @@ def _instance_dict_attr(inst, cls, name):
     return got
 
 
+_INSTANCE_LOOKUP_VARS = 3
+
+
 @c_abi_export("py_instance_vars")
 def py_instance_vars(inst):
     if not _ptr_is_instance(inst):
@@ -1547,7 +1550,9 @@ def py_obj_vars(o):
         py_raise_owned(py_exc_new(3, cstr("vars() argument has no __dict__")))
         return null()
     if _ptr_is_instance(o):
-        return py_instance_vars(o)
+        return _instance_lookup_rooted(
+            o, -1, cstr("__dict__"), _INSTANCE_LOOKUP_VARS,
+        )
     if _ptr_is_class(o):
         attrs = py_class_attrs_dict(o, 1)
         if ptr_is_null(attrs) == 0:
@@ -2614,7 +2619,9 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
 
     A nonnegative index resolves an unbound physical field's stable name;
     otherwise the caller supplies the attribute name. Lookup kinds are normal
-    (0), default (1), and custom __getattribute__ (2).
+    (0), default (1), custom __getattribute__ (2), and vars (3).  The vars
+    route selects a canonical module namespace after input admission; other
+    instances retain the existing fixed-field snapshot path.
     """
     roots = stack_alloc(3 * C_POINTER_SIZE)
     handles = stack_alloc(3 * C_POINTER_SIZE)
@@ -2625,6 +2632,10 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
     pcc_py_gc_minor_graph_lock()
     inst = pcc_gc_note_relocation_read(inst)
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
+    if lookup_kind == _INSTANCE_LOOKUP_VARS and not _ptr_is_class(cls):
+        pcc_py_gc_minor_graph_unlock()
+        py_raise_owned(py_exc_new(3, cstr("vars() argument has no __dict__")))
+        return null()
     store_ptr(roots, 0, inst)
     store_ptr(roots, C_POINTER_SIZE, cls)
     index: int = 0
@@ -2646,7 +2657,18 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
         if idx >= 0:
             names = load_ptr(cls, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
             name = load_ptr(names, idx * C_POINTER_SIZE)
-        if lookup_kind != 0:
+        if lookup_kind == _INSTANCE_LOOKUP_VARS:
+            # The admitted receiver and class stay pinned while read barriers
+            # may park. Canonical runtime module objects own their live dict;
+            # class names and matching field layouts do not prove that type.
+            module_cls = pcc_gc_load_ptr(
+                null(), global_addr("pcc_runtime_module_class_cache"),
+            )
+            if ptr_is_null(module_cls) == 0 and ptr_eq(cls, module_cls) != 0:
+                result = py_obj_getattr(pcc_gc_load_ptr(null(), roots), name)
+            else:
+                result = py_instance_vars(pcc_gc_load_ptr(null(), roots))
+        elif lookup_kind != 0:
             result = _instance_getattr_default_rooted(
                 pcc_gc_load_ptr(null(), roots), cls, name, lookup_kind - 1,
             )
