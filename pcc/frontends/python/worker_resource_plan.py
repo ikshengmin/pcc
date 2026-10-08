@@ -12,6 +12,11 @@ import time
 
 
 TREE_STATE_ENV = "PCC_WORKER_TREE_STATE_PATH"
+# v1 timestamps use the same-machine CPython monotonic clock (Python >=3.13):
+# Darwin mach_absolute_time / CLOCK_UPTIME_RAW, Linux CLOCK_MONOTONIC, and
+# Windows QueryPerformanceCounter. The native platform clock must share both
+# its epoch and suspend behavior. Wall time and process-relative clocks are
+# not compatible; not_before is in this same domain. State is run-local.
 TREE_STATE_SCHEMA = "pcc.worker-tree-rss.v1"
 RESOURCE_REPORT_ENV = "PCC_WORKER_RESOURCE_REPORT"
 RESOURCE_TOKEN_ENV = "PCC_WORKER_RESOURCE_TOKEN"

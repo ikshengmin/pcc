@@ -236,6 +236,19 @@ def fork_c() -> i64:
     return result
 
 
+@c_abi_typed_export("setpgid", "i32", ("i32", "i32"))
+def setpgid_c(pid: i64, group: i64) -> i64:
+    # pid_t is signed C int on both Linux ABIs. Keep the libc result/errno
+    # contract; syscall numbers match codegen/linux_syscalls.py's mapping.
+    machine = target_platform_machine()
+    number: i64 = 154 if load_i8(machine, 0) == 97 else 109
+    result: i64 = syscall6(number, pid, group, 0, 0, 0, 0)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return 0
+
+
 @c_abi_typed_export("waitpid", "i32", ("i32", "ptr", "i32"))
 def waitpid_c(pid: i64, status: c_ptr, options: i64) -> i64:
     # The existing target ABI maps waitpid to wait4 with NULL struct rusage.

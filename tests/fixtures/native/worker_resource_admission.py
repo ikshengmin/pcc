@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 
+from pcc.extern import c_int, extern
 from pcc.frontends.python import pipeline_frontend_workers as workers
 from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
@@ -23,6 +24,7 @@ from pcc.frontends.python import worker_resource_plan as policy
 MIB = 1024 ** 2
 PAYLOAD_BYTES = 48 * MIB
 WAIT_SECONDS = 3.0
+_setpgid = extern("setpgid", (c_int, c_int), c_int)
 
 
 def read(root, name):
@@ -186,13 +188,10 @@ def confirm_overlap(root, index, peers):
 
 
 def join_process_group(group):
-    if native_owner():
-        # The public syscall intrinsic takes the target kernel number. These
-        # match the existing setpgid mapping in codegen/linux_syscalls.py.
-        from pcc.unsafe import syscall6
-
-        number = int(os.environ["PCC_TEST_SETPGID_NR"])
-        assert syscall6(number, 0, group, 0, 0, 0, 0) == 0
+    if sys.implementation.name == "pcc":
+        # Darwin uses the supported libSystem ABI; Linux's owned libc leaf
+        # supplies the same signed pid_t/result contract with kernel calls.
+        assert _setpgid(0, group) == 0
     else:
         os.setpgid(0, group)
 

@@ -11,7 +11,20 @@ on:
       - "tests/python/test_package_*.py"
       - "tests/python/pcc1_gate.py"
       - "tests/python/test_pcc_native_extension_loader.py"
+      - "tests/python/test_owned_darwin_time_runtime.py"
+      - "tests/python/test_worker_state_clock_contract.py"
+      - "tests/python/test_native_worker_state_clock.py"
+      - "tests/python/test_worker_resource_setpgid.py"
+      - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_valueclass_aggregate_ownership_native.py"
+      - "tests/python/owned_regression_support.py"
+      - "tests/fixtures/native/worker_resource_admission.py"
+      - "tests/runtime_fixture_provenance.py"
+      - "tests/test_ci_macos_regression_gate.py"
       - "tests/integration/test_uv_pcc_project_environment.py"
+      - "scripts/ci_macos_regression_gate.py"
+      - "scripts/pytest_live_report.py"
+      - "scripts/run_process_tree_sample.py"
       - "scripts/ci_native_wheel_gate.py"
       - "scripts/bootstrap.py"
       - "scripts/bootstrap_platform.py"
@@ -25,7 +38,20 @@ on:
       - "tests/python/test_package_*.py"
       - "tests/python/pcc1_gate.py"
       - "tests/python/test_pcc_native_extension_loader.py"
+      - "tests/python/test_owned_darwin_time_runtime.py"
+      - "tests/python/test_worker_state_clock_contract.py"
+      - "tests/python/test_native_worker_state_clock.py"
+      - "tests/python/test_worker_resource_setpgid.py"
+      - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_valueclass_aggregate_ownership_native.py"
+      - "tests/python/owned_regression_support.py"
+      - "tests/fixtures/native/worker_resource_admission.py"
+      - "tests/runtime_fixture_provenance.py"
+      - "tests/test_ci_macos_regression_gate.py"
       - "tests/integration/test_uv_pcc_project_environment.py"
+      - "scripts/ci_macos_regression_gate.py"
+      - "scripts/pytest_live_report.py"
+      - "scripts/run_process_tree_sample.py"
       - "scripts/ci_native_wheel_gate.py"
       - "scripts/bootstrap.py"
       - "scripts/bootstrap_platform.py"
@@ -33,6 +59,56 @@ on:
       - ".github/workflows/pcc1-package-parity.yml"
 
 jobs:
+  macos-pcc0-regressions:
+    name: macOS arm64 focused pcc0 native regressions
+    runs-on: macos-15
+    timeout-minutes: 25
+    # Separate from Stage1: these exact programs use a threaded/atomic runtime.
+    # The existing Stage1 configuration and its 45-minute budget stay unchanged.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Execute focused Darwin regressions with one matched runtime
+        run: |
+          env -u LC_ALL uv run python scripts/run_process_tree_sample.py \
+            --result build/macos-regressions/work/supervisor/result.json \
+            --samples build/macos-regressions/work/supervisor/samples.tsv \
+            --stdout build/macos-regressions/work/supervisor/target.stdout \
+            --stderr build/macos-regressions/work/supervisor/target.stderr \
+            --timeout 1200 --interval 1 --progress-interval 30 \
+            --max-tree-rss-bytes 4294967296 \
+            --darwin-preflight-reserve-bytes 536870912 \
+            -- uv run python scripts/ci_macos_regression_gate.py \
+            --out-dir build/macos-regressions
+
+      - name: Collect complete bounded Mac regression receipts
+        if: always()
+        run: |
+          env -u LC_ALL uv run python scripts/ci_macos_regression_gate.py \
+            --out-dir build/macos-regressions --collect-evidence
+
+      - name: Preserve Mac regression receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-pcc0-regression-receipts
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: warn
+          # Complete compressed logs/receipts only; no archives, objects or IR.
+          path: build/macos-regressions/evidence/
+
   other-platform-native-wheel:
     name: Native wheel / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}

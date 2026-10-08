@@ -654,7 +654,6 @@ def _resource_driver_environment(owner, collector):
     environment.update({
         "PCC_TEST_RESOURCE_OWNER": owner,
         "PCC_GC_BACKEND": str(collector),
-        "PCC_TEST_SETPGID_NR": "109" if platform.machine().lower() in ("x86_64", "amd64") else "154",
         "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PCC_TEST_NO_NATIVE_PROVISIONING": "1",
@@ -678,7 +677,11 @@ def _execute_resource_driver(prefix, case, directory, owner, collector):
     (directory / "driver.stderr").write_text(result.stderr)
     record = {
         "case": case,
-        "boundary": "linux_owned_setpgid_handle_lifecycle" if case == "handles" else "shared_admission_policy",
+        "boundary": (
+            ("darwin_libsystem_setpgid_handle_lifecycle" if sys.platform == "darwin"
+             else "linux_owned_setpgid_handle_lifecycle")
+            if case == "handles" else "shared_admission_policy"
+        ),
         "owner": owner, "requested_collector": collector,
         "qualification_scope": "resource_component",
         "pcc1_stage2_worker_dispatch_proved": False,

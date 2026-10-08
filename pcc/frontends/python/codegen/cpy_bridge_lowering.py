@@ -280,20 +280,86 @@ class CpyBridgeLoweringMixin:
                 self.builder.call(self.runtime["py_cpy_decref"], [value])
                 self._forget_owned_cpy_value(value)
             return bridged
-        boxed_valueclass = self._emit_valueclass_payload_to_object(
-            value,
-            value_ty,
-            consume_fields=consume_valueclass_payload_fields,
+        # Native payload boxing is fallible too. Its nested slot/lease error
+        # edges must retire the caller's already-live container and operands,
+        # just as the CPython bridge above does. A post-boxing error check is
+        # too late: those edges have already selected their unwind target.
+        payload_cleanup = isinstance(value.type, ir.LiteralStructType) and (
+            cpy_owned_on_error or rooted_pcc_on_error
+            or pinned_pcc_on_error or pcc_release_on_error
         )
-        if boxed_valueclass is not None:
-            return boxed_valueclass
-        return marshal.marshal_to_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            value,
-            value_ty,
-        )
+        previous = self._current_try_err_block()
+        saved_cpy = self._cpy_operand_cleanup_block
+        if payload_cleanup:
+            pcc_target = previous if previous is not None else self._ensure_fn_err_exit()
+            cpy_target = saved_cpy if saved_cpy is not None else pcc_target
+            pointer_type = ir.IntType(8).as_pointer()
+            exception_slot = self._alloca_in_entry(
+                pointer_type, name=self._fresh("value.box.unwind.exception"),
+                init_null=True,
+            )
+            # This is an entry-registered root, not a LIFO operand: cleanup
+            # must be able to leave the outer container frames while retaining
+            # the selecting exception across reentrant finalizers.
+            self._ensure_local_gc_frame_root(
+                self._fresh("value.box.unwind.owner"), exception_slot,
+                pointer_type, allow_module=True,
+            )
+            swap_exception = self.module.globals.get("py_tls_exc_swap_slot")
+            if swap_exception is None:
+                swap_exception = ir.Function(
+                    self.module, ir.FunctionType(ir.VoidType(), [pointer_type]),
+                    name="py_tls_exc_swap_slot",
+                )
+            cleanups = []
+            for target in (pcc_target, cpy_target):
+                if cleanups and target is pcc_target:
+                    cleanups.append(cleanups[0])
+                    continue
+                cleanup = self.current_function.append_basic_block(
+                    name=self._fresh("value.box.unwind.cleanup"),
+                )
+                saved_block = self.builder._block
+                self.builder.position_at_end(cleanup)
+                self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
+                for owned in reversed(cpy_owned_on_error):
+                    self.builder.call(self.runtime["py_cpy_decref"], [owned])
+                for pcc_value, root_slot in reversed(rooted_pcc_on_error):
+                    # Keep the original owner until the root has cleared and
+                    # unpinned it; a pin does not prevent terminal decref.
+                    self._leave_container_temp_root(root_slot)
+                    self._gc_release(pcc_value)
+                for pcc_value, release_owned in reversed(pinned_pcc_on_error):
+                    self._gc_unpin(pcc_value)
+                    if release_owned:
+                        self._gc_release(pcc_value)
+                for pcc_value in reversed(pcc_release_on_error):
+                    self._gc_release(pcc_value)
+                self.builder.call(self.runtime["py_clear_exception"], [])
+                self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
+                self.builder.branch(target)
+                self.builder.position_at_end(saved_block)
+                cleanups.append(cleanup)
+            self._try_err_block = cleanups[0]
+            self._cpy_operand_cleanup_block = cleanups[1]
+        try:
+            boxed_valueclass = self._emit_valueclass_payload_to_object(
+                value,
+                value_ty,
+                consume_fields=consume_valueclass_payload_fields,
+            )
+            if boxed_valueclass is not None:
+                return boxed_valueclass
+            return marshal.marshal_to_object(
+                self.builder,
+                self.module,
+                self.runtime,
+                value,
+                value_ty,
+            )
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _marshal_to_cpython(self, v: ir.Value, ty: Type) -> tuple[ir.Value, bool]:
         """Convert a pcc-native value to a CPython PyObject*.

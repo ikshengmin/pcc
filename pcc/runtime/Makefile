@@ -82,6 +82,7 @@ FREESTANDING_PY_MODULES = freestanding_mem_str freestanding_lfq_spsc freestandin
 FREESTANDING_PY_MODULES += freestanding_class_namespace
 FREESTANDING_PY_MODULES += freestanding_sequence_snapshot
 FREESTANDING_PY_MODULES += freestanding_gateway_control
+FREESTANDING_PY_MODULES += freestanding_time_calendar
 ifneq ($(PCC_WITH_THREADS),1)
 FREESTANDING_PY_MODULES += freestanding_thread_kernel
 endif

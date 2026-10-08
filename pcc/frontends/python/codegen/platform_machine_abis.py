@@ -116,6 +116,8 @@ PLATFORM_MACHINE_ABIS = {
     'pcc_platform_wall_time_us': ('()', 'c_int64'),
     'pcc_time_breakdown': ('(c_int64,c_int64,c_int64,c_ptr,c_ptr)', 'c_int64'),
     'pcc_time_days_from_civil': ('(c_int64,c_int64,c_int64)', 'c_int64'),
+    'pcc_time_format_floor_div': ('(c_int64,c_int64)', 'c_int64'),
+    'pcc_time_format_floor_mod': ('(c_int64,c_int64)', 'c_int64'),
     'pcc_time_posix_zone': ('(c_ptr,c_int64,c_ptr)', 'c_int64'),
     'pcc_win_error': ('()', 'c_int64'),
     'pcc_win_fd_handle': ('(c_int64,)', 'c_ptr'),

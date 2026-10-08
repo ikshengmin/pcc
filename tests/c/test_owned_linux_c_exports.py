@@ -71,13 +71,14 @@ def test_linux_export_exact_abi_object(tmp_path, target, deny_external_compilers
     for signature in (
         "void @_Exit(i32 ", "void @_exit(i32 ", "i32 @close(i32 ",
         "i32 @fcntl(i32 ", "void @exit(i32 ", "i32 @atexit(ptr ",
+        "i32 @setpgid(i32 ",
     ):
         assert signature in text
     object_bytes = emit_owned_object(text, target)
     output.with_suffix(".o").write_bytes(object_bytes)
     obj = parse_relocatable(object_bytes)
     definitions = {s.name for s in obj.symbols if s.section_index != 0}
-    assert {"_Exit", "_exit", "close", "fcntl", "exit", "atexit"} <= definitions
+    assert {"_Exit", "_exit", "close", "fcntl", "exit", "atexit", "setpgid"} <= definitions
     undefined = {s.name for s in obj.symbols if s.section_index == 0 and s.name}
     assert undefined <= {"pcc_errno_set", "pcc_platform_abort", "malloc", "free", "fflush",
                          "__fini_array_start", "__fini_array_end"}

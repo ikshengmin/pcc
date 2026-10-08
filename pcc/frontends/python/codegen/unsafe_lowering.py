@@ -4177,7 +4177,12 @@ class UnsafeIntrinsicMixin:
             platform_name = self._target_sys_platform_text()
             machine = self._target_machine_text()
             if platform_name == "darwin":
-                clock_id = 0 if logical_kind == 0 else 6
+                # Match CPython's system-wide mach_absolute_time clock, so
+                # host/native deadlines and worker-tree timestamps share an
+                # epoch and suspend behavior. Darwin CLOCK_MONOTONIC (6)
+                # includes system sleep; CLOCK_UPTIME_RAW (8) is precisely
+                # mach_absolute_time converted with mach_timebase_info.
+                clock_id = 0 if logical_kind == 0 else 8
                 clock_fn = self._declare_external_function(
                     "clock_gettime",
                     _I32,

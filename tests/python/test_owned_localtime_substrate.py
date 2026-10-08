@@ -48,7 +48,8 @@ class Memory:
                   getenv=lambda _name:None if zone is None else self.text(zone),
                   set_errno=self.set_errno, open_readonly=self.open, read=self.read,
                   close=lambda fd:os.close(fd))
-        self.calendar = self.module('freestanding_time_format.py', ns)
+        self.calendar = self.module('freestanding_time_calendar.py', ns)
+        self.calendar = self.module('freestanding_time_format.py', self.calendar)
         self.posix = self.module('freestanding_posix_timezone.py', dict(ns,
             days_from_civil=self.calendar['days_from_civil'], breakdown=self.calendar['breakdown']))
         self.linux = self.module('freestanding_linux_time.py', dict(ns,
