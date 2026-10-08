@@ -130,7 +130,7 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         return output
 
-    def _new_slot_call_root(self, label: str):
+    def _new_slot_call_root(self, label: str, synchronous_lexical: bool = False):
         """Register an empty owning operand slot before evaluating its value.
 
         Operand roots have lexical LIFO lifetimes. Their caller must install
@@ -152,7 +152,11 @@ class CallObjectLoweringMixin:
         generator_resume = bool(generator_contexts) and (
             generator_contexts[-1].get("resume_function") is self.current_function
         )
-        lifo = not generator_resume
+        # Opt in only for audited fixed-emission regions with no generated
+        # suspension or continuation entry between activation and retirement.
+        # Runtime calls may still collect or reenter; the lexical frame stays
+        # registered until the existing release/take/error protocol leaves it.
+        lifo = not generator_resume or synchronous_lexical
         if lifo:
             self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), slot)
         else:

@@ -553,7 +553,13 @@ def take_generator_frame_result(host, expr: Call, source_slot) -> ir.Value:
     ):
         raise L1CodegenError("continuation result has no authoritative frame owner")
     sink = host._slot_call_result_sink(expr)
-    output = sink if sink is not None else host._new_slot_call_root("vthread.result")
+    # This fixed result-publication region runs after the child's completion.
+    # It lowers no AST, yields, or continuation entry. Its success take and
+    # installed error cleanup both retire the lexical root before control
+    # returns to the surrounding coroutine lowering.
+    output = sink if sink is not None else host._new_slot_call_root(
+        "vthread.result", synchronous_lexical=True,
+    )
     previous = host._current_try_err_block()
     saved_cpy = host._cpy_operand_cleanup_block
     target = previous if previous is not None else host._ensure_fn_err_exit()

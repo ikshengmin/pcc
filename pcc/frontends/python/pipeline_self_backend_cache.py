@@ -8,7 +8,7 @@ import os
 OBJECT_CACHE_ENV = "PCC_SELF_BACKEND_OBJECT_CACHE"
 OBJECT_CACHE_DIR_ENV = "PCC_SELF_BACKEND_OBJECT_CACHE_DIR"
 OBJECT_CACHE_IDENTITY_ENV = "PCC_SELF_BACKEND_OBJECT_CACHE_IDENTITY"
-OBJECT_CACHE_VERSION = "pcc.self-backend-object-cache.v3"
+OBJECT_CACHE_VERSION = "pcc.self-backend-object-cache.v4"
 
 
 def enabled() -> bool:
@@ -21,6 +21,11 @@ def enabled() -> bool:
         "disable",
         "disabled",
     ):
+        return False
+    # A profile is a mutable external code-generation input. Until the worker
+    # consumes a frozen, content-identified profile, bypass both lookup and
+    # publication rather than keying only its path or racing its contents.
+    if str(os.environ.get("PCC_CODE_PROFILE", "") or "").strip():
         return False
     identity = str(os.environ.get(OBJECT_CACHE_IDENTITY_ENV, "") or "").strip()
     return bool(identity)
@@ -84,6 +89,48 @@ def plan(worker_items: list[tuple[str, str, str]], target_id: str, cc: str,
     return _plan_enabled(worker_items, target_id, cc)
 
 
+def _effective_backend_configuration() -> str:
+    """Canonical output-affecting settings for the owned worker cache.
+
+    Keep this allowlist aligned with environment reads in the self backend.
+    Use the emitter's resolvers so unset/default and explicit equivalent
+    settings share a key. Preserve pass order and duplicates. The four
+    AArch64 switches are conservatively included on every target.
+
+    Diagnostic trace switches do not affect object bytes. Frontend settings
+    and upstream IR optimization are represented by the complete emitted IR.
+    Worker/source identity and target/artifact mode remain separate key fields;
+    caller identity must bind the compiler/worker implementation and ABI.
+    External function-order profiles bypass this cache in enabled().
+    """
+    import json
+    from pcc.backend.self_backend_target_passes import (
+        resolve_self_target_pass_names,
+        resolve_self_target_pass_transport,
+    )
+    from pcc.backend.self_backend_aarch64_darwin_regalloc import (
+        call_result_registers_enabled,
+        callee_saved_registers_enabled,
+        function_live_intervals_enabled,
+    )
+    from pcc.backend.self_backend_aarch64_darwin_branch_protection import (
+        branch_protection_enabled,
+    )
+
+    transport = resolve_self_target_pass_transport()
+    return json.dumps(
+        [
+            ["target-pass-transport", transport],
+            ["target-passes", resolve_self_target_pass_names(transport=transport)],
+            ["call-result-registers", call_result_registers_enabled()],
+            ["callee-saved-registers", callee_saved_registers_enabled()],
+            ["function-live-intervals", function_live_intervals_enabled()],
+            ["branch-protection", branch_protection_enabled()],
+        ],
+        separators=(",", ":"),
+    )
+
+
 def _plan_enabled(worker_items: list[tuple[str, str, str]], target_id: str,
                   cc: str) -> list[tuple[str, str]]:
     import hashlib
@@ -91,11 +138,12 @@ def _plan_enabled(worker_items: list[tuple[str, str, str]], target_id: str,
     from pcc.tools.compiler_cache_retention import acquire_entry_lease, release_entry_lease, record_successful_access
     identity = str(os.environ.get(OBJECT_CACHE_IDENTITY_ENV, "") or "")
     source_identity = self_backend_emitter_source_identity()
+    configuration = _effective_backend_configuration()
     root = cache_dir()
     result = []
     for result_path, object_path, ir_path in worker_items:
         digest = hashlib.sha256()
-        for field in (OBJECT_CACHE_VERSION, identity, source_identity, target_id, cc):
+        for field in (OBJECT_CACHE_VERSION, identity, source_identity, target_id, cc, configuration):
             digest.update(field.encode("utf-8"))
             digest.update(b"\0")
         with open(ir_path, "rb") as stream:

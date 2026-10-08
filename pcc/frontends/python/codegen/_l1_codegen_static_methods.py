@@ -564,7 +564,7 @@ def _part_46(out):
 def _part_47(out):
     _append_method(out, '_extern_release_foreign_leases', (('self', 'pos', False), ('leases', 'pos', False)))
     _append_method(out, '_extern_check_lease_cleanup', (('self', 'pos', False), ('failed', 'pos', False), ('roots', 'pos', False)))
-    _append_method(out, '_new_slot_call_root', (('self', 'pos', False), ('label', 'pos', False)))
+    _append_method(out, '_new_slot_call_root', (('self', 'pos', False), ('label', 'pos', False), ('synchronous_lexical', 'pos', True)))
     _append_method(out, '_slot_call_root_record', (('self', 'pos', False), ('slot', 'pos', False)))
     _append_method(out, '_slot_call_result_sink', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_slot_call_note_published', (('self', 'pos', False), ('slot', 'pos', False)))
@@ -680,10 +680,10 @@ def _part_57(out):
     _append_method(out, '_emit_next_filter_truth', (('self', 'pos', False), ('output', 'pos', False), ('predicate', 'pos', False), ('call_args', 'pos', False), ('pred_result', 'pos', False), ('none_obj', 'pos', False), ('span', 'pos', False)))
     _append_method(out, '_emit_owned_padding_method', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_strip_method', (('self', 'pos', False), ('expr', 'pos', False)))
-    _append_method(out, '_emit_ellipsis_literal', (('self', 'pos', False), ('expr', 'pos', False)))
 
 
 def _part_58(out):
+    _append_method(out, '_emit_ellipsis_literal', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_continuation_slot', (('self', 'pos', False), ('output', 'pos', False), ('arguments', 'pos', False), ('resume', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_generator_slot', (('self', 'pos', False), ('output', 'pos', False), ('fn', 'pos', False), ('formals', 'pos', False), ('arguments', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_spawn_allocation_check', (('self', 'pos', False), ('output', 'pos', False)))
@@ -691,10 +691,10 @@ def _part_58(out):
     _append_method(out, '_clear_owned_valueclass_payload', (('self', 'pos', False), ('slot', 'pos', False)))
     _append_method(out, '_copy_valueclass_payload', (('self', 'pos', False), ('destination', 'pos', False), ('value', 'pos', False), ('ty', 'pos', False), ('module_destination', 'pos', True)))
     _append_method(out, '_copy_valueclass_payload_fields', (('self', 'pos', False), ('destination', 'pos', False), ('destination_path', 'pos', False), ('value', 'pos', False), ('ty', 'pos', False), ('module_destination', 'pos', True)))
-    _append_method(out, '_emit_owned_valueclass_cleanup', (('self', 'pos', False), ('skip_payload', 'pos', True)))
 
 
 def _part_59(out):
+    _append_method(out, '_emit_owned_valueclass_cleanup', (('self', 'pos', False), ('skip_payload', 'pos', True)))
     _append_method(out, '_emit_valueclass_return', (('self', 'pos', False), ('value', 'pos', False), ('ty', 'pos', False)))
     _append_method(out, '_load_valueclass_payload', (('self', 'pos', False), ('slot', 'pos', False), ('ty', 'pos', False), ('path', 'pos', True), ('module_source', 'pos', True)))
     _append_method(out, '_new_owned_valueclass_payload', (('self', 'pos', False), ('ty', 'pos', False), ('label', 'pos', False)))
@@ -702,10 +702,10 @@ def _part_59(out):
     _append_method(out, '_valueclass_payload_owned_roots', (('self', 'pos', False), ('slot', 'pos', False)))
     _append_method(out, '_valueclass_payload_source', (('self', 'pos', False), ('value', 'pos', False)))
     _append_method(out, '_ensure_valueclass_error_owner', (('self', 'pos', False),))
-    _append_method(out, '_emit_valueclass_payload_expr', (('self', 'pos', False), ('expr', 'pos', False), ('ty', 'pos', False)))
 
 
 def _part_60(out):
+    _append_method(out, '_emit_valueclass_payload_expr', (('self', 'pos', False), ('expr', 'pos', False), ('ty', 'pos', False)))
     _append_method(out, '_emit_valueclass_payload_from_root', (('self', 'pos', False), ('source', 'pos', False), ('ty', 'pos', False)))
     _append_method(out, '_emit_native_adapter_scalar_from_root', (('self', 'pos', False), ('source_root', 'pos', False), ('target_ty', 'pos', False)))
     _append_method(out, '_emit_native_aggregate_adapter_body', (('self', 'pos', False), ('adapter_ir', 'pos', False), ('full_fn', 'pos', False), ('original_args', 'pos', False), ('free_names', 'pos', False), ('return_ty', 'pos', False), ('adapter_fd', 'pos', False)))
