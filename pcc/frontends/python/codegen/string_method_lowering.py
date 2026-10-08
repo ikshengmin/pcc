@@ -24,6 +24,8 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_NONE,
     PY_TYPE_STR,
 )
 
@@ -712,6 +714,160 @@ class StringMethodLoweringMixin:
             return self.builder.load(output, name=self._fresh("padding.output"))
         return self._take_slot_call_root(output)
 
+    def _emit_owned_strip_method(self, expr):
+        """Dispatch strip through the actual text/byte family with rooted inputs.
+
+        A dynamic binary read must retain its bytes result. Other receivers keep
+        ordinary method lookup before argument evaluation, and None selects
+        whitespace stripping without reading it as a character buffer.
+        """
+        attr = expr.func
+        if (attr.name not in ("strip", "lstrip", "rstrip") or len(expr.args) > 1
+                or expr.kwargs or self._has_starred_unpack(expr.args)
+                or self._expr_looks_cpython(attr.obj)):
+            return None
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("strip.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(attr.obj, "strip.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            dynamic = isinstance(attr.obj.ty, DynType)
+            generic_block = None
+            done_block = None
+            byte_family = isinstance(attr.obj.ty, (BytesType, ByteArrayType))
+            if dynamic:
+                tag = self._slot_call_runtime_call("py_obj_type_tag", (receiver,), span=expr.span)
+                is_bytes = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_BYTES))
+                is_bytearray = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_BYTEARRAY))
+                byte_family = self.builder.or_(is_bytes, is_bytearray)
+                is_string = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_STR))
+                is_native = self.builder.or_(byte_family, is_string)
+                native_block = self.current_function.append_basic_block(self._fresh("strip.native"))
+                generic_block = self.current_function.append_basic_block(self._fresh("strip.generic"))
+                done_block = self.current_function.append_basic_block(self._fresh("strip.done"))
+                self.builder.cbranch(is_native, native_block, generic_block)
+                self.builder.position_at_end(native_block)
+
+            branch_roots = list(roots)
+            operands = []
+            for argument in expr.args:
+                operand = self._emit_slot_call_operand(argument, "strip.argument")
+                operands.append(operand)
+                branch_roots.append(operand)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            if dynamic:
+                bytes_block = self.current_function.append_basic_block(self._fresh("strip.bytes"))
+                text_block = self.current_function.append_basic_block(self._fresh("strip.text"))
+                ready_block = self.current_function.append_basic_block(self._fresh("strip.ready"))
+                self.builder.cbranch(byte_family, bytes_block, text_block)
+                native_branches = ((bytes_block, "py_bytes_"), (text_block, "py_str_"))
+            else:
+                native_branches = ((None, "py_bytes_" if byte_family else "py_str_"),)
+            for native_block, prefix in native_branches:
+                if native_block is not None:
+                    self.builder.position_at_end(native_block)
+                runtime_name = prefix + attr.name
+                if not operands:
+                    self._slot_call_runtime_call(
+                        runtime_name, (receiver,), result_slot=output, span=expr.span,
+                    )
+                else:
+                    chars = operands[0]
+                    chars_tag = self._slot_call_runtime_call("py_obj_type_tag", (chars,), span=expr.span)
+                    default_block = self.current_function.append_basic_block(self._fresh("strip.default"))
+                    chars_block = self.current_function.append_basic_block(self._fresh("strip.chars"))
+                    result_block = self.current_function.append_basic_block(self._fresh("strip.result"))
+                    is_none = self.builder.icmp_signed("==", chars_tag, ir.Constant(_I64, PY_TYPE_NONE))
+                    self.builder.cbranch(is_none, default_block, chars_block)
+                    self.builder.position_at_end(default_block)
+                    self._slot_call_runtime_call(
+                        runtime_name, (receiver,), result_slot=output, span=expr.span,
+                    )
+                    self.builder.branch(result_block)
+                    self.builder.position_at_end(chars_block)
+                    if prefix == "py_bytes_":
+                        valid_chars = self.builder.icmp_signed("==", chars_tag, ir.Constant(_I64, PY_TYPE_BYTES))
+                        for tag_value in (PY_TYPE_BYTEARRAY, PY_TYPE_MEMORYVIEW):
+                            matches = self.builder.icmp_signed("==", chars_tag, ir.Constant(_I64, tag_value))
+                            valid_chars = self.builder.or_(valid_chars, matches)
+                        message = "strip argument must be a bytes-like object or None"
+                    else:
+                        valid_chars = self.builder.icmp_signed("==", chars_tag, ir.Constant(_I64, PY_TYPE_STR))
+                        message = "strip argument must be str or None"
+                    valid_block = self.current_function.append_basic_block(self._fresh("strip.valid"))
+                    invalid_block = self.current_function.append_basic_block(self._fresh("strip.invalid"))
+                    self.builder.cbranch(valid_chars, valid_block, invalid_block)
+                    self.builder.position_at_end(invalid_block)
+                    self._emit_builtin_exception_and_branch("TypeError", message, expr.span)
+                    self.builder.position_at_end(valid_block)
+                    self._slot_call_runtime_call(
+                        runtime_name + "_chars", (receiver, chars), result_slot=output, span=expr.span,
+                    )
+                    self.builder.branch(result_block)
+                    self.builder.position_at_end(result_block)
+                if dynamic:
+                    self.builder.branch(ready_block)
+            if dynamic:
+                self.builder.position_at_end(ready_block)
+            self._release_slot_call_roots(tuple(operands))
+            if dynamic:
+                self.builder.branch(done_block)
+                self.builder.position_at_end(generic_block)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                method = self._new_slot_call_root("strip.method")
+                branch_roots = list(roots) + [method]
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_getattr", (receiver,), result_slot=method,
+                    suffix_args=(self._attr_name_ptr(attr.name),), span=expr.span,
+                )
+                current = self.builder.load(method, name=self._fresh("strip.callable"))
+                self._emit_attribute_error_if_null(current, attr.name, attr.span)
+                positional, keywords = self._slot_call_split_operands(expr)
+                args = self._emit_slot_call_args_tuple(positional, "strip.args")
+                branch_roots.append(args)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                kwargs = self._emit_slot_call_kwargs_object(keywords, None, expr.span, "strip.kwargs", method)
+                branch_roots.append(kwargs)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                status = self.builder.call(
+                    self.runtime["py_obj_call_slots"],
+                    [self._as_gc_ptr(method), self._as_gc_ptr(args), self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                    name=self._fresh("strip.invoke"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "strip method call", expr.span)
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots(tuple(branch_roots[len(roots):]))
+                self.builder.branch(done_block)
+                self.builder.position_at_end(done_block)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_note_published(output)
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("strip.output"))
+        return self._take_slot_call_root(output)
+
     def _maybe_emit_owned_str_result(self, expr):
         """Evaluate native string operands in roots and publish before cleanup.
 
@@ -727,6 +883,8 @@ class StringMethodLoweringMixin:
         name = attr.name
         if name in ("ljust", "rjust"):
             return self._emit_owned_padding_method(expr)
+        if name in ("strip", "lstrip", "rstrip"):
+            return self._emit_owned_strip_method(expr)
         runtime_name = None
         object_count = len(expr.args)
         scalar_index = -1
@@ -735,10 +893,6 @@ class StringMethodLoweringMixin:
             if expr.args:
                 return None
             runtime_name = "py_str_" + name
-        elif name in ("strip", "lstrip", "rstrip"):
-            if len(expr.args) > 1:
-                return None
-            runtime_name = "py_str_" + name + ("_chars" if expr.args else "")
         elif name in ("split", "rsplit"):
             if len(expr.args) > 2:
                 return None

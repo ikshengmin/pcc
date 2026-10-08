@@ -711,6 +711,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_next_pending_or_default",
     "_emit_next_filter_truth",
     "_emit_owned_padding_method",
+    "_emit_owned_strip_method",
     "_emit_ellipsis_literal",
     "_emit_virtual_thread_continuation_slot",
     "_emit_virtual_thread_generator_slot",

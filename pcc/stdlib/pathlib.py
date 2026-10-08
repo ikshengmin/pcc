@@ -293,14 +293,10 @@ class Path(PurePath):
         self,
         encoding: str = "utf-8",
         errors: str = "strict",
-        newline: str = "",
+        newline: str | None = None,
     ) -> str:
-        # ``errors`` and ``newline`` are part of CPython's signature and are
-        # forwarded to ``open``, which accepts them as compatibility kwargs
-        # (see ``codegen/native_files``).  Accepting them here is what lets
-        # ordinary code such as ``path.read_text(encoding="utf-8",
-        # errors="ignore")`` compile at all -- ``pcc/package/metadata.py``
-        # spells it that way twice.
+        # Match Path.read_text's universal-newline default. An explicit empty
+        # string has different read semantics and must reach open unchanged.
         with open(
             self._raw, "r", encoding=encoding, errors=errors, newline=newline
         ) as f:
@@ -311,7 +307,7 @@ class Path(PurePath):
         s: str,
         encoding: str = "utf-8",
         errors: str = "strict",
-        newline: str = "",
+        newline: str | None = None,
     ) -> int:
         with open(
             self._raw, "w", encoding=encoding, errors=errors, newline=newline

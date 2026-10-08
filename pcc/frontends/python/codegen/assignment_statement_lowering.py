@@ -908,6 +908,24 @@ class AssignmentStatementLoweringMixin:
             self._inspect_fullargspec_aliases[target.ident] = inspect_fullargspec
 
         target_ty = assignment_storage_annotation(stmt.annotation, stmt.value, stmt.has_value) if stmt.annotation is not None else target.ty
+        # A later assignment can lose its concrete inferred type while the
+        # binding still uses a valueclass aggregate. Select that actual slot's
+        # projection before any RHS preparation, including scalar boxing, so
+        # the producer is evaluated once into the required rooted boundary.
+        global_slot = self._module_globals.get(target.ident)
+        if global_slot is not None and (
+            self.current_func_def is None
+            or target.ident in self._current_global_names
+        ):
+            if (isinstance(global_slot[0].value_type, ir.LiteralStructType)
+                    and self._is_valueclass_payload_type(global_slot[1])):
+                target_ty = global_slot[1]
+        else:
+            existing_slot = self.env.get(target.ident)
+            if (existing_slot is not None
+                    and isinstance(existing_slot[1], ir.LiteralStructType)
+                    and self._is_valueclass_payload_type(existing_slot[2])):
+                target_ty = existing_slot[2]
         if self._maybe_emit_virtual_literal_dispatch_assign(
             target,
             stmt.value,

@@ -6684,7 +6684,18 @@ def _infer_funcdef(
         if default is not None and _is_raw_int_type(ty):
             default = _contextualize_raw_int_constant(default, ty)
         new_args.append(replace(a, annotation=ty, default=default))
-        param_scope.define(a.name, ty)
+        # Python variadic annotations describe each supplied value, while
+        # the body receives a tuple or dict. Keep the formal annotation for
+        # signature metadata; only the local binding has the carrier type.
+        # Unannotated and unresolved annotations (including unsupported
+        # Unpack forms) retain their existing dynamic inference.
+        local_ty = ty
+        if a.annotation is not None and not isinstance(ty, DynType):
+            if a.kind == "*args":
+                local_ty = TupleType(name="tuple_variadic", elems=(ty,))
+            elif a.kind == "**kwargs":
+                local_ty = DictType(name="dict", key=TYPE_STR, value=ty)
+        param_scope.define(a.name, local_ty)
 
     ret_ty = ctx.resolve_annotation(fn.return_ty)
     if fn.is_async:

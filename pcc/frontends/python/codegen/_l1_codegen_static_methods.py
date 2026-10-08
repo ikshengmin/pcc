@@ -679,6 +679,7 @@ def _part_57(out):
     _append_method(out, '_emit_next_pending_or_default', (('self', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('exhausted', 'pos', False)))
     _append_method(out, '_emit_next_filter_truth', (('self', 'pos', False), ('output', 'pos', False), ('predicate', 'pos', False), ('call_args', 'pos', False), ('pred_result', 'pos', False), ('none_obj', 'pos', False), ('span', 'pos', False)))
     _append_method(out, '_emit_owned_padding_method', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_emit_owned_strip_method', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_ellipsis_literal', (('self', 'pos', False), ('expr', 'pos', False)))
 
 

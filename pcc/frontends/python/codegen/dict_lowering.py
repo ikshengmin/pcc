@@ -825,30 +825,18 @@ class DictLoweringMixin:
                     ready_bb = fn.append_basic_block(self._fresh("dict.copy.keys.ok"))
                     self.builder.cbranch(missing, bad_bb, ready_bb)
                     self.builder.position_at_end(bad_bb)
-                    # Dynamic list/tuple sources are pair sequences, not
-                    # failed mapping copies. The existing runtime update
-                    # transaction owns their iterator/items and error TLS.
-                    tag = self._slot_call_runtime_call("py_obj_type_tag", (source,), span=expr.span)
-                    pairs = self.builder.or_(
-                        self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_LIST)),
-                        self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_TUPLE)),
-                    )
-                    pairs_bb = fn.append_basic_block(self._fresh("dict.constructor.pairs"))
-                    invalid_bb = fn.append_basic_block(self._fresh("dict.constructor.notiterable"))
-                    self.builder.cbranch(pairs, pairs_bb, invalid_bb)
-                    self.builder.position_at_end(pairs_bb)
+                    # A dynamic source can implement the mapping protocol or
+                    # yield pairs without being an exact list/tuple. Let the
+                    # owned update transaction resolve keys()/__getitem__ or
+                    # iteration, retaining its roots and exception semantics.
                     status = self.builder.call(
                         self.runtime["py_dict_update_slots"],
                         [self._as_gc_ptr(output), self._as_gc_ptr(source)],
-                        name=self._fresh("dict.constructor.pairs.status"),
+                        name=self._fresh("dict.constructor.protocol.status"),
                     )
-                    self._slot_call_check_status(status, "dictionary pair insertion", expr.span)
+                    self._slot_call_check_status(status, "dictionary protocol insertion", expr.span)
                     self._emit_post_call_err_check(expr.span)
                     self.builder.branch(end_bb)
-                    self.builder.position_at_end(invalid_bb)
-                    self._emit_builtin_exception_and_branch(
-                        "TypeError", "dict() argument is not iterable", expr.span,
-                    )
                     self.builder.position_at_end(ready_bb)
                 count = self._slot_call_runtime_call("py_obj_len", (keys,), span=expr.span)
                 index = self._alloca_in_entry(_I64, name="dict.copy.idx.addr")

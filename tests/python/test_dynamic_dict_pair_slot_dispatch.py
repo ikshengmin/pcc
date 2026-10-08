@@ -1,4 +1,4 @@
-"""Dynamic pair construction keeps the repaired authoritative owner path."""
+"""Dynamic mapping and pair construction shares the authoritative owner path."""
 import re
 
 import pytest
@@ -12,11 +12,12 @@ from pcc.backend.self_backend_x86_64_linux import _aggregate_returned_indirect
 
 @pytest.mark.parametrize('annotation', ('', ': object'))
 @pytest.mark.parametrize('expression', ('dict(source)', 'dict(source, extra=7)'))
-def test_dynamic_pair_dispatch_uses_existing_slot_transaction(annotation, expression):
+def test_dynamic_protocol_dispatch_uses_existing_slot_transaction(annotation, expression):
     source = 'def probe(source' + annotation + '):\n    return ' + expression + '\n'
     body = _function(_emit(source))
-    assert '@py_obj_type_tag(' in body
-    assert 'dict.constructor.pairs' in body
+    assert 'dict.constructor.protocol.status' in body
+    assert 'dict() argument is not iterable' not in body
+    assert 'dict.constructor.notiterable' not in body
     calls = re.findall(r'call i64[^\n]*@py_dict_update_slots\(ptr (%[\w.]+), ptr (%[\w.]+)\)', body)
     assert len(calls) == 1
     aliases = dict(re.findall(r'(%[\w.]+) = bitcast ptr (%[\w.]+) to ptr', body))

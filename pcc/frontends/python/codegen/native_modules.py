@@ -3487,6 +3487,14 @@ class NativeModuleAliasMixin:
         if not isinstance(attr, Attr):
             return None
         if live_import_expr_binding(self, attr.obj):
+            # Imported computed values keep a dynamic type and a live binding.
+            # Reuse ordinary dictionary method guards before materializing the
+            # callable: they load that binding once and preserve normal method
+            # lookup for a replacement or receiver that is not an exact dict.
+            if isinstance(attr.obj.ty, DynType):
+                native = self._maybe_emit_dict_method_via_dyn(expr)
+                if native is not None:
+                    return native
             return self._emit_slot_call_object(expr, "import.method." + attr.name)
         export = self._native_module_expr_export_info(attr.obj, attr.name)
         if export is None:

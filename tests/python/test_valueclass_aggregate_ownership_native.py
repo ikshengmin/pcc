@@ -140,6 +140,51 @@ SCENARIOS = (
             gc.collect()
             assert events == ['first', 'second']
     """, ["first", "second"]),
+    _scenario("dynamic-rebind-nested-payload", """
+        calls = []
+
+        class Producer:
+            def metadata(self, label):
+                calls.append(label)
+                gc.collect()
+                if label == 'fail':
+                    failed = Token('failed-producer')
+                    raise ValueError('producer failed')
+                return Packet(Leaf(Token(label), [Token(label + '-list')], 11), True)
+
+        def replace_payload(producer):
+            packet: Packet = producer.metadata('first')
+            gc.collect()
+            assert events == []
+            for label in ['second', 'third']:
+                packet = producer.metadata(label)
+                gc.collect()
+                assert packet.leaf.token.label == label
+                assert packet.leaf.values[0].label == label + '-list'
+                assert packet.leaf.number == 11
+                assert packet.flag is True
+            assert sorted(events) == ['first', 'first-list', 'second', 'second-list']
+            try:
+                packet = producer.metadata('fail')
+            except ValueError as error:
+                assert str(error) == 'producer failed'
+            else:
+                raise AssertionError('producer exception was lost')
+            gc.collect()
+            assert packet.leaf.token.label == 'third'
+            assert packet.leaf.values[0].label == 'third-list'
+            assert sorted(events) == [
+                'failed-producer', 'first', 'first-list', 'second', 'second-list',
+            ]
+            del packet
+
+        def run_case():
+            replace_payload(Producer())
+            assert calls == ['first', 'second', 'third', 'fail']
+    """, [
+        "failed-producer", "first", "first-list", "second", "second-list",
+        "third", "third-list",
+    ]),
     _scenario("mixed-nested-copies-delete", """
         def run_case():
             token = Token('borrowed-token')

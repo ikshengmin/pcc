@@ -604,6 +604,10 @@ class MethodCallExpressionLoweringMixin:
         # surfaces as NotImplementedError rather than falling through
         # to the generic CPython helper.
         obj_ty0 = attr.obj.ty
+        if isinstance(obj_ty0, (BytesType, ByteArrayType)) and attr.name in ("strip", "lstrip", "rstrip"):
+            native = self._emit_owned_strip_method(expr)
+            if native is not None:
+                return native
         if isinstance(obj_ty0, ListType):
             native = self._maybe_emit_list_method(expr, obj_ty0)
             if native is not None:
