@@ -1768,6 +1768,12 @@ def _write_native_exports_wire(
 def _read_native_exports_wire(path: str, include_function_object_uses: bool = False):
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
+    return _decode_native_exports_wire(text, include_function_object_uses)
+
+
+def _decode_native_exports_wire(text: str, include_function_object_uses: bool = False):
+    """Decode an already-read native-export wire without further file access."""
+
     if text.startswith(_NATIVE_EXPORT_INDEXED_SCHEMA + "\n"):
         native_exports, derived_class_map, function_object_uses, _preload = (
             _read_indexed_native_exports_wire(text)
@@ -1803,7 +1809,7 @@ def _read_native_exports_wire_for_module(path: str, module_name: str):
             _read_indexed_native_exports_wire(text, module_name)
         )
         return native_exports, derived_class_map, unique_class_preload, True
-    native_exports, derived_class_map = _read_native_exports_wire(path)
+    native_exports, derived_class_map = _decode_native_exports_wire(text)
     from pcc.frontends.python.type_infer import build_unique_external_class_preload
 
     external_for_root = {}

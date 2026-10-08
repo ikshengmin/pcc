@@ -26,10 +26,14 @@ NS = 1_000_000_000
 
 
 def _write_state(path, sampled_at, *, budget=1000, owner=11):
+    # All rows are synthetic. Derive distinct IDs even when the owner is
+    # itself a small PID such as 10, 12, or 13 in an isolated process namespace.
+    wrapper, worker, descendant = owner + 3, owner + 1, owner + 2
     path.write_text(
         policy.TREE_STATE_SCHEMA + "\n" + str(sampled_at) + "\n" + str(budget)
-        + "\n10\t1\t50\n" + str(owner) + "\t10\t100\n"
-        + "12\t" + str(owner) + "\t200\n13\t12\t30\n",
+        + "\n" + str(wrapper) + "\t0\t50\n" + str(owner) + "\t" + str(wrapper) + "\t100\n"
+        + str(worker) + "\t" + str(owner) + "\t200\n"
+        + str(descendant) + "\t" + str(worker) + "\t30\n",
         encoding="utf-8",
     )
 
@@ -219,9 +223,10 @@ def test_malformed_tree_state_never_supplies_zero_rss(tmp_path, monkeypatch, bad
     assert policy.read_tree_state(str(state), 1000, 11, [12]) is None
 
 
+@pytest.mark.parametrize("owner_pid", [10, 12345])
 @pytest.mark.parametrize("publication_delay", [0.25, 1.75, 2.25, 4.0])
 def test_sampler_retry_delay_does_not_relax_admission_freshness(
-    tmp_path, monkeypatch, publication_delay,
+    tmp_path, monkeypatch, publication_delay, owner_pid,
 ):
     # Deterministic scheduling model: the coordinator starts just after the
     # previous snapshot. The next fresh snapshot is delayed by ps. This pins
@@ -236,7 +241,7 @@ def test_sampler_retry_delay_does_not_relax_admission_freshness(
         def sleep(self, seconds):
             self.value += seconds
             if self.value >= 100.0 + publication_delay:
-                _write_state(state, self.value, budget=budget, owner=os.getpid())
+                _write_state(state, self.value, budget=budget, owner=owner_pid)
 
     class Admitted(Exception):
         pass
@@ -244,11 +249,19 @@ def test_sampler_retry_delay_does_not_relax_admission_freshness(
     clock = Clock()
     state = tmp_path / "tree.tsv"
     budget = 512 * 1024 * 1024
-    _write_state(state, 99.99, budget=budget, owner=os.getpid())
+    _write_state(state, 99.99, budget=budget, owner=owner_pid)
     monkeypatch.setenv(policy.TREE_STATE_ENV, str(state))
+    # Make both the reported failure and ordinary-PID control deterministic;
+    # do not alter the real pytest PID or the process-wide os module.
+    monkeypatch.setattr(pool, "os", SimpleNamespace(
+        getpid=lambda: owner_pid, environ=os.environ, path=os.path, unlink=os.unlink,
+    ))
     monkeypatch.setattr(policy, "time", clock)
     monkeypatch.setattr(pool, "time", clock)
     monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: 32 * 1024 * 1024)
+    assert policy.read_tree_state(str(state), budget, owner_pid, [owner_pid + 1]) == (
+        50, {owner_pid + 1: 230},
+    )
 
     def start(_specs, _index):
         assert clock.value >= 100.0 + publication_delay

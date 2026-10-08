@@ -9,6 +9,7 @@ import os
 import platform
 import re
 import sys
+import time
 
 import pytest
 
@@ -18,6 +19,7 @@ from pcc.backend.owned_object_emit import emit_owned_object
 from pcc.tools import runtime_module_inventory
 from tests.python.owned_regression_support import (
     assert_owned_program,
+    assert_reference_program,
     explicit_owned_runtime,
 )
 
@@ -288,29 +290,90 @@ int main(void) {
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
+def _darwin_time_program():
+    # Keeping monotonic in an ordinary imported provider reproduces the user's
+    # link boundary, while gmtime executes the previously missing definition.
+    # CPython exposes libc's UTC abbreviation (Darwin uses UTC); the owned
+    # provider uses GMT. Neither spelling permits a shifted calendar or offset.
+    return """import time
+
+def check_gmtime(seconds, expected):
+    result = time.gmtime(seconds)
+    observed = (seconds, tuple(result), result.tm_zone, result.tm_gmtoff)
+    assert tuple(result) == expected, observed
+    assert type(result.tm_zone) is str, observed
+    assert result.tm_zone in ("GMT", "UTC"), observed
+    assert type(result.tm_gmtoff) is int, observed
+    assert result.tm_gmtoff == 0, observed
+
+def main():
+    assert time.monotonic() > 0
+    check_gmtime(0, (1970, 1, 1, 0, 0, 0, 3, 1, 0))
+    check_gmtime(-1, (1969, 12, 31, 23, 59, 59, 2, 365, 0))
+    check_gmtime(951782400, (2000, 2, 29, 0, 0, 0, 1, 60, 0))
+    print("DARWIN_TIME_OK")
+
+main()
+"""
+
+
+def test_darwin_time_program_reference_contract(tmp_path):
+    assert_reference_program(_darwin_time_program(), "DARWIN_TIME_OK\n", tmp_path)
+
+
+@pytest.mark.parametrize("zone", ("GMT", "UTC"))
+def test_darwin_time_program_accepts_utc_abbreviations(zone, monkeypatch, capsys):
+    reference = time.gmtime
+    calls = []
+
+    def gmtime(seconds):
+        calls.append(seconds)
+        return time.struct_time(tuple(reference(seconds)), {
+            "tm_zone": zone, "tm_gmtoff": 0,
+        })
+
+    monkeypatch.setattr(time, "gmtime", gmtime)
+    exec(_darwin_time_program(), {})
+    assert calls == [0, -1, 951782400]
+    assert capsys.readouterr().out == "DARWIN_TIME_OK\n"
+
+
+@pytest.mark.parametrize("seconds", (0, -1, 951782400))
+@pytest.mark.parametrize("field, value", (
+    *((index, None) for index in range(9)),
+    (9, None), (9, ""), (9, "PST"), (9, b"GMT"),
+    (10, None), (10, 3600), (10, 0.0),
+))
+def test_darwin_time_program_rejects_corrupt_records(
+    seconds, field, value, monkeypatch,
+):
+    reference = time.gmtime
+
+    def gmtime(stamp):
+        result = reference(stamp)
+        if stamp != seconds:
+            return result
+        fields = list(result) + [result.tm_zone, result.tm_gmtoff]
+        fields[field] = fields[field] + 1 if field < 9 else value
+        return time.struct_time(fields)
+
+    monkeypatch.setattr(time, "gmtime", gmtime)
+    with pytest.raises(AssertionError) as caught:
+        exec(_darwin_time_program(), {})
+    # Failures must identify the input and actual calendar/zone/offset, so a
+    # future runner discrepancy cannot disappear behind a combined assertion.
+    observed = caught.value.args[0]
+    result = gmtime(seconds)
+    assert observed == (seconds, tuple(result), result.tm_zone, result.tm_gmtoff)
+
+
 @pytest.mark.integration
 @pytest.mark.pcc_gate(probe=lambda: sys.platform == "darwin" and platform.machine() == "arm64")
 def test_darwin_import_time_and_gmtime_execute(
     tmp_path, explicit_owned_runtime, python_program_compiler, request, capfd,
 ):
-    # Keeping monotonic in an ordinary imported provider reproduces the user's
-    # link boundary, while gmtime executes the previously missing definition.
-    program = """import time
-
-def main():
-    assert time.monotonic() > 0
-    result = time.gmtime(0)
-    assert tuple(result) == (1970, 1, 1, 0, 0, 0, 3, 1, 0)
-    assert result.tm_zone == "GMT" and result.tm_gmtoff == 0
-    result = time.gmtime(-1)
-    assert tuple(result) == (1969, 12, 31, 23, 59, 59, 2, 365, 0)
-    assert tuple(time.gmtime(951782400))[:3] == (2000, 2, 29)
-    print("DARWIN_TIME_OK")
-
-main()
-"""
     assert_owned_program(
-        program, "DARWIN_TIME_OK\n", tmp_path, python_program_compiler,
+        _darwin_time_program(), "DARWIN_TIME_OK\n", tmp_path, python_program_compiler,
         request.node.callspec.params["python_program_compiler"],
         explicit_owned_runtime, capfd,
     )

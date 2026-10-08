@@ -98,8 +98,12 @@ def main():
             raise AssertionError('bad field count')
     assert tuple(time.gmtime(-0.25)) == (1969,12,31,23,59,59,2,365,0)
     assert tuple(time.gmtime(-1.25)) == (1969,12,31,23,59,58,2,365,0)
-    assert time.gmtime(0).tm_zone == 'GMT'
-    assert time.gmtime(0).tm_gmtoff == 0
+    epoch = time.gmtime(0)
+    observed = (tuple(epoch), epoch.tm_zone, epoch.tm_gmtoff)
+    assert tuple(epoch) == (1970, 1, 1, 0, 0, 0, 3, 1, 0), observed
+    # CPython preserves libc's UTC abbreviation; Darwin uses UTC.
+    assert type(epoch.tm_zone) is str and epoch.tm_zone in ('GMT', 'UTC'), observed
+    assert type(epoch.tm_gmtoff) is int and epoch.tm_gmtoff == 0, observed
     for stamp in (-2208988800, -1, 0, 951782400, 1710053999, 1710054000,
                   1730613599, 1730613600, 4102444800):
         localtm = time.localtime(stamp)

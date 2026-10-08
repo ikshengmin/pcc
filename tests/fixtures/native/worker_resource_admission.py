@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from pcc.extern import c_int, extern
+from pcc.extern import c_int, c_int64, c_ptr, extern
 from pcc.frontends.python import pipeline_frontend_workers as workers
 from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
@@ -25,6 +25,12 @@ MIB = 1024 ** 2
 PAYLOAD_BYTES = 48 * MIB
 WAIT_SECONDS = 3.0
 _setpgid = extern("setpgid", (c_int, c_int), c_int)
+# Raw ABI probes deliberately bypass the controller's ownership inventory.
+# extern declarations lower at their call sites; they are not runtime module
+# attributes that can be fetched from pool.
+_raw_worker_start = extern("pcc_worker_process_start", (c_ptr, c_int64), c_int64)
+_raw_worker_poll = extern("pcc_worker_process_poll", (c_int64,), c_int64)
+_raw_worker_stop = extern("pcc_worker_process_stop", (c_int64,), c_int64)
 
 
 def read(root, name):
@@ -382,10 +388,10 @@ def spawn_failure(root):
     else:
         raise AssertionError("empty command accepted")
     if native_owner():
-        assert pool._native_worker_start([], 0) == -1
-        assert pool._native_worker_start([], -1) == -1
-        assert pool._native_worker_poll(0) == 127
-        assert pool._native_worker_stop(0) == -1
+        assert _raw_worker_start([], 0) == -1
+        assert _raw_worker_start([], -1) == -1
+        assert _raw_worker_poll(0) == 127
+        assert _raw_worker_stop(0) == -1
     expect_unowned_poll(0)
     pool._stop_resource_worker(0)
     # The driver is its own process-group leader. A mistaken group signal to
@@ -409,7 +415,7 @@ def wait_owned(pid):
 
 def raw_poll(pid, process):
     if native_owner():
-        return pool._native_worker_poll(pid)
+        return _raw_worker_poll(pid)
     result = process.poll()
     return pool._WORKER_RUNNING if result is None else result
 
@@ -443,7 +449,7 @@ def handles(root):
             raise AssertionError("live child retired")
         if native_owner():
             # Real owned ABI, deliberately outside the shared pool inventory.
-            sentinel = pool._native_worker_start(specs, 1)
+            sentinel = _raw_worker_start(specs, 1)
         else:
             argv, vector = specs[1]
             environment = dict(item.split("=", 1) for item in vector)

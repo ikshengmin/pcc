@@ -154,6 +154,38 @@ def test_timestamp_float_subclass_can_supply_index_protocol(timestamp):
     assert time.gmtime(value) == time.gmtime(18)
 
 
+@pytest.mark.parametrize('platform', ('darwin', 'linux', 'win32'))
+@pytest.mark.parametrize('seconds', (-1, 0, 951782400))
+def test_owned_gmtime_keeps_exact_calendar_utc_arguments(platform, seconds):
+    buffer = object()
+    record = object()
+    calls = []
+
+    def allocate(size):
+        assert size == 64
+        return buffer
+
+    def breakdown(value, offset, daylight, zone, output):
+        calls.append((value, offset, daylight, zone, output))
+        return 0
+
+    def from_tm(output):
+        assert output is buffer
+        return record
+
+    ns = functions(ROOT / 'pcc/stdlib/time.py', ('gmtime',), {
+        '_timestamp_seconds': lambda value: value,
+        'stack_alloc': allocate,
+        '_breakdown': breakdown,
+        '_record_from_tm': from_tm,
+        '_native_sys': SimpleNamespace(platform=platform),
+    })
+    assert ns['gmtime'](seconds) is record
+    # The cross-platform acceptance oracle allows libc's UTC spelling too;
+    # it must not weaken the owned provider's explicit GMT/zero-offset ABI.
+    assert calls == [(seconds, 0, 0, 'GMT', buffer)]
+
+
 @pytest.mark.parametrize('name', ('time', 'monotonic', 'perf_counter'))
 def test_owned_clock_wrapper_uses_abi_result_and_propagates_error(name):
     calls = []
