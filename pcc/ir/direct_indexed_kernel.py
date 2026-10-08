@@ -642,6 +642,47 @@ class DirectIndexedFunctionBuilder:
             value_operand,
         )
 
+    def publish_cmpxchg(
+        self,
+        dest_ref: _ir.Value,
+        ptr_ref: _ir.Value,
+        expected_ref: _ir.Value,
+        desired_ref: _ir.Value,
+        success_ordering: str,
+        failure_ordering: str,
+    ) -> int:
+        """Publish the text parser's compare-exchange payload and all uses."""
+        if success_ordering not in ("monotonic", "acquire", "release", "acq_rel", "seq_cst"):
+            raise BackendUnavailable("direct cmpxchg success ordering is not supported")
+        if failure_ordering not in ("monotonic", "acquire", "seq_cst"):
+            raise BackendUnavailable("direct cmpxchg failure ordering is not supported")
+        value_desc = self._type_desc(expected_ref.type)
+        if value_desc != self._type_desc(desired_ref.type):
+            raise BackendUnavailable("direct cmpxchg operand types disagree")
+        dest_id = self._dest_value_id(dest_ref)
+        pair_desc = self._type_desc(dest_ref.type)
+        ptr_operand = self._operand_value_ref(ptr_ref)
+        expected_operand = self._operand_value_ref(expected_ref)
+        desired_operand = self._operand_value_ref(desired_ref)
+        payload_id = self.seed.append_cold_instruction_data(
+            (
+                self.seed.value_names[dest_id],
+                pair_desc,
+                self._type_desc(ptr_ref.type),
+                _decode_direct_value_token(self._value_ref_text(ptr_ref), self.function),
+                value_desc,
+                _decode_direct_value_token(self._value_ref_text(expected_ref), self.function),
+                _decode_direct_value_token(self._value_ref_text(desired_ref), self.function),
+                success_ordering,
+                failure_ordering,
+            )
+        )
+        self.seed.publish_value_type_id(dest_id, self._intern_type_desc(pair_desc))
+        return self._append_metadata(
+            "cmpxchg", payload_id, dest_id, 0,
+            ptr_operand, expected_operand, desired_operand,
+        )
+
     def publish_fcmp(
         self,
         predicate: str,

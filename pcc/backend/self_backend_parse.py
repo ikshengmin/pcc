@@ -503,12 +503,14 @@ def decode_llvm_c_string(token: str) -> bytes:
 
 
 def decode_value_token(token: str, *, type_context=None) -> str:
-    if type_context is None:
-        type_context = TypeParseContext()
     token = token.strip()
     simple = _decode_simple_value_token(token)
     if simple is not None:
         return simple
+    # Simple operands do not inspect named layouts or populate type caches.
+    # Defer the context and its dictionaries until a typed expression needs it.
+    if type_context is None:
+        type_context = TypeParseContext()
     typed_token = _decode_parenthesized_typed_value(token, type_context=type_context)
     if typed_token is not None:
         return typed_token

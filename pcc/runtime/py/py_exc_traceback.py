@@ -8,6 +8,8 @@ but uses pcc.unsafe.write instead of variadic fprintf.
 __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
+    PY_FLAG_IMMORTAL,
     PYCLASSOBJECT_NAME_OFFSET,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_TYPE_EXC,
@@ -18,24 +20,33 @@ from pcc.runtime.py.py_abi_constants import (
 )
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_cas_i64,
+    atomic_load_i64,
     atomic_load_i32,
     atomic_rmw_i32,
     cstr,
+    define_global_i32,
+    define_global_i64,
     define_global_ptr_null,
     free,
+    global_addr,
     global_load_ptr,
     global_store_ptr,
+    int_to_ptr,
+    ptr_to_int,
     is_tagged_int,
     load_i32,
     load_i64,
     load_ptr,
     malloc,
     memcpy,
+    memset,
     null,
     ptr_add,
     ptr_eq,
     ptr_is_null,
     realloc,
+    stack_alloc,
     store_i8,
     store_i32,
     store_i64,
@@ -73,6 +84,47 @@ py_instance_getattr = extern("py_instance_getattr", (c_ptr, c_ptr), c_ptr)
 define_global_ptr_null("py_traceback_class_cache")
 define_global_ptr_null("py_frame_class_cache")
 define_global_ptr_null("py_code_class_cache")
+
+
+# Cache slots are process-lifetime owners. The mutex protects registration and
+# publication, never managed allocation or destruction. Candidates remain in
+# an ordinary construction frame until publication (including reentrant calls).
+define_global_i64("pcc_traceback_cache_mutex_bits", 0)
+define_global_i32("pcc_traceback_cache_registered", 0)
+define_global_i32("pcc_frame_cache_registered", 0)
+define_global_i32("pcc_code_cache_registered", 0)
+define_global_i32("pcc_traceback_borrowed_map", -1)
+define_global_i32("pcc_traceback_owned_map", 9)
+
+_TB_EXCEPTION = 0
+_TB_CLASS = 1
+_TB_FRAME_CLASS = 2
+_TB_CODE_CLASS = 3
+_TB_CHAIN = 4
+_TB_CODE = 5
+_TB_FRAME = 6
+_TB_ENTRY = 7
+_TB_VALUE = 8
+_TB_SLOT_COUNT = 9
+
+pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
+pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
+pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
+pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
+pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+py_runtime_error_if_unset_abi = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+py_cleanup_one_root_preserving_exception = extern("py_cleanup_one_root_preserving_exception", (c_ptr,), c_void)
+py_cleanup_one_lease_preserving_exception = extern("py_cleanup_one_lease_preserving_exception", (c_ptr, c_int64), c_void)
 
 
 def _type_of(obj) -> int:
@@ -625,45 +677,125 @@ def py_exc_traceback_print_exc(exc) -> None:
     free(b)
 
 
-def _traceback_class():
-    cls = global_load_ptr("py_traceback_class_cache")
-    if ptr_is_null(cls) == 0:
-        return cls
-    cls = py_class_new(cstr("traceback"), null(), 0, null(), 0)
-    if ptr_is_null(cls) == 0:
-        global_store_ptr("py_traceback_class_cache", cls)
-    return cls
+def _tb_cache_mutex():
+    slot = global_addr("pcc_traceback_cache_mutex_bits")
+    bits: int = atomic_load_i64(slot, 0, "acquire")
+    if bits != 0:
+        return int_to_ptr(bits)
+    candidate = pcc_mutex_new()
+    if ptr_is_null(candidate):
+        return null()
+    installed: int = atomic_cas_i64(slot, 0, 0, ptr_to_int(candidate), "acq_rel", "acquire")
+    if installed != 0:
+        pcc_mutex_free(candidate)
+        return int_to_ptr(installed)
+    return candidate
 
 
-def _frame_class():
-    cls = global_load_ptr("py_frame_class_cache")
-    if ptr_is_null(cls) == 0:
-        return cls
-    cls = py_class_new(cstr("frame"), null(), 0, null(), 0)
-    if ptr_is_null(cls) == 0:
-        global_store_ptr("py_frame_class_cache", cls)
-    return cls
+def _tb_error(message) -> int:
+    py_runtime_error_if_unset_abi(cstr("traceback construction"), message)
+    return -1
 
 
-def _code_class():
-    cls = global_load_ptr("py_code_class_cache")
-    if ptr_is_null(cls) == 0:
-        return cls
-    cls = py_class_new(cstr("code"), null(), 0, null(), 0)
-    if ptr_is_null(cls) == 0:
-        global_store_ptr("py_code_class_cache", cls)
-    return cls
+def _tb_adopt(slot) -> None:
+    # NEW results are stored directly into an empty registered slot before
+    # any call. The barrier reloads under the relocation graph lock.
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
 
 
-def _tb_set_owned(obj, name, value) -> int:
-    """Store a NEW reference as ``obj.name`` and drop it; -1 on failure."""
-    if ptr_is_null(value) != 0:
-        return -1
-    rc: int = py_instance_setattr(obj, name, value)
-    py_decref(value)
-    if rc != 0:
-        return -1
+def _tb_cache_class(cache, registered, name, destination, candidate) -> int:
+    mutex = _tb_cache_mutex()
+    if ptr_is_null(mutex) or pcc_mutex_lock(mutex) != 0:
+        return _tb_error(cstr("class cache lock failed"))
+    if load_i32(registered, 0) == 0:
+        handle = pcc_gc_scheduler_root_register_handle(cache)
+        if ptr_is_null(handle):
+            pcc_mutex_unlock(mutex)
+            return _tb_error(cstr("class cache root registration failed"))
+        store_i32(registered, 0, 1)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_store_root(destination, pcc_gc_load_ptr(null(), cache))
+    pcc_py_gc_minor_graph_unlock()
+    pcc_mutex_unlock(mutex)
+    if ptr_is_null(load_ptr(destination, 0)) == 0:
+        return 0
+
+    # A finalizer may reenter here and publish first. No cache mutex or graph
+    # lock spans construction, and the losing candidate never escapes.
+    store_ptr(candidate, 0, py_class_new(name, null(), 0, null(), 0))
+    _tb_adopt(candidate)
+    if ptr_is_null(load_ptr(candidate, 0)):
+        return _tb_error(cstr("class cache allocation failed"))
+    if pcc_mutex_lock(mutex) != 0:
+        _tb_discard_class(candidate)
+        return _tb_error(cstr("class cache publication lock failed"))
+    pcc_py_gc_minor_graph_lock()
+    published = pcc_gc_load_ptr(null(), cache)
+    if ptr_is_null(published):
+        pcc_gc_store_root(cache, pcc_gc_load_ptr(null(), candidate))
+    pcc_gc_store_root(destination, pcc_gc_load_ptr(null(), cache))
+    loser: int = 1 - ptr_eq(pcc_gc_load_ptr(null(), candidate), pcc_gc_load_ptr(null(), cache))
+    pcc_py_gc_minor_graph_unlock()
+    pcc_mutex_unlock(mutex)
+    if loser != 0:
+        _tb_discard_class(candidate)
+    else:
+        py_cleanup_one_root_preserving_exception(candidate)
     return 0
+
+
+def _tb_discard_class(candidate) -> None:
+    # Only our unexposed, empty, zero-base synthetic class reaches this path.
+    # Its self-MRO entries are borrowed, and its initial reference is the sole
+    # owner. Demote this unpublished shell so ordinary class disposal can
+    # retire its allocation and MRO even on refcount-only GC0.
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), candidate)
+    atomic_rmw_i32("and", value, 12, ~PY_FLAG_IMMORTAL, "relaxed")
+    pcc_py_gc_minor_graph_unlock()
+    py_cleanup_one_root_preserving_exception(candidate)
+
+
+def _tb_new_instance(slots, class_index: int, result_index: int) -> int:
+    source = ptr_add(slots, class_index * C_POINTER_SIZE)
+    destination = ptr_add(slots, result_index * C_POINTER_SIZE)
+    lease: int = pcc_gc_foreign_lease_acquire(source)
+    if lease < 0:
+        return _tb_error(cstr("class address lease failed"))
+    store_ptr(destination, 0, py_instance_new(load_ptr(source, 0)))
+    _tb_adopt(destination)
+    py_cleanup_one_lease_preserving_exception(source, lease)
+    if ptr_is_null(load_ptr(destination, 0)):
+        return _tb_error(cstr("instance allocation failed"))
+    return 0
+
+
+def _tb_set_slot(slots, object_index: int, name, value_index: int) -> int:
+    destination = ptr_add(slots, object_index * C_POINTER_SIZE)
+    value = ptr_add(slots, value_index * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(value, 0)):
+        return -1
+    object_lease: int = pcc_gc_foreign_lease_acquire(destination)
+    if object_lease < 0:
+        return _tb_error(cstr("instance address lease failed"))
+    value_lease: int = pcc_gc_foreign_lease_acquire(value)
+    if value_lease < 0:
+        py_cleanup_one_lease_preserving_exception(destination, object_lease)
+        return _tb_error(cstr("attribute address lease failed"))
+    rc: int = py_instance_setattr(load_ptr(destination, 0), name, load_ptr(value, 0))
+    py_cleanup_one_lease_preserving_exception(value, value_lease)
+    py_cleanup_one_lease_preserving_exception(destination, object_lease)
+    return rc
+
+
+def _tb_set_value(slots, object_index: int, name) -> int:
+    value = ptr_add(slots, _TB_VALUE * C_POINTER_SIZE)
+    _tb_adopt(value)
+    rc: int = _tb_set_slot(slots, object_index, name, _TB_VALUE)
+    py_cleanup_one_root_preserving_exception(value)
+    return rc
 
 
 def _tb_cstr_or(p, fallback):
@@ -672,95 +804,129 @@ def _tb_cstr_or(p, fallback):
     return py_str_new(p, strlen(p))
 
 
-def _tb_new_entry(fr, tb_cls, frame_cls, code_cls, tb_next):
-    """One traceback object (with its frame and code) for frame record ``fr``."""
+def _tb_new_entry(slots, index: int) -> int:
+    """Build through authoritative slots; lease only individual raw ABI calls."""
+    pcc_py_gc_minor_graph_lock()
+    exc = pcc_gc_load_ptr(null(), ptr_add(slots, _TB_EXCEPTION * C_POINTER_SIZE))
+    fr = ptr_add(load_ptr(exc, 48), index * 32)
+    # Frame metadata points to immutable native strings, not managed objects.
     func_name = load_ptr(fr, 0)
     filename = load_ptr(fr, 8)
     line: int = load_i32(fr, 24)
-    code = py_instance_new(code_cls)
-    if ptr_is_null(code) != 0:
-        return null()
-    ok: int = _tb_set_owned(code, cstr("co_filename"), _tb_cstr_or(filename, cstr("<unknown>")))
-    if ok == 0:
-        ok = _tb_set_owned(code, cstr("co_name"), _tb_cstr_or(func_name, cstr("<module>")))
-    if ok == 0:
-        ok = _tb_set_owned(code, cstr("co_qualname"), _tb_cstr_or(func_name, cstr("<module>")))
-    if ok == 0:
-        ok = _tb_set_owned(code, cstr("co_firstlineno"), py_int_from_i64(line))
-    if ok != 0:
-        py_decref(code)
-        return null()
-    frame = py_instance_new(frame_cls)
-    if ptr_is_null(frame) != 0:
-        py_decref(code)
-        return null()
-    ok = _tb_set_owned(frame, cstr("f_code"), code)
-    none = global_load_ptr("py_None")
-    if ok == 0:
-        ok = _tb_set_owned(frame, cstr("f_lineno"), py_int_from_i64(line))
-    if ok == 0:
-        ok = _tb_set_owned(frame, cstr("f_lasti"), py_int_from_i64(-1))
-    if ok == 0:
-        ok = _tb_set_owned(frame, cstr("f_globals"), py_dict_new())
-    if ok == 0:
-        ok = _tb_set_owned(frame, cstr("f_locals"), py_dict_new())
-    if ok == 0:
-        py_incref(none)
-        ok = _tb_set_owned(frame, cstr("f_back"), none)
-    if ok != 0:
-        py_decref(frame)
-        return null()
-    tb = py_instance_new(tb_cls)
-    if ptr_is_null(tb) != 0:
-        py_decref(frame)
-        return null()
-    ok = _tb_set_owned(tb, cstr("tb_frame"), frame)
-    if ok == 0:
-        ok = _tb_set_owned(tb, cstr("tb_lineno"), py_int_from_i64(line))
-    if ok == 0:
-        ok = _tb_set_owned(tb, cstr("tb_lasti"), py_int_from_i64(-1))
-    if ok == 0:
-        py_incref(tb_next)
-        ok = _tb_set_owned(tb, cstr("tb_next"), tb_next)
-    if ok != 0:
-        py_decref(tb)
-        return null()
-    return tb
+    pcc_py_gc_minor_graph_unlock()
+    value = ptr_add(slots, _TB_VALUE * C_POINTER_SIZE)
+    if _tb_new_instance(slots, _TB_CODE_CLASS, _TB_CODE) != 0:
+        return -1
+    store_ptr(value, 0, _tb_cstr_or(filename, cstr("<unknown>")))
+    if _tb_set_value(slots, _TB_CODE, cstr("co_filename")) != 0:
+        return -1
+    store_ptr(value, 0, _tb_cstr_or(func_name, cstr("<module>")))
+    if _tb_set_value(slots, _TB_CODE, cstr("co_name")) != 0:
+        return -1
+    store_ptr(value, 0, _tb_cstr_or(func_name, cstr("<module>")))
+    if _tb_set_value(slots, _TB_CODE, cstr("co_qualname")) != 0:
+        return -1
+    store_ptr(value, 0, py_int_from_i64(line))
+    if _tb_set_value(slots, _TB_CODE, cstr("co_firstlineno")) != 0:
+        return -1
+    if _tb_new_instance(slots, _TB_FRAME_CLASS, _TB_FRAME) != 0:
+        return -1
+    if _tb_set_slot(slots, _TB_FRAME, cstr("f_code"), _TB_CODE) != 0:
+        return -1
+    py_cleanup_one_root_preserving_exception(ptr_add(slots, _TB_CODE * C_POINTER_SIZE))
+    store_ptr(value, 0, py_int_from_i64(line))
+    if _tb_set_value(slots, _TB_FRAME, cstr("f_lineno")) != 0:
+        return -1
+    store_ptr(value, 0, py_int_from_i64(-1))
+    if _tb_set_value(slots, _TB_FRAME, cstr("f_lasti")) != 0:
+        return -1
+    store_ptr(value, 0, py_dict_new())
+    if _tb_set_value(slots, _TB_FRAME, cstr("f_globals")) != 0:
+        return -1
+    store_ptr(value, 0, py_dict_new())
+    if _tb_set_value(slots, _TB_FRAME, cstr("f_locals")) != 0:
+        return -1
+    pcc_gc_store_root(value, global_load_ptr("py_None"))
+    if _tb_set_value(slots, _TB_FRAME, cstr("f_back")) != 0:
+        return -1
+    if _tb_new_instance(slots, _TB_CLASS, _TB_ENTRY) != 0:
+        return -1
+    if _tb_set_slot(slots, _TB_ENTRY, cstr("tb_frame"), _TB_FRAME) != 0:
+        return -1
+    py_cleanup_one_root_preserving_exception(ptr_add(slots, _TB_FRAME * C_POINTER_SIZE))
+    store_ptr(value, 0, py_int_from_i64(line))
+    if _tb_set_value(slots, _TB_ENTRY, cstr("tb_lineno")) != 0:
+        return -1
+    store_ptr(value, 0, py_int_from_i64(-1))
+    if _tb_set_value(slots, _TB_ENTRY, cstr("tb_lasti")) != 0:
+        return -1
+    return _tb_set_slot(slots, _TB_ENTRY, cstr("tb_next"), _TB_CHAIN)
+
+
+def _tb_finish(slots, borrowed, success: int):
+    index: int = 0
+    while index < _TB_SLOT_COUNT:
+        if index != _TB_CHAIN or success == 0:
+            py_cleanup_one_root_preserving_exception(ptr_add(slots, index * C_POINTER_SIZE))
+        index = index + 1
+    result = ptr_add(slots, _TB_CHAIN * C_POINTER_SIZE)
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), result)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, 12) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(result, prior)
 
 
 @c_abi_export("py_exc_traceback_object")
 def py_exc_traceback_object(exc):
-    """``exc.__traceback__``: NEW reference, None when no frame was recorded.
+    """NEW traceback chain, starting at the outermost recorded frame.
 
-    Frame records are appended as the exception leaves each function, so
-    record 0 is the innermost frame.  CPython's chain starts at the outermost
-    frame and follows ``tb_next`` inward, so it is built from record 0 up.
+    Register the incoming borrowed argument before the first call; all managed
+    construction state thereafter lives in collector-rewritten owning slots.
     """
-    none = global_load_ptr("py_None")
-    if ptr_is_null(exc) != 0 or _is_exception(exc) == 0:
-        py_incref(none)
-        return none
-    records = load_ptr(exc, 48)
-    n_frames: int = load_i32(exc, 56)
-    if n_frames <= 0 or ptr_is_null(records) != 0:
-        py_incref(none)
-        return none
-    tb_cls = _traceback_class()
-    frame_cls = _frame_class()
-    code_cls = _code_class()
-    if ptr_is_null(tb_cls) != 0 or ptr_is_null(frame_cls) != 0 or ptr_is_null(code_cls) != 0:
-        return null()
-    chain = none
-    py_incref(chain)
-    i: int = 0
-    while i < n_frames:
-        tb = _tb_new_entry(ptr_add(records, i * 32), tb_cls, frame_cls, code_cls, chain)
-        py_decref(chain)
-        if ptr_is_null(tb) != 0:
-            return null()
-        chain = tb
-        i = i + 1
-    return chain
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, exc)
+    pcc_gc_frame_enter(global_addr("pcc_traceback_borrowed_map"), borrowed)
+    slots = stack_alloc(_TB_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _TB_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_traceback_owned_map"), slots)
+    lease: int = pcc_gc_root_copy_borrowed_lease(slots, borrowed)
+    if lease < 0:
+        _tb_error(cstr("exception owner acquisition failed"))
+        return _tb_finish(slots, borrowed, 0)
+    py_cleanup_one_lease_preserving_exception(slots, lease)
+    pcc_py_gc_minor_graph_lock()
+    exc = pcc_gc_load_ptr(null(), slots)
+    n_frames: int = 0
+    if _is_exception(exc) != 0:
+        if ptr_is_null(load_ptr(exc, 48)) == 0:
+            n_frames = load_i32(exc, 56)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_root(ptr_add(slots, _TB_CHAIN * C_POINTER_SIZE), global_load_ptr("py_None"))
+    if n_frames <= 0:
+        return _tb_finish(slots, borrowed, 1)
+    candidate = ptr_add(slots, _TB_VALUE * C_POINTER_SIZE)
+    if _tb_cache_class(global_addr("py_traceback_class_cache"), global_addr("pcc_traceback_cache_registered"), cstr("traceback"), ptr_add(slots, _TB_CLASS * C_POINTER_SIZE), candidate) != 0:
+        return _tb_finish(slots, borrowed, 0)
+    if _tb_cache_class(global_addr("py_frame_class_cache"), global_addr("pcc_frame_cache_registered"), cstr("frame"), ptr_add(slots, _TB_FRAME_CLASS * C_POINTER_SIZE), candidate) != 0:
+        return _tb_finish(slots, borrowed, 0)
+    if _tb_cache_class(global_addr("py_code_class_cache"), global_addr("pcc_code_cache_registered"), cstr("code"), ptr_add(slots, _TB_CODE_CLASS * C_POINTER_SIZE), candidate) != 0:
+        return _tb_finish(slots, borrowed, 0)
+    index: int = 0
+    while index < n_frames:
+        if _tb_new_entry(slots, index) != 0:
+            return _tb_finish(slots, borrowed, 0)
+        py_cleanup_one_root_preserving_exception(ptr_add(slots, _TB_CHAIN * C_POINTER_SIZE))
+        if pcc_gc_root_move(ptr_add(slots, _TB_CHAIN * C_POINTER_SIZE), ptr_add(slots, _TB_ENTRY * C_POINTER_SIZE)) != 0:
+            _tb_error(cstr("traceback chain owner transfer failed"))
+            return _tb_finish(slots, borrowed, 0)
+        index = index + 1
+    return _tb_finish(slots, borrowed, 1)
 
 
 @c_abi_export("py_exc_handle_uncaught")

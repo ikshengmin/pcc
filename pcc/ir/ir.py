@@ -3265,25 +3265,33 @@ class IRBuilder:
     ) -> Value:
         pair_ty = LiteralStructType([cmp.type, _I1])
         v = self._next(name, pair_ty)
-        self._emit(
-            str(v)
-            + " = cmpxchg "
-            + str(ptr.type)
-            + " "
-            + str(ptr)
-            + ", "
-            + str(cmp.type)
-            + " "
-            + str(cmp)
-            + ", "
-            + str(val.type)
-            + " "
-            + str(val)
-            + " "
-            + str(success_ordering)
-            + " "
-            + str(failure_ordering)
-        )
+        direct_builder = self._direct_builder_plane()
+        if self._direct_indexed_no_text and direct_builder is not None:
+            rec = self._emit_direct("cmpxchg")
+        else:
+            rec = self._emit(
+                str(v)
+                + " = cmpxchg "
+                + str(ptr.type)
+                + " "
+                + str(ptr)
+                + ", "
+                + str(cmp.type)
+                + " "
+                + str(cmp)
+                + ", "
+                + str(val.type)
+                + " "
+                + str(val)
+                + " "
+                + str(success_ordering)
+                + " "
+                + str(failure_ordering)
+            )
+        if direct_builder is not None:
+            rec._direct_record_id = DirectIndexedFunctionBuilder.publish_cmpxchg(
+                direct_builder, v, ptr, cmp, val, success_ordering, failure_ordering,
+            )
         return v
 
     def syscall6(

@@ -310,6 +310,13 @@ $(OBJDIR_PY)/py_cleanup_runtime.o: $(PYDIR)/py_cleanup_runtime.py | $(OBJDIR_PY)
 	mv $(OBJDIR_PY)/py_cleanup_runtime.opt.ll $(OBJDIR_PY)/py_cleanup_runtime.ll
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/py_cleanup_runtime.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
 
+# Traceback raw-ABI entry must publish borrowed roots before any poll.
+$(OBJDIR_PY)/py_exc_traceback.o: $(PYDIR)/py_exc_traceback.py | $(OBJDIR_PY)
+	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) PCC_WITH_THREADS=0 $(PCC) --python-library --target=$(PCC_RUNTIME_TARGET) --emit-llvm=$(OBJDIR_PY)/py_exc_traceback.ll $<
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.ir.optimization.driver "$(PCC_RUNTIME_IR_PASSES)" $(OBJDIR_PY)/py_exc_traceback.ll $(OBJDIR_PY)/py_exc_traceback.opt.ll
+	mv $(OBJDIR_PY)/py_exc_traceback.opt.ll $(OBJDIR_PY)/py_exc_traceback.ll
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/py_exc_traceback.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
+
 $(OBJDIR_PY):
 	mkdir -p $(OBJDIR_PY)
 
