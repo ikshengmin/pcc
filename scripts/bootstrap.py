@@ -23,6 +23,8 @@ Runtime defaults for every stage:
   PCC_BOOTSTRAP_SELF_BACKEND_JOBS=${PCC_SELF_BACKEND_JOBS:-2}
   PCC_BOOTSTRAP_MACHO_LINK_JOBS=${PCC_MACHO_LINK_JOBS:-8}
   PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES=17179869184
+  PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES=17179869184 (when no explicit cap)
+  PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES=1
   PCC_BOOTSTRAP_STAGE_TIMEOUT=1800
 
 This is the whole build entry in Python (it replaces ``bootstrap.sh``): no
@@ -140,6 +142,10 @@ class Options:
         self.requested_tree_rss_bytes = (
             self.max_tree_rss_bytes if env.get("PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES") else 0
         )
+        self.auto_tree_rss_ceiling_bytes = _env_int(
+            env, "PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES", SAFE_MAX_TREE_RSS_BYTES
+        )
+        self.min_tree_rss_bytes = _env_int(env, "PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES", 1)
         self.memory_budget_selection = {}
         self.stage_timeout = _env_int(env, "PCC_BOOTSTRAP_STAGE_TIMEOUT", 1800)
         self.smoke_refcount_audit = (
@@ -247,6 +253,14 @@ def validate_settings(options: Options) -> Options:
         SAFE_MAX_TREE_RSS_BYTES,
         env,
     )
+    _validate_resource_limit(
+        "PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES",
+        options.auto_tree_rss_ceiling_bytes,
+        SAFE_MAX_TREE_RSS_BYTES,
+        env,
+    )
+    if not 0 < options.min_tree_rss_bytes <= options.auto_tree_rss_ceiling_bytes:
+        raise BootstrapError("minimum bootstrap tree budget must fit the automatic ceiling")
     _validate_resource_limit(
         "PCC_BOOTSTRAP_STAGE_TIMEOUT",
         options.stage_timeout,
@@ -698,9 +712,17 @@ def _posix_guard_command(
         "--timeout", str(options.stage_timeout),
         "--interval", "0.25",
         "--progress-interval", "30",
-        "--max-tree-rss-bytes", str(options.max_tree_rss_bytes),
         "--no-performance-lock",
     ]
+    if _guard_reselects_memory(options):
+        # Final admission belongs to the enforcement process: its startup may
+        # have reduced headroom since Bootstrap's planning observation.
+        command += [
+            "--auto-tree-rss-ceiling-bytes", str(options.max_tree_rss_bytes),
+            "--min-tree-rss-bytes", str(options.min_tree_rss_bytes),
+        ]
+    else:
+        command += ["--max-tree-rss-bytes", str(options.max_tree_rss_bytes)]
     if sys.platform == "darwin":
         command += [
             "--darwin-preflight-reserve-bytes",
@@ -708,6 +730,48 @@ def _posix_guard_command(
         ]
     command += ["--", *target]
     return command
+
+
+def _guard_reselects_memory(options: Options) -> bool:
+    return (sys.platform == "darwin"
+            and options.stage1_checkpoint is None
+            and options.memory_budget_selection.get("selection_kind") == "automatic")
+
+
+def _write_memory_admission(stage: int, options: Options, status: str, **details) -> None:
+    path = options.out_dir / f"stage{stage}.memory-budget.json"
+    payload = {
+        "schema": "pcc.bootstrap_memory_admission.v1", "stage": stage,
+        "status": status, "memory_budget_selection": options.memory_budget_selection,
+        **details,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _read_final_guard_memory_budget(guard_dir: Path, options: Options, stage: int) -> None:
+    path = guard_dir / "result.json"
+    try:
+        receipt = json.loads(path.read_text())
+        selection = receipt.get("memory_budget_selection") or {}
+        if receipt["status"] == "PREFLIGHT_REJECTED":
+            options.memory_budget_selection = selection
+            _write_memory_admission(
+                stage, options, "PREFLIGHT_REJECTED", admission_owner="process_tree_guard",
+                error=receipt.get("error", ""), guard_receipt=str(path),
+            )
+            return
+        selected = selection["max_tree_rss_bytes"]
+        if not options.min_tree_rss_bytes <= selected <= options.max_tree_rss_bytes:
+            raise ValueError("final automatic cap lies outside the admitted bounds")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise BootstrapError("invalid final guard memory receipt: " + str(exc)) from exc
+    options.max_tree_rss_bytes = selected
+    options.memory_budget_selection = selection
+    _write_memory_admission(
+        stage, options, "ADMITTED", admission_owner="process_tree_guard",
+        guard_receipt=str(path), guard_status=receipt["status"],
+    )
 
 
 def _windows_guarded_run(
@@ -784,6 +848,8 @@ def _run_guarded(
         env=environment,
         check=False,
     )
+    if _guard_reselects_memory(options):
+        _read_final_guard_memory_budget(guard_dir, options, stage)
     for name, stream in (("target.stdout", sys.stdout), ("target.stderr", sys.stderr)):
         path = guard_dir / name
         if path.is_file() and path.stat().st_size:
@@ -793,17 +859,23 @@ def _run_guarded(
 
 
 def _resolve_tree_memory_budget(options: Options) -> None:
-    from scripts.run_process_tree_sample import ProcessTreeSampleError, select_tree_memory_budget
+    from scripts.run_process_tree_sample import (
+        ProcessTreeSampleError,
+        select_tree_memory_budget,
+    )
 
     external = options.env.get("PCC_WORKER_TREE_BUDGET_BYTES")
     if options.external_memory_guard == "1" and not external and not options.requested_tree_rss_bytes:
         raise BootstrapError("external memory guard needs an explicit or inherited tree cap")
     try:
         selection = select_tree_memory_budget(
-            options.requested_tree_rss_bytes, default_ceiling=SAFE_MAX_TREE_RSS_BYTES,
+            options.requested_tree_rss_bytes,
+            default_ceiling=options.auto_tree_rss_ceiling_bytes,
+            minimum_bytes=options.min_tree_rss_bytes,
             reserve_bytes=options.host_memory_reserve_bytes, external_budget=external,
         )
-    except ProcessTreeSampleError as exc:
+    except (ProcessTreeSampleError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        options.memory_budget_selection = getattr(exc, "memory_budget_selection", None) or {}
         raise BootstrapError(str(exc)) from exc
     selection["external_memory_guard"] = options.external_memory_guard == "1"
     options.memory_budget_selection = selection
@@ -815,7 +887,15 @@ def _resolve_tree_memory_budget(options: Options) -> None:
 def run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> None:
     """Compile one stage, gate it natively, and report its receipt."""
 
-    _resolve_tree_memory_budget(options)
+    # Preserve launch admission evidence even when no compiler child can start.
+    try:
+        _resolve_tree_memory_budget(options)
+    except BootstrapError as exc:
+        _write_memory_admission(
+            stage, options, "PREFLIGHT_REJECTED", admission_owner="bootstrap", error=str(exc),
+        )
+        raise
+    _write_memory_admission(stage, options, "ADMITTED", admission_owner="bootstrap")
     if stage == 1 and options.stage1_checkpoint is not None:
         from scripts.bootstrap_stage1_checkpoint import (
             CheckpointError,

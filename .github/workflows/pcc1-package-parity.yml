@@ -16,6 +16,8 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_worker_memory_budget_selection.py"
+      - "tests/python/test_process_tree_sample_tool.py"
       - "tests/python/test_valueclass_aggregate_ownership_native.py"
       - "tests/python/owned_regression_support.py"
       - "tests/fixtures/native/worker_resource_admission.py"
@@ -43,6 +45,8 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_worker_memory_budget_selection.py"
+      - "tests/python/test_process_tree_sample_tool.py"
       - "tests/python/test_valueclass_aggregate_ownership_native.py"
       - "tests/python/owned_regression_support.py"
       - "tests/fixtures/native/worker_resource_admission.py"
@@ -87,7 +91,8 @@ jobs:
             --stdout build/macos-regressions/work/supervisor/target.stdout \
             --stderr build/macos-regressions/work/supervisor/target.stderr \
             --timeout 1200 --interval 1 --progress-interval 30 \
-            --max-tree-rss-bytes 4294967296 \
+            --auto-tree-rss-ceiling-bytes 4294967296 \
+            --min-tree-rss-bytes 2147483648 \
             --darwin-preflight-reserve-bytes 536870912 \
             -- uv run python scripts/ci_macos_regression_gate.py \
             --out-dir build/macos-regressions
@@ -204,11 +209,11 @@ jobs:
       PCC_BOOTSTRAP_RUNTIME_CC: "pcc"
       PCC_BOOTSTRAP_RUNTIME_HIGH: "py"
       PCC_BOOTSTRAP_PYTHON_LIBPYTHON: "off"
-      # macos-15 runners have 7 GB of RAM. The Darwin preflight requires
-      # reclaimable memory >= tree cap + host reserve, and the reserve defaults
-      # to 8 GiB for development machines, so it can never pass here. Stage1
-      # with two frontend workers peaks near 2.1 GB.
-      PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES: "4294967296"
+      # Select from observed reclaimable RAM, disk space and swap pressure on
+      # the 7 GB runner. Keep a 4 GiB ceiling, a 2 GiB admission floor and the
+      # existing 512 MiB reserve; never round a low observation up to the floor.
+      PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"
+      PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"
       PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"
       # Three M1 cores: a local 12-core Stage1 already takes ~520 s.
       PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"
@@ -241,8 +246,8 @@ jobs:
             --out-dir "$PCC_BOOTSTRAP_OUT_DIR"
           test -x "$PCC_BOOTSTRAP_OUT_DIR/pcc1"
 
-      - name: Preserve macOS bootstrap failure evidence
-        if: failure()
+      - name: Preserve macOS bootstrap evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bootstrap-macos-arm64

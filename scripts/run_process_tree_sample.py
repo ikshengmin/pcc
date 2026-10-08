@@ -199,9 +199,14 @@ def _request_interrupt(_signum, _frame) -> None:
 
 
 class ProcessTreeSampleError(RuntimeError):
-    def __init__(self, message: str, *, retry_count: int = 0) -> None:
+    def __init__(
+        self, message: str, *, retry_count: int = 0,
+        resource_preflight=None, memory_budget_selection=None,
+    ) -> None:
         super().__init__(message)
         self.retry_count = retry_count
+        self.resource_preflight = resource_preflight
+        self.memory_budget_selection = memory_budget_selection
 
 
 def _persist(path: Path, payload: object) -> None:
@@ -503,28 +508,11 @@ def _validate_darwin_resource_observation(
     swap_free_bytes: int, platform: str = "darwin",
 ) -> dict:
     required_bytes = int(max_tree_rss_bytes) + int(reserve_bytes)
-    if reclaimable_bytes < required_bytes:
-        raise ProcessTreeSampleError(
-            "insufficient reclaimable memory for guarded process tree"
-        )
-    if disk_free_bytes < required_bytes:
-        raise ProcessTreeSampleError(
-            "insufficient disk space for guarded process tree and swap reserve"
-        )
     ample_physical_headroom = (
         reclaimable_bytes
         >= required_bytes * _SWAP_PRESSURE_RECLAIMABLE_MARGIN
     )
-    if (
-        swap_total_bytes > 0
-        and swap_used_bytes * 2 > swap_total_bytes
-        and swap_free_bytes < _MIN_PRESSURED_SWAP_FREE_BYTES
-        and not ample_physical_headroom
-    ):
-        raise ProcessTreeSampleError(
-            "swap is already pressured; refusing guarded process tree"
-        )
-    return {
+    receipt = {
         "max_tree_rss_bytes": int(max_tree_rss_bytes),
         "reserve_bytes": int(reserve_bytes),
         "required_reclaimable_and_disk_free_bytes": required_bytes,
@@ -535,6 +523,27 @@ def _validate_darwin_resource_observation(
         "swap_free_bytes": swap_free_bytes,
         "swap_pressure_waived_by_reclaimable": bool(ample_physical_headroom),
     }
+    if reclaimable_bytes < required_bytes:
+        raise ProcessTreeSampleError(
+            "insufficient reclaimable memory for guarded process tree",
+            resource_preflight=receipt,
+        )
+    if disk_free_bytes < required_bytes:
+        raise ProcessTreeSampleError(
+            "insufficient disk space for guarded process tree and swap reserve",
+            resource_preflight=receipt,
+        )
+    if (
+        swap_total_bytes > 0
+        and swap_used_bytes * 2 > swap_total_bytes
+        and swap_free_bytes < _MIN_PRESSURED_SWAP_FREE_BYTES
+        and not ample_physical_headroom
+    ):
+        raise ProcessTreeSampleError(
+            "swap is already pressured; refusing guarded process tree",
+            resource_preflight=receipt,
+        )
+    return receipt
 
 
 def _darwin_resource_preflight(*, max_tree_rss_bytes: int, reserve_bytes: int) -> dict:
@@ -659,12 +668,13 @@ def configured_host_memory_reserve_bytes(environment=None) -> int:
 
 def select_tree_memory_budget(
     explicit: int, *, default_ceiling: int = 16 * _GIB,
-    reserve_bytes=None, external_budget=None, observation=None,
+    reserve_bytes=None, external_budget=None, observation=None, minimum_bytes: int = 1,
 ) -> dict:
     """Select auto limits; keep explicit and already-guarded caps authoritative."""
     if reserve_bytes is None:
         reserve_bytes = configured_host_memory_reserve_bytes()
-    if explicit < 0 or default_ceiling <= 0 or reserve_bytes < 0:
+    if (explicit < 0 or default_ceiling <= 0 or reserve_bytes < 0
+            or minimum_bytes <= 0 or minimum_bytes > default_ceiling):
         raise ProcessTreeSampleError("invalid memory budget selection")
     if external_budget not in (None, ""):
         try:
@@ -673,6 +683,8 @@ def select_tree_memory_budget(
             raise ProcessTreeSampleError("active worker tree budget is invalid") from exc
         if guarded <= 0:
             raise ProcessTreeSampleError("active worker tree budget must be positive")
+        if guarded < minimum_bytes:
+            raise ProcessTreeSampleError("active worker tree budget is below the minimum tree budget")
         if explicit and explicit != guarded:
             raise ProcessTreeSampleError(
                 "explicit memory budget differs from the active guard cap; "
@@ -682,12 +694,16 @@ def select_tree_memory_budget(
         return {"max_tree_rss_bytes": explicit or guarded,
                 "selection_kind": "explicit" if explicit else "external_guard",
                 "explicit_requested_bytes": explicit, "external_guard_bytes": guarded,
+                "minimum_tree_rss_bytes": minimum_bytes,
                 "configured_host_memory_reserve_bytes": reserve_bytes}
     # Non-Darwin explicit limits retain their existing guard contract. The
     # Darwin reserve/swap admission remains mandatory for explicit caps.
     if explicit and observation is None and sys.platform != "darwin":
+        if explicit < minimum_bytes:
+            raise ProcessTreeSampleError("explicit memory budget is below the minimum tree budget")
         return {"max_tree_rss_bytes": explicit, "selection_kind": "explicit",
                 "explicit_requested_bytes": explicit, "platform": sys.platform,
+                "minimum_tree_rss_bytes": minimum_bytes,
                 "configured_host_memory_reserve_bytes": reserve_bytes}
     observed = _host_memory_observation() if observation is None else dict(observation)
     if (not explicit and observed["platform"] == "linux"
@@ -709,17 +725,35 @@ def select_tree_memory_budget(
         # and container headroom instead of the machine's total physical RAM.
         maximum = int(observed["available_bytes"]) // 2
     selected = explicit or min(default_ceiling, maximum)
+    selection = {
+        "max_tree_rss_bytes": selected,
+        "selection_kind": "explicit" if explicit else "automatic",
+        "explicit_requested_bytes": explicit, "default_ceiling_bytes": default_ceiling,
+        "minimum_tree_rss_bytes": minimum_bytes,
+        "configured_host_memory_reserve_bytes": reserve_bytes,
+        "observation": observed, "resource_preflight": None,
+    }
     if selected <= 0:
-        raise ProcessTreeSampleError("available resources cannot admit a positive automatic tree budget")
-    if observed["platform"] == "darwin":
-        preflight = _validate_darwin_resource_observation(
-            max_tree_rss_bytes=selected, reserve_bytes=reserve_bytes, **observed,
+        raise ProcessTreeSampleError(
+            "available resources cannot admit a positive automatic tree budget",
+            memory_budget_selection=selection,
         )
-    return {"max_tree_rss_bytes": selected,
-            "selection_kind": "explicit" if explicit else "automatic",
-            "explicit_requested_bytes": explicit, "default_ceiling_bytes": default_ceiling,
-            "configured_host_memory_reserve_bytes": reserve_bytes,
-            "observation": observed, "resource_preflight": preflight}
+    if selected < minimum_bytes:
+        raise ProcessTreeSampleError(
+            "available resources cannot admit the minimum tree budget",
+            memory_budget_selection=selection,
+        )
+    if observed["platform"] == "darwin":
+        try:
+            preflight = _validate_darwin_resource_observation(
+                max_tree_rss_bytes=selected, reserve_bytes=reserve_bytes, **observed,
+            )
+        except ProcessTreeSampleError as exc:
+            selection["resource_preflight"] = exc.resource_preflight
+            exc.memory_budget_selection = selection
+            raise
+    selection["resource_preflight"] = preflight
+    return selection
 
 
 def _process_snapshot(
@@ -768,7 +802,12 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         raise ProcessTreeSampleError("max tree RSS must be zero or positive")
     if args.darwin_preflight_reserve_bytes < 0:
         raise ProcessTreeSampleError("preflight reserve must be zero or positive")
-    if args.darwin_preflight_reserve_bytes and args.max_tree_rss_bytes <= 0:
+    auto_ceiling = args.auto_tree_rss_ceiling_bytes
+    if auto_ceiling < 0 or args.min_tree_rss_bytes <= 0:
+        raise ProcessTreeSampleError("automatic tree budget bounds must be positive")
+    if auto_ceiling and args.max_tree_rss_bytes:
+        raise ProcessTreeSampleError("explicit and automatic tree caps are mutually exclusive")
+    if args.darwin_preflight_reserve_bytes and not (args.max_tree_rss_bytes or auto_ceiling):
         raise ProcessTreeSampleError("Darwin preflight requires a positive RSS cap")
     command = list(args.command)
     if command and command[0] == "--":
@@ -790,11 +829,9 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     # The guard below remains the only enforcement owner. Its synchronized
     # rows include wrappers and descendants that self RSS cannot observe.
     worker_state_path = str(result_path) + ".worker-rss.tsv"
-    if args.max_tree_rss_bytes > 0:
+    if args.max_tree_rss_bytes > 0 or auto_ceiling:
         if Path(worker_state_path).exists():
             raise ProcessTreeSampleError("refusing existing output: " + worker_state_path)
-        environment["PCC_WORKER_TREE_STATE_PATH"] = worker_state_path
-        environment["PCC_WORKER_TREE_BUDGET_BYTES"] = str(args.max_tree_rss_bytes)
     started_utc = dt.datetime.now(dt.timezone.utc).isoformat()
     started = time.monotonic()
     payload: dict[str, object] = {
@@ -810,14 +847,33 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         "darwin_preflight_reserve_bytes": args.darwin_preflight_reserve_bytes,
     }
     _persist(result_path, payload)
-    if args.darwin_preflight_reserve_bytes:
+    if auto_ceiling or args.darwin_preflight_reserve_bytes:
         try:
-            payload["resource_preflight"] = _darwin_resource_preflight(
-                max_tree_rss_bytes=args.max_tree_rss_bytes,
-                reserve_bytes=args.darwin_preflight_reserve_bytes,
-            )
+            if auto_ceiling:
+                selection = select_tree_memory_budget(
+                    0, default_ceiling=auto_ceiling,
+                    minimum_bytes=args.min_tree_rss_bytes,
+                    reserve_bytes=args.darwin_preflight_reserve_bytes or None,
+                )
+                args.max_tree_rss_bytes = selection["max_tree_rss_bytes"]
+                payload["max_tree_rss_bytes"] = args.max_tree_rss_bytes
+                payload["memory_budget_selection"] = selection
+                payload["resource_preflight"] = selection["resource_preflight"]
+                if selection["resource_preflight"] is not None:
+                    payload["darwin_preflight_reserve_bytes"] = (
+                        selection["configured_host_memory_reserve_bytes"]
+                    )
+            else:
+                payload["resource_preflight"] = _darwin_resource_preflight(
+                    max_tree_rss_bytes=args.max_tree_rss_bytes,
+                    reserve_bytes=args.darwin_preflight_reserve_bytes,
+                )
             _persist(result_path, payload)
         except BaseException as exc:
+            for key in ("resource_preflight", "memory_budget_selection"):
+                evidence = getattr(exc, key, None)
+                if evidence is not None:
+                    payload[key] = evidence
             payload.update(
                 {
                     "status": "PREFLIGHT_REJECTED",
@@ -834,6 +890,12 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             raise ProcessTreeSampleError(
                 "resource preflight failed: " + type(exc).__name__ + ": " + str(exc)
             ) from exc
+
+    if args.max_tree_rss_bytes > 0:
+        environment["PCC_WORKER_TREE_STATE_PATH"] = worker_state_path
+        environment["PCC_WORKER_TREE_BUDGET_BYTES"] = str(args.max_tree_rss_bytes)
+    payload["environment"] = _recorded_environment(environment)
+    _persist(result_path, payload)
 
     lock_context = (
         compile_ab._performance_lock()
@@ -1129,11 +1191,20 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, required=True)
     parser.add_argument("--interval", type=float, default=0.25)
     parser.add_argument("--progress-interval", type=float, default=30.0)
-    parser.add_argument(
+    tree_cap = parser.add_mutually_exclusive_group()
+    tree_cap.add_argument(
         "--max-tree-rss-bytes",
         type=int,
         default=0,
         help="terminate the owned process group when aggregate RSS exceeds this cap",
+    )
+    tree_cap.add_argument(
+        "--auto-tree-rss-ceiling-bytes", type=int, default=0,
+        help="select a safe observed tree cap no greater than this ceiling",
+    )
+    parser.add_argument(
+        "--min-tree-rss-bytes", type=int, default=1,
+        help="reject automatic admission below this tree budget; never round up",
     )
     parser.add_argument(
         "--darwin-preflight-reserve-bytes",

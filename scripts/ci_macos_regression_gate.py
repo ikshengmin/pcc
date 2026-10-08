@@ -99,7 +99,14 @@ def verify_execution_report(path, expected):
 
 def _command(command, directory, environment):
     directory.mkdir(parents=True, exist_ok=True)
-    _save(directory / "command.json", {"command": command})
+    _save(directory / "command.json", {
+        "command": command,
+        "worker_memory_guard": {
+            key: environment.get(key, "") for key in (
+                "PCC_WORKER_TREE_BUDGET_BYTES", "PCC_WORKER_TREE_STATE_PATH",
+            )
+        },
+    })
     with (directory / "target.stdout").open("wb") as stdout, \
             (directory / "target.stderr").open("wb") as stderr:
         return subprocess.run(command, cwd=ROOT, env=environment,

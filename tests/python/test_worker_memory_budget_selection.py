@@ -1,5 +1,6 @@
 """Observed automatic caps preserve explicit and external guard contracts."""
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -219,3 +220,192 @@ def test_options_and_help_do_not_probe_resources(monkeypatch):
     with pytest.raises(SystemExit) as caught:
         stage1.main(["--help"])
     assert caught.value.code == 0
+
+
+def mac_ci_observation(**changes):
+    # Synthetic headroom on a 7 GB runner, not a measurement from failed CI.
+    return darwin_observation(
+        **{"reclaimable_bytes": 3 * GIB, "swap_total_bytes": 0,
+           "swap_used_bytes": 0, "swap_free_bytes": 0, **changes}
+    )
+
+
+def mac_ci_options(tmp_path):
+    return bootstrap.validate_settings(bootstrap.Options({
+        "PCC_BOOTSTRAP_OUT_DIR": str(tmp_path),
+        "PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES": str(4 * GIB),
+        "PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES": str(2 * GIB),
+        "PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES": str(GIB // 2),
+    }))
+
+
+@pytest.mark.parametrize("available,expected", [(3 * GIB, 5 * GIB // 2), (7 * GIB, 4 * GIB)])
+def test_mac_ci_auto_budget_uses_observed_headroom_not_runner_total(available, expected):
+    observation = mac_ci_observation(reclaimable_bytes=available)
+    selected = guard.select_tree_memory_budget(
+        0, default_ceiling=4 * GIB, minimum_bytes=2 * GIB,
+        reserve_bytes=GIB // 2, observation=observation,
+    )
+    assert selected["max_tree_rss_bytes"] == expected
+    assert selected["observation"] == observation
+    assert selected["resource_preflight"]["reserve_bytes"] == GIB // 2
+    assert selected["resource_preflight"]["required_reclaimable_and_disk_free_bytes"] == expected + GIB // 2
+
+
+@pytest.mark.parametrize("changes", [
+    {"reclaimable_bytes": 2 * GIB},
+    {"disk_free_bytes": 2 * GIB},
+    {"swap_total_bytes": 2 * GIB, "swap_used_bytes": 3 * GIB // 2,
+     "swap_free_bytes": GIB // 2},
+])
+def test_mac_ci_below_minimum_fails_closed_without_rounding_up(changes):
+    observation = mac_ci_observation(**changes)
+    with pytest.raises(guard.ProcessTreeSampleError, match="minimum tree budget") as caught:
+        guard.select_tree_memory_budget(
+            0, default_ceiling=4 * GIB, minimum_bytes=2 * GIB,
+            reserve_bytes=GIB // 2, observation=observation,
+        )
+    selected = caught.value.memory_budget_selection
+    assert selected["max_tree_rss_bytes"] < 2 * GIB
+    assert selected["observation"] == observation
+    assert selected["configured_host_memory_reserve_bytes"] == GIB // 2
+
+
+def test_mac_ci_explicit_four_gib_keeps_the_original_rejection(monkeypatch):
+    monkeypatch.setattr(guard.sys, "platform", "darwin")
+    monkeypatch.setattr(guard, "_host_memory_observation", mac_ci_observation)
+    with pytest.raises(guard.ProcessTreeSampleError, match="insufficient reclaimable") as caught:
+        guard.select_tree_memory_budget(4 * GIB, reserve_bytes=GIB // 2)
+    selected = caught.value.memory_budget_selection
+    assert selected["max_tree_rss_bytes"] == 4 * GIB
+    assert selected["resource_preflight"]["reclaimable_bytes"] == 3 * GIB
+
+
+def test_mac_ci_bootstrap_persists_admission_and_propagates_exact_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr(guard, "_host_memory_observation", mac_ci_observation)
+    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
+    options = mac_ci_options(tmp_path)
+    entered = []
+
+    def stage(stage, out_exe, cmd, options):
+        entered.append(stage)
+        expected = 5 * GIB // 2
+        assert options.max_tree_rss_bytes == expected
+        environment = bootstrap.stage_environment(stage, options)
+        assert environment["PCC_WORKER_TREE_BUDGET_BYTES"] == str(expected)
+        command = bootstrap._posix_guard_command(tmp_path / "guard", options, ["compiler"])
+        assert command[command.index("--auto-tree-rss-ceiling-bytes") + 1] == str(expected)
+        assert command[command.index("--min-tree-rss-bytes") + 1] == str(2 * GIB)
+        assert command[command.index("--darwin-preflight-reserve-bytes") + 1] == str(GIB // 2)
+
+    monkeypatch.setattr(bootstrap, "_run_stage", stage)
+    bootstrap.run_stage(1, tmp_path / "pcc1", ["compiler"], options)
+    assert entered == [1]
+    receipt = json.loads((tmp_path / "stage1.memory-budget.json").read_text())
+    assert receipt["status"] == "ADMITTED"
+    assert receipt["memory_budget_selection"] == options.memory_budget_selection
+    assert receipt["memory_budget_selection"]["observation"] == mac_ci_observation()
+
+
+def test_mac_ci_bootstrap_rejection_records_observation_and_never_starts_stage(tmp_path, monkeypatch):
+    observation = mac_ci_observation(reclaimable_bytes=2 * GIB)
+    monkeypatch.setattr(guard, "_host_memory_observation", lambda: observation)
+    options = mac_ci_options(tmp_path)
+
+    def forbidden_stage(*args):
+        pytest.fail("compiler stage launched after failed memory admission")
+
+    monkeypatch.setattr(bootstrap, "_run_stage", forbidden_stage)
+    with pytest.raises(bootstrap.BootstrapError, match="minimum tree budget"):
+        bootstrap.run_stage(1, tmp_path / "pcc1", ["compiler"], options)
+    receipt = json.loads((tmp_path / "stage1.memory-budget.json").read_text())
+    assert receipt["status"] == "PREFLIGHT_REJECTED"
+    assert receipt["memory_budget_selection"]["observation"] == observation
+    assert receipt["memory_budget_selection"]["minimum_tree_rss_bytes"] == 2 * GIB
+
+
+@pytest.mark.parametrize("final_available,expected_code", [(29 * GIB // 10, 0), (2 * GIB, 2)])
+def test_mac_ci_final_guard_reselects_after_startup_and_records_final_observation(
+    tmp_path, monkeypatch, final_available, expected_code,
+):
+    monkeypatch.setattr(guard.sys, "platform", "darwin")
+    observations = iter([mac_ci_observation(), mac_ci_observation(reclaimable_bytes=final_available)])
+    monkeypatch.setattr(guard, "_host_memory_observation", lambda: next(observations))
+    options = mac_ci_options(tmp_path)
+    bootstrap._resolve_tree_memory_budget(options)
+    initial_cap = options.max_tree_rss_bytes
+    assert initial_cap == 5 * GIB // 2
+    launched = []
+
+    class Child:
+        pid = 123
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    def launch(command, **kwargs):
+        launched.append(kwargs["env"])
+        return Child()
+
+    def run_guard(command, **kwargs):
+        assert command[command.index("--auto-tree-rss-ceiling-bytes") + 1] == str(initial_cap)
+        return guard.subprocess.CompletedProcess(command, guard.main(command[2:]))
+
+    monkeypatch.setattr(guard.subprocess, "Popen", launch)
+    monkeypatch.setattr(bootstrap.subprocess, "run", run_guard)
+    monkeypatch.setattr(guard, "_process_identity", lambda pid: guard._ProcessIdentity(pid, 1, (1, 0)))
+    tables = iter([({123: (1, 1024, "synthetic-worker")}, 0), ({}, 0)])
+    monkeypatch.setattr(guard, "_process_table", lambda **kwargs: next(tables))
+    code, directory = bootstrap._run_guarded(
+        ["synthetic-worker"], options, 1, bootstrap.stage_environment(1, options),
+    )
+    assert code == expected_code
+    receipt = json.loads((tmp_path / "stage1.memory-budget.json").read_text())
+    final = receipt["memory_budget_selection"]
+    assert final["observation"]["reclaimable_bytes"] == final_available
+    assert final["default_ceiling_bytes"] == initial_cap
+    assert receipt["admission_owner"] == "process_tree_guard"
+    if expected_code:
+        assert receipt["status"] == "PREFLIGHT_REJECTED"
+        assert launched == []
+    else:
+        expected_cap = final_available - GIB // 2
+        assert receipt["status"] == "ADMITTED"
+        assert options.max_tree_rss_bytes == expected_cap < initial_cap
+        assert len(launched) == 1
+        assert launched[0]["PCC_WORKER_TREE_BUDGET_BYTES"] == str(expected_cap)
+        state = Path(launched[0]["PCC_WORKER_TREE_STATE_PATH"]).read_text().splitlines()
+        assert int(state[2]) == expected_cap
+        assert "PCC_WORKER_TREE_STATE_PATH" not in bootstrap.stage_environment(1, options)
+
+
+@pytest.mark.parametrize("failure", [OSError("vm_stat unavailable"), guard.subprocess.TimeoutExpired("vm_stat", 5)])
+def test_mac_ci_unavailable_observation_records_rejection_before_stage(tmp_path, monkeypatch, failure):
+    def unavailable():
+        raise failure
+
+    def forbidden_stage(*args):
+        pytest.fail("stage launched without a resource observation")
+
+    monkeypatch.setattr(guard, "_host_memory_observation", unavailable)
+    monkeypatch.setattr(bootstrap, "_run_stage", forbidden_stage)
+    options = mac_ci_options(tmp_path)
+    with pytest.raises(bootstrap.BootstrapError):
+        bootstrap.run_stage(1, tmp_path / "pcc1", ["compiler"], options)
+    receipt = json.loads((tmp_path / "stage1.memory-budget.json").read_text())
+    assert receipt["status"] == "PREFLIGHT_REJECTED"
+    assert str(failure) in receipt["error"]
+    assert receipt["memory_budget_selection"] == {}
+
+
+@pytest.mark.parametrize("kind,checkpoint", [("explicit", None), ("external_guard", None), ("automatic", "checkpoint")])
+def test_mac_ci_guard_preserves_exact_explicit_inherited_and_checkpoint_caps(tmp_path, monkeypatch, kind, checkpoint):
+    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
+    options = mac_ci_options(tmp_path)
+    options.max_tree_rss_bytes = 3 * GIB
+    options.memory_budget_selection = {"selection_kind": kind}
+    options.stage1_checkpoint = checkpoint
+    command = bootstrap._posix_guard_command(tmp_path / "guard", options, ["compiler"])
+    assert "--auto-tree-rss-ceiling-bytes" not in command
+    assert command[command.index("--max-tree-rss-bytes") + 1] == str(3 * GIB)

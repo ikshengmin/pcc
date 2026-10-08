@@ -131,12 +131,18 @@ def test_workflow_keeps_stage1_configuration_and_evidence_separate():
     stage1 = workflow.split("  pcc1-package-parity:\n", 1)[1]
     assert "runs-on: macos-15" in smoke
     assert "timeout-minutes: 25" in smoke and "--timeout 1200" in smoke
-    assert "--max-tree-rss-bytes 4294967296" in smoke
+    assert "--auto-tree-rss-ceiling-bytes 4294967296" in smoke
+    assert "--min-tree-rss-bytes 2147483648" in smoke
     assert "--darwin-preflight-reserve-bytes 536870912" in smoke
     assert "path: build/macos-regressions/evidence/" in smoke
     assert "actions/download-artifact" not in smoke + stage1
     assert "timeout-minutes: 45" in stage1
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"' in stage1
+    assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in stage1
+    assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in stage1
+    assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in stage1
+    assert "PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES:" not in stage1
+    assert "name: Preserve macOS bootstrap evidence\n        if: always()" in stage1
     assert "PCC_WITH_THREADS" not in stage1
     assert "ci_macos_regression_gate" not in stage1
 
@@ -168,3 +174,21 @@ def test_failed_gate_stops_before_runtime_build_and_marks_remaining_unrun(tmp_pa
     assert receipt["gates"]["clock"]["status"] == "FAIL"
     assert all(row["status"] == "NOT_RUN" for name, row in receipt["gates"].items() if name != "clock")
     assert receipt["gates"]["root-joins"]["expected_nodes"] == list(dict(gate.GATES)["root-joins"])
+
+
+def test_command_receipt_and_native_child_receive_the_same_guard_budget(tmp_path, monkeypatch):
+    environment = {
+        "PCC_WORKER_TREE_BUDGET_BYTES": str(5 * 1024**3 // 2),
+        "PCC_WORKER_TREE_STATE_PATH": str(tmp_path / "supervisor.worker-rss.tsv"),
+    }
+    seen = []
+
+    def child(command, **kwargs):
+        seen.append(kwargs["env"])
+        return gate.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(gate.subprocess, "run", child)
+    assert gate._command(["native-worker"], tmp_path / "native", environment) == 0
+    receipt = json.loads((tmp_path / "native/command.json").read_text())
+    assert seen == [environment]
+    assert receipt["worker_memory_guard"] == environment

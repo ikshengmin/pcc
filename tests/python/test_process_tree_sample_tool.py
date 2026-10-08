@@ -1047,3 +1047,90 @@ def test_termination_returns_for_exited_child_and_excludes_unrelated_session(
             if owned.poll() is None:
                 owned.kill()
             owned.wait(timeout=3)
+
+
+def _mac_ci_memory_observation(available=3 * 1024**3):
+    # Synthetic availability on a 7 GB runner; failed CI recorded no exact value.
+    return {
+        "platform": "darwin", "reclaimable_bytes": available,
+        "disk_free_bytes": 20 * 1024**3, "swap_total_bytes": 0,
+        "swap_used_bytes": 0, "swap_free_bytes": 0,
+    }
+
+
+def _mac_ci_guard_args(tool, tmp_path, *, automatic=True):
+    cap = ["--auto-tree-rss-ceiling-bytes", str(4 * 1024**3),
+           "--min-tree-rss-bytes", str(2 * 1024**3)] if automatic else [
+               "--max-tree-rss-bytes", str(4 * 1024**3)]
+    return tool._parser().parse_args([
+        "--result", str(tmp_path / "result.json"),
+        "--samples", str(tmp_path / "samples.tsv"),
+        "--stdout", str(tmp_path / "stdout"), "--stderr", str(tmp_path / "stderr"),
+        "--cwd", str(tmp_path), "--timeout", "5", "--no-performance-lock",
+        "--darwin-preflight-reserve-bytes", str(1024**3 // 2), *cap,
+        "--", "synthetic-native-worker",
+    ])
+
+
+def test_mac_ci_guard_auto_selection_reaches_receipt_environment_and_state(tmp_path, monkeypatch):
+    tool = _load_tool_module()
+    observation = _mac_ci_memory_observation()
+    monkeypatch.setattr(tool, "_host_memory_observation", lambda: observation)
+    launched = []
+
+    class Child:
+        pid = 123
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    def launch(command, **kwargs):
+        launched.append(kwargs["env"])
+        return Child()
+
+    monkeypatch.setattr(tool.subprocess, "Popen", launch)
+    monkeypatch.setattr(tool, "_process_identity", lambda pid: tool._ProcessIdentity(pid, 1, (1, 0)))
+    tables = iter([({123: (1, 1024, "synthetic-native-worker")}, 0), ({}, 0)])
+    monkeypatch.setattr(tool, "_process_table", lambda **kwargs: next(tables))
+    receipt = tool.run(_mac_ci_guard_args(tool, tmp_path))
+    assert receipt["status"] == "COMPLETE" and receipt["returncode"] == 0
+    budget = 5 * 1024**3 // 2
+    assert receipt["max_tree_rss_bytes"] == budget
+    assert receipt["memory_budget_selection"]["observation"] == observation
+    assert receipt["resource_preflight"]["reserve_bytes"] == 1024**3 // 2
+    assert len(launched) == 1
+    assert launched[0]["PCC_WORKER_TREE_BUDGET_BYTES"] == str(budget)
+    assert receipt["environment"]["PCC_WORKER_TREE_BUDGET_BYTES"] == str(budget)
+    state = Path(launched[0]["PCC_WORKER_TREE_STATE_PATH"]).read_text().splitlines()
+    assert state[0] == "pcc.worker-tree-rss.v1" and int(state[2]) == budget
+
+
+@pytest.mark.parametrize("automatic,available,message", [
+    (True, 2 * 1024**3, "minimum tree budget"),
+    (False, 3 * 1024**3, "insufficient reclaimable"),
+])
+def test_mac_ci_guard_rejection_persists_observation_without_launch(
+    tmp_path, monkeypatch, automatic, available, message,
+):
+    tool = _load_tool_module()
+    observation = _mac_ci_memory_observation(available)
+    monkeypatch.setattr(tool, "_host_memory_observation", lambda: observation)
+    monkeypatch.setattr(tool, "_darwin_resource_observation", lambda: observation)
+
+    def forbidden_launch(*args, **kwargs):
+        pytest.fail("target launched after rejected memory admission")
+
+    monkeypatch.setattr(tool.subprocess, "Popen", forbidden_launch)
+    monkeypatch.setattr(tool, "_process_table", forbidden_launch)
+    with pytest.raises(tool.ProcessTreeSampleError, match=message):
+        tool.run(_mac_ci_guard_args(tool, tmp_path, automatic=automatic))
+    receipt = json.loads((tmp_path / "result.json").read_text())
+    assert receipt["status"] == "PREFLIGHT_REJECTED"
+    if automatic:
+        assert receipt["memory_budget_selection"]["observation"] == observation
+        assert receipt["memory_budget_selection"]["minimum_tree_rss_bytes"] == 2 * 1024**3
+    else:
+        assert receipt["resource_preflight"]["reclaimable_bytes"] == available
+        assert receipt["resource_preflight"]["reserve_bytes"] == 1024**3 // 2
+    assert not (tmp_path / "result.json.worker-rss.tsv").exists()
