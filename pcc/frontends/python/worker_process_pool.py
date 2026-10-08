@@ -169,7 +169,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
         RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, STATE_MAX_AGE_SECONDS, TREE_STATE_ENV,
         WorkerMemoryError, available_worker_bytes, choose_task,
         estimated_task_bytes, minimum_task_bytes, peak_reservation, read_tree_state,
-        read_worker_resource, require_task_fits,
+        read_worker_resource, ready_resource_cohort, require_task_fits,
+        resource_task_order,
     )
 
     if len(commands) != len(tasks) or width <= 0 or tree_budget <= 0:
@@ -190,9 +191,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
         specs.append((argv, vector))
     tree_path = str(os.environ.get(TREE_STATE_ENV, "") or "")
     owner_pid = os.getpid()
-    pending = sorted(range(len(tasks)), key=lambda index: (
-        -sum(tasks[index]["inputs"]), index,
-    ))
+    pending, bands = resource_task_order(tasks)
     active = []
     attempt_tokens = {}
     retries = [0 for _task in tasks]
@@ -362,6 +361,9 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                         tasks[item]["source_identity"] = file_sha256(input_path)
                         tasks[item]["input_ready"] = True
                     ready.append(item)
+                ready = ready_resource_cohort(
+                    ready, pending, [item[0] for item in active], bands,
+                )
                 index, demand, exclusive = choose_task(
                     ready, tasks, observations, reservations, width, available,
                     guarded_calibration=state is not None,

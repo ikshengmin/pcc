@@ -165,7 +165,16 @@ class StringGlobalsLoweringMixin:
         payload: str,
         prefix: str = ".cstr",
     ) -> ir.Value:
-        return self._ptr_to_cstr(self._pooled_cstr_global(payload, prefix))
+        # This private pool contains only byte arrays created by
+        # _pooled_cstr_global in the default address space.  Their first byte
+        # has the same opaque-pointer address as the global itself.  Keep the
+        # tracked i8 pointee without emitting a redundant SSA GEP per use.
+        # Typed locals keep the returned global and reference live across
+        # allocating IR constructors in the native compiler.
+        gv: ir.GlobalVariable = self._pooled_cstr_global(payload, prefix)
+        global_ref: str = str(gv)
+        pointer_type: ir.PointerType = ir.PointerType(_I8)
+        return ir.Value(pointer_type, global_ref)
 
     def _ptr_to_cstr(self, gv: ir.GlobalVariable) -> ir.Value:
         zero = ir.Constant(_I32, 0)

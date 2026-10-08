@@ -254,6 +254,31 @@ class CallObjectLoweringMixin:
         cleanup = self.current_function.append_basic_block(self._fresh("call.slot.cleanup"))
         saved = self.builder._block
         self.builder.position_at_end(cleanup)
+        # Keep caller-frame retirement visible to precise stack-map analysis.
+        # Only the helper's own balanced exception frame is hidden by this call.
+        one_root = (len(root_owners) == 1 and not lease_owners
+                    and root_owners[0][1] is None and root_owners[0][2])
+        one_lease = not root_owners and len(lease_owners) == 1
+        if one_root or one_lease:
+            if one_root:
+                slot = root_owners[0][0]
+                self.builder.call(
+                    self.runtime["py_cleanup_one_root_preserving_exception"],
+                    [self._as_gc_ptr(slot)],
+                )
+                self._emit_gc_frame_leave_lifo_for_slot(slot)
+            else:
+                slot, token = lease_owners[0]
+                self.builder.call(
+                    self.runtime["py_cleanup_one_lease_preserving_exception"],
+                    [self._as_gc_ptr(slot), token],
+                )
+            self.builder.branch(target)
+            self.builder.position_at_end(saved)
+            self._slot_call_cleanup_blocks[key] = (
+                cleanup, tuple(root_owners), target, lease_owners, entry,
+            )
+            return cleanup
         exception_slot = None
         swap_exception = None
         if roots or leases:

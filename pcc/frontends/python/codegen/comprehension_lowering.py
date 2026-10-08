@@ -324,7 +324,9 @@ class ComprehensionLoweringMixin:
         _MISSING = object()
         cpy_flags = getattr(self, "_cpy_env_flags", None)
         exact_flags = getattr(self, "_exact_int_env_flags", None)
-        for nm in comp_bound_names:
+        # This loop allocates lexical-bound flags and fixes restoration order.
+        # Target membership is a set; never let its hash order enter the IR.
+        for nm in sorted(comp_bound_names):
             saved_env_entries[nm] = self.env.get(nm, _MISSING)
             saved_owned_flags[nm] = self._owned_local_flag_slots.get(nm, _MISSING)
             saved_owned_flag_allocas[nm] = getattr(self, "_owned_local_flag_allocas", {}).get(nm, _MISSING)

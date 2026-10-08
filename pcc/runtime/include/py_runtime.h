@@ -2259,6 +2259,8 @@ int32_t py_mem_ptr_eq(const void *a, const void *b);
 void   *py_tls_exc_get(void);
 void    py_tls_exc_set(void *exc);
 void    py_tls_exc_swap_slot(void *slot);
+void    py_cleanup_one_root_preserving_exception(void *slot);
+void    py_cleanup_one_lease_preserving_exception(void *slot, int64_t acquired);
 void    py_raise_rooted(void *borrowed_slots, void *owned_slot);
 /* No-park handled-state links; exception slots use the normal GC root ABI. */
 void py_handled_context_push(void *record, void *exception_slot);

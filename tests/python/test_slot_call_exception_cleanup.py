@@ -43,6 +43,8 @@ class CleanupModel(CallObjectLoweringMixin):
         self.runtime = {name: name for name in (
             "pcc_gc_store_root", "py_current_exception", "py_clear_exception",
             "pcc_gc_load_ptr", "py_raise", "pcc_gc_foreign_lease_release",
+            "py_cleanup_one_root_preserving_exception",
+            "py_cleanup_one_lease_preserving_exception",
         )}
         self._slot_call_root_records = [(name, None, True) for name in owners]
         self.weakref_memory = {}
@@ -159,6 +161,23 @@ class CleanupModel(CallObjectLoweringMixin):
         return 0
 
     def call(self, runtime, arguments, **_kwargs):
+        if runtime.startswith("py_cleanup_one_"):
+            from pcc.ir.compat import ir
+            # Execute the production helper against the same moving-root model.
+            namespace = dict(
+                C_POINTER_SIZE=8, null=lambda: 0,
+                stack_alloc=lambda size: self._alloca_in_entry(None, name="helper.exception", init_null=True),
+                store_ptr=lambda slot, offset, value: self.roots.__setitem__(slot, value),
+                global_addr=lambda name: name,
+                pcc_gc_frame_enter_lifo=self._emit_current_gc_frame_enter_lifo,
+                pcc_gc_frame_leave_lifo=self._emit_gc_frame_leave_lifo_for_slot,
+                py_tls_exc_swap_slot=lambda slot: self.call("py_tls_exc_swap_slot", [slot]),
+                py_clear_exception=self.clear,
+                pcc_gc_store_root=lambda slot, value: self.call("pcc_gc_store_root", [slot, ir.Constant(ir.IntType(8).as_pointer(), None)]),
+                pcc_gc_foreign_lease_release=lambda slot, token: self.call("pcc_gc_foreign_lease_release", [slot, token]),
+            )
+            _functions(Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_cleanup_runtime.py", {runtime}, namespace)
+            return namespace[runtime](*arguments)
         if runtime == "py_tls_exc_swap_slot":
             self.swap_ns[runtime](arguments[0])
             self.events.append(("swap", arguments[0]))
@@ -220,12 +239,14 @@ def test_real_cleanup_preserves_exception_and_retires_owners(owners, callback, m
     assert model.builder._block == "entry"
 
 
-def test_lease_only_cleanup_does_not_create_or_change_exception_owner():
+def test_lease_only_cleanup_preserves_exception_with_balanced_helper_owner():
     model = CleanupModel((), "weakref", False)
     model._slot_call_cleanup_block((), "handler", (("argument", 1),))
     assert model.pending == model.original
-    assert model.saved is None and model.callback_count == 0
-    assert model.events == [("lease", "argument"), ("branch", "handler")]
+    assert model.callback_count == 0 and model.registered == []
+    assert [event[0] for event in model.events] == [
+        "register", "swap", "lease", "clear", "swap", "retire-exception", "branch",
+    ]
 
 
 @pytest.mark.parametrize("pending", [False, True])

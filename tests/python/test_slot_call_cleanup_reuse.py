@@ -28,6 +28,8 @@ class Recorder(CallObjectLoweringMixin):
         self.module = SimpleNamespace(globals={"py_tls_exc_swap_slot": "swap"})
         self.runtime = {name: name for name in (
             "pcc_gc_store_root", "py_clear_exception", "pcc_gc_foreign_lease_release",
+            "py_cleanup_one_root_preserving_exception",
+            "py_cleanup_one_lease_preserving_exception",
         )}
         self._slot_call_root_records = []
 

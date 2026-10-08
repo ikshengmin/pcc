@@ -102,6 +102,55 @@ def require_task_fits(task_index: int, demand: int, available: int,
         )
 
 
+def resource_task_order(tasks):
+    """Keep small independent codegen cohorts ahead of large peak samples.
+
+    Source/AST bytes vary per singleton; full-export bytes and module count
+    do not. Exclude those shared features from the size band. The largest
+    input in each band calibrates first, with the existing componentwise
+    coverage and maximum-peak estimator unchanged. Task indices never move.
+    Other phases, mixed classes and dependency-bearing tasks keep their old
+    priority and readiness rules.
+    """
+    pending = sorted(range(len(tasks)), key=lambda index: (
+        -sum(tasks[index]["inputs"]), index,
+    ))
+    if not tasks:
+        return pending, []
+    execution_class = tasks[0]["class"]
+    bands = []
+    for task in tasks:
+        inputs = task["inputs"]
+        if (task.get("diagnostic_phase", "") != "codegen"
+                or task["class"] != execution_class
+                or len(task.get("diagnostic_indices", [])) != 1
+                or len(inputs) != 6 or inputs[5] != 1
+                or inputs[0] != inputs[1] or inputs[2] != inputs[3]
+                or inputs[4] != tasks[0]["inputs"][4]
+                or any(value < 0 for value in inputs)
+                or task.get("depends_on", -1) >= 0
+                or task.get("input_path", "")):
+            return pending, []
+        size = inputs[0] + inputs[2]
+        band = 0
+        while size > 0:
+            size //= 2
+            band += 1
+        bands.append(band)
+    pending = sorted(pending, key=lambda index: (
+        bands[index], -sum(tasks[index]["inputs"]), index,
+    ))
+    return pending, bands
+
+
+def ready_resource_cohort(ready, pending, active_indices, bands):
+    """Drain the smallest unfinished cohort, including its live workers."""
+    if not bands:
+        return ready
+    current = min(bands[index] for index in pending + active_indices)
+    return [index for index in ready if bands[index] == current]
+
+
 def choose_task(pending, tasks, observations, active_reservations,
                 width: int, available: int, guarded_calibration: bool = False):
     """Pick a fitting task or reserve idle capacity for a calibration.
