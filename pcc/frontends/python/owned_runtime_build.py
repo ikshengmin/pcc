@@ -189,8 +189,10 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
         with open(temporary, "wb") as stream:
             stream.write(write_archive(members))
         capi_path = temporary + ".capi_syms"
-        with open(capi_path, "w", encoding="ascii") as stream:
-            stream.write("\n".join(sorted(capi)) + "\n")
+        # Provenance hashes canonical ASCII/LF bytes, independent of host
+        # text-mode newline translation (in particular Windows CRLF).
+        with open(capi_path, "wb") as stream:
+            stream.write(("\n".join(sorted(capi)) + "\n").encode("ascii"))
         assemble_runtime_archive_manifest(Path(temporary), objects, runtime_root=Path(runtime_dir),
                                            capi_inventory_path=Path(capi_path))
         os.replace(capi_path, archive + ".capi_syms")

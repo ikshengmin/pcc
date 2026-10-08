@@ -813,3 +813,93 @@ def test_resource_acceptance_driver_native_five_collectors(
     assert len(receipt["executions"]) == 5 * len(RESOURCE_DRIVER_CASES)
     receipt["status"] = "PASS"
     save()
+
+
+def test_measured_limit_preserves_task_identity_and_accounting(tmp_path, monkeypatch):
+    """Failure context survives temporary manifests without exposing launch data."""
+    monkeypatch.setenv(policy.TREE_STATE_ENV, str(tmp_path / "tree"))
+    pid = 12345
+    owner = 64 * MIB
+    outside = 32 * MIB
+    peak = 300 * MIB
+    current = 290 * MIB
+    budget = 512 * MIB
+    stopped = []
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: owner)
+    monkeypatch.setattr(pool, "_start_resource_worker", lambda specs, index: pid)
+    monkeypatch.setattr(pool, "_poll_resource_worker", lambda pid: pool._WORKER_RUNNING)
+    monkeypatch.setattr(pool, "_stop_resource_worker", stopped.append)
+    monkeypatch.setattr(policy, "read_tree_state", lambda path, limit, owner_pid, active, after:
+                        (outside, {child: current for child in active}))
+    monkeypatch.setattr(policy, "read_worker_resource", lambda path, child, token:
+                        ("emit-object", current, peak))
+    item = task(tmp_path / "rss")
+    item["diagnostic_phase"] = "codegen"
+    item["diagnostic_modules"] = ["package.first", "package.second"]
+    with pytest.raises(policy.WorkerMemoryError) as failure:
+        pool.run_resource_worker_processes(
+            ["PRIVATE_TEST_VALUE=do-not-log /never-executed --secret-argument"],
+            [item], 1, budget, observations=[],
+        )
+    message = str(failure.value)
+    assert "live worker measured peak exceeds safe worker space" in message
+    assert "phase=codegen modules=['package.first', 'package.second']" in message
+    assert "worker_report_phase=emit-object" in message
+    assert "observed_peak_so_far_bytes=" + str(peak) in message
+    assert "available_worker_bytes=" + str(budget - owner - outside - policy.RSS_HEADROOM_BYTES) in message
+    assert "owner_reservation_rss_bytes=" + str(owner) in message
+    assert "outside_owner_rss_bytes=" + str(outside) in message
+    assert "current_worker_subtree_rss_bytes=" + str(current) in message
+    assert "budget=" + str(budget) in message
+    assert "full-task peak is unknown; tree cap is unchanged" in message
+    assert "do-not-log" not in message and "secret-argument" not in message
+    assert stopped == [pid]
+
+
+def test_resource_task_diagnostics_retain_only_assigned_modules(tmp_path, monkeypatch):
+    from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+
+    manifest_path = str(tmp_path / "worker.manifest")
+    manifest = {
+        "assigned_indices": [2, 0], "job_kind": "codegen", "ast_dir": "",
+        "exports_path": "", "src_paths": ["one.py", "other.py", "three.py"],
+        "module_names": ["pkg.one", "pkg.unassigned", "pkg.three"],
+    }
+    monkeypatch.setattr(workers, "read_worker_manifest", lambda path: manifest)
+    monkeypatch.setattr(workers, "_artifact_size", lambda path: 123)
+    monkeypatch.setattr(checkpoint, "file_sha256", lambda path: "a" * 64)
+    items = workers.resource_tasks_for_commands([
+        shlex.join([sys.executable, "--pcc-python-multi-codegen-worker", manifest_path]),
+    ])
+    assert items[0]["diagnostic_phase"] == "codegen"
+    assert items[0]["diagnostic_modules"] == ["pkg.three", "pkg.one"]
+    assert items[0]["estimate_bytes"] == 0
+    roots = tmp_path / "roots"
+    roots.write_text("pkg.one\npkg.three\n")
+    items = workers.resource_tasks_for_commands([
+        shlex.join([sys.executable, "--pcc-preload-delta-worker", "exports", str(roots), "output"]),
+    ])
+    assert items[0]["diagnostic_phase"] == "preload-delta"
+    assert items[0]["diagnostic_modules"] == ["pkg.one", "pkg.three"]
+    assert items[0]["estimate_bytes"] == 0
+
+
+def test_macos_failure_workflow_preserves_narrow_guard_evidence():
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/pcc1-package-parity.yml").read_text()
+    macos = workflow.split("  pcc1-package-parity:\n", 1)[1]
+    evidence = macos.split("      - name: Preserve macOS bootstrap failure evidence\n", 1)[1]
+    evidence = evidence.split("      - name:", 1)[0]
+    assert "if: failure()" in evidence
+    assert "uses: actions/upload-artifact@v4" in evidence
+    paths = evidence.split("          path: |\n", 1)[1].splitlines()
+    assert [path.strip() for path in paths if path.strip()] == [
+        "build/bootstrap/stage*.process.*/result.json",
+        "build/bootstrap/stage*.process.*/samples.tsv",
+        "build/bootstrap/stage*.process.*/target.stdout",
+        "build/bootstrap/stage*.process.*/target.stderr",
+        "build/bootstrap/stage*.process.*/result.json.worker-rss.tsv",
+        "build/bootstrap/stage*.json",
+    ]
+    assert 'PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES: "4294967296"' in macos
+    assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in macos

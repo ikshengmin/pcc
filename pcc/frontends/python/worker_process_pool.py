@@ -237,11 +237,27 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                     if state[1].get(pid, 0) <= 0:
                         raise WorkerMemoryError("live worker subtree RSS is unavailable: task=" + str(index))
                     if peak > available:
+                        # Manifests live in temporary directories that unwind
+                        # after failure. Preserve only task identity and RSS
+                        # evidence here, never argv, environment or input text.
+                        task = tasks[index]
+                        report = read_worker_resource(
+                            str(task["report_path"]), pid, attempt_tokens[pid],
+                        )
+                        context = (
+                            " phase=" + str(task.get("diagnostic_phase", "unknown"))
+                            + " modules=" + repr(task.get("diagnostic_modules", []))
+                            + " owner_reservation_rss_bytes=" + str(owner_rss)
+                            + " outside_owner_rss_bytes=" + str(outside)
+                            + " current_worker_subtree_rss_bytes=" + str(state[1][pid])
+                            + " worker_report_phase=" + (str(report[0]) if report else "unavailable")
+                        )
                         raise WorkerMemoryError(
                             "live worker measured peak exceeds safe worker space: task=" + str(index)
                             + " observed_peak_so_far_bytes=" + str(peak)
                             + " available_worker_bytes=" + str(available)
                             + " budget=" + str(tree_budget)
+                            + context
                             + "; full-task peak is unknown; tree cap is unchanged"
                         )
                     reservation = max(reservation, measured_demand)

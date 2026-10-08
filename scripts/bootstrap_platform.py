@@ -182,7 +182,8 @@ def _stage_environment(gc_backend, jobs=1, rss_limit=17179869184):
         "PCC_SELF_BACKEND_JOBS": str(jobs), "PCC_DEFER_FRONTEND_CODEGEN": "0",
         "PCC_WORKER_TREE_BUDGET_BYTES": str(rss_limit),
         "PCC_DEFER_FRONTEND_CODEGEN_PLAN": "", "PCC_DEFER_FRONTEND_OUTPUT": "",
-        "PCC_DEFER_SELF_LINK_PLAN": "", "PCC_DIRECT_INDEXED_KERNEL_EMIT": "1",
+        "PCC_DEFER_SELF_LINK_PLAN": "",
+        "PCC_DIRECT_INDEXED_KERNEL_CAPTURE": "1", "PCC_DIRECT_INDEXED_KERNEL_EMIT": "1",
     })
     return environment
 

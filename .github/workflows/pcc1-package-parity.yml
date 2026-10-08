@@ -151,6 +151,21 @@ jobs:
             --out-dir "$PCC_BOOTSTRAP_OUT_DIR"
           test -x "$PCC_BOOTSTRAP_OUT_DIR/pcc1"
 
+      - name: Preserve macOS bootstrap failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-macos-arm64
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/bootstrap/stage*.process.*/result.json
+            build/bootstrap/stage*.process.*/samples.tsv
+            build/bootstrap/stage*.process.*/target.stdout
+            build/bootstrap/stage*.process.*/target.stderr
+            build/bootstrap/stage*.process.*/result.json.worker-rss.tsv
+            build/bootstrap/stage*.json
+
       - name: Build, install, and execute the native wheel
         run: |
           env -u LC_ALL uv run pytest -x -n0 -vv --tb=short -m integration \

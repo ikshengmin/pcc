@@ -124,3 +124,46 @@ def test_pe_fixed_point_does_not_ignore_metadata_bytes():
     other = bytearray(image)
     other[64 + 8] = 1
     assert platform.normalized_image(bytes(image)) != platform.normalized_image(bytes(other))
+
+
+@pytest.mark.parametrize("capture", [None, "0", "1"])
+@pytest.mark.parametrize("gc_backend", range(5))
+def test_stage_environment_enables_capture_for_direct_output(monkeypatch, capture, gc_backend):
+    if capture is None:
+        monkeypatch.delenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", raising=False)
+    else:
+        monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", capture)
+    environment = platform._stage_environment(gc_backend)
+    assert environment["PCC_DIRECT_INDEXED_KERNEL_EMIT"] == "1"
+    assert environment.get("PCC_DIRECT_INDEXED_KERNEL_CAPTURE") == "1"
+
+
+@pytest.mark.parametrize("target", [
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+])
+def test_stage_environment_drives_real_indexed_worker(tmp_path, monkeypatch, target):
+    from pcc.frontends.python import pipeline, pipeline_targets
+
+    # Start from the clean CI environment, rather than a developer shell that
+    # already enables capture. Keep the harness's actual stage settings.
+    for name in tuple(platform.os.environ):
+        if name.startswith(("PCC_DIRECT_INDEXED_", "PCC_TEXT_INDEXED_")):
+            monkeypatch.delenv(name)
+    for name, value in platform._stage_environment(0).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(pipeline_targets, "host_target_triple", lambda: target)
+    source = tmp_path / "probe.py"
+    source.write_text("def answer(value: int) -> int:\n    return value + 2\nprint(answer(40))\n")
+    manifest = tmp_path / "worker.manifest"
+    result = tmp_path / "result.tsv"
+    pipeline._write_python_frontend_worker_manifest(
+        str(manifest), str(result), str(tmp_path), "", "", [str(source)],
+        ["probe"], [0], entry_module="probe", sibling_inits=(),
+        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+    )
+    assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
+    object_path = tmp_path / "module_0.direct.pco"
+    assert object_path.stat().st_size > 0
+    assert "\tPCO\t" + str(object_path) in result.read_text()

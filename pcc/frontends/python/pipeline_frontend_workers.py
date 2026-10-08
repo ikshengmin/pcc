@@ -958,6 +958,8 @@ def resource_tasks_for_commands(commands):
                 "inputs": [_artifact_size(exports_path), _artifact_size(roots_path), len(roots)],
                 "estimate_bytes": 0,
                 "report_path": out_path + ".rss",
+                "diagnostic_phase": "preload-delta",
+                "diagnostic_modules": roots,
                 "restartable": True,
                 "source_identity": "|".join(identities),
             })
@@ -1006,6 +1008,8 @@ def resource_tasks_for_commands(commands):
                        sum(ast_sizes), max(ast_sizes, default=0), export_bytes, len(indices)],
             "estimate_bytes": 0,
             "report_path": path + ".rss",
+            "diagnostic_phase": manifest["job_kind"],
+            "diagnostic_modules": [manifest["module_names"][index] for index in indices],
             "restartable": True,
             "source_identity": "|".join(identities),
         })
