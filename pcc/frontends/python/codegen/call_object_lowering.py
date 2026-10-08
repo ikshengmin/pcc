@@ -229,6 +229,28 @@ class CallObjectLoweringMixin:
     def _slot_call_cleanup_block(self, roots, target, leases=()):
         if not roots and not leases:
             return target
+        # Share only this function's identical cleanup program. Keep all
+        # identity-key owners alive in the value: IR Values do not define a
+        # suitable structural equality, and bare ids can otherwise be reused.
+        if not hasattr(self, "_slot_call_cleanup_function"):
+            self._slot_call_cleanup_function = None
+            self._slot_call_cleanup_blocks = {}
+        if self._slot_call_cleanup_function is not self.current_function:
+            self._slot_call_cleanup_function = self.current_function
+            self._slot_call_cleanup_blocks = {}
+        root_owners = []
+        root_keys = []
+        for slot in roots:
+            record = self._slot_call_root_record(slot)
+            root_owners.append((slot, record[1], bool(record[2])))
+            root_keys.append((id(slot), id(record[1]), bool(record[2])))
+        lease_owners = tuple(leases)
+        lease_keys = tuple((id(slot), id(token)) for slot, token in lease_owners)
+        entry = getattr(self, "_current_entry_block", None)
+        key = (tuple(root_keys), id(target), lease_keys, id(entry))
+        prior = self._slot_call_cleanup_blocks.get(key)
+        if prior is not None:
+            return prior[0]
         cleanup = self.current_function.append_basic_block(self._fresh("call.slot.cleanup"))
         saved = self.builder._block
         self.builder.position_at_end(cleanup)
@@ -286,6 +308,11 @@ class CallObjectLoweringMixin:
                 self._emit_gc_frame_leave_lifo_for_slot(slot)
         self.builder.branch(target)
         self.builder.position_at_end(saved)
+        # Publish only a completed block. A failed build cannot leave a
+        # partially emitted cleanup available to a later caller.
+        self._slot_call_cleanup_blocks[key] = (
+            cleanup, tuple(root_owners), target, lease_owners, entry,
+        )
         return cleanup
 
     def _slot_call_check_status(self, status, operation: str, span=None) -> None:

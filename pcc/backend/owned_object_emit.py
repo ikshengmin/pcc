@@ -61,5 +61,18 @@ def emit_owned_object(ir_text: str, triple: str) -> bytes:
         finally:
             if transport.encoded_line_records is not None:
                 transport.encoded_line_records.close()
+    from .self_backend_target_match import is_x86_64_linux_triple
+
+    if is_x86_64_linux_triple(triple):
+        # Reuse the indexed frontend's packed metadata route. Runtime members
+        # need the same precise roots, but no intermediate assembly rendering
+        # and reparsing of every stack-map field. Final label offsets are still
+        # resolved by the owned assembler before the plans are consumed.
+        stack_map_plans = []
+        assembly = emit_indexed_assembly(module, stack_map_plans_out=stack_map_plans)
+        return encode_assembly_object(
+            assembly, triple, stack_map_plans=stack_map_plans,
+            consume_stack_map_plans=True,
+        )
     assembly = emit_indexed_assembly(module)
     return encode_assembly_object(assembly, triple)

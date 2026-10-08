@@ -41,6 +41,8 @@ jobs:
       PCC_BUILD_BACKEND: self
       PCC_RUNTIME_CC: pcc
       PCC_RUNTIME_HIGH: py
+      # Qualification logs retain the existing worker phase/function timings.
+      PCC_PY_FRONTEND_WORKER_TIMING: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -134,6 +136,8 @@ jobs:
       PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"
       # Three M1 cores: a local 12-core Stage1 already takes ~520 s.
       PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"
+      # Keep phase/module timing in the retained process stderr on timeout.
+      PCC_PY_FRONTEND_WORKER_TIMING: "1"
     steps:
       - uses: actions/checkout@v4
 

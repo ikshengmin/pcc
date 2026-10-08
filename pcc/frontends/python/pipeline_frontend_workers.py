@@ -960,6 +960,7 @@ def resource_tasks_for_commands(commands):
                 "report_path": out_path + ".rss",
                 "diagnostic_phase": "preload-delta",
                 "diagnostic_modules": roots,
+                "diagnostic_indices": [],
                 "restartable": True,
                 "source_identity": "|".join(identities),
             })
@@ -1010,6 +1011,7 @@ def resource_tasks_for_commands(commands):
             "report_path": path + ".rss",
             "diagnostic_phase": manifest["job_kind"],
             "diagnostic_modules": [manifest["module_names"][index] for index in indices],
+            "diagnostic_indices": list(indices),
             "restartable": True,
             "source_identity": "|".join(identities),
         })
