@@ -816,3 +816,54 @@ def test_rare_emitter_vocabulary_publishes_scalar_words(line: str) -> None:
     assert candidate_sections == oracle_sections
     assert candidate_undefined == oracle_undefined
     records.close()
+
+
+@pytest.mark.parametrize("count", [0, 1, 1023, 1024, 1025, 2048, 2057])
+def test_compiler_word_pack_preserves_chunk_boundaries_and_input(count) -> None:
+    values = [0, 1, 0x12345678, 0x80000000, 0xFFFFFFFF]
+    words = CompilerIntArena()
+    expected = bytearray()
+    for index in range(count):
+        value = values[index % len(values)]
+        words.append(value)
+        expected.extend(value.to_bytes(4, "little"))
+    before = words.diagnostic_values()
+    assert words.pack_u32_bytes() == bytes(expected)
+    assert words.pack_u32_bytes() == bytes(expected)
+    assert words.diagnostic_values() == before
+    words.close()
+
+
+@pytest.mark.parametrize("bad", [-1, 0x100000000])
+def test_compiler_word_pack_rejects_invalid_tail_after_full_chunk(bad) -> None:
+    words = CompilerIntArena()
+    for _ in range(1024):
+        words.append(0xFFFFFFFF)
+    words.append(bad)
+    with pytest.raises(ValueError, match="outside uint32"):
+        words.pack_u32_bytes()
+    assert len(words) == 1025 and words.get_unchecked(1024) == bad
+    words.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        words.pack_u32_bytes()
+
+
+def test_compiler_word_pack_bounds_temporary_host_objects() -> None:
+    import tracemalloc
+
+    words = CompilerIntArena()
+    count = 65536
+    for _ in range(count):
+        words.append(0xD503201F)
+    tracemalloc.start()
+    try:
+        packed = words.pack_u32_bytes()
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+        words.close()
+    assert packed == b"\x1f\x20\x03\xd5" * count
+    # Input allocation precedes tracing. Packing holds compact chunks plus
+    # final output and bounded 1024-word scratch, not one object per word
+    # across the whole module. Leave ample fixed interpreter overhead.
+    assert peak <= 3 * len(packed) + 512 * 1024

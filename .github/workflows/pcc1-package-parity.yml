@@ -59,6 +59,16 @@ jobs:
       - name: Install wheel-build tools
         run: python -m pip install build hatchling
 
+      - name: Install Windows publication test tools
+        if: matrix.platform == 'windows-x86_64'
+        run: python -m pip install pytest
+
+      - name: Verify Windows RSS publication with a held reader
+        if: matrix.platform == 'windows-x86_64'
+        timeout-minutes: 2
+        # This isolated test needs no POSIX-only repository conftest fixtures.
+        run: python -m pytest --noconftest -o "addopts=" -x -vv --tb=short tests/python/test_worker_resource_publication.py
+
       - name: Qualify all five GC self-host chains
         run: python scripts/bootstrap_platform.py --gc all --out-dir build/platform-qualification
 

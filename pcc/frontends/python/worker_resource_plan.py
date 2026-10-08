@@ -234,4 +234,27 @@ def publish_worker_resource(phase: str) -> None:
             + "\n" + str(current) + "\n" + str(peak)
             + "\n" + str(os.environ.get(RESOURCE_TOKEN_ENV, "") or "") + "\n"
         )
-    os.replace(temporary, path)
+    # CPython's Windows reader can deny delete sharing while reading the old
+    # snapshot. Keep that valid snapshot until atomic replacement succeeds;
+    # never truncate it or treat a failed final publication as completion.
+    # Bound contention below STATE_MAX_AGE_SECONDS. The independent tree RSS
+    # guard and the reader's PID/token/completion checks remain authoritative.
+    deadline = time.monotonic() + 1.0
+    try:
+        while True:
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as error:
+                remaining = deadline - time.monotonic()
+                if getattr(error, "winerror", 0) not in (5, 32) or remaining <= 0:
+                    raise
+                time.sleep(min(0.01, remaining))
+    except BaseException:
+        # Do not leave a failed attempt's unpublished snapshot for a retry.
+        # Preserve the publication error if cleanup itself is unavailable.
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
