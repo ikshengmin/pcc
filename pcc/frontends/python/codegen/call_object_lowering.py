@@ -488,6 +488,30 @@ class CallObjectLoweringMixin:
         )
         self._slot_call_check_status(released, "owned-result lease release")
 
+    def _slot_call_builtin_power_expr(self, expr):
+        """Recognize only an unshadowed two-argument builtin power call."""
+        if (not isinstance(expr, Call) or not isinstance(expr.func, Name)
+                or len(expr.args) != 2 or expr.kwargs
+                or self._has_starred_unpack(expr.args)):
+            return None
+        ident = expr.func.ident
+        if (ident in self.env or ident in self._module_globals
+                or ident in self.functions
+                or ident in getattr(getattr(self, "class_lowering", None), "classes", {})
+                or live_import_name_slot(self, ident) is not None):
+            return None
+        builtin = self._native_builtin_value_for_name(ident)
+        if builtin != "builtins.pow":
+            # Plain pow is not in the builtin *type* value-name table.
+            # Accept its unbound spelling, never an imported/assigned alias.
+            if (ident != "pow" or builtin is not None
+                    or ident in self._native_builtin_value_aliases):
+                return None
+        # Reuse the exact numeric producer, with authoritative input roots and
+        # immediate NEW-result publication. A negative exponent stays boxed.
+        return BinOp(span=expr.span, ty=expr.ty, op="**",
+                     lhs=expr.args[0], rhs=expr.args[1])
+
     def _emit_slot_call_operand(self, expr: Expr, label: str):
         """Evaluate one operand into an independent owning authoritative root."""
         if self._expr_returns_unsafe_raw_pointer(expr):
@@ -551,6 +575,11 @@ class CallObjectLoweringMixin:
                 and not self._has_starred_unpack(expr.args)
                 and not (isinstance(expr.ty, IntType) and expr.ty.name != "int")):
             return self._emit_slot_call_int_constructor(expr, label)
+        power = self._slot_call_builtin_power_expr(expr)
+        if power is not None:
+            runtime_power = self._slot_call_binary_runtime(power, object_boundary=True)
+            if runtime_power is not None:
+                return self._emit_slot_call_binary(power, label, runtime_power)
         if isinstance(expr, Call) and expr.is_set_literal:
             return self._emit_slot_call_set(expr, label)
         if (isinstance(expr, Call) and isinstance(expr.func, Name)

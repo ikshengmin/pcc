@@ -83,7 +83,10 @@ def compile_time_isinstance_impl(
         return None
     matcher = _BUILTIN_TYPE_MATCHERS[class_ident]
     ty = obj_expr.ty
-    if isinstance(ty, DynType) or (class_ident == "str" and isinstance(ty, ClassType)):
+    # ClassType describes the Python class, not an exact builtin layout.
+    # Native immutable subclasses keep that class and are checked by the
+    # subclass-aware runtime predicates below.
+    if isinstance(ty, DynType) or (class_ident in ("str", "tuple") and isinstance(ty, ClassType)):
         return None
     return ir.Constant(_I1, 1 if isinstance(ty, matcher) else 0)
 

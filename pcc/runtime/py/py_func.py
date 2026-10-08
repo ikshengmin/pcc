@@ -269,6 +269,127 @@ def py_func_init_metadata_slots(
     return status
 
 
+py_func_new_named_raw = extern("py_func_new_named", (c_ptr, c_ptr, c_ptr), c_ptr)
+
+# Fixed construction frame; expression evaluation remains in the caller.
+_FUNC_CONSTRUCTION_CAPTURES_SLOT = 0
+_FUNC_CONSTRUCTION_SIGNATURE_SLOT = 1
+_FUNC_CONSTRUCTION_WRAPPER_SLOT = 2
+_FUNC_CONSTRUCTION_ERROR_SLOT = 3
+_FUNC_CONSTRUCTION_SLOT_COUNT = 4
+
+
+def _func_construction_close(
+    slots: c_ptr, tokens: c_ptr, handles: c_ptr, registered: int,
+) -> None:
+    if registered == _FUNC_CONSTRUCTION_SLOT_COUNT:
+        py_tls_exc_swap_slot(ptr_add(slots, _FUNC_CONSTRUCTION_ERROR_SLOT * C_POINTER_SIZE))
+        index: int = _FUNC_CONSTRUCTION_WRAPPER_SLOT
+        while index >= _FUNC_CONSTRUCTION_CAPTURES_SLOT:
+            offset: int = index * C_POINTER_SIZE
+            slot = ptr_add(slots, offset)
+            if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
+                pcc_platform_abort()
+                return
+            store_i64(tokens, offset, 0)
+            pcc_gc_store_root(slot, null())
+            index = index - 1
+        py_clear_exception()
+        py_tls_exc_swap_slot(ptr_add(slots, _FUNC_CONSTRUCTION_ERROR_SLOT * C_POINTER_SIZE))
+    index = registered - 1
+    while index >= 0:
+        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
+        index = index - 1
+
+
+def _func_construction_lease_new(slot: c_ptr) -> int:
+    # The producer must have stored NEW directly into this registered empty
+    # slot, with no intervening call. Return the live token even if TLS is set.
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        py_runtime_error_if_unset(cstr("function construction"), cstr("result lease failed"))
+        return token
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+    if ptr_is_null(load_ptr(slot, 0)) != 0:
+        py_runtime_error_if_unset(cstr("function construction"), cstr("allocation failed"))
+    return token
+
+
+@c_abi_export("py_func_new_signature_slots")
+def py_func_new_signature_slots(
+    captures_slot: c_ptr, signature_slot: c_ptr, entry: c_ptr,
+    name: c_ptr, output_slot: c_ptr,
+) -> int:
+    """Borrow evaluated roots; construct exactly [captures, signature].
+
+    entry/name are static unmanaged ABI pointers. output_slot must be a
+    distinct, registered EMPTY owning root. Success publishes one NEW owner.
+    On failure it may still own a non-null result; the caller MUST clean it
+    up, even when status is negative. Input owners are never retired here.
+    NEW publication precedes every poll, lease, diagnostic and cleanup.
+    """
+    if py_err_occurred() != 0:
+        return -1
+    if ptr_is_null(captures_slot) != 0 or ptr_is_null(signature_slot) != 0 or ptr_is_null(output_slot) != 0:
+        py_runtime_error_if_unset(cstr("function construction"), cstr("invalid source slot"))
+        return -1
+    if ptr_eq(output_slot, captures_slot) != 0 or ptr_eq(output_slot, signature_slot) != 0 or ptr_is_null(load_ptr(output_slot, 0)) == 0:
+        py_runtime_error_if_unset(cstr("function construction"), cstr("output slot must be empty and distinct"))
+        return -1
+    slots = stack_alloc(_FUNC_CONSTRUCTION_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FUNC_CONSTRUCTION_SLOT_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_FUNC_CONSTRUCTION_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _FUNC_CONSTRUCTION_SLOT_COUNT * C_POINTER_SIZE)
+    memset(tokens, 0, _FUNC_CONSTRUCTION_SLOT_COUNT * C_POINTER_SIZE)
+    memset(handles, 0, _FUNC_CONSTRUCTION_SLOT_COUNT * C_POINTER_SIZE)
+    registered: int = 0
+    while registered < _FUNC_CONSTRUCTION_SLOT_COUNT:
+        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, registered * C_POINTER_SIZE))
+        if ptr_is_null(handle) != 0:
+            break
+        store_ptr(handles, registered * C_POINTER_SIZE, handle)
+        registered = registered + 1
+    if registered != _FUNC_CONSTRUCTION_SLOT_COUNT:
+        py_runtime_error_if_unset(cstr("function construction"), cstr("root registration failed"))
+        _func_construction_close(slots, tokens, handles, registered)
+        return -1
+    captures = ptr_add(slots, _FUNC_CONSTRUCTION_CAPTURES_SLOT * C_POINTER_SIZE)
+    signature = ptr_add(slots, _FUNC_CONSTRUCTION_SIGNATURE_SLOT * C_POINTER_SIZE)
+    wrapper = ptr_add(slots, _FUNC_CONSTRUCTION_WRAPPER_SLOT * C_POINTER_SIZE)
+    token: int = pcc_gc_root_copy_lease(captures, captures_slot)
+    if token >= 0:
+        store_i64(tokens, _FUNC_CONSTRUCTION_CAPTURES_SLOT * C_POINTER_SIZE, token)
+        token = pcc_gc_root_copy_lease(signature, signature_slot)
+        if token >= 0:
+            store_i64(tokens, _FUNC_CONSTRUCTION_SIGNATURE_SLOT * C_POINTER_SIZE, token)
+    if token < 0:
+        py_runtime_error_if_unset(cstr("function construction"), cstr("source owner copy failed"))
+        _func_construction_close(slots, tokens, handles, registered)
+        return -1
+    store_ptr(wrapper, 0, py_tuple_new(2))
+    token = _func_construction_lease_new(wrapper)
+    if token >= 0:
+        store_i64(tokens, _FUNC_CONSTRUCTION_WRAPPER_SLOT * C_POINTER_SIZE, token)
+    status: int = -1
+    if token >= 0 and py_err_occurred() == 0:
+        py_tuple_set_item(load_ptr(wrapper, 0), 0, load_ptr(captures, 0))
+        if py_err_occurred() == 0:
+            py_tuple_set_item(load_ptr(wrapper, 0), 1, load_ptr(signature, 0))
+            if py_err_occurred() == 0:
+                store_ptr(output_slot, 0, py_func_new_named_raw(entry, load_ptr(wrapper, 0), name))
+                token = _func_construction_lease_new(output_slot)
+                if token >= 0:
+                    if pcc_gc_foreign_lease_release(output_slot, token) != 0:
+                        pcc_platform_abort()
+                        return -1
+                    if py_err_occurred() == 0:
+                        status = 0
+    _func_construction_close(slots, tokens, handles, registered)
+    return status
+
+
 # A deferred request is consumed by the actual semantic callee. Ordinary
 # function bodies run with synchronous dynamic-call semantics. Transparent
 # bind/partial entries forward only their target call through the second lane.

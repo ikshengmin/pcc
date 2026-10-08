@@ -57,7 +57,7 @@ class BinaryOpLoweringMixin:
         never admit a primitive integer kernel or prove overflow impossible.
         Explicit machine projections retain their own lowering.
         """
-        if (expr.op not in ("+", "-", "*", "/", "//", "%", "<<", ">>", "&", "|", "^") or getattr(self, "_freestanding_module", False)
+        if (expr.op not in ("+", "-", "*", "/", "//", "%", "**", "<<", ">>", "&", "|", "^") or getattr(self, "_freestanding_module", False)
                 or getattr(self, "_runtime_port_module", False)):
             return None
         function = self.current_function
@@ -83,6 +83,17 @@ class BinaryOpLoweringMixin:
         for operand in (expr.lhs, expr.rhs):
             if self._expr_returns_unsafe_raw_pointer(operand):
                 return None
+        if expr.op == "**":
+            # Preserve the existing exact integer power producer at an object
+            # boundary. This is not a generic annotation-derived arithmetic
+            # kernel: only the numeric shape already admitted by the exact
+            # power path is supported. Its NEW result can also be a float
+            # for a negative exponent and must remain an owning object.
+            if (object_boundary and isinstance(expr.ty, IntType)
+                    and isinstance(expr.lhs.ty, (IntType, BoolType))
+                    and isinstance(expr.rhs.ty, (IntType, BoolType))):
+                return "py_int_pow"
+            return None
         if expr.op in ("&", "|", "^"):
             # Actual runtime tags select arbitrary-precision integer, bool,
             # container or user/reflected protocols. An annotation never

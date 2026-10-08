@@ -43,7 +43,9 @@ from pcc.frontends.python.codegen.method_call_lowering import (
     _method_source_arg_type,
 )
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.unary_call_lowering import is_i64_int_literal
+from pcc.frontends.python.codegen.unary_call_lowering import (
+    folded_int_literal, is_i64_int_literal,
+)
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
 
 _I1 = ir.IntType(1)
@@ -536,6 +538,62 @@ class CompareMembershipLoweringMixin:
                     ir.Constant(_I32, 0),
                     name=self._fresh("cpy.cmp.i1"),
                 )
+
+        exact_mixed = False
+        if not (getattr(self, "_freestanding_module", False)
+                or getattr(self, "_runtime_port_module", False)):
+            for operand, other_ty in ((expr.lhs, rhs_ty), (expr.rhs, lhs_ty)):
+                if not isinstance(other_ty, (DynType, FloatType)):
+                    continue
+                if self._int_expr_needs_exact_object_boundary(operand):
+                    exact_mixed = True
+                elif (isinstance(other_ty, DynType) and isinstance(operand.ty, IntType)
+                      and operand.ty.name == "int"):
+                    literal = folded_int_literal(operand)
+                    # Even an i64-range literal can allocate when boxed for a
+                    # dynamic comparison. Root the borrowed operand before
+                    # that allocation, and consume the temporary integer.
+                    if literal is not None and not (
+                        self._STATIC_TAGGED_INT_MIN <= literal <= self._STATIC_TAGGED_INT_MAX
+                    ):
+                        exact_mixed = True
+        if exact_mixed:
+            # A mixed comparison is an object boundary for an unbounded
+            # Python int. Emitting it in the scaffold i64 lane first changes
+            # +2**63 into -2**63 before either dynamic or float comparison.
+            # Keep both operands in authoritative roots through evaluation,
+            # comparison callbacks and cleanup; literal trees must use the
+            # exact producer even when this module normally uses raw ints.
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            roots = []
+            try:
+                for operand in (expr.lhs, expr.rhs):
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    if self._slot_call_literal_integer_kind(operand):
+                        root = self._emit_slot_call_literal_integer(operand, "compare.exact.int")
+                    else:
+                        root = self._emit_slot_call_operand(operand, "compare.exact.operand")
+                    roots.append(root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                runtime_name = {
+                    "==": "py_obj_eq_value", "!=": "py_obj_eq_value",
+                    "<": "py_obj_lt", "<=": "py_obj_le",
+                    ">": "py_obj_gt", ">=": "py_obj_ge",
+                }[expr.op]
+                compared = self._slot_call_runtime_call(runtime_name, tuple(roots), span=expr.span)
+                result = self.builder.icmp_signed(
+                    "==" if expr.op == "!=" else "!=", compared,
+                    ir.Constant(compared.type, 0), name=self._fresh("exact.mixed.cmp"),
+                )
+                self._release_slot_call_roots(tuple(roots))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return result
 
         if expr.op in ("==", "!="):
             lhs_scalar = isinstance(lhs_ty, (IntType, BoolType, FloatType))

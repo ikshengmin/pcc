@@ -117,8 +117,8 @@ class Layer1InitMixin:
         self._fn_valueclass_payload_root_slots: dict[str, list] = {}
         self._slot_call_root_records: list = []
         self._slot_call_root_record_index: dict = {}
-        self._slot_call_cleanup_function = None
-        self._slot_call_cleanup_blocks: dict = {}
+        self._slot_call_cleanup_function: Optional[ir.Function] = None
+        self._slot_call_cleanup_blocks: dict[tuple, tuple] = {}
         self._slot_call_result_sinks: list = []
         self._valueclass_payload_sources: list = []
         self._valueclass_payload_source_index: dict = {}

@@ -3043,28 +3043,15 @@ class UserFunctionLoweringMixin:
             self._cpy_operand_cleanup_block = self._try_err_block
             value = self._emit_native_func_signature(original_args)
             self._publish_slot_call_owned(signature, value, label="callable signature")
-            wrapped = self._new_slot_call_root(label + ".wrapper")
-            roots.append(wrapped)
-            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-            self._cpy_operand_cleanup_block = self._try_err_block
-            value = self.builder.call(
-                self.runtime["py_tuple_new"], [ir.Constant(_I64, 2)],
-                name=self._fresh(label + ".wrapper.new"),
+            status = self.builder.call(
+                self.runtime["py_func_new_signature_slots"],
+                [self._as_gc_ptr(captures), self._as_gc_ptr(signature),
+                 adapter, display_name_ptr, self._as_gc_ptr(output)],
+                name=self._fresh(label + ".construction.status"),
             )
-            self._publish_slot_call_owned(wrapped, value, label="callable wrapper")
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, "callable construction", fd.span)
             self._emit_post_call_err_check(fd.span)
-            self._guard_cpy_value_not_null(self.builder.load(wrapped))
-            for index, item in enumerate((captures, signature)):
-                self._slot_call_runtime_call(
-                    "py_tuple_set_item", (wrapped, item),
-                    suffix_args=(ir.Constant(_I64, index),),
-                    argument_order=(0, 2, 1), span=fd.span,
-                )
-            self._slot_call_runtime_call(
-                "py_func_new_named", (wrapped,), result_slot=output,
-                suffix_args=(adapter, display_name_ptr),
-                argument_order=(1, 0, 2), span=fd.span,
-            )
             self._guard_cpy_value_not_null(self.builder.load(output))
             self._release_slot_call_roots(tuple(roots[1:]))
             output_cleanup = self._slot_call_cleanup_block((output,), target)

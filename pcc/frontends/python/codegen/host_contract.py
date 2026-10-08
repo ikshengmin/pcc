@@ -3,8 +3,9 @@
 The native lowering files under ``pcc.frontends.python.codegen.native_*`` are
 mixins. A raw single-file probe sees ``self`` as the mixin class, but the
 real closed-world compiler executes those methods on ``L1CodeGen``. Keep
-that policy in one small codegen-local module so fallback gates and future
-type-infer protocol work agree on the same host model.
+that policy in one codegen-local module so contextual type inference,
+closed-world field exports and the native host layout agree. These names
+are production layout state, not just a diagnostic allowlist.
 """
 
 from __future__ import annotations
@@ -238,6 +239,8 @@ L1_CODEGEN_HOST_ATTRS = (
     "module",
     "runtime",
     "_for_unpack_temporary_names",
+    "_slot_call_cleanup_function",
+    "_slot_call_cleanup_blocks",
 )
 L1_CODEGEN_HOST_METHODS = (
     "_store_unpack_root_target",

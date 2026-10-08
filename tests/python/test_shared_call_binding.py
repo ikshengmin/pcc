@@ -150,20 +150,21 @@ def test_function_metadata_uses_defining_namespace_and_rooted_setters():
     for value in ("provider", "target"):
         encoded = 'c"' + "".join("\\" + format(byte, "02X") for byte in value.encode() + b"\0") + '"'
         assert encoded in text, value
-    # Publication is the next instruction after the constructor, before any
-    # lease release, error check, construction cleanup or metadata allocation.
+    # The slot producer owns immediate publication, including partial results
+    # on failure. Metadata must receive that same authoritative output slot.
     constructor = re.search(
-        r"(%[^ ]+) = call [^\n]*@py_func_new_named\([^\n]*\)\n\s+store ptr \1, ptr (%function\.metadata\.result[^ ,\n]*)",
-        text,
+        r"call [^\n]*@py_func_new_signature_slots\([^\n]*, ptr (%[^ ,\n]+)\)", text,
     )
     assert constructor is not None
     aliases = dict(re.findall(r"(%[^ ]+) = bitcast ptr (%[^ ]+) to ptr", text))
+    def resolve(value):
+        while value in aliases:
+            value = aliases[value]
+        return value
     calls = re.findall(r"call [^\n]*@py_func_init_metadata_slots\(([^\n]*)\)", text)
     assert calls
     first_argument = calls[0].split(",", 1)[0].split()[-1]
-    while first_argument in aliases:
-        first_argument = aliases[first_argument]
-    assert first_argument == constructor.group(2)
+    assert resolve(first_argument) == resolve(constructor.group(1))
     assert "@pcc_gc_foreign_lease_acquire(" in text
 
 

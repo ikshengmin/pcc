@@ -1382,6 +1382,12 @@ PyObject *py_native_extension_import_by_name(const char *module_name);
  */
 PyObject *py_func_new(void *entry, PyObject *captures_tuple);
 PyObject *py_func_new_named(void *entry, PyObject *captures_tuple, const char *name);
+/* Borrow evaluated authoritative inputs. Output must be distinct, registered
+ * and empty. It may own NEW even on failure; caller must clean it up. */
+int64_t py_func_new_signature_slots(
+    PyObject **captures_slot, PyObject **signature_slot, void *entry,
+    const char *name, PyObject **output_slot
+);
 /* Borrows the authoritative callable owner and preserves pending errors. */
 int64_t py_func_init_metadata_slots(
     PyObject **callable_slot, const char *module_name, const char *qualname

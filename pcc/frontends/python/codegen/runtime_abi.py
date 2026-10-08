@@ -864,6 +864,7 @@ def _runtime_signatures_part_12():
     # ---- Native function objects -----------------------------------
     "py_func_new": (_PYOBJ, [_PTR, _PYOBJ], False),
     "py_func_new_named": (_PYOBJ, [_PTR, _PYOBJ, _CSTR], False),
+    "py_func_new_signature_slots": (_I64, [_PTR, _PTR, _PTR, _CSTR, _PTR], False),
     "py_func_init_metadata_slots": (_I64, [_PTR, _CSTR, _CSTR], False),
     "py_builtin_function_value": (_PYOBJ, [_PTR, _CSTR], False),
     "py_builtin_abs_entry": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
