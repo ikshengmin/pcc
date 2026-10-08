@@ -34,6 +34,7 @@ from .elf_x86_64 import (
 )
 from .x86_64_encode import (
     X86EncodeError,
+    _OperandParseCache,
     encode_instruction,
 )
 
@@ -493,7 +494,7 @@ _INSTRUCTION_SIZE_CACHE_MAX_ENTRIES = 4096
 _INSTRUCTION_SIZE_CACHE_MAX_KEY_BYTES = 1_048_576
 
 
-def _measure_sections(plans, order, symbols):
+def _measure_sections(plans, order, symbols, operand_cache=None):
     labels: dict[str, tuple[str, int]] = {}
     sizes: dict[str, int] = {}
     section_sizes: dict[str, int] = {}
@@ -545,6 +546,7 @@ def _measure_sections(plans, order, symbols):
                     # an oversized miss through the following cache hits.
                     instruction_size = len(encode_instruction(
                         instruction_text, pc=offset, labels={}, section_name=name,
+                        operand_cache=operand_cache,
                     ).code)
                     if cacheable:
                         if (
@@ -615,7 +617,10 @@ def _assemble_file(
     if consume_stack_map_plans and not isinstance(stack_map_plans, list):
         raise X86EncodeError("consuming stack maps require a mutable plan list")
     plans, order, symbol_meta = _parse_file(asm_text, compact_instructions=True)
-    labels, measured_sizes = _measure_sections(plans, order, symbol_meta)
+    operand_cache = _OperandParseCache()
+    labels, measured_sizes = _measure_sections(
+        plans, order, symbol_meta, operand_cache=operand_cache,
+    )
     pending: list[_PendingRelocation] = []
     if stack_map_plans:
         from .self_backend_precise_stackmaps import build_x86_64_stack_map_payload
@@ -706,6 +711,7 @@ def _assemble_file(
                     pc=memory_size,
                     labels=local_branch_labels,
                     section_name=name,
+                    operand_cache=operand_cache,
                 )
                 payload.extend(encoded.code)
                 memory_size += len(encoded.code)

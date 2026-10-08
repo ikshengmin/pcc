@@ -116,6 +116,12 @@ pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+py_handled_exception_slot = extern("py_handled_exception_slot", (), c_ptr)
+py_exc_traceback_format_exc_abi = extern("py_exc_traceback_format_exc", (c_ptr,), c_ptr)
+py_exc_traceback_print_exc_abi = extern("py_exc_traceback_print_exc", (c_ptr,), c_void)
+define_global_i32("pcc_traceback_current_map", 2)
+
 py_runtime_error_if_unset_abi = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
@@ -675,6 +681,60 @@ def py_exc_traceback_print_exc(exc) -> None:
             write(2, buf, length)
         free(buf)
     free(b)
+
+
+def _tb_current_finish(slots, lease: int):
+    # The formatter result is published before either operand cleanup or
+    # frame retirement. Keep its NEW owner through the final raw ABI handoff.
+    if lease >= 0:
+        py_cleanup_one_lease_preserving_exception(slots, lease)
+    py_cleanup_one_root_preserving_exception(slots)
+    result = ptr_add(slots, C_POINTER_SIZE)
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), result)
+    prior: int = 0
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        prior = load_i32(value, 12) & 64
+        pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(result, prior)
+
+
+def _tb_current_call(print_only: int):
+    # This module is built without implicit polls. All managed state is in
+    # registered slots before any allocating call. The dynamic handled slot
+    # belongs to the caller's still-live handler, including across ordinary
+    # provider/helper function calls; pending TLS is not the handled state.
+    slots = stack_alloc(2 * C_POINTER_SIZE)
+    memset(slots, 0, 2 * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_traceback_current_map"), slots)
+    source = py_handled_exception_slot()
+    lease: int = 0
+    if ptr_is_null(source) == 0:
+        lease = pcc_gc_root_copy_lease(slots, source)
+        if lease < 0:
+            _tb_error(cstr("handled exception owner acquisition failed"))
+            return _tb_current_finish(slots, lease)
+    if print_only != 0:
+        py_exc_traceback_print_exc_abi(load_ptr(slots, 0))
+        pcc_gc_store_root(ptr_add(slots, C_POINTER_SIZE), global_load_ptr("py_None"))
+    else:
+        store_ptr(slots, C_POINTER_SIZE, py_exc_traceback_format_exc_abi(load_ptr(slots, 0)))
+        _tb_adopt(ptr_add(slots, C_POINTER_SIZE))
+    return _tb_current_finish(slots, lease)
+
+
+@c_abi_export("py_exc_traceback_format_current")
+def py_exc_traceback_format_current():
+    """NEW text for the dynamically handled exception, or NoneType: None."""
+    return _tb_current_call(0)
+
+
+@c_abi_export("py_exc_traceback_print_current")
+def py_exc_traceback_print_current() -> None:
+    # The shared result is the immortal None singleton on this branch.
+    _tb_current_call(1)
 
 
 def _tb_cache_mutex():

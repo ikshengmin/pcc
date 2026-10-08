@@ -261,6 +261,46 @@ def _parse_operand(text: str):
         return _Target(name)
 
 
+
+_OPERAND_CACHE_MAX_ENTRIES = 4096
+_OPERAND_CACHE_MAX_KEY_BYTES = 1_048_576
+
+
+class _OperandParseCache:
+    """Bounded file-local reuse of immutable, PC-independent operand syntax."""
+
+    def __init__(self) -> None:
+        self.entries: dict[str, _Reg | _Mem | _Imm | _Target] = {}
+        self.key_bytes = 0
+
+    def parse(self, text: str):
+        # A str subclass can override len/hash/equality. Preserve the parser's
+        # original treatment without performing cache-only operations on it.
+        if type(text) is not str:
+            return _parse_operand(text)
+        key_bytes = 4 * len(text)
+        cacheable = (
+            _OPERAND_CACHE_MAX_ENTRIES > 0
+            and key_bytes <= _OPERAND_CACHE_MAX_KEY_BYTES
+        )
+        if not cacheable:
+            return _parse_operand(text)
+        result = self.entries.get(text)
+        if result is not None:
+            return result
+        # Invalid operands must still fail at their actual encounter point.
+        result = _parse_operand(text)
+        if (
+            len(self.entries) >= _OPERAND_CACHE_MAX_ENTRIES
+            or self.key_bytes + key_bytes > _OPERAND_CACHE_MAX_KEY_BYTES
+        ):
+            self.entries.clear()
+            self.key_bytes = 0
+        self.entries[text] = result
+        self.key_bytes += key_bytes
+        return result
+
+
 def _int_bytes(value: int, width: int) -> bytes:
     mask = (1 << (width * 8)) - 1
     return (value & mask).to_bytes(width, "little")
@@ -945,6 +985,7 @@ def encode_instruction(
     pc: int,
     labels: dict[str, tuple[str, int]],
     section_name: str,
+    operand_cache: _OperandParseCache | None = None,
 ) -> EncodedInstruction:
     """Encode one normalized Intel-syntax instruction at ``pc``."""
     stripped = line.strip()
@@ -986,12 +1027,16 @@ def encode_instruction(
             pc=pc + 1,
             labels=labels,
             section_name=section_name,
+            operand_cache=operand_cache,
         )
         return EncodedInstruction(
             b"\xf0" + nested.code,
             nested.relocations,
         )
-    operands = [_parse_operand(item) for item in _split_operands(rest)]
+    operands = [
+        _parse_operand(item) if operand_cache is None else operand_cache.parse(item)
+        for item in _split_operands(rest)
+    ]
     if mnemonic in ("fld", "fstp", "fild", "fistp", "fnstcw", "fldcw"):
         if len(operands) != 1 or not isinstance(operands[0], _Mem):
             raise X86EncodeError(f"{mnemonic} requires one sized memory operand")

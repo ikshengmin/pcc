@@ -1,10 +1,17 @@
-"""pcc.stdlib.traceback — narrow ``traceback`` skeleton.
+"""Owned current-exception formatting through the runtime frame records.
 
-Hooks into the py_runtime exception-frame table (``py_exc_append_frame``)
-to format an exception's stack. Real formatting mirrors CPython's
-``Traceback (most recent call last):`` layout.
+Native format_exc/print_exc support their default options. Explicit limits,
+chain suppression and alternate print destinations fail closed until the
+runtime formatter supports them. Other traceback APIs remain unsupported.
 """
 from __future__ import annotations
+
+import sys as _native_sys
+import traceback as _host_traceback
+from pcc.extern import c_obj, c_void, extern
+
+_format_current = extern("py_exc_traceback_format_current", (), c_obj)
+_print_current = extern("py_exc_traceback_print_current", (), c_void)
 
 
 def format_exception(etype, value, tb) -> list[str]:
@@ -13,12 +20,27 @@ def format_exception(etype, value, tb) -> list[str]:
     )
 
 
-def format_exc() -> str:
-    raise NotImplementedError("format_exc awaits frame-table marshalling")
+def format_exc(limit=None, chain=True) -> str:
+    if _native_sys.implementation.name != "pcc":
+        return _host_traceback.format_exc(limit=limit, chain=chain)
+    if limit is not None:
+        raise NotImplementedError("native traceback.format_exc limit is not implemented")
+    if chain is not True:
+        raise NotImplementedError("native traceback.format_exc chain option is not implemented")
+    return _format_current()
 
 
-def print_exc() -> None:
-    raise NotImplementedError("print_exc awaits frame-table marshalling")
+def print_exc(limit=None, file=None, chain=True) -> None:
+    if _native_sys.implementation.name != "pcc":
+        _host_traceback.print_exc(limit=limit, file=file, chain=chain)
+        return
+    if limit is not None:
+        raise NotImplementedError("native traceback.print_exc limit is not implemented")
+    if file is not None:
+        raise NotImplementedError("native traceback.print_exc file option is not implemented")
+    if chain is not True:
+        raise NotImplementedError("native traceback.print_exc chain option is not implemented")
+    _print_current()
 
 
 def print_exception(etype, value, tb) -> None:

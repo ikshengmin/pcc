@@ -522,9 +522,12 @@ probe:
 '''
     original = assembler.encode_instruction
     calls = []
-    def tracked(line, *, pc, labels, section_name):
+    def tracked(line, *, pc, labels, section_name, operand_cache=None):
         calls.append((line, pc, bool(labels)))
-        return original(line, pc=pc, labels=labels, section_name=section_name)
+        return original(
+            line, pc=pc, labels=labels, section_name=section_name,
+            operand_cache=operand_cache,
+        )
     monkeypatch.setattr(assembler, 'encode_instruction', tracked)
     first = assembler.assemble_file(text)
     section = next(section for section in first.sections if section.name == '.text')

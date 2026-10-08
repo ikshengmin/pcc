@@ -2072,6 +2072,9 @@ PyObject *py_exc_traceback_format_exc(PyObject *exc);
 /* traceback.print_exc(): same text as py_exc_traceback_format_exc,
  * written to stderr. `exc` is borrowed and may be NULL. */
 void py_exc_traceback_print_exc(PyObject *exc);
+/* Owned provider entrypoints: use the dynamic handled-exception root. */
+PyObject *py_exc_traceback_format_current(void);
+void py_exc_traceback_print_current(void);
 
 /* exc.__traceback__: traceback -> frame -> code objects built from the
  * frame records; NEW reference, None when no frame was recorded. */
