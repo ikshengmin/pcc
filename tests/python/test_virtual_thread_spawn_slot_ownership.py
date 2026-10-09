@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,7 +10,11 @@ from pcc.backend.self_backend_kernel import get_indexed_function_kernel
 from pcc.backend.self_backend_parse import parse_self_backend_module
 from pcc.backend.self_backend_verify import verify_parsed_module
 from pcc.diagnostics.gc_log import parse_log_lines
-from tests.python.test_slot_call_operand_roots import _emit
+from tests.python.root_slot_contract import RootSlotContract
+from tests.python.test_slot_call_operand_roots import (
+    _emit,
+    _probe_function,
+)
 
 
 def _spawn_source(generator=False, sink=True, module_scope=False, resume=False):
@@ -25,7 +30,40 @@ def _spawn_source(generator=False, sink=True, module_scope=False, resume=False):
     return source + "def probe():\n" + ("    vt.yield_now()\n" if resume else "") + "    return " + expression + "\n"
 
 
-def _assert_spawn_contract(text):
+def _assert_singleton_root_cleanup(block, addresses):
+    """Recognize the audited helper without hiding caller-slot retirement.
+
+    The production helper saves/restores the selecting exception internally;
+    tests in test_owned_cleanup_helpers execute that body with hostile moving
+    callbacks. Here the exact caller owner must remain live through the call
+    and retire immediately afterward on this real error CFG.
+    """
+    calls = [ins for ins in block.instructions if ins.kind == "call"]
+    assert (len(calls) == 2
+            and addresses.called(calls[0], "py_cleanup_one_root_preserving_exception")
+            and not calls[0].data[3]
+            and addresses.called(calls[1], "pcc_gc_frame_leave_lifo")
+            and not calls[1].data[3]), (
+            "singleton cleanup needs helper before its sole caller retirement"
+        )
+    assert all(ins.kind == "call" or (ins.kind == "cast" and ins.data[0] == "bitcast")
+               for ins in block.instructions), "singleton cleanup cannot overwrite its owner"
+    helper_args, leave_args = addresses.args(calls[0]), addresses.args(calls[1])
+    assert len(helper_args) == len(leave_args) == 1
+    owner = addresses.slot(helper_args[0])
+    assert owner == addresses.slot(leave_args[0]), "singleton helper must clear the retired owner"
+    addresses.require_owning(owner, allow_lifo=True)
+    assert any(addresses.called(ins, "pcc_gc_frame_enter_lifo")
+               and not ins.data[3]
+               and addresses.slot(addresses.args(ins)[1]) == owner for _, _, ins in addresses.rows), (
+        "singleton helper requires the caller's lexical registration"
+    )
+    assert block.terminator.kind == "br", "singleton cleanup must branch to its error target"
+    assert block.terminator.data[0] != block.name, "singleton cleanup cannot loop before its error target"
+    return owner
+
+
+def _assert_spawn_contract(text, mutate_cleanup=None):
     module = parse_self_backend_module(text)
     verify_parsed_module(module)
     functions = []
@@ -38,14 +76,19 @@ def _assert_spawn_contract(text):
             functions.append((blocks, rows))
     assert len(functions) == 1
     blocks, rows = functions[0]
-    aliases = {ins.data[1]: ins.data[3] for _, _, ins in rows
-               if ins.kind == "cast" and ins.data[0] == "bitcast"}
+    if mutate_cleanup is not None:
+        blocks = mutate_cleanup(blocks)
+        rows = [(block, index, ins) for block in blocks
+                for index, ins in enumerate(block.instructions)]
+    addresses = RootSlotContract(blocks, module.globals_)
+    helper_clears = {block.name: _assert_singleton_root_cleanup(block, addresses)
+                     for block in blocks if any(addresses.called(ins, "py_cleanup_one_root_preserving_exception")
+                                                for ins in block.instructions)}
+    # Local helper-before-leave shape plus the complete frame-state proof
+    # establishes that its caller owner is live throughout the helper call.
+    addresses.assert_frame_exits()
+    slot = addresses.slot
     loads = {ins.data[0]: ins.data[3] for _, _, ins in rows if ins.kind == "load"}
-
-    def slot(value):
-        while value in aliases:
-            value = aliases[value]
-        return value
 
     def called(ins, name):
         return ins.kind == "call" and ins.data[2] == name
@@ -58,12 +101,16 @@ def _assert_spawn_contract(text):
                    or called(ins, "py_continuation_new_typed")
                    or (ins.kind == "call" and ins.data[2] == "user_slot_operand_worker")]
     by_name = {block.name: block for block in blocks}
+    assert "err.exit" in by_name, "fixture needs its independently named enclosing error exit"
     thread_root = None
+    allocated_roots = []
     for block, index, ins in allocations:
         published = block.instructions[index + 1]
         assert published.kind == "store" and published.data[1] == ins.data[0]
         root = slot(published.data[3])
-        assert any(row.kind == "alloca" and row.data[0] == root for _, _, row in rows)
+        addresses.require_owning(root, allow_lifo=True)
+        assert root not in allocated_roots, "different allocations alias the same physical root cell"
+        allocated_roots.append(root)
         null_checks = [row for _, _, row in rows if row.kind == "icmp"
                        and row.data[0] == "eq" and row.data[4] == "null"
                        and row.data[3] in loads and slot(loads[row.data[3]]) == root]
@@ -84,6 +131,8 @@ def _assert_spawn_contract(text):
                 assert not any(called(row, "py_virtual_thread_start") for row in error.instructions)
                 cleared.extend(slot(args(row)[0]) for row in error.instructions
                                if called(row, "pcc_gc_store_root") and args(row)[1] == "null")
+                if error.name in helper_clears:
+                    cleared.append(helper_clears[error.name])
                 term = error.terminator
                 if term.kind == "br":
                     error = by_name[term.data[0]]
@@ -91,7 +140,8 @@ def _assert_spawn_contract(text):
                     error = by_name[term.data[1]]
                 else:
                     break
-            assert root in cleared
+            assert root in cleared, "allocated owner must be cleared on its NULL error path"
+            assert "err.exit" in seen, "NULL error cleanup must reach the enclosing error exit"
         if called(ins, "py_virtual_thread_new"):
             thread_root = root
             thread_ssa = ins.data[0]
@@ -130,6 +180,112 @@ def test_spawn_allocation_errors_keep_cleanup_and_strict_stale_rejection():
     assert "@py_tls_exc_swap_slot(" in text
     with pytest.raises(L1CodegenError, match="lacks an immediate owned-result handoff"):
         _emit("def probe():\n    return slot_stale_probe()\n")
+
+
+@pytest.fixture(scope="module")
+def singleton_spawn_ir():
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("PCC_DIRECT_GENERATOR_TASKS", "0")
+        return _emit(_spawn_source(generator=False, sink=True))
+
+
+def test_spawn_singleton_root_cleanup_contract(singleton_spawn_ir):
+    _assert_spawn_contract(singleton_spawn_ir)
+
+
+def _mutate_singleton_spawn_cleanup(blocks, mutation, applied):
+    copied = [SimpleNamespace(name=block.name, instructions=list(block.instructions),
+                              terminator=block.terminator) for block in blocks]
+    addresses = RootSlotContract(copied)
+    publications = [(ins.data[2], block.instructions[index + 1].data[3])
+                    for block, index, ins in addresses.rows
+                    if ins.kind == "call" and ins.data[2] in (
+                        "py_virtual_thread_new", "py_continuation_new_typed")]
+    root_value = next(value for name, value in publications if name == "py_virtual_thread_new")
+    root = addresses.slot(root_value)
+    # This other SSA is a real, distinct, positively registered NEW owner in
+    # the unmodified positive, not an invalid/unbound pointer spelling.
+    other = next(value for _, value in publications if addresses.slot(value) != root)
+    target, index, helper = next((block, index, ins) for block, index, ins in addresses.rows
+                                if addresses.called(ins, "py_cleanup_one_root_preserving_exception")
+                                and addresses.slot(addresses.args(ins)[0]) == root)
+    instructions = target.instructions
+
+    def with_args(ins, arguments):
+        return SimpleNamespace(kind=ins.kind, data=ins.data[:4] + (arguments,) + ins.data[5:])
+
+    if mutation == "missing-helper":
+        instructions.pop(index)
+    elif mutation in ("wrong-valid-owner", "null-owner"):
+        value = other if mutation == "wrong-valid-owner" else "null"
+        instructions[index] = with_args(helper, ((helper.data[4][0][0], value),))
+    elif mutation in ("missing-retirement", "retire-before-helper"):
+        leave_index = next(i for i, ins in enumerate(instructions)
+                           if addresses.called(ins, "pcc_gc_frame_leave_lifo"))
+        leave = instructions.pop(leave_index)
+        if mutation == "retire-before-helper":
+            # Reuse the already-defined helper address to preserve valid SSA
+            # while moving retirement ahead of the potentially reentrant drop.
+            instructions.insert(index, with_args(leave, helper.data[4]))
+    else:
+        assert mutation == "bypass-cleanup"
+        predecessor = next(block for block in copied if block.terminator.kind == "br"
+                           and block.terminator.data[0] == target.name)
+        assert target.terminator.kind == "br"
+        predecessor.terminator = SimpleNamespace(kind="br", data=target.terminator.data)
+    applied.append(mutation)
+    return copied
+
+
+@pytest.mark.parametrize("mutation, diagnostic", [
+    ("missing-helper", "allocated owner must be cleared"),
+    ("wrong-valid-owner", "singleton helper must clear the retired owner"),
+    ("null-owner", "singleton helper must clear the retired owner"),
+    ("missing-retirement", "singleton cleanup needs helper before"),
+    ("retire-before-helper", "singleton cleanup needs helper before"),
+    ("bypass-cleanup", "inconsistent live root frames|active root frames"),
+])
+def test_spawn_singleton_cleanup_rejects_wrong_owner_or_retirement(
+    singleton_spawn_ir, mutation, diagnostic,
+):
+    _assert_spawn_contract(singleton_spawn_ir)
+    applied = []
+    with pytest.raises(AssertionError, match=diagnostic):
+        _assert_spawn_contract(singleton_spawn_ir, mutate_cleanup=lambda blocks:
+                               _mutate_singleton_spawn_cleanup(blocks, mutation, applied))
+    assert applied == [mutation], "the negative case must reach the singleton ownership validator"
+
+
+@pytest.mark.parametrize("runtime, diagnostic", [
+    ("py_cleanup_one_root_preserving_exception", "singleton cleanup needs helper before"),
+    ("pcc_gc_frame_enter_lifo", "singleton helper requires the caller's lexical registration"),
+    ("pcc_gc_frame_leave_lifo", "singleton cleanup needs helper before"),
+])
+def test_spawn_singleton_cleanup_rejects_same_name_indirect_calls(
+    singleton_spawn_ir, runtime, diagnostic,
+):
+    _assert_spawn_contract(singleton_spawn_ir)
+    body = _probe_function(singleton_spawn_ir)
+    direct, indirect = "@" + runtime + "(", "%" + runtime + "("
+    line = next(line for line in body.splitlines(keepends=True)
+                if "call " in line and direct in line)
+    assert "%" + runtime not in body, "indirect control needs an unused local SSA name"
+    # Give the local function pointer a real dominating definition, so this
+    # is valid IR with the same decoded callee name, not an undefined SSA.
+    replacement = ("  %" + runtime + " = bitcast ptr @" + runtime + " to ptr\n"
+                   + line.replace(direct, indirect, 1))
+    changed = body.replace(line, replacement, 1)
+    assert changed != body and changed.count(indirect) == 1, "indirect mutation must apply"
+    mutated = singleton_spawn_ir.replace(body, changed, 1)
+    module = parse_self_backend_module(mutated)
+    verify_parsed_module(module)
+    calls = [ins for fn in module.functions
+             for block in get_indexed_function_kernel(fn).materialize_legacy_blocks(fn)
+             for ins in block.instructions
+             if ins.kind == "call" and ins.data[2] == runtime and ins.data[3]]
+    assert len(calls) == 1, "control must preserve the name while changing directness"
+    with pytest.raises(AssertionError, match=diagnostic):
+        _assert_spawn_contract(mutated)
 
 
 NATIVE_SOURCE = '''import gc

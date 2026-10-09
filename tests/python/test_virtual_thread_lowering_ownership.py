@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.root_slot_contract import RootSlotContract
+
 
 REPO = Path(__file__).resolve().parents[2]
 LOWERING = REPO / "pcc" / "frontends" / "python" / "codegen" / "native_virtual_thread.py"
@@ -170,16 +172,8 @@ def _assert_callback_exception_owner_path(
     """Follow the real cleanup CFG while tracking the selecting TLS owner."""
     by_name = {block.name: block for block in blocks}
     rows = [ins for block in blocks for ins in block.instructions]
-    aliases = {ins.data[1]: ins.data[3] for ins in rows
-               if ins.kind == "cast" and ins.data[0] == "bitcast"}
-
-    def slot(value):
-        seen = set()
-        while value in aliases:
-            assert value not in seen
-            seen.add(value)
-            value = aliases[value]
-        return value
+    addresses = RootSlotContract(blocks)
+    slot = addresses.slot
 
     def called(ins, name):
         return ins.kind == "call" and ins.data[2] == name
@@ -215,7 +209,7 @@ def _assert_callback_exception_owner_path(
                 saved[owner] = None
             elif called(ins, "pcc_gc_frame_enter_lifo") and slot(args(ins)[1]) in swap_slots:
                 owner = slot(args(ins)[1])
-                assert slot(args(ins)[0]).lstrip("@") in one_slot_maps, (
+                assert addresses.symbol(args(ins)[0]).lstrip("@") in one_slot_maps, (
                     "exception registration needs a real one-slot owning frame map"
                 )
                 assert owner in initialized and owner not in registered
@@ -299,17 +293,9 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
     by_name = {block.name: block for block in blocks}
     rows = [(block, index, instruction) for block in blocks
             for index, instruction in enumerate(block.instructions)]
-    aliases = {ins.data[1]: ins.data[3] for _, _, ins in rows
-               if ins.kind == "cast" and ins.data[0] == "bitcast"}
+    addresses = RootSlotContract(blocks, module.globals_)
+    slot = addresses.slot
     loads = {ins.data[0]: ins.data[3] for _, _, ins in rows if ins.kind == "load"}
-
-    def slot(value):
-        seen = set()
-        while value in aliases:
-            assert value not in seen
-            seen.add(value)
-            value = aliases[value]
-        return value
 
     def called(ins, name):
         return ins.kind == "call" and ins.data[2] == name
@@ -346,15 +332,9 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
     assert published.kind == "store" and published.data[1] == invoke.data[0]
     result_slot = slot(published.data[3])
     roots = (callable_slot, args_slot, result_slot)
-    assert len(set(roots)) == 3
+    assert len(set(roots)) == 3, "different operands alias the same physical root cell"
     for root in roots:
-        assert any(ins.kind == "alloca" and ins.data[0] == root for _, _, ins in rows)
-        assert any(ins.kind == "store" and ins.data[1] == "null"
-                   and slot(ins.data[3]) == root for ins in by_name["entry"].instructions)
-        assert any(called(ins, "pcc_gc_frame_enter") and slot(args(ins)[1]) == root
-                   for _, _, ins in rows)
-        assert not any(called(ins, "pcc_gc_frame_enter_lifo") and slot(args(ins)[1]) == root
-                       for _, _, ins in rows)
+        addresses.require_owning(root)
 
     # The list holding the first argument and the callable must both be saved
     # at the argument's suspension, then restored from the same heap cells
@@ -498,13 +478,7 @@ def test_callback_exception_owner_contract_rejects_wrong_cleanup(mutation, diagn
         copied = [SimpleNamespace(name=block.name, instructions=list(block.instructions),
                                   terminator=block.terminator) for block in blocks]
         by_name = {block.name: block for block in copied}
-        aliases = {ins.data[1]: ins.data[3] for block in copied for ins in block.instructions
-                   if ins.kind == "cast" and ins.data[0] == "bitcast"}
-
-        def slot(value):
-            while value in aliases:
-                value = aliases[value]
-            return value
+        slot = RootSlotContract(copied).slot
 
         def called(ins, name):
             return ins.kind == "call" and ins.data[2] == name

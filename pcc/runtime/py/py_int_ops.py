@@ -306,6 +306,12 @@ def py_int_truediv(a, b):
 
 @c_abi_export("py_int_pow")
 def py_int_pow(a, b):
+    # The C pow ABI reports a floating divide-by-zero and returns infinity;
+    # Python integer power must instead publish a catchable TLS exception.
+    # Inspect signs before float conversion, including boxed zero and counts.
+    if _int_shift_sign(b) < 0 and _int_shift_sign(a) == 0:
+        py_raise_owned(py_exc_new(9, cstr("0.0 cannot be raised to a negative power")))
+        return null()
     if is_tagged_int(b):
         ev: int = untag_int(b)
         if ev < 0:

@@ -995,6 +995,44 @@ class ExceptionLoweringMixin:
                 self._note_owned_dynamic_call_value(result)
                 return result
             if tag >= 0:
+                sink = self._slot_call_result_sink(exc_expr)
+                if (sink is not None and not exc_expr.kwargs
+                        and len(exc_expr.args) <= 1
+                        and not self._has_starred_unpack(exc_expr.args)
+                        and self._split_starstar_kwargs_unpack(exc_expr.args) is None):
+                    # Publish this known NEW producer into its caller's root.
+                    # Keep dispatch in the exception builder: routing through
+                    # class-call construction has a different argument ABI.
+                    previous = self._current_try_err_block()
+                    target = previous if previous is not None else self._ensure_fn_err_exit()
+                    saved_cpy = self._cpy_operand_cleanup_block
+                    roots = []
+                    try:
+                        if exc_expr.args and not isinstance(exc_expr.args[0], StrLit):
+                            argument = self._emit_slot_call_operand(
+                                exc_expr.args[0], "exception.value.argument",
+                            )
+                            roots.append(argument)
+                            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                            self._cpy_operand_cleanup_block = self._try_err_block
+                            self._slot_call_runtime_call(
+                                "py_exc_new_with_value", (argument,), result_slot=sink,
+                                suffix_args=(ir.Constant(_I64, tag),), argument_order=(1, 0),
+                                span=exc_expr.span,
+                            )
+                        else:
+                            # Omitted and literal messages use static C strings,
+                            # so there is no managed input crossing this call.
+                            message = _message_cstr(exc_expr.args)
+                            self._slot_call_runtime_call(
+                                "py_exc_new", (), result_slot=sink,
+                                suffix_args=(ir.Constant(_I64, tag), message), span=exc_expr.span,
+                            )
+                        self._release_slot_call_roots(tuple(roots))
+                        return self.builder.load(sink, name=self._fresh("exception.value.current"))
+                    finally:
+                        self._try_err_block = previous
+                        self._cpy_operand_cleanup_block = saved_cpy
                 if (
                     len(exc_expr.args) == 1
                     and not exc_expr.kwargs
@@ -1005,17 +1043,24 @@ class ExceptionLoweringMixin:
                     # exits with 3 and ``ValueError(3).args == (3,)``; it
                     # used to be stringified into the message.
                     arg_obj = self._emit_expr_as_pcc_object(exc_expr.args[0])
-                    return self.builder.call(
+                    result = self.builder.call(
                         self.runtime["py_exc_new_with_value"],
                         [ir.Constant(_I64, tag), arg_obj],
                         name=self._fresh(f"exc.{cls_name}"),
                     )
-                msg_ptr = _message_cstr(exc_expr.args, exc_expr.kwargs)
-                return self.builder.call(
-                    self.runtime["py_exc_new"],
-                    [ir.Constant(_I64, tag), msg_ptr],
-                    name=self._fresh(f"exc.{cls_name}"),
-                )
+                else:
+                    msg_ptr = _message_cstr(exc_expr.args, exc_expr.kwargs)
+                    result = self.builder.call(
+                        self.runtime["py_exc_new"],
+                        [ir.Constant(_I64, tag), msg_ptr],
+                        name=self._fresh(f"exc.{cls_name}"),
+                    )
+                if sink is not None:
+                    self._publish_slot_call_owned(sink, result, label="builtin exception")
+                    self._emit_post_call_err_check(exc_expr.span)
+                    return self.builder.load(sink, name=self._fresh("exception.value.current"))
+                self._note_owned_object_value(result)
+                return result
             info = self.class_lowering.classes.get(cls_name)
             if info is not None:
                 # Construct the instance properly so the user __init__ runs

@@ -24,6 +24,76 @@ _CSTR = _I8.as_pointer()
 _STOP_ITERATION_TAG = 8
 
 
+_GENERATOR_OPERAND_ROOT_GROUP_SIZE = 16
+
+
+def generator_operand_root_group(host, slot):
+    """Find only this resume function's owning-operand registration group."""
+    contexts = getattr(host, "_generator_ctx_stack", ())
+    if not contexts or contexts[-1].get("resume_function") is not host.current_function:
+        return None
+    record = contexts[-1].get("operand_root_group_members", {}).get(id(slot))
+    if record is None:
+        return None
+    if record[0] is not slot:
+        raise L1CodegenError("generator operand root identity mismatch")
+    return record[1]
+
+
+def allocate_generator_operand_root(host, name):
+    """Allocate one owning operand cell in a bounded, entry-rooted group.
+
+    Group only the physical registrations. Each cell keeps its independent
+    owned flag, error cleanup and generator heap-frame save/restore entry.
+    The existing positive-count map ABI traces contiguous pointer cells.
+    Every map is fixed at 16 cells. Unused tail cells remain initialized NULL;
+    neither text nor compact IR observes a map initializer changing later.
+    """
+    contexts = getattr(host, "_generator_ctx_stack", ())
+    if not contexts or contexts[-1].get("resume_function") is not host.current_function:
+        raise L1CodegenError("generator operand group requires its resume function")
+    ctx = contexts[-1]
+    groups = ctx.setdefault("operand_root_groups", [])
+    members = ctx.setdefault("operand_root_group_members", {})
+    group = groups[-1] if groups else None
+    if group is not None and not (0 <= group["used"] <= _GENERATOR_OPERAND_ROOT_GROUP_SIZE):
+        raise L1CodegenError("generator operand group index out of range")
+    if group is None or group["used"] == _GENERATOR_OPERAND_ROOT_GROUP_SIZE:
+        slots_type = ir.ArrayType(_CSTR, _GENERATOR_OPERAND_ROOT_GROUP_SIZE)
+        base = host._alloca_in_entry(slots_type, name=host._fresh("gen.operand.roots"))
+        # _fresh strips leading punctuation. Restore the reserved descriptor
+        # prefix outside it so object shards retain this map's initializer.
+        frame_map = ir.GlobalVariable(
+            host.module, _I32, name="." + host._fresh("pcc.gc.frame.map.gen.operands"),
+        )
+        frame_map.linkage = "internal"
+        frame_map.global_constant = True
+        frame_map.initializer = ir.Constant(_I32, _GENERATOR_OPERAND_ROOT_GROUP_SIZE)
+        saved_block = host.builder._block
+        host._position_at_entry_hoist_point()
+        # Initialize every address before the group's single entry. Do not
+        # use empty padding instead of releasing any populated owner cell.
+        for index in range(_GENERATOR_OPERAND_ROOT_GROUP_SIZE):
+            cell = host.builder.gep(
+                base, [ir.Constant(_I32, 0), ir.Constant(_I32, index)],
+                name=host._fresh("gen.operand.empty.cell"),
+            )
+            host.builder.store(ir.Constant(_CSTR, None), cell)
+        host.builder.position_at_end(saved_block)
+        group = {"base": base, "map": frame_map, "used": 0, "registered": False}
+        groups.append(group)
+    index = group["used"]
+    saved_block = host.builder._block
+    host._position_at_entry_hoist_point()
+    slot = host.builder.gep(
+        group["base"], [ir.Constant(_I32, 0), ir.Constant(_I32, index)], name=name,
+    )
+    host.builder.position_at_end(saved_block)
+    group["used"] = index + 1
+    members[id(slot)] = (slot, group)
+    return slot
+
+
 def _generator_borrowed_frame_map(host, count: int) -> ir.GlobalVariable:
     name = ".pcc.gc.frame.map.borrowed." + str(count)
     existing = host.module.globals.get(name)
@@ -1737,6 +1807,8 @@ class GeneratorLoweringMixin:
                 "switch": switch_inst,
                 "next_state": 1,
                 "active_exception_unwind_roots": [],
+                "operand_root_groups": [],
+                "operand_root_group_members": {},
             }
         )
 

@@ -1519,8 +1519,33 @@ class CallExpressionLoweringMixin:
             result = self._maybe_emit_zip_builtin(expr)
             if result is not None:
                 return result
-        if name == "globals" and not expr.args and not expr.kwargs:
-            return self._emit_globals_builtin()
+        if (name == "globals" and not expr.args and not expr.kwargs
+                and not self._iterator_builtin_is_shadowed(name)
+                and name not in self._native_builtin_value_aliases):
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            sink = self._slot_call_result_sink(expr)
+            output = sink if sink is not None else self._new_slot_call_root("globals.result")
+            roots = (output,) if sink is None else ()
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(roots, target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                # The namespace cache pins its borrowed dictionary. The last
+                # producer below retains one independent Python-call owner.
+                # Publish that actual result before TLS checks or any later
+                # consumer can park, rather than guessing from the Call AST.
+                value = self._emit_globals_builtin()
+                self._publish_slot_call_owned(output, value, label="globals result")
+                self._emit_post_call_err_check(expr.span)
+                current = self.builder.load(output, name=self._fresh("globals.current"))
+                self._guard_cpy_value_not_null(current)
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("globals.owned"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
         if name == "iter":
             result = self._maybe_emit_iter_builtin(expr)
             if result is not None:

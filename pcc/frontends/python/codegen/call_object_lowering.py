@@ -146,7 +146,6 @@ class CallObjectLoweringMixin:
         if getattr(self, "_freestanding_module", False):
             raise L1CodegenError("slot-call roots require the managed runtime")
         name = self._fresh(label + ".operand")
-        slot = self._alloca_in_entry(_CSTR, name=name, init_null=True)
         flag = None
         generator_contexts = getattr(self, "_generator_ctx_stack", ())
         generator_resume = bool(generator_contexts) and (
@@ -157,6 +156,13 @@ class CallObjectLoweringMixin:
         # Runtime calls may still collect or reenter; the lexical frame stays
         # registered until the existing release/take/error protocol leaves it.
         lifo = not generator_resume or synchronous_lexical
+        if lifo:
+            slot = self._alloca_in_entry(_CSTR, name=name, init_null=True)
+        else:
+            from pcc.frontends.python.codegen.generator_lowering import (
+                allocate_generator_operand_root,
+            )
+            slot = allocate_generator_operand_root(self, name)
         if lifo:
             self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), slot)
         else:

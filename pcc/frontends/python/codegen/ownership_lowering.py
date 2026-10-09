@@ -1179,7 +1179,23 @@ class OwnershipLoweringMixin:
                 return
         if frame_map is None:
             frame_map = self._gc_one_slot_frame_map()
-        self._emit_entry_gc_frame_enter(frame_map, alloca)
+        from pcc.frontends.python.codegen.generator_lowering import (
+            generator_operand_root_group,
+        )
+        group = generator_operand_root_group(self, alloca)
+        registration_slot = alloca
+        new_registration = True
+        if group is not None:
+            if frame_map is not self._gc_one_slot_frame_map():
+                from pcc.frontends.python.codegen.errors import L1CodegenError
+                raise L1CodegenError("generator operand group requires an owning frame map")
+            registration_slot = group["base"]
+            frame_map = group["map"]
+            new_registration = not group["registered"]
+        if new_registration:
+            self._emit_entry_gc_frame_enter(frame_map, registration_slot)
+            if group is not None:
+                group["registered"] = True
         registry.append((name, alloca))
         self._gc_rooted_local_names.add(name)
         if not hasattr(self, "_gc_rooted_local_order"):
@@ -1190,10 +1206,10 @@ class OwnershipLoweringMixin:
         # retro-patch this slot's leave into exit sites whose cleanup was
         # emitted before this slot existed (e.g. an early `return` lowered
         # before a later re-binding created this alloca).
-        if hasattr(self, "_fn_gc_root_exit_sites"):
+        if new_registration and hasattr(self, "_fn_gc_root_exit_sites"):
             if fn.name in self._fn_gc_root_exit_sites:
                 for site in self._fn_gc_root_exit_sites[fn.name]:
-                    self._insert_gc_frame_leave_before_terminator(site, alloca)
+                    self._insert_gc_frame_leave_before_terminator(site, registration_slot)
 
     def _emit_gc_frame_leave_for_slot(self, alloca: ir.Value) -> None:
         self.builder.call(
@@ -1297,13 +1313,18 @@ class OwnershipLoweringMixin:
         if not hasattr(self, "_fn_err_exit_gc_root_slots"):
             self._fn_err_exit_gc_root_slots = {}
         patched = self._fn_err_exit_gc_root_slots.setdefault(fn.name, [])
+        from pcc.frontends.python.codegen.generator_lowering import (
+            generator_operand_root_group,
+        )
+        group = generator_operand_root_group(self, alloca)
+        registration_slot = alloca if group is None else group["base"]
         for done in patched:
-            if done is alloca:
+            if done is registration_slot:
                 return
         finish_bb = self._fn_err_exit_finish_blocks[fn.name]
-        if not self._insert_gc_frame_leave_before_terminator(finish_bb, alloca):
+        if not self._insert_gc_frame_leave_before_terminator(finish_bb, registration_slot):
             return
-        patched.append(alloca)
+        patched.append(registration_slot)
 
     def _discard_owned_local_gc_root(self, name: str, alloca: ir.Value) -> None:
         # Compile-time bookkeeping only — do NOT emit a mid-function
@@ -1546,10 +1567,16 @@ class OwnershipLoweringMixin:
                 registry = self._fn_gc_root_slot_registry[fn.name]
         emitted_slot_leaves: list = []
         payload_handoff_roots = self._valueclass_payload_owned_roots(skip_payload) if skip_payload is not None else ()
+        from pcc.frontends.python.codegen.generator_lowering import (
+            generator_operand_root_group,
+        )
         for entry in reversed(registry):
             entry_alloca = entry[1]
             if any(root is entry_alloca for root in payload_handoff_roots):
                 continue
+            group = generator_operand_root_group(self, entry_alloca)
+            if group is not None:
+                entry_alloca = group["base"]
             already = False
             for done in emitted_slot_leaves:
                 if done is entry_alloca:

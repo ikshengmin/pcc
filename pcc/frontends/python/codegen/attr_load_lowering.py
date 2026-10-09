@@ -1898,13 +1898,25 @@ class AttrLoadLoweringMixin:
             if chain_val in getattr(self, "_cpy_values", ()):
                 return self._emit_cpy_attr(chain_val, expr.name)
 
-        # Property getter fast path: if the attribute is a @property on
-        # a hinted class, dispatch to the getter function.
+        # Dynamically typed properties on ordinary objects use their live
+        # descriptor. Typed results and explicit layouts retain their ABI.
         if isinstance(expr.obj, Name):
             hint = self.env_class_hint.get(expr.obj.ident)
             if hint is not None:
                 info = self._resolve_property_mro(hint, expr.name)
                 if info is not None:
+                    # Classify the receiver, not an inherited declaration's
+                    # owner. Typed results need a separate object-ABI design;
+                    # their annotations cannot justify unboxing replacements.
+                    hinted_info = self.class_lowering.classes.get(hint)
+                    if (
+                        isinstance(expr.ty, DynType)
+                        and hinted_info is not None
+                        and self.class_lowering.uses_live_class_attribute(
+                            hinted_info, expr.name, expr.ty,
+                        )
+                    ):
+                        return self.class_lowering.emit_live_class_attribute(expr)
                     getter = info.properties[expr.name]
                     obj_val = self._emit_expr(expr.obj)
                     return self.builder.call(
@@ -2006,9 +2018,13 @@ class AttrLoadLoweringMixin:
                 receiver_info = self.class_lowering.classes.get(receiver_class_name)
             if receiver_info is None:
                 receiver_info = current_class
-            # self.<prop> — dispatch to getter when present.
+            # Apply the same dynamic-result and receiver-layout boundary.
             info_p = self._resolve_property_mro(receiver_info.name, expr.name)
             if info_p is not None:
+                if isinstance(expr.ty, DynType) and self.class_lowering.uses_live_class_attribute(
+                    receiver_info, expr.name, expr.ty,
+                ):
+                    return self.class_lowering.emit_live_class_attribute(expr)
                 getter = info_p.properties[expr.name]
                 self_val = self.builder.load(
                     self.env["self"][0], name=self._fresh("self")

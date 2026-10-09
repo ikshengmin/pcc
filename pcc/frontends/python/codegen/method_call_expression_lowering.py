@@ -936,59 +936,68 @@ class MethodCallExpressionLoweringMixin:
         gen_intrinsic_ok = (
             isinstance(attr.obj.ty, DynType) and attr.obj.ty.name == "generator"
         )
+        gen_runtime_name = ""
         if (
             gen_intrinsic_ok
             and attr.name == "send"
             and len(expr.args) == 1
             and not expr.kwargs
         ):
-            gen_obj = self._emit_as_object(attr.obj)
-            value_obj = self._emit_as_object(expr.args[0])
-            send_res = self.builder.call(
-                self.runtime["py_gen_send"],
-                [gen_obj, value_obj],
-                name=self._fresh("gen.send"),
-            )
-            # py_gen_send raises (thrown-in exceptions, GeneratorExit
-            # escapes, errors inside the generator body); without
-            # this check they skip enclosing try/except blocks
-            self._emit_post_call_err_check(expr.span)
-            return send_res
-        if (
+            gen_runtime_name = "py_gen_send"
+        elif (
             gen_intrinsic_ok
             and attr.name == "throw"
             and len(expr.args) == 1
             and not expr.kwargs
         ):
-            gen_obj = self._emit_as_object(attr.obj)
-            exc_obj = self._emit_as_object(expr.args[0])
-            throw_res = self.builder.call(
-                self.runtime["py_gen_throw"],
-                [gen_obj, exc_obj],
-                name=self._fresh("gen.throw"),
-            )
-            # py_gen_throw raises (thrown-in exceptions, GeneratorExit
-            # escapes, errors inside the generator body); without
-            # this check they skip enclosing try/except blocks
-            self._emit_post_call_err_check(expr.span)
-            return throw_res
-        if (
+            gen_runtime_name = "py_gen_throw"
+        elif (
             gen_intrinsic_ok
             and attr.name == "close"
             and not expr.args
             and not expr.kwargs
         ):
-            gen_obj = self._emit_as_object(attr.obj)
-            close_res = self.builder.call(
-                self.runtime["py_gen_close"],
-                [gen_obj],
-                name=self._fresh("gen.close"),
-            )
-            # py_gen_close raises (thrown-in exceptions, GeneratorExit
-            # escapes, errors inside the generator body); without
-            # this check they skip enclosing try/except blocks
-            self._emit_post_call_err_check(expr.span)
-            return close_res
+            gen_runtime_name = "py_gen_close"
+        if gen_runtime_name:
+            # These runtime producers return a NEW yield/return owner, or
+            # NULL with TLS set. Keep the receiver and explicit argument in
+            # independent roots, and publish the result before error checks
+            # or lease release can park. close() can return the generator's
+            # return value, so it has the same ownership boundary as send().
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            sink = self._slot_call_result_sink(expr)
+            output = sink
+            roots = []
+            if output is None:
+                output = self._new_slot_call_root(gen_runtime_name + ".result")
+                roots.append(output)
+            operands = []
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                receiver = self._emit_slot_call_operand(attr.obj, gen_runtime_name + ".receiver")
+                roots.append(receiver)
+                operands.append(receiver)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                for argument_expr in expr.args:
+                    argument = self._emit_slot_call_operand(argument_expr, gen_runtime_name + ".argument")
+                    roots.append(argument)
+                    operands.append(argument)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    gen_runtime_name, tuple(operands), result_slot=output, span=expr.span,
+                )
+                self._release_slot_call_roots(tuple(operands))
+                if sink is None:
+                    return self._take_slot_call_root(output)
+                return self.builder.load(output, name=self._fresh("gen.result.current"))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
 
         # Case 0: ``super().method(args)`` inside a method body.
         # Resolve the method by walking the current class's declared
