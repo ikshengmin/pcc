@@ -39,10 +39,10 @@ Minimal native-output example on Linux x86_64, with Git and
 [uv](https://docs.astral.sh/uv/) installed:
 
 ```bash
-git clone https://github.com/ikshengmin/pcc.git
+git clone https://github.com/allstoalls/pcc.git
 cd pcc
 printf 'print("Hello, PCC!")\n' > hello.py
-env -u LC_ALL uv run python -m pcc hello.py -o hello
+uv run python -m pcc hello.py -o hello
 ./hello
 ```
 
@@ -61,10 +61,10 @@ From the repository root, with default build settings and no `PCC_*`
 overrides, this low-level entry point prebuilds the host runtime:
 
 ```bash
-env -u LC_ALL uv run python -m pcc.frontends.python.owned_runtime_build \
+uv run python -m pcc.frontends.python.owned_runtime_build \
   --output build/runtime/libpy_runtime_pcc_py.a
 PCC_RUNTIME_ARCHIVE="$PWD/build/runtime/libpy_runtime_pcc_py.a" \
-  env -u LC_ALL uv run python -m pcc hello.py -o hello
+  uv run python -m pcc hello.py -o hello
 ./hello
 ```
 
@@ -100,7 +100,7 @@ m = pcc.module("add.c")
 print(m.add(3, 4))
 ```
 
-Run `env -u LC_ALL uv run python call_c.py`. Expected output: `7`.
+Run `uv run python call_c.py`. Expected output: `7`.
 `pcc.module` uses the owned shared-library builder and loads the result through
 `ctypes`. `pcc.build` returns an artifact without loading it; see the
 [API source and options](pcc/api.py).
@@ -135,7 +135,7 @@ The numbers name **compiler build generations**, not Python versions:
 The separate Stage1 developer build entry is:
 
 ```bash
-env -u LC_ALL uv run python scripts/bootstrap.py --stage 1 --out-dir build/bootstrap
+uv run python scripts/bootstrap.py --stage 1 --out-dir build/bootstrap
 ```
 
 On a successful Unix build, the output is `build/bootstrap/pcc1`. This is a
@@ -163,7 +163,7 @@ and long-running performance need evidence for the exact source and workload.
 
 No-libpython describes the Python-runtime boundary; it is not a universal
 zero-libc or C-speed claim. See [verification status](docs/verification-status.md)
-and [CI runs](https://github.com/ikshengmin/pcc/actions/workflows/pcc1-package-parity.yml).
+and [CI runs](https://github.com/allstoalls/pcc/actions/workflows/pcc1-package-parity.yml).
 
 ## Documentation
 
