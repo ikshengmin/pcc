@@ -55,6 +55,7 @@ from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
+_I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
@@ -350,23 +351,102 @@ class CallObjectLoweringMixin:
         )
         return cleanup
 
+    def _slot_call_status_report_helper(self) -> ir.Function:
+        # Keep this private generated function in the existing module-owned
+        # declaration map. A new generation replaces that map together with
+        # its IR module; no native host-layout field or runtime ABI is added.
+        key = "__pcc_slot_call_status_report"
+        existing = self.runtime.get(key)
+        if existing is not None:
+            if existing.module is not self.module:
+                raise L1CodegenError("slot-status reporter belongs to another module")
+            return existing
+        name = self._fresh("_pcc_slot_call_status_report")
+        while name in self.module.globals:
+            name = self._fresh("_pcc_slot_call_status_report")
+        helper: ir.Function = ir.Function(
+            self.module,
+            ir.FunctionType(ir.VoidType(), [_CSTR, _CSTR, _CSTR, _CSTR, _I32, _I1]),
+            name=name,
+        )
+        helper.linkage = "internal"
+        # Both ordinary owned inlining modes honor this attribute. Without
+        # it, later optimization could recreate the per-site cold expansion.
+        helper.attributes.add("noinline")
+        message: ir.Value = helper.args[0]
+        function_name: ir.Value = helper.args[1]
+        filename: ir.Value = helper.args[2]
+        source_line: ir.Value = helper.args[3]
+        line: ir.Value = helper.args[4]
+        has_frame: ir.Value = helper.args[5]
+        entry = helper.append_basic_block("entry")
+        report = helper.append_basic_block("report")
+        frame = helper.append_basic_block("frame")
+        done = helper.append_basic_block("done")
+        saved_builder: ir.IRBuilder = self.builder
+        self.builder = ir.IRBuilder(entry)
+        try:
+            pending = self.builder.call(self.runtime["py_err_occurred"], [])
+            self.builder.cbranch(
+                self.builder.icmp_signed("!=", pending, ir.Constant(_I64, 0)),
+                done, report,
+            )
+            self.builder.position_at_end(report)
+            exception = self.builder.call(
+                self.runtime["py_exc_new"], [ir.Constant(_I64, 7), message],
+            )
+            # Preserve the original borrowed py_raise protocol and call order.
+            # py_runtime_error_if_unset uses py_raise_owned and adds its own
+            # runtime traceback frame, so it is not an equivalent substitute.
+            self.builder.call(self.runtime["py_raise"], [exception])
+            current = self.builder.call(self.runtime["py_current_exception"], [])
+            self.builder.cbranch(has_frame, frame, done)
+            self.builder.position_at_end(frame)
+            self.builder.call(
+                self.runtime["py_exc_append_frame_source"],
+                [current, function_name, filename, source_line, line],
+            )
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+            self.builder.ret_void()
+        finally:
+            self.builder = saved_builder
+        # Only publish a complete helper. Its parameters are static C strings
+        # and fixed scalars. Caller roots stay registered across this call;
+        # no managed owner or lease is transferred to the helper.
+        self.runtime[key] = helper
+        return helper
+
     def _slot_call_check_status(self, status, operation: str, span=None) -> None:
         failed = self.builder.icmp_signed("<", status, ir.Constant(_I64, 0))
         error = self.current_function.append_basic_block(self._fresh("call.slot.error"))
         ready = self.current_function.append_basic_block(self._fresh("call.slot.ready"))
         self.builder.cbranch(failed, error, ready)
         self.builder.position_at_end(error)
-        pending = self.builder.call(self.runtime["py_err_occurred"], [])
-        has_error = self.builder.icmp_signed("!=", pending, ir.Constant(_I64, 0))
-        report = self.current_function.append_basic_block(self._fresh("call.slot.report"))
         target = self._current_try_err_block()
         if target is None:
             target = self._ensure_fn_err_exit()
-        self.builder.cbranch(has_error, target, report)
-        self.builder.position_at_end(report)
-        self._emit_builtin_exception_and_branch(
-            "RuntimeError", "slot-call " + operation + " failed", span,
+        helper: ir.Function = self._slot_call_status_report_helper()
+        message = self._pooled_cstr_ptr("slot-call " + operation + " failed", ".exc.msg")
+        function_name = ir.Constant(_CSTR, None)
+        filename = ir.Constant(_CSTR, None)
+        source_line = ir.Constant(_CSTR, None)
+        line = ir.Constant(_I32, 0)
+        if span is not None:
+            name = "<module>" if self.current_func_def is None else self.current_func_def.name
+            function_name = self._pooled_cstr_ptr(name, ".tb.func")
+            filename = self._pooled_cstr_ptr(span.file or "<unknown>", ".tb.file")
+            source_line = self._pooled_cstr_ptr(self._traceback_source_text(span), ".tb.source")
+            line = ir.Constant(_I32, int(span.line))
+        # Only the already-cold status failure edge calls the reporter. It
+        # returns with the selected TLS exception intact; each site keeps its
+        # exact cleanup successor and its existing registered root/lease state.
+        self.builder.call(
+            helper,
+            [message, function_name, filename, source_line, line,
+             ir.Constant(_I1, 1 if span is not None else 0)],
         )
+        self.builder.branch(target)
         self.builder.position_at_end(ready)
 
     def _slot_call_copy_source(self, destination, source, borrowed=False, span=None) -> None:

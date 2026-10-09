@@ -712,6 +712,7 @@ def _part_60(out):
     _append_method(out, '_valueclass_indexed_element_type', (('self', 'pos', False), ('ty', 'pos', False)))
     _append_method(out, '_emit_rooted_valueclass_indexed_loop', (('self', 'pos', False), ('iterable', 'pos', False), ('target', 'pos', False), ('statement', 'pos', True), ('comprehension', 'pos', True)))
     _append_method(out, '_emit_direct_method_receiver', (('self', 'pos', False), ('expression', 'pos', False), ('info', 'pos', False), ('method_name', 'pos', False)))
+    _append_method(out, '_slot_call_status_report_helper', (('self', 'pos', False),))
 
 
 def _build_static_methods():
