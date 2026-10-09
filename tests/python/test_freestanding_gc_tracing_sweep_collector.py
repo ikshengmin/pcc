@@ -134,12 +134,14 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
         '@c_abi_export("pcc_gc_tracing_sweep_unreachable")', 1
     )[1]
 
-    assert sweep.index("py_user_del_dispatch(obj)") < sweep.index(
-        "pcc_gc_tracing_recheck_reachability_after_finalizers()"
+    recheck = "pcc_gc_tracing_recheck_reachability_after_finalizers()"
+    assert sweep.count(recheck) == 2
+    assert sweep.index("if budget <= 0:") < sweep.index(recheck)
+    assert sweep.index(recheck) < sweep.index("py_user_del_dispatch(obj)")
+    assert sweep.index("py_user_del_dispatch(obj)") < sweep.rindex(recheck)
+    assert sweep.rindex(recheck) < sweep.index(
+        "pcc_gc_tracing_clear_unreachable(obj)"
     )
-    assert sweep.index(
-        "pcc_gc_tracing_recheck_reachability_after_finalizers()"
-    ) < sweep.index("pcc_gc_tracing_clear_unreachable(obj)")
     assert sweep.index("pcc_gc_tracing_clear_unreachable(obj)") < sweep.index(
         "pcc_gc_tracing_finalize_unreachable(obj)"
     )

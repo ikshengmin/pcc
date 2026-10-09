@@ -200,8 +200,10 @@ def pcc_gc_tracing_finalize_unreachable(obj) -> None:
 
 @c_abi_export("pcc_gc_tracing_recheck_reachability_after_finalizers")
 def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
-    # PEP 442: re-mark roots after PASS-0 and remove resurrected objects from
-    # the candidate set before any referent is cleared.
+    # Refresh the candidate verdict from current roots.  This is also used
+    # before PASS-0; keep the exported name for the existing runtime ABI.
+    # After PASS-0, PEP 442 requires the same refresh to rescue resurrection
+    # before any referent is cleared.
     pcc_gc_seed_roots()
     pcc_gc_drain_all_gray_unlocked()
     node = global_load_ptr("pcc_gc_object_head")
@@ -219,6 +221,12 @@ def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
 def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if budget <= 0:
         return 0
+
+    # A completed concurrent/incremental mark may leave a pending candidate
+    # that is reachable at this sweep boundary.  Revalidate before invoking
+    # user finalizers: rescuing it only after __del__ is already too late.
+    # Keep the separate post-finalizer refresh for PEP 442 resurrection.
+    pcc_gc_tracing_recheck_reachability_after_finalizers()
 
     # PASS 0: finalizers see intact fields.  C-extension tags are excluded
     # because their lifecycle is owned by the C-API bridge.

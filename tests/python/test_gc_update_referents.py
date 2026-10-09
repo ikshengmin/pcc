@@ -812,7 +812,7 @@ def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
     py_sweep_body = tracing_collector_py[
         tracing_collector_py.index(
             "def pcc_gc_tracing_sweep_unreachable("
-        ) : tracing_collector_py.index(
+        ) : tracing_collector_py.rindex(
             "    pcc_gc_tracing_recheck_reachability_after_finalizers()"
         )
     ]
