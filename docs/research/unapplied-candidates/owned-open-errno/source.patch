@@ -1,6 +1,14 @@
 --- a/pcc/runtime/py/freestanding_stdio.py
 +++ b/pcc/runtime/py/freestanding_stdio.py
-@@ -204,6 +204,7 @@
+@@ -69,6 +69,7 @@
+ __pcc_freestanding__ = True
+ 
+ pcc_errno_set = extern("pcc_errno_set", (c_int32,), c_void)
++pcc_errno_get = extern("pcc_errno_get", (), c_int32)
+ 
+ # Registry nodes are separate from the public 64-byte owned FILE layout:
+ # next@0, stream@8. The lock protects registry traversal and stream lifetime,
+@@ -204,6 +205,7 @@
  @c_abi_export("fopen")
  def fopen(path, mode) -> c_ptr:
      if ptr_is_null(path) or ptr_is_null(mode):
@@ -8,7 +16,7 @@
          return null()
      first = load_i8(mode, 0)
      access: i64 = 0
-@@ -224,6 +225,7 @@
+@@ -224,6 +226,7 @@
          disposition: i64 = 3
          flags = abi_constant("stdio.flag.writable")
      else:
@@ -16,7 +24,7 @@
          return null()
  
      offset: i64 = 1
-@@ -235,6 +237,7 @@
+@@ -235,6 +238,7 @@
                  "stdio.flag.writable"
              )
          elif marker != 98 and marker != 116:
@@ -24,7 +32,7 @@
              return null()
          offset = offset + 1
      if first == 97:
-@@ -242,6 +245,9 @@
+@@ -242,6 +246,9 @@
  
      fd = open_file(path, access, disposition)
      if fd < 0:
@@ -34,12 +42,18 @@
          return null()
      append_position: i64 = 0
      if (flags & abi_constant("stdio.flag.append")) != 0:
-@@ -251,10 +257,13 @@
+@@ -250,11 +257,19 @@
+         # write is still forced to EOF by O_APPEND.
          append_position = seek_file(fd, 0, 2)
          if append_position < 0:
++            # Darwin seek_file exposes libSystem's -1/errno ABI; Linux
++            # exposes the raw -errno result. Capture before close can alter it.
++            saved_errno: i64 = 0 - append_position
++            if load_i8(target_sys_platform(), 0) == 100:
++                saved_errno = pcc_errno_get()
              close(fd)
 +            # Cleanup must not replace the operation's captured error.
-+            pcc_errno_set(0 - append_position)
++            pcc_errno_set(saved_errno)
              return null()
      stream = _stream_new(fd, flags, 0)
      if ptr_is_null(stream):
@@ -155,7 +169,7 @@
      def load_selected(self, path, names, constants=()):
 --- /dev/null
 +++ b/tests/python/test_native_open_errno.py
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,156 @@
 +"""Missing-file errors traverse owned fopen, payload and handler dispatch.
 +
 +Host ABI models check the actual provider bodies. Emitted execution is a
@@ -207,11 +221,18 @@
 +    assert not runtime.frames and not runtime.leases
 +
 +
-+def test_fopen_restores_seek_errno_after_close():
++@pytest.mark.parametrize("platform", ["linux", "darwin"])
++def test_fopen_restores_seek_errno_after_close(platform):
 +    runtime = FileRuntime()
 +    closed = []
 +    runtime.ns["open_file"] = lambda *_: 123
-+    runtime.ns["seek_file"] = lambda *_: -errno.ESPIPE
++    runtime.ns["target_sys_platform"] = lambda: runtime.cstr(platform)
++
++    def seek(*_):
++        runtime.errno = errno.ESPIPE
++        return -1 if platform == "darwin" else -errno.ESPIPE
++
++    runtime.ns["seek_file"] = seek
 +
 +    def close(fd):
 +        closed.append(fd)
