@@ -399,6 +399,99 @@ def test_mac_ci_unavailable_observation_records_rejection_before_stage(tmp_path,
     assert receipt["memory_budget_selection"] == {}
 
 
+def mock_final_guard_output(monkeypatch, raw_receipt, returncode):
+    directories = []
+
+    def run_guard(command, **kwargs):
+        result = Path(command[command.index("--result") + 1])
+        directories.append(result.parent)
+        if raw_receipt is not None:
+            result.write_text(raw_receipt)
+        (result.parent / "target.stdout").write_text("compiler stdout before guard exit\n")
+        (result.parent / "target.stderr").write_text("compiler stderr before guard exit\n")
+        return bootstrap.subprocess.CompletedProcess(command, returncode)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", run_guard)
+    return directories
+
+
+@pytest.mark.skipif(bootstrap.os.name == "nt", reason="POSIX guard receipt replay")
+@pytest.mark.parametrize("raw_receipt,diagnostic", [
+    pytest.param(None, "missing", id="no-receipt"),
+    pytest.param(json.dumps({"status": "RUNNING", "max_tree_rss_bytes": 0}),
+                 "incomplete", id="interrupted-before-selection"),
+    pytest.param(json.dumps({"status": "RUNNING", "memory_budget_selection": {
+        "max_tree_rss_bytes": 2 * GIB}}), "incomplete", id="interrupted-after-selection"),
+    pytest.param("{}", "incomplete", id="no-status"),
+    pytest.param(json.dumps({"status": "COMPLETE"}), "incomplete", id="no-selection"),
+    pytest.param(json.dumps({"status": "COMPLETE", "memory_budget_selection": {
+        "selection_kind": "automatic"}}), "incomplete", id="no-selected-cap"),
+    pytest.param("{", "invalid", id="malformed-json"),
+    pytest.param("[]", "invalid", id="non-object-receipt"),
+    pytest.param(json.dumps({"status": "COMPLETE", "memory_budget_selection": []}),
+                 "invalid", id="non-object-selection"),
+    pytest.param(json.dumps({"status": "COMPLETE", "memory_budget_selection": {
+        "max_tree_rss_bytes": GIB}}), "invalid", id="below-minimum"),
+    pytest.param(json.dumps({"status": "COMPLETE", "memory_budget_selection": {
+        "max_tree_rss_bytes": 4 * GIB}}), "invalid", id="above-admitted-ceiling"),
+    pytest.param(json.dumps({"status": "COMPLETE", "memory_budget_selection": {
+        "max_tree_rss_bytes": float(2 * GIB)}}), "invalid", id="non-integer-cap"),
+])
+def test_mac_ci_guard_receipt_failure_preserves_compiler_output(
+    tmp_path, monkeypatch, capsys, raw_receipt, diagnostic,
+):
+    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
+    options = mac_ci_options(tmp_path)
+    options.max_tree_rss_bytes = 3 * GIB
+    initial_selection = {"selection_kind": "automatic", "max_tree_rss_bytes": 3 * GIB}
+    options.memory_budget_selection = initial_selection.copy()
+    directories = mock_final_guard_output(monkeypatch, raw_receipt, -9)
+
+    with pytest.raises(bootstrap.BootstrapError, match=diagnostic + " final guard memory receipt") as caught:
+        bootstrap._run_guarded(["synthetic-worker"], options, 1, {})
+
+    captured = capsys.readouterr()
+    assert captured.out.count("compiler stdout before guard exit\n") == 1
+    assert captured.err == "compiler stderr before guard exit\n"
+    assert "compiler stderr" not in captured.out
+    assert "guard returncode=-9" in str(caught.value)
+    assert str(directories[0] / "result.json") in str(caught.value)
+    assert options.max_tree_rss_bytes == 3 * GIB
+    assert options.memory_budget_selection == initial_selection
+    assert not (tmp_path / "stage1.memory-budget.json").exists()
+    if raw_receipt is not None:
+        assert (directories[0] / "result.json").read_text() == raw_receipt
+
+
+@pytest.mark.skipif(bootstrap.os.name == "nt", reason="POSIX guard receipt replay")
+@pytest.mark.parametrize("returncode", [0, 7])
+def test_mac_ci_terminal_guard_receipt_preserves_output_and_returncode(
+    tmp_path, monkeypatch, capsys, returncode,
+):
+    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
+    options = mac_ci_options(tmp_path)
+    options.max_tree_rss_bytes = 3 * GIB
+    options.memory_budget_selection = {"selection_kind": "automatic"}
+    selection = {"selection_kind": "automatic", "max_tree_rss_bytes": 5 * GIB // 2}
+    directories = mock_final_guard_output(monkeypatch, json.dumps({
+        "status": "COMPLETE", "returncode": returncode,
+        "memory_budget_selection": selection,
+    }), returncode)
+
+    actual_code, directory = bootstrap._run_guarded(["synthetic-worker"], options, 1, {})
+
+    assert actual_code == returncode
+    assert directory == directories[0]
+    captured = capsys.readouterr()
+    assert captured.out.count("compiler stdout before guard exit\n") == 1
+    assert captured.err == "compiler stderr before guard exit\n"
+    assert options.max_tree_rss_bytes == selection["max_tree_rss_bytes"]
+    receipt = json.loads((tmp_path / "stage1.memory-budget.json").read_text())
+    assert receipt["status"] == "ADMITTED"
+    assert receipt["guard_status"] == "COMPLETE"
+    assert receipt["memory_budget_selection"] == selection
+
+
 @pytest.mark.parametrize("kind,checkpoint", [("explicit", None), ("external_guard", None), ("automatic", "checkpoint")])
 def test_mac_ci_guard_preserves_exact_explicit_inherited_and_checkpoint_caps(tmp_path, monkeypatch, kind, checkpoint):
     monkeypatch.setattr(bootstrap.sys, "platform", "darwin")

@@ -749,23 +749,53 @@ def _write_memory_admission(stage: int, options: Options, status: str, **details
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def _read_final_guard_memory_budget(guard_dir: Path, options: Options, stage: int) -> None:
+def _read_final_guard_memory_budget(
+    guard_dir: Path, options: Options, stage: int, *, guard_returncode: int | None = None,
+) -> None:
     path = guard_dir / "result.json"
+    context = str(path)
+    if guard_returncode is not None:
+        context += f" (guard returncode={guard_returncode})"
     try:
         receipt = json.loads(path.read_text())
-        selection = receipt.get("memory_budget_selection") or {}
-        if receipt["status"] == "PREFLIGHT_REJECTED":
+        if not isinstance(receipt, dict):
+            raise ValueError("receipt must be a JSON object")
+        status = receipt.get("status")
+        if status in (None, "", "RUNNING"):
+            raise BootstrapError(
+                "incomplete final guard memory receipt: " + context
+                + f": status={status!r}; guard did not publish a final result"
+            )
+        if not isinstance(status, str):
+            raise ValueError("guard status must be a string")
+        selection = receipt.get("memory_budget_selection")
+        if selection is None:
+            selection = {}
+        if not isinstance(selection, dict):
+            raise ValueError("memory budget selection must be a JSON object")
+        if status == "PREFLIGHT_REJECTED":
             options.memory_budget_selection = selection
             _write_memory_admission(
                 stage, options, "PREFLIGHT_REJECTED", admission_owner="process_tree_guard",
                 error=receipt.get("error", ""), guard_receipt=str(path),
             )
             return
+        if "max_tree_rss_bytes" not in selection:
+            raise BootstrapError(
+                "incomplete final guard memory receipt: " + context
+                + f": status={status!r}; final memory selection has no max_tree_rss_bytes"
+            )
         selected = selection["max_tree_rss_bytes"]
+        if type(selected) is not int:
+            raise ValueError("final automatic cap must be an integer")
         if not options.min_tree_rss_bytes <= selected <= options.max_tree_rss_bytes:
             raise ValueError("final automatic cap lies outside the admitted bounds")
+    except FileNotFoundError as exc:
+        raise BootstrapError("missing final guard memory receipt: " + context) from exc
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise BootstrapError("invalid final guard memory receipt: " + str(exc)) from exc
+        raise BootstrapError(
+            "invalid final guard memory receipt: " + context + ": " + str(exc)
+        ) from exc
     options.max_tree_rss_bytes = selected
     options.memory_budget_selection = selection
     _write_memory_admission(
@@ -848,13 +878,17 @@ def _run_guarded(
         env=environment,
         check=False,
     )
-    if _guard_reselects_memory(options):
-        _read_final_guard_memory_budget(guard_dir, options, stage)
+    # Replay compiler diagnostics even if the guard died before publishing its
+    # final receipt. Receipt validation still fails closed after output replay.
     for name, stream in (("target.stdout", sys.stdout), ("target.stderr", sys.stderr)):
         path = guard_dir / name
         if path.is_file() and path.stat().st_size:
             stream.write(path.read_text(encoding="utf-8", errors="replace"))
             stream.flush()
+    if _guard_reselects_memory(options):
+        _read_final_guard_memory_budget(
+            guard_dir, options, stage, guard_returncode=completed.returncode,
+        )
     return completed.returncode, guard_dir
 
 

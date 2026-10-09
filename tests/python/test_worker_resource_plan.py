@@ -891,9 +891,9 @@ def test_macos_failure_workflow_preserves_narrow_guard_evidence():
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/pcc1-package-parity.yml").read_text()
     macos = workflow.split("  pcc1-package-parity:\n", 1)[1]
-    evidence = macos.split("      - name: Preserve macOS bootstrap failure evidence\n", 1)[1]
+    evidence = macos.split("      - name: Preserve macOS bootstrap evidence\n", 1)[1]
     evidence = evidence.split("      - name:", 1)[0]
-    assert "if: failure()" in evidence
+    assert "if: always()" in evidence
     assert "uses: actions/upload-artifact@v4" in evidence
     paths = evidence.split("          path: |\n", 1)[1].splitlines()
     assert [path.strip() for path in paths if path.strip()] == [
@@ -904,5 +904,8 @@ def test_macos_failure_workflow_preserves_narrow_guard_evidence():
         "build/bootstrap/stage*.process.*/result.json.worker-rss.tsv",
         "build/bootstrap/stage*.json",
     ]
-    assert 'PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES: "4294967296"' in macos
-    assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in macos
+    environment = macos.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
+    assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in environment
+    assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in environment
+    assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in environment
+    assert "PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES:" not in environment
