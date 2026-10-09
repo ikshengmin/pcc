@@ -184,7 +184,12 @@ class LiteralLoweringMixin:
 
     def _emit_none_literal(self) -> ir.Value:
         gv = declare_runtime_global(self.module, "py_None")
-        return self.builder.load(gv, name=self._fresh("none"))
+        value = self.builder.load(gv, name=self._fresh("none"))
+        # This exact producer loads the immortal singleton. A Call such as
+        # list.append() can return it too; semantic NoneType alone is not
+        # proof that an arbitrary pointer is safe to publish or omit barriers.
+        self._note_never_gc_object(value)
+        return value
 
     def _emit_int_literal_object(self, value) -> ir.Value:
         # `value` is deliberately UNANNOTATED.  An `int`-annotated parameter is

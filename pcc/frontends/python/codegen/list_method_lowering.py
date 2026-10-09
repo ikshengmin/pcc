@@ -704,6 +704,98 @@ class ListMethodLoweringMixin:
             return None
         if self.current_function is None:
             return None
+        if (attr.name == "append" and self._slot_call_result_sink(expr) is not None
+                and not self._expr_looks_cpython(attr.obj)):
+            # An expression-valued dynamic append can return either the native
+            # None singleton or an arbitrary user-method result. Publish both
+            # arms into the consumer's authoritative root before any cleanup;
+            # a raw PHI cannot inherit one arm's ownership or singleton proof.
+            output = self._slot_call_result_sink(expr)
+            roots = []
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            try:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                receiver = self._emit_slot_call_operand(attr.obj, "list.append.receiver")
+                roots.append(receiver)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                tag = self._slot_call_runtime_call(
+                    "py_obj_type_tag", (receiver,), span=expr.span,
+                )
+                is_list = self.builder.icmp_signed(
+                    "==", tag, ir.Constant(_I64, PY_TYPE_LIST),
+                    name=self._fresh("list.append.is_list"),
+                )
+                function = self.current_function
+                list_block = function.append_basic_block(self._fresh("list.append.list"))
+                generic_block = function.append_basic_block(self._fresh("list.append.generic"))
+                done_block = function.append_basic_block(self._fresh("list.append.done"))
+                self.builder.cbranch(is_list, list_block, generic_block)
+
+                self.builder.position_at_end(list_block)
+                item = self._emit_slot_call_operand(expr.args[0], "list.append.item")
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_list_append", (receiver, item), span=expr.span,
+                )
+                none_value = self._emit_none_literal()
+                self._publish_slot_call_owned(output, none_value, label="list append result")
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots((item,))
+                self.builder.branch(done_block)
+
+                self.builder.position_at_end(generic_block)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                # Attribute resolution precedes argument evaluation. In particular,
+                # subclass overrides and user descriptors retain their existing binding
+                # and validation behavior through the ordinary callable protocol.
+                method = self._new_slot_call_root("list.append.method")
+                branch_roots = list(roots) + [method]
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_getattr", (receiver,), result_slot=method,
+                    suffix_args=(self._attr_name_ptr(attr.name),), span=expr.span,
+                )
+                current = self.builder.load(method, name=self._fresh("list.append.callable"))
+                self._emit_attribute_error_if_null(current, attr.name, attr.span)
+                args = self._emit_slot_call_args_tuple(expr.args, "list.append.args")
+                branch_roots.append(args)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                kwargs = self._emit_slot_call_kwargs_object(
+                    (), None, expr.span, "list.append.kwargs", method,
+                )
+                branch_roots.append(kwargs)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                status = self.builder.call(
+                    self.runtime["py_obj_call_slots"],
+                    [self._as_gc_ptr(method), self._as_gc_ptr(args),
+                     self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
+                    name=self._fresh("list.append.invoke"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "append method call", expr.span)
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots(tuple(branch_roots[len(roots):]))
+                self.builder.branch(done_block)
+
+                self.builder.position_at_end(done_block)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_note_published(output)
+                self._release_slot_call_roots(tuple(roots))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return self.builder.load(output, name=self._fresh("list.append.output"))
+
         if attr.name == "pop" and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_list_pop(expr)
         if attr.name == "count" and not self._expr_looks_cpython(attr.obj):

@@ -6,7 +6,6 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Attr, Call, Expr, Lambda, Name
-from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 
 
@@ -48,44 +47,53 @@ class NativeWeakrefLoweringMixin:
                 [],
                 name=self._fresh("weak.key.dict"),
             )
-        if kind == "weakref.proxy":
-            if len(args) != 1:
-                return None
-            target = self._emit_as_object(args[0])
-            none_gv = declare_runtime_global(self.module, "py_None")
-            callback = self.builder.load(
-                none_gv,
-                name=self._fresh("weakref.none"),
-            )
-            proxy_ref = self.builder.call(
-                self.runtime["py_weakref_new"],
-                [target, callback],
-                name=self._fresh("weakref.proxy"),
-            )
-            # py_weakref_new raises (TypeError on valueclass payloads);
-            # without this check the pending exception skips enclosing
-            # try/except blocks.
-            self._emit_post_call_err_check(args[0].span)
-            return proxy_ref
-        if kind != "weakref.ref" or len(args) not in (1, 2):
+        if not (
+            kind == "weakref.ref" and len(args) in (1, 2)
+            or kind == "weakref.proxy" and len(args) == 1
+        ):
             return None
-        target = self._emit_as_object(args[0])
-        if len(args) == 2:
-            callback = self._emit_weakref_callback_object(args[1])
-        else:
-            none_gv = declare_runtime_global(self.module, "py_None")
-            callback = self.builder.load(
-                none_gv,
-                name=self._fresh("weakref.none"),
+
+        # The runtime borrows both arguments. A captured name is an owned
+        # cell read, just like a call/subscript result: keep that owner in a
+        # root through callback evaluation, then retire it after publication.
+        previous = self._current_try_err_block()
+        error_target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        saved_preference = self._prefer_native_callable_values
+        output = self._new_slot_call_root(kind + ".result")
+        roots = [output]
+        operands = []
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            referent = self._emit_slot_call_operand(args[0], kind + ".target")
+            roots.append(referent)
+            operands.append(referent)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if len(args) == 2:
+                # Use ordinary callable construction's rooted NEW-result
+                # contract for named, lambda, captured and computed callbacks.
+                self._prefer_native_callable_values = True
+                callback = self._emit_slot_call_operand(args[1], kind + ".callback")
+                self._prefer_native_callable_values = saved_preference
+                roots.append(callback)
+                operands.append(callback)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            omitted = () if len(args) == 2 else (ir.Constant(ir.IntType(8).as_pointer(), None),)
+            self._slot_call_runtime_call(
+                "py_weakref_new", tuple(operands), result_slot=output,
+                suffix_args=omitted, span=args[0].span,
             )
-        new_ref = self.builder.call(
-            self.runtime["py_weakref_new"],
-            [target, callback],
-            name=self._fresh("weakref.ref"),
-        )
-        # See proxy note above: the constructor can raise.
-        self._emit_post_call_err_check(args[0].span)
-        return new_ref
+            # Releasing a temporary target can run its finalizer and the new
+            # weakref's callback. The result remains rooted across both.
+            self._release_slot_call_roots(tuple(operands))
+            return self._take_slot_call_root(output)
+        finally:
+            self._prefer_native_callable_values = saved_preference
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     def _weak_dict_constructor_kind_for_expr(self, expr: Expr) -> Optional[str]:
         if not isinstance(expr, Call) or expr.kwargs or expr.args:
