@@ -264,6 +264,18 @@ def _parse_operand(text: str):
 
 _OPERAND_CACHE_MAX_ENTRIES = 4096
 _OPERAND_CACHE_MAX_KEY_BYTES = 1_048_576
+# Independent file-local bounds include both source-key storage and machine
+# bytes. No instruction graph or PC-dependent relocation is retained here.
+_INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES = 4096
+_INSTRUCTION_ENCODING_CACHE_MAX_BYTES = 1_048_576
+# An explicit allowlist keeps future PC-sensitive instructions (including
+# loop/jrcxz families) on the ordinary encoder until their contract is audited.
+_PC_INDEPENDENT_INSTRUCTION_MNEMONICS = frozenset((
+    "mov", "add", "or", "and", "sub", "xor", "cmp", "test", "lea",
+    "imul", "neg", "mul", "div", "idiv", "shl", "shr", "sar",
+    "movzx", "movsx", "movsxd", "xchg", "xadd", "cmpxchg",
+    "push", "pop", "nop", "cdq", "cqo", "syscall", "mfence", "ret", "ud2",
+))
 
 
 class _OperandParseCache:
@@ -272,6 +284,8 @@ class _OperandParseCache:
     def __init__(self) -> None:
         self.entries: dict[str, _Reg | _Mem | _Imm | _Target] = {}
         self.key_bytes = 0
+        self.instruction_encodings: dict[str, bytes] = {}
+        self.instruction_encoding_bytes = 0
 
     def parse(self, text: str):
         # A str subclass can override len/hash/equality. Preserve the parser's
@@ -299,6 +313,39 @@ class _OperandParseCache:
         self.entries[text] = result
         self.key_bytes += key_bytes
         return result
+
+    def instruction_encoding(self, text: str):
+        if (
+            type(text) is not str
+            or _INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES <= 0
+            or 4 * len(text) > _INSTRUCTION_ENCODING_CACHE_MAX_BYTES
+        ):
+            return None
+        return self.instruction_encodings.get(text)
+
+    def remember_instruction_encoding(self, text: str, encoded) -> None:
+        if type(text) is not str or encoded.relocations:
+            return
+        # Every admitted operation uses PC solely for relocation offsets,
+        # excluded above, and never reads labels or section_name. Branches,
+        # prefixes, and every unaudited mnemonic remain on the original path.
+        mnemonic = text.strip().partition(" ")[0].lower()
+        if mnemonic not in _PC_INDEPENDENT_INSTRUCTION_MNEMONICS:
+            return
+        storage_bytes = 4 * len(text) + len(encoded.code)
+        if (
+            _INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES <= 0
+            or storage_bytes > _INSTRUCTION_ENCODING_CACHE_MAX_BYTES
+        ):
+            return
+        if (
+            len(self.instruction_encodings) >= _INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES
+            or self.instruction_encoding_bytes + storage_bytes > _INSTRUCTION_ENCODING_CACHE_MAX_BYTES
+        ):
+            self.instruction_encodings.clear()
+            self.instruction_encoding_bytes = 0
+        self.instruction_encodings[text] = encoded.code
+        self.instruction_encoding_bytes += storage_bytes
 
 
 def _int_bytes(value: int, width: int) -> bytes:
@@ -980,6 +1027,32 @@ def _branch(
 
 
 def encode_instruction(
+    line: str,
+    *,
+    pc: int,
+    labels: dict[str, tuple[str, int]],
+    section_name: str,
+    operand_cache: _OperandParseCache | None = None,
+) -> EncodedInstruction:
+    """Encode at the real PC, reusing only proven PC-independent machine bytes."""
+    # Preserve the existing duck-typed/subclass operand-cache path. The owned
+    # assembler creates this exact file-local cache type for both passes.
+    reusable = type(operand_cache) is _OperandParseCache
+    if reusable:
+        code = operand_cache.instruction_encoding(line)
+        if code is not None:
+            # Each caller still owns a fresh immutable result record.
+            return EncodedInstruction(code)
+    encoded = _encode_instruction_uncached(
+        line, pc=pc, labels=labels, section_name=section_name,
+        operand_cache=operand_cache,
+    )
+    if reusable:
+        operand_cache.remember_instruction_encoding(line, encoded)
+    return encoded
+
+
+def _encode_instruction_uncached(
     line: str,
     *,
     pc: int,
