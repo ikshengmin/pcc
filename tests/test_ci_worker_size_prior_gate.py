@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
+import weakref
 
 import pytest
 
@@ -39,7 +40,8 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_dynamic_handoff_slots.py",
     )
     assert gate.HOST_FILES[4] == "tests/python/test_worker_guard_cadence.py"
-    assert gate.HOST_COUNTS == (80, 3, 123, 0, 4, 20, 21)
+    assert gate.HOST_FILES[5] == "tests/c/test_self_backend_function_body_lines.py"
+    assert gate.HOST_COUNTS == (80, 3, 127, 0, 4, 12, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -495,7 +497,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 123, 0, 4, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 127, 0, 4, 12, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -1332,3 +1334,108 @@ def test_strict_compile_profile_snapshot_is_detached_and_handles_empty_fields():
     assert empty["phase_totals_ms"] == {} and empty["counters"] == {}
     assert not any(empty["module_event_counts"].values())
     assert not any(empty["module_events"].values()) and not empty["module_events_truncated"]
+
+
+@pytest.mark.parametrize("retaining", [False, True], ids=["retired", "original-reference"])
+@pytest.mark.parametrize("fail_freeze", [False, True], ids=["success", "freeze-failure"])
+def test_parser_input_lifetimes_release_only_after_successful_freeze(retaining, fail_freeze):
+    # Execute the actual traversal with synthetic owners, not the PCC parser,
+    # unsafe arenas, codec, emitter, or native code. The old-loop control must
+    # exhibit the opposite lifetime at the second function.
+    path = ROOT / "pcc/backend/self_backend_parse.py"
+    source = ast.parse(path.read_text())
+    function, = [node for node in source.body
+                 if isinstance(node, ast.FunctionDef) and node.name == "_parse_functions"]
+    tree = ast.Module(body=[function], type_ignores=[])
+    if retaining:
+        reference = ast.parse((ROOT / "tests/c/test_self_backend_function_body_lines.py").read_text())
+        restore, = [node for node in reference.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "_restore_retained_parse_inputs"]
+        scope = {"ast": ast}
+        exec(compile(ast.Module(body=[restore], type_ignores=[]), "<pure-parser-reference>", "exec"), scope)
+        tree = scope["_restore_retained_parse_inputs"](tree)
+
+    class Owner:
+        def __init__(self, name):
+            self.name = name
+        def close(self):
+            raise AssertionError("shared parser owners must not be closed")
+
+    class Definitions(list):
+        pass
+
+    class Function:
+        def __init__(self, **values):
+            self.__dict__.update(values)
+
+    header_refs, body_refs, seed_refs, arenas, functions, visits = [], [], [], [], [], []
+    scan_refs = []
+    failure = RuntimeError("original freeze failure")
+
+    def scan(text):
+        assert text == "all-input" and visits == []
+        definitions = Definitions()
+        for name in ("first", "second"):
+            header, body = Owner(name), Owner(name)
+            header_refs.append(weakref.ref(header))
+            body_refs.append(weakref.ref(body))
+            definitions.append((header, body))
+        scan_refs.append(weakref.ref(definitions))
+        return definitions
+
+    def parse_blocks(name, body, args, **kwargs):
+        assert body.name == name and args == []
+        if name == "second":
+            assert (header_refs[0]() is not None) is retaining
+            assert (body_refs[0]() is not None) is retaining
+            assert (seed_refs[0]() is not None) is retaining
+            assert functions[0].indexed_kernel.arena is arenas[0]
+        visits.append(name)
+        assert len(scan_refs[0]()) == (2 if retaining else 2 - len(visits))
+        seed = Owner(name)
+        seed.construction = Owner("temporary columns")
+        seed.arena = Owner("shared final arena")
+        seed_refs.append(weakref.ref(seed))
+        arenas.append(seed.arena)
+        return [], seed
+
+    def freeze(function):
+        assert header_refs[-1 if function.name == "second" else 0]() is not None
+        assert body_refs[-1 if function.name == "second" else 0]() is not None
+        if fail_freeze and function.name == "second":
+            raise failure
+        function.indexed_kernel = SimpleNamespace(arena=function.indexed_seed.arena)
+        function.indexed_seed = None
+        functions.append(function)
+        return function.indexed_kernel
+
+    scope = {
+        "_iter_function_defs": scan,
+        "_parse_function_header": lambda header, **kwargs: ("", "i64", header.name, ""),
+        "decode_global_name": lambda name: name,
+        "check_simple_symbol_name": lambda name: None,
+        "_parse_type": lambda text, **kwargs: "i64",
+        "_parse_arg_infos": lambda name, text, **kwargs: [],
+        "_parse_blocks": parse_blocks,
+        "ParsedFunction": Function,
+        "_arg_list_is_vararg": lambda text: False,
+        "get_indexed_function_kernel": freeze,
+    }
+    tree.body[:0] = ast.parse("from __future__ import annotations").body
+    exec(compile(ast.fix_missing_locations(tree), "<pure-parser-input-lifetimes>", "exec"), scope)
+    parse = scope["_parse_functions"]
+    if fail_freeze:
+        with pytest.raises(RuntimeError) as caught:
+            parse("all-input", type_context=object())
+        assert caught.value is failure
+        # The failed frame still owns the unadopted seed and current texts.
+        assert seed_refs[1]() is not None
+        assert header_refs[1]() is not None and body_refs[1]() is not None
+        assert (seed_refs[0]() is not None) is False
+    else:
+        result = parse("all-input", type_context=object())
+        assert result == functions and [item.name for item in result] == ["first", "second"]
+        assert all(ref() is None for ref in (*header_refs, *body_refs, *seed_refs))
+        assert scan_refs[0]() is None
+        assert all(item.indexed_kernel.arena is arena for item, arena in zip(result, arenas))
+    assert visits == ["first", "second"]

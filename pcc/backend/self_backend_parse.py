@@ -1852,7 +1852,12 @@ def _parse_functions(ir_text: str, *, type_context=None) -> list[ParsedFunction]
     if type_context is None:
         type_context = TypeParseContext()
     functions: list[ParsedFunction] = []
-    for header_text, body_text in _iter_function_defs(ir_text):
+    # Finish the full scan first so unterminated-body diagnostics retain
+    # priority, then retire each copied body without retaining earlier ones.
+    definitions = _iter_function_defs(ir_text)
+    definitions.reverse()
+    while definitions:
+        header_text, body_text = definitions.pop()
         prefix_text, ret_type_text, name_text, args_text = _parse_function_header(
             header_text, type_context=type_context
         )
@@ -1902,7 +1907,12 @@ def _parse_functions(ir_text: str, *, type_context=None) -> list[ParsedFunction]
         # Downstream consumers never need the construction seed or a block
         # object graph; explicit legacy/diagnostic callers project lazily.
         get_indexed_function_kernel(function)
+        # The kernel owns the final arenas; the seed still owns temporary
+        # construction columns which must not overlap the next function.
+        indexed_seed = None
         functions.append(function)
+        header_text = ""
+        body_text = ""
     return functions
 
 
