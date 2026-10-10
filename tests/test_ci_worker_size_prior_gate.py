@@ -39,7 +39,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_dynamic_handoff_slots.py",
     )
     assert gate.HOST_FILES[4] == "tests/python/test_worker_guard_cadence.py"
-    assert gate.HOST_COUNTS == (80, 3, 117, 0, 4, 20, 21)
+    assert gate.HOST_COUNTS == (80, 3, 123, 0, 4, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -495,7 +495,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 117, 0, 4, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 123, 0, 4, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -1058,7 +1058,10 @@ def test_strict_progress_surrounds_real_phases_and_uses_collected_receipt():
         "require_object_symbols", ("module-emit", "complete"),
     ]
     assert 'receipt_path = tmp_path / "worker-size-prior-closed-world.json"' in source
-    assert 'finally:\n        _publish_closed_world_receipt(receipt_path, receipt)' in source
+    finalizer = next(node for node in function.body if isinstance(node, ast.Try)).finalbody
+    assert isinstance(finalizer[-1], ast.Try)
+    assert ast.unparse(finalizer[-1].body[-1]) == "_publish_closed_world_receipt(receipt_path, receipt)"
+    assert ast.unparse(finalizer[-1].handlers[0].body[0]) == "if not primary_failed:\n    raise"
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     assert workflow.count("build/worker-prior-gate/**/*.json\n") == 2
     command = gate.pytest_command(Path("build/worker-prior-gate/strict-closure"),
@@ -1067,7 +1070,7 @@ def test_strict_progress_surrounds_real_phases_and_uses_collected_receipt():
     assert "-n0" not in command and "-o" not in command
 
 
-@pytest.mark.parametrize("failure", ("none", "encode", "emit"))
+@pytest.mark.parametrize("failure", ("none", "compile", "compile-summary", "compile-publish", "encode", "emit", "publish"))
 def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, monkeypatch, failure):
     import hashlib
     import weakref
@@ -1084,6 +1087,8 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
     monkeypatch.setattr(closure, "MODULES", names)
     monkeypatch.setattr(closure, "__file__", str(root / "tests/integration/closure.py"))
     target = "x86_64-unknown-linux-gnu"
+    error_type = OSError if failure == "publish" else RuntimeError
+    original_error = error_type("synthetic " + failure + " failure")
     events, whole_refs, section_refs, module_refs, index_refs = [], [], [], [], []
     symbols = {name: "user_" + name.replace(".", "_") + "_entry"
                for name in (*names, dependency)}
@@ -1134,6 +1139,33 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
         assert kwargs["module_names"] == list(names) and kwargs["libpython_mode"] == "off"
         assert kwargs["emit_llvm_only"] and kwargs["backend"] == "self"
         events.append("compile")
+        profile = kwargs["profile"]
+        assert profile == {}
+        profile.update(phase_totals_ms={"multi_type_infer": 20, "python_ir_pass_pipeline_many": 30},
+                       counters={"multi_files": 3},
+                       events=[{"name": "multi_type_infer", "detail": names[0], "ms": 20}])
+        # Existing timers update memory only. The pre-call receipt remains a
+        # valid pending snapshot until normal return or an ordinary exception.
+        pending = json.loads((output / "worker-size-prior-closed-world.json").read_text())
+        assert pending["progress"][-1]["state"] == "started"
+        assert pending["compile_profile"]["complete"] is False
+        assert pending["compile_profile"]["phase_totals_ms"] == {}
+        if failure in ("compile-summary", "compile-publish"):
+            def fail_reporting(*args, **kwargs):
+                raise OSError("secondary reporting failure")
+            monkeypatch.setattr(closure, "_bounded_compile_profile" if failure == "compile-summary"
+                                else "_publish_closed_world_receipt", fail_reporting)
+        if failure.startswith("compile"):
+            raise original_error
+        if failure == "publish":
+            publish = closure._publish_closed_world_receipt
+
+            def fail_final_publication(path, receipt):
+                if receipt["status"] == "PASS":
+                    raise original_error
+                publish(path, receipt)
+
+            monkeypatch.setattr(closure, "_publish_closed_world_receipt", fail_final_publication)
         Path(destination).write_text(text)
 
     def verify(value):
@@ -1159,7 +1191,7 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
         assert module_refs[-1]() is module
         events.append("encode")
         if failure == "encode":
-            raise RuntimeError("synthetic encode failure")
+            raise original_error
         Path(path).write_bytes(b"encoded-sidecar")
 
     def emit(path, destination, kind, *, optimize):
@@ -1167,7 +1199,7 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
         assert module_refs[-1]() is None, "original parsed module overlaps decoded emitter module"
         events.append("emit")
         if failure == "emit":
-            raise RuntimeError("synthetic emit failure")
+            raise original_error
         Path(destination).write_bytes(b"owned-object")
 
     def require_symbols(payload, triple, required):
@@ -1192,14 +1224,38 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
     if failure == "none":
         closure.test_worker_size_prior_modules_strict_target_emission(output, monkeypatch)
     else:
-        with pytest.raises(RuntimeError, match="synthetic " + failure + " failure"):
+        with pytest.raises(error_type, match="synthetic " + failure + " failure") as caught:
             closure.test_worker_size_prior_modules_strict_target_emission(output, monkeypatch)
+        assert caught.value is original_error
     receipt = json.loads((output / "worker-size-prior-closed-world.json").read_text())
     assert receipt["target"] == target and receipt["codegen_sha256"] == "fixed-codegen"
     assert receipt["sources"] == {name: hashlib.sha256(
         (root / (name.replace(".", "/") + ".py")).read_bytes()).hexdigest() for name in names}
+    if failure in ("compile-summary", "compile-publish"):
+        assert receipt["status"] == "RUNNING" and receipt["modules"] == {}
+        assert receipt["compile_profile"]["complete"] is False
+        assert receipt["compile_profile"]["phase_totals_ms"] == {}
+        assert receipt["progress"][-1]["phase"] == "compile" and receipt["progress"][-1]["state"] == "started"
+        assert "closure_modules" not in receipt and events == ["compile"]
+        return
+    assert receipt["compile_profile"]["complete"] == (failure != "compile")
+    assert receipt["compile_profile"]["phase_totals_ms"] == {
+        "multi_type_infer": 20, "python_ir_pass_pipeline_many": 30,
+    }
+    assert receipt["compile_profile"]["module_events"]["multi_type_infer"] == [
+        {"module": names[0], "ms": 20},
+    ]
+    if failure == "compile":
+        assert receipt["status"] == "FAIL" and receipt["modules"] == {}
+        assert receipt["error"] == "RuntimeError: synthetic compile failure"
+        assert "closure_modules" not in receipt and events == ["compile"]
+        return
     assert receipt["closure_modules"] == [*names, dependency]
     assert receipt["closure_definitions"] == 3
+    if failure == "publish":
+        assert receipt["status"] == "RUNNING" and list(receipt["modules"]) == list(names)
+        assert receipt["progress"][-1]["phase"] == "module-emit" and receipt["progress"][-1]["state"] == "complete"
+        return
     if failure == "none":
         assert receipt["status"] == "PASS" and list(receipt["modules"]) == list(names)
         for name in names:
@@ -1218,3 +1274,61 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
         assert events == ["compile", "whole-verify", "slice", "slice", "section-verify", "encode"] + (
             ["emit"] if failure == "emit" else []
         )
+
+
+def test_strict_compile_profile_keeps_only_bounded_phase_data():
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    profile = {
+        "phase_totals_ms": {name: 123 for name in closure._COMPILE_PROFILE_PHASES},
+        "counters": {name: 456 for name in closure._COMPILE_PROFILE_COUNTERS},
+        "events": [], "secret": "/private/source/path",
+    }
+    module_names = {index: ("pcc.module_" + str(index) + "_").ljust(160, "x") for index in range(20)}
+    for phase in closure._COMPILE_PROFILE_MODULE_PHASES:
+        profile["events"].extend({"name": phase, "detail": module_names[index], "ms": index}
+                                 for index in range(20))
+        for detail, duration in (("/private/source/path", 1), ("pcc." + "x" * 160, 1),
+                                 ("pcc.hidden", True), ("pcc.hidden", -1),
+                                 ("pcc.hidden", 9223372036854775808), ("pcc.hidden", float("inf"))):
+            profile["events"].append({"name": phase, "detail": detail, "ms": duration})
+    profile["events"] += [None, {"name": [], "detail": "pcc.hidden", "ms": 1},
+                          {"name": "unapproved", "detail": "/private/path", "ms": 1}]
+    profile["phase_totals_ms"].update(unapproved="/private/path", multi_type_infer=True)
+    profile["counters"].update(unapproved="/private/path", multi_files=-1)
+    snapshot = closure._bounded_compile_profile(profile, complete=True)
+    assert snapshot["complete"] is True and snapshot["module_events_truncated"] is True
+    assert set(snapshot["phase_totals_ms"]) == set(closure._COMPILE_PROFILE_PHASES) - {"multi_type_infer"}
+    assert set(snapshot["counters"]) == set(closure._COMPILE_PROFILE_COUNTERS) - {"multi_files"}
+    for phase in closure._COMPILE_PROFILE_MODULE_PHASES:
+        assert snapshot["module_event_counts"][phase] == 20
+        assert snapshot["module_events"][phase] == [
+            {"module": module_names[index], "ms": index} for index in range(19, 11, -1)
+        ]
+    encoded = json.dumps(snapshot, allow_nan=False)
+    assert "/private" not in encoded and "hidden" not in encoded and len(encoded.encode()) < 16384
+
+
+def test_strict_compile_profile_snapshot_is_detached_and_handles_empty_fields():
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    profile = {"phase_totals_ms": {"multi_codegen_layer1": 5}, "counters": {"multi_files": 2},
+               "events": [{"name": "multi_codegen_layer1", "detail": "pcc.z", "ms": 5},
+                          {"name": "multi_codegen_layer1", "detail": "pcc.a", "ms": 5}]}
+    snapshot = closure._bounded_compile_profile(profile, complete=False)
+    saved = json.dumps(snapshot, sort_keys=True)
+    assert snapshot["capture"] == "return-or-python-exception" and snapshot["complete"] is False
+    assert snapshot["module_events"]["multi_codegen_layer1"] == [
+        {"module": "pcc.a", "ms": 5}, {"module": "pcc.z", "ms": 5},
+    ]
+    profile["phase_totals_ms"].clear()
+    profile["counters"].clear()
+    profile["events"][0]["detail"] = "/private/changed"
+    profile.clear()
+    assert json.dumps(snapshot, sort_keys=True) == saved
+    empty = closure._bounded_compile_profile(
+        {"phase_totals_ms": [], "counters": None, "events": "not-events"}, complete=False,
+    )
+    assert empty["phase_totals_ms"] == {} and empty["counters"] == {}
+    assert not any(empty["module_event_counts"].values())
+    assert not any(empty["module_events"].values()) and not empty["module_events_truncated"]

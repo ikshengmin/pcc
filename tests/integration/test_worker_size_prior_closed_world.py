@@ -41,6 +41,74 @@ def _index_definition_bodies(text):
     return bodies
 
 
+_COMPILE_PROFILE_PHASES = (
+    "collect_multi_source_relative_closure", "filter_ir_scaffold_closure",
+    "validate_package_site_abi", "frontend_imports", "order_module_inits",
+    "build_closed_world_context", "build_closed_world_context_import_py_ast",
+    "build_closed_world_context_import_py_lift", "build_closed_world_context_parse",
+    "build_closed_world_context_lift", "build_closed_world_context_module",
+    "multi_type_infer", "multi_codegen_layer1", "python_ir_pass_pipeline_many",
+    "libpython_scan", "emit_ll_many_combined", "compile_python_multi_total",
+)
+_COMPILE_PROFILE_MODULE_PHASES = (
+    "build_closed_world_context_parse", "build_closed_world_context_lift",
+    "build_closed_world_context_module", "multi_type_infer", "multi_codegen_layer1",
+)
+_COMPILE_PROFILE_COUNTERS = (
+    "multi_input_files", "multi_files", "multi_frontend_jobs",
+    "multi_ir_bytes_before_passes", "multi_ir_modules", "multi_ir_bytes",
+)
+_COMPILE_PROFILE_MODULE_LIMIT = 8
+
+
+def _bounded_compile_profile(profile, *, complete):
+    """Snapshot existing timers after return/exception; no live compiler hook."""
+    def bounded_count(value):
+        return type(value) is int and 0 <= value <= 9223372036854775807
+
+    totals = profile.get("phase_totals_ms", {})
+    counters = profile.get("counters", {})
+    events = profile.get("events", [])
+    if not isinstance(totals, dict):
+        totals = {}
+    if not isinstance(counters, dict):
+        counters = {}
+    if not isinstance(events, list):
+        events = []
+    phase_totals = {name: totals[name] for name in _COMPILE_PROFILE_PHASES
+                    if name in totals and bounded_count(totals[name])}
+    safe_counters = {name: counters[name] for name in _COMPILE_PROFILE_COUNTERS
+                     if name in counters and bounded_count(counters[name])}
+    module_events = {name: [] for name in _COMPILE_PROFILE_MODULE_PHASES}
+    event_counts = {name: 0 for name in _COMPILE_PROFILE_MODULE_PHASES}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        phase, detail, duration = event.get("name"), event.get("detail"), event.get("ms")
+        if not isinstance(phase, str) or phase not in module_events:
+            continue
+        if (not isinstance(detail, str) or len(detail) > 160
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", detail) is None
+                or not bounded_count(duration)):
+            continue
+        event_counts[phase] += 1
+        rows = module_events[phase]
+        rows.append({"module": detail, "ms": duration})
+        rows.sort(key=lambda row: (-row["ms"], row["module"]))
+        del rows[_COMPILE_PROFILE_MODULE_LIMIT:]
+    return {
+        "schema": "pcc.strict-compile-profile.v1",
+        "capture": "return-or-python-exception",
+        "complete": complete,
+        "phase_totals_ms": phase_totals,
+        "counters": safe_counters,
+        "module_events": module_events,
+        "module_event_counts": event_counts,
+        "module_events_truncated": any(count > _COMPILE_PROFILE_MODULE_LIMIT
+                                       for count in event_counts.values()),
+    }
+
+
 def _publish_closed_world_receipt(path, receipt):
     payload = (json.dumps(receipt, indent=2, allow_nan=False) + "\n").encode("utf-8")
     assert len(payload) <= _RECEIPT_MAX_BYTES, "closed-world receipt exceeds byte bound"
@@ -144,10 +212,14 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         monkeypatch.setenv(name, "0")
     monkeypatch.delenv("PCC_PYTHON_IR_PASSES", raising=False)
     monkeypatch.delenv("PCC_PYTHON_IR_PASS_SKIP_MODULE_PREFIXES", raising=False)
+    compile_profile = {}
+    compile_complete = False
+    primary_failed = False
     receipt = {"status": "RUNNING", "target": target, "sources": digests,
                "codegen_sha256": codegen_checksum(), "modules": {},
                "scope": "public strict full closure and eight actual target objects",
-               "native_execution": False}
+               "native_execution": False,
+               "compile_profile": _bounded_compile_profile(compile_profile, complete=False)}
     output = tmp_path / "closed-world.ll"
     receipt_path = tmp_path / "worker-size-prior-closed-world.json"
     started = time.monotonic()
@@ -157,8 +229,11 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
             [str(path) for path in sources], str(output), module_names=list(MODULES),
             entry_module=MODULES[0], emit_llvm_only=True, target_triple=target,
             libpython_mode="off", ir_scaffold_mode="on", backend="self",
-            recursive_stdlib=False,
+            recursive_stdlib=False, profile=compile_profile,
         )
+        receipt["compile_profile"] = _bounded_compile_profile(compile_profile, complete=True)
+        compile_complete = True
+        del compile_profile
         _record_closed_world_progress(receipt_path, receipt, started, "compile", "complete")
         _record_closed_world_progress(receipt_path, receipt, started, "whole-verify", "started")
         text = output.read_text()
@@ -209,7 +284,16 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
                            for name, path in zip(MODULES, sources)}
         receipt["status"] = "PASS"
     except BaseException as error:
+        primary_failed = True
         receipt.update(status="FAIL", error=type(error).__name__ + ": " + str(error))
         raise
     finally:
-        _publish_closed_world_receipt(receipt_path, receipt)
+        try:
+            if not compile_complete:
+                receipt["compile_profile"] = _bounded_compile_profile(compile_profile, complete=False)
+            _publish_closed_world_receipt(receipt_path, receipt)
+        except BaseException:
+            # Preserve the compiler/verification exception already unwinding.
+            # A reporting failure on an otherwise normal path stays fatal.
+            if not primary_failed:
+                raise
