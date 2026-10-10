@@ -323,5 +323,13 @@ def _append_unwind(sections, symbols, procedures):
     sections.append(CoffSection(".pdata", bytes(pdata), 0x40000040, 4, tuple(relocations)))
 
 
-def assemble_object(text: str) -> bytes:
-    return emit_object(assemble(text))
+def assemble_object(text: str, *, phase_timing=None) -> bytes:
+    if phase_timing is None:
+        return emit_object(assemble(text))
+    started = phase_timing.start()
+    obj = assemble(text)
+    phase_timing.add(9, started)
+    started = phase_timing.start()
+    encoded = emit_object(obj)
+    phase_timing.add(10, started)
+    return encoded

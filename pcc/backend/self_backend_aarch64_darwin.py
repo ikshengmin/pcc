@@ -454,7 +454,9 @@ def emit_aarch64_darwin_asm(ir_text: str, optimize: bool = True) -> str:
     )
 
 
-def emit_aarch64_darwin_indexed_module(module, optimize: bool = True) -> str:
+def emit_aarch64_darwin_indexed_module(
+    module, optimize: bool = True, *, phase_timing=None,
+) -> str:
     """Emit an already-indexed module through the ordinary verified backend."""
     prepared = prepare_parsed_module_for_target(
         module,
@@ -463,17 +465,21 @@ def emit_aarch64_darwin_indexed_module(module, optimize: bool = True) -> str:
             _aggregate_returned_indirect_indexed
         ),
         materialize_legacy_slots=False,
+        phase_timing=phase_timing,
     )
     return _emit_prepared_aarch64_darwin_module(
         prepared,
         optimize,
         profile_ir_text="",
+        phase_timing=phase_timing,
     )
 
 
 def emit_aarch64_darwin_indexed_lines(
     module,
     optimize: bool = True,
+    *,
+    phase_timing=None,
 ) -> list[str]:
     """Emit the indexed module without materializing a joined text string."""
 
@@ -484,11 +490,13 @@ def emit_aarch64_darwin_indexed_lines(
             _aggregate_returned_indirect_indexed
         ),
         materialize_legacy_slots=False,
+        phase_timing=phase_timing,
     )
     return _emit_prepared_aarch64_darwin_lines(
         prepared,
         optimize,
         profile_ir_text="",
+        phase_timing=phase_timing,
     )
 
 
@@ -496,6 +504,8 @@ def emit_aarch64_darwin_indexed_transport(
     module,
     optimize: bool = True,
     structured_instructions: bool = True,
+    *,
+    phase_timing=None,
 ) -> StructuredAArch64Module:
     """Emit indexed code plus final structured section payloads."""
 
@@ -506,6 +516,7 @@ def emit_aarch64_darwin_indexed_transport(
             _aggregate_returned_indirect_indexed
         ),
         materialize_legacy_slots=False,
+        phase_timing=phase_timing,
     )
     structured_sections = []
     native_text = structured_instructions and not optimize
@@ -530,6 +541,7 @@ def emit_aarch64_darwin_indexed_transport(
         ),
         native_undefined=native_undefined if native_text else None,
         native_fallback_lines=native_fallback_lines if native_text else None,
+        phase_timing=phase_timing,
     )
     if not structured_instructions:
         structured_counts = [0, 0, 0, 0, 0, 0, 0]
@@ -568,6 +580,7 @@ def _emit_prepared_aarch64_darwin_lines(
     structured_counts: list[int] | None = None,
     native_undefined: list[str] | None = None,
     native_fallback_lines: list[str] | None = None,
+    phase_timing=None,
 ) -> list[str]:
     global _AARCH64_EMISSION_ACTIVE
     direct_instruction_capture = (
@@ -599,6 +612,7 @@ def _emit_prepared_aarch64_darwin_lines(
                 native_sink=native_sink,
                 native_undefined=native_undefined,
                 native_fallback_lines=native_fallback_lines,
+                phase_timing=phase_timing,
             )
         finally:
             if native_sink is not None:
@@ -622,6 +636,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
     native_sink: _NativeAArch64Emission | None = None,
     native_undefined: list[str] | None = None,
     native_fallback_lines: list[str] | None = None,
+    phase_timing=None,
 ) -> list[str]:
     global _MODULE_SYMBOLS
     direct_instruction_capture = encoded_line_records is not None and not optimize
@@ -654,6 +669,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
     for func in functions:
         func.aarch64_tail_call_ids = []
     _emit_trace("stack map plans begin funcs=" + str(len(functions)))
+    if phase_timing is not None:
+        phase_start = phase_timing.start()
     stack_map_plans = {
         plan.function_name: plan
         for plan in build_stack_map_plans(
@@ -663,6 +680,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
             function_symbol=_function_symbol,
         )
     }
+    if phase_timing is not None:
+        phase_timing.add(5, phase_start)
 
     _emit_trace("stack map plans end")
     lines = _emit_globals(globals_, _MODULE_SYMBOLS)
@@ -684,10 +703,14 @@ def _emit_prepared_aarch64_darwin_lines_active(
             plan_aarch64_tail_calls(func, stack_map_plans[func.name], enabled=optimize)
             if func.aarch64_tail_call_ids:
                 previous_plan = stack_map_plans[func.name]
+                if phase_timing is not None:
+                    phase_start = phase_timing.start()
                 stack_map_plans[func.name] = build_function_stack_map_plan(
                     func, globals_, target="aarch64-darwin",
                     identity_name=_function_symbol(func.name),
                 )
+                if phase_timing is not None:
+                    phase_timing.add(5, phase_start)
                 if previous_plan.packed_records is not None:
                     previous_plan.packed_records.close()
             plan_aarch64_madd_fusions(func, enabled=optimize)
@@ -705,11 +728,22 @@ def _emit_prepared_aarch64_darwin_lines_active(
                         _block_label(func.name, success_block),
                     )
                 )
+            if phase_timing is not None:
+                phase_start = phase_timing.start()
             if native_sink is None:
-                lines.extend(_emit_function(func, stack_map_plans[func.name]))
+                lines.extend(_emit_function(
+                    func, stack_map_plans[func.name], phase_timing=phase_timing,
+                ))
             else:
-                _emit_function(func, stack_map_plans[func.name], native_sink=native_sink)
+                _emit_function(
+                    func, stack_map_plans[func.name], native_sink=native_sink,
+                    phase_timing=phase_timing,
+                )
                 native_sink.release_captured_function()
+            if phase_timing is not None:
+                phase_timing.add(6, phase_start)
+    if phase_timing is not None:
+        phase_start = phase_timing.start()
     if native_sink is not None:
         if (
             optimize or structured_sections is None or structured_counts is None
@@ -744,6 +778,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
             native_sink.call_count, native_sink.direct_count,
             native_sink.fragment_record_count,
         ])
+        if phase_timing is not None:
+            phase_timing.add(7, phase_start)
         return []
     if optimize:
         lines = _forward_adjacent_stack_store_load(lines)
@@ -938,6 +974,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
         structured_counts.append(structured_call_count)
         structured_counts.append(direct_instruction_index)
         structured_counts.append(0)
+    if phase_timing is not None:
+        phase_timing.add(7, phase_start)
     return lines
 
 
@@ -947,14 +985,21 @@ def _emit_prepared_aarch64_darwin_module(
     *,
     profile_ir_text: str = "",
     close_native_tables: bool = True,
+    phase_timing=None,
 ) -> str:
     lines = _emit_prepared_aarch64_darwin_lines(
         prepared,
         optimize,
         profile_ir_text=profile_ir_text,
         close_native_tables=close_native_tables,
+        phase_timing=phase_timing,
     )
-    return "\n".join(lines) + "\n"
+    if phase_timing is not None:
+        phase_start = phase_timing.start()
+    result = "\n".join(lines) + "\n"
+    if phase_timing is not None:
+        phase_timing.add(7, phase_start)
+    return result
 
 
 def _parse_stack_transfer(line: str, opcode: str) -> tuple[str, str] | None:
@@ -2145,13 +2190,19 @@ def _emit_function(
     func: ParsedFunction,
     stack_map_plan: FunctionStackMapPlan,
     native_sink: _NativeAArch64Emission | None = None,
+    *,
+    phase_timing=None,
 ) -> list[str]:
+    if phase_timing is not None:
+        phase_start = phase_timing.start()
     note_aarch64_reload_destinations(func, stack_map_plan)
     lines = _prologue_emit_function_prologue(func, _MODULE_SYMBOLS)
     if native_sink is not None:
         native_sink.extend(lines)
         lines = []
     kernel = get_indexed_function_kernel(func)
+    if phase_timing is not None:
+        phase_timing.add(12, phase_start)
     if stack_map_plan.packed_records is not None and (
         not func.blocks or direct_instruction_capture_active()
     ):

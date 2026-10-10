@@ -2923,14 +2923,20 @@ def _emit_unreachable_terminator() -> list[str]:
 def _emit_function(
     func: ParsedFunction,
     stack_map_plan: FunctionStackMapPlan,
+    *,
+    phase_timing=None,
 ) -> list[str]:
     global _WINDOWS_SCRATCH_BASE
+    if phase_timing is not None:
+        phase_start = phase_timing.start()
     if _WINDOWS_ABI:
         from .self_backend_win64_abi import outgoing_size
         _WINDOWS_SCRATCH_BASE = outgoing_size(func)
     symbol = _asm_symbol(func.name)
     lines = _emit_prologue(func)
     kernel = get_indexed_function_kernel(func)
+    if phase_timing is not None:
+        phase_timing.add(12, phase_start)
     # Indexed input owns no legacy block graph. Keep the compatibility view
     # alive only while this function emits; retaining it on every function
     # duplicates the whole module's instructions alongside the indexed arenas.
@@ -2974,6 +2980,7 @@ def _emit_function(
 def _emit_x86_64_module(
     ir_text: str, *, windows: bool = False, module=None,
     stack_map_plans_out=None,
+    phase_timing=None,
 ) -> str:
     global _WINDOWS_ABI, _X86_EMISSION_ACTIVE
     if _X86_EMISSION_ACTIVE:
@@ -2984,10 +2991,18 @@ def _emit_x86_64_module(
     _WINDOWS_ABI = windows
     try:
         if module is None:
-            prepared = prepare_module_for_target(ir_text, aggregate_returned_indirect=_aggregate_returned_indirect)
+            prepared = prepare_module_for_target(
+                ir_text,
+                aggregate_returned_indirect=_aggregate_returned_indirect,
+                phase_timing=phase_timing,
+            )
         else:
             from .self_backend_prepare import prepare_parsed_module_for_target
-            prepared = prepare_parsed_module_for_target(module, aggregate_returned_indirect=_aggregate_returned_indirect)
+            prepared = prepare_parsed_module_for_target(
+                module,
+                aggregate_returned_indirect=_aggregate_returned_indirect,
+                phase_timing=phase_timing,
+            )
         from .self_backend_target_match import is_x86_64_windows_triple
         valid = is_x86_64_windows_triple(prepared.triple) if windows else is_x86_64_linux_triple(prepared.triple)
         if not valid:
@@ -2995,6 +3010,7 @@ def _emit_x86_64_module(
         prepared = run_self_target_memory_pass_pipeline(prepared, "self-x86_64-linux-v0")
         return _emit_prepared_x86_64_module(
             prepared, ir_text, stack_map_plans_out=stack_map_plans_out,
+            phase_timing=phase_timing,
         )
     finally:
         _WINDOWS_ABI = False
@@ -3019,7 +3035,7 @@ def _append_assembly_chunk(
 
 
 def _emit_prepared_x86_64_module(
-    prepared, ir_text: str, *, stack_map_plans_out=None,
+    prepared, ir_text: str, *, stack_map_plans_out=None, phase_timing=None,
 ) -> str:
     global _MODULE_SYMBOLS, _VARARG_FUNCTIONS, _TLS_GLOBALS
     triple = prepared.triple
@@ -3055,15 +3071,22 @@ def _emit_prepared_x86_64_module(
         _append_assembly_chunk(chunks, label_lines, global_lines)
     del global_lines
     for func in functions:
+        if phase_timing is not None:
+            phase_start = phase_timing.start()
         plan = build_function_stack_map_plan(
             func,
             prepared.globals_,
             target="x86_64-linux",
             identity_name=_asm_symbol(func.name),
         )
+        if phase_timing is not None:
+            phase_timing.add(5, phase_start)
         stack_map_plans[func.name] = plan
+        if phase_timing is not None:
+            phase_start = phase_timing.start()
         _append_assembly_chunk(
-            chunks, label_lines, _emit_function(func, plan),
+            chunks, label_lines,
+            _emit_function(func, plan, phase_timing=phase_timing),
         )
         # The stack-map plan retains scalar/root metadata, never the IR.
         # Release completed functions before the next body adds assembly.
@@ -3079,6 +3102,10 @@ def _emit_prepared_x86_64_module(
             clear_text_key_mapping(func.alloca_slots)
             func.alloca_slot_buckets.clear()
             clear_text_key_mapping(func.value_types)
+        if phase_timing is not None:
+            phase_timing.add(6, phase_start)
+    if phase_timing is not None:
+        phase_start = phase_timing.start()
     if functions:
         plans = tuple(stack_map_plans[func.name] for func in functions)
         if stack_map_plans_out is None:
@@ -3095,4 +3122,7 @@ def _emit_prepared_x86_64_module(
     # The empty final chunk supplies the newline without copying the full text.
     chunks.append("")
     reset_operand_intern()
-    return "\n".join(chunks)
+    result = "\n".join(chunks)
+    if phase_timing is not None:
+        phase_timing.add(7, phase_start)
+    return result

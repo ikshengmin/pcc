@@ -627,6 +627,16 @@ def run_codegen_worker(
             if verbose:
                 log(verbose, "worker codegen[" + module_name + "]")
             codegen_ms = 0
+            phase_timing = None
+            phase_timing_complete = False
+            if worker_timing:
+                try:
+                    from pcc.backend.indexed_phase_timing import ModulePhaseTiming
+
+                    phase_timing = ModulePhaseTiming(module_name)
+                except Exception:
+                    # Optional diagnostics must not change compiler outcomes.
+                    pass
             try:
                 codegen_started = time.monotonic() if worker_timing else 0.0
                 direct_path = ""
@@ -686,7 +696,10 @@ def run_codegen_worker(
                     and not emit_text_control
                     and not direct_passes
                 )
+                phase_started = phase_timing.start() if phase_timing is not None else 0
                 generated_module = codegen.generate(typed_module)
+                if phase_timing is not None:
+                    phase_timing.add(0, phase_started)
                 publish_worker_resource("codegen:" + str(index))
                 ir_text = str(generated_module) if render_ir_text else ""
                 if direct_passes:
@@ -740,6 +753,9 @@ def run_codegen_worker(
                                 direct_module, host_target_triple(),
                             )
                         direct_target = direct_module.triple
+                        if phase_timing is not None:
+                            phase_timing.target = direct_target
+                            phase_timing.route = "indexed-sidecar" if indexed_sidecar_output else "indexed-assembly"
                         from pcc.ir.direct_indexed_kernel import (
                             direct_indexed_module_first_libpython_edge,
                         )
@@ -786,7 +802,10 @@ def run_codegen_worker(
                             and not validate_direct
                             and not indexed_sidecar_output
                         ):
+                            phase_started = phase_timing.start() if phase_timing is not None else 0
                             _release_direct_frontend_state(codegen)
+                            if phase_timing is not None:
+                                phase_timing.add(1, phase_started)
                         direct_emit_started = (
                             time.monotonic() if worker_timing else 0.0
                         )
@@ -807,6 +826,9 @@ def run_codegen_worker(
                             and is_x86_64_linux_triple(direct_target)
                         )
                         if direct_lines_output:
+                            if phase_timing is not None:
+                                phase_timing.route = "indexed-native-sections"
+                            phase_started = phase_timing.start() if phase_timing is not None else 0
                             direct_transport = (
                                 emit_aarch64_darwin_indexed_transport(
                                     direct_module,
@@ -814,8 +836,11 @@ def run_codegen_worker(
                                     # Both host and native workers emit final
                                     # machine records through the owned encoder.
                                     structured_instructions=True,
+                                    phase_timing=phase_timing,
                                 )
                             )
+                            if phase_timing is not None:
+                                phase_timing.add(2, phase_started)
                             if worker_timing:
                                 sys.stderr.write(
                                     "pcc structured instructions module="
@@ -835,6 +860,7 @@ def run_codegen_worker(
                                     + "\n"
                                 )
                         elif not indexed_sidecar_output:
+                            phase_started = phase_timing.start() if phase_timing is not None else 0
                             direct_asm = emit_indexed_assembly(
                                 direct_module,
                                 optimize=False,
@@ -842,7 +868,10 @@ def run_codegen_worker(
                                     direct_stack_map_plans
                                     if direct_packed_stack_maps else None
                                 ),
+                                phase_timing=phase_timing,
                             )
+                            if phase_timing is not None:
+                                phase_timing.add(2, phase_started)
                         if (
                             release_direct_frontend
                             and emit_direct
@@ -857,6 +886,7 @@ def run_codegen_worker(
                             # Section/Relocation/NativeObject graph; pcc's
                             # allocator can reuse freed cells even though it
                             # cannot yet unmap whole slabs.
+                            phase_started = phase_timing.start() if phase_timing is not None else 0
                             parsed_modules[index] = None
                             del ast_module
                             del typed_module
@@ -870,6 +900,8 @@ def run_codegen_worker(
                             gc.collect()
                             if lazy_ast_dir:
                                 _freeze_worker_survivors()
+                            if phase_timing is not None:
+                                phase_timing.add(8, phase_started)
                         if worker_timing:
                             sys.stderr.write(
                                 "pcc direct indexed emit module="
@@ -907,18 +939,25 @@ def run_codegen_worker(
                                             if direct_packed_stack_maps else None
                                         ),
                                         consume_stack_map_plans=direct_packed_stack_maps,
+                                        phase_timing=phase_timing,
                                     )
                                     direct_stack_map_plans.clear()
                                     if not validate_direct:
                                         direct_asm = ""
                                 else:
                                     if direct_lines_output:
+                                        phase_started = phase_timing.start() if phase_timing is not None else 0
                                         sections, undefined = direct_transport.assemble_sections()
+                                        if phase_timing is not None:
+                                            phase_timing.add(9, phase_started)
                                         if direct_transport.encoded_line_records is not None:
                                             direct_transport.encoded_line_records.close()
                                         del direct_transport
                                     else:
+                                        phase_started = phase_timing.start() if phase_timing is not None else 0
                                         sections, undefined = assemble_file(direct_asm)
+                                        if phase_timing is not None:
+                                            phase_timing.add(9, phase_started)
                                     # Parsing is complete. Unless the text oracle
                                     # still needs it, drop the assembly text before
                                     # validating and encoding the Section graph
@@ -928,14 +967,20 @@ def run_codegen_worker(
                                     # graph.
                                     if not validate_direct:
                                         direct_asm = ""
+                                    phase_started = phase_timing.start() if phase_timing is not None else 0
                                     encoded = encode_native_object_from_sections(
                                         sections,
                                         undefined=undefined,
                                     )
+                                    if phase_timing is not None:
+                                        phase_timing.add(10, phase_started)
                                     del sections
                                     del undefined
+                                phase_started = phase_timing.start() if phase_timing is not None else 0
                                 with open(direct_path, "wb") as stream:
                                     stream.write(encoded)
+                                if phase_timing is not None:
+                                    phase_timing.add(11, phase_started)
                                 if checkpoint_root:
                                     # A large Stage1 object can itself be 174 MB.
                                     # Release the emitter buffer before the
@@ -996,6 +1041,7 @@ def run_codegen_worker(
                             direct_asm = ""
                 if worker_timing:
                     codegen_ms = int((time.monotonic() - codegen_started) * 1000)
+                phase_timing_complete = True
             except Exception as exc:
                 raise _worker_failure(
                     "codegen["
@@ -1005,6 +1051,10 @@ def run_codegen_worker(
                     + ": "
                     + safe_exception_text(exc)
                 ) from exc
+            finally:
+                if phase_timing is not None:
+                    # Outside timed scopes; never replace the original error.
+                    phase_timing.report(sys.stderr, phase_timing_complete)
             ir_path = os.path.join(ir_dir, "module_" + str(index) + ".ll")
             with open(ir_path, "w", encoding="utf-8") as stream:
                 stream.write(ir_text)

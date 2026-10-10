@@ -36,6 +36,7 @@ def prepare_module_for_target(
     aggregate_returned_indirect,
     aggregate_returned_indirect_indexed=None,
     materialize_legacy_slots: bool = True,
+    phase_timing=None,
 ) -> PreparedSelfBackendModule:
     module = parse_self_backend_module(ir_text)
     return prepare_parsed_module_for_target(
@@ -43,6 +44,7 @@ def prepare_module_for_target(
         aggregate_returned_indirect=aggregate_returned_indirect,
         aggregate_returned_indirect_indexed=aggregate_returned_indirect_indexed,
         materialize_legacy_slots=materialize_legacy_slots,
+        phase_timing=phase_timing,
     )
 
 
@@ -52,11 +54,17 @@ def prepare_parsed_module_for_target(
     aggregate_returned_indirect,
     aggregate_returned_indirect_indexed=None,
     materialize_legacy_slots: bool = True,
+    phase_timing=None,
 ) -> PreparedSelfBackendModule:
     """Prepare an already-final parsed/indexed module without reparsing text."""
     # The verifier constructs each function's indexed kernel at its definition
     # boundary.  Every later migrated pass then observes the same stable IDs.
+    if phase_timing is not None:
+        phase_start = phase_timing.start()
     verify_parsed_module(module)
+    if phase_timing is not None:
+        phase_timing.add(3, phase_start)
+        phase_start = phase_timing.start()
     globals_ = list(module.globals_)
     functions = list(module.functions)
     prepare_parsed_functions(functions)
@@ -72,9 +80,12 @@ def prepare_parsed_module_for_target(
             materialize_legacy_slots=materialize_legacy_slots,
         )
     module_symbols = prepare_module_symbols("", globals_, functions, module.triple)
-    return PreparedSelfBackendModule(
+    prepared = PreparedSelfBackendModule(
         triple=module.triple,
         globals_=globals_,
         functions=functions,
         module_symbols=module_symbols,
     )
+    if phase_timing is not None:
+        phase_timing.add(4, phase_start)
+    return prepared
