@@ -3,6 +3,7 @@
 These bounded host checks are not native or collector qualification.
 """
 import ast
+from functools import lru_cache
 import os
 from pathlib import Path
 
@@ -16,8 +17,11 @@ from test_unicode_decode_error_payload import DecodeMemory
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def bodies(path, namespace, *, names=None):
-    tree = ast.parse(path.read_text())
+@lru_cache(maxsize=32)
+def _compiled_bodies(source, filename, names):
+    # Cache only immutable code. Every exec below creates fresh functions
+    # bound to the caller's fresh model namespace and injected raw leaves.
+    tree = ast.parse(source, filename=filename)
     nodes = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and (names is None or node.name in names):
@@ -25,7 +29,71 @@ def bodies(path, namespace, *, names=None):
             nodes.append(node)
         elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
             nodes.append(node)
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), namespace)
+    return compile(ast.Module(body=nodes, type_ignores=[]), filename, 'exec')
+
+
+def bodies(path, namespace, *, names=None):
+    # Content, filename and selection identify the code. Reading on every
+    # call prevents stale results when a preimage or source file changes.
+    selection = None if names is None else frozenset(names)
+    exec(_compiled_bodies(path.read_text(), str(path), selection), namespace)
+
+
+def test_body_code_cache_isolates_model_namespaces(tmp_path):
+    source = tmp_path / 'bodies.py'
+    source.write_text('def touch(value):\n    state.append(leaf() + value)\n    return state\n')
+    first = {'state': [], 'leaf': lambda: 10}
+    second = {'state': [], 'leaf': lambda: 20}
+    bodies(source, first)
+    bodies(source, second)
+    assert first['touch'] is not second['touch']
+    assert first['touch'].__code__ is second['touch'].__code__
+    assert first['touch'].__globals__ is first
+    assert second['touch'].__globals__ is second
+    assert first['touch'](1) == [11]
+    assert second['state'] == []
+    assert second['touch'](2) == [22]
+    assert first['state'] == [11]
+
+
+def test_body_code_cache_invalidates_changed_source_and_filename(tmp_path):
+    source = tmp_path / 'bodies.py'
+    source.write_text('VALUE = 1\ndef read():\n    return VALUE\n')
+    first = {}
+    bodies(source, first)
+    source.write_text('VALUE = 2\ndef read():\n    return VALUE\n')
+    second = {}
+    bodies(source, second)
+    assert first['read']() == 1
+    assert second['read']() == 2
+    assert first['read'].__code__ is not second['read'].__code__
+    other = tmp_path / 'other.py'
+    other.write_text(source.read_text())
+    third = {}
+    bodies(other, third)
+    assert third['read']() == 2
+    assert second['read'].__code__.co_filename == str(source)
+    assert third['read'].__code__.co_filename == str(other)
+
+
+def test_body_code_cache_keeps_name_selections_distinct(tmp_path):
+    source = tmp_path / 'bodies.py'
+    source.write_text('VALUE = 1\ndef first():\n    return 1\ndef second():\n    return 2\n')
+    names = {'first'}
+    first = {}
+    bodies(source, first, names=names)
+    names.clear()
+    names.add('second')
+    second = {}
+    bodies(source, second, names=names)
+    empty = {}
+    bodies(source, empty, names=set())
+    all_names = {}
+    bodies(source, all_names)
+    assert first['first']() == 1 and 'second' not in first
+    assert second['second']() == 2 and 'first' not in second
+    assert empty['VALUE'] == 1 and 'first' not in empty and 'second' not in empty
+    assert all_names['first']() == 1 and all_names['second']() == 2
 
 
 class ErrorMemory(DecodeMemory):
@@ -37,14 +105,22 @@ class ErrorMemory(DecodeMemory):
                          pcc_tempdir_frame_map=24)
         names = {1: 'Exception', 2: 'ValueError', 3: 'TypeError', 6: 'AttributeError',
                  14: 'OSError', 19: 'MemoryError', 34: 'FileNotFoundError',
-                 35: 'FileExistsError', 36: 'PermissionError', 38: 'NotADirectoryError'}
+                 35: 'FileExistsError', 36: 'PermissionError', 37: 'IsADirectoryError',
+                 38: 'NotADirectoryError', 39: 'ProcessLookupError', 40: 'ChildProcessError',
+                 41: 'TimeoutError', 42: 'InterruptedError', 43: 'BlockingIOError',
+                 44: 'ConnectionError', 45: 'BrokenPipeError', 46: 'ConnectionAbortedError',
+                 47: 'ConnectionRefusedError', 48: 'ConnectionResetError'}
         for tag, name in names.items():
             cls = self.make(abi.PY_TYPE_CLASS, 65)
             cls.fields.update(exception_tag=tag)
             cls.fields[abi.PYCLASSOBJECT_NAME_OFFSET] = name
             self.class_cache.fields[tag * 8] = cls
         for tag in names:
-            lineage = [tag] + ([14] if tag in (34, 35, 36, 38) else [])
+            lineage = [tag]
+            if 45 <= tag <= 48:
+                lineage.append(44)
+            if 34 <= tag <= 48:
+                lineage.append(14)
             mro = _Slots(len(lineage) * 8)
             for index, base in enumerate(lineage):
                 mro.fields[index * 8] = self.class_cache.fields[base * 8]

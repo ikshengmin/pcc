@@ -3506,7 +3506,9 @@ def _builtin_exception_call(cls, args, nargs: int):
     generic class allocation would lose their message and ``args``.
     """
     tag: int = _builtin_exception_class_tag(cls)
-    if tag == 14 or tag == 34:
+    if tag == 14 or (tag >= 34 and tag <= 48):
+        # The contiguous FileNotFoundError..ConnectionResetError family.
+        # Only OSError itself remaps errno; explicit subclasses keep tag.
         return py_os_error_new(tag, args)
     if tag == 58:
         return py_unicode_decode_error_new(args)
@@ -3937,19 +3939,24 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
             if ptr_is_null(arg) == 0:
                 py_decref(arg)
             return out
-        if nkwargs != 0 and _builtin_exception_class_tag(callable) == 14:
-            py_raise_owned(py_exc_new(3, cstr("OSError() takes no keyword arguments")))
+        exception_tag: int = _builtin_exception_class_tag(callable)
+        if nkwargs != 0 and (exception_tag == 14 or (exception_tag >= 34 and exception_tag <= 48)):
+            # Static table strings do not move while constructing the error.
+            # The bounded builtin names plus this suffix fit in 96 bytes.
+            name = load_ptr(global_addr("PY_EXC_BUILTIN_NAMES"), exception_tag * C_POINTER_SIZE)
+            message = stack_alloc(96)
+            end: int = _cstr_append(message, 0, name)
+            end = _cstr_append(message, end, cstr("() takes no keyword arguments"))
+            store_i8(message, end, 0)
+            py_raise_owned(py_exc_new(3, message))
             return null()
-        if nkwargs != 0 and _builtin_exception_class_tag(callable) == 34:
-            py_raise_owned(py_exc_new(3, cstr("FileNotFoundError() takes no keyword arguments")))
-            return null()
-        if nkwargs != 0 and _builtin_exception_class_tag(callable) == 58:
+        if nkwargs != 0 and exception_tag == 58:
             py_raise_owned(py_exc_new(3, cstr("UnicodeDecodeError() takes no keyword arguments")))
             return null()
-        if nkwargs != 0 and _builtin_exception_class_tag(callable) == 59:
+        if nkwargs != 0 and exception_tag == 59:
             py_raise_owned(py_exc_new(3, cstr("UnicodeEncodeError() takes no keyword arguments")))
             return null()
-        if nkwargs == 0 and _builtin_exception_class_tag(callable) >= 0:
+        if nkwargs == 0 and exception_tag >= 0:
             return _builtin_exception_call(callable, args, nargs)
         # CPython: ``obj = cls.__new__(cls, *args)`` first.  Going straight
         # to py_instance_new skipped every user ``__new__``, so interning and

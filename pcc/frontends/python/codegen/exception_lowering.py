@@ -945,8 +945,8 @@ class ExceptionLoweringMixin:
         if isinstance(exc_expr, Call) and isinstance(exc_expr.func, Name):
             cls_name = exc_expr.func.ident
             tag = _builtin_exc_tag_or_missing(cls_name)
-            if tag == 14 or tag == 34:
-                # OSError and FileNotFoundError have positional metadata.
+            if tag == 14 or (34 <= tag <= 48):
+                # OSError and every builtin subclass have positional metadata.
                 # The ordinary slot-call route preserves every operand and
                 # shares construction with aliases and first-class classes.
                 return self._emit_slot_call_object(exc_expr, "exc.os")
