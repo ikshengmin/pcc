@@ -315,6 +315,9 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                     if not exclusive:
                         _resource_event(trace_path, "exclusive", index, pid,
                                         reservation, available, peak)
+                        _resource_diagnostic(tasks[index], "exclusive", index, pid,
+                                             reservation, available, peak,
+                                             bands[index] if bands else -1)
                 else:
                     if active[0][3] and measured_demand > available:
                         raise WorkerMemoryError(

@@ -188,13 +188,22 @@ def _stage_environment(gc_backend, jobs=1, rss_limit=17179869184):
     return environment
 
 
+def _runtime_identity_matches(runtime, identity):
+    for suffix, key in (("", "sha256"), (".provenance.json", "provenance_sha256"),
+                        (".capi_syms", "capi_inventory_sha256")):
+        if key in identity and _digest(str(runtime) + suffix) != identity[key]:
+            return False
+    return True
+
+
 def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
-              rss_limit=17179869184, allow_dirty=False, shared=None, jobs=1, lock_held=False, cancel=None):
+              rss_limit=17179869184, allow_dirty=False, shared=None, jobs=1, lock_held=False, cancel=None,
+              runtime_archive=None):
     if not lock_held:
         with performance_lock():
             return run_chain(gc_backend, out_dir, stage_limit=stage_limit, timeout=timeout,
                              rss_limit=rss_limit, allow_dirty=allow_dirty, shared=shared,
-                             jobs=jobs, lock_held=True, cancel=cancel)
+                             jobs=jobs, lock_held=True, cancel=cancel, runtime_archive=runtime_archive)
     def guarded(command, **options):
         if cancel is not None:
             if cancel.is_set():
@@ -233,23 +242,36 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
     with (contextlib.nullcontext() if lock_held else performance_lock()):
         try:
             if shared is None:
-                runtime = out_dir / "runtime" / "libpy_runtime_pcc_py.a"
-                runtime_env = environment.copy()
-                runtime_env.pop("PCC_RUNTIME_ARCHIVE", None)
-                # The runtime builder locally masks executable/direct emission
-                # flags for each library-IR request, restoring them afterward.
-                guarded([sys.executable, "-m", "pcc.frontends.python.owned_runtime_build", "--target", target,
-                     "--output", str(runtime)], cwd=ROOT, env=runtime_env,
-                    log_path=out_dir / "runtime-build.log", timeout=timeout,
-                    rss_limit=rss_limit)
+                if runtime_archive is not None:
+                    from pcc.frontends.python.owned_runtime_build import ensure_target_runtime
+
+                    # Explicit reuse is fail-closed: the existing owner checks
+                    # target/config, every member/source, codegen and CAPI bytes.
+                    # An invalid explicit archive never falls back to rebuilding.
+                    runtime = Path(ensure_target_runtime(
+                        str(ROOT / "pcc" / "runtime"), target,
+                        explicit_archive=str(runtime_archive),
+                    ))
+                else:
+                    runtime = out_dir / "runtime" / "libpy_runtime_pcc_py.a"
+                    runtime_env = environment.copy()
+                    runtime_env.pop("PCC_RUNTIME_ARCHIVE", None)
+                    # The runtime builder locally masks executable/direct emission
+                    # flags for each library-IR request, restoring them afterward.
+                    guarded([sys.executable, "-m", "pcc.frontends.python.owned_runtime_build", "--target", target,
+                         "--output", str(runtime)], cwd=ROOT, env=runtime_env,
+                        log_path=out_dir / "runtime-build.log", timeout=timeout,
+                        rss_limit=rss_limit)
                 runtime_identity = {"path": str(runtime), "sha256": _digest(runtime),
                                     "provenance_sha256": _digest(str(runtime) + ".provenance.json")}
+                if runtime_archive is not None:
+                    runtime_identity["capi_inventory_sha256"] = _digest(str(runtime) + ".capi_syms")
             else:
                 if shared["source"] != source or shared["target"] != target or shared.get("configuration") != configuration:
                     raise RuntimeError("shared Stage1 source or target identity differs")
                 runtime_identity = dict(shared["runtime"])
                 runtime = Path(runtime_identity["path"])
-                if _digest(runtime) != runtime_identity["sha256"] or _digest(str(runtime) + ".provenance.json") != runtime_identity["provenance_sha256"]:
+                if not _runtime_identity_matches(runtime, runtime_identity):
                     raise RuntimeError("shared runtime identity changed")
                 compiler = [shared["compiler_path"]]
                 if _digest(compiler[0]) != shared["stages"][0]["sha256"]:
@@ -258,7 +280,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
             for stage in range(1, stage_limit + 1):
                 if source_identity(allow_dirty) != source:
                     raise RuntimeError("source changed before stage " + str(stage))
-                if _digest(runtime) != runtime_identity["sha256"]:
+                if not _runtime_identity_matches(runtime, runtime_identity):
                     raise RuntimeError("runtime archive changed before stage " + str(stage))
                 compiler_digest = _digest(compiler[0])
                 output = out_dir / ("pcc" + str(stage) + suffix)
@@ -308,9 +330,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                     raise RuntimeError("native GC/function/object/integer/exception canary failed")
                 if source_identity(allow_dirty) != source:
                     raise RuntimeError("source changed during native canary " + str(stage))
-                if _digest(runtime) != runtime_identity["sha256"] or _digest(
-                    str(runtime) + ".provenance.json"
-                ) != runtime_identity["provenance_sha256"]:
+                if not _runtime_identity_matches(runtime, runtime_identity):
                     raise RuntimeError("runtime archive/provenance changed during stage " + str(stage))
                 if _digest(output) != record["sha256"]:
                     raise RuntimeError("stage compiler changed during native canary " + str(stage))
@@ -401,7 +421,8 @@ def run_from_shared(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
 
 
 def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400,
-               rss_limit=17179869184, allow_dirty=False, cpu_budget=4, lock_held=False):
+               rss_limit=17179869184, allow_dirty=False, cpu_budget=4, lock_held=False,
+               runtime_archive=None):
     """One immutable runtime/Stage1, then resource-bounded native chains."""
     out_dir = Path(out_dir).resolve()
     slots = min(len(backends), 2, max(1, cpu_budget // 2), max(1, rss_limit // (4 * 1024 ** 3)))
@@ -412,7 +433,8 @@ def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400,
         (out_dir / "matrix-receipt.json").unlink(missing_ok=True)
         shared = run_chain("0", out_dir / "shared", stage_limit=1, timeout=timeout,
                            rss_limit=rss_limit, allow_dirty=allow_dirty,
-                           jobs=shared_stage1_jobs(cpu_budget, rss_limit), lock_held=True)
+                           jobs=shared_stage1_jobs(cpu_budget, rss_limit), lock_held=True,
+                           runtime_archive=runtime_archive)
         cancelled = threading.Event()
         def execute(backend):
             if cancelled.is_set():
@@ -454,6 +476,7 @@ def main(argv=None):
     parser.add_argument("--rss-limit", type=int, default=17179869184)
     parser.add_argument("--cpu-budget", type=int, default=4)
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--runtime-archive", help="Explicit source-matched archive; verify deeply and never rebuild")
     parser.add_argument("--inside-matrix", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--lock-held", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -470,7 +493,8 @@ def main(argv=None):
             return run(command, cwd=ROOT, env=os.environ.copy(), log_path=out_dir / "matrix.log",
                        timeout=args.timeout * (2 + 2 * rounds) + 300, rss_limit=args.rss_limit)
     return run_matrix(backends, args.out_dir, stage_limit=args.stage, timeout=args.timeout,
-                      rss_limit=args.rss_limit, allow_dirty=args.allow_dirty, cpu_budget=args.cpu_budget, lock_held=args.lock_held)
+                      rss_limit=args.rss_limit, allow_dirty=args.allow_dirty, cpu_budget=args.cpu_budget,
+                      lock_held=args.lock_held, runtime_archive=args.runtime_archive)
 
 
 if __name__ == "__main__":
