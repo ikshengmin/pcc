@@ -1,7 +1,7 @@
 """CRT-free Windows executable entry with UTF-8 argv and environment."""
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_ptr, c_int, c_void, extern
+from pcc.extern import c_abi_export, c_ptr, c_int, c_int32, c_void, extern
 from pcc.unsafe import malloc, free, null, ptr_is_null, load_i32, load_ptr, store_ptr, stack_alloc, global_addr, ptr_diff, call_void_ptr0
 
 __pcc_freestanding__ = True
@@ -10,7 +10,7 @@ GetCommandLineW = extern("GetCommandLineW", (), c_ptr)
 CommandLineToArgvW = extern("CommandLineToArgvW", (c_ptr, c_ptr), c_ptr)
 LocalFree = extern("LocalFree", (c_ptr,), c_ptr)
 ExitProcess = extern("ExitProcess", (c_int,), c_void)
-c_exit = extern("exit", (c_int,), c_void)
+c_exit = extern("exit", (c_int32,), c_void)
 utf8 = extern("pcc_win_utf8", (c_ptr,), c_ptr)
 initial_environ = extern("pcc_win_initial_environ", (), c_ptr)
 env_init = extern("pcc_platform_env_init", (c_ptr,), c_int)

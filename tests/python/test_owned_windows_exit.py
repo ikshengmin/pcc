@@ -195,6 +195,26 @@ def test_windows_immediate_and_recursive_exit_skip_remaining_cleanup(entry):
 
 
 def test_windows_start_returns_through_normal_exit():
+    from pcc.frontends.python.codegen.platform_machine_abis import PLATFORM_MACHINE_ABIS
+    from pcc.frontends.python.pipeline_freestanding import freestanding_module_scope_extern_bindings
+
+    source = (ROOT / "pcc/runtime/py/freestanding_windows_start.py").read_text()
+    bindings = {name: (parameters, result) for name, parameters, result in
+                freestanding_module_scope_extern_bindings(source)}
+    assert bindings["exit"] == ("(c_int32,)", "c_void")
+    # Source-level admission intentionally uses canonical spellings. Win32
+    # APIs/main retain their separately declared c_int contracts; exit uses
+    # the exact owned C lifecycle contract already used by Linux startup.
+    for name, signature in bindings.items():
+        assert signature == PLATFORM_MACHINE_ABIS[name], name
+    declaration = 'c_exit = extern("exit", (c_int32,), c_void)'
+    assert source.count(declaration) == 1
+    for rejected in ("c_int", "c_int64", "c_ptr"):
+        wrong = source.replace(declaration, declaration.replace("c_int32", rejected))
+        wrong_bindings = {name: (parameters, result) for name, parameters, result in
+                          freestanding_module_scope_extern_bindings(wrong)}
+        assert wrong_bindings["exit"] != PLATFORM_MACHINE_ABIS["exit"]
+
     memory = _RawMemory()
     events = []
     begin = memory.global_addr("__init_array_start")
@@ -245,6 +265,20 @@ def test_windows_exit_exports_exact_owned_coff_abi(tmp_path):
         with pytest.raises(CoffError, match="has no named system DLL ABI"):
             system_dll(name)
     assert not re.search(r"call[^\n]*@(py_box_|py_int_)", text)
+
+    # Exercise the consuming startup module as well as the provider. Its
+    # compilation must pass the real closed-world verifier before emission.
+    startup = "freestanding_windows_start"
+    startup_output = tmp_path / "windows_start.ll"
+    _compile_runtime_module(startup, str(runtime / "py" / (startup + ".py")),
+                            str(startup_output), TARGET)
+    startup_text = optimize_ir(startup_output.read_text(), runtime_ir_passes(str(runtime)))
+    assert re.search(r"\bcall void(?:\s+\(i32\))?\s+@exit\(i32 ", startup_text)
+    startup_object = parse_object(emit_owned_object(startup_text, TARGET))
+    assert any(symbol.name == "pcc_windows_start" and symbol.external and symbol.section
+               for symbol in startup_object.symbols)
+    assert any(symbol.name == "exit" and symbol.external and not symbol.section
+               for symbol in startup_object.symbols)
 
 
 @pytest.mark.integration
