@@ -21,6 +21,9 @@ on:
       - "tests/python/test_valueclass_aggregate_ownership_native.py"
       - "tests/python/test_os_error_constructors.py"
       - "tests/python/test_native_open_errno.py"
+      - "tests/python/test_native_float_protocol.py"
+      - "tests/python/test_native_class_docstrings.py"
+      - "tests/python/test_native_float_callback_movement.py"
       - "tests/python/test_owned_fdopen_provider.py"
       - "tests/python/owned_regression_support.py"
       - "tests/fixtures/native/worker_resource_admission.py"
@@ -53,6 +56,9 @@ on:
       - "tests/python/test_valueclass_aggregate_ownership_native.py"
       - "tests/python/test_os_error_constructors.py"
       - "tests/python/test_native_open_errno.py"
+      - "tests/python/test_native_float_protocol.py"
+      - "tests/python/test_native_class_docstrings.py"
+      - "tests/python/test_native_float_callback_movement.py"
       - "tests/python/test_owned_fdopen_provider.py"
       - "tests/python/owned_regression_support.py"
       - "tests/fixtures/native/worker_resource_admission.py"
@@ -119,6 +125,57 @@ jobs:
           if-no-files-found: warn
           # Complete compressed logs/receipts only; no archives, objects or IR.
           path: build/macos-regressions/evidence/
+
+  macos-pcc0-float-doc-regressions:
+    name: macOS arm64 pcc0 float and class-doc regressions
+    runs-on: macos-15
+    timeout-minutes: 25
+    # Independent of the existing regression and Stage1 jobs.
+    # Build a source-matched threaded/atomic runtime within this job's own cap.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Execute float and class-doc regressions with one matched runtime
+        run: |
+          uv run python scripts/run_process_tree_sample.py \
+            --result build/macos-float-doc/work/supervisor/result.json \
+            --samples build/macos-float-doc/work/supervisor/samples.tsv \
+            --stdout build/macos-float-doc/work/supervisor/target.stdout \
+            --stderr build/macos-float-doc/work/supervisor/target.stderr \
+            --timeout 1200 --interval 1 --progress-interval 30 \
+            --auto-tree-rss-ceiling-bytes 4294967296 \
+            --min-tree-rss-bytes 2147483648 \
+            --darwin-preflight-reserve-bytes 536870912 \
+            -- uv run python scripts/ci_macos_regression_gate.py \
+            --out-dir build/macos-float-doc --profile float-doc
+
+      - name: Collect complete bounded float and class-doc receipts
+        if: always()
+        run: |
+          uv run python scripts/ci_macos_regression_gate.py \
+            --out-dir build/macos-float-doc --profile float-doc --collect-evidence
+
+      - name: Preserve float and class-doc receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-pcc0-float-doc-receipts
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: warn
+          # Complete compressed logs/receipts only; no archives, objects or IR.
+          path: build/macos-float-doc/evidence/
 
   other-platform-native-wheel:
     name: Native wheel / ${{ matrix.platform }}

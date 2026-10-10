@@ -61,6 +61,7 @@ from pcc.unsafe import (
     ptr_is_null,
     ptr_to_int,
     stack_alloc,
+    store_f64,
     store_i8,
     store_i32,
     store_i64,
@@ -2112,6 +2113,23 @@ def _named_convert(slots, conversion: int, scalar) -> int:
         if ptr_is_null(py_str_payload(load_ptr(result_slot, 0))) != 0:
             py_raise_owned(py_exc_new(3, cstr("string special method returned non-string")))
             return -1
+    elif conversion == 8 or conversion == 9:
+        if conversion == 8 and tag != PY_TYPE_FLOAT:
+            py_raise_owned(py_exc_new(3, cstr("__float__ returned non-float")))
+            return -1
+        if conversion == 9 and tag != PY_TYPE_INT:
+            if tag == PY_TYPE_BOOL:
+                py_raise_owned(py_exc_new(11, cstr("pcc float: non-exact __index__ results require owned warning emission")))
+            else:
+                py_raise_owned(py_exc_new(3, cstr("__index__ returned non-int")))
+            return -1
+        # Convert while the callback result still owns its counted lease.
+        number: float = py_float_to_f64(load_ptr(result_slot, 0))
+        if py_err_occurred() != 0:
+            return -1
+        if ptr_is_null(scalar) == 0:
+            store_f64(scalar, 0, number)
+        return 0
     if ptr_is_null(scalar) == 0:
         store_i64(scalar, 0, value)
     if py_err_occurred() != 0:
@@ -2156,6 +2174,12 @@ def _named_body(slots, tokens, borrowed, name, rname, nargs: int, mode: int, con
                     return -1
                 index = index + 1
         status = py_obj_special_call_slots(receiver_slot, name, args_slot, null(), result_slot, handled)
+        if status == 0 and conversion == 8 and load_i64(handled, 0) == 0:
+            # float falls back only on absence, never on a selected method's
+            # error or invalid result. Keep the same receiver owner across
+            # both lookups; instance attributes are deliberately bypassed.
+            status = py_obj_special_call_slots(receiver_slot, cstr("__index__"), null(), null(), result_slot, handled)
+            conversion = 9
     if status != 0:
         return -1
     if load_i64(handled, 0) == 0:
@@ -2226,6 +2250,7 @@ def py_user_special_dispatch(obj, name, arg0, arg1, nargs: int, conversion: int,
 
     Scalar conversions: 1 length, 2 truth, 3 bool, 4 hash, 5 discard.
     Conversion 6 validates a string; 7 treats NotImplemented as absence.
+    Conversion 8 validates __float__, with __index__ fallback, into an f64.
     An absent method is handled=0; selected
     None, descriptor errors and callback failures all remain handled=1.
     """

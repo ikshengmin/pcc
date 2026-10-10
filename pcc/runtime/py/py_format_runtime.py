@@ -82,6 +82,10 @@ py_obj_repr = extern("py_obj_repr", (c_ptr,), c_ptr)
 py_obj_ascii = extern("py_obj_ascii", (c_ptr,), c_ptr)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_float_to_f64 = extern("py_float_to_f64", (c_ptr,), c_double)
+py_user_special_dispatch = extern(
+    "py_user_special_dispatch",
+    (c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64, c_ptr, c_ptr), c_ptr,
+)
 py_float_from_f64 = extern("py_float_from_f64", (c_double,), c_ptr)
 py_bigint_to_double = extern("py_bigint_to_double", (c_ptr,), c_double)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
@@ -323,7 +327,22 @@ def py_float_value_of(value) -> float:
                 py_raise_owned(py_exc_new(2, cstr("could not convert string to float")))
                 return 0.0
             return parsed
-    return py_float_to_f64(value)
+    tag: int = _type_of(value)
+    if tag == PY_TYPE_INT or tag == PY_TYPE_BOOL or tag == PY_TYPE_FLOAT:
+        return py_float_to_f64(value)
+    scalar = stack_alloc(8)
+    handled = stack_alloc(8)
+    store_i64(scalar, 0, 0)
+    store_i64(handled, 0, 0)
+    py_user_special_dispatch(
+        value, cstr("__float__"), null(), null(), 0, 8, scalar, handled,
+    )
+    if py_err_occurred() != 0:
+        return 0.0
+    if load_i64(handled, 0) == 0:
+        py_raise_owned(py_exc_new(3, cstr("float() argument must be a string or a real number")))
+        return 0.0
+    return load_f64(scalar, 0)
 
 
 @c_abi_export("pcc_float_round_fixed_f64")

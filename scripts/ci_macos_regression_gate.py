@@ -64,12 +64,34 @@ GATES = (
             "original-direct-payload", "original-valuebox",
         )
     )),
+    ("float-protocol", (
+        "tests/python/test_native_float_protocol.py::"
+        "test_float_protocol_native_five_gc[pcc0]",
+    )),
+    ("class-docstrings", (
+        "tests/python/test_native_class_docstrings.py::"
+        "test_class_docstrings_native_five_gc[pcc0]",
+    )),
+    ("float-callback-movement", (
+        "tests/python/test_native_float_callback_movement.py::"
+        "test_canonical_float_callback_movement_gc4[pcc0]",
+    )),
 )
+PROFILES = {
+    "default": (
+        "clock", "runtime-build", "oserror", "time", "native-worker-clock",
+        "worker-handles", "root-joins",
+    ),
+    "float-doc": (
+        "runtime-build", "float-protocol", "class-docstrings", "float-callback-movement",
+    ),
+}
 EVIDENCE_LIMIT = 16 * 1024 * 1024
 RECEIPT_NAMES = {
     "qualification.json", "command.json", "result.json", "runtime-identity.json",
     "live.jsonl", "junit.xml", "ownership-regression.json", "execution.json",
     "darwin-resource-handles.json", "native-worker-clock.json", "reference.json",
+    "float-callback-movement.json",
     *(f"gc{backend}.json" for backend in range(5)),
 }
 
@@ -135,24 +157,34 @@ def _pytest_gate(name, nodes, out, environment):
     return verify_execution_report(directory / "live.jsonl", nodes)
 
 
-def run(out):
+def run(out, profile="default"):
+    if profile not in PROFILES:
+        raise ValueError("unknown Mac regression profile: " + str(profile))
+    order = PROFILES[profile]
     assert sys.platform == "darwin" and platform.machine() == "arm64", "Darwin arm64 execution is required"
     assert not os.environ.get("PCC_TEST_COMPILER"), "these gates require the host pcc0 compiler"
     environment = dict(os.environ)
     environment.pop("LC_ALL", None)
     environment.update(PCC_NO_AUTO_PCC1="1", PCC_TEST_COMPILER_STRICT="1")
-    order = ["clock", "runtime-build", "oserror", "time", "native-worker-clock", "worker-handles", "root-joins"]
     receipt = {
         "schema": "pcc.macos-regression-ci.v1", "status": "RUNNING",
+        "profile": profile,
         "source_commit": environment.get("GITHUB_SHA", ""),
         "scope": "host pcc0 self/off emitted execution; Stage1 is a separate job",
-        "clock_scope": "real host/native clock epoch; simulated suspend; emitted native worker-state reader",
         "gates": {name: {"status": "NOT_RUN", "expected_nodes": list(dict(GATES).get(name, ()))}
                   for name in order},
     }
+    if profile == "default":
+        receipt["clock_scope"] = "real host/native clock epoch; simulated suspend; emitted native worker-state reader"
+    else:
+        receipt["collector_scope"] = (
+            "float protocol and class docstrings request GC0-4 without collector-selection telemetry; "
+            "float callback movement asserts actual GC4 and positive selection/relocation "
+            "in both callback and cleanup"
+        )
     receipt_path = out / "work" / "qualification.json"
     _save(receipt_path, receipt)
-    current = "clock"
+    current = order[0]
     try:
         for name in order:
             current = name
@@ -248,13 +280,14 @@ def collect_evidence(out):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--profile", choices=tuple(PROFILES), default="default")
     parser.add_argument("--collect-evidence", action="store_true")
     args = parser.parse_args(argv)
     out = args.out_dir.resolve()
     if args.collect_evidence:
         collect_evidence(out)
     else:
-        run(out)
+        run(out, profile=args.profile)
     return 0
 
 

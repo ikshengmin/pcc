@@ -19,6 +19,7 @@ class _C3Memory(_Memory):
     def __init__(self, force=False, fail=None, publish_move=False):
         self.raw, self.spans, self.handles = [], [], {}
         self.reads, self.force, self.fail_kind = 0, force, fail
+        self.doc_writes = []
         self.publish_move=publish_move
         super().__init__("unused")
         self.maps.update({"pcc_class_construct_owned_frame_map":5,
@@ -29,6 +30,7 @@ class _C3Memory(_Memory):
         self.namespace.update({name:getattr(abi,name) for name in dir(abi) if name.isupper()})
         self.namespace.update({
             "malloc":self.malloc, "free":self.free,
+            "cstr":lambda value:value,
             "load_i64":lambda value,offset:self.read(value,offset) or 0,
             "load_i32":lambda value,offset:self.read(value,offset) or 0,
             "pcc_gc_note_relocation_read":self.resolve,
@@ -45,6 +47,7 @@ class _C3Memory(_Memory):
             # identity; the actual runtime helpers perform the MRO lookup.
             "pcc_gc_pointer_is_managed":lambda value:isinstance(value, _Object) and value.alive,
             "global_load_ptr":lambda name:self.builtin_classes.get(name, self.none),
+            "py_class_write_namespace_slots":self.write_namespace,
         })
         parsed=ast.parse(PORT.read_text(),filename=str(PORT))
         functions=[node for node in parsed.body if isinstance(node,ast.FunctionDef)
@@ -99,6 +102,17 @@ class _C3Memory(_Memory):
         self.handles[handle]=slot
         return handle
     def unregister(self,handle):del self.handles[handle]
+    def write_namespace(self, class_slot, name, value_slot, remove):
+        # Model only the existing owning-slot writer boundary. The native
+        # docstring regression checks the real namespace implementation.
+        assert remove == 0 and name == "__doc__"
+        for slot in (class_slot, value_slot):
+            base, _ = self.pointer(slot)
+            assert id(base) in self.frames
+        target, offset = self.pointer(value_slot)
+        assert self.read(target, offset) is self.none
+        self.doc_writes.append(name)
+        return -1 if self.fail_kind == "doc" else 0
     def frame_enter(self,frame_map,slots):
         assert frame_map in(5,-2)
         self.frames[id(slots)]=slots
@@ -240,6 +254,16 @@ def test_class_constructor_zero_bases_appends_object_root():
     result=memory.construct([])
     assert list(result.fields[48].fields.values())==[result,memory.root]
     assert not memory.frames and not memory.handles and memory.pin_metric==0
+    assert memory.doc_writes == ["__doc__"]
+
+
+def test_class_constructor_doc_write_failure_retires_unpublished_class():
+    memory = _C3Memory(fail="doc")
+    existing = {id(obj) for obj in memory.objects}
+    assert memory.construct([]) is None
+    assert memory.doc_writes == ["__doc__"]
+    assert not memory.frames and not memory.handles and memory.pin_metric == 0
+    assert all(not obj.alive for obj in memory.objects if id(obj) not in existing)
 
 
 def test_class_constructor_temporary_snapshots_balance_nonimmortal_base_references():

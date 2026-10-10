@@ -1620,6 +1620,29 @@ class CallExpressionLoweringMixin:
                 folded = _maybe_fold_str_to_float(arg.value)
                 if folded is not None:
                     return ir.Constant(_DOUBLE, folded)
+            if (isinstance(ty, (StrType, DynType, ClassType))
+                    and not getattr(self, "_runtime_port_module", False)
+                    and not getattr(self, "_freestanding_module", False)
+                    and not self._expr_looks_cpython(arg)
+                    and not self._expr_returns_unsafe_raw_pointer(arg)):
+                # Conversion may invoke user code. The receiver must own a
+                # root and an address lease until protocol dispatch returns.
+                previous = self._current_try_err_block()
+                target = previous if previous is not None else self._ensure_fn_err_exit()
+                saved_cpy = self._cpy_operand_cleanup_block
+                argument = self._emit_slot_call_operand(arg, "float.argument")
+                cleanup = self._slot_call_cleanup_block((argument,), target)
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                try:
+                    result = self._slot_call_runtime_call(
+                        "py_float_value_of", (argument,), span=expr.span,
+                    )
+                    self._release_slot_call_roots((argument,))
+                    return result
+                finally:
+                    self._try_err_block = previous
+                    self._cpy_operand_cleanup_block = saved_cpy
             # ``float(<str>)`` (non-literal): parse the string at runtime via the
             # str-aware py_float_value_of (raises ValueError on a bad string).
             # Without this, a str routed through py_float_to_f64 wrongly yielded

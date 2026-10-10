@@ -4099,6 +4099,13 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     if str_payload != 0 or tuple_payload != 0:
         # One extra traced owner; __dict__ stays at the existing offset.
         store_i32(c, PYCLASSOBJECT_INSTANCE_SIZE_OFFSET, inst_size + C_POINTER_SIZE)
+    # Every class owns its default documentation entry. Otherwise ordinary
+    # MRO lookup incorrectly inherits a base's docstring (or reports absence).
+    # The completed C3 scratch owner is no longer needed; reuse its rooted slot.
+    doc_slot = ptr_add(roots, 4 * C_POINTER_SIZE)
+    pcc_gc_store_root(doc_slot, global_load_ptr("py_None"))
+    if py_class_write_namespace_slots(roots, cstr("__doc__"), doc_slot, 0) != 0:
+        return _class_construct_finish(roots, borrowed, 0)
     return _class_construct_finish(roots, borrowed, 1)
 
 

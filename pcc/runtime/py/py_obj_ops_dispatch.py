@@ -3572,7 +3572,11 @@ def _descriptor_call_body(slots, tokens, tag: int) -> int:
     nkwargs: int = 0
     if ptr_is_null(kwargs) == 0 and ptr_eq(kwargs, global_load_ptr("py_None")) == 0:
         nkwargs = py_dict_len(kwargs)
-    if tag != PY_TYPE_PROPERTY:
+    if tag == PY_TYPE_FLOAT:
+        if nkwargs != 0 or nargs > 1:
+            py_raise_owned(py_exc_new(3, cstr("float() takes at most one positional argument")))
+            return -1
+    elif tag != PY_TYPE_PROPERTY:
         if nkwargs != 0:
             py_raise_owned(py_exc_new(3, cstr("descriptor constructor takes no keyword arguments")))
             return -1
@@ -3620,7 +3624,17 @@ def _descriptor_call_body(slots, tokens, tag: int) -> int:
         if matched != nkwargs:
             py_raise_owned(py_exc_new(3, cstr("unsupported property keyword argument")))
             return -1
-    if tag == PY_TYPE_STATICMETHOD:
+    if tag == PY_TYPE_FLOAT:
+        # Reuse this constructor's argument/result leases: a lease on args
+        # alone cannot keep its element's address stable across __float__.
+        number: float = 0.0
+        if nargs == 1:
+            number = py_float_value_of(load_ptr(slots, _DESCRIPTOR_FGET * C_POINTER_SIZE))
+            if py_err_occurred() != 0:
+                return -1
+        store_ptr(slots, _DESCRIPTOR_RESULT * C_POINTER_SIZE,
+                  py_float_from_f64(number))
+    elif tag == PY_TYPE_STATICMETHOD:
         store_ptr(slots, _DESCRIPTOR_RESULT * C_POINTER_SIZE,
                   py_staticmethod_new(load_ptr(slots, _DESCRIPTOR_FGET * C_POINTER_SIZE)))
     elif tag == PY_TYPE_CLASSMETHOD:
@@ -3641,8 +3655,8 @@ def _descriptor_call_body(slots, tokens, tag: int) -> int:
 
 
 def _descriptor_type_call(args, kwargs, tag: int):
-    # The first-class type path shares the ordinary factories. Every input,
-    # accessor and result keeps a counted lease across their allocation polls.
+    # Descriptor and float constructors share this owning call frame. Every
+    # argument and result keeps a counted lease across callbacks and cleanup.
     borrowed = stack_alloc(_DESCRIPTOR_INPUT_COUNT * C_POINTER_SIZE)
     store_ptr(borrowed, _DESCRIPTOR_ARGS * C_POINTER_SIZE, args)
     store_ptr(borrowed, _DESCRIPTOR_KWARGS * C_POINTER_SIZE, kwargs)
@@ -3851,6 +3865,8 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
                     )
                 )
                 return null()
+            if ptr_eq(callable, global_load_ptr("pcc_type_cls_float")) != 0:
+                return _descriptor_type_call(args, kwargs, PY_TYPE_FLOAT)
             arg = null()
             if nargs == 1:
                 arg = py_tuple_get(args, 0)
@@ -3867,11 +3883,6 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
                     # One owner for int(x): exact floats, __int__/__index__
                     # and CPython's TypeError (floats used to be rejected).
                     out = py_obj_as_int_object(arg, 10)
-            elif ptr_eq(callable, global_load_ptr("pcc_type_cls_float")) != 0:
-                value: float = 0.0
-                if ptr_is_null(arg) == 0:
-                    value = py_float_value_of(arg)
-                out = py_float_from_f64(value)
             elif ptr_eq(callable, global_load_ptr("pcc_type_cls_str")) != 0:
                 if ptr_is_null(arg) != 0:
                     out = py_str_new(cstr(""), 0)

@@ -3154,7 +3154,11 @@ class ClassLowering:
         protocol_like = self._is_protocol_like_class(cd)
         next_enum_value = 1
         abstract_methods: list[str] = []
-        for stmt in cd.body:
+        for statement_index, stmt in enumerate(cd.body):
+            if (statement_index == 0 and _is_ast_node(stmt, ExprStmt)
+                    and _is_ast_node(stmt.expr, StrLit)):
+                self._declare_class_attr(info, "__doc__", stmt.expr)
+                continue
             if _is_ast_node(stmt, Pass):
                 continue
             if _is_ast_node(stmt, Assign):
@@ -3292,8 +3296,7 @@ class ClassLowering:
                 continue
             # Ignore anything else (nested classes etc.) until a later
             # phase picks them up.
-            # Docstrings at the top of the body are expression statements
-            # with a StrLit — fine to drop silently.
+            # Only the leading string expression is class documentation.
 
         if abstract_methods:
             elem_ty = StrType(name="str")
@@ -5628,6 +5631,11 @@ class ClassLowering:
                     capture_root, owns_capture = self._emit_dataclass_factory_capture(value_expr)
                     class_body_lifetimes.append(("factory", capture_root, owns_capture))
                     continue
+                if event_kind == "attr" and attr_name == "__doc__" and not fresh_builtin_class:
+                    # The body already supplied documentation in the
+                    # metaclass namespace. __new__ may replace/delete it or
+                    # return a different class; preserve that actual result.
+                    continue
                 if event_kind in ("method", "property_setter", "property_deleter"):
                     if event_kind == "method":
                         method_root = self._emit_class_method_publication(
@@ -6047,9 +6055,15 @@ class ClassLowering:
         explicit existing routes. A declaration global is only a binding
         identity on this ordinary path; it never owns a cached value.
         """
-        if info.valueclass or _classgen_has_dynamic_field_layout(self, info):
+        if info.valueclass:
             return False
         if getattr(self.parent, "_runtime_port_module", False) or getattr(self.parent, "_freestanding_module", False):
+            return False
+        if attr_name == "__doc__":
+            # Documentation belongs to the returned class namespace, even
+            # when a metaclass changed the source literal during creation.
+            return True
+        if _classgen_has_dynamic_field_layout(self, info):
             return False
         if info.expanded_cd is not None and self._class_metaclass_expr(info.expanded_cd) is not None:
             return False
@@ -6982,7 +6996,18 @@ class ClassLowering:
 
     def _emit_prepared_namespace_statements(self, cd, info, ns_obj, ns_info, precomputed, method_objects):
         factory_captures = []
-        for stmt in cd.body:
+        for statement_index, stmt in enumerate(cd.body):
+            if (statement_index == 0 and _is_ast_node(stmt, ExprStmt)
+                    and _is_ast_node(stmt.expr, StrLit)):
+                value_obj = self._emit_namespace_expr_object(stmt.expr)
+                self._emit_namespace_setitem(ns_obj, ns_info, "__doc__", value_obj)
+                precomputed["__doc__"] = value_obj
+                if "__doc__" in info.class_attrs:
+                    global_var = info.class_attrs["__doc__"][0]
+                    self.parent.builder.store(value_obj, global_var)
+                    self.parent.env["__doc__"] = (global_var, _PTR, stmt.expr.ty)
+                    self.parent._class_namespace_context[2]["__doc__"] = (global_var, "__doc__")
+                continue
             capture = _classgen_factory_capture_statement(stmt)
             if capture is not None:
                 factory_captures.append(self._emit_dataclass_factory_capture(capture))
