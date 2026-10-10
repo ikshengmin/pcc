@@ -444,6 +444,8 @@ INDEXED_SPLIT_NODES = {
         "test_failure_retires_running_peers_and_does_not_launch_tail",
         "tests/python/test_worker_resource_plan.py::"
         "test_progressive_retry_drains_peers_then_restores_concurrency",
+        "tests/python/test_worker_resource_plan.py::"
+        "test_ready_unknown_head_drains_peer_before_exclusive_calibration",
     ),
     "indexed-split": (
         "tests/python/test_indexed_process_split_real.py::"

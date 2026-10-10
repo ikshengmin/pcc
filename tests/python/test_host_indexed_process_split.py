@@ -145,6 +145,9 @@ def test_stage_plan_preserves_module_identity_and_bounds_handoff_chains(tmp_path
         assert frontend["diagnostic_indices"] == backend["diagnostic_indices"] == [original_index]
         assert frontend["depends_on"] == (2 * (position - 2) + 1 if position >= 2 else -1)
         assert backend["depends_on"] == 2 * position
+        assert frontend["calibrate_before_peers"] is True
+        assert backend["calibrate_before_peers"] is True
+        assert "calibrate_before_peers" not in fixture["frontend_tasks"][original_index]
         assert frontend["source_identity"] == "identity-" + str(original_index)
         assert backend["handoff_source_identity"] == frontend["source_identity"]
         assert backend["inputs"] == [0] * 47

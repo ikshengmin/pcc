@@ -103,6 +103,7 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
         write_request(request_path, request)
         task["class"] += "|host-indexed-frontend-v1"
         task["diagnostic_phase"] = "indexed-frontend"
+        task["calibrate_before_peers"] = True
         task["depends_on"] = 2 * (position - width) + 1 if position >= width else -1
         all_commands.append(ENV_REQUEST + "=" + shell_quote_arg(request_path) + " " + commands[source_position])
         all_tasks.append(task)
@@ -119,6 +120,7 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
             "depends_on": 2 * position,
             "restartable": True,
             "diagnostic_phase": "indexed-backend",
+            "calibrate_before_peers": True,
             "diagnostic_modules": [module_name],
             "diagnostic_indices": [index],
             "handoff_request": request_path,

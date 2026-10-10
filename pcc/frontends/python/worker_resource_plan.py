@@ -182,6 +182,19 @@ def choose_task(pending, tasks, observations, active_reservations,
             if active_reservations:
                 return -1, 0, False
             return index, max(available, estimated_task_bytes(tasks[index], observations)), True
+    # Split dependency heads must not wait behind an indefinitely refilled
+    # known-work lane. Only ready, explicitly marked, genuinely unknown tasks
+    # participate; retry calibration above keeps its original priority.
+    calibration = -1
+    for index in pending:
+        if (tasks[index].get("calibrate_before_peers", False)
+                and estimated_task_bytes(tasks[index], observations) == 0
+                and (calibration < 0 or index < calibration)):
+            calibration = index
+    if calibration >= 0:
+        if active_reservations or available <= 0:
+            return -1, 0, False
+        return calibration, available, True
     remaining = available - sum(active_reservations)
     unknown = -1
     forecast_only = -1

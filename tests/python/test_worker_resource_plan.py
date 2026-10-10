@@ -502,6 +502,131 @@ publish_worker_resource("complete")
     assert pool._HOST_WORKERS == {}
 
 
+@pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
+def test_ready_unknown_head_drains_peer_before_exclusive_calibration(tmp_path, monkeypatch):
+    # Use local real RSS accounting as the other lifecycle tests do. The
+    # enclosing process-tree guard and its inherited cap remain unchanged.
+    monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    child = tmp_path / "ready_unknown.py"
+    child.write_text("""
+import os
+from pathlib import Path
+import sys
+import time
+from pcc.frontends.python.worker_resource_plan import (
+    RESOURCE_TOKEN_ENV, publish_worker_resource,
+)
+
+root = Path(sys.argv[1])
+index = int(sys.argv[2])
+deadline = time.monotonic() + 6
+
+def wait_for(predicate):
+    while not predicate():
+        assert time.monotonic() < deadline, (index, "coordination timed out")
+        time.sleep(0.005)
+
+def rows():
+    trace = root / "ready_unknown.tsv"
+    return [line.split("\\t") for line in trace.read_text().splitlines()] if trace.exists() else []
+
+def seen(event, number):
+    return any(row[:2] == [event, str(number)] for row in rows())
+
+def draining():
+    history = rows()
+    for position, row in enumerate(history):
+        if row[:2] == ["retire", "0"]:
+            return any(item[0] == "backoff" for item in history[position + 1:])
+    return False
+
+payload = bytearray(4 * 1024 ** 2)
+publish_worker_resource("allocated")
+record = str(os.getpid()) + "\\t" + os.environ[RESOURCE_TOKEN_ENV]
+record += "\\t" + os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", "")
+marker = root / ("started" + str(index))
+temporary = marker.with_suffix(".tmp")
+temporary.write_text(record)
+temporary.replace(marker)
+if index == 0:
+    wait_for(lambda: (root / "started1").exists())
+    peer = int((root / "started1").read_text().split("\\t")[0])
+    os.kill(peer, 0)
+    (root / "initial-overlap").write_text(str(os.getpid()) + "\\t" + str(peer))
+elif index == 1:
+    # The dependency makes unknown task 2 ready only after task 0 retires.
+    # Keep this peer alive until real admission backs off, without a race
+    # against a sleep. Old admission launches known task 3 and fails here.
+    wait_for(lambda: draining() or seen("start", 3))
+    assert draining() and not seen("start", 3)
+elif index == 2:
+    assert seen("retire", 1) and not seen("start", 3)
+else:
+    assert seen("retire", 2)
+publish_worker_resource("complete")
+""")
+    owner = workers._coordinator_rss_bytes()
+    startup_peak = max(owner, workers._worker_peak_rss_bytes())
+    reservation = policy.peak_reservation(startup_peak + 32 * MIB)
+    budget = owner + policy.RSS_HEADROOM_BYTES + 2 * reservation + 32 * MIB
+    guard_cap = os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", "")
+    tasks = [task(tmp_path / ("rss" + str(index)),
+                  estimate=0 if index == 2 else reservation, inputs=(4 - index,),
+                  execution_class="host:ready-unknown:" + str(index))
+             for index in range(4)]
+    for item in tasks:
+        item["calibrate_before_peers"] = True
+    tasks[2]["depends_on"] = tasks[3]["depends_on"] = 0
+    commands = [shlex.join([sys.executable, "-B", str(child), str(tmp_path), str(index)])
+                for index in range(4)]
+    trace = tmp_path / "ready_unknown.tsv"
+    observations = []
+    reaped = set()
+    original_retire = pool._retire_resource_worker
+    original_killpg = os.killpg
+
+    def record_retire(pid):
+        original_retire(pid)
+        reaped.add(pid)
+
+    def reject_signal_after_reap(pid, number):
+        assert pid not in reaped
+        return original_killpg(pid, number)
+
+    monkeypatch.setattr(pool, "_retire_resource_worker", record_retire)
+    monkeypatch.setattr(os, "killpg", reject_signal_after_reap)
+    pool.run_resource_worker_processes(commands, tasks, 2, budget,
+                                      observations=observations, trace_path=str(trace))
+    rows = [line.split("\t") for line in trace.read_text().splitlines()]
+    assert [row[:2] for row in rows if row[0] != "backoff"] == [
+        ["start", "0"], ["start", "1"], ["retire", "0"], ["retire", "1"],
+        ["calibrate", "2"], ["retire", "2"], ["start", "3"], ["retire", "3"],
+    ]
+    events = {(row[0], row[1]): row for row in rows}
+    assert any(row[0] == "backoff" and
+               float(events["retire", "0"][6]) < float(row[6]) < float(events["retire", "1"][6])
+               for row in rows)
+    calibration = events["calibrate", "2"]
+    assert 0 < int(calibration[3]) == int(calibration[4]) < budget
+    records = [(tmp_path / ("started" + str(index))).read_text().split("\t")
+               for index in range(4)]
+    assert (tmp_path / "initial-overlap").read_text().split("\t") == [
+        records[0][0], records[1][0],
+    ]
+    assert len(observations) == 4 and len({record[1] for record in records}) == 4
+    for index, (pid_text, token, inherited_cap) in enumerate(records):
+        pid = int(pid_text)
+        report = policy.read_worker_resource(tasks[index]["report_path"], pid, token)
+        assert report is not None and report[0] == "complete" and report[2] >= report[1] > 0
+        assert [sample[2] for sample in observations if sample[0] == tasks[index]["class"]] == [report[2]]
+        assert inherited_cap == guard_cap
+        assert pid in reaped
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+    assert tasks[2]["estimate_bytes"] == 0
+    assert pool._HOST_WORKERS == {}
+
+
 def test_retry_calibration_barrier_preserves_known_minimum():
     retry = task("unused-retry", estimate=8 * MIB)
     retry["retry_calibration"] = True
