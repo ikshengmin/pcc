@@ -9,6 +9,8 @@ executable artifacts stay on the runner. No test/runtime failure becomes a skip.
 from __future__ import annotations
 
 import argparse
+import ast
+from importlib.metadata import version
 import gzip
 import hashlib
 import json
@@ -18,6 +20,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,6 +180,90 @@ def _pytest_gate(name, nodes, out, environment):
     return verify_execution_report(directory / "live.jsonl", nodes)
 
 
+HANDOFF_TEST = "tests/python/test_pipeline_indexed_handoff.py"
+
+
+def _handoff_expected_nodes():
+    tree = ast.parse((ROOT / HANDOFF_TEST).read_text())
+    owner, = [node for node in tree.body
+              if isinstance(node, ast.ClassDef) and node.name == "HandoffContractTests"]
+    names = sorted(node.name for node in owner.body
+                   if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"))
+    assert len(names) == 29, "update the explicit handoff xdist gate census"
+    return [HANDOFF_TEST + "::HandoffContractTests::" + name for name in names]
+
+
+def verify_handoff_xdist(directory, expected):
+    """Cross-check normal xdist output against durable controller and JUnit reports."""
+    stdout = (directory / "target.stdout").read_text()
+    lines = {line.strip() for line in stdout.splitlines()}
+    # xdist emits the second line only after every worker finishes collection.
+    assert "created: 6/6 workers" in lines, "six actual xdist workers were not created"
+    assert f"6 workers [{len(expected)} items]" in lines, "six worker collections did not complete"
+    assert "scheduling tests via LoadGroupScheduling" in lines, "default scheduler was not used"
+    rows = [json.loads(line) for line in (directory / "live.jsonl").read_text().splitlines()]
+    start, = [row for row in rows if row["event"] == "start"]
+    finish, = [row for row in rows if row["event"] == "finish"]
+    assert not start["collect_only"] and not start["override_ini"]
+    assert Path(start["inifile"]).resolve() == ROOT / "pyproject.toml"
+    assert start["markexpr"] == "not integration" and not start["keyword"]
+    assert not any(row["event"] in {"deselected", "collection"} for row in rows)
+    assert [row["nodeids"] for row in rows if row["event"] == "collected"] == [expected]
+    assert finish["exitstatus"] == 0 and finish["testsfailed"] == 0
+    assert finish["testscollected"] == len(expected)
+    reports = [row for row in rows if row["event"] == "report"]
+    assert {row["nodeid"] for row in reports} == set(expected)
+    assert all(row["outcome"] == "passed" and "wasxfail" not in row for row in reports)
+    calls = 0
+    for node in expected:
+        phases = [row["when"] for row in reports if row["nodeid"] == node]
+        assert phases[0] == "setup" and phases[-1] == "teardown", (node, phases)
+        assert len(phases) >= 3 and all(phase == "call" for phase in phases[1:-1])
+        calls += len(phases) - 2
+    xml = ET.parse(directory / "junit.xml")
+    # pytest 9 includes successful subreports in suite.tests, not extra testcase nodes.
+    assert not any(list(xml.iter(tag)) for tag in ("failure", "error", "skipped"))
+    actual = [(case.get("classname"), case.get("name")) for case in xml.iter("testcase")]
+    wanted = [(HANDOFF_TEST.removesuffix(".py").replace("/", ".") + ".HandoffContractTests",
+               node.rsplit("::", 1)[1]) for node in expected]
+    assert len(actual) == len(wanted) and set(actual) == set(wanted)
+    return {"worker_count": 6, "scheduler": "loadgroup", "executed_nodes": expected,
+            "extra_successful_call_reports": calls - len(expected)}
+
+
+def run_handoff_xdist(out):
+    """Run the exact host file with normal project addopts, under the outer guard."""
+    assert sys.platform == "darwin" and platform.machine() == "arm64"
+    directory = out / "work" / "handoff-xdist"
+    expected = _handoff_expected_nodes()
+    environment = dict(os.environ)
+    environment.pop("LC_ALL", None)
+    environment.update(PYTEST_ADDOPTS="", PCC_PYTEST_AUTO_CLEAN="0",
+                       PCC_NO_AUTO_PCC1="1", PCC_TEST_NO_NATIVE_PROVISIONING="1")
+    receipt = {"schema": "pcc.handoff-default-xdist.v1", "status": "RUNNING",
+               "source_commit": environment.get("GITHUB_SHA", ""),
+               "test_sha256": _sha256(ROOT / HANDOFF_TEST),
+               "uv_lock_sha256": _sha256(ROOT / "uv.lock"),
+               "versions": {name: version(name) for name in ("pytest", "pytest-xdist", "execnet")},
+               "expected_nodes": expected,
+               "scope": "real default-xdist host contracts; no compiler or native execution"}
+    _save(directory / "result.json", receipt)
+    command = ["uv", "run", "--frozen", "pytest", "-x", "-vv", "--tb=short", "--color=no",
+               "-p", "scripts.pytest_live_report", "--pcc-live-report", str(directory / "live.jsonl"),
+               "--junitxml", str(directory / "junit.xml"), "--basetemp", str(directory / "tests"),
+               HANDOFF_TEST]
+    try:
+        receipt["returncode"] = _command(command, directory, environment)
+        assert receipt["returncode"] == 0, "handoff default-xdist pytest failed; inspect complete logs"
+        receipt.update(verify_handoff_xdist(directory, expected))
+    except Exception as error:
+        receipt.update(status="FAIL", error=str(error))
+        _save(directory / "result.json", receipt)
+        raise
+    receipt["status"] = "PASS"
+    _save(directory / "result.json", receipt)
+
+
 def run(out, profile="default"):
     if profile not in PROFILES:
         raise ValueError("unknown Mac regression profile: " + str(profile))
@@ -312,11 +399,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--profile", choices=tuple(PROFILES), default="default")
-    parser.add_argument("--collect-evidence", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--collect-evidence", action="store_true")
+    mode.add_argument("--handoff-xdist", action="store_true")
     args = parser.parse_args(argv)
     out = args.out_dir.resolve()
     if args.collect_evidence:
         collect_evidence(out)
+    elif args.handoff_xdist:
+        run_handoff_xdist(out)
     else:
         run(out, profile=args.profile)
     return 0

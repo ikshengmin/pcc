@@ -18,6 +18,7 @@ on:
       - "tests/python/test_worker_resource_plan.py"
       - "tests/python/test_indexed_process_split_real.py"
       - "tests/python/test_indexed_handoff_closed_world.py"
+      - "tests/python/test_pipeline_indexed_handoff.py"
       - "tests/python/test_worker_memory_budget_selection.py"
       - "tests/python/test_process_tree_sample_tool.py"
       - "tests/python/test_valueclass_aggregate_ownership_native.py"
@@ -55,6 +56,7 @@ on:
       - "tests/python/test_worker_resource_plan.py"
       - "tests/python/test_indexed_process_split_real.py"
       - "tests/python/test_indexed_handoff_closed_world.py"
+      - "tests/python/test_pipeline_indexed_handoff.py"
       - "tests/python/test_worker_memory_budget_selection.py"
       - "tests/python/test_process_tree_sample_tool.py"
       - "tests/python/test_valueclass_aggregate_ownership_native.py"
@@ -200,6 +202,20 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --dev
+
+      - name: Verify handoff contracts with the normal six-worker pytest default
+        run: |
+          uv run python scripts/run_process_tree_sample.py \
+            --result build/macos-indexed-split/work/handoff-xdist-supervisor/result.json \
+            --samples build/macos-indexed-split/work/handoff-xdist-supervisor/samples.tsv \
+            --stdout build/macos-indexed-split/work/handoff-xdist-supervisor/target.stdout \
+            --stderr build/macos-indexed-split/work/handoff-xdist-supervisor/target.stderr \
+            --timeout 300 --interval 1 --progress-interval 30 \
+            --auto-tree-rss-ceiling-bytes 4294967296 \
+            --min-tree-rss-bytes 2147483648 \
+            --darwin-preflight-reserve-bytes 536870912 \
+            -- uv run python scripts/ci_macos_regression_gate.py \
+            --out-dir build/macos-indexed-split --handoff-xdist
 
       - name: Verify real split objects and helper closed-world lowering
         run: |

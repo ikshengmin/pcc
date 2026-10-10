@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
 import pytest
@@ -565,3 +566,128 @@ def test_indexed_split_workflow_gates_only_macos_stage1_opt_in():
     for name in ("indexed-split", "indexed-handoff-closure"):
         path = INDEXED_SPLIT_NODES[name][0].split("::", 1)[0]
         assert workflow.count('      - "' + path + '"') == 2
+
+
+
+def _handoff_xdist_reports(directory, nodes):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "target.stdout").write_text(
+        f"created: 6/6 workers\n6 workers [{len(nodes)} items]\n"
+        "scheduling tests via LoadGroupScheduling\n")
+    rows = _reports(nodes)
+    rows[0].update(override_ini=[], inifile=str(ROOT / "pyproject.toml"),
+                   markexpr="not integration", keyword="")
+    # Model successful pytest9 subreports without conflating them with main tests.
+    rows.insert(3, {"event": "report", "nodeid": nodes[0],
+                    "when": "call", "outcome": "passed"})
+    _write_reports(directory / "live.jsonl", rows)
+    xml = ET.Element("testsuites")
+    suite = ET.SubElement(xml, "testsuite", tests=str(len(nodes) + 1))
+    for node in nodes:
+        ET.SubElement(suite, "testcase", {
+            "classname": "tests.python.test_pipeline_indexed_handoff.HandoffContractTests",
+            "name": node.rsplit("::", 1)[1],
+        })
+    ET.ElementTree(xml).write(directory / "junit.xml")
+    return rows, xml
+
+
+def test_handoff_default_xdist_keeps_project_options_and_collects_real_evidence(tmp_path, monkeypatch):
+    _mock_macos(monkeypatch)
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-n0 -o addopts=")
+    monkeypatch.setenv("LC_ALL", "test-locale-must-not-propagate")
+    monkeypatch.setattr(gate, "version", lambda name: "recorded-" + name)
+    commands = []
+
+    def command(arguments, directory, environment):
+        commands.append(arguments)
+        assert environment["PYTEST_ADDOPTS"] == ""
+        assert "LC_ALL" not in environment
+        assert environment["PCC_PYTEST_AUTO_CLEAN"] == "0"
+        assert environment["PCC_NO_AUTO_PCC1"] == "1"
+        assert environment["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+        _handoff_xdist_reports(directory, gate._handoff_expected_nodes())
+        return 0
+
+    monkeypatch.setattr(gate, "_command", command)
+    assert gate.main(["--out-dir", str(tmp_path), "--handoff-xdist"]) == 0
+    args, = commands
+    assert args[:6] == ["uv", "run", "--frozen", "pytest", "-x", "-vv"]
+    assert args[-1] == "tests/python/test_pipeline_indexed_handoff.py"
+    assert not any(arg in {"-o", "--override-ini", "-c", "--dist"}
+                   or arg.startswith(("-n", "--numprocesses", "--dist=", "addopts=")) for arg in args)
+    receipt = json.loads((tmp_path / "work/handoff-xdist/result.json").read_text())
+    assert receipt["status"] == "PASS" and receipt["worker_count"] == 6
+    assert receipt["scheduler"] == "loadgroup" and len(receipt["executed_nodes"]) == 29
+    assert receipt["extra_successful_call_reports"] == 1
+    assert receipt["test_sha256"] == gate._sha256(ROOT / gate.HANDOFF_TEST)
+    assert receipt["uv_lock_sha256"] == gate._sha256(ROOT / "uv.lock")
+    assert receipt["versions"] == {name: "recorded-" + name for name in ("pytest", "pytest-xdist", "execnet")}
+
+
+@pytest.mark.parametrize("change", (
+    "no-workers", "partial-collection", "wrong-scheduler", "override-defaults",
+    "wrong-config", "collect-only", "missing-call", "missing-teardown", "failed-subreport",
+    "xfail", "missing-finish", "duplicate-junit", "skipped-junit",
+))
+def test_handoff_default_xdist_rejects_missing_or_weakened_execution(tmp_path, change):
+    nodes = [gate.HANDOFF_TEST + "::HandoffContractTests::test_one"]
+    rows, xml = _handoff_xdist_reports(tmp_path, nodes)
+    stdout = tmp_path / "target.stdout"
+    if change == "no-workers":
+        stdout.write_text(stdout.read_text().replace("created: 6/6 workers", "created: 5/5 workers"))
+    elif change == "partial-collection":
+        stdout.write_text(stdout.read_text().replace("6 workers [1 items]", "collecting: 5/6 workers"))
+    elif change == "wrong-scheduler":
+        stdout.write_text(stdout.read_text().replace("LoadGroupScheduling", "LoadScheduling"))
+    elif change == "override-defaults":
+        rows[0]["override_ini"] = ["addopts="]
+    elif change == "wrong-config":
+        rows[0]["inifile"] = "/dev/null"
+    elif change == "collect-only":
+        rows[0]["collect_only"] = True
+    elif change == "missing-call":
+        rows = [row for row in rows if row.get("when") != "call"]
+    elif change == "missing-teardown":
+        rows = [row for row in rows if row.get("when") != "teardown"]
+    elif change == "failed-subreport":
+        rows[3]["outcome"] = "failed"
+    elif change == "xfail":
+        rows[3]["wasxfail"] = "must not become a pass"
+    elif change == "missing-finish":
+        rows.pop()
+    elif change == "duplicate-junit":
+        ET.SubElement(xml[0], "testcase", dict(xml[0][0].attrib))
+    else:
+        ET.SubElement(xml[0][0], "skipped")
+    _write_reports(tmp_path / "live.jsonl", rows)
+    ET.ElementTree(xml).write(tmp_path / "junit.xml")
+    with pytest.raises((AssertionError, ValueError)):
+        gate.verify_handoff_xdist(tmp_path, nodes)
+
+
+def test_handoff_default_xdist_preserves_failure_logs_and_receipt(tmp_path, monkeypatch):
+    _mock_macos(monkeypatch)
+    monkeypatch.setattr(gate, "version", lambda name: "recorded-" + name)
+    monkeypatch.setattr(gate, "_command", lambda *args: 3)
+    with pytest.raises(AssertionError, match="default-xdist pytest failed"):
+        gate.run_handoff_xdist(tmp_path)
+    receipt = json.loads((tmp_path / "work/handoff-xdist/result.json").read_text())
+    assert receipt["status"] == "FAIL" and receipt["returncode"] == 3
+    assert "executed_nodes" not in receipt
+
+
+def test_handoff_default_xdist_workflow_is_bounded_and_keeps_stage1_dependency():
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    job = _workflow_job(workflow, "macos-pcc0-indexed-split")
+    step = job.split("      - name: Verify handoff contracts", 1)[1].split("      - name:", 1)[0]
+    assert "--timeout 300" in step
+    assert "--auto-tree-rss-ceiling-bytes 4294967296" in step
+    assert "--min-tree-rss-bytes 2147483648" in step
+    assert "--darwin-preflight-reserve-bytes 536870912" in step
+    assert "--out-dir build/macos-indexed-split --handoff-xdist" in step
+    assert "work/handoff-xdist-supervisor/result.json" in step
+    assert job.index("--handoff-xdist") < job.index("--profile indexed-split")
+    assert "timeout-minutes: 25" in job
+    assert workflow.count('      - "tests/python/test_pipeline_indexed_handoff.py"') == 2
+    assert "needs: macos-pcc0-indexed-split" in _workflow_job(workflow, "pcc1-package-parity")

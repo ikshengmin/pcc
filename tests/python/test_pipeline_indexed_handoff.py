@@ -416,9 +416,14 @@ class HandoffContractTests(unittest.TestCase):
 
     def test_decoded_target_and_shape_mismatch(self):
         self.prepare()
-        for direct in (module(target="aarch64-apple-darwin"), module((1, 4)),
-                       module((1,)), module(globals_count=1)):
-            with self.subTest(direct=direct):
+        for case, direct in (
+            ("target", module(target="aarch64-apple-darwin")),
+            ("arena-shape", module((1, 4))),
+            ("function-count", module((1,))),
+            ("global-count", module(globals_count=1)),
+        ):
+            # pytest-xdist serializes subTest parameters, not just their repr.
+            with self.subTest(case=case):
                 with self.assertRaisesRegex(ValueError, "target/shape"):
                     handoff.validate_handoff_module(str(self.request), direct)
 
