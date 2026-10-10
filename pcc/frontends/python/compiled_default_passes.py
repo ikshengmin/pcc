@@ -755,8 +755,8 @@ def _contains_ssa_name(text: str, name: str) -> bool:
 def _ssa_names_in(text: str) -> list[str]:
     """Every maximal ``%name`` token in *text*, in order, without duplicates.
 
-    This is exactly the set of names for which ``_contains_ssa_name(text,
-    name)`` is True: that helper accepts ``%name`` only when the following
+    For nonempty simple names, this is exactly the set for which
+    ``_contains_ssa_name(text, name)`` is True: it accepts ``%name`` only when the following
     character is outside ``_SSA_NAME_CHARS``, which is the same thing as the
     token being maximal.  ``%s1`` therefore does not answer for ``s``, and the
     prefix families real IR is full of (``%s1`` / ``%s10`` / ``%s100``) stay
@@ -842,6 +842,31 @@ def _all_defined_ssa_names(lines: list[str]) -> set[str]:
 
 def _references_removed_definitions(lines, removed_names) -> bool:
     """Return whether transformed IR still uses an SSA definition it removed."""
+    # Production callers pass plain string lists with simple SSA names.  Scan
+    # each raw line once, including comments and string literals, rather than
+    # searching it again for every removed definition.  Keep the old search
+    # for other inputs: quoted/empty names and custom coercions are not tokens.
+    if type(lines) is list and type(removed_names) is list:
+        simple = True
+        for line in lines:
+            if type(line) is not str:
+                simple = False
+                break
+        removed: set[str] = set()
+        if simple:
+            for name in removed_names:
+                if type(name) is not str or not _simple_ssa_name(name):
+                    simple = False
+                    break
+                removed.add(name)
+        if simple:
+            if not removed:
+                return False
+            for line in lines:
+                for name in _ssa_names_in(line):
+                    if name in removed:
+                        return True
+            return False
     for line in lines:
         for name in removed_names:
             if _contains_ssa_name(line, str(name)):
