@@ -75,7 +75,8 @@ full Stage1 remain separate unqualified boundaries.
   coverage, not successful runtime release or complete GC correctness.
 - The observer calls the original planner once, keeps no native owner, defers
   failures until normal cleanup, and restores the hook. The driver closes
-  every packed plan and indexed kernel. No planner record-to-text expansion is
+  every returned packed plan and every published indexed kernel, including
+  unvisited functions after a preparation/planning failure. No planner record-to-text expansion is
   performed merely for diagnostics.
 
 ## Predeclared decision and bounds
@@ -120,3 +121,13 @@ The actual reviewed wrapper pins all five packet files, sources and guards.
 Candidate payload and comparison must fit its original 300-second process. There
 is no runtime construction, native emission, FFI, subprocess, benchmark,
 denied diagnostic reconstruction or production application in this packet.
+
+## V2 harness-only correction
+
+V1 remained unexecuted. Final source review found that preparation publishes all
+function kernels before planning, while V1 closed only the current function on
+a failure. V2 moves preparation inside the cleanup boundary and also retires
+unvisited published kernels. This changes only exceptional harness cleanup;
+compiler source, measured counts, contracts, thresholds and resource limits are
+unchanged. The frozen V1 manifest is bound below for recovery; no failed run is
+being replaced.

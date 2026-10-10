@@ -184,13 +184,14 @@ def inspect_text(text, *, arm, phase, classes, admitted, suffix, output):
         "constant": item.is_constant, "tls_model": item.tls_model, "alignment": item.alignment,
         "prefix": item.ir_prefix, "attributes": list(item.trailing_attributes)}
         for item in parsed.globals_ if not item.is_internal}
-    prepared = prepare_parsed_module_for_target(parsed,
-        aggregate_returned_indirect=aggregate_returned_indirect,
-        aggregate_returned_indirect_indexed=aggregate_returned_indirect_indexed,
-        materialize_legacy_slots=False)
     rows, plans = [], []
+    closed_kernels = set()
     observer = RootContractObserver(stackmaps, PREFIX)
     try:
+        prepared = prepare_parsed_module_for_target(parsed,
+            aggregate_returned_indirect=aggregate_returned_indirect,
+            aggregate_returned_indirect_indexed=aggregate_returned_indirect_indexed,
+            materialize_legacy_slots=False)
         with observer:
             for function in prepared.functions:
                 kernel = get_indexed_function_kernel(function)
@@ -210,8 +211,16 @@ def inspect_text(text, *, arm, phase, classes, admitted, suffix, output):
                     if plan is not None and plan.packed_records is not None:
                         plan.packed_records.close()
                     kernel.close_native_tables()
+                    closed_kernels.add(id(kernel))
     finally:
         observer.restore()
+        # Preparation eagerly publishes kernels for every function. Retire
+        # unvisited published owners too if preparation or planning raises.
+        for function in parsed.functions:
+            kernel = function.indexed_kernel
+            if kernel is not None and id(kernel) not in closed_kernels:
+                kernel.close_native_tables()
+                closed_kernels.add(id(kernel))
     if helpers:
         observer.assert_complete(expected_helpers=len(helpers))
     else:
