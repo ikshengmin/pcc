@@ -40,6 +40,9 @@ def main():
         raise RuntimeError("host worker state is missing, stale, or incompatible")
     if state != (0, {}):
         raise RuntimeError("unexpected native worker-state accounting")
+    inclusive = read_tree_state(state_path, budget, os.getpid(), [], include_owner=True)
+    if inclusive != (0, {os.getpid(): 1048576}):
+        raise RuntimeError("native reader did not retain same-snapshot owner RSS")
     sleep_start = time.monotonic()
     deadline = sleep_start + 0.001
     time.sleep(0.005)

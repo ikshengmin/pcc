@@ -256,7 +256,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 break
             owner_rss = _coordinator_rss_bytes()
             state = read_tree_state(tree_path, tree_budget, owner_pid,
-                                    [item[1] for item in active], fresh_after)
+                                    [item[1] for item in active], fresh_after, include_owner=True)
             if tree_path and state is None:
                 if time.monotonic() - unavailable_since > STATE_MAX_AGE_SECONDS:
                     raise WorkerMemoryError("worker tree RSS state is missing, stale, or incompatible")
@@ -276,17 +276,17 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 active = updated
             if len(active) == 1 and active[0][4] > 0:
                 measured_demand = peak_reservation(active[0][4])
-                if measured_demand > available and state is not None:
+                if state is not None:
                     index, pid, reservation, exclusive, peak = active[0]
-                    # A padded forecast controls admission of peers; it is
-                    # not a hard RSS limit for an already running worker.
-                    # Keep the forecast and hold this worker exclusively.
-                    # Only fresh guard accounting can authorize continuing;
-                    # measured peak, owner/outside reserve and fixed headroom
-                    # must still fit, and the outer aggregate cap is unchanged.
+                    # Historical owner/worker peaks need not overlap. Keep
+                    # them for admission, floors and monotonic reservations;
+                    # continuation requires the current synchronized sample
+                    # to fit with the unchanged fixed headroom and tree cap.
                     if state[1].get(pid, 0) <= 0:
                         raise WorkerMemoryError("live worker subtree RSS is unavailable: task=" + str(index))
-                    if peak > available:
+                    current_owner = state[1].get(owner_pid, 0)
+                    current_available = available_worker_bytes(tree_budget, current_owner, outside)
+                    if state[1][pid] > current_available:
                         # Manifests live in temporary directories that unwind
                         # after failure. Preserve only task identity and RSS
                         # evidence here, never argv, environment or input text.
@@ -298,18 +298,24 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                             " phase=" + str(task.get("diagnostic_phase", "unknown"))
                             + " modules=" + repr(task.get("diagnostic_modules", []))
                             + " owner_reservation_rss_bytes=" + str(owner_rss)
+                            + " current_owner_rss_bytes=" + str(current_owner)
+                            + " admission_available_worker_bytes=" + str(available)
                             + " outside_owner_rss_bytes=" + str(outside)
                             + " current_worker_subtree_rss_bytes=" + str(state[1][pid])
                             + " worker_report_phase=" + (str(report[0]) if report else "unavailable")
                         )
                         raise WorkerMemoryError(
-                            "live worker measured peak exceeds safe worker space: task=" + str(index)
+                            "live worker current subtree exceeds safe worker space: task=" + str(index)
                             + " observed_peak_so_far_bytes=" + str(peak)
-                            + " available_worker_bytes=" + str(available)
+                            + " available_worker_bytes=" + str(current_available)
                             + " budget=" + str(tree_budget)
                             + context
                             + "; full-task peak is unknown; tree cap is unchanged"
                         )
+                if measured_demand > available and state is not None:
+                    # A padded forecast controls admission of peers, not the
+                    # current RSS ceiling. No new peer may share this worker.
+                    index, pid, reservation, exclusive, peak = active[0]
                     reservation = max(reservation, measured_demand)
                     active = [(index, pid, reservation, True, peak)]
                     if not exclusive:

@@ -334,12 +334,16 @@ def read_worker_resource(path: str, expected_pid: int, expected_token: str = "")
 
 
 def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
-                    not_before: float = 0.0):
+                    not_before: float = 0.0, include_owner: bool = False):
     """Read the guard's synchronized accounting without shelling out.
 
     Return (outside-owner-and-worker bytes, worker-subtree bytes). Missing,
     stale, malformed and mismatched state is unavailable, never zero RSS.
     This optional observation transport does not provide the RSS guard.
+    With include_owner, the RSS map also contains the owner's current RSS;
+    all active roots must be positively measured direct children. Every value
+    comes from this one atomically published process-table sample, not from
+    independently timed high-water marks or a second file read.
     """
     if not path:
         return None
@@ -366,6 +370,9 @@ def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
             return None
         children = {}
         for pid in active_pids:
+            if include_owner and (pid == owner_pid or pid not in rows
+                                  or rows[pid][0] != owner_pid or rows[pid][1] <= 0):
+                return None
             children[pid] = 0
         outside = 0
         for pid, row in rows.items():
@@ -384,6 +391,8 @@ def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
                 children[worker] += row[1]
             else:
                 outside += row[1]
+        if include_owner:
+            children[owner_pid] = rows[owner_pid][1]
         return outside, children
     except (OSError, ValueError):
         return None

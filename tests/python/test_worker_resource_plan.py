@@ -178,9 +178,9 @@ if case == "stale-state":
     frozen = root / "frozen-tree.tsv"
     original_read = policy.read_tree_state
     original_event = pool._resource_event
-    def read_state(path, tree_budget, owner_pid, active_pids, not_before=0.0):
+    def read_state(path, tree_budget, owner_pid, active_pids, not_before=0.0, include_owner=False):
         return original_read(str(frozen) if frozen.exists() else path,
-                             tree_budget, owner_pid, active_pids, not_before)
+                             tree_budget, owner_pid, active_pids, not_before, include_owner)
     def event(*args):
         original_event(*args)
         if args[1] == "exclusive" and not frozen.exists():
@@ -240,7 +240,7 @@ if case in ("forecast", "calibration"):
     else:
         assert first[0] == "calibrate", record
 elif case == "measured-limit":
-    assert error and "live worker measured peak exceeds safe worker space" in error, record
+    assert error and "live worker current subtree exceeds safe worker space" in error, record
     assert not (root / "completed0").exists() and not (root / "started1").exists(), record
 elif case == "no-state":
     assert error and "worker memory budget cannot admit" in error, record
@@ -957,8 +957,8 @@ def test_measured_limit_preserves_task_identity_and_accounting(tmp_path, monkeyp
     monkeypatch.setattr(pool, "_start_resource_worker", lambda specs, index: pid)
     monkeypatch.setattr(pool, "_poll_resource_worker", lambda pid: pool._WORKER_RUNNING)
     monkeypatch.setattr(pool, "_stop_resource_worker", stopped.append)
-    monkeypatch.setattr(policy, "read_tree_state", lambda path, limit, owner_pid, active, after:
-                        (outside, {child: current for child in active}))
+    monkeypatch.setattr(policy, "read_tree_state", lambda path, limit, owner_pid, active, after, include_owner=False:
+                        (outside, {owner_pid: owner, **{child: current for child in active}}))
     monkeypatch.setattr(policy, "read_worker_resource", lambda path, child, token:
                         ("emit-object", current, peak))
     item = task(tmp_path / "rss")
@@ -970,12 +970,13 @@ def test_measured_limit_preserves_task_identity_and_accounting(tmp_path, monkeyp
             [item], 1, budget, observations=[],
         )
     message = str(failure.value)
-    assert "live worker measured peak exceeds safe worker space" in message
+    assert "live worker current subtree exceeds safe worker space" in message
     assert "phase=codegen modules=['package.first', 'package.second']" in message
     assert "worker_report_phase=emit-object" in message
     assert "observed_peak_so_far_bytes=" + str(peak) in message
     assert "available_worker_bytes=" + str(budget - owner - outside - policy.RSS_HEADROOM_BYTES) in message
     assert "owner_reservation_rss_bytes=" + str(owner) in message
+    assert "current_owner_rss_bytes=" + str(owner) in message
     assert "outside_owner_rss_bytes=" + str(outside) in message
     assert "current_worker_subtree_rss_bytes=" + str(current) in message
     assert "budget=" + str(budget) in message
