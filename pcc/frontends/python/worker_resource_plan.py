@@ -1,9 +1,9 @@
 """Byte reservations shared by host and native compiler worker schedulers.
 
 A reservation is an estimate, never an RSS limit. The enclosing process-tree
-watchdog remains the enforcement owner. Uncalibrated tasks run exclusively;
-completed tasks supply measured envelopes for later, no-larger inputs in the
-same execution class. Estimates may rise while a worker is alive, but never
+watchdog remains the enforcement owner. Recognized host tasks have empirical
+size priors; unsupported execution classes still calibrate exclusively. Completed
+tasks supply measured envelopes for later, no-larger inputs in the same class. Estimates may rise while a worker is alive, but never
 fall until that process and its descendants have retired.
 """
 
@@ -45,21 +45,100 @@ def input_envelope_covers(observed_inputs, pending_inputs) -> bool:
     return True
 
 
+
+def task_startup_prior_bytes(task) -> int:
+    """Return a soft host forecast, never an explicit or measured lower bound.
+
+    The coefficients use completed cc5 samples; 137 completions are held out.
+    They are not upper bounds: both runs censor their largest unfinished work.
+    Export bytes were constant within each sampled reader, so their multiplier
+    is a provisional scaling assumption. Native workers do not use this model.
+    Live growth, the tree watchdog and bounded exclusive retries remain owners
+    of memory safety. Completed modeled samples can only raise this forecast's
+    scale; unsupported workers retain the legacy absolute-envelope maximum.
+    """
+    model = str(task.get("startup_prior_model", "") or "")
+    if not model:
+        return 0
+    mib = 1024 * 1024
+    if model == "host-indexed-backend-v1":
+        if not task.get("input_ready", False):
+            return 0
+        packed_bytes = task.get("prior_input_bytes", 0)
+        if type(packed_bytes) is not int or packed_bytes <= 0:
+            raise WorkerMemoryError("indexed worker prior needs verified packed bytes")
+        return peak_reservation(64 * mib + 7 * packed_bytes)
+    inputs = task["inputs"]
+    if len(inputs) != 6 or any(type(value) is not int or value < 0 for value in inputs):
+        raise WorkerMemoryError("host worker prior needs nonnegative source/AST/export bytes")
+    source_bytes, ast_bytes, export_bytes = inputs[0], inputs[2], inputs[4]
+    if model == "host-export-v1":
+        working_bytes = 160 * mib + 160 * source_bytes
+    elif model == "host-summary-v1":
+        working_bytes = 192 * mib + 5 * (ast_bytes + export_bytes)
+    elif model == "host-codegen-v1":
+        if inputs[5] > 1:
+            # Bounded host batches reserve the SUM of singleton forecasts.
+            # Keep every member's fixed/export cost and margin; do not assume
+            # that shared imports or sequential cleanup reduce peak demand.
+            # 224 * 5 is divisible by 4, so the sum is exact for integer bytes.
+            return (inputs[5] * peak_reservation(128 * mib + 43 * export_bytes)
+                    + 280 * (source_bytes + ast_bytes))
+        working_bytes = 128 * mib + 224 * (source_bytes + ast_bytes) + 43 * export_bytes
+    elif model == "host-indexed-frontend-v1":
+        working_bytes = 128 * mib + 80 * (source_bytes + ast_bytes) + 11 * export_bytes
+    else:
+        raise WorkerMemoryError("unknown worker startup prior model: " + model)
+    return peak_reservation(working_bytes)
+
+
+def completed_task_observation(task, peak):
+    """Bind a verified completion to its original model, never a live sample."""
+    sample = (task["class"], list(task["inputs"]), peak)
+    model = str(task.get("startup_prior_model", "") or "")
+    if not model:
+        return sample
+    prior = task_startup_prior_bytes(task)
+    if prior <= 0:
+        raise WorkerMemoryError("completed modeled worker has no startup prior")
+    return sample + ((model, prior),)
+
+
 def estimated_task_bytes(task, observations) -> int:
-    """Return a conservative estimate or zero for an uncalibrated task.
+    """Return a soft estimate or zero for an uncalibrated task.
 
     Samples are local to this invocation and execution class. They cannot be
     reused across machines, compilers, collectors, options, or export readers.
-    A size envelope is an explicit extrapolation, not an absolute bound.
+    Modeled samples raise the entire size predictor by the greatest measured
+    padded-peak/original-prior ratio. A large task's absolute peak is not copied
+    to every smaller task. This remains extrapolation, not an RSS upper bound.
+    Legacy three-field samples retain their old covering-envelope maximum.
     """
-    estimate = max(0, int(task["estimate_bytes"]))
+    prior = task_startup_prior_bytes(task)
+    model = str(task.get("startup_prior_model", "") or "")
+    estimate = max(0, int(task["estimate_bytes"]), prior)
     incomplete_peak = int(task.get("incomplete_peak_bytes", 0))
     if incomplete_peak > 0:
         # A cancelled attempt establishes only a lower bound. It must never
         # become a completed-task sample that authorizes concurrent retries.
         estimate = max(estimate, peak_reservation(incomplete_peak))
-    for key, inputs, peak in observations:
-        if key == task["class"] and input_envelope_covers(inputs, task["inputs"]):
+    for sample in observations:
+        if len(sample) not in (3, 4):
+            raise WorkerMemoryError("worker observation shape differs")
+        key, inputs, peak = sample[:3]
+        if key != task["class"]:
+            continue
+        if model and len(sample) == 4:
+            fitted = sample[3]
+            if (type(fitted) is not tuple or len(fitted) != 2
+                    or fitted[0] != model or type(fitted[1]) is not int
+                    or fitted[1] <= 0):
+                raise WorkerMemoryError("worker observation prior binding differs")
+            # Arbitrary-precision integer ceil avoids float precision loss,
+            # division by zero, and fixed-width intermediate overflow.
+            scaled = (prior * peak_reservation(peak) + fitted[1] - 1) // fitted[1]
+            estimate = max(estimate, scaled)
+        elif input_envelope_covers(inputs, task["inputs"]):
             estimate = max(estimate, peak_reservation(peak))
     return estimate
 
@@ -108,7 +187,7 @@ def require_task_fits(task_index: int, demand: int, available: int,
 
 
 def resource_task_order(tasks):
-    """Keep small independent codegen cohorts ahead of large peak samples.
+    """Schedule modeled host work largest-first; retain legacy native cohorts.
 
     Source/AST bytes vary per singleton; full-export bytes and module count
     do not. Split each power-of-two size band at its arithmetic midpoint,
@@ -123,6 +202,13 @@ def resource_task_order(tasks):
     ))
     if not tasks:
         return pending, []
+    if any(task.get("startup_prior_model", "") for task in tasks):
+        # Host priors replace the small-cohort drain. Indices and dependency
+        # edges stay intact; lazy backend inputs are re-ranked when ready.
+        return sorted(pending, key=lambda index: (
+            -task_startup_prior_bytes(tasks[index]),
+            -sum(tasks[index]["inputs"]), index,
+        )), []
     execution_class = tasks[0]["class"]
     bands = []
     for task in tasks:
@@ -168,9 +254,9 @@ def choose_task(pending, tasks, observations, active_reservations,
                 width: int, available: int, guarded_calibration: bool = False):
     """Pick a fitting task or reserve idle capacity for a calibration.
 
-    Unknown demand is not represented by a fabricated fixed worker peak. The
-    initial task reserves all available child memory. Its actual observed peak
-    can admit multiple subsequent workers whose input envelope it covers.
+    Modeled host tasks use empirical byte priors, refreshed for each ready
+    input. Unsupported shapes retain exclusive calibration; its measured peak
+    can admit later workers whose full input envelope it covers.
     A cancelled attempt needs the same exclusive space for its bounded retry;
     stop admitting peers until the active workers have drained. Preserve any
     known minimum above that space so the caller refuses before launching.
@@ -182,6 +268,20 @@ def choose_task(pending, tasks, observations, active_reservations,
             if active_reservations:
                 return -1, 0, False
             return index, max(available, estimated_task_bytes(tasks[index], observations)), True
+    if any(tasks[index].get("startup_prior_model", "") for index in pending):
+        # Re-evaluate after dependency/input preparation and after every live
+        # observation. Select the largest fitting ready forecast, not a stale
+        # initial ordering with zero-sized backend placeholders.
+        pending = sorted(pending, key=lambda index: (
+            -estimated_task_bytes(tasks[index], observations), index,
+        ))
+        if (pending and guarded_calibration and available > 0
+                and tasks[pending[0]].get("startup_prior_model", "")
+                and estimated_task_bytes(tasks[pending[0]], observations) > available):
+            if active_reservations:
+                return -1, 0, False
+            index = pending[0]
+            return index, estimated_task_bytes(tasks[index], observations), True
     # Split dependency heads must not wait behind an indefinitely refilled
     # known-work lane. Only ready, explicitly marked, genuinely unknown tasks
     # participate; retry calibration above keeps its original priority.

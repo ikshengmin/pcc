@@ -395,7 +395,10 @@ def _task_bound(task):
     if task.get("input_ready", False):
         _require(task.get("source_identity") == seal["pidx_sha256"]
                  and task.get("handoff_seal_sha256") == seal_digest
-                 and task.get("inputs") == seal["shape"], "prepared task binding mismatch")
+                 and task.get("inputs") == seal["shape"]
+                 and (task.get("startup_prior_model", "") != "host-indexed-backend-v1"
+                      or task.get("prior_input_bytes") == seal["pidx_size"]),
+                 "prepared task binding mismatch")
     return request, seal, request_digest, seal_digest, result_path
 
 
@@ -417,6 +420,8 @@ def prepare_handoff_task(task, expected_frontend_token):
     task["inputs"] = list(seal["shape"])
     task["source_identity"] = seal["pidx_sha256"]
     task["handoff_seal_sha256"] = seal_digest
+    if task.get("startup_prior_model", "") == "host-indexed-backend-v1":
+        task["prior_input_bytes"] = seal["pidx_size"]
     task["input_ready"] = True
 
 

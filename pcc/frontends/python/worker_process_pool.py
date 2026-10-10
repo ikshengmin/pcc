@@ -175,7 +175,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     from pcc.frontends.python.pipeline_frontend_workers import _coordinator_rss_bytes
     from pcc.frontends.python.worker_resource_plan import (
         RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, STATE_MAX_AGE_SECONDS, TREE_STATE_ENV,
-        WorkerMemoryError, available_worker_bytes, choose_task,
+        WorkerMemoryError, available_worker_bytes, choose_task, completed_task_observation,
         estimated_task_bytes, minimum_task_bytes, peak_reservation, read_tree_state,
         read_worker_resource, ready_resource_cohort, require_task_fits,
         resource_task_order,
@@ -246,7 +246,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                     from pcc.frontends.python.pipeline_indexed_handoff import retire_handoff_task
 
                     retire_handoff_task(tasks[index], attempt_tokens[pid])
-                observations.append((tasks[index]["class"], tasks[index]["inputs"], observed_peak))
+                observations.append(completed_task_observation(tasks[index], observed_peak))
                 completed_tokens[index] = attempt_tokens[pid]
                 if tasks[index].get("retry_calibration", False):
                     tasks[index]["retry_calibration"] = False

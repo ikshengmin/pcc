@@ -6,6 +6,7 @@ No native fitted memory coefficients or cached historical peaks are used.
 """
 
 import os
+import sys
 
 
 HOST_SPLIT_ENV = "PCC_HOST_INDEXED_PROCESS_SPLIT"
@@ -70,6 +71,12 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
     frontend_tasks = resource_tasks_for_commands(commands)
     if frontend_tasks is None or len(frontend_tasks) != count:
         raise ValueError("host indexed process split requires complete worker resource identities")
+    frontend_tasks = [dict(task) for task in frontend_tasks]
+    for task in frontend_tasks:
+        if task.get("startup_prior_model", "") == "host-codegen-v1":
+            task["startup_prior_model"] = "host-indexed-frontend-v1"
+    backend_host_prior = (sys.implementation.name == "cpython"
+                          and list(worker_prefix) == [sys.executable, "-m", "pcc"])
     order, _bands = resource_task_order(frontend_tasks)
     width = min(jobs, count)
     all_commands = []
@@ -127,6 +134,8 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
             "handoff_source_identity": identity,
             "input_ready": False,
         })
+        if backend_host_prior:
+            all_tasks[-1]["startup_prior_model"] = "host-indexed-backend-v1"
         outputs[index] = (sidecar, output)
     budget = worker_tree_budget_bytes(os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", ""))
     run_resource_worker_processes(

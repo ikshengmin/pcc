@@ -915,12 +915,13 @@ def _artifact_size(path: str) -> int:
 def resource_tasks_for_commands(commands):
     """Describe the actual worker inputs without changing their export view.
 
-    Source, AST and export sizes are demand features, not RSS bytes. A zero
-    initial estimate requests measured calibration, never a fixed 2 GiB guess.
-    The same planner sees host and native execution classes separately.
+    Source, AST and export sizes are demand features, not RSS bytes. Recognized
+    CPython worker commands get a soft empirical prior, separate from explicit
+    reservations. Native/unknown owners retain exclusive measured calibration.
     """
     import shlex
     from pcc.frontends.python.pipeline_stage1_checkpoint import file_sha256
+    from pcc.frontends.python.worker_process_pool import _command_spec
 
     worker_arg = "--pcc-python-multi-codegen-worker"
     preload_arg = "--pcc-preload-delta-worker"
@@ -1015,4 +1016,14 @@ def resource_tasks_for_commands(commands):
             "restartable": True,
             "source_identity": "|".join(identities),
         })
+        # Match the exact host prefix emitted by the public pipeline. A native
+        # executable, custom command, or different interpreter cannot inherit
+        # CPython peak assumptions just because its manifest has the same size.
+        if (sys.implementation.name == "cpython"
+                and _command_spec(command)[0]
+                == [sys.executable, "-m", "pcc", worker_arg, path]
+                and manifest["job_kind"] in ("export", "summary", "codegen")):
+            tasks[-1]["startup_prior_model"] = "host-" + manifest["job_kind"] + "-v1"
+            if manifest["job_kind"] == "codegen" and len(indices) > 1:
+                tasks[-1]["class"] += "|host-codegen-batch:" + str(len(indices))
     return tasks

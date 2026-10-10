@@ -1,0 +1,375 @@
+"""Empirical priors are soft reservations; actual RSS remains authoritative."""
+
+import copy
+import shlex
+import sys
+
+import pytest
+
+from pcc.frontends.python import pipeline_frontend_workers as workers
+from pcc.frontends.python import worker_resource_plan as policy
+
+
+MIB = 1024 * 1024
+
+
+def task(model="host-indexed-frontend-v1", source=100, ast=200, exports=300):
+    return {
+        "class": "private-run:host", "estimate_bytes": 0,
+        "inputs": [source, source, ast, ast, exports, 1],
+        "startup_prior_model": model, "report_path": "unused", "restartable": True,
+        "diagnostic_phase": "codegen", "diagnostic_indices": [0],
+    }
+
+
+@pytest.mark.parametrize("model,working", [
+    ("host-export-v1", 160 * MIB + 160 * 100),
+    ("host-summary-v1", 192 * MIB + 5 * (200 + 300)),
+    ("host-codegen-v1", 128 * MIB + 224 * (100 + 200) + 43 * 300),
+    ("host-indexed-frontend-v1", 128 * MIB + 80 * (100 + 200) + 11 * 300),
+])
+def test_phase_models_use_bytes_and_apply_existing_margin_once(model, working):
+    item = task(model)
+    assert policy.task_startup_prior_bytes(item) == policy.peak_reservation(working)
+    assert policy.estimated_task_bytes(item, []) == policy.peak_reservation(working)
+    assert policy.minimum_task_bytes(item) == 0
+
+
+@pytest.mark.parametrize("count,exports", [(2, 1), (2, 24327614), (3, 7), (7, 123)])
+def test_codegen_batch_prior_is_exact_sum_of_all_singleton_margins(count, exports):
+    members = [task("host-codegen-v1", source=13 + index * 19,
+                    ast=5 + index * 7, exports=exports) for index in range(count)]
+    combined = task("host-codegen-v1", exports=exports)
+    combined["inputs"] = [
+        sum(item["inputs"][0] for item in members),
+        max(item["inputs"][0] for item in members),
+        sum(item["inputs"][2] for item in members),
+        max(item["inputs"][2] for item in members), exports, count,
+    ]
+    assert policy.task_startup_prior_bytes(combined) == sum(
+        policy.task_startup_prior_bytes(item) for item in members)
+    assert policy.minimum_task_bytes(combined) == 0
+    assert combined["estimate_bytes"] == 0
+
+
+def test_backend_prior_requires_ready_verified_complete_file_size():
+    item = task("host-indexed-backend-v1")
+    item["inputs"] = [999999] * 47
+    assert policy.task_startup_prior_bytes(item) == 0
+    item["input_ready"] = True
+    with pytest.raises(policy.WorkerMemoryError, match="verified packed bytes"):
+        policy.task_startup_prior_bytes(item)
+    item["prior_input_bytes"] = 12345
+    assert policy.task_startup_prior_bytes(item) == policy.peak_reservation(64 * MIB + 7 * 12345)
+    # The header and arena counts are not substituted for whole-file bytes.
+    item["inputs"] = [1] * 47
+    assert policy.task_startup_prior_bytes(item) == policy.peak_reservation(64 * MIB + 7 * 12345)
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 1.5, "123"])
+def test_backend_prior_rejects_unverified_byte_types(bad):
+    item = task("host-indexed-backend-v1")
+    item.update(input_ready=True, prior_input_bytes=bad)
+    with pytest.raises(policy.WorkerMemoryError, match="verified packed bytes"):
+        policy.task_startup_prior_bytes(item)
+
+
+@pytest.mark.parametrize("bad", [[1], [1] * 7, [-1, 0, 0, 0, 0, 1], [True, 0, 0, 0, 0, 1]])
+def test_frontend_prior_rejects_unknown_or_negative_dimensions(bad):
+    item = task()
+    item["inputs"] = bad
+    with pytest.raises(policy.WorkerMemoryError, match="source/AST/export bytes"):
+        policy.task_startup_prior_bytes(item)
+
+
+def test_unrecognized_model_fails_closed_and_absent_model_keeps_legacy_calibration():
+    item = task("unknown-owner-v1")
+    with pytest.raises(policy.WorkerMemoryError, match="unknown worker startup prior"):
+        policy.estimated_task_bytes(item, [])
+    del item["startup_prior_model"]
+    assert policy.estimated_task_bytes(item, []) == 0
+    assert policy.choose_task([0], [item], [], [], 3, 1024 * MIB) == (0, 1024 * MIB, True)
+
+
+def test_prior_never_replaces_explicit_or_incomplete_lower_bound():
+    item = task()
+    prior = policy.task_startup_prior_bytes(item)
+    item["estimate_bytes"] = prior + 5
+    item["incomplete_peak_bytes"] = prior + 7
+    assert policy.minimum_task_bytes(item) == prior + 7
+    assert policy.estimated_task_bytes(item, []) == policy.peak_reservation(prior + 7)
+    assert item["estimate_bytes"] == prior + 5
+
+
+def test_covering_observations_still_use_the_unchanged_full_maximum():
+    item = task()
+    observations = [
+        (item["class"], list(item["inputs"]), 900 * MIB),
+        (item["class"], [2 * value for value in item["inputs"]], 10 * MIB),
+        ("other-owner", [3 * value for value in item["inputs"]], 2000 * MIB),
+    ]
+    assert policy.estimated_task_bytes(item, observations) == policy.peak_reservation(900 * MIB)
+    assert len(observations) == 3
+
+
+def test_completed_modeled_observation_binds_original_prior_and_copies_inputs():
+    item = task()
+    prior = policy.task_startup_prior_bytes(item)
+    sample = policy.completed_task_observation(item, 400 * MIB)
+    assert sample == (item["class"], item["inputs"], 400 * MIB,
+                      (item["startup_prior_model"], prior))
+    item["inputs"][0] += 1
+    assert sample[1][0] == 100
+    del item["startup_prior_model"]
+    assert policy.completed_task_observation(item, 400 * MIB) == (
+        item["class"], item["inputs"], 400 * MIB)
+
+
+def test_unprepared_backend_cannot_publish_a_modeled_completion():
+    with pytest.raises(policy.WorkerMemoryError, match="no startup prior"):
+        policy.completed_task_observation(task("host-indexed-backend-v1"), MIB)
+
+
+def test_largest_completed_task_does_not_transfer_absolute_peak_to_small_input():
+    large = task(source=10 * MIB, ast=0, exports=0)
+    small = task(source=1, ast=0, exports=0)
+    sample = policy.completed_task_observation(large, 600 * MIB)
+    assert sample[3][1] > policy.peak_reservation(sample[2])
+    assert policy.estimated_task_bytes(small, [sample]) == policy.task_startup_prior_bytes(small)
+    assert policy.estimated_task_bytes(small, [sample]) < policy.peak_reservation(sample[2])
+
+
+def test_underestimated_completion_raises_size_scale_for_small_and_large_tasks():
+    measured = task(source=2, ast=0, exports=0)
+    sample = policy.completed_task_observation(measured, 600 * MIB)
+    for size in (1, 2, 10 * MIB):
+        item = task(source=size, ast=0, exports=0)
+        prior = policy.task_startup_prior_bytes(item)
+        expected = (prior * policy.peak_reservation(sample[2]) + sample[3][1] - 1) // sample[3][1]
+        assert policy.estimated_task_bytes(item, [sample]) == expected > prior
+    assert policy.estimated_task_bytes(measured, [sample]) == policy.peak_reservation(600 * MIB)
+
+
+def test_upward_scale_never_reduces_same_task_explicit_or_cancelled_peak_floor():
+    item = task()
+    sample = policy.completed_task_observation(task(source=10 * MIB), MIB)
+    item["estimate_bytes"] = 900 * MIB
+    item["incomplete_peak_bytes"] = 1000 * MIB
+    assert policy.minimum_task_bytes(item) == 1000 * MIB
+    assert policy.estimated_task_bytes(item, [sample]) == policy.peak_reservation(1000 * MIB)
+
+
+def test_modeled_and_legacy_samples_coexist_without_cross_class_pollution():
+    item = task()
+    same = policy.completed_task_observation(item, 400 * MIB)
+    foreign = ("other", list(item["inputs"]), 999999999999999, ("other-model", 0))
+    legacy = (item["class"], [2 * value for value in item["inputs"]], 700 * MIB)
+    assert policy.estimated_task_bytes(item, [same, foreign, legacy]) == policy.peak_reservation(700 * MIB)
+    del item["startup_prior_model"]
+    assert policy.estimated_task_bytes(item, [same]) == policy.peak_reservation(400 * MIB)
+
+
+@pytest.mark.parametrize("binding", [None, (), ("host-indexed-frontend-v1",),
+    ("host-indexed-frontend-v1", 0), ("host-indexed-frontend-v1", -1),
+    ("host-indexed-frontend-v1", True), ("host-indexed-frontend-v1", 1.5),
+    ("host-indexed-frontend-v1", "1"), ("other-model", 1)])
+def test_invalid_same_class_prior_sample_fails_closed(binding):
+    item = task()
+    with pytest.raises(policy.WorkerMemoryError, match="prior binding differs"):
+        policy.estimated_task_bytes(item, [(item["class"], item["inputs"], MIB, binding)])
+
+
+def test_scale_uses_exact_integer_ceil_beyond_machine_word_and_float_precision():
+    item = task(source=10**40, ast=0, exports=0)
+    prior = policy.task_startup_prior_bytes(item)
+    denominator, peak = 2**100 + 17, 2**104 + 23
+    sample = (item["class"], item["inputs"], peak, (item["startup_prior_model"], denominator))
+    numerator = prior * policy.peak_reservation(peak)
+    quotient, remainder = divmod(numerator, denominator)
+    assert remainder != 0
+    assert policy.estimated_task_bytes(item, [sample]) == quotient + 1
+
+
+def test_calibrated_forecast_above_available_drains_for_exclusive_retry_space():
+    tasks = [task(source=2, ast=0, exports=0), task(source=1, ast=0, exports=0)]
+    sample = policy.completed_task_observation(tasks[0], 900 * MIB)
+    available = policy.task_startup_prior_bytes(tasks[0]) + MIB
+    assert policy.task_startup_prior_bytes(tasks[0]) < available
+    assert policy.choose_task([0, 1], tasks, [sample], [MIB], 3, available, True) == (-1, 0, False)
+    index, demand, exclusive = policy.choose_task([0, 1], tasks, [sample], [], 3, available, True)
+    assert index == 0 and exclusive and demand > available
+
+
+def test_largest_first_host_order_has_no_small_cohort_barrier_and_stable_ties():
+    tasks = [task(source=size, ast=0, exports=0) for size in (1, 30, 30, 2)]
+    before = copy.deepcopy(tasks)
+    order, bands = policy.resource_task_order(tasks)
+    assert order == [1, 2, 3, 0]
+    assert bands == []
+    ready = [0, 2]
+    assert policy.ready_resource_cohort(ready, order, [1], bands) is ready
+    assert tasks == before
+
+
+def test_unknown_host_priors_fill_width_without_exclusive_calibration():
+    tasks = [task(source=size, ast=0, exports=0) for size in (1, 30, 2)]
+    for item in tasks:
+        item["calibrate_before_peers"] = True
+    pending = [0, 1, 2]
+    active = []
+    expected = [1, 2, 0]
+    available = sum(policy.task_startup_prior_bytes(item) for item in tasks)
+    for index in expected:
+        selected, demand, exclusive = policy.choose_task(pending, tasks, [], active, 3, available, True)
+        assert selected == index and not exclusive
+        assert demand == policy.task_startup_prior_bytes(tasks[index])
+        active.append(demand)
+        pending.remove(index)
+    assert sum(active) == available
+    assert policy.choose_task([0], tasks, [], active, 3, available, True) == (-1, 0, False)
+
+
+def test_largest_fitting_ready_prior_does_not_lower_a_live_reservation():
+    tasks = [task(source=size, ast=0, exports=0) for size in (3000000, 100, 100000)]
+    live = 600 * MIB
+    small = policy.task_startup_prior_bytes(tasks[1])
+    available = live + small
+    selected, demand, exclusive = policy.choose_task([0, 1, 2], tasks, [], [live], 3, available, True)
+    assert (selected, demand, exclusive) == (1, small, False)
+    assert policy.choose_task([0, 2], tasks, [], [live, small], 3, available, True) == (-1, 0, False)
+
+
+def test_prior_above_available_drains_then_uses_guarded_exclusive_without_a_hard_floor():
+    tasks = [task(source=1000000, ast=0, exports=0), task(source=1, ast=0, exports=0)]
+    prior = policy.task_startup_prior_bytes(tasks[0])
+    available = prior - 1
+    assert policy.minimum_task_bytes(tasks[0]) == 0
+    assert policy.choose_task([1, 0], tasks, [], [MIB], 3, available, True) == (-1, 0, False)
+    assert policy.choose_task([1, 0], tasks, [], [], 3, available, True) == (0, prior, True)
+    assert tasks[0]["estimate_bytes"] == 0
+
+
+def test_retry_still_drains_and_precedes_larger_priors():
+    tasks = [task(source=4000000), task(source=1)]
+    tasks[1]["retry_calibration"] = True
+    tasks[1]["incomplete_peak_bytes"] = 50 * MIB
+    available = 2 * 1024 * MIB
+    assert policy.choose_task([0, 1], tasks, [], [MIB], 3, available, True) == (-1, 0, False)
+    assert policy.choose_task([0, 1], tasks, [], [], 3, available, True) == (1, available, True)
+
+
+def test_newly_materialized_backend_size_is_ranked_after_readiness():
+    frontend = task(source=1, ast=1, exports=1)
+    backend = task("host-indexed-backend-v1")
+    backend["inputs"] = [0] * 47
+    tasks = [frontend, backend]
+    assert policy.resource_task_order(tasks)[0] == [0, 1]
+    backend.update(input_ready=True, prior_input_bytes=50 * MIB)
+    selected, demand, exclusive = policy.choose_task([0, 1], tasks, [], [], 3, 2 * 1024 * MIB, True)
+    assert selected == 1 and demand == policy.task_startup_prior_bytes(backend) and not exclusive
+
+
+@pytest.mark.parametrize("kind", ["export", "summary", "codegen"])
+@pytest.mark.parametrize("owner", ["host", "host-env", "native", "wrapper", "different-python", "host-extra"])
+def test_only_the_actual_cpython_worker_prefix_receives_a_host_prior(tmp_path, monkeypatch, kind, owner):
+    from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+
+    manifest = dict(assigned_indices=[0], job_kind=kind, ast_dir="",
+                    exports_path="", src_paths=["one.py"], module_names=["pkg.one"])
+    monkeypatch.setattr(workers, "read_worker_manifest", lambda path: manifest)
+    monkeypatch.setattr(workers, "_artifact_size", lambda path: 123)
+    monkeypatch.setattr(checkpoint, "file_sha256", lambda path: "a" * 64)
+    prefix = {
+        "host": [sys.executable, "-m", "pcc"],
+        "host-env": ["PCC_EXAMPLE=value", sys.executable, "-m", "pcc"],
+        "native": ["/private/native-pcc1"],
+        "wrapper": ["wrapper", sys.executable, "-m", "pcc"],
+        "different-python": ["/private/python", "-m", "pcc"],
+        "host-extra": [sys.executable, "-B", "-m", "pcc"],
+    }[owner]
+    command = shlex.join([*prefix, "--pcc-python-multi-codegen-worker", str(tmp_path / "manifest")])
+    item = workers.resource_tasks_for_commands([command])[0]
+    assert item["estimate_bytes"] == 0
+    if owner in ("host", "host-env"):
+        assert item["startup_prior_model"] == "host-" + kind + "-v1"
+        assert policy.task_startup_prior_bytes(item) > 0
+    else:
+        assert "startup_prior_model" not in item
+        assert policy.task_startup_prior_bytes(item) == 0
+
+
+def test_codegen_batches_do_not_share_completed_envelopes_with_singletons(tmp_path, monkeypatch):
+    from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+
+    base = dict(job_kind="codegen", ast_dir="", exports_path="",
+                src_paths=["one.py", "two.py", "three.py"],
+                module_names=["pkg.one", "pkg.two", "pkg.three"])
+    manifests = {str(tmp_path / ("manifest" + str(count))): dict(base, assigned_indices=list(range(count)))
+                 for count in (1, 2, 3)}
+    monkeypatch.setattr(workers, "read_worker_manifest", lambda path: manifests[path])
+    monkeypatch.setattr(workers, "_artifact_size", lambda path: 123)
+    monkeypatch.setattr(checkpoint, "file_sha256", lambda path: "a" * 64)
+    commands = [shlex.join([sys.executable, "-m", "pcc", "--pcc-python-multi-codegen-worker", path])
+                for path in manifests]
+    items = workers.resource_tasks_for_commands(commands)
+    assert len({item["class"] for item in items}) == 3
+    assert items[1]["class"].endswith("|host-codegen-batch:2")
+    assert items[2]["class"].endswith("|host-codegen-batch:3")
+    for count, item in enumerate(items, 1):
+        assert item["inputs"][5] == count
+        assert policy.task_startup_prior_bytes(item) == count * policy.task_startup_prior_bytes(items[0])
+        assert policy.estimated_task_bytes(item, [
+            ("unrelated", [999999999] * 6, 999999999),
+        ]) == policy.task_startup_prior_bytes(item)
+
+
+def test_backend_prior_byte_binding_is_exact_and_detects_stale_task_mutation():
+    # Reuse the existing synthetic-wire contract fixture. This proves binding,
+    # not codec/emitter execution; real split parity remains an integration gate.
+    from tests.python import test_pipeline_indexed_handoff as fixture
+
+    case = fixture.HandoffContractTests()
+    case.setUp()
+    try:
+        case.task["startup_prior_model"] = "host-indexed-backend-v1"
+        seal = case.publish()
+        fixture.handoff.prepare_handoff_task(case.task, fixture._FRONTEND_TOKEN)
+        assert case.task["prior_input_bytes"] == seal["pidx_size"] == case.sidecar.stat().st_size
+        assert policy.task_startup_prior_bytes(case.task) == policy.peak_reservation(
+            64 * MIB + 7 * seal["pidx_size"])
+        case.task["prior_input_bytes"] += 1
+        with pytest.raises(fixture.handoff.HandoffError, match="prepared task binding mismatch"):
+            fixture.handoff.prepare_handoff_task(case.task, fixture._FRONTEND_TOKEN)
+        assert case.sidecar.exists() and case.seal.exists()
+    finally:
+        case.doCleanups()
+
+
+@pytest.mark.parametrize("frontend_host,backend_host", [(False, False), (False, True), (True, False), (True, True)])
+def test_split_models_classify_frontend_and_backend_prefixes_independently(tmp_path, monkeypatch, frontend_host, backend_host):
+    from tests.python import test_host_indexed_process_split as fixture
+    from pcc.frontends.python import pipeline_frontend_indexed_stage as stage
+    from pcc.frontends.python import worker_process_pool as pool
+
+    prepared = fixture._stage_fixture(tmp_path, monkeypatch, count=1)
+    if frontend_host:
+        prepared["frontend_tasks"][0]["startup_prior_model"] = "host-codegen-v1"
+    captured = []
+
+    def observe(commands, tasks, width, budget, **kwargs):
+        captured.extend(tasks)
+        for request in prepared["requests"].values():
+            with open(request["output_path"], "wb") as stream:
+                stream.write(b"synthetic completed object")
+
+    monkeypatch.setattr(pool, "run_resource_worker_processes", observe)
+    prefix = [sys.executable, "-m", "pcc"] if backend_host else ["wrapper", sys.executable, "-m", "pcc"]
+    stage.run_host_indexed_stage(
+        prepared["commands"], prepared["manifests"], prepared["results"],
+        prepared["chunks"], prepared["names"], prepared["ir_dir"], prefix, 1,
+        "", shlex.quote,
+    )
+    assert len(captured) == 2
+    assert captured[0].get("startup_prior_model") == ("host-indexed-frontend-v1" if frontend_host else None)
+    assert captured[1].get("startup_prior_model") == ("host-indexed-backend-v1" if backend_host else None)
+    assert prepared["frontend_tasks"][0].get("startup_prior_model") == ("host-codegen-v1" if frontend_host else None)
