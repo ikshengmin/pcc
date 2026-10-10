@@ -1054,6 +1054,222 @@ def test_structured_parsed_aarch64_reloads_keep_final_instruction_order():
         assert transport.encoded_line_records is None
 
 
+@pytest.mark.parametrize(
+    "source_factory", [_target_final_stackmap_ir, _stale_managed_ssa_ir],
+)
+def test_native_function_retirement_matches_delayed_object_control(
+    monkeypatch, source_factory,
+):
+    from pcc.backend import self_backend_aarch64_darwin as emitter
+    from pcc.backend.native_object import encode_native_object_from_sections
+    from pcc.backend.self_backend_kernel import (
+        IndexedFunctionKernel,
+        get_indexed_function_kernel,
+    )
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+
+    source = source_factory("arm64-apple-darwin23.6.0") + """
+
+define i64 @retirement_tail(i64 %value) {
+entry:
+  %result = add i64 %value, 1
+  ret i64 %result
+}
+"""
+    close = IndexedFunctionKernel.close_native_tables
+    emit_function = emitter._emit_function
+    release_capture = emitter._NativeAArch64Emission.release_captured_function
+    build_section = emitter.build_aarch64_stack_map_section
+
+    def emit_with_lifetime_assertions(*, delayed):
+        completed = []
+        released = set()
+        stackmaps_finished = False
+        suppressed_closes = []
+
+        def observe_function(func, plan, **kwargs):
+            assert kwargs.get("native_sink") is not None
+            for previous in completed:
+                assert previous.instruction_metadata._closed is (not delayed)
+            kernel = get_indexed_function_kernel(func)
+            assert not kernel.instruction_metadata._closed
+            result = emit_function(func, plan, **kwargs)
+            completed.append(kernel)
+            return result
+
+        def observe_release(sink):
+            assert not completed[-1].instruction_metadata._closed
+            release_capture(sink)
+            released.add(id(completed[-1]))
+
+        def observe_close(kernel):
+            assert id(kernel) in released
+            if delayed and not stackmaps_finished:
+                # Test-only original control: preserve tables until the
+                # unchanged late-close loop after stack-map serialization.
+                suppressed_closes.append(id(kernel))
+                return
+            close(kernel)
+
+        def observe_section(*args, **kwargs):
+            nonlocal stackmaps_finished
+            assert len(completed) == 2
+            assert all(
+                kernel.instruction_metadata._closed is (not delayed)
+                for kernel in completed
+            )
+            kernel_arenas = {
+                id(getattr(kernel, field))
+                for kernel in completed
+                for field in kernel.__slots__
+                if isinstance(getattr(kernel, field), CompilerIntArena)
+            }
+            for plan in args[1]:
+                packed = plan.packed_records
+                assert packed is not None
+                for field in packed.__slots__:
+                    value = getattr(packed, field)
+                    if isinstance(value, CompilerIntArena):
+                        assert id(value) not in kernel_arenas
+                        assert not value._closed
+            result = build_section(*args, **kwargs)
+            stackmaps_finished = True
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(emitter, "_emit_function", observe_function)
+            patch.setattr(
+                emitter._NativeAArch64Emission,
+                "release_captured_function", observe_release,
+            )
+            patch.setattr(IndexedFunctionKernel, "close_native_tables", observe_close)
+            patch.setattr(emitter, "build_aarch64_stack_map_section", observe_section)
+            transport = emitter.emit_aarch64_darwin_indexed_transport(
+                parse_self_backend_module(source), optimize=False,
+            )
+        assert stackmaps_finished
+        assert len(released) == 2
+        assert len(suppressed_closes) == (2 if delayed else 0)
+        assert all(kernel.instruction_metadata._closed for kernel in completed)
+        sections, undefined = transport.assemble_sections()
+        names = {(section.segname, section.sectname) for section in sections}
+        assert ("__DATA", "__pcc_stackmaps") in names
+        assert ("__LD", "__compact_unwind") in names
+        stackmaps = next(
+            section for section in sections if section.sectname == "__pcc_stackmaps"
+        )
+        decoded = decode_stack_map(stackmaps.data, expected_arch=ARCH_AARCH64)
+        assert any(record.locations for fn in decoded.functions for record in fn.records)
+        encoded = encode_native_object_from_sections(sections, undefined=undefined)
+        return sections, undefined, encoded
+
+    expected = emit_with_lifetime_assertions(delayed=True)
+    assert emit_with_lifetime_assertions(delayed=False) == expected
+
+
+def test_native_function_retirement_preserves_nonconsuming_tables(monkeypatch):
+    from pcc.backend import self_backend_aarch64_darwin as emitter
+    from pcc.backend.native_object import encode_native_object_from_sections
+    from pcc.backend.self_backend_kernel import (
+        IndexedFunctionKernel,
+        get_indexed_function_kernel,
+    )
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+
+    source = _stale_managed_ssa_ir("arm64-apple-darwin23.6.0")
+    expected = emitter.emit_aarch64_darwin_indexed_transport(
+        parse_self_backend_module(source), optimize=False,
+    ).assemble_sections()
+    prepared = emitter.prepare_parsed_module_for_target(
+        parse_self_backend_module(source),
+        aggregate_returned_indirect=emitter._aggregate_returned_indirect,
+        aggregate_returned_indirect_indexed=emitter._aggregate_returned_indirect_indexed,
+        materialize_legacy_slots=False,
+    )
+    kernels = [get_indexed_function_kernel(func) for func in prepared.functions]
+    close = IndexedFunctionKernel.close_native_tables
+    sections, undefined = [], []
+
+    def reject_close(kernel):
+        raise AssertionError("close_native_tables=False must preserve kernel tables")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(IndexedFunctionKernel, "close_native_tables", reject_close)
+            lines = emitter._emit_prepared_aarch64_darwin_lines(
+                prepared, optimize=False, close_native_tables=False,
+                structured_sections=sections, structured_counts=[],
+                native_undefined=undefined, native_fallback_lines=[],
+            )
+        assert lines == []
+        assert all(not kernel.instruction_metadata._closed for kernel in kernels)
+        assert (sections, undefined) == expected
+        assert encode_native_object_from_sections(
+            sections, undefined=undefined,
+        ) == encode_native_object_from_sections(expected[0], undefined=expected[1])
+    finally:
+        for kernel in kernels:
+            close(kernel)
+
+
+@pytest.mark.parametrize("failure_phase", ["emit", "capture-retire"])
+def test_native_function_retirement_waits_for_success(monkeypatch, failure_phase):
+    from pcc.backend import self_backend_aarch64_darwin as emitter
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+
+    source = _stale_managed_ssa_ir("arm64-apple-darwin23.6.0") + """
+
+define i64 @retirement_tail(i64 %value) {
+entry:
+  ret i64 %value
+}
+"""
+    module = parse_self_backend_module(source)
+    emit_function = emitter._emit_function
+    release_capture = emitter._NativeAArch64Emission.release_captured_function
+    started = []
+    release_count = 0
+
+    def fail_emit(func, plan, **kwargs):
+        kernel = get_indexed_function_kernel(func)
+        started.append(kernel)
+        if len(started) == 2 and failure_phase == "emit":
+            raise BackendUnavailable("injected function retirement failure")
+        return emit_function(func, plan, **kwargs)
+
+    def fail_release(sink):
+        nonlocal release_count
+        release_count += 1
+        if release_count == 2 and failure_phase == "capture-retire":
+            raise BackendUnavailable("injected function retirement failure")
+        release_capture(sink)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(emitter, "_emit_function", fail_emit)
+            patch.setattr(
+                emitter._NativeAArch64Emission,
+                "release_captured_function", fail_release,
+            )
+            with pytest.raises(BackendUnavailable, match="injected function retirement failure"):
+                emitter.emit_aarch64_darwin_indexed_transport(module, optimize=False)
+        assert len(started) == 2
+        assert started[0].instruction_metadata._closed
+        assert not started[1].instruction_metadata._closed
+        assert not emitter._AARCH64_EMISSION_ACTIVE
+        assert not emitter.direct_instruction_capture_active()
+        # A failed scope must not poison a fresh transport in the same process.
+        fresh = emitter.emit_aarch64_darwin_indexed_transport(
+            parse_self_backend_module(source), optimize=False,
+        )
+        assert fresh.native_finalized
+        assert fresh.assemble_sections()[0]
+    finally:
+        for func in module.functions:
+            get_indexed_function_kernel(func).close_native_tables()
+
+
 def test_both_target_emitters_refresh_live_managed_ssa_after_safepoint():
     aarch64 = emit_aarch64_darwin_asm(
         _stale_managed_ssa_ir("arm64-apple-darwin23.6.0")

@@ -752,6 +752,10 @@ def _emit_prepared_aarch64_darwin_lines_active(
                     phase_timing=phase_timing,
                 )
                 native_sink.release_captured_function()
+                if close_native_tables:
+                    # Final words and deferred error stubs are published. Plans
+                    # own their scalar tables; unwind only needs function names.
+                    get_indexed_function_kernel(func).close_native_tables()
             if phase_timing is not None:
                 phase_timing.add(6, phase_start)
     if phase_timing is not None:
