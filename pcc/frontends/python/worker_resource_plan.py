@@ -250,6 +250,33 @@ def ready_resource_cohort(ready, pending, active_indices, bands):
     return [index for index in ready if bands[index] == current]
 
 
+def validate_handoff_slots(tasks):
+    """Opt-in slots pair one unchained FE with its own sealed-handoff BE.
+
+    Legacy tasks without slot metadata keep their dependency semantics.
+    Reject malformed pairs before starting any child, rather than leaking
+    capacity or letting an unrelated completion release another FE's slot.
+    """
+    members = {}
+    for index, task in enumerate(tasks):
+        if "handoff_slot" not in task:
+            continue
+        slot = task["handoff_slot"]
+        if type(slot) is not int or slot < 0 or slot >= len(tasks):
+            raise WorkerMemoryError("invalid resource handoff slot owner")
+        members.setdefault(slot, []).append(index)
+    for slot, pair in members.items():
+        if (len(pair) != 2 or slot not in pair
+                or tasks[slot].get("depends_on", -1) != -1
+                or tasks[slot].get("handoff_request", "")):
+            raise WorkerMemoryError("invalid resource handoff slot pair")
+        backend = pair[1] if pair[0] == slot else pair[0]
+        dependency = tasks[backend].get("depends_on", -1)
+        if (type(dependency) is not int or dependency != slot
+                or not tasks[backend].get("handoff_request", "")):
+            raise WorkerMemoryError("invalid resource handoff slot release")
+
+
 def choose_task(pending, tasks, observations, active_reservations,
                 width: int, available: int, guarded_calibration: bool = False):
     """Pick a fitting task or reserve idle capacity for a calibration.

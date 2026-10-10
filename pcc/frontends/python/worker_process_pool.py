@@ -189,13 +189,14 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
         WorkerMemoryError, available_worker_bytes, choose_task, completed_task_observation,
         estimated_task_bytes, minimum_task_bytes, peak_reservation, read_tree_state,
         read_worker_resource, ready_resource_cohort, require_task_fits,
-        resource_task_order,
+        resource_task_order, validate_handoff_slots,
     )
 
     if len(commands) != len(tasks) or width <= 0 or tree_budget <= 0:
         raise WorkerMemoryError("invalid resource worker inventory or budget")
     if not commands:
         return
+    validate_handoff_slots(tasks)
     if observations is None:
         observations = _RESOURCE_OBSERVATIONS
     specs = []
@@ -216,6 +217,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     retries = [0 for _task in tasks]
     completed = set()
     completed_tokens = {}
+    handoff_slots = set()
     unavailable_since = -1.0
     fresh_after = time.monotonic()
     state_diagnostic = {}
@@ -282,6 +284,9 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 if tasks[index].get("retry_calibration", False):
                     tasks[index]["retry_calibration"] = False
                 completed.add(index)
+                slot = tasks[index].get("handoff_slot", -1)
+                if slot >= 0 and slot != index:
+                    handoff_slots.remove(slot)
             active = survivors
             if not pending and not active:
                 break
@@ -413,6 +418,10 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                     break
                 ready = []
                 for item in pending:
+                    slot = tasks[item].get("handoff_slot", -1)
+                    if (slot == item and slot not in handoff_slots
+                            and len(handoff_slots) >= width):
+                        continue
                     dependency = tasks[item].get("depends_on", -1)
                     if dependency >= 0 and dependency not in completed:
                         continue
@@ -477,6 +486,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 pid = _start_resource_worker(specs, index)
                 if pid <= 0:
                     raise subprocess.CalledProcessError(127, commands[index])
+                if tasks[index].get("handoff_slot", -1) == index:
+                    handoff_slots.add(index)
                 pending.remove(index)
                 attempt_tokens[pid] = token
                 active.append((index, pid, demand, exclusive, 0))

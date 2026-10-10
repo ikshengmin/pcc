@@ -42,11 +42,11 @@ def require_host_indexed_split(env, *, checkpoint_root, action_cache_plan,
 def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
                            module_names, ir_dir, worker_prefix, jobs,
                            worker_environment, shell_quote_arg):
-    """Keep at most ``jobs`` not-yet-consumed modules in width fixed chains.
+    """Keep at most ``jobs`` not-yet-consumed modules in dynamic slots.
 
-    FE_i -> BE_i -> FE_(i+width).  A dependency is released only after a
-    successful child is reaped, its final RSS/attempt is verified, and its
-    task-owned intermediate is removed.  Cancellation never deletes input.
+    Each FE acquires a slot until its own dependent BE is reaped, its final
+    RSS/attempt is verified, and its task-owned intermediate is removed.
+    Free slots admit any fitting FE; cancellation never releases a slot.
     """
     from pcc.frontends.python.pipeline_frontend_workers import (
         resource_tasks_for_commands, worker_tree_budget_bytes,
@@ -111,7 +111,8 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
         task["class"] += "|host-indexed-frontend-v1"
         task["diagnostic_phase"] = "indexed-frontend"
         task["calibrate_before_peers"] = True
-        task["depends_on"] = 2 * (position - width) + 1 if position >= width else -1
+        task["depends_on"] = -1
+        task["handoff_slot"] = 2 * position
         all_commands.append(ENV_REQUEST + "=" + shell_quote_arg(request_path) + " " + commands[source_position])
         all_tasks.append(task)
         backend_command = worker_environment + " " + ENV_REQUEST + "=" + shell_quote_arg(request_path)
@@ -125,6 +126,7 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
             "estimate_bytes": 0,
             "report_path": output + ".rss",
             "depends_on": 2 * position,
+            "handoff_slot": 2 * position,
             "restartable": True,
             "diagnostic_phase": "indexed-backend",
             "calibrate_before_peers": True,

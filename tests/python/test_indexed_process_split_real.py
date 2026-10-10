@@ -156,6 +156,10 @@ def test_real_split_and_unsplit_match_complete_objects(tmp_path, monkeypatch):
             row = dict(phase=task["diagnostic_phase"], modules=task["diagnostic_modules"],
                        indices=task["diagnostic_indices"], pid=pid, exit_code=0, reaped=True,
                        resource_token=report[5])
+            if "handoff_slot" in task:
+                slot = task["handoff_slot"]
+                row["handoff_slot"] = slot
+                assert task["depends_on"] == (-1 if index == slot else slot)
             if task.get("handoff_request"):
                 request_path = Path(task["handoff_request"])
                 request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -228,6 +232,25 @@ def test_real_split_and_unsplit_match_complete_objects(tmp_path, monkeypatch):
     assert [("start" if event == "calibrate" else event, index) for event, index in lifecycle] == [
         (event, index) for index in range(4) for event in ("start", "retire")
     ]
+    assert [worker["handoff_slot"] for worker in batch["workers"]] == [0, 0, 2, 2]
+    assert len(names) > options["jobs"]
+    occupied, maximum = set(), 0
+    for event, index in lifecycle:
+        slot = batch["workers"][index]["handoff_slot"]
+        if event in ("start", "calibrate"):
+            if index == slot:
+                assert slot not in occupied and len(occupied) < options["jobs"]
+                occupied.add(slot)
+                maximum = max(maximum, len(occupied))
+            else:
+                assert slot in occupied
+        elif index != slot:
+            occupied.remove(slot)
+    assert not occupied and maximum == options["jobs"]
+    # Pool success and the receipt checks above verify every BE retirement;
+    # the original trace alone does not report the later cleanup timestamp.
+    batch["handoff_slot_reuse"] = dict(modules=len(names), width=options["jobs"],
+                                       maximum_inflight=maximum)
     assert not any(worker["phase"].startswith("indexed-")
                    for batch in evidence["unsplit"] for worker in batch["workers"])
     receipt["status"] = "PASS"

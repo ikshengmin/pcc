@@ -125,7 +125,7 @@ def _run_stage(fixture, width):
     )
 
 
-def test_stage_plan_preserves_module_identity_and_bounds_handoff_chains(tmp_path, monkeypatch):
+def test_stage_plan_preserves_module_identity_and_pairs_dynamic_slots(tmp_path, monkeypatch):
     fixture = _stage_fixture(tmp_path, monkeypatch, order=[3, 1, 4, 0, 2])
     captured = {}
 
@@ -143,8 +143,9 @@ def test_stage_plan_preserves_module_identity_and_bounds_handoff_chains(tmp_path
     for position, original_index in enumerate(fixture["order"]):
         frontend, backend = tasks[2 * position:2 * position + 2]
         assert frontend["diagnostic_indices"] == backend["diagnostic_indices"] == [original_index]
-        assert frontend["depends_on"] == (2 * (position - 2) + 1 if position >= 2 else -1)
+        assert frontend["depends_on"] == -1
         assert backend["depends_on"] == 2 * position
+        assert frontend["handoff_slot"] == backend["handoff_slot"] == 2 * position
         assert frontend["calibrate_before_peers"] is True
         assert backend["calibrate_before_peers"] is True
         assert "calibrate_before_peers" not in fixture["frontend_tasks"][original_index]
@@ -159,13 +160,8 @@ def test_stage_plan_preserves_module_identity_and_bounds_handoff_chains(tmp_path
         assert request["target"] == "arm64-apple-darwin"
         assert fixture["commands"][original_index] in captured["commands"][2 * position]
         assert "--pcc-self-backend-indexed-emit-worker" in captured["commands"][2 * position + 1]
-    # Every residue class is exactly FE -> BE -> next FE, not an all-FE barrier.
-    for lane in range(2):
-        chain = [value for position in range(lane, 5, 2)
-                 for value in (2 * position, 2 * position + 1)]
-        assert tasks[chain[0]]["depends_on"] == -1
-        for previous, current in zip(chain, chain[1:]):
-            assert tasks[current]["depends_on"] == previous
+    # Only own-FE edges remain; the pool owns the bounded dynamic capacity.
+    policy.validate_handoff_slots(tasks)
     for index, path in enumerate(fixture["results"]):
         fields = Path(path).read_text(encoding="utf-8").strip().split("\t")
         assert fields[:3] == ["OK", str(index), fixture["names"][index]]

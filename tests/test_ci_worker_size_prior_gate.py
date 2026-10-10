@@ -34,6 +34,11 @@ def put(directory, rows):
 
 
 def test_default_command_retains_project_xdist(tmp_path):
+    assert gate.HOST_FILES[-2:] == (
+        "tests/python/test_host_indexed_process_split.py",
+        "tests/python/test_dynamic_handoff_slots.py",
+    )
+    assert gate.HOST_COUNTS == (80, 3, 64, 0, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -440,7 +445,7 @@ def test_windows_exit_gates_follow_verified_runtime_and_stop_on_failure(tmp_path
             assert counts == ((6,) if integration else (8,))
             assert "runtime-identity" in events
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 64, 0) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 64, 0, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

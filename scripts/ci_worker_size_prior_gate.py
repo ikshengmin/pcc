@@ -23,9 +23,11 @@ EXIT_INPUTS = (EXIT_TEST, "tests/c/test_owned_linux_c_exports.py",
                "tests/c/fixtures/owned_linux_c_exports/exit_lifecycle.c",
                "tests/c/fixtures/owned_linux_c_exports/immediate_bypass.c")
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
-              "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST)
+              "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
+              "tests/python/test_host_indexed_process_split.py",
+              "tests/python/test_dynamic_handoff_slots.py")
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 64, 0)
+HOST_COUNTS = (80, 3, 64, 0, 20, 21)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
