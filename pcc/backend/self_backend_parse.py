@@ -327,6 +327,13 @@ def parse_self_backend_target_triple(ir_text: str) -> str:
     return match.group(1)
 
 
+def retire_module_parse_caches() -> None:
+    """Release module-scoped canonical strings after terminal object output."""
+    _NUMERIC_SSA_NAME_CACHE.clear()
+    _DOT_NUMERIC_SSA_NAME_CACHE.clear()
+    reset_operand_intern()
+
+
 def parse_self_backend_module(ir_text: str) -> ParsedModule:
     # Targets model scalars as one 64-bit register; split i128 values first.
     ir_text = legalize_wide_integers(ir_text)

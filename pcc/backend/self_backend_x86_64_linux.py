@@ -77,6 +77,20 @@ _MODULE_SYMBOLS = PreparedModuleSymbols(
 _VARARG_FUNCTIONS: frozenset[str] = frozenset()
 _TLS_GLOBALS: dict[str, GlobalDef] = {}
 
+def retire_x86_module_state() -> None:
+    """Drop prior-module roots only after assembly AND stack-map encoding."""
+    global _MODULE_SYMBOLS, _TLS_GLOBALS, _VARARG_FUNCTIONS
+    if _X86_EMISSION_ACTIVE:
+        raise BackendUnavailable("cannot retire active x86 emission")
+    _MODULE_SYMBOLS = PreparedModuleSymbols(
+        internal_prefix="", defined_symbols=frozenset(),
+        internal_symbols=frozenset(), thread_local_symbols=frozenset(),
+    )
+    # Do not clear the former TypeParseContext or aliased dictionaries in place.
+    _TLS_GLOBALS = {}
+    _VARARG_FUNCTIONS = frozenset()
+
+
 _ARG_REGS = ("rdi", "rsi", "rdx", "rcx", "r8", "r9")
 _ARG_REGS_32 = ("edi", "esi", "edx", "ecx", "r8d", "r9d")
 _ARG_REGS_16 = ("di", "si", "dx", "cx", "r8w", "r9w")

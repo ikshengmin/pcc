@@ -124,6 +124,11 @@ def _text_key_index(mapping) -> tuple[dict[int, str], dict[int, list[str]]]:
     return by_id, by_bucket
 
 
+def retire_module_text_key_cache() -> None:
+    """Drop consumed module lookup owners after every object consumer ends."""
+    _TEXT_KEY_INDEX_CACHE.clear()
+
+
 def clear_text_key_mapping(mapping) -> None:
     """Retire one consumed mapping together with its equality lookup index."""
     cache_key = id(mapping)

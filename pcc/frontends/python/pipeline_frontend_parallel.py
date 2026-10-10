@@ -1022,6 +1022,16 @@ def compile_parallel_uncached(
             artifact_dir=artifact_dir,
         )
         host_indexed_split = True
+    from pcc.frontends.python.pipeline_frontend_host_batch import (
+        bounded_host_codegen_batches, host_codegen_batch_limit,
+        validate_host_batch_result,
+    )
+
+    host_batch_limit = host_codegen_batch_limit(
+        os.environ, native_worker=native_owned_lanes, indexed_split=host_indexed_split,
+        checkpoint_root=checkpoint_root, action_cache_plan=action_cache_plan,
+        libpython_mode=libpython_mode, artifact_dir=artifact_dir,
+    )
     if checkpoint_root:
         if (
             native_owned_lanes
@@ -1050,8 +1060,8 @@ def compile_parallel_uncached(
     if host_indexed_split and any(len(chunk) != 1 for chunk in chunks):
         raise pipeline_error("host indexed process split requires singleton codegen chunks")
     # Export startup is amortized over a fixed-size batch, independently of
-    # admission width. Host/native codegen below remains singleton so its
-    # decoded export graph and module-local state have one-module lifetimes.
+    # admission width. Codegen remains singleton unless the restricted host
+    # batch mode explicitly pairs two assignments after AST export completes.
     from pcc.frontends.python.pipeline_frontend_workers import SOURCE_WORKER_MODULES_PER_CHUNK
 
     export_chunks = [
@@ -1257,6 +1267,8 @@ def compile_parallel_uncached(
                     sidecar_dir=ast_dir,
                 )
             )
+        if host_batch_limit == 2:
+            safe_chunks = bounded_host_codegen_batches(src_paths, ast_dir, safe_chunks)
         scheduled_chunks = oversized_chunks + safe_chunks
         checkpoint_skip_masks = []
         if checkpoint_root:
@@ -1563,9 +1575,16 @@ def compile_parallel_uncached(
         worker_codegen_max_ms = 0
         worker_codegen_max_index = -1
         checkpoint_hits = 0
-        for result_path in result_paths:
+        for result_position, result_path in enumerate(result_paths):
             with open(result_path, "r", encoding="utf-8") as stream:
                 result_text = stream.read()
+            if host_batch_limit == 2:
+                try:
+                    validate_host_batch_result(
+                        result_text, scheduled_chunks[result_position], module_names, ir_dir,
+                    )
+                except ValueError as exc:
+                    raise pipeline_error(str(exc)) from exc
             for raw_line in result_text.splitlines():
                 parts = raw_line.split("\t")
                 if not parts:

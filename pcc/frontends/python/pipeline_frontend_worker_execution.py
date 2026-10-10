@@ -437,6 +437,19 @@ def run_codegen_worker(
                 manifest, native_worker_executable,
             )
             checkpoint_skip_indices = manifest["checkpoint_skip_indices"]
+        from pcc.frontends.python.pipeline_frontend_host_batch import (
+            host_codegen_batch_limit, require_empty_host_codegen_context,
+            retire_host_codegen_backend_state,
+        )
+
+        host_batch_limit = host_codegen_batch_limit(
+            os.environ, native_worker=bool(native_worker_executable()),
+            indexed_split=bool(handoff_request), checkpoint_root=checkpoint_root,
+            action_cache_plan=None, libpython_mode=libpython_mode, artifact_dir=ir_dir,
+        )
+        host_batch = host_batch_limit == 2 and len(assigned_indices) > 1
+        if host_batch and (len(assigned_indices) > 2 or not ast_dir or not exports_path):
+            raise _worker_failure("host codegen batch requires at most two lazy-AST assignments")
         unique_external_class_preload = None
         indexed_exports = False
         lazy_ast_dir = ""
@@ -447,7 +460,7 @@ def run_codegen_worker(
             # one exports file the host compiler and pcc1 inferred different
             # things (a codegen mixin's ``self`` method call was dynamic under
             # the host and direct under pcc1) and emitted different IR.
-            if len(assigned_indices) == 1:
+            if len(assigned_indices) == 1 or host_batch:
                 root_module = module_names[assigned_indices[0]]
                 (
                     native_exports,
@@ -458,6 +471,11 @@ def run_codegen_worker(
                     exports_path,
                     root_module,
                 )
+                if host_batch and indexed_exports:
+                    # Batch2 reuses the current host legacy/full graph only.
+                    # A sparse singleton view has separate global-provider
+                    # obligations and cannot silently become a full batch view.
+                    raise _worker_failure("host codegen batch requires full-graph export input")
             else:
                 native_exports, derived_class_map = read_native_exports_wire(
                     exports_path
@@ -503,6 +521,8 @@ def run_codegen_worker(
             _freeze_worker_survivors()
         for index in assigned_indices:
             module_name = module_names[index]
+            if host_batch:
+                require_empty_host_codegen_context()
             if checkpoint_root:
                 _validate_stage1_checkpoint_module_context(manifest, checkpoint_graph, index)
                 if index in checkpoint_skip_indices:
@@ -552,6 +572,12 @@ def run_codegen_worker(
             for owner_name, exports in native_exports.items():
                 if owner_name != module_name:
                     external_for_this[owner_name] = exports
+            if host_batch and unique_external_class_preload is None:
+                # Reproduce the ordinary legacy singleton's root-excluded
+                # preload. Only file/JSON decoding is shared across modules.
+                from pcc.frontends.python.type_infer import build_unique_external_class_preload
+
+                unique_external_class_preload = build_unique_external_class_preload(external_for_this)
             infer_ms = 0
             try:
                 infer_started = time.monotonic() if worker_timing else 0.0
@@ -838,6 +864,12 @@ def run_codegen_worker(
                             and not indexed_sidecar_output
                         ):
                             phase_started = phase_timing.start() if phase_timing is not None else 0
+                            if host_batch:
+                                # These provenance Values can root cyclic IR.
+                                # Clear them before collection, not next generate.
+                                from pcc.frontends.python.codegen.marshal import reset_boxed_i64_constants
+
+                                reset_boxed_i64_constants()
                             _release_direct_frontend_state(codegen)
                             if phase_timing is not None:
                                 phase_timing.add(1, phase_started)
@@ -917,9 +949,9 @@ def run_codegen_worker(
                             and not indexed_sidecar_output
                         ):
                             # The indexed module is frozen and the canonical IR
-                            # has already been serialized.  A direct native-
-                            # object worker handles one module, so no later
-                            # iteration can consume these frontend graphs.
+                            # has already been serialized. These products are
+                            # terminal for this module; a bounded host batch
+                            # releases them before reading the next AST.
                             # Release them before the assembler builds its own
                             # Section/Relocation/NativeObject graph; pcc's
                             # allocator can reuse freed cells even though it
@@ -936,7 +968,7 @@ def run_codegen_worker(
                             import gc
 
                             gc.collect()
-                            if lazy_ast_dir:
+                            if lazy_ast_dir and not host_batch:
                                 _freeze_worker_survivors()
                             if phase_timing is not None:
                                 phase_timing.add(8, phase_started)
@@ -1019,7 +1051,7 @@ def run_codegen_worker(
                                     stream.write(encoded)
                                 if phase_timing is not None:
                                     phase_timing.add(11, phase_started)
-                                if checkpoint_root:
+                                if checkpoint_root or host_batch:
                                     # A large Stage1 object can itself be 174 MB.
                                     # Release the emitter buffer before the
                                     # durable writer reads and validates it.
@@ -1169,9 +1201,27 @@ def run_codegen_worker(
                     + " module=" + module_name + "\n"
                 )
             result_lines.append(result_line)
-        with open(result_path, "w", encoding="utf-8") as stream:
+            if host_batch:
+                # The restricted direct-release path already retired all AST,
+                # typed, codegen and indexed owners. Drop remaining products
+                # before the next AST is read; only result paths/metadata stay.
+                ir_text = ""
+                unique_external_class_preload = None
+                direct_asm = ""
+                direct_lines = []
+                direct_stack_map_plans = []
+                retire_host_codegen_backend_state(direct_target)
+                import gc
+
+                gc.collect()
+                require_empty_host_codegen_context()
+                publish_worker_resource("module-retired:" + str(index))
+        publication_path = result_path + ".batch.partial" if host_batch else result_path
+        with open(publication_path, "w", encoding="utf-8") as stream:
             for line in result_lines:
                 stream.write(line + "\n")
+        if host_batch:
+            os.replace(publication_path, result_path)
         publish_worker_resource("complete")
         return 0
     except Exception as exc:

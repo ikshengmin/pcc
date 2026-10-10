@@ -568,6 +568,18 @@ def emit_aarch64_darwin_indexed_transport(
 _AARCH64_EMISSION_ACTIVE = False
 
 
+def retire_aarch64_module_state() -> None:
+    """Drop prior-module roots after all object and unwind consumers finish."""
+    global _MODULE_SYMBOLS
+    if _AARCH64_EMISSION_ACTIVE:
+        raise BackendUnavailable("cannot retire active AArch64 emission")
+    require_direct_instruction_capture_idle()
+    _MODULE_SYMBOLS = PreparedModuleSymbols(
+        internal_prefix="", defined_symbols=frozenset(),
+        internal_symbols=frozenset(), thread_local_symbols=frozenset(),
+    )
+
+
 def _emit_prepared_aarch64_darwin_lines(
     prepared: PreparedSelfBackendModule,
     optimize: bool = True,
