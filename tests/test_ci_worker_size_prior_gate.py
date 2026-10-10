@@ -38,7 +38,8 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_host_indexed_process_split.py",
         "tests/python/test_dynamic_handoff_slots.py",
     )
-    assert gate.HOST_COUNTS == (80, 3, 77, 0, 20, 21)
+    assert gate.HOST_FILES[4] == "tests/python/test_worker_guard_cadence.py"
+    assert gate.HOST_COUNTS == (80, 3, 77, 0, 4, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -475,7 +476,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
             assert nodes == (gate.REGALLOC_HOST_NODES if name.endswith("-host")
                              else gate.REGALLOC_NATIVE_NODES)
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 77, 0, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 77, 0, 4, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

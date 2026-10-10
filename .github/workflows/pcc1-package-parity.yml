@@ -16,6 +16,7 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_worker_guard_cadence.py"
       - "conftest.py"
       - "uv.lock"
       - ".python-version"
@@ -77,6 +78,7 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_worker_guard_cadence.py"
       - "conftest.py"
       - "uv.lock"
       - ".python-version"
@@ -154,7 +156,7 @@ jobs:
             --samples build/macos-regressions/work/supervisor/samples.tsv \
             --stdout build/macos-regressions/work/supervisor/target.stdout \
             --stderr build/macos-regressions/work/supervisor/target.stderr \
-            --timeout 1200 --interval 1 --progress-interval 30 \
+            --timeout 1200 --interval 0.25 --progress-interval 30 \
             --auto-tree-rss-ceiling-bytes 4294967296 \
             --min-tree-rss-bytes 2147483648 \
             --darwin-preflight-reserve-bytes 536870912 \
@@ -205,7 +207,7 @@ jobs:
             --samples build/macos-float-doc/work/supervisor/samples.tsv \
             --stdout build/macos-float-doc/work/supervisor/target.stdout \
             --stderr build/macos-float-doc/work/supervisor/target.stderr \
-            --timeout 1200 --interval 1 --progress-interval 30 \
+            --timeout 1200 --interval 0.25 --progress-interval 30 \
             --auto-tree-rss-ceiling-bytes 4294967296 \
             --min-tree-rss-bytes 2147483648 \
             --darwin-preflight-reserve-bytes 536870912 \
@@ -270,7 +272,7 @@ jobs:
             --samples build/macos-indexed-split/work/supervisor/samples.tsv \
             --stdout build/macos-indexed-split/work/supervisor/target.stdout \
             --stderr build/macos-indexed-split/work/supervisor/target.stderr \
-            --timeout 1200 --interval 1 --progress-interval 30 \
+            --timeout 1200 --interval 0.25 --progress-interval 30 \
             --auto-tree-rss-ceiling-bytes 4294967296 \
             --min-tree-rss-bytes 2147483648 \
             --darwin-preflight-reserve-bytes 536870912 \

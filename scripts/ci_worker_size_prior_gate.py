@@ -54,10 +54,11 @@ REGALLOC_NATIVE_NODES = tuple(
 )
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
+              "tests/python/test_worker_guard_cadence.py",
               "tests/python/test_host_indexed_process_split.py",
               "tests/python/test_dynamic_handoff_slots.py")
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 77, 0, 20, 21)
+HOST_COUNTS = (80, 3, 77, 0, 4, 20, 21)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
