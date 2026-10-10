@@ -5,6 +5,7 @@ relocation. Native execution remains a separate explicit-runtime integration
 gate. BlockingIOError.characters_written and Windows winerror are not qualified.
 """
 from pathlib import Path
+import json
 import re
 
 import pytest
@@ -40,6 +41,54 @@ OS_ERROR_CLASSES = (
     (45, BrokenPipeError), (46, ConnectionAbortedError),
     (47, ConnectionRefusedError), (48, ConnectionResetError),
 )
+
+
+@pytest.mark.parametrize("tag,cls", OS_ERROR_CLASSES)
+def test_os_error_indexable_third_argument_reference(tag, cls):
+    # CPython 3.15 oserror_init uses the third argument as a written count
+    # only for exact BlockingIOError. It does not index the errno object.
+    events = []
+
+    class Errno:
+        def __int__(self):
+            raise AssertionError("errno was converted")
+
+        def __index__(self):
+            raise AssertionError("errno was indexed")
+
+    class Written:
+        def __index__(self):
+            events.append("third")
+            return 3
+
+    number, written, second = Errno(), Written(), object()
+    error = cls(number, "blocked", written, None, second)
+    assert type(error) is cls and error.errno is number
+    assert error.strerror == "blocked"
+    if cls is BlockingIOError:
+        assert events == ["third"]
+        assert error.characters_written == 3
+        assert error.filename is None and error.filename2 is None
+        assert error.args == (number, "blocked", written, None, second)
+    else:
+        assert events == []
+        assert error.filename is written and error.filename2 is second
+        assert error.args == (number, "blocked")
+
+
+def test_blocking_indexable_third_argument_error_reference():
+    events = []
+    problem = ValueError("third argument index failed")
+
+    class Written:
+        def __index__(self):
+            events.append("third")
+            raise problem
+
+    with pytest.raises(ValueError) as caught:
+        BlockingIOError(11, "blocked", Written())
+    assert caught.value is problem
+    assert events == ["third"]
 
 
 def constructor_memory(phase):
@@ -220,6 +269,10 @@ class Unformatted:
     def __str__(self):
         raise AssertionError('constructor formatted an argument')
 
+class UnformattedPath:
+    def __str__(self):
+        raise AssertionError('constructor formatted a filename')
+
 def direct():
     return OSError(84, 'msg')
 
@@ -267,6 +320,7 @@ def direct_subclasses():
 
 def subclass_edges():
     marker = Unformatted()
+    path = UnformattedPath()
     for cls in (FileNotFoundError, FileExistsError, PermissionError,
                 IsADirectoryError, NotADirectoryError, ProcessLookupError,
                 ChildProcessError, TimeoutError, InterruptedError,
@@ -286,12 +340,21 @@ def subclass_edges():
         for number in (None, '2', b'2', 2.5, 2 ** 100, True):
             verify(cls(number, 'msg', 'path'), cls,
                    (number, 'msg'), number, 'msg', 'path')
-        untouched = cls(marker, marker, marker, None, marker)
+        # A numeric third argument has different meaning for BlockingIOError.
+        # Keep errno conversion probes separate from ordinary filename probes.
+        untouched = cls(marker, marker, path, None, path)
         gc.collect()
         assert type(untouched) is cls
         assert untouched.errno is marker and untouched.strerror is marker
-        assert untouched.filename is marker and untouched.filename2 is marker
+        assert untouched.filename is path and untouched.filename2 is path
         assert untouched.args[0] is marker and untouched.args[1] is marker
+        if cls is not BlockingIOError:
+            # Indexable filenames remain unconverted for every other subclass.
+            indexed_path = cls(marker, marker, marker, None, marker)
+            gc.collect()
+            assert indexed_path.filename is marker and indexed_path.filename2 is marker
+            assert indexed_path.errno is marker and indexed_path.strerror is marker
+            assert indexed_path.args[0] is marker and indexed_path.args[1] is marker
         try:
             cls(message='invalid')
         except TypeError as error:
@@ -399,3 +462,98 @@ def test_os_error_constructor_native_five_gc(python_program_compiler, request,
     assert_owned_program(PROGRAM, "OS_ERROR_CONSTRUCTORS_OK\n", tmp_path,
                          python_program_compiler, mode, explicit_owned_runtime,
                          capfd, provenance_probe="2")
+
+
+_BLOCKING_INDEX_PREFIX = r'''
+import gc
+EVENTS = []
+PROBLEM = ValueError('third argument index failed')
+
+class Written:
+    def __index__(self):
+        EVENTS.append('third')
+        return 3
+
+class FailedWritten:
+    def __index__(self):
+        EVENTS.append('third')
+        raise PROBLEM
+
+def main():
+'''
+BLOCKING_INDEX_PROGRAMS = {
+    "value": _BLOCKING_INDEX_PREFIX + r'''
+    written = Written()
+    error = BlockingIOError(11, 'blocked', written, None, 'ignored')
+    gc.collect()
+    if EVENTS == []:
+        assert type(error) is BlockingIOError
+        assert error.errno == 11 and error.strerror == 'blocked'
+        assert error.args == (11, 'blocked')
+        assert error.filename is written and error.filename2 == 'ignored'
+        print('BLOCKING_INDEX_NOT_IMPLEMENTED')
+        return
+    assert EVENTS == ['third']
+    assert type(error) is BlockingIOError
+    assert error.characters_written == 3
+    assert error.errno == 11 and error.strerror == 'blocked'
+    assert error.args == (11, 'blocked', written, None, 'ignored')
+    assert error.filename is None and error.filename2 is None
+    print('BLOCKING_INDEX_OK')
+
+main()
+''',
+    "error": _BLOCKING_INDEX_PREFIX + r'''
+    written = FailedWritten()
+    try:
+        result = BlockingIOError(11, 'blocked', written)
+    except ValueError as error:
+        assert error is PROBLEM
+        assert EVENTS == ['third']
+    else:
+        if EVENTS == []:
+            gc.collect()
+            assert type(result) is BlockingIOError
+            assert result.errno == 11 and result.strerror == 'blocked'
+            assert result.args == (11, 'blocked')
+            assert result.filename is written and result.filename2 is None
+            print('BLOCKING_INDEX_NOT_IMPLEMENTED')
+            return
+        raise AssertionError('third argument index failure was swallowed')
+    print('BLOCKING_INDEX_OK')
+
+main()
+''',
+}
+
+
+class _BlockingIndexNotImplemented(AssertionError):
+    pass
+
+
+@pytest.mark.integration
+@pytest.mark.xfail(strict=True, raises=_BlockingIndexNotImplemented,
+                  reason="BlockingIOError indexable-third/characters_written is unimplemented")
+@pytest.mark.parametrize("case", ("value", "error"))
+@pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
+def test_blocking_indexable_third_argument_native_five_gc(
+        case, python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd):
+    mode = request.node.callspec.params["python_program_compiler"]
+    try:
+        assert_owned_program(BLOCKING_INDEX_PROGRAMS[case], "BLOCKING_INDEX_OK\n", tmp_path,
+                             python_program_compiler, mode, explicit_owned_runtime,
+                             capfd, provenance_probe="2")
+    except AssertionError:
+        # Only the emitted program's precise absent-callback sentinel is a
+        # known failure. Reference, compile, crash or unrelated assertion
+        # failures must remain real failures rather than being masked by XFAIL.
+        receipt_path = tmp_path / "ownership-regression.json"
+        if receipt_path.is_file():
+            receipt = json.loads(receipt_path.read_text())
+            executions = receipt.get("executions", [])
+            if receipt.get("status") == "NATIVE_EXECUTION_FAILED" and executions:
+                last = executions[-1]
+                if (last["returncode"], last["stdout"], last["stderr"]) == (
+                        0, "BLOCKING_INDEX_NOT_IMPLEMENTED\n", ""):
+                    raise _BlockingIndexNotImplemented(case) from None
+        raise
