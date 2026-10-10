@@ -199,3 +199,68 @@ def test_float_protocol_result_ownership(relocate, kind):
         assert memory.obj(memory.pending)["value"][0] == (6 if kind == "error" else 3)
     assert memory.obj(memory.current["receiver"])["refs"] == 1
     memory.assert_clean()
+
+
+@pytest.mark.parametrize("relocate", (False, True))
+@pytest.mark.parametrize("method,result_value,raw_double,overflow", (
+    pytest.param("__index__", 10 ** 400, float("inf"), True, id="positive-huge-index"),
+    pytest.param("__index__", -(10 ** 400), float("-inf"), True, id="negative-huge-index"),
+    pytest.param("__index__", 2 ** 1024 - 2 ** 971, 1.7976931348623157e308, False, id="positive-max-finite"),
+    pytest.param("__index__", -(2 ** 1024 - 2 ** 971), -1.7976931348623157e308, False, id="negative-max-finite"),
+    pytest.param("__index__", 2 ** 1024 - 2 ** 970 - 1, 1.7976931348623157e308, False, id="positive-below-overflow"),
+    pytest.param("__index__", -(2 ** 1024 - 2 ** 970 - 1), -1.7976931348623157e308, False, id="negative-below-overflow"),
+    pytest.param("__index__", 2 ** 1024 - 2 ** 970, float("inf"), True, id="positive-overflow-threshold"),
+    pytest.param("__index__", -(2 ** 1024 - 2 ** 970), float("-inf"), True, id="negative-overflow-threshold"),
+    pytest.param("__index__", 0, 0.0, False, id="zero-index"),
+    pytest.param("__float__", float("inf"), float("inf"), False, id="positive-infinite-float"),
+    pytest.param("__float__", float("-inf"), float("-inf"), False, id="negative-infinite-float"),
+    pytest.param("__float__", float("nan"), float("nan"), False, id="nan-float"),
+))
+def test_float_index_overflow_preserves_owned_error(
+    relocate, method, result_value, raw_double, overflow,
+):
+    memory = ConsumerModel(relocate)
+    receiver = memory.new("receiver")
+    namespace = memory.env()
+    float_tag = 13
+    namespace["PY_TYPE_FLOAT"] = float_tag
+    namespace["store_f64"] = memory.store
+
+    def raw_conversion(value):
+        assert memory.obj(value)["leases"]
+        assert memory.obj(value)["value"] is result_value
+        memory.park("raw-float-conversion")
+        # Model the runtime's unchecked double conversion, including raw
+        # infinities. CPython float(huge_int) would raise before the new guard.
+        # These cases test the checked boundary, not the bigint rounding body.
+        return raw_double
+
+    namespace["py_float_to_f64"] = raw_conversion
+    tag = 1 if method == "__index__" else float_tag
+    memory.methods[method] = lambda *_: memory.new("result", tag, result_value)
+    if method == "__float__":
+        memory.methods["__index__"] = lambda *_: pytest.fail("selected float fell back")
+    if overflow:
+        # Inject a model cleanup error to verify that dropping the temporary
+        # cannot replace the original owned OverflowError.
+        memory.finalize_error.add("result")
+    scalar, handled = memory.alloc(8), memory.alloc(8)
+    result = namespace["py_user_special_dispatch"](
+        receiver, "__float__", None, None, 0, 8, scalar, handled,
+    )
+    assert result is None and memory.load(handled) == 1
+    assert memory.calls == (["__float__", "__index__"] if method == "__index__" else ["__float__"])
+    if overflow:
+        assert memory.obj(memory.pending)["value"] == (15, "int too large to convert to float")
+        assert memory.load(scalar) == 0
+        assert "finalizer-error" in memory.disposed
+    else:
+        assert memory.pending is None
+        actual = memory.load(scalar)
+        if raw_double != raw_double:
+            assert actual != actual
+        else:
+            assert actual == raw_double
+    assert memory.disposed.count("result") == 1
+    assert memory.obj(memory.current["receiver"])["refs"] == 1
+    memory.assert_clean()

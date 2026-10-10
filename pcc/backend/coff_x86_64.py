@@ -199,7 +199,9 @@ def _unwind_source(text):
     return "\n".join(lines), procedures
 
 
-def assemble(text: str) -> CoffObject:
+def assemble(
+    text: str, *, stack_map_plans=None, consume_stack_map_plans=False,
+) -> CoffObject:
     from .x86_64_asm_driver import assemble_file_keeping_labels
     from .elf_x86_64 import SHF_EXECINSTR, SHF_WRITE, SHF_TLS, STB_LOCAL, STT_FUNC
     clean, procedures = _unwind_source(text)
@@ -209,7 +211,19 @@ def assemble(text: str) -> CoffObject:
     for _name, actions, prolog_end, end in procedures:
         markers.update(label for label, _op, _args in actions)
         markers.update((prolog_end, end))
-    elf = assemble_file_keeping_labels(clean, markers)
+    if stack_map_plans is None:
+        elf = assemble_file_keeping_labels(clean, markers)
+    else:
+        from .x86_64_asm_driver import assemble_file_with_stack_maps_keeping_labels
+        from .self_backend_x86_64_linux import _asm_symbol, _block_label
+
+        # Reuse the owned target-final packer before the unchanged ELF-to-COFF
+        # relocation conversion. SEH labels remain available to _append_unwind.
+        elf = assemble_file_with_stack_maps_keeping_labels(
+            clean, stack_map_plans, markers,
+            function_symbol=_asm_symbol, block_label=_block_label,
+            consume_stack_map_plans=consume_stack_map_plans,
+        )
     symbols = [CoffSymbol(sym.name, sym.section_index, sym.value,
                           sym.binding != STB_LOCAL, sym.type == STT_FUNC) for sym in elf.symbols[1:]]
     sections = []
@@ -323,13 +337,22 @@ def _append_unwind(sections, symbols, procedures):
     sections.append(CoffSection(".pdata", bytes(pdata), 0x40000040, 4, tuple(relocations)))
 
 
-def assemble_object(text: str, *, phase_timing=None) -> bytes:
-    if phase_timing is None:
-        return emit_object(assemble(text))
-    started = phase_timing.start()
-    obj = assemble(text)
-    phase_timing.add(9, started)
-    started = phase_timing.start()
+def assemble_object(
+    text: str, *, stack_map_plans=None, consume_stack_map_plans=False,
+    phase_timing=None,
+) -> bytes:
+    started = phase_timing.start() if phase_timing is not None else 0
+    if stack_map_plans is None:
+        obj = assemble(text)
+    else:
+        obj = assemble(
+            text, stack_map_plans=stack_map_plans,
+            consume_stack_map_plans=consume_stack_map_plans,
+        )
+    if phase_timing is not None:
+        phase_timing.add(9, started)
+        started = phase_timing.start()
     encoded = emit_object(obj)
-    phase_timing.add(10, started)
+    if phase_timing is not None:
+        phase_timing.add(10, started)
     return encoded

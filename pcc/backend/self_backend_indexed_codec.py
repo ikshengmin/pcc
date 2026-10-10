@@ -287,13 +287,25 @@ def _function_to_wire(function: ParsedFunction, kernel: IndexedFunctionKernel):
     }
 
 
+# At most 64 KiB of wire bytes per write, plus 8,192 scalar byte objects.
+# Keep packing scratch independent of arena length without changing <q coercion.
+_HOST_ARENA_CHUNK_SCALARS = 8192
+
+
 def _write_host_arena(stream, arena: CompilerIntArena) -> None:
+    # As before, the caller supplies a blocking binary writer that writes the
+    # complete bytes argument or raises. Earlier chunks can remain written if
+    # a later scalar cannot be packed; callers must discard failed sidecars.
     chunks = []
     index = 0
     while index < len(arena):
         chunks.append(struct.pack("<q", arena.get_unchecked(index)))
         index += 1
-    stream.write(b"".join(chunks))
+        if len(chunks) == _HOST_ARENA_CHUNK_SCALARS:
+            stream.write(b"".join(chunks))
+            chunks = []
+    if chunks or index == 0:
+        stream.write(b"".join(chunks))
 
 
 def encode_indexed_module_file(path: str, module: ParsedModule) -> None:

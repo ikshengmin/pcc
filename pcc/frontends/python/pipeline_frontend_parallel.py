@@ -1010,6 +1010,18 @@ def compile_parallel_uncached(
     # A numeric worker count limits concurrency; it must not turn off the
     # native export/codegen ownership and memory-safe deferred pipeline.
     native_owned_lanes = compiled_native_worker
+    host_indexed_split = False
+    if not native_owned_lanes and str(
+        os.environ.get("PCC_HOST_INDEXED_PROCESS_SPLIT", "") or ""
+    ).strip().lower() in ("1", "true", "yes", "on"):
+        from pcc.frontends.python.pipeline_frontend_indexed_stage import require_host_indexed_split
+
+        require_host_indexed_split(
+            os.environ, checkpoint_root=checkpoint_root,
+            action_cache_plan=action_cache_plan, libpython_mode=libpython_mode,
+            artifact_dir=artifact_dir,
+        )
+        host_indexed_split = True
     if checkpoint_root:
         if (
             native_owned_lanes
@@ -1035,6 +1047,8 @@ def compile_parallel_uncached(
     native_auto_source_lanes = auto_source_lanes and compiled_native_worker
     chunk_count = chunk_count_for_workers(len(src_paths), jobs, worker_prefix)
     chunks = codegen_chunks(src_paths, chunk_count)
+    if host_indexed_split and any(len(chunk) != 1 for chunk in chunks):
+        raise pipeline_error("host indexed process split requires singleton codegen chunks")
     # Export startup is amortized over a fixed-size batch, independently of
     # admission width. Host/native codegen below remains singleton so its
     # decoded export graph and module-local state have one-module lifetimes.
@@ -1097,6 +1111,8 @@ def compile_parallel_uncached(
     )
     with tempfile.TemporaryDirectory(prefix="pcc_frontends_python_workers_") as tmp:
         ir_dir = artifact_dir if artifact_dir else os.path.join(tmp, "ir")
+        if host_indexed_split:
+            ir_dir = os.path.abspath(ir_dir)
         os.makedirs(ir_dir, exist_ok=True)
         # The merged may_park fixed point is a semantic prerequisite for
         # parallel codegen, so every export worker must publish its lifted AST.
@@ -1364,6 +1380,8 @@ def compile_parallel_uncached(
             command_parts.append(shell_quote_arg(worker_arg))
             command_parts.append(shell_quote_arg(manifest_path))
             command_environment = worker_env_prefix()
+            if host_indexed_split:
+                command_environment += " PCC_DIRECT_INDEXED_SIDECAR=1"
             if oversized_assembly_handoff and worker_index < oversized_chunk_count:
                 # The frontend, indexed emitter and assembler have different
                 # high-water shapes.  Keep the direct indexed emitter here,
@@ -1466,7 +1484,15 @@ def compile_parallel_uncached(
                 "multi_frontend_codegen_in_process",
                 1 if in_process_codegen else 0,
             )
-            if in_process_codegen:
+            if host_indexed_split:
+                from pcc.frontends.python.pipeline_frontend_indexed_stage import run_host_indexed_stage
+
+                run_host_indexed_stage(
+                    commands, manifest_paths, result_paths, scheduled_chunks,
+                    module_names, ir_dir, worker_prefix, safe_jobs,
+                    worker_env_prefix(), shell_quote_arg,
+                )
+            elif in_process_codegen:
                 old_native_object = str(
                     os.environ.get(
                         "PCC_DIRECT_INDEXED_NATIVE_OBJECT", "1"
@@ -1505,7 +1531,7 @@ def compile_parallel_uncached(
                     oversized_started,
                 )
             safe_commands = commands[oversized_chunk_count:]
-            if safe_commands and not in_process_codegen:
+            if safe_commands and not in_process_codegen and not host_indexed_split:
                 safe_started = profile_begin(profile)
                 run_worker_commands(safe_commands, max_parallel=safe_jobs)
                 profile_end(

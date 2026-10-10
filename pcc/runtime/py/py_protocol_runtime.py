@@ -2127,6 +2127,11 @@ def _named_convert(slots, conversion: int, scalar) -> int:
         number: float = py_float_to_f64(load_ptr(result_slot, 0))
         if py_err_occurred() != 0:
             return -1
+        if conversion == 9 and number != 0.0 and number == number * 2.0:
+            # Raw bigint conversion produces infinity on overflow. Only the
+            # integer fallback must reject it; __float__ may return infinity.
+            py_raise_owned(py_exc_new(15, cstr("int too large to convert to float")))
+            return -1
         if ptr_is_null(scalar) == 0:
             store_f64(scalar, 0, number)
         return 0

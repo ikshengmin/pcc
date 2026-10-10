@@ -284,6 +284,9 @@ def test_profiles_preserve_default_order_and_bind_only_three_float_doc_nodes():
         "float-doc": (
             "runtime-build", "float-protocol", "class-docstrings", "float-callback-movement",
         ),
+        "indexed-split": (
+            "indexed-worker-lifetime", "indexed-split", "indexed-handoff-closure",
+        ),
     }
     assert {name: dict(gate.GATES)[name] for name in FLOAT_DOC_NODES} == FLOAT_DOC_NODES
 
@@ -384,7 +387,7 @@ def test_cli_rejects_unknown_profile_before_run_or_collection(tmp_path, monkeypa
     assert not (tmp_path / "absent").exists()
 
 
-@pytest.mark.parametrize("profile", ("default", "float-doc"))
+@pytest.mark.parametrize("profile", ("default", "float-doc", "indexed-split"))
 def test_cli_selects_profile_without_changing_default(tmp_path, monkeypatch, profile):
     seen = []
     monkeypatch.setattr(gate, "run", lambda out, **kwargs: seen.append((out, kwargs)))
@@ -432,4 +435,131 @@ def test_float_doc_workflow_is_independent_bounded_and_triggered():
     assert "--profile float-doc" not in _workflow_job(workflow, "pcc1-package-parity")
     for name in FLOAT_DOC_NODES:
         path = FLOAT_DOC_NODES[name][0].split("::", 1)[0]
+        assert workflow.count('      - "' + path + '"') == 2
+
+
+INDEXED_SPLIT_NODES = {
+    "indexed-worker-lifetime": (
+        "tests/python/test_worker_resource_plan.py::"
+        "test_failure_retires_running_peers_and_does_not_launch_tail",
+        "tests/python/test_worker_resource_plan.py::"
+        "test_progressive_retry_drains_peers_then_restores_concurrency",
+    ),
+    "indexed-split": (
+        "tests/python/test_indexed_process_split_real.py::"
+        "test_real_split_and_unsplit_match_complete_objects",
+    ),
+    "indexed-handoff-closure": (
+        "tests/python/test_indexed_handoff_closed_world.py::"
+        "test_handoff_provider_closed_world_aarch64",
+    ),
+}
+
+
+def test_indexed_split_profile_runs_exact_real_nodes_without_runtime_build(tmp_path, monkeypatch):
+    _mock_macos(monkeypatch)
+    calls = []
+    monkeypatch.setattr(gate, "_command", lambda *args: pytest.fail("runtime build was reached"))
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "2147483648")
+    monkeypatch.setenv("PCC_WORKER_TREE_STATE_PATH", str(tmp_path / "tree-state.tsv"))
+
+    def execute(name, nodes, out, environment):
+        calls.append(name)
+        assert nodes == INDEXED_SPLIT_NODES[name]
+        assert out == tmp_path
+        assert environment["PCC_HOST_INDEXED_PROCESS_SPLIT"] == "0"
+        assert environment["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+        assert environment["PCC_NO_AUTO_PCC1"] == "1"
+        assert environment["PCC_TEST_COMPILER_STRICT"] == "1"
+        assert environment["PCC_WORKER_TREE_BUDGET_BYTES"] == "2147483648"
+        assert environment["PCC_WORKER_TREE_STATE_PATH"] == str(tmp_path / "tree-state.tsv")
+        return list(nodes)
+
+    monkeypatch.setattr(gate, "_pytest_gate", execute)
+    gate.run(tmp_path, profile="indexed-split")
+    assert calls == list(gate.PROFILES["indexed-split"]) == list(INDEXED_SPLIT_NODES)
+    assert {name: dict(gate.GATES)[name] for name in calls} == INDEXED_SPLIT_NODES
+    receipt = json.loads((tmp_path / "work/qualification.json").read_text())
+    assert receipt["status"] == "PASS" and receipt["profile"] == "indexed-split"
+    assert "no native helper execution, runtime or GC qualification" in receipt["scope"]
+    assert "collector_scope" not in receipt and "clock_scope" not in receipt
+    for name, nodes in INDEXED_SPLIT_NODES.items():
+        assert receipt["gates"][name] == {
+            "status": "PASS", "expected_nodes": list(nodes), "executed_nodes": list(nodes),
+        }
+
+
+@pytest.mark.parametrize("failed", tuple(INDEXED_SPLIT_NODES))
+def test_indexed_split_failure_stops_later_gates(tmp_path, monkeypatch, failed):
+    _mock_macos(monkeypatch)
+    calls = []
+    monkeypatch.setattr(gate, "_command", lambda *args: pytest.fail("runtime build was reached"))
+
+    def execute(name, nodes, out, environment):
+        calls.append(name)
+        if name == failed:
+            raise AssertionError("selected indexed gate failed")
+        return list(nodes)
+
+    monkeypatch.setattr(gate, "_pytest_gate", execute)
+    with pytest.raises(AssertionError, match="selected indexed gate failed"):
+        gate.run(tmp_path, profile="indexed-split")
+    order = list(INDEXED_SPLIT_NODES)
+    index = order.index(failed)
+    assert calls == order[:index + 1]
+    receipt = json.loads((tmp_path / "work/qualification.json").read_text())
+    assert receipt["status"] == "FAIL"
+    for position, name in enumerate(order):
+        expected = "PASS" if position < index else "FAIL" if position == index else "NOT_RUN"
+        assert receipt["gates"][name]["status"] == expected
+        if position >= index:
+            assert "executed_nodes" not in receipt["gates"][name]
+
+
+def test_indexed_receipts_are_retained_without_assembly_or_objects(tmp_path):
+    work = tmp_path / "work/indexed-split/tests"
+    work.mkdir(parents=True)
+    names = ("indexed-process-split.json", "indexed-handoff-closed-world.json")
+    for name in names:
+        (work / name).write_text('{"status": "PASS"}\n')
+    (work / "module.pco").write_bytes(b"owned object stays on runner")
+    (work / "provider.ll").write_text("real IR stays on runner")
+    gate.collect_evidence(tmp_path)
+    index = json.loads((tmp_path / "evidence/index.json").read_text())
+    assert index["status"] == "COMPLETE"
+    assert {row["source"] for row in index["files"]} == {
+        "indexed-split/tests/" + name for name in names
+    }
+    for name in names:
+        actual = tmp_path / "evidence/indexed-split/tests" / (name + ".gz")
+        assert gzip.decompress(actual.read_bytes()) == (work / name).read_bytes()
+
+
+def test_indexed_split_workflow_gates_only_macos_stage1_opt_in():
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    job = _workflow_job(workflow, "macos-pcc0-indexed-split")
+    stage1 = _workflow_job(workflow, "pcc1-package-parity")
+    other = _workflow_job(workflow, "other-platform-native-wheel")
+    assert "runs-on: macos-15" in job
+    assert "timeout-minutes: 25" in job and "--timeout 1200" in job
+    assert "--auto-tree-rss-ceiling-bytes 4294967296" in job
+    assert "--min-tree-rss-bytes 2147483648" in job
+    assert "--darwin-preflight-reserve-bytes 536870912" in job
+    assert job.count("--out-dir build/macos-indexed-split --profile indexed-split") == 2
+    assert "path: build/macos-indexed-split/evidence/" in job
+    assert "name: macos-pcc0-indexed-split-receipts" in job
+    assert job.count("if: always()") == 2
+    assert "needs:" not in job and "actions/download-artifact" not in job
+    assert "env -u LC_ALL" not in job
+    assert "needs: macos-pcc0-indexed-split" in stage1
+    assert stage1.count('PCC_HOST_INDEXED_PROCESS_SPLIT: "1"') == 1
+    assert ('      - name: Build current pcc1\n        env:\n'
+            '          # Opt in only this Stage1 build, after the independent gate passed.\n'
+            '          PCC_HOST_INDEXED_PROCESS_SPLIT: "1"\n        run: |') in stage1
+    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"' in stage1
+    assert "timeout-minutes: 45" in stage1
+    assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in other
+    assert "needs:" not in other
+    for name in ("indexed-split", "indexed-handoff-closure"):
+        path = INDEXED_SPLIT_NODES[name][0].split("::", 1)[0]
         assert workflow.count('      - "' + path + '"') == 2

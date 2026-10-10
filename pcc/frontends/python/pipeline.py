@@ -1172,8 +1172,51 @@ def run_self_backend_indexed_emit_worker(
     output_path: str,
     artifact_kind: str,
 ) -> int:
+    phase_timing = None
+    complete = False
     try:
-        _emit_indexed_module_file(sidecar_path, output_path, artifact_kind)
+        handoff_request = str(os.environ.get("PCC_INDEXED_HANDOFF_REQUEST", "") or "")
+        if handoff_request:
+            handoff_started = time.monotonic()
+            from pcc.frontends.python.pipeline_indexed_handoff import (
+                publish_handoff_result, validate_handoff_input,
+            )
+
+            request, _seal = validate_handoff_input(
+                handoff_request, sidecar_path, output_path, artifact_kind,
+            )
+            if _pipeline_frontend_workers.worker_timing_enabled(
+                os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", ""),
+            ):
+                try:
+                    from pcc.backend.indexed_phase_timing import ModulePhaseTiming
+
+                    phase_timing = ModulePhaseTiming(request["module"])
+                    phase_timing.target = request["target"]
+                    phase_timing.route = "indexed-sidecar-backend"
+                except Exception:
+                    pass
+            _emit_indexed_module_file(
+                sidecar_path, output_path, artifact_kind,
+                phase_timing=phase_timing, handoff_request=handoff_request,
+            )
+            publish_handoff_result(handoff_request)
+            from pcc.frontends.python.worker_resource_plan import publish_worker_resource
+
+            publish_worker_resource("complete")
+            if phase_timing is not None:
+                try:
+                    sys.stderr.write(
+                        "pcc indexed backend worker done index=" + str(request["index"])
+                        + " module=" + request["module"]
+                        + " elapsed_ms=" + str(int((time.monotonic() - handoff_started) * 1000))
+                        + " artifact=PCO\n"
+                    )
+                except Exception:
+                    pass
+        else:
+            _emit_indexed_module_file(sidecar_path, output_path, artifact_kind)
+        complete = True
         return 0
     except Exception as exc:
         sys.stderr.write(
@@ -1182,6 +1225,9 @@ def run_self_backend_indexed_emit_worker(
             + "\n"
         )
         return 1
+    finally:
+        if phase_timing is not None:
+            phase_timing.report(sys.stderr, complete)
 
 
 def run_self_backend_emit_batch_worker(manifest_path: str) -> int:

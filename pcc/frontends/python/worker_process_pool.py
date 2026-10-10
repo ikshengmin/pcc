@@ -155,7 +155,7 @@ def _resource_diagnostic(task, event, index, pid, reservation, available, peak, 
             + " peak_bytes=" + str(peak)
             + " monotonic_s=" + str(time.monotonic())
             + " input_count=" + str(len(inputs))
-            + " inputs=" + repr(inputs[:8])
+            + " inputs=" + repr(inputs[:47] if task.get("handoff_request", "") else inputs[:8])
             + " class_sha256=" + class_digest
             + " cohort=" + str(cohort) + "\n"
         )
@@ -204,6 +204,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     attempt_tokens = {}
     retries = [0 for _task in tasks]
     completed = set()
+    completed_tokens = {}
     unavailable_since = time.monotonic()
     fresh_after = unavailable_since
     preflight_done = False
@@ -241,7 +242,12 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 _resource_event(trace_path, "retire", index, pid, reservation, 0, observed_peak)
                 _resource_diagnostic(tasks[index], "retire", index, pid, reservation, 0, observed_peak,
                                          bands[index] if bands else -1)
+                if tasks[index].get("handoff_request", ""):
+                    from pcc.frontends.python.pipeline_indexed_handoff import retire_handoff_task
+
+                    retire_handoff_task(tasks[index], attempt_tokens[pid])
                 observations.append((tasks[index]["class"], tasks[index]["inputs"], observed_peak))
+                completed_tokens[index] = attempt_tokens[pid]
                 if tasks[index].get("retry_calibration", False):
                     tasks[index]["retry_calibration"] = False
                 completed.add(index)
@@ -360,6 +366,10 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                     dependency = tasks[item].get("depends_on", -1)
                     if dependency >= 0 and dependency not in completed:
                         continue
+                    if tasks[item].get("handoff_request", "") and not tasks[item].get("input_ready", False):
+                        from pcc.frontends.python.pipeline_indexed_handoff import prepare_handoff_task
+
+                        prepare_handoff_task(tasks[item], completed_tokens[dependency])
                     input_path = str(tasks[item].get("input_path", "") or "")
                     if input_path and not tasks[item].get("input_ready", False):
                         with open(input_path, "rb") as stream:
@@ -407,6 +417,12 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 argv, vector = specs[index]
                 vector = [entry for entry in vector if not entry.startswith(RESOURCE_TOKEN_ENV + "=")]
                 vector.append(RESOURCE_TOKEN_ENV + "=" + token)
+                if tasks[index].get("handoff_request", ""):
+                    from pcc.frontends.python.pipeline_indexed_handoff import ENV_SEAL, reset_handoff_output
+
+                    reset_handoff_output(tasks[index])
+                    vector = [entry for entry in vector if not entry.startswith(ENV_SEAL + "=")]
+                    vector.append(ENV_SEAL + "=" + tasks[index]["handoff_seal_sha256"])
                 specs[index] = (argv, vector)
                 pid = _start_resource_worker(specs, index)
                 if pid <= 0:

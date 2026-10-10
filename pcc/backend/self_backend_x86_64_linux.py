@@ -2985,8 +2985,6 @@ def _emit_x86_64_module(
     global _WINDOWS_ABI, _X86_EMISSION_ACTIVE
     if _X86_EMISSION_ACTIVE:
         raise BackendUnavailable("x86 emission is already active")
-    if windows and stack_map_plans_out is not None:
-        raise BackendUnavailable("packed x86 stack maps require the Linux ELF target")
     _X86_EMISSION_ACTIVE = True
     _WINDOWS_ABI = windows
     try:

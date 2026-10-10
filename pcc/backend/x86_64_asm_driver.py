@@ -642,6 +642,21 @@ def assemble_file_with_stack_maps(
     )
 
 
+def assemble_file_with_stack_maps_keeping_labels(
+    asm_text: str, stack_map_plans, keep_labels, *, function_symbol, block_label,
+    consume_stack_map_plans: bool = False,
+) -> ElfObject:
+    """Assemble structured maps while retaining the requested local labels.
+
+    COFF consumers retain the same unreferenced SEH marker labels as their
+    text-only path; packed metadata still resolves at final machine offsets.
+    """
+    return _assemble_file(
+        asm_text, keep_labels, stack_map_plans, function_symbol, block_label,
+        consume_stack_map_plans,
+    )
+
+
 def _assemble_file(
     asm_text: str, keep_labels, stack_map_plans, function_symbol, block_label,
     consume_stack_map_plans: bool = False,

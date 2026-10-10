@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused Darwin pcc0 execution gates; never certify Stage1 or a fixed point.
+"""Focused Darwin pcc0 gates; never certify Stage1 or a fixed point.
 
 Run under scripts/run_process_tree_sample.py. The workflow bounds the complete
 process tree, then collects small receipts even after a timeout. Runtime and
@@ -64,6 +64,20 @@ GATES = (
             "original-direct-payload", "original-valuebox",
         )
     )),
+    ("indexed-worker-lifetime", (
+        "tests/python/test_worker_resource_plan.py::"
+        "test_failure_retires_running_peers_and_does_not_launch_tail",
+        "tests/python/test_worker_resource_plan.py::"
+        "test_progressive_retry_drains_peers_then_restores_concurrency",
+    )),
+    ("indexed-split", (
+        "tests/python/test_indexed_process_split_real.py::"
+        "test_real_split_and_unsplit_match_complete_objects",
+    )),
+    ("indexed-handoff-closure", (
+        "tests/python/test_indexed_handoff_closed_world.py::"
+        "test_handoff_provider_closed_world_aarch64",
+    )),
     ("float-protocol", (
         "tests/python/test_native_float_protocol.py::"
         "test_float_protocol_native_five_gc[pcc0]",
@@ -82,6 +96,9 @@ PROFILES = {
         "clock", "runtime-build", "oserror", "time", "native-worker-clock",
         "worker-handles", "root-joins",
     ),
+    "indexed-split": (
+        "indexed-worker-lifetime", "indexed-split", "indexed-handoff-closure",
+    ),
     "float-doc": (
         "runtime-build", "float-protocol", "class-docstrings", "float-callback-movement",
     ),
@@ -92,6 +109,7 @@ RECEIPT_NAMES = {
     "live.jsonl", "junit.xml", "ownership-regression.json", "execution.json",
     "darwin-resource-handles.json", "native-worker-clock.json", "reference.json",
     "float-callback-movement.json",
+    "indexed-process-split.json", "indexed-handoff-closed-world.json",
     *(f"gc{backend}.json" for backend in range(5)),
 }
 
@@ -166,6 +184,11 @@ def run(out, profile="default"):
     environment = dict(os.environ)
     environment.pop("LC_ALL", None)
     environment.update(PCC_NO_AUTO_PCC1="1", PCC_TEST_COMPILER_STRICT="1")
+    if profile == "indexed-split":
+        # The pair toggles only its own compiler children. No runtime is needed
+        # for PCO equality or actual provider closed-world lowering/emission.
+        environment.update(PCC_HOST_INDEXED_PROCESS_SPLIT="0",
+                           PCC_TEST_NO_NATIVE_PROVISIONING="1")
     receipt = {
         "schema": "pcc.macos-regression-ci.v1", "status": "RUNNING",
         "profile": profile,
@@ -176,6 +199,12 @@ def run(out, profile="default"):
     }
     if profile == "default":
         receipt["clock_scope"] = "real host/native clock epoch; simulated suspend; emitted native worker-state reader"
+    elif profile == "indexed-split":
+        receipt["scope"] = (
+            "host pcc0 split/unsplit complete object equality and real worker lifetime; "
+            "actual handoff provider no-libpython ARM lowering/emission; "
+            "no native helper execution, runtime or GC qualification"
+        )
     else:
         receipt["collector_scope"] = (
             "float protocol and class docstrings request GC0-4 without collector-selection telemetry; "

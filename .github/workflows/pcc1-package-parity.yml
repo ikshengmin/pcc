@@ -16,6 +16,8 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_indexed_process_split_real.py"
+      - "tests/python/test_indexed_handoff_closed_world.py"
       - "tests/python/test_worker_memory_budget_selection.py"
       - "tests/python/test_process_tree_sample_tool.py"
       - "tests/python/test_valueclass_aggregate_ownership_native.py"
@@ -51,6 +53,8 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_indexed_process_split_real.py"
+      - "tests/python/test_indexed_handoff_closed_world.py"
       - "tests/python/test_worker_memory_budget_selection.py"
       - "tests/python/test_process_tree_sample_tool.py"
       - "tests/python/test_valueclass_aggregate_ownership_native.py"
@@ -177,6 +181,56 @@ jobs:
           # Complete compressed logs/receipts only; no archives, objects or IR.
           path: build/macos-float-doc/evidence/
 
+  macos-pcc0-indexed-split:
+    name: macOS arm64 pcc0 indexed-stage bridge gate
+    runs-on: macos-15
+    timeout-minutes: 25
+    # Real host child/object and compiler-owned helper lowering evidence.
+    # No runtime build or native helper execution is claimed by this gate.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Verify real split objects and helper closed-world lowering
+        run: |
+          uv run python scripts/run_process_tree_sample.py \
+            --result build/macos-indexed-split/work/supervisor/result.json \
+            --samples build/macos-indexed-split/work/supervisor/samples.tsv \
+            --stdout build/macos-indexed-split/work/supervisor/target.stdout \
+            --stderr build/macos-indexed-split/work/supervisor/target.stderr \
+            --timeout 1200 --interval 1 --progress-interval 30 \
+            --auto-tree-rss-ceiling-bytes 4294967296 \
+            --min-tree-rss-bytes 2147483648 \
+            --darwin-preflight-reserve-bytes 536870912 \
+            -- uv run python scripts/ci_macos_regression_gate.py \
+            --out-dir build/macos-indexed-split --profile indexed-split
+
+      - name: Collect complete bounded indexed-stage receipts
+        if: always()
+        run: |
+          uv run python scripts/ci_macos_regression_gate.py \
+            --out-dir build/macos-indexed-split --profile indexed-split --collect-evidence
+
+      - name: Preserve indexed-stage receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-pcc0-indexed-split-receipts
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: warn
+          path: build/macos-indexed-split/evidence/
+
   other-platform-native-wheel:
     name: Native wheel / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
@@ -262,6 +316,7 @@ jobs:
         run: python scripts/ci_native_wheel_gate.py dist
 
   pcc1-package-parity:
+    needs: macos-pcc0-indexed-split
     name: macOS arm64 native pcc1 and installed wheel
     runs-on: macos-15
     timeout-minutes: 45
@@ -302,6 +357,9 @@ jobs:
         run: uv sync --dev
 
       - name: Build current pcc1
+        env:
+          # Opt in only this Stage1 build, after the independent gate passed.
+          PCC_HOST_INDEXED_PROCESS_SPLIT: "1"
         run: |
           env -u LC_ALL uv run python scripts/bootstrap.py \
             --backend self \

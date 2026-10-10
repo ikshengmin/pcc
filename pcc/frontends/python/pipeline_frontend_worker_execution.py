@@ -415,6 +415,10 @@ def run_codegen_worker(
         indexed_sidecar_requested = str(
             os.environ.get("PCC_DIRECT_INDEXED_SIDECAR", "") or ""
         ).strip().lower() in ("1", "true", "yes", "on")
+        handoff_request = str(os.environ.get("PCC_INDEXED_HANDOFF_REQUEST", "") or "")
+        if handoff_request and (native_worker_executable() or not indexed_sidecar_requested
+                                or libpython_mode != "off" or len(assigned_indices) != 1):
+            raise _worker_failure("host indexed handoff requires a host singleton no-libpython sidecar worker")
         if indexed_sidecar_requested and len(assigned_indices) != 1:
             raise _worker_failure(
                 "indexed sidecar output requires a singleton worker manifest"
@@ -726,7 +730,9 @@ def run_codegen_worker(
 
                     from pcc.backend.target_objects import emit_indexed_assembly, encode_assembly_object
                     from pcc.backend.self_backend_target_match import (
-                        is_aarch64_darwin_triple, is_x86_64_linux_triple,
+                        is_aarch64_darwin_triple,
+                        is_x86_64_linux_triple,
+                        is_x86_64_windows_triple,
                     )
                     from pcc.backend.self_backend_dispatch import emit_self_asm
                     if validate_direct or emit_direct:
@@ -772,7 +778,7 @@ def run_codegen_worker(
                                 + direct_libpython_edge
                             )
                         if (
-                            require_zero_direct_fallback
+                            (require_zero_direct_fallback or handoff_request)
                             and codegen.module._direct_indexed_fallback_records != 0
                         ):
                             raise _worker_failure(
@@ -794,7 +800,36 @@ def run_codegen_worker(
                                 ir_dir,
                                 "module_" + str(index) + ".direct.pidx",
                             )
-                            encode_indexed_module_file(direct_path, direct_module)
+                            if handoff_request:
+                                from pcc.frontends.python.pipeline_indexed_handoff import publish_handoff
+
+                                # The indexed module owns its immutable kernels.
+                                # The rendered canonical pass input is retained
+                                # for the ordinary IR/result protocol, but AST,
+                                # frontend owners and their cycles can die now.
+                                phase_started = phase_timing.start() if phase_timing is not None else 0
+                                _release_direct_frontend_state(codegen)
+                                parsed_modules[index] = None
+                                del ast_module
+                                del typed_module
+                                del external_for_this
+                                del codegen_exports
+                                del generated_module
+                                del codegen
+                                import gc
+
+                                gc.collect()
+                                if phase_timing is not None:
+                                    phase_timing.add(1, phase_started)
+                                direct_path = publish_handoff(
+                                    handoff_request, manifest_path, index, module_name,
+                                    direct_module, direct_passes, direct_needs_libpython,
+                                    needs_native_extension_exports, encode_indexed_module_file,
+                                )
+                                del direct_module
+                                publish_worker_resource("indexed-handoff:" + str(index))
+                            else:
+                                encode_indexed_module_file(direct_path, direct_module)
                             direct_marker = "PIDX"
                         if (
                             release_direct_frontend
@@ -823,7 +858,10 @@ def run_codegen_worker(
                             and native_object_output
                             and not validate_direct
                             and not emit_text_control
-                            and is_x86_64_linux_triple(direct_target)
+                            and (
+                                is_x86_64_linux_triple(direct_target)
+                                or is_x86_64_windows_triple(direct_target)
+                            )
                         )
                         if direct_lines_output:
                             if phase_timing is not None:
@@ -902,7 +940,7 @@ def run_codegen_worker(
                                 _freeze_worker_survivors()
                             if phase_timing is not None:
                                 phase_timing.add(8, phase_started)
-                        if worker_timing:
+                        if worker_timing and not handoff_request:
                             sys.stderr.write(
                                 "pcc direct indexed emit module="
                                 + module_name
@@ -1094,6 +1132,7 @@ def run_codegen_worker(
                     + str(infer_ms)
                     + " codegen_ms="
                     + str(codegen_ms)
+                    + (" artifact=PIDX" if handoff_request else "")
                     + "\n"
                 )
             if direct_path:

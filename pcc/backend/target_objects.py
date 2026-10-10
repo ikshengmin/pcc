@@ -28,6 +28,13 @@ def encode_assembly_object(
     assembly, target, *, stack_map_plans=None, consume_stack_map_plans=False,
     phase_timing=None,
 ):
+    if stack_map_plans is not None and is_x86_64_windows_triple(target):
+        from .coff_x86_64 import assemble_object
+        return assemble_object(
+            assembly, stack_map_plans=stack_map_plans,
+            consume_stack_map_plans=consume_stack_map_plans,
+            phase_timing=phase_timing,
+        )
     if stack_map_plans is not None:
         if not is_x86_64_linux_triple(target):
             raise BackendUnavailable("packed stack maps require the Linux x86 target")
