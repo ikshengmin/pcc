@@ -13,6 +13,101 @@ from pcc.frontends.python import worker_resource_plan as policy
 MIB = 1024 * 1024
 
 
+def test_failed_process_fixture_keeps_bounded_synthetic_protocol_evidence(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from tests.python import test_worker_size_prior_processes as fixture
+
+    report = policy.RESOURCE_REPORT_SCHEMA + "\n123\nleader-grown\n300\n400\nattempt-token\n"
+
+    def failed_child(command, *, env, timeout):
+        assert timeout == 20 and env["PCC_WORKER_TREE_BUDGET_BYTES"] == str(1024 * MIB)
+        root = tmp_path / "growth"
+        (root / "rss0").write_text(report)
+        (root / "started.0.1").write_text("123\tattempt-token\tcpython\t0")
+        (root / "admission.tsv").write_text("failure-budget\t-1\t0\t900\t800\t0\t1\n")
+        (root / "complete.0.1").write_text("x" * 9000)
+        (root / "unrelated-secret").write_text("must not be copied")
+        return SimpleNamespace(returncode=1, stdout="original stdout", stderr="original failure")
+
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(1024 * MIB))
+    monkeypatch.setattr(fixture, "run_process_group_timeout", failed_child)
+    with pytest.raises(AssertionError) as caught:
+        fixture._run(["unused"], "growth", tmp_path / "growth", "cpython", 0)
+    record = fixture.json.loads((tmp_path / "growth" / "execution.json").read_text())
+    assert (record["returncode"], record["stdout"], record["stderr"]) == (
+        1, "original stdout", "original failure",
+    )
+    assert "original failure" in str(caught.value)
+    evidence = record["failure_evidence"]
+    assert set(evidence) == {"rss0", "started.0.1", "admission.tsv", "complete.0.1"}
+    assert evidence["rss0"] == {"text": report, "truncated": False}
+    assert evidence["complete.0.1"] == {"text": "x" * 8192, "truncated": True}
+
+
+@pytest.mark.parametrize("valid_token", [False, True])
+def test_failed_pool_evidence_uses_latest_accepted_peer_charge(tmp_path, monkeypatch, valid_token):
+    import subprocess
+    from types import SimpleNamespace
+    from pcc.frontends.python import worker_process_pool as pool
+
+    tasks = [task("host-export-v1", source=1, ast=0, exports=0),
+             task("host-export-v1", source=0, ast=0, exports=0)]
+    for index, item in enumerate(tasks):
+        item["report_path"] = str(tmp_path / ("rss" + str(index)))
+        item["class"] += ":" + str(index)
+    priors = [policy.task_startup_prior_bytes(item) for item in tasks]
+    available = sum(priors) + 64 * MIB
+    owner = 32 * MIB
+    live, tokens, stopped = set(), {}, []
+    observations = []
+    clock = SimpleNamespace(monotonic=lambda: 100.0, sleep=lambda seconds: None)
+
+    def write_report(index, peak, token):
+        with open(tasks[index]["report_path"], "w") as stream:
+            stream.write(policy.RESOURCE_REPORT_SCHEMA + "\n" + str(100 + index)
+                         + "\nallocated\n" + str(peak) + "\n" + str(peak) + "\n" + token + "\n")
+
+    def start(specs, index):
+        tokens[index] = next(value.split("=", 1)[1] for value in specs[index][1]
+                             if value.startswith(policy.RESOURCE_TOKEN_ENV + "="))
+        live.add(100 + index)
+        write_report(index, 16 * MIB, tokens[index])
+        if index == 1:
+            write_report(0, 320 * MIB, tokens[0] if valid_token else "stale-token")
+        return 100 + index
+
+    def stop(pid):
+        stopped.append(pid)
+        live.remove(pid)
+
+    monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "0")
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: owner)
+    monkeypatch.setattr(pool, "time", clock)
+    monkeypatch.setattr(policy, "time", clock)
+    monkeypatch.setattr(pool, "_start_resource_worker", start)
+    monkeypatch.setattr(pool, "_poll_resource_worker", lambda pid: 7 if pid == 101 else pool._WORKER_RUNNING)
+    monkeypatch.setattr(pool, "_retire_resource_worker", live.remove)
+    monkeypatch.setattr(pool, "_stop_resource_worker", stop)
+    trace = tmp_path / "admission.tsv"
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        pool.run_resource_worker_processes(["leader", "peer"], tasks, 2,
+            owner + policy.RSS_HEADROOM_BYTES + available,
+            observations=observations, trace_path=str(trace))
+    assert caught.value.returncode == 7 and caught.value.cmd == "peer"
+    rows = [line.split("\t") for line in trace.read_text().splitlines()]
+    assert all(len(row) == 7 for row in rows)
+    accepted_peak = (320 if valid_token else 16) * MIB
+    charge = max(priors[0], policy.peak_reservation(accepted_peak))
+    peer = next(row for row in rows if row[0] == "failure-active")
+    assert peer[1:6] == ["0", "100", str(charge), str(available), str(accepted_peak)]
+    budget = next(row for row in rows if row[0] == "failure-budget")
+    assert budget[1:6] == ["-1", "0", str(charge + priors[1]), str(available), "0"]
+    assert (charge + priors[1] > available) == valid_token
+    assert not live and stopped == [100] and observations == []
+    assert not any(row[0] in ("cancel", "retire") for row in rows)
+
+
 @pytest.mark.parametrize("mode", [
     "venv", "venv-case", "other-python", "wrapper", "native-command",
     "non-windows", "system-python", "no-base", "other-owner",

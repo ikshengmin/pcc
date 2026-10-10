@@ -20,6 +20,29 @@ DRIVER = ROOT / "tests/fixtures/native/worker_size_priors.py"
 CASES = ("width", "growth")
 
 
+def _fixture_failure_evidence(directory):
+    # Only this synthetic fixture's bounded protocol files are copied into
+    # execution.json, which the existing CI artifact pattern already keeps.
+    # Tokens here identify synthetic attempts, never user credentials.
+    names = ["budget.tsv", "admission.tsv", "peer-report-ready"]
+    for index in range(3):
+        names.extend(["rss" + str(index), "attempts" + str(index)])
+        for attempt in (1, 2):
+            suffix = str(index) + "." + str(attempt)
+            names.extend(["started." + suffix, "complete." + suffix])
+    evidence = {}
+    for name in names:
+        try:
+            with (directory / name).open("r", encoding="utf-8", errors="replace") as stream:
+                text = stream.read(8193)
+            evidence[name] = {"text": text[:8192], "truncated": len(text) > 8192}
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            evidence[name] = {"read_error": type(error).__name__ + ": " + str(error)}
+    return evidence
+
+
 def _environment(owner, collector):
     environment = dict(os.environ)
     # Keep the outer watchdog's budget. As in the existing resource driver,
@@ -61,6 +84,10 @@ def _run(prefix, case, directory, owner, collector):
         "accounting_scope": "local_driver_and_workers_under_outer_tree_watchdog",
         "native_execution": owner == "pcc", "pcc1_stage2_dispatch": False,
     }
+    if (result.returncode, result.stdout, result.stderr) != (
+        0, "WORKER_SIZE_PRIOR_OK " + case + "\n", "",
+    ):
+        record["failure_evidence"] = _fixture_failure_evidence(directory)
     (directory / "execution.json").write_text(json.dumps(record, indent=2) + "\n")
     assert (result.returncode, result.stdout, result.stderr) == (
         0, "WORKER_SIZE_PRIOR_OK " + case + "\n", "",

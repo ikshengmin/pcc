@@ -219,6 +219,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     unavailable_since = -1.0
     fresh_after = time.monotonic()
     preflight_done = False
+    available = 0
     try:
         while pending or active:
             survivors = []
@@ -239,6 +240,24 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                     _resource_event(trace_path, "failed", index, pid, reservation, 0, observed_peak)
                     _resource_diagnostic(tasks[index], "failed", index, pid, reservation, 0, observed_peak,
                                          bands[index] if bands else -1)
+                    if trace_path:
+                        # Failure-only evidence: peers earlier in this scan
+                        # may have a newer accepted peak than active contains.
+                        # Record the charge actually seen, never resample or
+                        # change a scheduling decision to explain the failure.
+                        try:
+                            charge = reservation
+                            for sibling in active:
+                                for seen in survivors:
+                                    if seen[1] == sibling[1]:
+                                        sibling = seen
+                                        break
+                                charge += sibling[2]
+                                _resource_event(trace_path, "failure-active", sibling[0], sibling[1],
+                                                sibling[2], available, sibling[4])
+                            _resource_event(trace_path, "failure-budget", -1, 0, charge, available, 0)
+                        except OSError:
+                            pass  # Extra evidence must not hide the child failure.
                     raise subprocess.CalledProcessError(result, commands[index])
                 # The child may publish complete and exit between the earlier
                 # live read and poll. Only a fresh post-success read can bind
