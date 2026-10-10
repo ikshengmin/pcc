@@ -290,6 +290,7 @@ class GenerationLoweringMixin:
         # by an alias-Assign — ``<inner_name> = <hoisted_name>`` —
         # so direct calls ``inner_name(arg)`` continue to route
         # through the existing user-function call path.
+        self.class_lowering.prepare_class_init_outlines()
         _codegen_log(self, debug_codegen, "hoist begin")
         hoisted = hoist_nested_funcdefs(self)
         _codegen_log(self, debug_codegen, "hoist end " + str(len(hoisted)))
