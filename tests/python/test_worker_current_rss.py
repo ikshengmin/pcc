@@ -243,3 +243,126 @@ def test_exhausted_historical_owner_reserve_still_blocks_admission(tmp_path, mon
     )
     assert "worker memory budget cannot admit one task" in failure
     assert not events and not stopped and not reaped and not observations
+
+
+@pytest.mark.parametrize("case,initial_time,initial_gap,start_delay,gaps,finish_after,fails", [
+    ("slow-start-publication-lag", 100.0, 0.0, 3.0, ((0.0, 0.5),), 1.0, False),
+    ("slow-start-continuous-outage", 100.0, 0.0, 3.0, ((0.0, 10.0),), 9.0, True),
+    ("recovery-resets-outage", 100.0, 0.0, 0.0, ((0.0, 1.25), (1.75, 3.0)), 3.5, False),
+    ("first-read-unavailable-at-zero", 0.0, 0.5, 0.0, (), 0.5, False),
+    ("continuous-outage-at-zero", 0.0, 10.0, 0.0, (), 0.5, True),
+])
+def test_unavailable_window_starts_at_first_rejected_snapshot(
+    tmp_path, monkeypatch, case, initial_time, initial_gap, start_delay,
+    gaps, finish_after, fails,
+):
+    # Use the real file parser, but virtual time/processes. Unlike the eager
+    # mock above, a freshly launched child can be absent from a valid guard
+    # snapshot until the next publication. None still authorizes no admission.
+    owner = os.getpid()
+    child = owner + 100
+    budget = 512 * MIB
+    tree = tmp_path / "tree"
+    report_path = tmp_path / "worker.rss"
+    clock = SimpleNamespace(now=initial_time)
+    live = {}
+    started, stopped, reaped, rejected, accepted, observations = [], [], [], [], [], []
+    last_publication = [initial_time - 1.0]
+
+    def publish_tree(force=False):
+        if not force and clock.now - last_publication[0] < 0.25:
+            return
+        last_publication[0] = clock.now
+        if clock.now - initial_time < initial_gap:
+            tree.write_text("no usable snapshot yet\n")
+            return
+        rows = [f"{owner}\t0\t{64 * MIB}"]
+        if live:
+            elapsed = clock.now - live["started"]
+            if not any(low <= elapsed < high for low, high in gaps):
+                rows.append(f"{child}\t{owner}\t{16 * MIB}")
+        tree.write_text(policy.TREE_STATE_SCHEMA + "\n" + str(clock.now) + "\n"
+                        + str(budget) + "\n" + "\n".join(rows) + "\n")
+
+    def sleep(seconds):
+        clock.now += seconds
+        assert clock.now - initial_time < 15.0, "outage timer failed to terminate"
+        publish_tree()
+
+    def publish_report(phase):
+        report_path.write_text(policy.RESOURCE_REPORT_SCHEMA + "\n" + str(child)
+                               + "\n" + phase + "\n" + str(16 * MIB) + "\n"
+                               + str(16 * MIB) + "\n" + live["token"] + "\n")
+
+    def start(specs, index):
+        assert index == 0 and not live and not started
+        # Model work since the last accepted observation, then a fresh guard
+        # sample which precedes discovery of this new direct child.
+        clock.now += start_delay
+        token = next(value.split("=", 1)[1] for value in specs[index][1]
+                     if value.startswith(policy.RESOURCE_TOKEN_ENV + "="))
+        live.update(started=clock.now, token=token)
+        started.append(clock.now)
+        publish_report("started")
+        publish_tree(force=True)
+        return child
+
+    def poll(pid):
+        assert pid == child and live
+        if clock.now - live["started"] < finish_after:
+            return pool._WORKER_RUNNING
+        publish_report("complete")
+        return 0
+
+    def retire(pid):
+        assert pid == child
+        reaped.append(pid)
+        live.clear()
+
+    def stop(pid):
+        assert pid == child
+        stopped.append(pid)
+        live.clear()
+
+    original_reader = policy.read_tree_state
+
+    def read_state(*args, **kwargs):
+        result = original_reader(*args, **kwargs)
+        (rejected if result is None else accepted).append(clock.now)
+        return result
+
+    clock.monotonic = lambda: clock.now
+    clock.sleep = sleep
+    monkeypatch.setattr(policy, "time", clock)
+    monkeypatch.setattr(pool, "time", clock)
+    monkeypatch.setattr(policy, "read_tree_state", read_state)
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: 64 * MIB)
+    monkeypatch.setattr(pool, "_start_resource_worker", start)
+    monkeypatch.setattr(pool, "_poll_resource_worker", poll)
+    monkeypatch.setattr(pool, "_retire_resource_worker", retire)
+    monkeypatch.setattr(pool, "_stop_resource_worker", stop)
+    monkeypatch.setenv(policy.TREE_STATE_ENV, str(tree))
+    monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "0")
+    publish_tree(force=True)
+    failure = None
+    try:
+        pool.run_resource_worker_processes(
+            ["unused-command"], [{"class": "publication-lag", "inputs": [1],
+                                  "estimate_bytes": 64 * MIB,
+                                  "report_path": str(report_path)}],
+            1, budget, observations=observations,
+        )
+    except policy.WorkerMemoryError as error:
+        failure = str(error)
+    assert rejected and not live, case
+    if fails:
+        assert failure == "worker tree RSS state is missing, stale, or incompatible"
+        assert policy.STATE_MAX_AGE_SECONDS <= clock.now - rejected[0] < 2.03
+        assert not observations and not reaped
+        assert stopped == ([child] if started else [])
+    else:
+        assert failure is None and reaped == [child] and not stopped
+        assert len(observations) == 1 and observations[0][2] == 16 * MIB
+        assert any(at > rejected[0] for at in accepted)
+        if initial_gap:
+            assert started[0] >= initial_time + initial_gap

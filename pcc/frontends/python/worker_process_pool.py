@@ -216,8 +216,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     retries = [0 for _task in tasks]
     completed = set()
     completed_tokens = {}
-    unavailable_since = time.monotonic()
-    fresh_after = unavailable_since
+    unavailable_since = -1.0
+    fresh_after = time.monotonic()
     preflight_done = False
     try:
         while pending or active:
@@ -269,11 +269,16 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
             state = read_tree_state(tree_path, tree_budget, owner_pid,
                                     [item[1] for item in active], fresh_after, include_owner=True)
             if tree_path and state is None:
-                if time.monotonic() - unavailable_since > STATE_MAX_AGE_SECONDS:
+                now = time.monotonic()
+                if unavailable_since < 0.0:
+                    unavailable_since = now
+                if now - unavailable_since > STATE_MAX_AGE_SECONDS:
                     raise WorkerMemoryError("worker tree RSS state is missing, stale, or incompatible")
                 time.sleep(0.01)
                 continue
-            unavailable_since = time.monotonic()
+            # Processing/launch time before the first rejected observation
+            # is not a continuous state outage. Reader freshness is separate.
+            unavailable_since = -1.0
             outside = 0 if state is None else state[0]
             available = available_worker_bytes(tree_budget, owner_rss, outside)
             if state is not None:
