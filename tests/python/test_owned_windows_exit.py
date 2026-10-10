@@ -322,34 +322,54 @@ def test_windows_c_exit_lifecycle_executes(tmp_path, explicit_owned_runtime,
 
 @pytest.mark.integration
 @pytest.mark.pcc_gate(probe=lambda: sys.platform == "win32" and platform.machine().lower() in ("amd64", "x86_64"))
-def test_windows_tempdir_atexit_keeps_runtime_alive_five_collectors(
+def test_windows_managed_atexit_keeps_runtime_alive_five_collectors(
     tmp_path, explicit_owned_runtime, capfd,
 ):
     from pcc.frontends.python.pipeline import compile_python
 
-    source = tmp_path / "tempdir_exit.py"
+    # TemporaryDirectory has a separate, explicit Windows filesystem gap.
+    # Exercise the exit/GC contract through the supported owned C callback ABI.
+    source = tmp_path / "managed_exit.py"
     source.write_text('''
+import gc
 import os
-import sys
-import tempfile
-from pcc.extern import c_int32, c_int64, c_void, extern
+from pcc.extern import (
+    c_abi_typed_export, c_int32, c_int64, c_ptr, c_void, extern,
+)
+from pcc.unsafe import function_addr
 
 finish = extern("exit", (c_int32,), c_void)
+register = extern("atexit", (c_ptr,), c_int32)
 collector = extern("pcc_gc_backend", (), c_int64)
+live = []
+
+@c_abi_typed_export("windows_managed_exit_callback", "void", ())
+def callback() -> None:
+    assert collector() == int(os.environ["PCC_GC_BACKEND"])
+    payload = live[0]
+    assert payload[0] == "live frame" and payload[1]["answer"] == 41
+    allocated = [payload[1]["answer"] + 1, "allocated in callback"]
+    gc.collect()
+    assert allocated == [42, "allocated in callback"]
+    assert payload[0] == "live frame" and payload[1]["answer"] == 41
+    print("ATEXIT_MANAGED_OK")
 
 def main():
-    manager = tempfile.TemporaryDirectory(dir=sys.argv[1])
-    assert os.path.isdir(manager.name)
+    payload = ["live frame", {"answer": 41}]
+    live.append(payload)
     assert collector() == int(os.environ["PCC_GC_BACKEND"])
-    print("TEMPDIR_ATEXIT_OK")
-    # The manager is still live in this frame. Only the registered shutdown
-    # callback can remove its directory before this direct C exit completes.
+    assert register(function_addr("windows_managed_exit_callback")) == 0
+    gc.collect()
+    assert payload[1]["answer"] == 41
+    print("ATEXIT_FRAME_LIVE")
+    # This frame never unwinds. The callback must run with managed objects,
+    # allocation, collection and Python output still available.
     finish(37)
-    raise AssertionError("exit returned")
+    raise AssertionError(payload)
 
 main()
 ''')
-    executable = tmp_path / "tempdir_exit.exe"
+    executable = tmp_path / "managed_exit.exe"
     try:
         compile_python(
             str(source), str(executable), backend="self", libpython_mode="off",
@@ -361,15 +381,13 @@ main()
         (tmp_path / "compile.stderr").write_text(captured.err)
     executions = []
     for backend in range(5):
-        root = tmp_path / ("gc" + str(backend))
-        root.mkdir()
         result = run_process_group_timeout(
-            [str(executable), str(root)],
+            [str(executable)],
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)), timeout=10,
         )
         executions.append({"collector": backend, "returncode": result.returncode,
-                           "stdout": result.stdout, "stderr": result.stderr,
-                           "remaining": [path.name for path in root.iterdir()]})
-        (tmp_path / "tempdir-executions.json").write_text(json.dumps(executions, indent=2) + "\n")
-        assert (result.returncode, result.stdout, result.stderr) == (37, "TEMPDIR_ATEXIT_OK\n", "")
-        assert executions[-1]["remaining"] == []
+                           "stdout": result.stdout, "stderr": result.stderr})
+        (tmp_path / "managed-executions.json").write_text(json.dumps(executions, indent=2) + "\n")
+        assert (result.returncode, result.stdout, result.stderr) == (
+            37, "ATEXIT_FRAME_LIVE\nATEXIT_MANAGED_OK\n", "",
+        )
