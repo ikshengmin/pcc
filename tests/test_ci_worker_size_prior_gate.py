@@ -43,7 +43,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[5] == "tests/c/test_self_backend_function_body_lines.py"
     assert gate.HOST_FILES[6] == "tests/python/test_compiled_default_pass_tier.py"
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
-    assert gate.HOST_COUNTS == (80, 3, 127, 0, 4, 12, 25, 7, 20, 21)
+    assert gate.HOST_COUNTS == (80, 3, 145, 0, 4, 12, 25, 7, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -499,7 +499,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 127, 0, 4, 12, 25, 7, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 145, 0, 4, 12, 25, 7, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -997,6 +997,7 @@ def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypa
     monkeypatch.setattr(closure.os, "replace", atomic_replace)
     monkeypatch.setattr(closure, "time", SimpleNamespace(monotonic=lambda: 101.25))
     for phase, module in (("compile", ""), ("whole-verify", ""),
+                          ("whole-parse", ""), ("whole-verify-parsed", ""),
                           *((phase, name) for name in closure.MODULES
                             for phase in ("module-verify", "module-emit"))):
         for state in ("started", "complete"):
@@ -1004,7 +1005,7 @@ def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypa
             assert json.loads(path.read_text()) == receipt
             assert receipt["progress"][-1] == {"phase": phase, "state": state,
                                                 "module": module, "elapsed_s": 1.25}
-    assert len(publications) == 4 + 4 * len(closure.MODULES)
+    assert len(publications) == 8 + 4 * len(closure.MODULES) == 40
     assert receipt["status"] == "RUNNING" and receipt["sources"] == {"original": "sha"}
     assert receipt["codegen_sha256"] == "original-codegen"
     assert receipt["modules"] == {"done": {"object_sha256": "bytes"}}
@@ -1044,6 +1045,10 @@ def test_strict_progress_surrounds_real_phases_and_uses_collected_receipt():
     events = []
 
     class Calls(ast.NodeVisitor):
+        def visit_Lambda(self, node):
+            # This callback is executed by the helper, not at construction.
+            pass
+
         def visit_Call(self, node):
             name = ast.unparse(node.func)
             if name == "_record_closed_world_progress":
@@ -1054,6 +1059,19 @@ def test_strict_progress_surrounds_real_phases_and_uses_collected_receipt():
             self.generic_visit(node)
 
     Calls().visit(function)
+    verify_calls = [node for node in ast.walk(function)
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "verify_ir_text"]
+    whole_call = next(node for node in verify_calls if ast.unparse(node.args[0]) == "text")
+    section_call = next(node for node in verify_calls if ast.unparse(node.args[0]) == "section")
+    assert not section_call.keywords
+    assert [keyword.arg for keyword in whole_call.keywords] == ["progress"]
+    callback = whole_call.keywords[0].value
+    assert isinstance(callback, ast.Lambda)
+    assert ast.unparse(callback.body) == (
+        "_record_closed_world_progress(receipt_path, receipt, started, "
+        "{'parse': 'whole-parse', 'verify': 'whole-verify-parsed'}[phase], state)"
+    )
     assert events == [
         ("compile", "started"), "compile_python_multi", ("compile", "complete"),
         ("whole-verify", "started"), "verify_ir_text", ("whole-verify", "complete"),
@@ -1068,13 +1086,25 @@ def test_strict_progress_surrounds_real_phases_and_uses_collected_receipt():
     assert ast.unparse(finalizer[-1].handlers[0].body[0]) == "if not primary_failed:\n    raise"
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     assert workflow.count("build/worker-prior-gate/**/*.json\n") == 2
+    helper_path = "tests/owned_ir_validation.py"
+    assert workflow.count('      - "' + helper_path + '"') == 2
+    gate_tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
+    identity = next(node for node in gate_tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "source_identity")
+    hashes = next(node.value for node in ast.walk(identity) if isinstance(node, ast.Assign)
+                  and isinstance(node.targets[0], ast.Subscript)
+                  and isinstance(node.targets[0].slice, ast.Constant)
+                  and node.targets[0].slice.value == "test_inputs")
+    assert any(isinstance(node, ast.Constant) and node.value == helper_path
+               for node in hashes.generators[0].iter.elts)
     command = gate.pytest_command(Path("build/worker-prior-gate/strict-closure"),
                                   [gate.CLOSURE_TEST + "::" + function.name], integration=True)
     assert command[command.index("--basetemp") + 1] == str(Path("build/worker-prior-gate/strict-closure") / "tests")
     assert "-n0" not in command and "-o" not in command
 
 
-@pytest.mark.parametrize("failure", ("none", "compile", "compile-summary", "compile-publish", "encode", "emit", "publish"))
+@pytest.mark.parametrize("failure", ("none", "compile", "compile-summary", "compile-publish", "parse", "verify",
+                                     "parse-publish", "verify-publish", "encode", "emit", "publish"))
 def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, monkeypatch, failure):
     import hashlib
     import weakref
@@ -1172,12 +1202,30 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
             monkeypatch.setattr(closure, "_publish_closed_world_receipt", fail_final_publication)
         Path(destination).write_text(text)
 
-    def verify(value):
+    def verify(value, *, progress=None):
         is_whole = isinstance(value, TrackedIR)
         if is_whole:
             assert not section_refs, "section copies overlap whole-module parsing"
+            assert callable(progress)
             events.append("whole-verify")
+            for phase in ("parse", "verify"):
+                progress(phase, "started")
+                pending = json.loads((output / "worker-size-prior-closed-world.json").read_text())
+                assert pending["status"] == "RUNNING"
+                assert pending["modules"] == {}
+                assert pending["progress"][-1]["phase"] == (
+                    "whole-parse" if phase == "parse" else "whole-verify-parsed"
+                )
+                assert pending["progress"][-1]["state"] == "started"
+                if failure in (phase, phase + "-publish"):
+                    if failure.endswith("-publish"):
+                        def failed_final_report(*args, **kwargs):
+                            raise OSError("secondary phase reporting failure")
+                        monkeypatch.setattr(closure, "_publish_closed_world_receipt", failed_final_report)
+                    raise original_error
+                progress(phase, "complete")
         else:
+            assert progress is None, "section validation unexpectedly publishes whole phases"
             assert len(section_refs) == len(names), "unselected closure sections were copied"
             assert whole_refs[0]() is None, "whole text or regex markers are still retained"
             assert index_refs[-1]() is None, "definition Match index survived its last use"
@@ -1254,6 +1302,16 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
         assert receipt["error"] == "RuntimeError: synthetic compile failure"
         assert "closure_modules" not in receipt and events == ["compile"]
         return
+    if failure in ("parse", "verify", "parse-publish", "verify-publish"):
+        phase = "whole-parse" if failure.startswith("parse") else "whole-verify-parsed"
+        assert receipt["progress"][-1]["phase"] == phase
+        assert receipt["progress"][-1]["state"] == "started"
+        assert receipt["status"] == ("RUNNING" if failure.endswith("-publish") else "FAIL")
+        if not failure.endswith("-publish"):
+            assert receipt["error"] == "RuntimeError: synthetic " + failure + " failure"
+        assert "closure_modules" not in receipt and receipt["modules"] == {}
+        assert events == ["compile", "whole-verify"]
+        return
     assert receipt["closure_modules"] == [*names, dependency]
     assert receipt["closure_definitions"] == 3
     if failure == "publish":
@@ -1278,6 +1336,118 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
         assert events == ["compile", "whole-verify", "slice", "slice", "section-verify", "encode"] + (
             ["emit"] if failure == "emit" else []
         )
+
+
+def _load_owned_ir_validation_control(monkeypatch, parse, verify, target):
+    # Install all PCC imports before executing this small test helper module.
+    # This control never imports the real parser, verifier or frontend.
+    for name, exports in {
+        "pcc.backend.self_backend_parse": {"parse_self_backend_module": parse},
+        "pcc.backend.self_backend_verify": {"verify_parsed_module": verify},
+        "pcc.frontends.python.pipeline_targets": {"host_target_triple": target},
+    }.items():
+        module = ModuleType(name)
+        for key, value in exports.items():
+            setattr(module, key, value)
+        monkeypatch.setitem(sys.modules, name, module)
+    spec = importlib.util.spec_from_file_location(
+        "_owned_ir_validation_control", ROOT / "tests/owned_ir_validation.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("text", (
+    'target triple = "chosen-target"\ndefine void @f() {}\n',
+    '  target \ttriple = "chosen-target"\ndefine void @f() {}\n',
+    'define void @f() {}\n',
+))
+@pytest.mark.parametrize("with_progress", (False, True))
+def test_owned_ir_validation_progress_preserves_normalization_and_identity(monkeypatch, text, with_progress):
+    events = []
+    parsed = object()
+    needs_target = not text.lstrip().startswith("target")
+    normalized = ('target triple = "host-target"\n' if needs_target else '') + text
+
+    class Text:
+        def __str__(self):
+            events.append("normalize")
+            return text
+
+    def target():
+        events.append("target")
+        return "host-target"
+
+    def parse(value):
+        assert type(value) is str and value == normalized
+        events.append("parse")
+        return parsed
+
+    def verify(value):
+        assert value is parsed
+        events.append("verify")
+
+    helper = _load_owned_ir_validation_control(monkeypatch, parse, verify, target)
+    def progress(phase, state):
+        events.append((phase, state))
+
+    if with_progress:
+        result = helper.verify_ir_text(Text(), progress=progress)
+    else:
+        result = helper.verify_ir_text(Text())
+    assert result is parsed
+    expected = ["normalize"] + (["target"] if needs_target else [])
+    if with_progress:
+        expected += [("parse", "started"), "parse", ("parse", "complete"),
+                     ("verify", "started"), "verify", ("verify", "complete")]
+    else:
+        expected += ["parse", "verify"]
+    assert events == expected
+
+
+@pytest.mark.parametrize("failure", (
+    "normalize", "target", "parse", "verify",
+    "parse-started", "parse-complete", "verify-started", "verify-complete",
+))
+def test_owned_ir_validation_progress_preserves_first_failure(monkeypatch, failure):
+    events = []
+    original_error = RuntimeError("original " + failure)
+    parsed = object()
+
+    def event(name):
+        events.append(name)
+        if name == failure:
+            raise original_error
+
+    class Text:
+        def __str__(self):
+            event("normalize")
+            return "define void @f() {}\n"
+
+    def target():
+        event("target")
+        return "host-target"
+
+    def parse(value):
+        assert value == 'target triple = "host-target"\ndefine void @f() {}\n'
+        event("parse")
+        return parsed
+
+    def verify(value):
+        assert value is parsed
+        event("verify")
+
+    helper = _load_owned_ir_validation_control(monkeypatch, parse, verify, target)
+    def progress(phase, state):
+        event(phase + "-" + state)
+
+    with pytest.raises(RuntimeError) as caught:
+        helper.verify_ir_text(Text(), progress=progress)
+    assert caught.value is original_error
+    full_order = ["normalize", "target", "parse-started", "parse", "parse-complete",
+                  "verify-started", "verify", "verify-complete"]
+    assert events == full_order[:full_order.index(failure) + 1]
 
 
 def test_strict_compile_profile_keeps_only_bounded_phase_data():

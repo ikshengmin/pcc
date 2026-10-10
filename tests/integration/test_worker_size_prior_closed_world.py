@@ -124,11 +124,12 @@ def _publish_closed_world_receipt(path, receipt):
 
 
 def _record_closed_world_progress(path, receipt, started, phase, state, module=""):
-    assert phase in ("compile", "whole-verify", "module-verify", "module-emit")
+    assert phase in ("compile", "whole-verify", "whole-parse", "whole-verify-parsed",
+                     "module-verify", "module-emit")
     assert state in ("started", "complete")
     assert (module in MODULES) if phase.startswith("module-") else module == ""
     progress = receipt.setdefault("progress", [])
-    assert len(progress) < 4 + 4 * len(MODULES), "closed-world progress exceeds phase bound"
+    assert len(progress) < 8 + 4 * len(MODULES), "closed-world progress exceeds phase bound"
     progress.append({"phase": phase, "state": state, "module": module,
                      "elapsed_s": time.monotonic() - started})
     _publish_closed_world_receipt(path, receipt)
@@ -242,7 +243,12 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         markers = list(SECTION.finditer(text))
         names = [match.group(1) for match in markers]
         assert len(names) == len(set(names)) and set(MODULES) <= set(names)
-        whole = verify_ir_text(text)
+        whole = verify_ir_text(
+            text, progress=lambda phase, state: _record_closed_world_progress(
+                receipt_path, receipt, started,
+                {"parse": "whole-parse", "verify": "whole-verify-parsed"}[phase], state,
+            ),
+        )
         assert Counter(function.name for function in whole.functions) == Counter(DEFINITION.findall(text))
         receipt["closure_modules"] = names
         receipt["closure_definitions"] = len(whole.functions)
