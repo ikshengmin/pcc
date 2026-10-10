@@ -394,6 +394,11 @@ class IndexedFunctionSeed(IndexedCallPlane):
     def _ensure_value_name_index(self) -> None:
         if self.value_name_index_active:
             return
+        if not self.value_names:
+            # The constructor already zeroed this hinted table. Only lazy
+            # builders with pre-appended names need to rebuild its entries.
+            self.value_name_index_active = True
+            return
         old_index = self.value_name_index
         (
             self.value_name_index,
