@@ -25,12 +25,39 @@ EXIT_INPUTS = (EXIT_TEST, "tests/c/test_owned_linux_c_exports.py",
 ARM_TRANSPORT_TEST = "tests/python/test_linux_aarch64_worker_transport.py"
 ARM_TRANSPORT_NATIVE_TEST = "tests/python/test_linux_aarch64_transport_native.py"
 ARM_TRANSPORT_INPUTS = (ARM_TRANSPORT_TEST, ARM_TRANSPORT_NATIVE_TEST)
+REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
+CALLEE_SAVED_TEST = "tests/c/test_self_backend_aarch64_callee_saved.py"
+BRANCH_PARITY_TEST = "tests/python/test_aarch64_branch_layout_parity.py"
+REGALLOC_INPUTS = (REGALLOC_TEST, CALLEE_SAVED_TEST, BRANCH_PARITY_TEST,
+                  "tests/aarch64_regalloc_scan_reference.py",
+                  "tests/python/test_precise_stackmap_abi.py",
+                  "tests/python/test_unsafe_syscall6.py")
+REGALLOC_MODES = ("default", "function", "local")
+REGALLOC_SHAPES = ("safe", "call", "loop", "empty", "syscall", "inline-error",
+                  "madd", "reload", "vararg", "invalid-low", "invalid-high")
+REGALLOC_HOST_NODES = (
+    *(REGALLOC_TEST + "::test_aarch64_regalloc_reuses_function_facts_without_changing_state["
+      + calls + "-" + mode + "-" + shape + "]"
+      for calls in ("0", "1") for mode in REGALLOC_MODES for shape in REGALLOC_SHAPES),
+    *(REGALLOC_TEST + "::test_aarch64_regalloc_scan_reuse_preserves_syscall_failure[" + mode + "]"
+      for mode in REGALLOC_MODES),
+    *(CALLEE_SAVED_TEST + "::test_scan_reuse_preserves_callee_saved_assembly_and_frames[" + mode + "]"
+      for mode in REGALLOC_MODES),
+    *(BRANCH_PARITY_TEST + "::test_regalloc_scan_reuse_preserves_assembly_native_sections_and_stackmaps["
+      + mode + "-" + shape + "]" for mode in REGALLOC_MODES for shape in ("branches", "root-reloads")),
+    CALLEE_SAVED_TEST + "::test_callee_saved_registers_are_saved_and_restored_on_every_exit",
+    CALLEE_SAVED_TEST + "::test_mode_off_emits_no_callee_saved_registers",
+)
+REGALLOC_NATIVE_NODES = tuple(
+    REGALLOC_TEST + "::test_aarch64_call_result_executes_through_indexed_emission[" + mode + "]"
+    for mode in REGALLOC_MODES
+)
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_host_indexed_process_split.py",
               "tests/python/test_dynamic_handoff_slots.py")
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 71, 0, 20, 21)
+HOST_COUNTS = (80, 3, 77, 0, 20, 21)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -53,7 +80,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS,
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),
                        "version": sys.version}
@@ -311,6 +338,11 @@ def run(out, phase):
                     out / "runtime-build", 1200, build_env)
             receipt["runtime"] = runtime_identity(archive)
             env.update(PCC_RUNTIME_ARCHIVE=str(archive), PCC_TEST_NO_NATIVE_PROVISIONING="1")
+            if sys.platform == "darwin":
+                # Each exact node retains the six-worker default and the 300s
+                # tree watchdog. Owned executable probes also have 10s bounds.
+                run_pytest(out, "aarch64-regalloc-host", REGALLOC_HOST_NODES, env)
+                run_pytest(out, "aarch64-regalloc-native", REGALLOC_NATIVE_NODES, env)
             if sys.platform == "win32":
                 run_pytest(out, "windows-exit-host", [EXIT_TEST], env, counts=(8,))
                 run_pytest(out, "windows-exit-native", [EXIT_TEST], env, integration=True, counts=(6,))

@@ -1,4 +1,4 @@
-"""Public five-module strict closure and real host-target object emission."""
+"""Public six-module strict closure and real host-target object emission."""
 
 import ast
 from collections import Counter
@@ -14,7 +14,7 @@ MODULES = tuple("pcc.frontends.python." + name for name in (
     "worker_resource_plan", "pipeline_frontend_workers",
     "pipeline_frontend_indexed_stage", "pipeline_indexed_handoff",
     "worker_process_pool",
-))
+)) + ("pcc.backend.self_backend_aarch64_darwin_regalloc",)
 SECTION = re.compile(r"^; ---- module: ([A-Za-z_][\w.]*) ----$", re.M)
 DEFINITION = re.compile(r'^define[^\n]*@"?([A-Za-z_][\w.$]*)"?\(', re.M)
 
@@ -92,7 +92,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
     monkeypatch.delenv("PCC_PYTHON_IR_PASS_SKIP_MODULE_PREFIXES", raising=False)
     receipt = {"status": "RUNNING", "target": target, "sources": digests,
                "codegen_sha256": codegen_checksum(), "modules": {},
-               "scope": "public strict full closure and five actual target objects",
+               "scope": "public strict full closure and six actual target objects",
                "native_execution": False}
     output = tmp_path / "closed-world.ll"
     try:

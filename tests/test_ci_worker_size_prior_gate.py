@@ -38,7 +38,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_host_indexed_process_split.py",
         "tests/python/test_dynamic_handoff_slots.py",
     )
-    assert gate.HOST_COUNTS == (80, 3, 71, 0, 20, 21)
+    assert gate.HOST_COUNTS == (80, 3, 77, 0, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -417,6 +417,8 @@ def test_other_platform_entry_keeps_the_original_full_gc_matrix_once():
     ("linux", "aarch64", "linux-arm-transport-routes"),
     ("linux", "aarch64", "linux-arm-transport-native"),
     ("linux", "aarch64", "runtime-identity"),
+    ("darwin", "arm64", "aarch64-regalloc-host"),
+    ("darwin", "arm64", "aarch64-regalloc-native"),
 ])
 def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, monkeypatch, target, machine, failing):
     out = tmp_path / "preflight"
@@ -464,8 +466,16 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
             else:
                 assert nodes == [gate.ARM_TRANSPORT_TEST]
                 assert counts == ((8,) if integration else (7,))
+        elif name.startswith("aarch64-regalloc-"):
+            assert target == "darwin" and machine == "arm64"
+            assert env["PCC_RUNTIME_ARCHIVE"] == str(archive)
+            assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+            assert "runtime-identity" in events
+            assert not integration and counts is None
+            assert nodes == (gate.REGALLOC_HOST_NODES if name.endswith("-host")
+                             else gate.REGALLOC_NATIVE_NODES)
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 71, 0, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 77, 0, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -481,6 +491,8 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
     monkeypatch.setattr(gate, "run_pytest", pytest_gate)
     monkeypatch.setattr(gate, "native_gate", native)
     expected = ["default-xdist", "runtime-build", "runtime-identity"]
+    if target == "darwin":
+        expected += ["aarch64-regalloc-host", "aarch64-regalloc-native"]
     if target == "win32":
         expected += ["windows-exit-host", "windows-exit-native"]
     elif target == "linux" and machine in ("aarch64", "arm64"):
@@ -563,3 +575,77 @@ def test_linux_arm_transport_inputs_markers_and_exact_inventory_are_bound():
                for mark in tests[0].decorator_list)
     assert any(isinstance(mark, ast.Call) and isinstance(mark.func, ast.Attribute) and mark.func.attr == "pcc_gate"
                for mark in tests[0].decorator_list)
+
+
+def test_aarch64_regalloc_inputs_and_exact_nodes_are_bound(tmp_path):
+    assert len(gate.REGALLOC_HOST_NODES) == 80
+    assert len(set(gate.REGALLOC_HOST_NODES)) == 80
+    assert len(gate.REGALLOC_NATIVE_NODES) == 3
+    assert gate.REGALLOC_NATIVE_NODES == tuple(
+        "tests/c/test_self_backend_aarch64_regalloc.py::"
+        "test_aarch64_call_result_executes_through_indexed_emission[" + mode + "]"
+        for mode in ("default", "function", "local")
+    )
+    tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
+    identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "source_identity")
+    hashes = next(node.value for node in identity.body if isinstance(node, ast.Assign)
+                  and isinstance(node.targets[0], ast.Subscript)
+                  and isinstance(node.targets[0].slice, ast.Constant)
+                  and node.targets[0].slice.value == "test_inputs")
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "REGALLOC_INPUTS" for node in hashes.generators[0].iter.elts)
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    for path in gate.REGALLOC_INPUTS:
+        assert workflow.count('      - "' + path + '"') == 2
+    for nodes in (gate.REGALLOC_HOST_NODES, gate.REGALLOC_NATIVE_NODES):
+        command = gate.pytest_command(tmp_path, nodes)
+        assert command[-len(nodes):] == list(nodes)
+        assert command.count("-m") == 1
+        assert not any(arg in ("-o", "-n", "-n0", "--dist", "--override-ini")
+                       or arg.startswith(("addopts=", "--numprocesses", "--dist=")) for arg in command)
+
+
+@pytest.mark.parametrize("nodes", (gate.REGALLOC_HOST_NODES, gate.REGALLOC_NATIVE_NODES))
+def test_aarch64_regalloc_gates_keep_tree_and_execution_bounds(tmp_path, monkeypatch, nodes):
+    calls = []
+    monkeypatch.setattr(gate, "guarded", lambda command, directory, timeout, env:
+                        calls.append((command, directory, timeout, env)))
+    monkeypatch.setattr(gate, "verify_pytest", lambda directory, expected, counts:
+                        (directory, expected, counts))
+    environment = {"unchanged": "yes"}
+    actual = gate.run_pytest(tmp_path, "regalloc", nodes, environment)
+    assert actual == (tmp_path / "regalloc", nodes, None)
+    assert calls == [(gate.pytest_command(tmp_path / "regalloc", nodes),
+                      tmp_path / "regalloc", 300, environment)]
+    source = ast.parse((ROOT / gate.REGALLOC_TEST).read_text())
+    function = next(node for node in source.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "test_aarch64_call_result_executes_through_indexed_emission")
+    runs = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+            and ast.unparse(node.func) == "subprocess.run"]
+    assert len(runs) == 1
+    assert any(keyword.arg == "timeout" and isinstance(keyword.value, ast.Constant)
+               and keyword.value.value == 10 for keyword in runs[0].keywords)
+
+
+
+def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
+    from tests.integration.test_worker_size_prior_closed_world import MODULES
+
+    assert MODULES == tuple("pcc.frontends.python." + name for name in (
+        "worker_resource_plan", "pipeline_frontend_workers",
+        "pipeline_frontend_indexed_stage", "pipeline_indexed_handoff", "worker_process_pool",
+    )) + ("pcc.backend.self_backend_aarch64_darwin_regalloc",)
+    source = ROOT / (MODULES[-1].replace(".", "/") + ".py")
+    definitions = [node.name for node in ast.parse(source.read_text()).body
+                   if isinstance(node, ast.FunctionDef)]
+    assert "allocate_aarch64_block_registers" in definitions
+    gate_tree = ast.parse((ROOT / gate.CLOSURE_TEST).read_text())
+    closure = next(node for node in gate_tree.body if isinstance(node, ast.FunctionDef)
+                   and node.name == "test_worker_size_prior_modules_strict_target_emission")
+    module_loop = next(node for node in ast.walk(closure) if isinstance(node, ast.For)
+                       and ast.unparse(node.iter) == "zip(MODULES, sources)")
+    calls = {ast.unparse(node) for node in ast.walk(module_loop) if isinstance(node, ast.Call)}
+    assert "require_definition(section, symbol)" in calls
+    assert "verify_ir_text(section)" in calls
+    assert "require_object_symbols(obj.read_bytes(), target, required)" in calls
+    assert "emit_indexed_module_file(str(sidecar), str(obj), 'PCO', optimize=False)" in calls

@@ -171,7 +171,8 @@ entry:
     assert _register_index(func, "second") is None
 
 
-def test_aarch64_call_result_executes_through_indexed_emission(tmp_path):
+@pytest.mark.parametrize("mode", ("default", "function", "local"))
+def test_aarch64_call_result_executes_through_indexed_emission(tmp_path, monkeypatch, mode):
     import platform
     import subprocess
     import sys
@@ -184,6 +185,10 @@ def test_aarch64_call_result_executes_through_indexed_emission(tmp_path):
 
     if sys.platform != "darwin" or platform.machine() != "arm64":
         pytest.skip("AArch64 Darwin execution")
+    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
+    from tests.aarch64_regalloc_scan_reference import old_scan_allocator, select_mode
+
+    select_mode(monkeypatch, mode)
     source = _TRIPLE + '''
 declare i64 @opaque(i64)
 define i64 @two_calls(i64 %arg) {
@@ -213,16 +218,22 @@ _opaque:
 ''')
     helper = NativeObject.from_sections(helper_sections, undefined=helper_undefined)
     for optimize in (False, True):
-        module = parse_self_backend_module(source)
-        transport = emit_aarch64_darwin_indexed_transport(module, optimize=optimize)
-        sections, undefined = transport.assemble_sections()
-        executable = tmp_path / ("call-results-" + str(optimize))
-        executable.write_bytes(link_executable([NativeObject.from_sections(sections, undefined=undefined), helper]))
-        executable.chmod(0o755)
-        if transport.encoded_line_records is not None:
-            transport.encoded_line_records.close()
-        result = subprocess.run([str(executable)], capture_output=True, timeout=10)
-        assert result.returncode == 0, result.stderr
+        outputs = []
+        for index, allocator in enumerate((old_scan_allocator(), allocate_aarch64_block_registers)):
+            with monkeypatch.context() as patch:
+                patch.setattr(prologue, "allocate_aarch64_block_registers", allocator)
+                module = parse_self_backend_module(source)
+                transport = emit_aarch64_darwin_indexed_transport(module, optimize=optimize)
+            sections, undefined = transport.assemble_sections()
+            outputs.append((sections, undefined))
+            executable = tmp_path / ("call-results-" + str(optimize) + "-" + str(index))
+            executable.write_bytes(link_executable([NativeObject.from_sections(sections, undefined=undefined), helper]))
+            executable.chmod(0o755)
+            if transport.encoded_line_records is not None:
+                transport.encoded_line_records.close()
+            result = subprocess.run([str(executable)], capture_output=True, timeout=10)
+            assert result.returncode == 0, result.stderr
+        assert outputs[0] == outputs[1]
 
 
 def test_aarch64_linear_scan_spills_farthest_interval_under_pressure():
@@ -450,3 +461,210 @@ entry:
 
     assert _register_index(func, "ptr") == 1
     assert _register_index(func, "loaded") == 1
+
+
+# The same immutable instruction planes feed the original-scan control and
+# candidate. Preparation and optional target planning happen before counting.
+_SCAN_SHAPES = ("safe", "call", "loop", "empty", "syscall", "inline-error",
+                "madd", "reload", "vararg", "invalid-low", "invalid-high")
+
+
+def _scan_reuse_function(monkeypatch, shape):
+    from pcc.backend.self_backend_aarch64_darwin_abi import (
+        aggregate_returned_indirect_indexed,
+    )
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    from pcc.backend.self_backend_prepare import prepare_parsed_module_for_target
+    from pcc.backend.self_backend_target_passes import plan_aarch64_madd_fusions
+    from pcc.ir import ir
+
+    if shape in ("syscall", "inline-error"):
+        monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
+        monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
+        monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_FUSE_USES", "1")
+        monkeypatch.setattr(ir, "_DIRECT_INLINE_ERROR_EDGE_CAPTURE_ENABLED", True)
+        source = ir.Module(name="regalloc-scan-reuse")
+        source.triple = "arm64-apple-darwin23.6.0"
+        i64 = ir.IntType(64)
+        function = ir.Function(source, ir.FunctionType(i64, [i64]), name="probe")
+        function.args[0].name = "arg"
+        entry = function.append_basic_block("entry")
+        tail = function.append_basic_block("tail")
+        builder = ir.IRBuilder(entry)
+        first = builder.add(function.args[0], ir.Constant(i64, 1), name="first")
+        if shape == "syscall":
+            zero = ir.Constant(i64, 0)
+            builder.syscall6(first, zero, zero, zero, zero, zero, zero, name="called")
+        else:
+            condition = builder.icmp_signed("!=", first, ir.Constant(i64, 0), name="failed")
+            assert ir.IRBuilder_try_inline_error_edge(builder, condition, tail, 42, 0)
+        result = builder.add(first, ir.Constant(i64, 2), name="result")
+        builder.ret(result)
+        builder.position_at_end(tail)
+        builder.ret(function.args[0])
+        module = source.direct_indexed_module()
+    else:
+        body = {
+            "safe": """define i64 @probe(i64 %arg) {
+entry:
+  %first = add i64 %arg, 1
+  %result = xor i64 %first, 2
+  ret i64 %result
+}""",
+            "call": """declare i64 @opaque(i64)
+define i64 @probe(i64 %arg) {
+entry:
+  %first = add i64 %arg, 1
+  %called = call i64 @opaque(i64 %first)
+  %again = call i64 @opaque(i64 %called)
+  %result = add i64 %first, %again
+  ret i64 %result
+}""",
+            "loop": """declare i64 @opaque(i64)
+define i64 @probe(i64 %arg) {
+entry:
+  %seed = add i64 %arg, 7
+  br label %head
+head:
+  %index = phi i64 [0, %entry], [%next, %body]
+  %total = phi i64 [0, %entry], [%sum, %body]
+  %more = icmp slt i64 %index, %arg
+  br i1 %more, label %body, label %done
+body:
+  %called = call i64 @opaque(i64 %index)
+  %part = add i64 %called, %seed
+  %sum = add i64 %total, %part
+  %next = add i64 %index, 1
+  br label %head
+done:
+  ret i64 %total
+}""",
+            "empty": """define i64 @probe(i64 %arg) {
+entry:
+  br label %tail
+tail:
+  ret i64 %arg
+}""",
+            "madd": """define i64 @probe(i64 %arg, i64 %other) {
+entry:
+  %left = add i64 %arg, 1
+  %right = add i64 %other, 2
+  %product = mul i64 %left, %right
+  %extra = xor i64 %arg, 3
+  %result = add i64 %product, %extra
+  ret i64 %result
+}""",
+            "vararg": """define i64 @probe(i64 %arg, ...) {
+entry:
+  %result = add i64 %arg, 1
+  ret i64 %result
+}""",
+        }
+        if shape == "reload":
+            from tests.python.test_precise_stackmap_abi import _stale_managed_ssa_ir
+            text = _stale_managed_ssa_ir("arm64-apple-darwin23.6.0")
+        else:
+            text = _TRIPLE + body["safe" if shape.startswith("invalid-") else shape]
+        module = parse_self_backend_module(text)
+    prepared = prepare_parsed_module_for_target(
+        module,
+        aggregate_returned_indirect=aggregate_returned_indirect,
+        aggregate_returned_indirect_indexed=aggregate_returned_indirect_indexed,
+        materialize_legacy_slots=False,
+    )
+    func, = prepared.functions
+    assert func.indexed_slot_projection
+    kernel = get_indexed_function_kernel(func)
+    if shape == "madd":
+        plan_aarch64_madd_fusions(func, enabled=True)
+        assert func.aarch64_madd_fusions
+    if shape == "reload":
+        from pcc.backend.self_backend_precise_stackmaps import build_stack_map_plans
+        plans = build_stack_map_plans(prepared.functions, prepared.globals_, target="aarch64-darwin")
+        try:
+            aarch64_regalloc.note_aarch64_reload_destinations(func, plans[0])
+            assert func.aarch64_reload_slot_offsets
+        finally:
+            for plan in plans:
+                if plan.packed_records is not None:
+                    plan.packed_records.close()
+    if shape.startswith("invalid-"):
+        kind = -1 if shape == "invalid-low" else len(aarch64_regalloc.PARSED_INSTRUCTION_KINDS)
+        kernel.instruction_metadata.set_unchecked(0, kind)
+    return func
+
+
+@pytest.mark.parametrize("shape", _SCAN_SHAPES)
+@pytest.mark.parametrize("mode", ("default", "function", "local"))
+@pytest.mark.parametrize("call_results", ("0", "1"))
+def test_aarch64_regalloc_reuses_function_facts_without_changing_state(
+    monkeypatch, shape, mode, call_results,
+):
+    from tests.aarch64_regalloc_scan_reference import (
+        allocation_state, old_scan_allocator, removed_metadata_reads, select_mode,
+    )
+
+    select_mode(monkeypatch, mode, call_results=call_results)
+    reference = old_scan_allocator()
+    funcs = [_scan_reuse_function(monkeypatch, shape) for _ in range(2)]
+    kernels = [get_indexed_function_kernel(func) for func in funcs]
+    planes = ("instruction_metadata", "instruction_facts", "instruction_record_scalars",
+              "block_facts", "phi_scalars", "phi_incoming_scalars", "error_edge_scalars")
+
+    def instructions(kernel):
+        return tuple(tuple(getattr(kernel, name).diagnostic_values()) for name in planes)
+
+    before = instructions(kernels[0])
+    assert instructions(kernels[1]) == before
+    assert allocation_state(funcs[0]) == allocation_state(funcs[1])
+    expected_removed = removed_metadata_reads(funcs[0]) if mode != "local" else 0
+    metadata = type(kernels[0]).instruction_metadata_by_id
+    counts = [0, 0]
+
+    def counted(kernel, instruction_id):
+        for index, target in enumerate(kernels):
+            if kernel is target:
+                counts[index] += 1
+                break
+        return metadata(kernel, instruction_id)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(type(kernels[0]), "instruction_metadata_by_id", counted)
+        reference(funcs[0])
+        allocate_aarch64_block_registers(funcs[1])
+    assert counts[0] - counts[1] == expected_removed
+    if shape not in ("empty", "vararg") and mode != "local":
+        assert expected_removed > 0
+    if shape == "vararg":
+        assert counts == [0, 0]
+    assert allocation_state(funcs[0]) == allocation_state(funcs[1])
+    assert all(instructions(kernel) == before for kernel in kernels)
+    if shape in ("syscall", "invalid-low", "invalid-high"):
+        block = kernels[1].block_fact(0)
+        for index in range(block.second):
+            dest = kernels[1].instruction_fact_by_id(block.first + index).first
+            if dest >= 0:
+                assert kernels[1].value_register(dest) is None
+    if shape == "reload" and mode == "default":
+        for value_id in range(len(kernels[1].value_names)):
+            if kernels[1].value_slot_offset(value_id) in funcs[1].aarch64_reload_slot_offsets:
+                assert kernels[1].value_register(value_id) is None
+
+
+@pytest.mark.parametrize("mode", ("default", "function", "local"))
+def test_aarch64_regalloc_scan_reuse_preserves_syscall_failure(monkeypatch, mode):
+    from pcc.backend import BackendUnavailable
+    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
+    from tests.aarch64_regalloc_scan_reference import old_scan_allocator, select_mode
+    from tests.python.test_unsafe_syscall6 import _build_syscall6_module
+
+    select_mode(monkeypatch, mode)
+    source = _build_syscall6_module(triple="arm64-apple-darwin")
+    failures = []
+    for allocator in (old_scan_allocator(), allocate_aarch64_block_registers):
+        with monkeypatch.context() as patch:
+            patch.setattr(prologue, "allocate_aarch64_block_registers", allocator)
+            with pytest.raises(BackendUnavailable, match="syscall6") as failure:
+                emit_self_asm(source)
+        failures.append((type(failure.value), str(failure.value)))
+    assert failures[0] == failures[1]

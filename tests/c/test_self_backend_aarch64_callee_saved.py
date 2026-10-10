@@ -354,3 +354,33 @@ def test_name_referenced_operand_reads_its_allocated_register(monkeypatch):
         prepared.module_symbols,
     )
     assert by_name == by_id == [f"  mov x1, x{register}"]
+
+
+@pytest.mark.parametrize("mode", ("default", "function", "local"))
+def test_scan_reuse_preserves_callee_saved_assembly_and_frames(monkeypatch, mode):
+    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
+    from pcc.backend import self_backend_aarch64_darwin_regalloc as regalloc
+    from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_asm
+    from tests.aarch64_regalloc_scan_reference import (
+        allocation_state, old_scan_allocator, select_mode,
+    )
+
+    select_mode(monkeypatch, mode)
+    outputs = []
+    for allocator in (old_scan_allocator(), regalloc.allocate_aarch64_block_registers):
+        states = {}
+
+        def allocate(func):
+            allocator(func)
+            states[func.name] = allocation_state(func)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(prologue, "allocate_aarch64_block_registers", allocate)
+            assembly = emit_aarch64_darwin_asm(IR, optimize=False)
+        assert set(states) == {"pressure", "loop_calls", "fib", "narrow", "tagged"}
+        if mode == "default":
+            assert states["fib"]["callee_saved"]
+        else:
+            assert not any(state["callee_saved"] for state in states.values())
+        outputs.append((assembly, states))
+    assert outputs[0] == outputs[1]

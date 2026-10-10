@@ -1322,20 +1322,23 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     for block_id in range(len(kernel.block_names)):
         block_name = kernel.block_names[block_id]
         block_fact: CompilerInt4 = kernel.block_fact(block_id)
-        block_is_safe = True
-        instruction_index = 0
         instruction_count = block_fact.second
-        while instruction_index < instruction_count:
-            metadata: CompilerInt4 = kernel.instruction_metadata_by_id(
-                block_fact.first + instruction_index
-            )
-            if (
-                not 0 <= metadata.first < len(PARSED_INSTRUCTION_KINDS)
-                or metadata.first in _POOL_REJECTED_INSTRUCTION_KIND_IDS
-            ):
-                block_is_safe = False
-                break
-            instruction_index += 1
+        if function_level:
+            block_is_safe = block_safe[block_id]
+        else:
+            block_is_safe = True
+            instruction_index = 0
+            while instruction_index < instruction_count:
+                metadata: CompilerInt4 = kernel.instruction_metadata_by_id(
+                    block_fact.first + instruction_index
+                )
+                if (
+                    not 0 <= metadata.first < len(PARSED_INSTRUCTION_KINDS)
+                    or metadata.first in _POOL_REJECTED_INSTRUCTION_KIND_IDS
+                ):
+                    block_is_safe = False
+                    break
+                instruction_index += 1
         if not block_is_safe:
             continue
         if callee_saved:
@@ -1352,14 +1355,15 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
             )
 
         call_positions: list[int] = []
-        instruction_index = 0
-        while instruction_index < instruction_count:
-            metadata: CompilerInt4 = kernel.instruction_metadata_by_id(
-                block_fact.first + instruction_index
-            )
-            if metadata.first == PARSED_INSTRUCTION_KIND_CALL:
-                call_positions.append(instruction_index)
-            instruction_index += 1
+        if not function_level:
+            instruction_index = 0
+            while instruction_index < instruction_count:
+                metadata: CompilerInt4 = kernel.instruction_metadata_by_id(
+                    block_fact.first + instruction_index
+                )
+                if metadata.first == PARSED_INSTRUCTION_KIND_CALL:
+                    call_positions.append(instruction_index)
+                instruction_index += 1
 
         last_use_override_ids: list[int] = []
         last_use_override_positions: list[int] = []

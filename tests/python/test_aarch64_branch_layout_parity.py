@@ -170,3 +170,59 @@ def test_branch_layout_shapes_match_between_asm_and_native_transport(monkeypatch
         if line.strip().startswith(("b ", "b.", "cbz ", "cbnz "))
     ]
     assert branches == ["b.le"], entry
+
+
+@pytest.mark.parametrize("shape", ("branches", "root-reloads"))
+@pytest.mark.parametrize("mode", ("default", "function", "local"))
+def test_regalloc_scan_reuse_preserves_assembly_native_sections_and_stackmaps(
+    monkeypatch, shape, mode,
+):
+    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
+    from pcc.backend import self_backend_aarch64_darwin_regalloc as regalloc
+    from pcc.backend.native_object import encode_native_object_from_sections
+    from pcc.backend.precise_stackmap import decode_stack_map
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    from tests.aarch64_regalloc_scan_reference import (
+        allocation_state, old_scan_allocator, select_mode,
+    )
+    from tests.python.test_precise_stackmap_abi import _stale_managed_ssa_ir
+
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
+    select_mode(monkeypatch, mode)
+
+    def module():
+        if shape == "branches":
+            return _build_shapes()
+        return parse_self_backend_module(_stale_managed_ssa_ir("arm64-apple-darwin23.6.0"))
+
+    outputs = []
+    for allocator in (old_scan_allocator(), regalloc.allocate_aarch64_block_registers):
+        states = []
+
+        def allocate(func):
+            allocator(func)
+            states.append((func.name, allocation_state(func)))
+
+        with monkeypatch.context() as patch:
+            patch.setattr(prologue, "allocate_aarch64_block_registers", allocate)
+            assembly = emit_aarch64_darwin_indexed_module(module(), optimize=False)
+            assembly_states = list(states)
+            states.clear()
+            transport = emit_aarch64_darwin_indexed_transport(module(), optimize=False)
+        sections, undefined = transport.assemble_sections()
+        assert transport.native_finalized
+        assert transport.fallback_instruction_count == 0
+        assert states == assembly_states
+        assert (sections, undefined) == assemble_file(assembly)
+        encoded = encode_native_object_from_sections(sections, undefined=undefined)
+        if shape == "root-reloads":
+            stackmap = next(section for section in sections if section.sectname == "__pcc_stackmaps")
+            decoded = decode_stack_map(stackmap.data)
+            assert any(record.locations for function in decoded.functions for record in function.records)
+            assert any(state["reload_offsets"] for _, state in states)
+            assert undefined
+        outputs.append((assembly, states, sections, undefined, encoded))
+    # Complete sections include instruction words, symbols, relocations, unwind
+    # and stackmaps. This compares two allocators, not just two emitter routes.
+    assert outputs[0] == outputs[1]
