@@ -575,6 +575,37 @@ def _dominance_frontiers(order: list, predecessors: dict, idom: dict, reachable:
     for block in order:
         frontiers[block] = []
         members[block] = set()
+    # Only ordinary string graphs can skip repeated lookups without changing
+    # custom container/coercion behavior.  Keep the original walk otherwise.
+    cacheable = (type(order) is list and type(predecessors) is dict
+                 and type(idom) is dict and type(reachable) is set
+                 and type(_IDOM_WALK_LIMIT) is int)
+    if cacheable:
+        for block in order:
+            if type(block) is not str:
+                cacheable = False
+                break
+    if cacheable:
+        for block in reachable:
+            if type(block) is not str:
+                cacheable = False
+                break
+    if cacheable:
+        for block, parent in idom.items():
+            if type(block) is not str or type(parent) is not str:
+                cacheable = False
+                break
+    if cacheable:
+        for block, incoming in predecessors.items():
+            if type(block) is not str or type(incoming) is not list:
+                cacheable = False
+                break
+            for predecessor in incoming:
+                if type(predecessor) is not str:
+                    cacheable = False
+                    break
+            if not cacheable:
+                break
     for block in order:
         joining = []
         for predecessor in predecessors.get(block, []):
@@ -583,21 +614,37 @@ def _dominance_frontiers(order: list, predecessors: dict, idom: dict, reachable:
         if len(joining) < 2:
             continue
         stop = idom[block]
+        # Completed suffix lengths belong to this join only.  Membership
+        # alone cannot justify stopping: a longer prefix may exceed the cap.
+        completed: dict[str, int] = {}
         for predecessor in joining:
             runner = predecessor
             steps = 0
+            path: list[str] = []
             while runner != stop:
                 steps = steps + 1
                 if steps > _IDOM_WALK_LIMIT:
                     return None
+                if cacheable and runner in completed:
+                    steps = steps + completed[runner] - 1
+                    if steps > _IDOM_WALK_LIMIT:
+                        return None
+                    break
                 if block not in members[runner]:
                     members[runner].add(block)
                     frontiers[runner].append(block)
+                if cacheable:
+                    path.append(runner)
                 next_runner = idom.get(runner, "")
                 if next_runner == "" or next_runner == runner:
                     runner = stop
                     continue
                 runner = next_runner
+            # Publish only after the entire predecessor walk has succeeded.
+            # A cycle or over-limit prefix never makes a partial cache entry.
+            if cacheable:
+                for index, visited in enumerate(path):
+                    completed[visited] = steps - index
     return frontiers
 
 
