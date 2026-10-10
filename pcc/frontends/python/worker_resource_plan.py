@@ -334,7 +334,8 @@ def read_worker_resource(path: str, expected_pid: int, expected_token: str = "")
 
 
 def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
-                    not_before: float = 0.0, include_owner: bool = False):
+                    not_before: float = 0.0, include_owner: bool = False,
+                    diagnostic=None):
     """Read the guard's synchronized accounting without shelling out.
 
     Return (outside-owner-and-worker bytes, worker-subtree bytes). Missing,
@@ -343,37 +344,79 @@ def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
     With include_owner, the RSS map also contains the owner's current RSS;
     all active roots must be positively measured direct children. Every value
     comes from this one atomically published process-table sample, not from
-    independently timed high-water marks or a second file read.
+    independently timed high-water marks or a second file read. Optional
+    diagnostic output describes this read; -1 marks fields not yet parsed.
     """
-    if not path:
-        return None
+    reason = "empty_path"
+    sampled_at = checked_at = age = -1.0
+    observed_budget = owner_parent = owner_rss = -1
+    active_pid = active_parent = active_rss = -1
+    row_number = line_count = 0
     try:
+        if not path:
+            return None
+        reason = "read"
         with open(path, "r", encoding="utf-8") as stream:
             lines = stream.read().splitlines()
+        line_count = len(lines)
+        reason = "header"
         if len(lines) < 4 or lines[0] != TREE_STATE_SCHEMA:
             return None
+        reason = "timestamp"
         sampled_at = float(lines[1])
-        age = time.monotonic() - sampled_at
-        if (not (0 <= age <= STATE_MAX_AGE_SECONDS) or sampled_at < not_before
-                or int(lines[2]) != tree_budget):
+        reason = "clock"
+        checked_at = time.monotonic()
+        age = checked_at - sampled_at
+        reason = "age"
+        if not (0 <= age <= STATE_MAX_AGE_SECONDS):
+            return None
+        reason = "before_barrier"
+        if sampled_at < not_before:
+            return None
+        reason = "budget"
+        observed_budget = int(lines[2])
+        if observed_budget != tree_budget:
             return None
         rows = {}
         for line in lines[3:]:
+            row_number += 1
             values = line.split("\t")
+            reason = "row_fields"
             if len(values) != 3:
                 return None
+            reason = "row_integer"
             pid, parent, rss = int(values[0]), int(values[1]), int(values[2])
+            reason = "row_identity"
             if pid <= 0 or parent < 0 or rss < 0 or pid in rows:
                 return None
             rows[pid] = (parent, rss)
-        if owner_pid not in rows or rows[owner_pid][1] <= 0:
+        reason = "owner_missing"
+        if owner_pid not in rows:
+            return None
+        owner_parent, owner_rss = rows[owner_pid]
+        reason = "owner_rss"
+        if owner_rss <= 0:
             return None
         children = {}
         for pid in active_pids:
-            if include_owner and (pid == owner_pid or pid not in rows
-                                  or rows[pid][0] != owner_pid or rows[pid][1] <= 0):
-                return None
+            if include_owner:
+                active_pid = pid
+                active_parent = active_rss = -1
+                reason = "active_owner"
+                if pid == owner_pid:
+                    return None
+                reason = "active_missing"
+                if pid not in rows:
+                    return None
+                active_parent, active_rss = rows[pid]
+                reason = "active_parent"
+                if active_parent != owner_pid:
+                    return None
+                reason = "active_rss"
+                if active_rss <= 0:
+                    return None
             children[pid] = 0
+        reason = "accounting"
         outside = 0
         for pid, row in rows.items():
             if pid == owner_pid:
@@ -393,9 +436,24 @@ def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
                 outside += row[1]
         if include_owner:
             children[owner_pid] = rows[owner_pid][1]
+        reason = "accepted"
         return outside, children
     except (OSError, ValueError):
         return None
+    finally:
+        if diagnostic is not None:
+            try:
+                diagnostic.clear()
+                diagnostic.update({
+                    "reason": reason, "sampled_at": sampled_at,
+                    "checked_at": checked_at, "age": age, "not_before": not_before,
+                    "expected_budget": tree_budget, "observed_budget": observed_budget,
+                    "owner_pid": owner_pid, "owner_parent": owner_parent, "owner_rss": owner_rss,
+                    "active_pid": active_pid, "active_parent": active_parent, "active_rss": active_rss,
+                    "line_count": line_count, "row_number": row_number,
+                })
+            except Exception:
+                pass  # Optional evidence must never change the reader outcome.
 
 
 def publish_worker_resource(phase: str) -> None:

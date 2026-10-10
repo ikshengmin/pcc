@@ -1,6 +1,8 @@
 """One guard snapshot authorizes live continuation, never future RSS safety."""
 
+import ast
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -37,10 +39,13 @@ def test_current_owner_is_an_opt_in_from_the_same_single_read(tmp_path, monkeypa
         return actual_open(*args, **kwargs)
 
     monkeypatch.setattr(policy, "open", counted_open, raising=False)
-    assert policy.read_tree_state(str(state), 1000, 11, [12], include_owner=True) == (
+    detail = {}
+    assert policy.read_tree_state(str(state), 1000, 11, [12], include_owner=True, diagnostic=detail) == (
         50, {11: 100, 12: 230},
     )
     assert opened == [str(state)]
+    assert detail["reason"] == "accepted"
+    assert (detail["owner_parent"], detail["owner_rss"], detail["observed_budget"]) == (10, 100, 1000)
 
 
 @pytest.mark.parametrize("change", [
@@ -356,7 +361,13 @@ def test_unavailable_window_starts_at_first_rejected_snapshot(
         failure = str(error)
     assert rejected and not live, case
     if fails:
-        assert failure == "worker tree RSS state is missing, stale, or incompatible"
+        prefix = "worker tree RSS state is missing, stale, or incompatible; last_rejected_snapshot="
+        assert failure.startswith(prefix)
+        detail_text, active_text = failure[len(prefix):].split("; active_tasks=", 1)
+        detail = ast.literal_eval(detail_text)
+        assert detail["reason"] == ("active_missing" if started else "header")
+        assert detail["expected_budget"] == budget and detail["owner_pid"] == owner
+        assert ast.literal_eval(active_text) == ([(0, child)] if started else [])
         assert policy.STATE_MAX_AGE_SECONDS <= clock.now - rejected[0] < 2.03
         assert not observations and not reaped
         assert stopped == ([child] if started else [])
@@ -366,3 +377,180 @@ def test_unavailable_window_starts_at_first_rejected_snapshot(
         assert any(at > rejected[0] for at in accepted)
         if initial_gap:
             assert started[0] >= initial_time + initial_gap
+
+
+@pytest.mark.parametrize("case,reason", [
+    ("empty-path", "empty_path"), ("missing-file", "read"),
+    ("short-header", "header"), ("wrong-schema", "header"),
+    ("timestamp", "timestamp"), ("clock", "clock"),
+    ("stale", "age"), ("future", "age"), ("barrier", "before_barrier"),
+    ("budget-integer", "budget"), ("budget-mismatch", "budget"),
+    ("row-fields", "row_fields"), ("row-integer", "row_integer"),
+    ("negative-pid", "row_identity"), ("negative-parent", "row_identity"),
+    ("negative-rss", "row_identity"), ("duplicate-pid", "row_identity"),
+    ("owner-missing", "owner_missing"), ("owner-rss", "owner_rss"),
+    ("active-owner", "active_owner"), ("active-missing", "active_missing"),
+    ("active-parent", "active_parent"), ("active-rss", "active_rss"),
+])
+def test_tree_rejection_diagnostic_preserves_each_old_rejection(tmp_path, monkeypatch, case, reason):
+    state = tmp_path / "state"
+    _snapshot(state)
+    lines = state.read_text().splitlines()
+    path, owner, active, barrier = str(state), 11, [12], 0.0
+    if case == "empty-path":
+        path = ""
+    elif case == "missing-file":
+        path = str(tmp_path / "missing")
+    elif case == "short-header":
+        lines = lines[:3]
+    elif case == "wrong-schema":
+        lines[0] = "incompatible-schema"
+    elif case == "timestamp":
+        lines[1] = "not-a-number"
+    elif case == "stale":
+        lines[1] = "97.0"
+    elif case == "future":
+        lines[1] = "101.0"
+    elif case == "barrier":
+        barrier = 100.25
+    elif case == "budget-integer":
+        lines[2] = "not-an-integer"
+    elif case == "budget-mismatch":
+        lines[2] = "999"
+    elif case == "row-fields":
+        lines[3] = "10\t0"
+    elif case == "row-integer":
+        lines[3] = "10\t0\tunknown"
+    elif case == "negative-pid":
+        lines[3] = "-1\t0\t50"
+    elif case == "negative-parent":
+        lines[3] = "10\t-1\t50"
+    elif case == "negative-rss":
+        lines[3] = "10\t0\t-1"
+    elif case == "duplicate-pid":
+        lines.append(lines[3])
+    elif case == "owner-missing":
+        owner = 99
+    elif case == "owner-rss":
+        lines[4] = "11\t10\t0"
+    elif case == "active-owner":
+        active = [11]
+    elif case == "active-missing":
+        active = [99]
+    elif case == "active-parent":
+        lines[5] = "12\t10\t200"
+    elif case == "active-rss":
+        lines[5] = "12\t11\t0"
+    state.write_text("\n".join(lines) + "\n")
+
+    def monotonic():
+        if case == "clock":
+            raise ValueError("clock unavailable")
+        return 100.5
+
+    monkeypatch.setattr(policy, "time", SimpleNamespace(monotonic=monotonic))
+    # Supplying no optional output retains the old return contract.
+    assert policy.read_tree_state(path, 1000, owner, active, barrier, True) is None
+    detail = {"old": "must be cleared"}
+    assert policy.read_tree_state(path, 1000, owner, active, barrier, True, detail) is None
+    assert "old" not in detail and detail["reason"] == reason
+    assert detail["expected_budget"] == 1000 and detail["owner_pid"] == owner
+    assert detail["not_before"] == barrier
+    if case in ("stale", "future", "barrier"):
+        assert detail["checked_at"] == 100.5
+        assert detail["age"] == 100.5 - float(lines[1])
+        assert detail["sampled_at"] == float(lines[1])
+    if case.startswith("active-"):
+        assert (detail["owner_parent"], detail["owner_rss"]) == (10, 100)
+        assert detail["active_pid"] == active[0] and detail["observed_budget"] == 1000
+    if case == "active-parent":
+        assert (detail["active_parent"], detail["active_rss"]) == (10, 200)
+    if case == "active-rss":
+        assert (detail["active_parent"], detail["active_rss"]) == (11, 0)
+
+
+def test_rejection_evidence_is_from_the_single_read_even_if_file_is_replaced(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    _snapshot(state, stamp=97.0)
+    opened = []
+    actual_open = open
+
+    def read_once(*args, **kwargs):
+        opened.append(args[0])
+        return actual_open(*args, **kwargs)
+
+    def replace_after_read():
+        _snapshot(state, stamp=100.0)
+        return 100.5
+
+    monkeypatch.setattr(policy, "open", read_once, raising=False)
+    monkeypatch.setattr(policy, "time", SimpleNamespace(monotonic=replace_after_read))
+    detail = {}
+    assert policy.read_tree_state(str(state), 1000, 11, [12], include_owner=True, diagnostic=detail) is None
+    assert opened == [str(state)]
+    assert detail["reason"] == "age" and detail["sampled_at"] == 97.0 and detail["age"] == 3.5
+    assert state.read_text().splitlines()[1] == "100.0"
+
+
+@pytest.mark.parametrize("case", ["accepted", "rejected", "unexpected-error"])
+def test_optional_evidence_failure_cannot_change_reader_outcome(tmp_path, monkeypatch, case):
+    state = tmp_path / "state"
+    _snapshot(state, stamp=97.0 if case == "rejected" else 100.0)
+    original = LookupError("original clock failure")
+
+    def monotonic():
+        if case == "unexpected-error":
+            raise original
+        return 100.5
+
+    class BrokenOutput:
+        def clear(self):
+            raise RuntimeError("optional evidence failed")
+
+    monkeypatch.setattr(policy, "time", SimpleNamespace(monotonic=monotonic))
+    if case == "unexpected-error":
+        with pytest.raises(LookupError) as caught:
+            policy.read_tree_state(str(state), 1000, 11, [12], diagnostic=BrokenOutput())
+        assert caught.value is original
+    else:
+        expected = (50, {12: 230}) if case == "accepted" else None
+        assert policy.read_tree_state(str(state), 1000, 11, [12], diagnostic=BrokenOutput()) == expected
+
+
+@pytest.mark.parametrize("frozen_exists", [False, True])
+def test_original_stale_guard_wrapper_forwards_optional_diagnostic(frozen_exists):
+    # Compile only the original embedded wrapper definition, never its real
+    # process driver. This keeps its path substitution and old/default call
+    # arguments intact while checking the new output is forwarded by identity.
+    tree = ast.parse(Path(__file__).with_name("test_worker_resource_plan.py").read_text())
+    driver = next(node.value for node in ast.walk(tree)
+                  if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                  and "def read_state(path, tree_budget, owner_pid" in node.value)
+    wrapper = next(node for node in ast.walk(ast.parse(driver))
+                   if isinstance(node, ast.FunctionDef) and node.name == "read_state")
+    calls = []
+    result = object()
+
+    class Snapshot:
+        def exists(self):
+            return frozen_exists
+
+        def __str__(self):
+            return "frozen.tsv"
+
+    def original_read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+
+    namespace = {"frozen": Snapshot(), "original_read": original_read}
+    module = ast.fix_missing_locations(ast.Module(body=[wrapper], type_ignores=[]))
+    exec(compile(module, "original-stale-guard-wrapper", "exec"), namespace)
+    output = {}
+    assert namespace["read_state"]("live.tsv", 1000, 11, [12], 100.0, True, diagnostic=output) is result
+    assert namespace["read_state"]("live.tsv", 1000, 11, [12]) is result
+    path = "frozen.tsv" if frozen_exists else "live.tsv"
+    assert calls == [
+        ((path, 1000, 11, [12], 100.0, True), {"diagnostic": output}),
+        ((path, 1000, 11, [12], 0.0, False), {"diagnostic": None}),
+    ]
+    assert calls[0][1]["diagnostic"] is output

@@ -178,9 +178,10 @@ if case == "stale-state":
     frozen = root / "frozen-tree.tsv"
     original_read = policy.read_tree_state
     original_event = pool._resource_event
-    def read_state(path, tree_budget, owner_pid, active_pids, not_before=0.0, include_owner=False):
+    def read_state(path, tree_budget, owner_pid, active_pids, not_before=0.0, include_owner=False, diagnostic=None):
         return original_read(str(frozen) if frozen.exists() else path,
-                             tree_budget, owner_pid, active_pids, not_before, include_owner)
+                             tree_budget, owner_pid, active_pids, not_before, include_owner,
+                             diagnostic=diagnostic)
     def event(*args):
         original_event(*args)
         if args[1] == "exclusive" and not frozen.exists():
@@ -957,7 +958,7 @@ def test_measured_limit_preserves_task_identity_and_accounting(tmp_path, monkeyp
     monkeypatch.setattr(pool, "_start_resource_worker", lambda specs, index: pid)
     monkeypatch.setattr(pool, "_poll_resource_worker", lambda pid: pool._WORKER_RUNNING)
     monkeypatch.setattr(pool, "_stop_resource_worker", stopped.append)
-    monkeypatch.setattr(policy, "read_tree_state", lambda path, limit, owner_pid, active, after, include_owner=False:
+    monkeypatch.setattr(policy, "read_tree_state", lambda path, limit, owner_pid, active, after, include_owner=False, diagnostic=None:
                         (outside, {owner_pid: owner, **{child: current for child in active}}))
     monkeypatch.setattr(policy, "read_worker_resource", lambda path, child, token:
                         ("emit-object", current, peak))

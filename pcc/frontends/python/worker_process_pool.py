@@ -218,6 +218,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     completed_tokens = {}
     unavailable_since = -1.0
     fresh_after = time.monotonic()
+    state_diagnostic = {}
     preflight_done = False
     available = 0
     try:
@@ -286,13 +287,18 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 break
             owner_rss = _coordinator_rss_bytes()
             state = read_tree_state(tree_path, tree_budget, owner_pid,
-                                    [item[1] for item in active], fresh_after, include_owner=True)
+                                    [item[1] for item in active], fresh_after, include_owner=True,
+                                    diagnostic=state_diagnostic if unavailable_since >= 0.0 else None)
             if tree_path and state is None:
                 now = time.monotonic()
                 if unavailable_since < 0.0:
                     unavailable_since = now
                 if now - unavailable_since > STATE_MAX_AGE_SECONDS:
-                    raise WorkerMemoryError("worker tree RSS state is missing, stale, or incompatible")
+                    raise WorkerMemoryError(
+                        "worker tree RSS state is missing, stale, or incompatible"
+                        + "; last_rejected_snapshot=" + repr(state_diagnostic)
+                        + "; active_tasks=" + repr([(item[0], item[1]) for item in active[:16]])
+                    )
                 time.sleep(0.01)
                 continue
             # Processing/launch time before the first rejected observation
