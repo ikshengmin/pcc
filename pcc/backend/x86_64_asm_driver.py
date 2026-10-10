@@ -241,6 +241,10 @@ _INSTRUCTION_SPAN_CODEC = struct.Struct("<q")
 _INSTRUCTION_SPAN_CHUNK_BYTES = 8192
 _INSTRUCTION_SPAN_MIN_RUN = 5
 
+# Fixed scratch-payload bound, matching the existing plan-chunk scale.
+# This is not an environment-tuned cache or a cap on object/section size.
+_NUMERIC_DATA_BATCH_BYTES = 8192
+
 
 def _append_instruction_span(entries: list[object], span: int) -> None:
     # Keep short runs in their original representation. On the supported host
@@ -311,6 +315,16 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
     symbols: dict[str, _SymbolMeta] = {}
     current: _SectionPlan | None = None
     saw_syntax = False
+    pending_data = bytearray()
+    data_batch_bytes = _NUMERIC_DATA_BATCH_BYTES
+
+    def flush_data() -> None:
+        if pending_data:
+            assert current is not None
+            # Only immutable _Data enters the plan. Raw bytearray entries
+            # already belong to the compact instruction-span transport.
+            current.entries.append(_Data(bytes(pending_data)))
+            pending_data.clear()
 
     def switch(name: str) -> None:
         nonlocal current
@@ -338,6 +352,12 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
         line = raw_line.strip()
         if not line:
             continue
+        # Keep every nonempty nonnumeric source-line boundary, including section,
+        # label, alignment, zero-fill, metadata and instruction boundaries.
+        if pending_data and not line.startswith((
+            ".byte ", ".short ", ".long ", ".quad ", ".float ", ".double ",
+        )):
+            flush_data()
         if line == ".intel_syntax noprefix":
             if saw_syntax or current is not None or symbols:
                 raise X86EncodeError(
@@ -423,6 +443,7 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
                 except ValueError:
                     difference = re.fullmatch(r"([.$A-Za-z_][.$\w]*)\s*-\s*([.$A-Za-z_][.$\w]*)", item)
                     if difference:
+                        flush_data()
                         current.entries.append(_SymbolDifference(difference.group(1), difference.group(2), width))
                         continue
                     if width != 8:
@@ -430,13 +451,17 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
                             f"symbol-valued {directive} is not proven: {line!r}"
                         )
                     symbol, addend = _symbol_plus_addend(item)
+                    flush_data()
                     current.entries.append(_SymbolData(symbol, addend))
                 else:
-                    current.entries.append(_Data(_integer_payload(
-                        value,
-                        width,
-                        owner=directive,
-                    )))
+                    payload = _integer_payload(value, width, owner=directive)
+                    if data_batch_bytes > 0 and len(payload) <= data_batch_bytes:
+                        if len(pending_data) + len(payload) > data_batch_bytes:
+                            flush_data()
+                        pending_data.extend(payload)
+                    else:
+                        flush_data()
+                        current.entries.append(_Data(payload))
             continue
         if line.startswith((".float ", ".double ")):
             if current is None:
@@ -448,7 +473,13 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
                     payload = struct.pack(fmt, float(item))
                 except (ValueError, OverflowError) as exc:
                     raise X86EncodeError(f"bad {directive} value {item!r}") from exc
-                current.entries.append(_Data(payload))
+                if data_batch_bytes > 0 and len(payload) <= data_batch_bytes:
+                    if len(pending_data) + len(payload) > data_batch_bytes:
+                        flush_data()
+                    pending_data.extend(payload)
+                else:
+                    flush_data()
+                    current.entries.append(_Data(payload))
             continue
         if line.startswith((".zero ", ".space ")):
             if current is None:
@@ -487,6 +518,7 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
         raise X86EncodeError(
             "owned x86 assembly must begin with .intel_syntax noprefix"
         )
+    flush_data()
     return plans, order, symbols
 
 
