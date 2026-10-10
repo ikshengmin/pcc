@@ -945,6 +945,11 @@ class ExceptionLoweringMixin:
         if isinstance(exc_expr, Call) and isinstance(exc_expr.func, Name):
             cls_name = exc_expr.func.ident
             tag = _builtin_exc_tag_or_missing(cls_name)
+            if tag == 14 or tag == 34:
+                # OSError and FileNotFoundError have positional metadata.
+                # The ordinary slot-call route preserves every operand and
+                # shares construction with aliases and first-class classes.
+                return self._emit_slot_call_object(exc_expr, "exc.os")
             if tag == 58 or tag == 59:  # Decode/encode errors have five-field constructors.
                 cls = self.builder.call(
                     self.runtime["py_exc_builtin_class"], [ir.Constant(_I64, tag)],

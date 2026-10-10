@@ -91,7 +91,10 @@ def test_macos_workflow_retains_opt_in_timing_stderr():
     macos = workflow.split('\n  pcc1-package-parity:\n', 1)[1]
     assert 'PCC_PY_FRONTEND_WORKER_TIMING: "1"' in macos
     assert 'build/bootstrap/stage*.process.*/target.stderr' in macos
-    assert 'PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES: "4294967296"' in macos
+    assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in macos
+    assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in macos
+    assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in macos
+    assert 'PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES:' not in macos
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"' in macos
 
 

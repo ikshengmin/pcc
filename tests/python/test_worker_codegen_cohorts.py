@@ -23,8 +23,8 @@ def test_bands_small_first_largest_within_band_exactly_once():
     tasks = [task(n, i) for i, n in enumerate([16, 3, 2, 8, 3, 0])]
     before = copy.deepcopy(tasks)
     order, bands = policy.resource_task_order(tasks)
-    assert order == [5, 1, 4, 2, 3, 0]
-    assert bands == [6, 3, 3, 5, 3, 0]
+    assert order == [5, 2, 1, 4, 3, 0]
+    assert bands == [12, 7, 6, 10, 7, 0]
     assert sorted(order) == list(range(len(tasks)))
     assert tasks == before
     assert policy.resource_task_order(tasks) == (order, bands)
@@ -81,7 +81,8 @@ def test_oversized_forecast_cannot_skip_lower_band_or_lower_maximum():
 
 
 def mock_pool(tmp_path, monkeypatch, failure=False, growth=False):
-    tasks = [task(n, i) for i, n in enumerate([70, 50, 40, 12, 10, 9, 300])]
+    # Keep the original overlapping/growth witnesses inside each new half-band.
+    tasks = [task(n, i) for i, n in enumerate([70, 44, 40, 11, 10, 9, 300])]
     for i, item in enumerate(tasks): item['report_path'] = str(tmp_path / ('rss' + str(i)))
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
     monkeypatch.delenv('PCC_PY_FRONTEND_WORKER_TIMING', raising=False)
@@ -179,7 +180,7 @@ def test_small_real_children_keep_cohort_barrier_and_original_outputs(tmp_path, 
     import sys
 
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
-    tasks = [task(n, i) for i, n in enumerate([70, 12, 10, 9])]
+    tasks = [task(n, i) for i, n in enumerate([70, 11, 10, 9])]
     commands = []
     for index, item in enumerate(tasks):
         item['report_path'] = str(tmp_path / ('rss' + str(index)))
@@ -205,3 +206,106 @@ def test_small_real_children_keep_cohort_barrier_and_original_outputs(tmp_path, 
     assert all(next(i for i, row in enumerate(rows) if row[:2] == ['retire', str(index)]) < later for index in (1, 2, 3))
     assert all((tmp_path / ('original-output' + str(index))).read_text() == str(index) for index in range(4))
     assert len(observations) == 4 and pool._HOST_WORKERS == {}
+
+
+@pytest.mark.parametrize("size,expected", [
+    (0, 0), (1, 2), (2, 4), (3, 5), (4, 6), (5, 6),
+    (6, 7), (7, 7), (8, 8), (11, 8), (12, 9), (15, 9),
+    (16, 10), (23, 10), (24, 11), (31, 11), (32, 12),
+])
+def test_half_band_integer_boundaries(size, expected):
+    item = task(0)
+    item['inputs'][:4] = [size, size, 0, 0]
+    assert policy.resource_task_order([item]) == ([0], [expected])
+
+
+def test_finer_order_keeps_larger_peak_after_smaller_half_band():
+    # 20 and 26 used to share [16,32); a 26-byte high-RSS task would
+    # calibrate first. The lower half now drains before it can contribute.
+    tasks = [task(13, 0), task(10, 1), task(9, 2)]
+    order, bands = policy.resource_task_order(tasks)
+    assert order == [1, 2, 0] and bands[1] == bands[2] < bands[0]
+    low = (tasks[1]['class'], list(tasks[1]['inputs']), 100 * MIB)
+    assert policy.estimated_task_bytes(tasks[2], [low]) == policy.peak_reservation(100 * MIB)
+    assert policy.estimated_task_bytes(tasks[0], [low]) == 0
+    high = (tasks[0]['class'], list(tasks[0]['inputs']), 900 * MIB)
+    # Sorting never filters, deletes or substitutes a MAX observation.
+    assert policy.estimated_task_bytes(tasks[2], [low, high]) == policy.peak_reservation(900 * MIB)
+    assert policy.ready_resource_cohort([0], [0], [1, 2], bands) == []
+    assert policy.ready_resource_cohort([0], [0], [], bands) == [0]
+
+
+def test_smaller_completed_cohort_cannot_cover_larger_pending_vector():
+    # Source/AST can trade off; the sum argument holds in both dimensions.
+    tasks = []
+    for source in range(9):
+        for wire in range(9):
+            item = task(0, len(tasks))
+            item['inputs'][:4] = [source, source, wire, wire]
+            tasks.append(item)
+    _order, bands = policy.resource_task_order(tasks)
+    for before, observed in enumerate(tasks):
+        for after, pending in enumerate(tasks):
+            if bands[before] < bands[after]:
+                assert not policy.input_envelope_covers(observed['inputs'], pending['inputs'])
+
+
+def test_half_bands_preserve_huge_integer_and_equal_vector_order():
+    size = 2 ** 80
+    tasks = [task(size, 0), task(size, 1), task(size - 1, 2)]
+    order, bands = policy.resource_task_order(tasks)
+    assert order == [2, 0, 1] and bands[0] == bands[1] > bands[2]
+    assert tasks[0]['inputs'][0] == size
+
+
+def test_admission_diagnostic_records_bounded_inputs_and_private_class_digest(monkeypatch, capsys):
+    import hashlib
+
+    monkeypatch.setenv('PCC_PY_FRONTEND_WORKER_TIMING', '1')
+    item = task(10, 4)
+    item['class'] = '/private/manifest|/private/compiler|codegen|secret-token'
+    item['report_path'] = '/private/report'
+    pool._resource_diagnostic(item, 'start', 4, 123, 500, 1000, 0, cohort=10)
+    text = capsys.readouterr().err
+    assert text.count('pcc frontend admission event=') == 1
+    assert 'input_count=6 inputs=[10, 10, 10, 10, 100000000, 1]' in text
+    assert 'class_sha256=' + hashlib.sha256(item['class'].encode()).hexdigest() in text
+    assert 'cohort=10' in text and 'module_count=1 mapping_offset=0' in text
+    assert '/private' not in text and 'secret-token' not in text
+
+
+@pytest.mark.parametrize('enabled', ['', '0', 'false'])
+def test_disabled_admission_diagnostic_never_reads_task(enabled, monkeypatch, capsys):
+    monkeypatch.setenv('PCC_PY_FRONTEND_WORKER_TIMING', enabled)
+    pool._resource_diagnostic(object(), 'start', 0, 1, 1, 1, 0)
+    assert capsys.readouterr().err == ''
+
+
+def test_admission_diagnostic_bounds_unknown_input_shape_and_keeps_batch_mapping(monkeypatch, capsys):
+    monkeypatch.setenv('PCC_PY_FRONTEND_WORKER_TIMING', '1')
+    item = task(10)
+    item['inputs'] = list(range(20))
+    item['diagnostic_modules'] = ['module' + str(i) for i in range(18)]
+    item['diagnostic_indices'] = list(range(18))
+    pool._resource_diagnostic(item, 'retire', 2, 99, 500, 0, 300)
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 2
+    assert all('input_count=20 inputs=[0, 1, 2, 3, 4, 5, 6, 7]' in line for line in lines)
+    assert 'mapping_offset=0' in lines[0] and 'mapping_offset=16' in lines[1]
+    assert 'indices=[16, 17]' in lines[1] and "modules=['module16', 'module17']" in lines[1]
+    assert all('cohort=-1' in line for line in lines)
+
+
+def test_original_quotient_scan_handles_nonfinite_and_subunit_sizes():
+    # Real source/AST byte counts are integers. Retain the old recognizer
+    # and quotient-loop behavior for its previously accepted numeric inputs.
+    for axis in (0, 2):
+        for value, expected in (
+            (float('inf'), [1]),
+            (float('nan'), []),
+            (float('-inf'), []),
+            (0.25, [2]),
+        ):
+            item = task(0)
+            item['inputs'][axis:axis + 2] = [value, value]
+            assert policy.resource_task_order([item]) == ([0], expected)

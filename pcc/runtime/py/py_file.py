@@ -101,6 +101,7 @@ py_obj_special_call_slots = extern("py_obj_special_call_slots",
     (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 pcc_errno_get = extern("pcc_errno_get", (), c_int32)
+pcc_errno_exception_kind = extern("pcc_errno_exception_kind", (c_int32,), c_int64)
 pcc_errno_message_into = extern("pcc_errno_message_into", (c_int32, c_ptr, c_int64), c_int32)
 py_str_splitlines_keepends = extern(
     "py_str_splitlines_keepends", (c_ptr, c_int32), c_ptr
@@ -227,6 +228,7 @@ _FILE_ERRNO_EXCEPTION = 0
 _FILE_ERRNO_NUMBER = 1
 _FILE_ERRNO_MESSAGE = 2
 _FILE_ERRNO_ARGS = 3
+_FILE_ERRNO_FILENAME = 4
 _FILE_DYNAMIC_METHOD = 8
 _FILE_BOUND_METHOD = 9
 _FILE_FSPATH = 10
@@ -379,7 +381,7 @@ def _file_native_mode(mode, output) -> None:
     store_i8(output, index, 0)
 
 
-def _file_raise_errno(code: int) -> int:
+def _file_raise_errno(code: int, filename_slot) -> int:
     slots = stack_alloc(_FILE_COUNT * _FILE_BYTES)
     tokens = stack_alloc(_FILE_COUNT * _FILE_BYTES)
     memset(slots, 0, _FILE_COUNT * _FILE_BYTES)
@@ -388,13 +390,23 @@ def _file_raise_errno(code: int) -> int:
         store_i64(tokens, index * _FILE_BYTES, -1)
         index = index + 1
     pcc_gc_frame_enter(global_addr("pcc_file_owned_map"), slots)
+    if not ptr_is_null(filename_slot):
+        # Copy from the caller's authoritative input slot before allocating.
+        # This owner preserves the exact str/bytes filename through cleanup.
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, _FILE_ERRNO_FILENAME * _FILE_BYTES), filename_slot)
+        store_i64(tokens, _FILE_ERRNO_FILENAME * _FILE_BYTES, token)
+        if token < 0:
+            _file_error(19, cstr("file error could not retain its filename"))
     message = stack_alloc(256)
     pcc_errno_message_into(code, message, 256)
     count: int = 0
     while count < 255 and load_i8(message, count) != 0:
         count = count + 1
-    store_ptr(slots, _FILE_ERRNO_EXCEPTION * _FILE_BYTES, py_exc_new(14, message))
-    if _file_adopt(slots, tokens, _FILE_ERRNO_EXCEPTION) == 0:
+    if not py_err_occurred():
+        kind: int = pcc_errno_exception_kind(code)
+        store_ptr(slots, _FILE_ERRNO_EXCEPTION * _FILE_BYTES, py_exc_new(kind, message))
+    if not py_err_occurred() and _file_adopt(slots, tokens, _FILE_ERRNO_EXCEPTION) == 0:
         store_ptr(slots, _FILE_ERRNO_NUMBER * _FILE_BYTES, py_int_from_i64(code))
         if _file_adopt(slots, tokens, _FILE_ERRNO_NUMBER) == 0:
             store_ptr(slots, _FILE_ERRNO_MESSAGE * _FILE_BYTES, py_str_new(message, count))
@@ -411,13 +423,16 @@ def _file_raise_errno(code: int) -> int:
             py_obj_setattr(exception, cstr("errno"), number)
             if not py_err_occurred():
                 py_obj_setattr(exception, cstr("strerror"), text)
+            if not py_err_occurred() and not ptr_is_null(filename_slot):
+                py_obj_setattr(exception, cstr("filename"),
+                    load_ptr(slots, _FILE_ERRNO_FILENAME * _FILE_BYTES))
             if not py_err_occurred():
                 py_obj_setattr(exception, cstr("args"), args)
             if not py_err_occurred():
                 py_incref(exception)
                 py_raise_owned(exception)
     py_tls_exc_swap_slot(ptr_add(slots, _FILE_ERROR * _FILE_BYTES))
-    index = _FILE_ERRNO_ARGS
+    index = _FILE_ERRNO_FILENAME
     while index >= _FILE_ERRNO_EXCEPTION:
         _file_drop(slots, tokens, index)
         index = index - 1
@@ -544,9 +559,11 @@ def _file_open_body(slots, tokens, descriptor_mode: int = 0, buffering: int = -1
         fp = pcc_stdio_fdopen(descriptor, mode_data,
                              1 if descriptor_mode == _FILE_FDOPEN_OWNED else 0, buffering)
     if ptr_is_null(fp):
+        # Snapshot errno before any allocation, formatting or owner release.
+        code: int = pcc_errno_get()
         if descriptor_mode != 0:
-            return _file_raise_errno(pcc_errno_get())
-        return _file_error(14, cstr("could not open file"))
+            return _file_raise_errno(code, null())
+        return _file_raise_errno(code, ptr_add(slots, _FILE_FIRST * _FILE_BYTES))
     if descriptor_mode == 0:
         out = pcc_gc_alloc(_FILE_SIZE, PY_TYPE_FILE, 0)
         if ptr_is_null(out):
@@ -1228,7 +1245,7 @@ def py_file_flush(file):
     if ptr_is_null(f):
         return null()
     if fflush(load_ptr(f, 16)) != 0:
-        _file_raise_errno(pcc_errno_get())
+        _file_raise_errno(pcc_errno_get(), null())
         return null()
     none = global_load_ptr("py_None")
     py_incref(none)

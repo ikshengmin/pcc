@@ -81,6 +81,8 @@ class FileRuntime(Runtime):
         })
         self.load(ROOT/'pcc/runtime/py/freestanding_stdio.py')
         self.load(ROOT/'pcc/runtime/py/py_file.py')
+        self.load_selected(ROOT/'pcc/runtime/py/freestanding_errno.py',
+                           {'pcc_errno_exception_kind'})
         self.install_integer_runtime()
 
     def load_selected(self, path, names, constants=()):

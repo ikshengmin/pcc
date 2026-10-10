@@ -145,6 +145,22 @@ def test_workflow_keeps_stage1_configuration_and_evidence_separate():
     assert "name: Preserve macOS bootstrap evidence\n        if: always()" in stage1
     assert "PCC_WITH_THREADS" not in stage1
     assert "ci_macos_regression_gate" not in stage1
+    assert "needs:" not in smoke
+    for path in (
+        "tests/python/test_os_error_constructors.py",
+        "tests/python/test_native_open_errno.py",
+        "tests/python/test_owned_fdopen_provider.py",
+    ):
+        assert workflow.count('      - "' + path + '"') == 2
+
+
+def test_oserror_gate_names_both_original_pcc0_native_programs():
+    assert dict(gate.GATES)["oserror"] == (
+        "tests/python/test_os_error_constructors.py::"
+        "test_os_error_constructor_native_five_gc[pcc0]",
+        "tests/python/test_native_open_errno.py::"
+        "test_open_errno_native_five_gc[pcc0]",
+    )
 
 
 def test_root_join_gate_names_the_five_original_pcc0_witnesses():
@@ -174,6 +190,7 @@ def test_failed_gate_stops_before_runtime_build_and_marks_remaining_unrun(tmp_pa
     assert receipt["gates"]["clock"]["status"] == "FAIL"
     assert all(row["status"] == "NOT_RUN" for name, row in receipt["gates"].items() if name != "clock")
     assert receipt["gates"]["root-joins"]["expected_nodes"] == list(dict(gate.GATES)["root-joins"])
+    assert receipt["gates"]["oserror"]["expected_nodes"] == list(dict(gate.GATES)["oserror"])
 
 
 def test_command_receipt_and_native_child_receive_the_same_guard_budget(tmp_path, monkeypatch):

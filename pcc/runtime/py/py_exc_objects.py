@@ -32,7 +32,9 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_CLASS,
+    PY_TYPE_COMPLEX,
     PY_TYPE_EXC,
+    PY_TYPE_FLOAT,
     PY_TYPE_INT,
     PY_TYPE_MEMORYVIEW,
     PY_TYPE_STR,
@@ -869,9 +871,132 @@ def py_unicode_error_set_field(error, index: int, value) -> int:
 
 
 # OSError fields are independent of .args, exactly as in the Unicode record.
-# Conversion is lazy so existing one-message exception constructors and their
-# allocation/GC contracts remain unchanged. The record uses the already traced
+# Legacy message-only runtime helpers still convert lazily in the setter. The
+# positional constructor below builds the same record in the already traced
 # message slot; no exception-layout or collector-specific extension is needed.
+pcc_errno_exception_kind = extern("pcc_errno_exception_kind", (c_int32,), c_int64)
+
+# Reuse the existing two-borrowed/eight-owned construction frame. These are
+# byte offsets, matching _unicode_tuple_put and _unicode_finish.
+_OS_NEW_ERROR = 0
+_OS_NEW_PAYLOAD = 8
+_OS_NEW_ARGS = 16
+_OS_NEW_ERRNO = 24
+_OS_NEW_STRERROR = 32
+_OS_NEW_FILENAME = 40
+_OS_NEW_FILENAME2 = 48
+_OS_NEW_TEMP = 56
+
+
+def _os_error_argument(borrowed, owned, index: int, destination: int) -> int:
+    prior: int = _unicode_pin_slot(borrowed)
+    store_ptr(owned, destination, py_tuple_get(load_ptr(borrowed, 0), index))
+    store_ptr(borrowed, 0, pcc_gc_take_pinned_slot(borrowed, prior))
+    return 0 if ptr_is_null(load_ptr(owned, destination)) else 1
+
+
+def _os_error_constructor_body(borrowed, owned, type_tag: int) -> int:
+    count: int = 0
+    prior: int = 0
+    if ptr_is_null(pcc_gc_load_ptr(null(), borrowed)):
+        store_ptr(owned, _OS_NEW_ARGS, py_tuple_new(0))
+        if ptr_is_null(load_ptr(owned, _OS_NEW_ARGS)):
+            return 0
+    else:
+        prior = _unicode_pin_slot(borrowed)
+        count = py_tuple_len(load_ptr(borrowed, 0))
+        store_ptr(borrowed, 0, pcc_gc_take_pinned_slot(borrowed, prior))
+        pcc_py_gc_minor_graph_lock()
+        args = pcc_gc_load_ptr(null(), borrowed)
+        py_incref(args)
+        store_ptr(owned, _OS_NEW_ARGS, args)
+        pcc_py_gc_minor_graph_unlock()
+    kind: int = type_tag
+    if count >= 2 and count <= 5:
+        if _os_error_argument(borrowed, owned, 0, _OS_NEW_ERRNO) == 0:
+            return 0
+        if _os_error_argument(borrowed, owned, 1, _OS_NEW_STRERROR) == 0:
+            return 0
+        number_slot = ptr_add(owned, _OS_NEW_ERRNO)
+        number_tag: int = _type_of(pcc_gc_load_ptr(null(), number_slot))
+        if type_tag == 14 and (number_tag == PY_TYPE_INT or number_tag == PY_TYPE_BOOL):
+            # OSError accepts arbitrary objects, including arbitrary-precision
+            # ints. Mapping must neither coerce user objects nor truncate ints.
+            overflow = stack_alloc(4)
+            store_i32(overflow, 0, 0)
+            prior = _unicode_pin_slot(number_slot)
+            number: int = py_int_to_i64(load_ptr(number_slot, 0), overflow)
+            store_ptr(number_slot, 0, pcc_gc_take_pinned_slot(number_slot, prior))
+            if py_err_occurred():
+                return 0
+            if load_i32(overflow, 0) == 0 and number >= -2147483648 and number <= 2147483647:
+                kind = pcc_errno_exception_kind(number)
+        if count >= 3:
+            if _os_error_argument(borrowed, owned, 2, _OS_NEW_FILENAME) == 0:
+                return 0
+            filename_slot = ptr_add(owned, _OS_NEW_FILENAME)
+            filename = pcc_gc_load_ptr(null(), filename_slot)
+            filename_tag: int = _type_of(filename)
+            numeric_written: int = kind == 43 and (
+                filename_tag == PY_TYPE_INT or filename_tag == PY_TYPE_BOOL
+                or filename_tag == PY_TYPE_FLOAT or filename_tag == PY_TYPE_COMPLEX)
+            if ptr_eq(filename, global_load_ptr("py_None")) or numeric_written:
+                # BlockingIOError's numeric third argument is not a filename.
+                # characters_written remains outside this metadata-only slice;
+                # keep the full args and the existing absent-filename behavior.
+                pcc_gc_store_root(filename_slot, null())
+            else:
+                if count == 5:
+                    if _os_error_argument(borrowed, owned, 4, _OS_NEW_FILENAME2) == 0:
+                        return 0
+                    second_slot = ptr_add(owned, _OS_NEW_FILENAME2)
+                    if ptr_eq(pcc_gc_load_ptr(null(), second_slot), global_load_ptr("py_None")):
+                        pcc_gc_store_root(second_slot, null())
+                store_ptr(owned, _OS_NEW_TEMP, py_tuple_new(2))
+                if ptr_is_null(load_ptr(owned, _OS_NEW_TEMP)):
+                    return 0
+                _unicode_tuple_put(owned, _OS_NEW_TEMP, 0, _OS_NEW_ERRNO)
+                _unicode_tuple_put(owned, _OS_NEW_TEMP, 1, _OS_NEW_STRERROR)
+                pcc_py_gc_minor_graph_lock()
+                pcc_gc_store_root(ptr_add(owned, _OS_NEW_ARGS),
+                    pcc_gc_load_ptr(null(), ptr_add(owned, _OS_NEW_TEMP)))
+                pcc_py_gc_minor_graph_unlock()
+                pcc_gc_store_root(ptr_add(owned, _OS_NEW_TEMP), null())
+    store_ptr(owned, _OS_NEW_PAYLOAD, py_tuple_new(5))
+    if ptr_is_null(load_ptr(owned, _OS_NEW_PAYLOAD)):
+        return 0
+    _unicode_tuple_put(owned, _OS_NEW_PAYLOAD, 0, _OS_NEW_ARGS)
+    index: int = 1
+    while index < 5:
+        field: int = _OS_NEW_ERRNO + (index - 1) * 8
+        if not ptr_is_null(pcc_gc_load_ptr(null(), ptr_add(owned, field))):
+            _unicode_tuple_put(owned, _OS_NEW_PAYLOAD, index, field)
+        index = index + 1
+    pcc_gc_publish_initialized(pcc_gc_load_ptr(null(), ptr_add(owned, _OS_NEW_PAYLOAD)))
+    store_ptr(owned, _OS_NEW_ERROR, py_exc_new(kind, null()))
+    if ptr_is_null(load_ptr(owned, _OS_NEW_ERROR)):
+        return 0
+    _exc_store_constructed_slot(owned, owned, _OS_NEW_PAYLOAD, 24)
+    pcc_py_gc_minor_graph_lock()
+    error = pcc_gc_load_ptr(null(), owned)
+    atomic_rmw_i32("or", error, 12, PY_FLAG_EXC_OS_PAYLOAD, "relaxed")
+    pcc_py_gc_minor_graph_unlock()
+    return 1
+
+
+@c_abi_export("py_os_error_new")
+def py_os_error_new(type_tag: int, args):
+    borrowed = stack_alloc(16)
+    store_ptr(borrowed, 0, args)
+    store_ptr(borrowed, 8, null())
+    pcc_gc_frame_enter(global_addr("pcc_unicode_borrowed_map"), borrowed)
+    owned = stack_alloc(64)
+    memset(owned, 0, 64)
+    pcc_gc_frame_enter(global_addr("pcc_unicode_owned_map"), owned)
+    success: int = _os_error_constructor_body(borrowed, owned, type_tag)
+    return _unicode_finish(borrowed, owned, success)
+
+
 def _os_error_prepare_payload(borrowed, owned) -> int:
     error = pcc_gc_load_ptr(null(), borrowed)
     if (load_i32(error, 12) & PY_FLAG_EXC_OS_PAYLOAD) != 0:

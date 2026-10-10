@@ -111,8 +111,9 @@ def resource_task_order(tasks):
     """Keep small independent codegen cohorts ahead of large peak samples.
 
     Source/AST bytes vary per singleton; full-export bytes and module count
-    do not. Exclude those shared features from the size band. The largest
-    input in each band calibrates first, with the existing componentwise
+    do not. Split each power-of-two size band at its arithmetic midpoint,
+    limiting a cohort to a size ratio below 1.5 instead of 2. The largest
+    input in each half-band calibrates first, with the existing componentwise
     coverage and maximum-peak estimator unchanged. Task indices never move.
     Other phases, mixed classes and dependency-bearing tasks keep their old
     priority and readiness rules.
@@ -137,10 +138,17 @@ def resource_task_order(tasks):
                 or task.get("input_path", "")):
             return pending, []
         size = inputs[0] + inputs[2]
+        size_total = size
         band = 0
+        upper = 1
         while size > 0:
             size //= 2
+            upper *= 2
             band += 1
+        if size == 0 and size_total > 0:
+            # [2**k, 2**(k+1)) splits at 3*2**(k-1). Keep the
+            # original quotient loop and skip this split if it ends in NaN.
+            band = 2 * band + (1 if 4 * size_total >= 3 * upper else 0)
         bands.append(band)
     pending = sorted(pending, key=lambda index: (
         bands[index], -sum(tasks[index]["inputs"]), index,

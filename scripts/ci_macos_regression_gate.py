@@ -35,6 +35,14 @@ GATES = (
         "tests/python/test_worker_state_clock_contract.py::"
         "test_darwin_clock_abi_matches_host_state_after_system_suspend[17924]",
     )),
+    # These unchanged programs request all five GC configurations; the shared
+    # helper checks native results, not collector-selection telemetry.
+    ("oserror", (
+        "tests/python/test_os_error_constructors.py::"
+        "test_os_error_constructor_native_five_gc[pcc0]",
+        "tests/python/test_native_open_errno.py::"
+        "test_open_errno_native_five_gc[pcc0]",
+    )),
     ("time", (
         "tests/python/test_owned_darwin_time_runtime.py::"
         "test_darwin_import_time_and_gmtime_execute[pcc0]",
@@ -133,7 +141,7 @@ def run(out):
     environment = dict(os.environ)
     environment.pop("LC_ALL", None)
     environment.update(PCC_NO_AUTO_PCC1="1", PCC_TEST_COMPILER_STRICT="1")
-    order = ["clock", "runtime-build", "time", "native-worker-clock", "worker-handles", "root-joins"]
+    order = ["clock", "runtime-build", "oserror", "time", "native-worker-clock", "worker-handles", "root-joins"]
     receipt = {
         "schema": "pcc.macos-regression-ci.v1", "status": "RUNNING",
         "source_commit": environment.get("GITHUB_SHA", ""),

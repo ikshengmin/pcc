@@ -69,6 +69,7 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 pcc_errno_set = extern("pcc_errno_set", (c_int32,), c_void)
+pcc_errno_get = extern("pcc_errno_get", (), c_int32)
 
 # Registry nodes are separate from the public 64-byte owned FILE layout:
 # next@0, stream@8. The lock protects registry traversal and stream lifetime,
@@ -204,6 +205,7 @@ def _stream_new(fd: i64, flags: i64, aux: i64):
 @c_abi_export("fopen")
 def fopen(path, mode) -> c_ptr:
     if ptr_is_null(path) or ptr_is_null(mode):
+        pcc_errno_set(22)
         return null()
     first = load_i8(mode, 0)
     access: i64 = 0
@@ -224,6 +226,7 @@ def fopen(path, mode) -> c_ptr:
         disposition: i64 = 3
         flags = abi_constant("stdio.flag.writable")
     else:
+        pcc_errno_set(22)
         return null()
 
     offset: i64 = 1
@@ -235,6 +238,7 @@ def fopen(path, mode) -> c_ptr:
                 "stdio.flag.writable"
             )
         elif marker != 98 and marker != 116:
+            pcc_errno_set(22)
             return null()
         offset = offset + 1
     if first == 97:
@@ -242,6 +246,9 @@ def fopen(path, mode) -> c_ptr:
 
     fd = open_file(path, access, disposition)
     if fd < 0:
+        # The owned syscall ABI returns -errno. Linux does not update the
+        # separate libc-style TLS slot; publish the captured failure here.
+        pcc_errno_set(0 - fd)
         return null()
     append_position: i64 = 0
     if (flags & abi_constant("stdio.flag.append")) != 0:
@@ -250,11 +257,19 @@ def fopen(path, mode) -> c_ptr:
         # write is still forced to EOF by O_APPEND.
         append_position = seek_file(fd, 0, 2)
         if append_position < 0:
+            # Darwin seek_file exposes libSystem's -1/errno ABI; Linux
+            # exposes the raw -errno result. Capture before close can alter it.
+            saved_errno: i64 = 0 - append_position
+            if load_i8(target_sys_platform(), 0) == 100:
+                saved_errno = pcc_errno_get()
             close(fd)
+            # Cleanup must not replace the operation's captured error.
+            pcc_errno_set(saved_errno)
             return null()
     stream = _stream_new(fd, flags, 0)
     if ptr_is_null(stream):
         close(fd)
+        pcc_errno_set(12)
         return null()
     if (flags & abi_constant("stdio.flag.append")) != 0:
         store_i64(

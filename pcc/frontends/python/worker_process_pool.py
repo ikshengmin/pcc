@@ -124,7 +124,7 @@ def _resource_event(path, event, index, pid, reservation, available, peak):
             )
 
 
-def _resource_diagnostic(task, event, index, pid, reservation, available, peak):
+def _resource_diagnostic(task, event, index, pid, reservation, available, peak, cohort=-1):
     """Keep safe task identity and admission evidence after temp files unwind."""
     if str(os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or "").strip().lower() not in (
         "1", "true", "yes", "on",
@@ -133,8 +133,12 @@ def _resource_diagnostic(task, event, index, pid, reservation, available, peak):
     # Never log the command, environment, source, AST, report path or token.
     # repr keeps unusual module names from forging extra diagnostic lines.
     # Bound each batch line while preserving every assigned module/index.
+    import hashlib
+
     modules = task.get("diagnostic_modules", [])
     indices = task.get("diagnostic_indices", [])
+    inputs = task.get("inputs", [])
+    class_digest = hashlib.sha256(str(task.get("class", "")).encode("utf-8")).hexdigest()
     count = max(1, len(modules), len(indices))
     offset = 0
     while offset < count:
@@ -149,7 +153,11 @@ def _resource_diagnostic(task, event, index, pid, reservation, available, peak):
             + " reservation_bytes=" + str(reservation)
             + " available_bytes=" + str(available)
             + " peak_bytes=" + str(peak)
-            + " monotonic_s=" + str(time.monotonic()) + "\n"
+            + " monotonic_s=" + str(time.monotonic())
+            + " input_count=" + str(len(inputs))
+            + " inputs=" + repr(inputs[:8])
+            + " class_sha256=" + class_digest
+            + " cohort=" + str(cohort) + "\n"
         )
         offset += 16
     sys.stderr.flush()
@@ -217,7 +225,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 active = [item for item in active if item[1] != pid]
                 if result:
                     _resource_event(trace_path, "failed", index, pid, reservation, 0, observed_peak)
-                    _resource_diagnostic(tasks[index], "failed", index, pid, reservation, 0, observed_peak)
+                    _resource_diagnostic(tasks[index], "failed", index, pid, reservation, 0, observed_peak,
+                                         bands[index] if bands else -1)
                     raise subprocess.CalledProcessError(result, commands[index])
                 # The child may publish complete and exit between the earlier
                 # live read and poll. Only a fresh post-success read can bind
@@ -225,11 +234,13 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 report = read_worker_resource(str(tasks[index]["report_path"]), pid, attempt_tokens[pid])
                 if report is None or report[0] != "complete":
                     _resource_event(trace_path, "unverified-retire", index, pid, reservation, 0, observed_peak)
-                    _resource_diagnostic(tasks[index], "unverified-retire", index, pid, reservation, 0, observed_peak)
+                    _resource_diagnostic(tasks[index], "unverified-retire", index, pid, reservation, 0, observed_peak,
+                                         bands[index] if bands else -1)
                     raise WorkerMemoryError("completed worker did not publish final peak RSS: task=" + str(index))
                 observed_peak = max(observed_peak, report[2])
                 _resource_event(trace_path, "retire", index, pid, reservation, 0, observed_peak)
-                _resource_diagnostic(tasks[index], "retire", index, pid, reservation, 0, observed_peak)
+                _resource_diagnostic(tasks[index], "retire", index, pid, reservation, 0, observed_peak,
+                                         bands[index] if bands else -1)
                 observations.append((tasks[index]["class"], tasks[index]["inputs"], observed_peak))
                 if tasks[index].get("retry_calibration", False):
                     tasks[index]["retry_calibration"] = False
@@ -322,7 +333,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 active.pop()
                 fresh_after = time.monotonic()
                 _resource_event(trace_path, "cancel", index, pid, reservation, available, observed_peak)
-                _resource_diagnostic(tasks[index], "cancel", index, pid, reservation, available, observed_peak)
+                _resource_diagnostic(tasks[index], "cancel", index, pid, reservation, available, observed_peak,
+                                     bands[index] if bands else -1)
                 if retries[index] >= 1:
                     raise WorkerMemoryError("worker peak estimate remains unstable after one bounded retry: task=" + str(index))
                 retries[index] += 1
@@ -407,7 +419,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 _resource_event(trace_path, "calibrate" if exclusive and retries[index] == 0 else "start",
                                 index, pid, demand, available, 0)
                 _resource_diagnostic(tasks[index], "calibrate" if exclusive and retries[index] == 0 else "start",
-                                     index, pid, demand, available, 0)
+                                     index, pid, demand, available, 0,
+                                     bands[index] if bands else -1)
                 if exclusive:
                     break
                 # Refresh live reports and the synchronized tree before the

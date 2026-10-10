@@ -221,6 +221,7 @@ py_unicode_error_get_field = extern("py_unicode_error_get_field", (c_ptr, c_int6
 py_unicode_error_set_field = extern("py_unicode_error_set_field", (c_ptr, c_int64, c_ptr), c_int64)
 py_os_error_get_field = extern("py_os_error_get_field", (c_ptr, c_int64), c_ptr)
 py_os_error_set_field = extern("py_os_error_set_field", (c_ptr, c_int64, c_ptr), c_int64)
+py_os_error_new = extern("py_os_error_new", (c_int64, c_ptr), c_ptr)
 py_exc_new_with_class = extern("py_exc_new_with_class", (c_ptr, c_ptr), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 py_file_type_kind = extern("py_file_type_kind", (c_ptr,), c_int64)
@@ -3500,14 +3501,16 @@ def _builtin_exception_class_tag(cls) -> int:
 def _builtin_exception_call(cls, args, nargs: int):
     """``category(message)`` for a builtin exception class value.
 
-    Builds the same exception object as the static ``ValueError("x")``
-    constructor (only ``args[0]`` is stored); the generic class path made a
-    plain instance with no message and no ``args``, so ``warnings.warn``
-    printed an empty ``UserWarning:``.
+    Structured builtin payloads use dedicated constructors. Remaining classes
+    retain the message-only path used by static ``ValueError("x")`` calls;
+    generic class allocation would lose their message and ``args``.
     """
-    if _builtin_exception_class_tag(cls) == 58:
+    tag: int = _builtin_exception_class_tag(cls)
+    if tag == 14 or tag == 34:
+        return py_os_error_new(tag, args)
+    if tag == 58:
         return py_unicode_decode_error_new(args)
-    if _builtin_exception_class_tag(cls) == 59:
+    if tag == 59:
         return py_unicode_encode_error_new(args)
     if nargs == 0:
         return py_exc_new_with_class(cls, null())
@@ -3923,6 +3926,12 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
             if ptr_is_null(arg) == 0:
                 py_decref(arg)
             return out
+        if nkwargs != 0 and _builtin_exception_class_tag(callable) == 14:
+            py_raise_owned(py_exc_new(3, cstr("OSError() takes no keyword arguments")))
+            return null()
+        if nkwargs != 0 and _builtin_exception_class_tag(callable) == 34:
+            py_raise_owned(py_exc_new(3, cstr("FileNotFoundError() takes no keyword arguments")))
+            return null()
         if nkwargs != 0 and _builtin_exception_class_tag(callable) == 58:
             py_raise_owned(py_exc_new(3, cstr("UnicodeDecodeError() takes no keyword arguments")))
             return null()

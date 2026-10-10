@@ -1989,6 +1989,10 @@ PyObject *py_exc_new(int64_t type_tag, const char *msg);
  * borrowed; the exception stores its own reference. */
 PyObject *py_exc_new_with_value(int64_t type_tag, PyObject *value);
 
+/* OSError/FileNotFoundError positional construction. Borrows args and returns
+ * a NEW exception; exact OSError may select an errno-derived builtin class. */
+PyObject *py_os_error_new(int64_t type_tag, PyObject *args);
+
 /* Owned UnicodeEncodeError/UnicodeDecodeError with independent args/fields. */
 PyObject *py_unicode_decode_error_new(PyObject *args);
 PyObject *py_unicode_decode_error_normalize(PyObject *value);
