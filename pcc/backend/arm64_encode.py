@@ -1299,6 +1299,41 @@ def append_emitted_instruction_record(
         )
         return EMITTED_INSTRUCTION_SCALAR
 
+    if line.startswith("  sxtw "):
+        destination_end = line.find(", ", 7)
+        if destination_end < 0:
+            return EMITTED_INSTRUCTION_FALLBACK
+        source_start = destination_end + 2
+        destination = _emitted_register_code_span(line, 7, destination_end)
+        source = _emitted_register_code_span(line, source_start, len(line))
+        if (
+            destination < 0 or destination >> 6 != _EMITTED_REG_X
+            or source < 0 or source >> 6 != _EMITTED_REG_W
+            or line[7:destination_end] == "sp" or line[source_start:] == "wsp"
+        ):
+            return EMITTED_INSTRUCTION_FALLBACK
+        # SBFM Xd, Xn, #0, #31. Register 31 denotes ZR, never SP.
+        word = 0x93407C00 | ((source & 63) << 5) | (destination & 63)
+        records.append4(line_index, word, STRUCTURED_RELOCATION_NONE, -1)
+        return EMITTED_INSTRUCTION_SCALAR
+
+    if line.startswith("  mrs "):
+        destination_end = line.find(", ", 6)
+        if destination_end < 0:
+            return EMITTED_INSTRUCTION_FALLBACK
+        destination = _emitted_register_code_span(line, 6, destination_end)
+        system = line[destination_end + 2:]
+        if (
+            destination < 0 or destination >> 6 != _EMITTED_REG_X
+            or line[6:destination_end] == "sp"
+            or system not in ("nzcv", "tpidr_el0")
+        ):
+            return EMITTED_INSTRUCTION_FALLBACK
+        # Match the finite system-register family owned by the text encoder.
+        word = (0xD53B4200 if system == "nzcv" else 0xD53BD040) | (destination & 63)
+        records.append4(line_index, word, STRUCTURED_RELOCATION_NONE, -1)
+        return EMITTED_INSTRUCTION_SCALAR
+
     if line.startswith("  adrp "):
         destination_start = 7
         destination_end = line.find(", ", destination_start)

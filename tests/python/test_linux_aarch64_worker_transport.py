@@ -90,8 +90,64 @@ def _forbid_text_assembly(monkeypatch):
         monkeypatch.setattr(owner, name, forbidden)
 
 
+def _assert_scalar_records(monkeypatch, accepted, rejected):
+    from pcc.backend import arm64_encode as encoder
+    from pcc.backend.self_backend_value_arena import CompilerIntArena
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("scalar record publication used the text encoder")
+
+    for line, expected_word in accepted:
+        # Literal ISA words and the independent existing text lane must agree.
+        assert encoder.assemble_text(line).code == expected_word.to_bytes(4, "little")
+        records = CompilerIntArena()
+        names, indices = [], {}
+        try:
+            with monkeypatch.context() as direct:
+                direct.setattr(encoder, "_encode_one", forbidden)
+                family = encoder.append_emitted_instruction_record(
+                    line, 17, 0, -1, None, records, indices, names,
+                )
+            assert family == encoder.EMITTED_INSTRUCTION_SCALAR
+            assert tuple(records.diagnostic_values()) == (17, expected_word, 0, -1)
+            assert names == [] and indices == {}
+        finally:
+            records.close()
+    for line in rejected:
+        records = CompilerIntArena()
+        records.append4(99, 0xD503201F, 0, -1)
+        names, indices = [], {}
+        try:
+            with monkeypatch.context() as direct:
+                direct.setattr(encoder, "_encode_one", forbidden)
+                family = encoder.append_emitted_instruction_record(
+                    line, 17, 0, -1, None, records, indices, names,
+                )
+            assert family == encoder.EMITTED_INSTRUCTION_FALLBACK, line
+            assert tuple(records.diagnostic_values()) == (99, 0xD503201F, 0, -1)
+            assert names == [] and indices == {}
+        finally:
+            records.close()
+
+
 @pytest.mark.parametrize("source", [_GLOBALS_IR, _ROOTS_IR], ids=["tls-relocations", "managed-roots"])
 def test_linux_transport_matches_same_ir_text_object(monkeypatch, source):
+    if source == _GLOBALS_IR:
+        _assert_scalar_records(monkeypatch, [
+            ("  mrs x17, tpidr_el0", 0xD53BD051),
+            ("  mrs x0, tpidr_el0", 0xD53BD040),
+            ("  mrs x30, tpidr_el0", 0xD53BD05E),
+            ("  mrs xzr, tpidr_el0", 0xD53BD05F),
+            ("  mrs fp, nzcv", 0xD53B421D),
+            ("  mrs lr, nzcv", 0xD53B421E),
+            ("  mrs x17, nzcv", 0xD53B4211),
+        ], [
+            "  mrs sp, tpidr_el0", "  mrs w0, tpidr_el0",
+            "  mrs x31, tpidr_el0", "  mrs d0, tpidr_el0",
+            "  mrs x0, tpidr_el1", "  mrs x0, cntvct_el0",
+            "  mrs x0", "  mrs , tpidr_el0", "  mrs x0, ",
+            "  mrs x0, tpidr_el0, x1",
+        ])
     expected = target_objects.encode_assembly_object(
         target_objects.emit_indexed_assembly(parse_self_backend_module(source), optimize=False),
         TARGET,
@@ -139,6 +195,19 @@ def test_linux_transport_preserves_mixed_aggregate_varargs(monkeypatch):
     from pcc.frontends.c.codegen.c_codegen import CCodeGenerator, postprocess_ir_text
     from pcc.frontends.c.parse.c_parser import CParser
 
+    _assert_scalar_records(monkeypatch, [
+        ("  sxtw x2, w9", 0x93407D22),
+        ("  sxtw x0, w0", 0x93407C00),
+        ("  sxtw x30, w30", 0x93407FDE),
+        ("  sxtw xzr, wzr", 0x93407FFF),
+        ("  sxtw fp, w10", 0x93407D5D),
+        ("  sxtw lr, w11", 0x93407D7E),
+    ], [
+        "  sxtw sp, w0", "  sxtw x0, wsp", "  sxtw w0, w1",
+        "  sxtw x0, x1", "  sxtw x31, w0", "  sxtw x0, w31",
+        "  sxtw d0, w0", "  sxtw x0", "  sxtw , w0",
+        "  sxtw x0, ", "  sxtw x0, w0, #1",
+    ])
     generator = CCodeGenerator()
     generator.module.triple = TARGET
     generator.generate_code(CParser().parse('''
