@@ -167,25 +167,27 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         markers = list(SECTION.finditer(text))
         names = [match.group(1) for match in markers]
         assert len(names) == len(set(names)) and set(MODULES) <= set(names)
-        sections = {match.group(1): text[match.end():markers[index + 1].start()
-                    if index + 1 < len(markers) else len(text)]
-                    for index, match in enumerate(markers)}
         whole = verify_ir_text(text)
         assert Counter(function.name for function in whole.functions) == Counter(DEFINITION.findall(text))
         receipt["closure_modules"] = names
         receipt["closure_definitions"] = len(whole.functions)
         del whole
+        sections = {match.group(1): text[match.end():markers[index + 1].start()
+                    if index + 1 < len(markers) else len(text)]
+                    for index, match in enumerate(markers) if match.group(1) in MODULES}
+        del text, markers
         _record_closed_world_progress(receipt_path, receipt, started, "whole-verify", "complete")
         for name, source in zip(MODULES, sources):
             _record_closed_world_progress(receipt_path, receipt, started, "module-verify", "started", name)
             declared = [node.name for node in ast.parse(source.read_bytes()).body
                         if isinstance(node, ast.FunctionDef)]
             assert declared and len(declared) == len(set(declared))
-            section = sections[name]
+            section = sections.pop(name)
             required = ["user_" + name.replace(".", "_") + "_" + function for function in declared]
             definition_bodies = _index_definition_bodies(section)
             for symbol in required:
                 require_definition(section, symbol, bodies=definition_bodies)
+            del definition_bodies
             module = verify_ir_text(section)
             assert module.triple == target
             assert Counter(function.name for function in module.functions) == Counter(DEFINITION.findall(section))
@@ -194,13 +196,14 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
             sidecar, obj = tmp_path / (name + ".pidx"), tmp_path / (name + ".pco")
             _record_closed_world_progress(receipt_path, receipt, started, "module-emit", "started", name)
             encode_indexed_module_file(str(sidecar), module)
+            del module
             emit_indexed_module_file(str(sidecar), str(obj), "PCO", optimize=False)
             assert obj.stat().st_size > 0 and not Path(str(obj) + ".tmp").exists()
             object_contract = require_object_symbols(obj.read_bytes(), target, required)
             receipt["modules"][name] = {"object_contract": object_contract, "functions": declared, "ir_sha256": hashlib.sha256(section.encode()).hexdigest(),
                                        "object_sha256": hashlib.sha256(obj.read_bytes()).hexdigest(),
                                        "object_bytes": obj.stat().st_size}
-            del module
+            del section
             _record_closed_world_progress(receipt_path, receipt, started, "module-emit", "complete", name)
         assert digests == {name: hashlib.sha256(path.read_bytes()).hexdigest()
                            for name, path in zip(MODULES, sources)}

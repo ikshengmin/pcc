@@ -39,7 +39,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_dynamic_handoff_slots.py",
     )
     assert gate.HOST_FILES[4] == "tests/python/test_worker_guard_cadence.py"
-    assert gate.HOST_COUNTS == (80, 3, 114, 0, 4, 20, 21)
+    assert gate.HOST_COUNTS == (80, 3, 117, 0, 4, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -495,7 +495,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 114, 0, 4, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 117, 0, 4, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -1065,3 +1065,156 @@ def test_strict_progress_surrounds_real_phases_and_uses_collected_receipt():
                                   [gate.CLOSURE_TEST + "::" + function.name], integration=True)
     assert command[command.index("--basetemp") + 1] == str(Path("build/worker-prior-gate/strict-closure") / "tests")
     assert "-n0" not in command and "-o" not in command
+
+
+@pytest.mark.parametrize("failure", ("none", "encode", "emit"))
+def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, monkeypatch, failure):
+    import hashlib
+    import weakref
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    root, output = tmp_path / "source", tmp_path / "output"
+    output.mkdir()
+    names = ("pcc.frontends.python.mock_alpha", "pcc.frontends.python.mock_beta")
+    dependency = "pcc.frontends.python.mock_dependency"
+    for name in names:
+        source = root / (name.replace(".", "/") + ".py")
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("def entry():\n    return 1\n")
+    monkeypatch.setattr(closure, "MODULES", names)
+    monkeypatch.setattr(closure, "__file__", str(root / "tests/integration/closure.py"))
+    target = "x86_64-unknown-linux-gnu"
+    events, whole_refs, section_refs, module_refs, index_refs = [], [], [], [], []
+    symbols = {name: "user_" + name.replace(".", "_") + "_entry"
+               for name in (*names, dependency)}
+    text = "".join('; ---- module: ' + name + ' ----\n'
+                   + 'define ptr @' + symbols[name] + '() {\n call ptr @real()\n ret ptr null\n}\n'
+                   for name in (*names, dependency))
+
+    class TrackedSection(str):
+        pass
+
+    class TrackedIR(str):
+        def __getitem__(self, key):
+            assert isinstance(key, slice)
+            assert events == ["compile", "whole-verify"] or events[-1] == "slice"
+            assert module_refs[0]() is None, "whole parsed module still owns its arenas while sections are copied"
+            value = TrackedSection(super().__getitem__(key))
+            section_refs.append(weakref.ref(value))
+            events.append("slice")
+            return value
+
+    class Parsed:
+        pass
+
+    class DefinitionIndex(dict):
+        pass
+
+    read_text = Path.read_text
+
+    def tracked_read(path, *args, **kwargs):
+        if path == output / "closed-world.ll":
+            value = TrackedIR(read_text(path, *args, **kwargs))
+            whole_refs.append(weakref.ref(value))
+            return value
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", tracked_read)
+    original_index = closure._index_definition_bodies
+
+    def indexed(section):
+        value = DefinitionIndex(original_index(section))
+        index_refs.append(weakref.ref(value))
+        return value
+
+    monkeypatch.setattr(closure, "_index_definition_bodies", indexed)
+
+    def compile_multi(paths, destination, **kwargs):
+        assert paths == [str(root / (name.replace(".", "/") + ".py")) for name in names]
+        assert kwargs["module_names"] == list(names) and kwargs["libpython_mode"] == "off"
+        assert kwargs["emit_llvm_only"] and kwargs["backend"] == "self"
+        events.append("compile")
+        Path(destination).write_text(text)
+
+    def verify(value):
+        is_whole = isinstance(value, TrackedIR)
+        if is_whole:
+            assert not section_refs, "section copies overlap whole-module parsing"
+            events.append("whole-verify")
+        else:
+            assert len(section_refs) == len(names), "unselected closure sections were copied"
+            assert whole_refs[0]() is None, "whole text or regex markers are still retained"
+            assert index_refs[-1]() is None, "definition Match index survived its last use"
+            if len(module_refs) > 1:
+                assert section_refs[len(module_refs) - 2]() is None, "previous section remains retained"
+            events.append("section-verify")
+        module = Parsed()
+        module.triple = target
+        module.functions = [SimpleNamespace(name=name, indexed_kernel=object())
+                            for name in closure.DEFINITION.findall(value)]
+        module_refs.append(weakref.ref(module))
+        return module
+
+    def encode(path, module):
+        assert module_refs[-1]() is module
+        events.append("encode")
+        if failure == "encode":
+            raise RuntimeError("synthetic encode failure")
+        Path(path).write_bytes(b"encoded-sidecar")
+
+    def emit(path, destination, kind, *, optimize):
+        assert Path(path).read_bytes() == b"encoded-sidecar" and kind == "PCO" and optimize is False
+        assert module_refs[-1]() is None, "original parsed module overlaps decoded emitter module"
+        events.append("emit")
+        if failure == "emit":
+            raise RuntimeError("synthetic emit failure")
+        Path(destination).write_bytes(b"owned-object")
+
+    def require_symbols(payload, triple, required):
+        assert payload == b"owned-object" and triple == target
+        assert required == [symbols[names[len([event for event in events if event == "object-check"])]]]
+        events.append("object-check")
+        return {"required_defined_symbols": list(required)}
+
+    monkeypatch.setattr(closure, "require_object_symbols", require_symbols)
+    for module_name, exports in {
+        "pcc.backend.self_backend_indexed_codec": {"encode_indexed_module_file": encode},
+        "pcc.backend.self_backend_indexed_emit": {"emit_indexed_module_file": emit},
+        "pcc.frontends.python.pipeline": {"compile_python_multi": compile_multi},
+        "pcc.frontends.python.pipeline_targets": {"host_target_triple": lambda: target},
+        "pcc.tools.runtime_archive_provenance": {"codegen_checksum": lambda: "fixed-codegen"},
+        "tests.owned_ir_validation": {"verify_ir_text": verify},
+    }.items():
+        module = ModuleType(module_name)
+        for key, value in exports.items():
+            setattr(module, key, value)
+        monkeypatch.setitem(sys.modules, module_name, module)
+    if failure == "none":
+        closure.test_worker_size_prior_modules_strict_target_emission(output, monkeypatch)
+    else:
+        with pytest.raises(RuntimeError, match="synthetic " + failure + " failure"):
+            closure.test_worker_size_prior_modules_strict_target_emission(output, monkeypatch)
+    receipt = json.loads((output / "worker-size-prior-closed-world.json").read_text())
+    assert receipt["target"] == target and receipt["codegen_sha256"] == "fixed-codegen"
+    assert receipt["sources"] == {name: hashlib.sha256(
+        (root / (name.replace(".", "/") + ".py")).read_bytes()).hexdigest() for name in names}
+    assert receipt["closure_modules"] == [*names, dependency]
+    assert receipt["closure_definitions"] == 3
+    if failure == "none":
+        assert receipt["status"] == "PASS" and list(receipt["modules"]) == list(names)
+        for name in names:
+            section = '\ndefine ptr @' + symbols[name] + '() {\n call ptr @real()\n ret ptr null\n}\n'
+            assert receipt["modules"][name] == {
+                "object_contract": {"required_defined_symbols": [symbols[name]]},
+                "functions": ["entry"], "ir_sha256": hashlib.sha256(section.encode()).hexdigest(),
+                "object_sha256": hashlib.sha256(b"owned-object").hexdigest(), "object_bytes": 12,
+            }
+        assert all(reference() is None for reference in whole_refs + section_refs + module_refs + index_refs)
+        assert events == ["compile", "whole-verify", "slice", "slice",
+                          *(event for _ in names for event in ("section-verify", "encode", "emit", "object-check"))]
+    else:
+        assert receipt["status"] == "FAIL" and receipt["modules"] == {}
+        assert receipt["error"] == "RuntimeError: synthetic " + failure + " failure"
+        assert events == ["compile", "whole-verify", "slice", "slice", "section-verify", "encode"] + (
+            ["emit"] if failure == "emit" else []
+        )
