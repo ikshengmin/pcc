@@ -9,7 +9,7 @@ import struct
 
 import pytest
 
-from pcc.backend import owned_elf_link
+from pcc.backend import elf_x86_64 as elf, owned_elf_link
 from pcc.backend.elf_x86_64 import (
     ET_EXEC,
     R_X86_64_64,
@@ -125,8 +125,139 @@ def test_compact_relocation_parser_preserves_strict_errors(field, value, diagnos
         parse_relocatable(bytes(encoded))
     with pytest.raises(ElfError) as compact:
         parse_relocatable(bytes(encoded), compact_relocations=True)
+    with pytest.raises(ElfError) as indexed:
+        elf._parse_relocatable_indexed(bytes(encoded))
+    unpublished = []
+    with pytest.raises(ElfError):
+        elf._parse_relocatable(encoded, compact_relocations=True,
+                               _section_ranges=unpublished)
+    assert unpublished == []  # No reusable range escapes failed full validation.
     assert diagnostic in str(ordinary.value)
     assert str(compact.value) == str(ordinary.value)
+    assert str(indexed.value) == str(ordinary.value)
+
+
+def _interleave_elf_section_headers(encoded):
+    """Move metadata among payload headers while preserving model section order."""
+    data = bytearray(encoded)
+    header = list(elf._ELF_HEADER.unpack_from(data))
+    rows = [list(elf._SECTION_HEADER.unpack_from(data, header[6] + index * 64))
+            for index in range(header[12])]
+    model = [index for index, row in enumerate(rows) if row[1] in (1, 7, 8)]
+    metadata = [index for index in range(1, len(rows)) if index not in model]
+    order = [0]
+    for index in range(max(len(model), len(metadata))):
+        if index < len(metadata):
+            order.append(metadata[-index - 1])
+        if index < len(model):
+            order.append(model[index])
+    mapping = {old: new for new, old in enumerate(order)}
+    for row in rows:
+        if row[1] == elf.SHT_SYMTAB:
+            for offset in range(row[4], row[4] + row[5], elf._SYMBOL.size):
+                symbol = list(elf._SYMBOL.unpack_from(data, offset))
+                if symbol[3] not in (elf.SHN_UNDEF, elf.SHN_ABS, elf.SHN_COMMON):
+                    symbol[3] = mapping[symbol[3]]
+                elf._SYMBOL.pack_into(data, offset, *symbol)
+        if row[6]:
+            row[6] = mapping[row[6]]
+        if row[1] == elf.SHT_RELA:
+            row[7] = mapping[row[7]]
+    for new, old in enumerate(order):
+        elf._SECTION_HEADER.pack_into(data, header[6] + new * 64, *rows[old])
+    header[13] = mapping[header[13]]
+    elf._ELF_HEADER.pack_into(data, 0, *header)
+    return bytes(data)
+
+
+@pytest.mark.parametrize("interspersed", [False, True])
+def test_private_index_projects_exact_validated_sections_and_relocations(interspersed):
+    source = _exit_42_object()
+    source = ElfObject(source.sections + (
+        ElfSection(".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE, 16, mem_size=32),
+        ElfSection(".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, 8, b"abc\0"),
+        ElfSection(".empty", SHT_PROGBITS, SHF_ALLOC, 1, b""),
+    ), source.symbols)
+    encoded = emit_relocatable(source)
+    if interspersed:
+        encoded = _interleave_elf_section_headers(encoded)
+    assert parse_relocatable(encoded) == source
+    parsed, ranges = elf._parse_relocatable_indexed(encoded)
+    assert emit_relocatable(parsed) == emit_relocatable(source)
+    assert parsed.symbols == source.symbols
+    assert len(ranges) == len(source.sections)
+    for section, row in zip(source.sections, ranges):
+        offset, size, rela_offset, rela_size = row
+        assert encoded[offset:offset + size] == section.data
+        projected = elf._PackedElfRelocations(encoded, rela_offset, rela_size)
+        assert projected.payload is encoded
+        assert tuple(projected) == section.relocations
+        assert len(projected) == len(section.relocations)
+    empty = ElfObject((), (ElfSymbol.null(),))
+    empty_parsed, empty_ranges = elf._parse_relocatable_indexed(emit_relocatable(empty))
+    assert empty_parsed == empty and empty_ranges == ()
+
+
+@pytest.mark.parametrize("shape", ["empty-empty", "empty-nonempty", "nonempty-empty"])
+def test_private_index_preserves_existing_duplicate_empty_rela_behavior(shape):
+    data = bytearray(emit_relocatable(_exit_42_object()))
+    header = list(elf._ELF_HEADER.unpack_from(data))
+    rows = [list(elf._SECTION_HEADER.unpack_from(data, header[6] + index * 64))
+            for index in range(header[12])]
+    rela_index = next(index for index, row in enumerate(rows) if row[1] == elf.SHT_RELA)
+    appended = list(rows[rela_index])
+    if shape.startswith("empty-"):
+        rows[rela_index][5] = 0
+        elf._SECTION_HEADER.pack_into(data, header[6] + rela_index * 64, *rows[rela_index])
+    if shape.endswith("-empty"):
+        appended[5] = 0
+    data.extend(elf._SECTION_HEADER.pack(*appended))
+    header[12] += 1
+    elf._ELF_HEADER.pack_into(data, 0, *header)
+    if shape == "nonempty-empty":
+        with pytest.raises(ElfError, match="multiple RELA tables") as ordinary:
+            parse_relocatable(data)
+        with pytest.raises(ElfError) as indexed:
+            elf._parse_relocatable_indexed(data)
+        assert str(indexed.value) == str(ordinary.value)
+    else:
+        ordinary = parse_relocatable(bytes(data))
+        indexed, ranges = elf._parse_relocatable_indexed(data)
+        assert emit_relocatable(indexed) == emit_relocatable(ordinary)
+        _offset, _size, rela_offset, rela_size = ranges[0]
+        assert tuple(elf._PackedElfRelocations(data, rela_offset, rela_size)) == (
+            ordinary.sections[0].relocations)
+
+
+def test_packed_relocation_range_is_immutable_and_reiterable():
+    expected = (ElfRelocation(3, 2, R_X86_64_64, -7),
+                ElfRelocation(11, 1, R_X86_64_PLT32, 5))
+    records = b"".join(elf._RELA.pack(row.offset, (row.symbol_index << 32) | row.type,
+                                     row.addend) for row in expected)
+    mutable = bytearray(b"prefix!" + records + b"suffix")
+    projected = elf._PackedElfRelocations(mutable, 7, len(records))
+    mutable[:] = b"\0" * len(mutable)
+    assert type(projected.payload) is bytes
+    assert tuple(projected) == expected
+    assert tuple(projected) == expected
+    assert projected[0] == expected[0] and projected[-1] == expected[-1]
+    assert projected[0] is not projected[0]
+    with pytest.raises(IndexError):
+        projected[2]
+    with pytest.raises(IndexError):
+        projected[-3]
+    with pytest.raises(TypeError):
+        projected[:1]
+    assert tuple(elf._PackedElfRelocations(projected.payload, 7, 0)) == ()
+
+
+@pytest.mark.parametrize("offset,size,diagnostic", [
+    (-1, 24, "outside"), (0, -1, "outside"), (49, 0, "outside"),
+    (24, 25, "outside"), (0, 23, "truncated"),
+])
+def test_packed_relocation_range_rejects_invalid_bounds(offset, size, diagnostic):
+    with pytest.raises(ElfError, match=diagnostic):
+        elf._PackedElfRelocations(b"\0" * 48, offset, size)
 
 
 def test_static_link_applies_plt32_and_has_no_dynamic_or_section_surface():

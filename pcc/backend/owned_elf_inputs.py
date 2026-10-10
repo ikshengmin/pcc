@@ -1,9 +1,10 @@
-"""Validated, rereadable ELF inputs with one resident parsed payload.
+"""Validated, rereadable ELF inputs with one resident immutable ELF payload.
 
-Symbols and section descriptors are retained for resolution/layout. Object,
-assembly and archive payloads are hashed, validated, then released; the linker
-reloads at most one parsed input at a time. This is bounded payload retention,
-not constant-space linking: symbol tuples and the final image remain resident.
+Symbols, section descriptors and private validated file ranges are retained for
+resolution/layout. Object and archive payloads are fully parsed once, released,
+then reread with exact length/SHA checks before projecting the validated ranges.
+Assembly retains its existing reassembly path. This is bounded payload
+retention, not constant-space linking: symbols and the final image remain resident.
 """
 
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ class _InputSource:
     label: str
     kind: str
     whole_file: bool
+    section_ranges: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -58,19 +60,30 @@ class _InputSection:
     def data(self):
         if not self.file_size:
             return b""
-        return self.store.load(self.source_index).sections[self.section_index].data
+        payload = self.store.load(self.source_index)
+        ranges = self.store.sources[self.source_index].section_ranges
+        if ranges is None:  # Assembly keeps its validated reassembly path.
+            return payload.sections[self.section_index].data
+        offset, size, _rela_offset, _rela_size = ranges[self.section_index]
+        return payload[offset:offset + size]
 
     @property
     def relocations(self):
         if not self.relocation_count:
             return ()
-        return self.store.load(self.source_index).sections[self.section_index].relocations
+        payload = self.store.load(self.source_index)
+        ranges = self.store.sources[self.source_index].section_ranges
+        if ranges is None:
+            return payload.sections[self.section_index].relocations
+        _offset, _size, rela_offset, rela_size = ranges[self.section_index]
+        return elf._PackedElfRelocations(payload, rela_offset, rela_size)
 
 
 @dataclass(frozen=True)
 class _InputObject:
     # Phase metadata from an already validated ElfObject, never an unchecked
-    # alternative public ElfObject constructor. Reload uses the same parser.
+    # alternative public ElfObject constructor. ELF reloads verify exact bytes
+    # before reusing that validation; assembly reloads still use the same parser.
     sections: tuple
     symbols: tuple
     machine: int
@@ -191,10 +204,16 @@ class ElfInputStore:
             size = os.path.getsize(path)
         source = _InputSource(path, offset, size, "", label or path, kind, whole_file)
         data, digest = self._read(source)
-        obj = self._parse(data, kind)
+        ranges = None
+        if kind == "ASM":
+            obj = self._parse(data, kind)
+        else:
+            obj, ranges = elf._parse_relocatable_indexed(data)
         del data
         index = len(self.sources)
-        self.sources.append(_InputSource(path, offset, size, digest, source.label, kind, whole_file))
+        self.sources.append(_InputSource(
+            path, offset, size, digest, source.label, kind, whole_file, ranges,
+        ))
         sections = tuple(
             _InputSection(self, index, si, section.name, section.type, section.flags,
                           section.align, len(section.data), section.mem_size,
@@ -209,7 +228,10 @@ class ElfInputStore:
         self.clear()
         source = self.sources[index]
         data, _digest = self._read(source)
-        obj = self._parse(data, source.kind)
+        # No indexed byte can be consumed until the complete source has passed
+        # the same exact-length and SHA check. Only this one immutable payload
+        # is cached; the index retains neither payloads nor relocation objects.
+        obj = self._parse(data, source.kind) if source.kind == "ASM" else data
         del data
         self.current = obj
         self.current_index = index

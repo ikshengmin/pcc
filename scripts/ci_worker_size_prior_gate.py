@@ -25,6 +25,12 @@ EXIT_INPUTS = (EXIT_TEST, "tests/c/test_owned_linux_c_exports.py",
 ARM_TRANSPORT_TEST = "tests/python/test_linux_aarch64_worker_transport.py"
 ARM_TRANSPORT_NATIVE_TEST = "tests/python/test_linux_aarch64_transport_native.py"
 ARM_TRANSPORT_INPUTS = (ARM_TRANSPORT_TEST, ARM_TRANSPORT_NATIVE_TEST)
+ELF_FORMAT_TEST = "tests/python/test_elf_x86_64.py"
+ELF_STAGING_TEST = "tests/python/test_owned_elf_staging.py"
+ELF_OWNER_TEST = "tests/python/test_pipeline_self_backend_link_owner.py"
+ELF_OWNER_NODE = ELF_OWNER_TEST + "::test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
+ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
+              "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py")
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 CALLEE_SAVED_TEST = "tests/c/test_self_backend_aarch64_callee_saved.py"
 BRANCH_PARITY_TEST = "tests/python/test_aarch64_branch_layout_parity.py"
@@ -58,7 +64,7 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_host_indexed_process_split.py",
               "tests/python/test_dynamic_handoff_slots.py")
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 77, 0, 4, 20, 21)
+HOST_COUNTS = (80, 3, 90, 0, 4, 20, 21)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -81,7 +87,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS,
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),
                        "version": sys.version}
@@ -353,6 +359,17 @@ def run(out, phase):
                 run_pytest(out, "linux-arm-transport-native", [ARM_TRANSPORT_NATIVE_TEST
                            + "::test_linux_aarch64_transport_executes_tls_varargs_and_managed_reload"],
                            env, integration=True)
+            if sys.platform.startswith("linux"):
+                run_pytest(out, "linux-elf-format", [ELF_FORMAT_TEST], env, counts=(31,))
+                # Match the staging test's actual pcc_gate predicate exactly.
+                # ARM deselects two x86 executable probes at collection; skips
+                # in any selected case still fail verify_pytest.
+                staging_count = 69 if platform.machine() in ("x86_64", "amd64") else 67
+                run_pytest(out, "linux-elf-staging", [ELF_STAGING_TEST], env,
+                           counts=(staging_count,))
+                # The whole owner file also contains unmarked Darwin native
+                # execution. Select only the affected Linux dispatch contract.
+                run_pytest(out, "linux-elf-owner", [ELF_OWNER_NODE], env)
             native_gate(out, "pcc0", env)
             run_pytest(out, "strict-closure", [CLOSURE_TEST + "::test_worker_size_prior_modules_strict_target_emission"],
                        env, integration=True)

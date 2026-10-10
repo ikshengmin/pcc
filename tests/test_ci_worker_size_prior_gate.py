@@ -39,7 +39,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_dynamic_handoff_slots.py",
     )
     assert gate.HOST_FILES[4] == "tests/python/test_worker_guard_cadence.py"
-    assert gate.HOST_COUNTS == (80, 3, 77, 0, 4, 20, 21)
+    assert gate.HOST_COUNTS == (80, 3, 90, 0, 4, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -420,6 +420,12 @@ def test_other_platform_entry_keeps_the_original_full_gc_matrix_once():
     ("linux", "aarch64", "runtime-identity"),
     ("darwin", "arm64", "aarch64-regalloc-host"),
     ("darwin", "arm64", "aarch64-regalloc-native"),
+    ("linux", "x86_64", "linux-elf-format"),
+    ("linux", "x86_64", "linux-elf-staging"),
+    ("linux", "x86_64", "linux-elf-owner"),
+    ("linux", "aarch64", "linux-elf-format"),
+    ("linux", "aarch64", "linux-elf-staging"),
+    ("linux", "aarch64", "linux-elf-owner"),
 ])
 def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, monkeypatch, target, machine, failing):
     out = tmp_path / "preflight"
@@ -475,8 +481,21 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
             assert not integration and counts is None
             assert nodes == (gate.REGALLOC_HOST_NODES if name.endswith("-host")
                              else gate.REGALLOC_NATIVE_NODES)
+        elif name.startswith("linux-elf-"):
+            assert target == "linux" and not integration
+            assert env["PCC_RUNTIME_ARCHIVE"] == str(archive)
+            assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+            assert "runtime-identity" in events
+            if name == "linux-elf-format":
+                assert nodes == [gate.ELF_FORMAT_TEST] and counts == (31,)
+            elif name == "linux-elf-staging":
+                assert nodes == [gate.ELF_STAGING_TEST]
+                assert counts == ((69,) if machine in ("x86_64", "amd64") else (67,))
+            else:
+                assert name == "linux-elf-owner"
+                assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 77, 0, 4, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 90, 0, 4, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -498,6 +517,8 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
         expected += ["windows-exit-host", "windows-exit-native"]
     elif target == "linux" and machine in ("aarch64", "arm64"):
         expected += ["linux-arm-transport-host", "linux-arm-transport-routes", "linux-arm-transport-native"]
+    if target == "linux":
+        expected += ["linux-elf-format", "linux-elf-staging", "linux-elf-owner"]
     expected += ["native-pcc0", "strict-closure", "runtime-identity"]
     if failing:
         with pytest.raises(RuntimeError, match="original platform gate failure"):
@@ -635,8 +656,9 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     assert MODULES == tuple("pcc.frontends.python." + name for name in (
         "worker_resource_plan", "pipeline_frontend_workers",
         "pipeline_frontend_indexed_stage", "pipeline_indexed_handoff", "worker_process_pool",
-    )) + ("pcc.backend.self_backend_aarch64_darwin_regalloc",)
-    source = ROOT / (MODULES[-1].replace(".", "/") + ".py")
+    )) + ("pcc.backend.self_backend_aarch64_darwin_regalloc",
+          "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
+    source = ROOT / ("pcc.backend.self_backend_aarch64_darwin_regalloc".replace(".", "/") + ".py")
     definitions = [node.name for node in ast.parse(source.read_text()).body
                    if isinstance(node, ast.FunctionDef)]
     assert "allocate_aarch64_block_registers" in definitions
@@ -650,3 +672,122 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     assert "verify_ir_text(section)" in calls
     assert "require_object_symbols(obj.read_bytes(), target, required)" in calls
     assert "emit_indexed_module_file(str(sidecar), str(obj), 'PCO', optimize=False)" in calls
+
+
+def test_elf_input_sources_strict_modules_and_workflow_are_bound():
+    from tests.integration.test_worker_size_prior_closed_world import MODULES
+
+    assert gate.ELF_INPUTS == (
+        "tests/python/test_elf_x86_64.py",
+        "tests/python/test_owned_elf_staging.py",
+        "tests/python/test_pipeline_self_backend_link_owner.py",
+        "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
+    )
+    assert gate.ELF_OWNER_NODE == (
+        "tests/python/test_pipeline_self_backend_link_owner.py::"
+        "test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
+    )
+    assert MODULES[-2:] == ("pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
+    tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
+    identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "source_identity")
+    hashes = next(node.value for node in identity.body if isinstance(node, ast.Assign)
+                  and isinstance(node.targets[0], ast.Subscript)
+                  and isinstance(node.targets[0].slice, ast.Constant)
+                  and node.targets[0].slice.value == "test_inputs")
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "ELF_INPUTS" for node in hashes.generators[0].iter.elts)
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    for path in gate.ELF_INPUTS:
+        assert workflow.count('      - "' + path + '"') == 2, path
+    # This control reads the final test source; it neither imports the ELF
+    # test modules nor calls their object emitters or native probes.
+    for path, expected, native_count in ((gate.ELF_FORMAT_TEST, 31, 0),
+                                          (gate.ELF_STAGING_TEST, 69, 2)):
+        total = gated = 0
+        for node in ast.parse((ROOT / path).read_text()).body:
+            if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+                continue
+            count = 1
+            is_gated = False
+            for mark in node.decorator_list:
+                assert not (isinstance(mark, ast.Attribute) and mark.attr == "integration")
+                if isinstance(mark, ast.Call) and isinstance(mark.func, ast.Attribute):
+                    if mark.func.attr == "parametrize":
+                        assert isinstance(mark.args[1], (ast.List, ast.Tuple))
+                        count *= len(mark.args[1].elts)
+                    elif mark.func.attr == "pcc_gate":
+                        is_gated = True
+                        assert node.name == "test_staged_metadata_image_executes_data_and_bss_relocations"
+            total += count
+            if is_gated:
+                gated += count
+        assert (total, gated) == (expected, native_count)
+
+
+@pytest.mark.parametrize("name,nodes,counts", [
+    ("linux-elf-format", [gate.ELF_FORMAT_TEST], (31,)),
+    ("linux-elf-staging", [gate.ELF_STAGING_TEST], (69,)),
+    ("linux-elf-staging", [gate.ELF_STAGING_TEST], (67,)),
+    ("linux-elf-owner", [gate.ELF_OWNER_NODE], None),
+])
+def test_elf_runtime_slices_keep_original_workers_and_bounds(tmp_path, monkeypatch, name, nodes, counts):
+    calls = []
+    monkeypatch.setattr(gate, "guarded", lambda command, directory, timeout, env:
+                        calls.append((command, directory, timeout, env)))
+    monkeypatch.setattr(gate, "verify_pytest", lambda directory, expected, file_counts:
+                        (directory, expected, file_counts))
+    environment = {"PCC_RUNTIME_ARCHIVE": "verified.a", "PCC_TEST_NO_NATIVE_PROVISIONING": "1"}
+    actual = gate.run_pytest(tmp_path, name, nodes, environment, counts=counts)
+    assert actual == (tmp_path / name, nodes, counts)
+    command = gate.pytest_command(tmp_path / name, nodes)
+    assert command[-len(nodes):] == nodes and command.count("-m") == 1
+    assert not any(arg in ("-o", "-n", "-n0", "--dist", "--override-ini")
+                   or arg.startswith(("addopts=", "--numprocesses", "--dist=")) for arg in command)
+    assert calls == [(command, tmp_path / name, 300, environment)]
+
+
+@pytest.mark.parametrize("machine,expected", [("x86_64", 69), ("aarch64", 67)])
+def test_elf_staging_collection_deselects_only_unavailable_native_cases(tmp_path, machine, expected):
+    from tests import conftest as test_gates
+
+    tree = ast.parse((ROOT / gate.ELF_STAGING_TEST).read_text())
+    native = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                  and node.name == "test_staged_metadata_image_executes_data_and_bss_relocations")
+    marker = next(mark for mark in native.decorator_list if isinstance(mark, ast.Call)
+                  and isinstance(mark.func, ast.Attribute) and mark.func.attr == "pcc_gate")
+    predicate = next(keyword.value for keyword in marker.keywords if keyword.arg == "unavailable")
+    assert isinstance(predicate, ast.IfExp)
+    assert isinstance(predicate.body, ast.Constant) and predicate.body.value is None
+    assert isinstance(predicate.orelse, ast.Constant) and predicate.orelse.value
+    condition = ast.parse("sys.platform.startswith('linux') and platform.machine() in ('x86_64', 'amd64')",
+                          mode="eval").body
+    assert ast.dump(predicate.test) == ast.dump(condition)
+    native_ids = [gate.ELF_STAGING_TEST + "::" + native.name + "[" + value + "]"
+                  for value in ("False", "True")]
+    ordinary_ids = [gate.ELF_STAGING_TEST + "::ordinary_" + str(index) for index in range(67)]
+    reason = None if machine in ("x86_64", "amd64") else predicate.orelse.value
+    items = []
+    for node in ordinary_ids + native_ids:
+        marks = (SimpleNamespace(kwargs={"unavailable": reason}),) if node in native_ids else ()
+        items.append(SimpleNamespace(nodeid=node,
+                                     iter_markers=lambda _name, marks=marks: iter(marks)))
+    deselected = []
+    config = SimpleNamespace(hook=SimpleNamespace(pytest_deselected=lambda items: deselected.extend(items)))
+    # Exercise the real hook and report verifier with synthetic reports only.
+    # No native test module, compiler, emitter, runtime or child is invoked.
+    test_gates.pytest_collection_modifyitems(config, items)
+    assert [item.nodeid for item in deselected] == (native_ids if expected == 67 else [])
+    nodes = [item.nodeid for item in items]
+    assert nodes == ordinary_ids + (native_ids if expected == 69 else [])
+    rows = reports(tmp_path, nodes)
+    put(tmp_path, rows)
+    assert gate.verify_pytest(tmp_path, [gate.ELF_STAGING_TEST], (expected,)) == nodes
+    rows[3]["outcome"] = "skipped"
+    put(tmp_path, rows)
+    with pytest.raises(AssertionError):
+        gate.verify_pytest(tmp_path, [gate.ELF_STAGING_TEST], (expected,))
+    if expected == 67:
+        put(tmp_path, reports(tmp_path, ordinary_ids + native_ids))
+        with pytest.raises(AssertionError):
+            gate.verify_pytest(tmp_path, [gate.ELF_STAGING_TEST], (expected,))

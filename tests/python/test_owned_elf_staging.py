@@ -1,6 +1,6 @@
 """Production staged ELF input and metadata-layout contracts."""
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
 import hashlib
 import platform
 import struct
@@ -15,6 +15,7 @@ from pcc.backend import owned_elf_inputs, owned_elf_link
 from pcc.backend.precise_stackmap import function_id
 from tests.python.test_elf_x86_64 import (
     _ar_member, _archive_selection_fixture, _exit_42_object,
+    _interleave_elf_section_headers,
 )
 
 TARGET = "x86_64-unknown-linux-gnu"
@@ -103,6 +104,40 @@ def test_staged_direct_inputs_match_retained_bytes(tmp_path, kind):
     assert output.read_bytes() == expected
 
 
+def test_staged_aarch64_ranges_match_retained_relocations_and_image(tmp_path):
+    from pcc.backend.linux_thread_intrinsics import assembly
+
+    target = "aarch64-unknown-linux-gnu"
+    # _start calls answer, which returns 42 in x0, then performs Linux exit.
+    text = bytes.fromhex("00000094 a80b80d2 010000d4 400580d2 c0035fd6")
+    obj = elf.ElfObject(
+        (elf.ElfSection(".text", 1, 6, 4, text,
+                        relocations=(elf.ElfRelocation(0, 2, 283),)),
+         elf.ElfSection(".data", 1, 3, 8, b"\0" * 8,
+                        relocations=(elf.ElfRelocation(0, 2, 257),)),
+         elf.ElfSection(".bss", 8, 3, 8, mem_size=8),
+         elf.ElfSection(".empty", 1, 2, 1)),
+        (elf.ElfSymbol.null(), elf.ElfSymbol("_start", 1, 0, 12, 1, 2),
+         elf.ElfSymbol("answer", 1, 12, 8, 1, 2)), elf.EM_AARCH64,
+    )
+    encoded = _interleave_elf_section_headers(elf.emit_relocatable(obj))
+    indexed, ranges = elf._parse_relocatable_indexed(encoded)
+    assert indexed.machine == elf.EM_AARCH64 and indexed.symbols == obj.symbols
+    for section, (offset, size, rela_offset, rela_size) in zip(obj.sections, ranges):
+        assert encoded[offset:offset + size] == section.data
+        assert tuple(elf._PackedElfRelocations(encoded, rela_offset, rela_size)) == (
+            section.relocations)
+    path = tmp_path / "arm.o"
+    path.write_bytes(encoded)
+    output = tmp_path / "arm-program"
+    extra = [owned_elf_link._thread_pointer_object(target),
+             owned_elf_link.assemble(assembly(True), target)]
+    expected = elf.link_static_executable([obj] + extra)
+    owned_elf_link.link_inputs(target=target, output=str(output), objects=[str(path)])
+    assert output.read_bytes() == expected
+    assert elf._ELF_HEADER.unpack_from(output.read_bytes())[2] == elf.EM_AARCH64
+
+
 def test_staging_releases_parsed_payload_and_uses_one_reload_cache(tmp_path, monkeypatch):
     paths = []
     for index in range(4):
@@ -114,7 +149,10 @@ def test_staging_releases_parsed_payload_and_uses_one_reload_cache(tmp_path, mon
         path.write_bytes(elf.emit_relocatable(obj))
         paths.append(str(path))
     refs = []
-    parse = elf.parse_relocatable
+    reads = []
+    stores = []
+    parse = elf._parse_relocatable
+    read = owned_elf_inputs.ElfInputStore._read
 
     def observed_parse(*args, **kwargs):
         assert not any(ref() is not None for ref in refs)
@@ -122,11 +160,133 @@ def test_staging_releases_parsed_payload_and_uses_one_reload_cache(tmp_path, mon
         refs.append(weakref.ref(obj))
         return obj
 
-    monkeypatch.setattr(elf, "parse_relocatable", observed_parse)
+    def observed_read(store, source):
+        assert store.current is None and store.current_index == -1
+        data, digest = read(store, source)
+        assert type(data) is bytes and len(data) == source.size
+        assert digest == hashlib.sha256(data).hexdigest()
+        if source.sha256:
+            assert source.sha256 == digest
+        reads.append((source.path, source.sha256, digest))
+        if not stores:
+            stores.append(store)
+        return data, digest
+
+    monkeypatch.setattr(elf, "_parse_relocatable", observed_parse)
+    monkeypatch.setattr(owned_elf_inputs.ElfInputStore, "_read", observed_read)
     output = tmp_path / "program"
     owned_elf_link.link_inputs(target=TARGET, output=str(output), objects=paths)
-    assert len(refs) > len(paths)  # Initial validation and actual reloads ran.
+    # Exactly one full validation per source, with identity-checked rereads for
+    # the actual GOT/copy/relocation passes rather than another full parse.
+    assert len(refs) == len(paths)
+    assert [path for path, expected, _digest in reads if not expected] == paths
+    assert len([row for row in reads if row[1]]) > len(paths)
+    assert {path for path, expected, _digest in reads if expected} == set(paths)
     assert not any(ref() is not None for ref in refs)
+    assert stores[0].current is None and stores[0].current_index == -1
+    assert _retained_payloads(stores[0]) == []
+
+
+def _retained_payloads(root):
+    """Inspect only the staged input graph, including all private descriptors."""
+    seen = set()
+    payloads = []
+
+    def visit(value):
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            payloads.append(value)
+        elif is_dataclass(value):
+            for field in fields(value):
+                visit(getattr(value, field.name))
+        elif isinstance(value, owned_elf_inputs.ElfInputStore):
+            visit(vars(value))
+        elif isinstance(value, dict):
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                visit(item)
+
+    visit(root)
+    return payloads
+
+
+@pytest.mark.parametrize("interspersed", [False, True])
+def test_verified_ranges_retain_one_payload_and_bind_each_source(tmp_path, interspersed):
+    store = owned_elf_inputs.ElfInputStore(TARGET)
+    objects = []
+    encoded = []
+    for index in range(3):
+        obj = _mapped_object(tls=True)
+        section = obj.sections[1]
+        obj = replace(obj, sections=(obj.sections[0],
+            replace(section, data=(40 + index).to_bytes(4, "little")), *obj.sections[2:]))
+        data = elf.emit_relocatable(obj)
+        if interspersed:
+            data = _interleave_elf_section_headers(data)
+        path = tmp_path / (str(index) + ".o")
+        path.write_bytes(data)
+        staged = store.stage(str(path))
+        objects.append(staged)
+        encoded.append(data)
+        source = store.sources[index]
+        assert source.size == len(data)
+        assert source.sha256 == hashlib.sha256(data).hexdigest()
+        assert len(source.section_ranges) == len(obj.sections)
+        assert all(type(row) is tuple and len(row) == 4
+                   and all(type(value) is int for value in row)
+                   for row in source.section_ranges)
+        with pytest.raises(FrozenInstanceError):
+            source.sha256 = "changed"
+        with pytest.raises(TypeError):
+            source.section_ranges[0][0] = 0
+        assert _retained_payloads((store, objects)) == []
+    for index in (2, 0, 1, 2, 0):
+        obj = objects[index]
+        assert obj.sections[1].data == (40 + index).to_bytes(4, "little")
+        payload = store.current
+        assert type(payload) is bytes and payload == encoded[index]
+        assert store.current_index == index
+        assert _retained_payloads((store, objects)) == [payload]
+        relocations = obj.sections[0].relocations
+        assert relocations.payload is payload
+        assert relocations[0] == elf.ElfRelocation(2, 2, 2, -4)
+        assert store.load(index) is payload
+        with pytest.raises(TypeError):
+            payload[0] = 0
+        view = weakref.ref(relocations)
+        del relocations, payload
+        assert view() is None
+    store.clear()
+    assert store.current_index == -1
+    assert _retained_payloads((store, objects)) == []
+
+
+def test_assembly_staging_still_reassembles_after_cache_release(tmp_path, monkeypatch):
+    path = tmp_path / "input.s"
+    path.write_bytes(ASM.replace("\n", "\r\n").encode())
+    assemble = owned_elf_link.assemble
+    calls = []
+
+    def observed_assemble(text, target):
+        calls.append(text)
+        return assemble(text, target)
+
+    monkeypatch.setattr(owned_elf_link, "assemble", observed_assemble)
+    store = owned_elf_inputs.ElfInputStore(TARGET)
+    obj = store.stage(str(path), kind="ASM")
+    assert store.sources[0].section_ranges is None
+    assert store.current is None and len(calls) == 1
+    first = obj.sections[0].data
+    assert isinstance(store.current, elf.ElfObject) and len(calls) == 2
+    assert obj.sections[0].data == first and len(calls) == 2
+    store.clear()
+    assert obj.sections[0].data == first and len(calls) == 3
+    assert all(text == ASM for text in calls)
+    store.clear()
 
 
 @pytest.mark.parametrize("field,value,diagnostic", [
@@ -159,6 +319,35 @@ def test_staged_malformed_relocations_fail_even_in_unused_archive_member(
     with pytest.raises(elf.ElfError, match=diagnostic):
         owned_elf_link.link_inputs(**options)
     assert not output.exists()
+
+
+@pytest.mark.parametrize("in_archive", [False, True])
+def test_invalid_stackmap_cannot_publish_a_reusable_index(tmp_path, in_archive):
+    data = bytearray(elf.emit_relocatable(_mapped_object()))
+    data[data.index(b"PCCSMAP1")] = 0
+    unpublished = []
+    with pytest.raises(elf.ElfError, match="invalid .pcc_stackmaps") as ordinary:
+        elf.parse_relocatable(data)
+    with pytest.raises(elf.ElfError) as indexed:
+        elf._parse_relocatable(data, compact_relocations=True,
+                               _section_ranges=unpublished)
+    assert str(indexed.value) == str(ordinary.value)
+    assert unpublished == []
+    path = tmp_path / "input.o"
+    output = tmp_path / "program"
+    output.write_bytes(b"previous executable")
+    options = dict(target=TARGET, output=str(output), objects=[str(path)])
+    if in_archive:
+        path.write_bytes(elf.emit_relocatable(_exit_42_object()))
+        archive = tmp_path / "unused.a"
+        archive.write_bytes(b"!<arch>\n" + _ar_member("bad.o", data))
+        options["archives"] = [str(archive)]
+    else:
+        path.write_bytes(data)
+    with pytest.raises(elf.ElfError, match="invalid .pcc_stackmaps"):
+        owned_elf_link.link_inputs(**options)
+    assert output.read_bytes() == b"previous executable"
+    assert not output.with_name("program.pcc-link.tmp").exists()
 
 
 @pytest.mark.parametrize("source_kind", ["object", "assembly", "archive", "manifest"])
@@ -211,16 +400,105 @@ def test_source_drift_preserves_previous_executable_and_map(
     assert not output.with_name("program.pcc-link.tmp").exists()
 
 
-def test_reload_rejects_drift_before_using_payload(tmp_path):
+@pytest.mark.parametrize("access", ["data", "relocations"])
+@pytest.mark.parametrize("mutation", ["rewrite", "symbols", "rela", "append", "truncate"])
+@pytest.mark.parametrize("in_archive", [False, True])
+def test_reload_rejects_drift_before_using_payload(tmp_path, access, mutation, in_archive):
     path = tmp_path / "input.o"
-    path.write_bytes(elf.emit_relocatable(_exit_42_object()))
+    encoded = elf.emit_relocatable(_exit_42_object())
+    path.write_bytes(encoded)
+    store = owned_elf_inputs.ElfInputStore(TARGET)
+    if in_archive:
+        path = tmp_path / "input.a"
+        path.write_bytes(b"!<arch>\n" + _ar_member("start.o", encoded))
+        store = owned_elf_inputs.ElfInputStore(TARGET, [str(path)])
+        obj = store.read_archive(0)[0].object
+    else:
+        obj = store.stage(str(path))
+    # A successful first load must not exempt a later load from identity checks.
+    assert obj.sections[0].data
+    store.clear()
+    payload = path.read_bytes()
+    if mutation in ("rewrite", "symbols", "rela"):
+        # Change header/symbol/RELA bytes without changing the complete length.
+        offset = store.sources[0].offset
+        if mutation != "rewrite":
+            header = elf._ELF_HEADER.unpack_from(payload, offset)
+            rows = [elf._SECTION_HEADER.unpack_from(payload, offset + header[6] + index * 64)
+                    for index in range(header[12])]
+            table_type = elf.SHT_SYMTAB if mutation == "symbols" else elf.SHT_RELA
+            offset += next(row[4] for row in rows if row[1] == table_type)
+        payload = payload[:offset] + bytes([payload[offset] ^ 1]) + payload[offset + 1:]
+    elif mutation == "append":
+        payload += b"extra"
+    else:
+        source = store.sources[0]
+        payload = payload[:source.offset + source.size - 1]
+    path.write_bytes(payload)
+    if in_archive and mutation == "append":
+        # Member rereads remain bounded; complete-archive verification catches
+        # an append outside the validated member range before publication.
+        assert getattr(obj.sections[0], access)
+        with pytest.raises(elf.ElfError, match="archive identity changed"):
+            store.verify()
+    else:
+        with pytest.raises(elf.ElfError, match="changed|truncated"):
+            getattr(obj.sections[0], access)
+    assert store.current is None and store.current_index == -1
+    assert _retained_payloads((store, obj)) == []
+
+
+def test_failed_stage_or_reload_releases_previous_cache(tmp_path):
+    path = tmp_path / "good.o"
+    original = elf.emit_relocatable(_exit_42_object())
+    path.write_bytes(original)
     store = owned_elf_inputs.ElfInputStore(TARGET)
     obj = store.stage(str(path))
-    payload = path.read_bytes()
-    path.write_bytes(payload[:-1] + bytes([payload[-1] ^ 1]))
-    with pytest.raises(elf.ElfError, match="identity changed"):
-        _ = obj.sections[0].data
-    assert store.current is None
+    assert obj.sections[0].data
+    bad = tmp_path / "bad.o"
+    bad.write_bytes(b"invalid")
+    with pytest.raises(elf.ElfError):
+        store.stage(str(bad))
+    assert len(store.sources) == 1
+    assert store.current is None and store.current_index == -1
+    assert _retained_payloads((store, obj)) == []
+    other = tmp_path / "other.o"
+    other.write_bytes(original)
+    second = store.stage(str(other))
+    assert obj.sections[0].data
+    other.write_bytes(original[:-1])
+    with pytest.raises(elf.ElfError, match="truncated"):
+        _ = second.sections[0].data
+    assert store.current is None and store.current_index == -1
+    assert _retained_payloads((store, obj, second)) == []
+
+
+def test_staged_index_size_tracks_sections_not_relocation_count(tmp_path):
+    count = 1024
+    obj = elf.ElfObject(
+        (elf.ElfSection(".text", elf.SHT_PROGBITS, elf.SHF_ALLOC | elf.SHF_EXECINSTR,
+                        8, b"\0" * (8 * count), relocations=tuple(
+                            elf.ElfRelocation(8 * index, 1, elf.R_X86_64_64)
+                            for index in range(count))),),
+        (elf.ElfSymbol.null(), elf.ElfSymbol("_start", 1, 0, 8 * count, 1, 2)),
+    )
+    path = tmp_path / "many.o"
+    data = elf.emit_relocatable(obj)
+    path.write_bytes(data)
+    store = owned_elf_inputs.ElfInputStore(TARGET)
+    staged = store.stage(str(path))
+    assert len(store.sources[0].section_ranges) == 1
+    assert len(store.sources[0].section_ranges[0]) == 4
+    assert staged.sections[0].relocation_count == count
+    assert _retained_payloads((store, staged)) == []
+    relocations = staged.sections[0].relocations
+    assert len(relocations) == count
+    assert relocations.payload is store.current
+    assert relocations.size == count * elf._RELA.size
+    assert tuple(relocations) == obj.sections[0].relocations
+    del relocations
+    store.clear()
+    assert _retained_payloads((store, staged)) == []
 
 
 def test_undefined_and_duplicate_strong_symbols_remain_strict(tmp_path):

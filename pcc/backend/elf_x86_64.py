@@ -165,21 +165,29 @@ class _PackedElfRelocations:
 
     Iteration/indexing project independent immutable records. No consumer may
     depend on projection identity; ordinary public parses still return tuples.
-    Copy mutable input so subsequent caller changes cannot alter validation.
+    A bounded range can share one immutable input-store payload without making
+    a second RELA copy. Copy mutable input so caller changes cannot alter it.
     """
 
     payload: bytes
+    offset: int = 0
+    size: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "payload", bytes(self.payload))
-        if len(self.payload) % _RELA.size:
+        if self.size is None:
+            object.__setattr__(self, "size", len(self.payload) - self.offset)
+        if (self.offset < 0 or self.size < 0 or self.offset > len(self.payload)
+                or self.size > len(self.payload) - self.offset):
+            raise ElfError("packed ELF relocation range is outside its payload")
+        if self.size % _RELA.size:
             raise ElfError("packed ELF relocation table is truncated")
 
     def __len__(self) -> int:
-        return len(self.payload) // _RELA.size
+        return self.size // _RELA.size
 
     def __iter__(self):
-        for position in range(0, len(self.payload), _RELA.size):
+        for position in range(self.offset, self.offset + self.size, _RELA.size):
             offset, info, addend = _RELA.unpack_from(self.payload, position)
             yield ElfRelocation(offset, info >> 32, info & 0xFFFFFFFF, addend)
 
@@ -190,7 +198,9 @@ class _PackedElfRelocations:
             index += len(self)
         if index < 0 or index >= len(self):
             raise IndexError("ELF relocation index out of range")
-        offset, info, addend = _RELA.unpack_from(self.payload, index * _RELA.size)
+        offset, info, addend = _RELA.unpack_from(
+            self.payload, self.offset + index * _RELA.size,
+        )
         return ElfRelocation(offset, info >> 32, info & 0xFFFFFFFF, addend)
 
 
@@ -531,6 +541,24 @@ def _unpack_elf_header(data: bytes | bytearray) -> tuple:
 
 def parse_relocatable(data: bytes, *, compact_relocations: bool = False) -> ElfObject:
     """Parse a finite external ELF64 x86_64 relocatable object."""
+    return _parse_relocatable(data, compact_relocations=compact_relocations)
+
+
+def _parse_relocatable_indexed(data: bytes):
+    """Return private file ranges only after the ordinary strict parse succeeds.
+
+    The input store binds these immutable ranges to the exact source length and
+    digest. They contain no payload or expanded relocation records and cannot
+    be used to construct an unchecked public ElfObject.
+    """
+    data = bytes(data)
+    ranges = []
+    obj = _parse_relocatable(data, compact_relocations=True, _section_ranges=ranges)
+    return obj, tuple(ranges)
+
+
+def _parse_relocatable(data: bytes, *, compact_relocations: bool = False,
+                       _section_ranges=None) -> ElfObject:
     header = _unpack_elf_header(data)
     if header[1] != ET_REL:
         raise ElfError(f"expected ET_REL, got ELF type {header[1]}")
@@ -604,6 +632,7 @@ def parse_relocatable(data: bytes, *, compact_relocations: bool = False) -> ElfO
     }
     source_to_model: dict[int, int] = {}
     sections: list[ElfSection] = []
+    ranges = []
     for source_index, raw in enumerate(raw_headers):
         if source_index in meta_indices:
             continue
@@ -628,6 +657,8 @@ def parse_relocatable(data: bytes, *, compact_relocations: bool = False) -> ElfO
             data=section_payload(source_index),
             mem_size=raw[5] if section_type == SHT_NOBITS else 0,
         ))
+        if _section_ranges is not None:
+            ranges.append((raw[4], 0 if section_type == SHT_NOBITS else raw[5], 0, 0))
 
     symbols: list[ElfSymbol] = []
     raw_symbols = section_payload(symtab_index)
@@ -684,7 +715,13 @@ def parse_relocatable(data: bytes, *, compact_relocations: bool = False) -> ElfO
             old.name, old.type, old.flags, old.align, old.data, old.mem_size,
             relocations,
         )
-    return ElfObject(tuple(mutable_sections), tuple(symbols), header[2])
+        if _section_ranges is not None:
+            data_offset, data_size, _rela_offset, _rela_size = ranges[target]
+            ranges[target] = (data_offset, data_size, raw[4], raw[5])
+    obj = ElfObject(tuple(mutable_sections), tuple(symbols), header[2])
+    if _section_ranges is not None:
+        _section_ranges.extend(ranges)
+    return obj
 
 
 @dataclass(frozen=True)
