@@ -24,7 +24,7 @@ def _fixture_failure_evidence(directory):
     # Only this synthetic fixture's bounded protocol files are copied into
     # execution.json, which the existing CI artifact pattern already keeps.
     # Tokens here identify synthetic attempts, never user credentials.
-    names = ["budget.tsv", "admission.tsv", "peer-report-ready"]
+    names = ["budget.tsv", "admission.tsv", "peer-report-ready", "windows-stage1-phase"]
     for index in range(3):
         names.extend(["rss" + str(index), "attempts" + str(index)])
         for attempt in (1, 2):
@@ -45,6 +45,7 @@ def _fixture_failure_evidence(directory):
 
 def _environment(owner, collector):
     environment = dict(os.environ)
+    environment.pop("PCC_TEST_WINDOWS_STAGE1_PHASE", None)
     # Keep the outer watchdog's budget. As in the existing resource driver,
     # its synchronized state is not falsely presented as this child's owner
     # state; this component uses the policy's local driver/worker accounting.
@@ -69,9 +70,13 @@ def _environment(owner, collector):
     return environment
 
 
-def _run(prefix, case, directory, owner, collector):
+def _run(prefix, case, directory, owner, collector, compiler_parameter=None):
     directory.mkdir()
     environment = _environment(owner, collector)
+    windows_phase = (sys.platform == "win32" and compiler_parameter == "pcc0"
+                     and owner == "pcc" and collector == 0 and case == "width")
+    if windows_phase:
+        environment["PCC_TEST_WINDOWS_STAGE1_PHASE"] = "1"
     command = [*prefix, case, str(directory)]
     result = run_process_group_timeout(command, env=environment, timeout=20)
     (directory / "stdout").write_text(result.stdout)
@@ -83,6 +88,7 @@ def _run(prefix, case, directory, owner, collector):
         "outer_tree_budget_bytes": int(environment["PCC_WORKER_TREE_BUDGET_BYTES"]),
         "accounting_scope": "local_driver_and_workers_under_outer_tree_watchdog",
         "native_execution": owner == "pcc", "pcc1_stage2_dispatch": False,
+        "windows_stage1_phase_witness": windows_phase,
     }
     if (result.returncode, result.stdout, result.stderr) != (
         0, "WORKER_SIZE_PRIOR_OK " + case + "\n", "",
@@ -248,7 +254,10 @@ def test_size_prior_native_processes_five_collectors(
     for collector in range(5):
         for case in CASES:
             try:
-                result = _run([str(binary)], case, tmp_path / ("gc" + str(collector) + "-" + case), "pcc", collector)
+                result = _run(
+                    [str(binary)], case, tmp_path / ("gc" + str(collector) + "-" + case),
+                    "pcc", collector, request.node.callspec.params["python_program_compiler"],
+                )
             except BaseException as error:
                 receipt["status"] = "NATIVE_EXECUTION_FAILED"
                 receipt["failed_case"] = case

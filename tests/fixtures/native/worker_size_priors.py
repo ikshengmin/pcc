@@ -158,11 +158,23 @@ def verify_model(root):
         raise AssertionError("zero observation prior was accepted")
 
 
+def _windows_stage1_phase(root, boundary):
+    # One bounded synthetic witness for the existing Windows pcc0/GC0/width
+    # execution only. The parent harness supplies the exact activation scope.
+    if sys.platform == "win32" and os.environ.get("PCC_TEST_WINDOWS_STAGE1_PHASE", "") == "1":
+        with open(root + "/windows-stage1-phase", "w", encoding="utf-8") as stream:
+            stream.write(boundary + "\n")
+
+
 def run_case(root, case):
+    _windows_stage1_phase(root, "owner")
     check_owner()
+    _windows_stage1_phase(root, "model")
     verify_model(root)
     assert not os.environ.get(policy.TREE_STATE_ENV, "")
+    _windows_stage1_phase(root, "rss-current")
     owner = workers._coordinator_rss_bytes()
+    _windows_stage1_phase(root, "rss-peak")
     startup = max(owner, workers._worker_peak_rss_bytes())
     # Reserve a measured startup envelope so the changed policy, rather than
     # fork/exec inherited high-water variance, determines initial admission.
@@ -181,7 +193,9 @@ def run_case(root, case):
     assert outer_budget > 0, "an enclosing hard process-tree budget is required"
     assert budget <= outer_budget, "component working set does not fit the unchanged outer cap"
     growth = working + 128 * MIB
+    _windows_stage1_phase(root, "command")
     commands = [command(root, case, index, growth) for index in range(3)]
+    _windows_stage1_phase(root, "budget")
     write(root, "budget.tsv", str(budget) + "\t" + str(outer_budget))
     observations = []
     pool.run_resource_worker_processes(

@@ -21,15 +21,19 @@ def test_failed_process_fixture_keeps_bounded_synthetic_protocol_evidence(tmp_pa
 
     def failed_child(command, *, env, timeout):
         assert timeout == 20 and env["PCC_WORKER_TREE_BUDGET_BYTES"] == str(1024 * MIB)
-        root = tmp_path / "growth"
+        root = fixture.Path(command[-1])
         (root / "rss0").write_text(report)
         (root / "started.0.1").write_text("123\tattempt-token\tcpython\t0")
         (root / "admission.tsv").write_text("failure-budget\t-1\t0\t900\t800\t0\t1\n")
         (root / "complete.0.1").write_text("x" * 9000)
         (root / "unrelated-secret").write_text("must not be copied")
+        assert env.get("PCC_TEST_WINDOWS_STAGE1_PHASE", "") in ("", "1")
+        if env.get("PCC_TEST_WINDOWS_STAGE1_PHASE") == "1":
+            (root / "windows-stage1-phase").write_text("model\n")
         return SimpleNamespace(returncode=1, stdout="original stdout", stderr="original failure")
 
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(1024 * MIB))
+    monkeypatch.setenv("PCC_TEST_WINDOWS_STAGE1_PHASE", "ambient-must-not-enable")
     monkeypatch.setattr(fixture, "run_process_group_timeout", failed_child)
     with pytest.raises(AssertionError) as caught:
         fixture._run(["unused"], "growth", tmp_path / "growth", "cpython", 0)
@@ -42,6 +46,47 @@ def test_failed_process_fixture_keeps_bounded_synthetic_protocol_evidence(tmp_pa
     assert set(evidence) == {"rss0", "started.0.1", "admission.tsv", "complete.0.1"}
     assert evidence["rss0"] == {"text": report, "truncated": False}
     assert evidence["complete.0.1"] == {"text": "x" * 8192, "truncated": True}
+    assert record["windows_stage1_phase_witness"] is False
+    for index, (target, compiler, owner, collector, case, enabled) in enumerate((
+        ("win32", "pcc0", "pcc", 0, "width", True),
+        ("win32", "pcc1", "pcc", 0, "width", False),
+        ("win32", "pcc0", "pcc", 1, "width", False),
+        ("win32", "pcc0", "pcc", 0, "growth", False),
+        ("win32", "pcc0", "cpython", 0, "width", False),
+        ("linux", "pcc0", "pcc", 0, "width", False),
+        ("darwin", "pcc0", "pcc", 0, "width", False),
+    )):
+        monkeypatch.setattr(fixture, "sys", SimpleNamespace(platform=target))
+        root = tmp_path / ("phase-" + str(index))
+        with pytest.raises(AssertionError):
+            fixture._run(["unused"], case, root, owner, collector, compiler)
+        result = fixture.json.loads((root / "execution.json").read_text())
+        assert result["windows_stage1_phase_witness"] is enabled
+        assert ("windows-stage1-phase" in result["failure_evidence"]) is enabled
+        if enabled:
+            assert result["failure_evidence"]["windows-stage1-phase"] == {
+                "text": "model\n", "truncated": False,
+            }
+
+    # The source witness uses one truncating file and fixed short literals.
+    # It does not include paths, command lines, environment values or user data.
+    import ast
+    tree = ast.parse(fixture.DRIVER.read_text())
+    phase = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                 and node.name == "_windows_stage1_phase")
+    opens = [node for node in ast.walk(phase) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id == "open"]
+    assert len(opens) == 1 and ast.literal_eval(opens[0].args[1]) == "w"
+    assert isinstance(opens[0].args[0], ast.BinOp)
+    assert ast.literal_eval(opens[0].args[0].right) == "/windows-stage1-phase"
+    run_case = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "run_case")
+    boundaries = [ast.literal_eval(node.value.args[1]) for node in run_case.body
+                  if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                  and isinstance(node.value.func, ast.Name)
+                  and node.value.func.id == "_windows_stage1_phase"]
+    assert boundaries == ["owner", "model", "rss-current", "rss-peak", "command", "budget"]
+    assert max(len(value) + 1 for value in boundaries) <= 12
 
 
 @pytest.mark.parametrize("valid_token", [False, True])
