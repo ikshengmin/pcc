@@ -21,7 +21,7 @@ CLOSURE_TEST = "tests/integration/test_worker_size_prior_closed_world.py"
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST)
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (68, 2, 46, 0)
+HOST_COUNTS = (68, 2, 58, 0)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -152,7 +152,8 @@ def verify_pytest(directory, expected, file_counts=None):
     lines = (directory / "target.stdout").read_text().splitlines()
     assert "created: 6/6 workers" in lines
     assert "scheduling tests via LoadGroupScheduling" in lines
-    assert "6 workers [" + str(len(nodes)) + " items]" in lines
+    noun = "item" if len(nodes) == 1 else "items"
+    assert "6 workers [" + str(len(nodes)) + " " + noun + "]" in lines
     return nodes
 
 

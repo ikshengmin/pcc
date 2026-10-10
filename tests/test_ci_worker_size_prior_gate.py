@@ -22,7 +22,10 @@ def reports(directory, nodes):
     rows.extend({"event": "report", "nodeid": node, "when": when, "outcome": "passed"}
                 for node in nodes for when in ("setup", "call", "teardown"))
     rows.append({"event": "finish", "exitstatus": 0, "testsfailed": 0, "testscollected": len(nodes)})
-    (directory / "target.stdout").write_text("created: 6/6 workers\n6 workers [" + str(len(nodes)) + " items]\nscheduling tests via LoadGroupScheduling\n")
+    noun = "item" if len(nodes) == 1 else "items"
+    (directory / "target.stdout").write_text(
+        "created: 6/6 workers\n6 workers [" + str(len(nodes)) + " " + noun
+        + "]\nscheduling tests via LoadGroupScheduling\n")
     return rows
 
 
@@ -46,15 +49,37 @@ def test_integration_selects_one_owner_without_changing_workers(tmp_path):
     assert "-n0" not in command and "-o" not in command
 
 
-def test_exact_six_worker_reports_are_required(tmp_path):
-    nodes = ["a.py::one", "b.py::two"]
+@pytest.mark.parametrize(("nodes", "summary"), [
+    (["a.py::one"], "6 workers [1 item]"),
+    (["a.py::one", "b.py::two"], "6 workers [2 items]"),
+])
+def test_exact_six_worker_reports_are_required(tmp_path, nodes, summary):
     put(tmp_path, reports(tmp_path, nodes))
+    # Literal xdist output keeps the fixture from repeating a parser spelling bug.
+    (tmp_path / "target.stdout").write_text(
+        "created: 6/6 workers\n" + summary + "\nscheduling tests via LoadGroupScheduling\n")
     assert gate.verify_pytest(tmp_path, nodes) == nodes
-    assert gate.verify_pytest(tmp_path, ["a.py", "b.py"], [1, 1]) == nodes
+    assert gate.verify_pytest(tmp_path, [node.split("::")[0] for node in nodes],
+                              [1] * len(nodes)) == nodes
+
+
+@pytest.mark.parametrize("summary", [
+    "5 workers [1 item]", "16 workers [1 item]", "6 workers [0 items]",
+    "6 workers [2 items]", "6 workers [1 items]", "6 workers [1 item] extra",
+    "prefix 6 workers [1 item]", "",
+])
+def test_worker_summary_requires_exact_worker_count_item_count_and_line(tmp_path, summary):
+    nodes = ["a.py::one"]
+    put(tmp_path, reports(tmp_path, nodes))
+    (tmp_path / "target.stdout").write_text(
+        "created: 6/6 workers\n" + summary + "\nscheduling tests via LoadGroupScheduling\n")
+    with pytest.raises(AssertionError):
+        gate.verify_pytest(tmp_path, nodes)
 
 
 @pytest.mark.parametrize("fault", ["collect-only", "override", "missing", "duplicate", "failed",
-                                   "skip", "xfail", "no-call", "no-finish", "five-workers", "wrong-count"])
+                                   "skip", "xfail", "no-call", "no-finish", "five-workers", "wrong-count",
+                                   "wrong-scheduler", "exit-status", "failure-count"])
 def test_no_partial_or_serial_run_can_pass(tmp_path, fault):
     nodes = ["a.py::one"]
     rows = reports(tmp_path, nodes)
@@ -67,7 +92,13 @@ def test_no_partial_or_serial_run_can_pass(tmp_path, fault):
     elif fault == "xfail": rows[3]["wasxfail"] = "not allowed"
     elif fault == "no-call": rows.pop(3)
     elif fault == "no-finish": rows.pop()
-    elif fault == "five-workers": (tmp_path / "target.stdout").write_text("created: 5/5 workers\n6 workers [1 items]\n")
+    elif fault in ("five-workers", "wrong-scheduler"):
+        path = tmp_path / "target.stdout"
+        before, after = (("created: 6/6 workers", "created: 5/5 workers") if fault == "five-workers"
+                         else ("LoadGroupScheduling", "LoadScheduling"))
+        path.write_text(path.read_text().replace(before, after))
+    elif fault == "exit-status": rows[-1]["exitstatus"] = 1
+    elif fault == "failure-count": rows[-1]["testsfailed"] = 1
     else: rows[-1]["testscollected"] = 2
     put(tmp_path, rows)
     with pytest.raises(AssertionError):
