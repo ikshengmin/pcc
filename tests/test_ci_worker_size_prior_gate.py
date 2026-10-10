@@ -39,7 +39,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_dynamic_handoff_slots.py",
     )
     assert gate.HOST_FILES[4] == "tests/python/test_worker_guard_cadence.py"
-    assert gate.HOST_COUNTS == (80, 3, 90, 0, 4, 20, 21)
+    assert gate.HOST_COUNTS == (80, 3, 114, 0, 4, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -495,7 +495,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 90, 0, 4, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 114, 0, 4, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -668,7 +668,8 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     module_loop = next(node for node in ast.walk(closure) if isinstance(node, ast.For)
                        and ast.unparse(node.iter) == "zip(MODULES, sources)")
     calls = {ast.unparse(node) for node in ast.walk(module_loop) if isinstance(node, ast.Call)}
-    assert "require_definition(section, symbol)" in calls
+    assert "_index_definition_bodies(section)" in calls
+    assert "require_definition(section, symbol, bodies=definition_bodies)" in calls
     assert "verify_ir_text(section)" in calls
     assert "require_object_symbols(obj.read_bytes(), target, required)" in calls
     assert "emit_indexed_module_file(str(sidecar), str(obj), 'PCO', optimize=False)" in calls
@@ -791,3 +792,276 @@ def test_elf_staging_collection_deselects_only_unavailable_native_cases(tmp_path
         put(tmp_path, reports(tmp_path, ordinary_ids + native_ids))
         with pytest.raises(AssertionError):
             gate.verify_pytest(tmp_path, [gate.ELF_STAGING_TEST], (expected,))
+
+
+# Frozen test-only controls for the original repeated scans.
+def _original_require_definition(text, symbol):
+    pattern = (r'^define[^\n]*@"?' + re.escape(symbol)
+               + r'"?\([^\n]*\)[^\n]*\{\n(?P<body>.*?)^\}')
+    matches = list(re.finditer(pattern, text, re.M | re.S))
+    assert len(matches) == 1, (symbol, "missing/duplicate definition")
+    body = matches[0].group("body")
+    assert not re.search(r"^define\b", body, re.M), (symbol, "cross-function match")
+    assert "strict.nolib" not in body and "@py_cpy_" not in body and '@"py_cpy_' not in body
+    assert not re.search(r'@"?py_exc_new"?\(\s*i64\s+11\s*,', body), symbol
+    assert "NotImplementedError" not in body, symbol
+    assert re.search(r"\bcall\b", body), (symbol, "empty/return-only replacement")
+
+def _original_require_object_symbols(payload, target, required):
+    """Owned readers validate the emitted container and every required code symbol."""
+    darwin, windows = "-apple-" in target, "-windows-" in target
+    if darwin:
+        from pcc.backend.native_object import decode_native_object
+        obj = decode_native_object(payload)
+        machine = "PCO has no machine field; verified PIDX target and Darwin emitter route"
+    elif windows:
+        from pcc.backend.coff_x86_64 import parse_object
+        obj = parse_object(payload)  # The reader requires AMD64 machine 0x8664.
+        machine = 0x8664
+    else:
+        from pcc.backend.elf_x86_64 import parse_relocatable
+        obj = parse_relocatable(payload)
+        machine = 62 if target.startswith("x86_64-") else 183
+        assert obj.machine == machine, "wrong ELF machine"
+    for name in required:
+        symbols = [symbol for symbol in obj.symbols if symbol.name == ("_" if darwin else "") + name]
+        assert len(symbols) == 1, (name, "missing/duplicate object definition")
+        symbol = symbols[0]
+        index = symbol.section if windows else symbol.section_index
+        assert 1 <= index <= len(obj.sections), (name, "undefined object symbol")
+        section = obj.sections[index - 1]
+        offset = symbol.offset if darwin else symbol.value
+        assert 0 <= offset < len(section.data), (name, "symbol outside code")
+        if darwin:
+            assert symbol.external and (section.segname, section.sectname) == ("__TEXT", "__text")
+        elif windows:
+            assert symbol.external and symbol.function and section.flags & 0x20000000
+        else:
+            assert symbol.binding == 1 and symbol.type == 2 and section.flags & 4
+    return {"machine": machine, "required_defined_symbols": list(required)}
+
+
+def _strict_check_result(check):
+    try:
+        return "return", check()
+    except Exception as error:
+        return "raise", type(error), str(error)
+
+
+@pytest.mark.parametrize("shape", (
+    "plain", "quoted", "duplicate", "mixed-duplicate", "missing", "empty",
+    "stub", "cpy-bare", "cpy-quoted", "not-implemented", "exc11", "nested",
+    "nested-and-later", "noncanonical-name", "multi-symbol-header", "multi-symbol-duplicate",
+))
+def test_strict_definition_index_matches_original_failures(shape):
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    body = " call ptr @real()\n ret ptr null\n"
+    text = "define ptr @user_test() {\n" + body + "}\n"
+    symbol = "user_test"
+    if shape == "quoted":
+        text = text.replace("@user_test(", '@"user_test"(')
+    elif shape == "duplicate":
+        text *= 2
+    elif shape == "mixed-duplicate":
+        text += text.replace("@user_test(", '@"user_test"(')
+    elif shape == "missing":
+        symbol = "user_absent"
+    elif shape == "empty":
+        text = text.replace(" call ptr @real()\n", "")
+    elif shape == "stub":
+        text = text.replace(" call ptr", " strict.nolib.stub:\n call ptr")
+    elif shape == "cpy-bare":
+        text = text.replace("@real", "@py_cpy_import")
+    elif shape == "cpy-quoted":
+        text = text.replace("@real", '@"py_cpy_import"')
+    elif shape == "not-implemented":
+        text = text.replace("@real", "@NotImplementedError")
+    elif shape == "exc11":
+        text = text.replace("@real()", "@py_exc_new(i64 11, ptr null)")
+    elif shape in ("nested", "nested-and-later"):
+        text = "define ptr @outer() {\n" + text
+        if shape == "nested-and-later":
+            text += "define ptr @user_test() {\n" + body + "}\n"
+        else:
+            symbol = "outer"
+    elif shape == "noncanonical-name":
+        text = text.replace("user_test", "user-test")
+        symbol = "user-test"
+    elif shape in ("multi-symbol-header", "multi-symbol-duplicate"):
+        ambiguous = text.replace("@user_test()", "@user_test(ptr @other())")
+        text = ambiguous if shape == "multi-symbol-header" else text + ambiguous
+    indexed = closure._index_definition_bodies(text)
+    assert _strict_check_result(lambda: closure.require_definition(text, symbol, bodies=indexed)) == (
+        _strict_check_result(lambda: _original_require_definition(text, symbol))
+    )
+
+
+@pytest.mark.parametrize("kind", ("pco", "elf", "coff"))
+def test_strict_symbol_index_matches_original_failures(monkeypatch, kind):
+    from tests.integration.test_worker_size_prior_closed_world import require_object_symbols
+
+    module_name, reader, target = {
+        "pco": ("native_object", "decode_native_object", "arm64-apple-darwin"),
+        "elf": ("elf_x86_64", "parse_relocatable", "x86_64-unknown-linux-gnu"),
+        "coff": ("coff_x86_64", "parse_object", "x86_64-pc-windows-msvc"),
+    }[kind]
+    module = ModuleType("pcc.backend." + module_name)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    for fault in ("none", "missing", "duplicate", "undefined", "negative-offset",
+                  "past-code", "private", "wrong-type", "wrong-section", "wrong-machine"):
+        symbol = SimpleNamespace(name=("_" if kind == "pco" else "") + "user_test",
+                                 section=1, section_index=1, offset=0, value=0,
+                                 external=True, function=True, binding=1, type=2)
+        section = SimpleNamespace(data=b"code", flags=0x20000004, segname="__TEXT", sectname="__text")
+        obj = SimpleNamespace(machine=62, symbols=[symbol], sections=[section])
+        if fault == "missing": obj.symbols = []
+        elif fault == "duplicate": obj.symbols.append(symbol)
+        elif fault == "undefined": symbol.section = symbol.section_index = 0
+        elif fault == "negative-offset": symbol.offset = symbol.value = -1
+        elif fault == "past-code": symbol.offset = symbol.value = len(section.data)
+        elif fault == "private": symbol.external = False; symbol.binding = 0
+        elif fault == "wrong-type": symbol.function = False; symbol.type = 0
+        elif fault == "wrong-section": section.sectname = "__data"; section.flags = 0
+        elif fault == "wrong-machine": obj.machine = 183
+        setattr(module, reader, lambda payload: obj)
+        actual = _strict_check_result(lambda: require_object_symbols(b"reader-owned", target, ["user_test"]))
+        expected = _strict_check_result(lambda: _original_require_object_symbols(b"reader-owned", target, ["user_test"]))
+        assert actual == expected, (kind, fault)
+
+
+def test_strict_lookup_indexes_scan_each_input_once(monkeypatch):
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    source = "".join("define ptr @user_" + name + "() {\n call ptr @real()\n ret ptr null\n}\n"
+                     for name in ("first", "second"))
+    pattern = closure._DEFINITION_BODY
+    scans = []
+
+    def finditer(text):
+        scans.append(text)
+        return pattern.finditer(text)
+
+    monkeypatch.setattr(closure, "_DEFINITION_BODY", SimpleNamespace(finditer=finditer))
+    bodies = closure._index_definition_bodies(source)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("indexed definition performed another section scan")
+
+    monkeypatch.setattr(closure.re, "finditer", unexpected)
+    for name in ("first", "second"):
+        closure.require_definition(source, "user_" + name, bodies=bodies)
+    assert scans == [source]
+
+    class CountedSymbols(list):
+        iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    symbols = CountedSymbols(SimpleNamespace(name="_user_" + name, section_index=1,
+                                             offset=0, external=True)
+                             for name in ("first", "second"))
+    obj = SimpleNamespace(symbols=symbols, sections=[SimpleNamespace(
+        data=b"code", segname="__TEXT", sectname="__text",
+    )])
+    reader = ModuleType("pcc.backend.native_object")
+    reader.decode_native_object = lambda payload: obj
+    monkeypatch.setitem(sys.modules, reader.__name__, reader)
+    closure.require_object_symbols(b"reader-owned", "arm64-apple-darwin", ["user_first", "user_second"])
+    assert symbols.iterations == 1
+
+
+def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypatch):
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    path = tmp_path / "worker-size-prior-closed-world.json"
+    receipt = {"status": "RUNNING", "target": "chosen-target", "sources": {"original": "sha"},
+               "codegen_sha256": "original-codegen", "modules": {"done": {"object_sha256": "bytes"}}}
+    replace = closure.os.replace
+    publications = []
+
+    def atomic_replace(temporary, destination):
+        assert destination == path and temporary == path.with_name(path.name + ".tmp")
+        payload = json.loads(temporary.read_text())
+        if path.exists():
+            assert json.loads(path.read_text()) == publications[-1]
+        publications.append(payload)
+        replace(temporary, destination)
+
+    monkeypatch.setattr(closure.os, "replace", atomic_replace)
+    monkeypatch.setattr(closure, "time", SimpleNamespace(monotonic=lambda: 101.25))
+    for phase, module in (("compile", ""), ("whole-verify", ""),
+                          *((phase, name) for name in closure.MODULES
+                            for phase in ("module-verify", "module-emit"))):
+        for state in ("started", "complete"):
+            closure._record_closed_world_progress(path, receipt, 100.0, phase, state, module)
+            assert json.loads(path.read_text()) == receipt
+            assert receipt["progress"][-1] == {"phase": phase, "state": state,
+                                                "module": module, "elapsed_s": 1.25}
+    assert len(publications) == 4 + 4 * len(closure.MODULES)
+    assert receipt["status"] == "RUNNING" and receipt["sources"] == {"original": "sha"}
+    assert receipt["codegen_sha256"] == "original-codegen"
+    assert receipt["modules"] == {"done": {"object_sha256": "bytes"}}
+    assert not path.with_name(path.name + ".tmp").exists()
+    previous = path.read_bytes()
+    with pytest.raises(AssertionError, match="phase bound"):
+        closure._record_closed_world_progress(path, receipt, 100.0, "compile", "started")
+    assert path.read_bytes() == previous
+
+
+@pytest.mark.parametrize("fault", ("oversize", "replace-failed"))
+def test_strict_progress_preserves_last_complete_json_on_write_failure(tmp_path, monkeypatch, fault):
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    path = tmp_path / "worker-size-prior-closed-world.json"
+    previous = b'{"status": "RUNNING", "phase": "compile"}\n'
+    path.write_bytes(previous)
+    if fault == "oversize":
+        monkeypatch.setattr(closure, "_RECEIPT_MAX_BYTES", 8)
+        error = AssertionError
+    else:
+        def failed_replace(*args):
+            raise OSError("synthetic replace failure")
+        monkeypatch.setattr(closure.os, "replace", failed_replace)
+        error = OSError
+    with pytest.raises(error):
+        closure._publish_closed_world_receipt(path, {"status": "PASS"})
+    assert path.read_bytes() == previous
+    assert not path.with_name(path.name + ".tmp").exists()
+
+
+def test_strict_progress_surrounds_real_phases_and_uses_collected_receipt():
+    source = (ROOT / gate.CLOSURE_TEST).read_text()
+    tree = ast.parse(source)
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "test_worker_size_prior_modules_strict_target_emission")
+    events = []
+
+    class Calls(ast.NodeVisitor):
+        def visit_Call(self, node):
+            name = ast.unparse(node.func)
+            if name == "_record_closed_world_progress":
+                events.append((ast.literal_eval(node.args[3]), ast.literal_eval(node.args[4])))
+            elif name in ("compile_python_multi", "verify_ir_text", "encode_indexed_module_file",
+                          "emit_indexed_module_file", "require_object_symbols"):
+                events.append(name)
+            self.generic_visit(node)
+
+    Calls().visit(function)
+    assert events == [
+        ("compile", "started"), "compile_python_multi", ("compile", "complete"),
+        ("whole-verify", "started"), "verify_ir_text", ("whole-verify", "complete"),
+        ("module-verify", "started"), "verify_ir_text", ("module-verify", "complete"),
+        ("module-emit", "started"), "encode_indexed_module_file", "emit_indexed_module_file",
+        "require_object_symbols", ("module-emit", "complete"),
+    ]
+    assert 'receipt_path = tmp_path / "worker-size-prior-closed-world.json"' in source
+    assert 'finally:\n        _publish_closed_world_receipt(receipt_path, receipt)' in source
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    assert workflow.count("build/worker-prior-gate/**/*.json\n") == 2
+    command = gate.pytest_command(Path("build/worker-prior-gate/strict-closure"),
+                                  [gate.CLOSURE_TEST + "::" + function.name], integration=True)
+    assert command[command.index("--basetemp") + 1] == str(Path("build/worker-prior-gate/strict-closure") / "tests")
+    assert "-n0" not in command and "-o" not in command

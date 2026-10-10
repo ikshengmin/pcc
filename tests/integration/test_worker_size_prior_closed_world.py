@@ -4,8 +4,10 @@ import ast
 from collections import Counter
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import time
 
 import pytest
 
@@ -20,10 +22,58 @@ SECTION = re.compile(r"^; ---- module: ([A-Za-z_][\w.]*) ----$", re.M)
 DEFINITION = re.compile(r'^define[^\n]*@"?([A-Za-z_][\w.$]*)"?\(', re.M)
 
 
-def require_definition(text, symbol):
+_DEFINITION_BODY = re.compile(
+    r'^define[^\n]*@"?(?P<symbol>[A-Za-z_][\w.$]*)"?\([^\n]*\)[^\n]*\{\n(?P<body>.*?)^\}',
+    re.M | re.S,
+)
+_RECEIPT_MAX_BYTES = 1024 * 1024
+
+
+def _index_definition_bodies(text):
+    bodies = {}
+    for match in _DEFINITION_BODY.finditer(text):
+        header = text[match.start():match.start("body")]
+        if header.count("@") != 1 or re.search(r"^define\b", match.group("body"), re.M):
+            # Ambiguous headers and nested definitions can match differently
+            # for each symbol. Preserve the original exact-symbol matcher.
+            return None
+        bodies.setdefault(match.group("symbol"), []).append(match)
+    return bodies
+
+
+def _publish_closed_world_receipt(path, receipt):
+    payload = (json.dumps(receipt, indent=2, allow_nan=False) + "\n").encode("utf-8")
+    assert len(payload) <= _RECEIPT_MAX_BYTES, "closed-world receipt exceeds byte bound"
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        with temporary.open("wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _record_closed_world_progress(path, receipt, started, phase, state, module=""):
+    assert phase in ("compile", "whole-verify", "module-verify", "module-emit")
+    assert state in ("started", "complete")
+    assert (module in MODULES) if phase.startswith("module-") else module == ""
+    progress = receipt.setdefault("progress", [])
+    assert len(progress) < 4 + 4 * len(MODULES), "closed-world progress exceeds phase bound"
+    progress.append({"phase": phase, "state": state, "module": module,
+                     "elapsed_s": time.monotonic() - started})
+    _publish_closed_world_receipt(path, receipt)
+
+
+def require_definition(text, symbol, *, bodies=None):
     pattern = (r'^define[^\n]*@"?' + re.escape(symbol)
                + r'"?\([^\n]*\)[^\n]*\{\n(?P<body>.*?)^\}')
-    matches = list(re.finditer(pattern, text, re.M | re.S))
+    # A missing/unindexable spelling uses the exact original matcher. Normal
+    # complete sections reuse one scan; duplicate definitions remain a list.
+    matches = bodies.get(symbol) if bodies is not None else None
+    if matches is None:
+        matches = list(re.finditer(pattern, text, re.M | re.S))
     assert len(matches) == 1, (symbol, "missing/duplicate definition")
     body = matches[0].group("body")
     assert not re.search(r"^define\b", body, re.M), (symbol, "cross-function match")
@@ -49,8 +99,11 @@ def require_object_symbols(payload, target, required):
         obj = parse_relocatable(payload)
         machine = 62 if target.startswith("x86_64-") else 183
         assert obj.machine == machine, "wrong ELF machine"
+    symbols_by_name = {}
+    for symbol in obj.symbols:
+        symbols_by_name.setdefault(symbol.name, []).append(symbol)
     for name in required:
-        symbols = [symbol for symbol in obj.symbols if symbol.name == ("_" if darwin else "") + name]
+        symbols = symbols_by_name.get(("_" if darwin else "") + name, [])
         assert len(symbols) == 1, (name, "missing/duplicate object definition")
         symbol = symbols[0]
         index = symbol.section if windows else symbol.section_index
@@ -96,13 +149,18 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
                "scope": "public strict full closure and eight actual target objects",
                "native_execution": False}
     output = tmp_path / "closed-world.ll"
+    receipt_path = tmp_path / "worker-size-prior-closed-world.json"
+    started = time.monotonic()
     try:
+        _record_closed_world_progress(receipt_path, receipt, started, "compile", "started")
         compile_python_multi(
             [str(path) for path in sources], str(output), module_names=list(MODULES),
             entry_module=MODULES[0], emit_llvm_only=True, target_triple=target,
             libpython_mode="off", ir_scaffold_mode="on", backend="self",
             recursive_stdlib=False,
         )
+        _record_closed_world_progress(receipt_path, receipt, started, "compile", "complete")
+        _record_closed_world_progress(receipt_path, receipt, started, "whole-verify", "started")
         text = output.read_text()
         assert "strict.nolib.stub" not in text
         assert not re.search(r'\b(?:call|invoke)\b[^\n]*@"?py_cpy_', text)
@@ -117,19 +175,24 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         receipt["closure_modules"] = names
         receipt["closure_definitions"] = len(whole.functions)
         del whole
+        _record_closed_world_progress(receipt_path, receipt, started, "whole-verify", "complete")
         for name, source in zip(MODULES, sources):
+            _record_closed_world_progress(receipt_path, receipt, started, "module-verify", "started", name)
             declared = [node.name for node in ast.parse(source.read_bytes()).body
                         if isinstance(node, ast.FunctionDef)]
             assert declared and len(declared) == len(set(declared))
             section = sections[name]
             required = ["user_" + name.replace(".", "_") + "_" + function for function in declared]
+            definition_bodies = _index_definition_bodies(section)
             for symbol in required:
-                require_definition(section, symbol)
+                require_definition(section, symbol, bodies=definition_bodies)
             module = verify_ir_text(section)
             assert module.triple == target
             assert Counter(function.name for function in module.functions) == Counter(DEFINITION.findall(section))
             assert all(function.indexed_kernel is not None for function in module.functions)
+            _record_closed_world_progress(receipt_path, receipt, started, "module-verify", "complete", name)
             sidecar, obj = tmp_path / (name + ".pidx"), tmp_path / (name + ".pco")
+            _record_closed_world_progress(receipt_path, receipt, started, "module-emit", "started", name)
             encode_indexed_module_file(str(sidecar), module)
             emit_indexed_module_file(str(sidecar), str(obj), "PCO", optimize=False)
             assert obj.stat().st_size > 0 and not Path(str(obj) + ".tmp").exists()
@@ -138,6 +201,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
                                        "object_sha256": hashlib.sha256(obj.read_bytes()).hexdigest(),
                                        "object_bytes": obj.stat().st_size}
             del module
+            _record_closed_world_progress(receipt_path, receipt, started, "module-emit", "complete", name)
         assert digests == {name: hashlib.sha256(path.read_bytes()).hexdigest()
                            for name, path in zip(MODULES, sources)}
         receipt["status"] = "PASS"
@@ -145,4 +209,4 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         receipt.update(status="FAIL", error=type(error).__name__ + ": " + str(error))
         raise
     finally:
-        (tmp_path / "worker-size-prior-closed-world.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        _publish_closed_world_receipt(receipt_path, receipt)
