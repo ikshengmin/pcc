@@ -22,12 +22,15 @@ EXIT_TEST = "tests/python/test_owned_windows_exit.py"
 EXIT_INPUTS = (EXIT_TEST, "tests/c/test_owned_linux_c_exports.py",
                "tests/c/fixtures/owned_linux_c_exports/exit_lifecycle.c",
                "tests/c/fixtures/owned_linux_c_exports/immediate_bypass.c")
+ARM_TRANSPORT_TEST = "tests/python/test_linux_aarch64_worker_transport.py"
+ARM_TRANSPORT_NATIVE_TEST = "tests/python/test_linux_aarch64_transport_native.py"
+ARM_TRANSPORT_INPUTS = (ARM_TRANSPORT_TEST, ARM_TRANSPORT_NATIVE_TEST)
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_host_indexed_process_split.py",
               "tests/python/test_dynamic_handoff_slots.py")
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 64, 0, 20, 21)
+HOST_COUNTS = (80, 3, 71, 0, 20, 21)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -50,7 +53,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS,
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),
                        "version": sys.version}
@@ -311,6 +314,12 @@ def run(out, phase):
             if sys.platform == "win32":
                 run_pytest(out, "windows-exit-host", [EXIT_TEST], env, counts=(8,))
                 run_pytest(out, "windows-exit-native", [EXIT_TEST], env, integration=True, counts=(6,))
+            elif sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64"):
+                run_pytest(out, "linux-arm-transport-host", [ARM_TRANSPORT_TEST], env, counts=(7,))
+                run_pytest(out, "linux-arm-transport-routes", [ARM_TRANSPORT_TEST], env, integration=True, counts=(8,))
+                run_pytest(out, "linux-arm-transport-native", [ARM_TRANSPORT_NATIVE_TEST
+                           + "::test_linux_aarch64_transport_executes_tls_varargs_and_managed_reload"],
+                           env, integration=True)
             native_gate(out, "pcc0", env)
             run_pytest(out, "strict-closure", [CLOSURE_TEST + "::test_worker_size_prior_modules_strict_target_emission"],
                        env, integration=True)

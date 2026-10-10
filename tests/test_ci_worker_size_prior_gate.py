@@ -38,7 +38,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_host_indexed_process_split.py",
         "tests/python/test_dynamic_handoff_slots.py",
     )
-    assert gate.HOST_COUNTS == (80, 3, 64, 0, 20, 21)
+    assert gate.HOST_COUNTS == (80, 3, 71, 0, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -409,17 +409,22 @@ def test_other_platform_entry_keeps_the_original_full_gc_matrix_once():
     assert "--runtime-archive" in constants and "2400" in constants and "17179869184" in constants
 
 
-@pytest.mark.parametrize("target,failing", [
-    ("win32", None), ("linux", None), ("darwin", None),
-    ("win32", "windows-exit-host"), ("win32", "windows-exit-native"),
+@pytest.mark.parametrize("target,machine,failing", [
+    ("win32", "x86_64", None), ("linux", "x86_64", None), ("darwin", "arm64", None),
+    ("win32", "x86_64", "windows-exit-host"), ("win32", "x86_64", "windows-exit-native"),
+    ("linux", "aarch64", None), ("linux", "arm64", None),
+    ("linux", "aarch64", "linux-arm-transport-host"),
+    ("linux", "aarch64", "linux-arm-transport-routes"),
+    ("linux", "aarch64", "linux-arm-transport-native"),
+    ("linux", "aarch64", "runtime-identity"),
 ])
-def test_windows_exit_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, monkeypatch, target, failing):
+def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, monkeypatch, target, machine, failing):
     out = tmp_path / "preflight"
     archive = out / "runtime/libpy_runtime_pcc_py.a"
     source, runtime = {"source": "fixed"}, {"runtime": "matched"}
     events = []
     monkeypatch.setattr(gate, "sys", SimpleNamespace(platform=target, executable="chosen-python"))
-    monkeypatch.setattr(gate, "platform", SimpleNamespace(machine=lambda: "arm64" if target == "darwin" else "x86_64"))
+    monkeypatch.setattr(gate, "platform", SimpleNamespace(machine=lambda: machine))
     monkeypatch.setattr(gate, "source_identity", lambda: source)
     monkeypatch.setattr(gate, "environment", lambda: {"PCC_RUNTIME_ARCHIVE": "stale", "PCC_TEST_NO_NATIVE_PROVISIONING": "1"})
 
@@ -432,6 +437,8 @@ def test_windows_exit_gates_follow_verified_runtime_and_stop_on_failure(tmp_path
     def identity(path):
         assert path == archive
         events.append("runtime-identity")
+        if failing == "runtime-identity":
+            raise RuntimeError("original platform gate failure")
         return runtime
 
     def pytest_gate(directory, name, nodes, env, *, integration=False, counts=None):
@@ -444,12 +451,25 @@ def test_windows_exit_gates_follow_verified_runtime_and_stop_on_failure(tmp_path
             assert integration == (name == "windows-exit-native")
             assert counts == ((6,) if integration else (8,))
             assert "runtime-identity" in events
+        elif name.startswith("linux-arm-transport-"):
+            assert target == "linux" and machine in ("aarch64", "arm64")
+            assert env["PCC_RUNTIME_ARCHIVE"] == str(archive)
+            assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+            assert "runtime-identity" in events
+            assert integration == (name != "linux-arm-transport-host")
+            if name == "linux-arm-transport-native":
+                assert nodes == [gate.ARM_TRANSPORT_NATIVE_TEST
+                                 + "::test_linux_aarch64_transport_executes_tls_varargs_and_managed_reload"]
+                assert counts is None
+            else:
+                assert nodes == [gate.ARM_TRANSPORT_TEST]
+                assert counts == ((8,) if integration else (7,))
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 64, 0, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 71, 0, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
-            raise RuntimeError("original exit gate failure")
+            raise RuntimeError("original platform gate failure")
 
     def native(directory, owner, env):
         assert directory == out and owner == "pcc0"
@@ -463,9 +483,11 @@ def test_windows_exit_gates_follow_verified_runtime_and_stop_on_failure(tmp_path
     expected = ["default-xdist", "runtime-build", "runtime-identity"]
     if target == "win32":
         expected += ["windows-exit-host", "windows-exit-native"]
+    elif target == "linux" and machine in ("aarch64", "arm64"):
+        expected += ["linux-arm-transport-host", "linux-arm-transport-routes", "linux-arm-transport-native"]
     expected += ["native-pcc0", "strict-closure", "runtime-identity"]
     if failing:
-        with pytest.raises(RuntimeError, match="original exit gate failure"):
+        with pytest.raises(RuntimeError, match="original platform gate failure"):
             gate.run(out, "preflight")
         expected = expected[:expected.index(failing) + 1]
     else:
@@ -473,7 +495,11 @@ def test_windows_exit_gates_follow_verified_runtime_and_stop_on_failure(tmp_path
     assert events == expected
     receipt = json.loads((out / "preflight.json").read_text())
     assert receipt["status"] == ("FAIL" if failing else "PASS")
-    assert receipt["source"] == source and receipt["runtime"] == runtime
+    assert receipt["source"] == source
+    if failing == "runtime-identity":
+        assert "runtime" not in receipt
+    else:
+        assert receipt["runtime"] == runtime
 
 
 def test_windows_exit_changed_shape_inputs_are_bound_and_trigger_ci():
@@ -495,3 +521,45 @@ def test_windows_exit_changed_shape_inputs_are_bound_and_trigger_ci():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     for name in gate.EXIT_INPUTS:
         assert workflow.count('      - "' + name + '"') == 2
+
+
+def test_linux_arm_transport_inputs_markers_and_exact_inventory_are_bound():
+    assert gate.ARM_TRANSPORT_INPUTS == (
+        "tests/python/test_linux_aarch64_worker_transport.py",
+        "tests/python/test_linux_aarch64_transport_native.py",
+    )
+    tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
+    identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "source_identity")
+    hashes = next(node.value for node in identity.body if isinstance(node, ast.Assign)
+                  and isinstance(node.targets[0], ast.Subscript)
+                  and isinstance(node.targets[0].slice, ast.Constant)
+                  and node.targets[0].slice.value == "test_inputs")
+    assert isinstance(hashes, ast.DictComp)
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "ARM_TRANSPORT_INPUTS" for node in hashes.generators[0].iter.elts)
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    for name in gate.ARM_TRANSPORT_INPUTS:
+        assert workflow.count('      - "' + name + '"') == 2
+
+    # Read source only: this control must never import or emit the target IR.
+    worker = ast.parse((ROOT / gate.ARM_TRANSPORT_TEST).read_text())
+    counts = {False: 0, True: 0}
+    for node in worker.body:
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+            continue
+        integration = any(isinstance(mark, ast.Attribute) and mark.attr == "integration"
+                          for mark in node.decorator_list)
+        count = 1
+        for mark in node.decorator_list:
+            if isinstance(mark, ast.Call) and isinstance(mark.func, ast.Attribute) and mark.func.attr == "parametrize":
+                assert isinstance(mark.args[1], (ast.List, ast.Tuple))
+                count *= len(mark.args[1].elts)
+        counts[integration] += count
+    assert counts == {False: 7, True: 8}
+    native = ast.parse((ROOT / gate.ARM_TRANSPORT_NATIVE_TEST).read_text())
+    tests = [node for node in native.body if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
+    assert [node.name for node in tests] == ["test_linux_aarch64_transport_executes_tls_varargs_and_managed_reload"]
+    assert any(isinstance(mark, ast.Attribute) and mark.attr == "integration"
+               for mark in tests[0].decorator_list)
+    assert any(isinstance(mark, ast.Call) and isinstance(mark.func, ast.Attribute) and mark.func.attr == "pcc_gate"
+               for mark in tests[0].decorator_list)

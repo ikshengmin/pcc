@@ -757,6 +757,7 @@ def run_codegen_worker(
                     from pcc.backend.target_objects import emit_indexed_assembly, encode_assembly_object
                     from pcc.backend.self_backend_target_match import (
                         is_aarch64_darwin_triple,
+                        is_aarch64_linux_triple,
                         is_x86_64_linux_triple,
                         is_x86_64_windows_triple,
                     )
@@ -882,7 +883,10 @@ def run_codegen_worker(
                             and native_object_output
                             and not validate_direct
                             and not emit_text_control
-                            and is_aarch64_darwin_triple(direct_target)
+                            and (
+                                is_aarch64_darwin_triple(direct_target)
+                                or is_aarch64_linux_triple(direct_target)
+                            )
                         )
                         direct_packed_stack_maps = bool(
                             emit_direct
@@ -1001,7 +1005,30 @@ def run_codegen_worker(
                                     ir_dir,
                                     "module_" + str(index) + ".direct.pco",
                                 )
-                                if not is_aarch64_darwin_triple(direct_target):
+                                if direct_lines_output and is_aarch64_linux_triple(direct_target):
+                                    from pcc.backend.arm64_elf_driver import from_sections
+                                    from pcc.backend.elf_x86_64 import emit_relocatable
+
+                                    # The shared transport owns final words and
+                                    # named fixups. Project them through the same
+                                    # ELF adapter as the text assembler, without
+                                    # rendering/reparsing a module-wide .s file.
+                                    phase_started = phase_timing.start() if phase_timing is not None else 0
+                                    sections, undefined = direct_transport.assemble_sections()
+                                    if direct_transport.encoded_line_records is not None:
+                                        direct_transport.encoded_line_records.close()
+                                    del direct_transport
+                                    elf_object = from_sections(sections, undefined)
+                                    del sections
+                                    del undefined
+                                    if phase_timing is not None:
+                                        phase_timing.add(9, phase_started)
+                                    phase_started = phase_timing.start() if phase_timing is not None else 0
+                                    encoded = emit_relocatable(elf_object)
+                                    if phase_timing is not None:
+                                        phase_timing.add(10, phase_started)
+                                    del elf_object
+                                elif not is_aarch64_darwin_triple(direct_target):
                                     encoded = encode_assembly_object(
                                         direct_asm, direct_target,
                                         stack_map_plans=(
