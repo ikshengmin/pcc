@@ -9,7 +9,6 @@ Also tests full system-link compilation to produce an nginx binary.
 Run:  uv run pytest tests/integration/test_nginx.py -v
 """
 
-import fcntl
 import hashlib
 import os
 import re
@@ -82,8 +81,15 @@ def _make_env():
     return env
 
 
+def _require_nginx_posix():
+    if os.name != "posix":
+        raise RuntimeError("nginx integration requires POSIX configure, make, and file locks")
+
+
 def _file_lock(lock_path):
+    _require_nginx_posix()
     import contextlib
+    import fcntl
 
     @contextlib.contextmanager
     def _lock():
@@ -104,6 +110,7 @@ def _ensure_nginx_configured():
     Uses system pcre2 and zlib (avoids modifying the project-local pcre/zlib
     directories that other tests depend on).
     """
+    _require_nginx_posix()
     if os.path.isfile(NGINX_MAKEFILE):
         return
 
@@ -156,6 +163,7 @@ def _nginx_cpp_args():
     Includes nginx's own source directories plus system pcre2/zlib headers
     (detected via pkg-config or standard paths).
     """
+    _require_nginx_posix()
     include_args = []
     for subdir in NGINX_INCLUDE_SUBDIRS:
         include_args.extend(["-I", os.path.join(NGINX_DIR, subdir)])
@@ -255,6 +263,7 @@ def _nginx_link_args():
 
 def _compile_nginx_file(fname):
     """Compile a single nginx .c file through pcc pipeline. Returns (stage, detail)."""
+    _require_nginx_posix()
     fpath = os.path.join(NGINX_DIR, fname)
     stage = "init"
     try:
@@ -302,7 +311,11 @@ def _compile_nginx_file(fname):
 # inside each test function (guarded by a file lock).
 # ────────────────────────────────────────────────────────────────────
 
-if os.path.isdir(NGINX_DIR) and os.path.isfile(NGINX_MAKEFILE):
+if (
+    os.name == "posix"
+    and os.path.isdir(NGINX_DIR)
+    and os.path.isfile(NGINX_MAKEFILE)
+):
     NGINX_SOURCE_FILES = _nginx_source_files()
 else:
     NGINX_SOURCE_FILES = []
