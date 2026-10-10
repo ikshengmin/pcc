@@ -90,7 +90,7 @@ def _forbid_text_assembly(monkeypatch):
         monkeypatch.setattr(owner, name, forbidden)
 
 
-def _assert_scalar_records(monkeypatch, accepted, rejected):
+def _assert_scalar_records(monkeypatch, accepted, rejected, *, move=False):
     from pcc.backend import arm64_encode as encoder
     from pcc.backend.self_backend_value_arena import CompilerIntArena
 
@@ -108,7 +108,10 @@ def _assert_scalar_records(monkeypatch, accepted, rejected):
                 family = encoder.append_emitted_instruction_record(
                     line, 17, 0, -1, None, records, indices, names,
                 )
-            assert family == encoder.EMITTED_INSTRUCTION_SCALAR
+            assert family == (
+                encoder.EMITTED_INSTRUCTION_MOVE if move
+                else encoder.EMITTED_INSTRUCTION_SCALAR
+            )
             assert tuple(records.diagnostic_values()) == (17, expected_word, 0, -1)
             assert names == [] and indices == {}
         finally:
@@ -207,6 +210,62 @@ def test_linux_transport_preserves_mixed_aggregate_varargs(monkeypatch):
         "  sxtw x0, x1", "  sxtw x31, w0", "  sxtw x0, w31",
         "  sxtw d0, w0", "  sxtw x0", "  sxtw , w0",
         "  sxtw x0, ", "  sxtw x0, w0, #1",
+    ])
+    _assert_scalar_records(monkeypatch, [
+        # Exact Linux va_list register-save stores, plus address boundaries.
+        ("  str q0, [sp, #64]", 0x3D8013E0),
+        ("  str q1, [sp, #80]", 0x3D8017E1),
+        ("  str q2, [sp, #96]", 0x3D801BE2),
+        ("  str q3, [sp, #112]", 0x3D801FE3),
+        ("  str q4, [sp, #128]", 0x3D8023E4),
+        ("  str q5, [sp, #144]", 0x3D8027E5),
+        ("  str q6, [sp, #160]", 0x3D802BE6),
+        ("  str q7, [sp, #176]", 0x3D802FE7),
+        ("  str q0, [x0]", 0x3D800000),
+        ("  str q30, [x30, #65520]", 0x3DBFFFDE),
+        ("  str q2, [fp, #16]", 0x3D8007A2),
+        ("  str q3, [lr, #32]", 0x3D800BC3),
+    ], [
+        "  str q31, [sp]", "  str q0, [xzr]", "  str q0, [w0]",
+        "  str q0, [x31]", "  str q0, [sp, #-16]", "  str q0, [sp, #8]",
+        "  str q0, [sp, #65536]", "  str q0, [sp, #16]!",
+        "  str q0, [sp], #16", "  str q0, [sp, x0]",
+        "  str q0, [x0, target@PAGEOFF]",
+        "  str q0, [sp, #]", "  str q0, [sp, #16, #0]",
+        "  str q0, [sp", "  str , [sp]", "  str q0, [sp], x0",
+        "  ldr q0, [sp]", "  stur q0, [sp]", "  strb q0, [sp]",
+    ])
+    _assert_scalar_records(monkeypatch, [
+        ("  mov w10, #0", 0x5280000A),
+        ("  mov w10, #-128", 0x12800FEA),
+        ("  mov w10, #-1", 0x1280000A),
+        # MOVZ has priority when either single-instruction alias could work.
+        ("  mov w10, #-65536", 0x52BFFFEA),
+        ("  mov w10, #65536", 0x52A0002A),
+        ("  mov w10, #-2147483648", 0x52B0000A),
+        ("  mov w10, #0xffffffff", 0x1280000A),
+        ("  mov w0, #65535", 0x529FFFE0),
+        ("  mov wzr, #1", 0x5280003F),
+        ("  mov w30, #0xffff0000", 0x52BFFFFE),
+    ], [
+        "  mov x0, #0", "  mov wsp, #0", "  mov w31, #0",
+        "  mov q0, #0", "  mov w0, #-2147483649", "  mov w0, #4294967296",
+        "  mov w0, #65537", "  mov w0, #-2147483647",
+        "  mov w0, #0x12345678", "  mov w0, #", "  mov , #0",
+        "  mov w0", "  mov w0, #0, lsl #16", "  mov w0, #0, w1",
+    ], move=True)
+    _assert_scalar_records(monkeypatch, [
+        ("  lsl w1, w1, #1", 0x531F7821),
+        ("  lsl w1, w1, #0", 0x53007C21),
+        ("  lsl w1, w1, #31", 0x53010021),
+        ("  lsl w30, w29, #31", 0x530103BE),
+        ("  lsl wzr, wzr, #1", 0x531F7BFF),
+    ], [
+        "  lsl wsp, w0, #1", "  lsl w0, wsp, #1", "  lsl w31, w0, #1",
+        "  lsl w0, w31, #1", "  lsl x0, x1, #1", "  lsl w0, x1, #1",
+        "  lsl x0, w1, #1", "  lsl w0, w1, #-1", "  lsl w0, w1, #32",
+        "  lsl w0, w1, w2", "  lsl w0, w1, #", "  lsl w0, w1",
+        "  lsl , w1, #1", "  lsl w0, , #1", "  lsl w0, w1, #1, #0",
     ])
     generator = CCodeGenerator()
     generator.module.triple = TARGET

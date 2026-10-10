@@ -563,6 +563,17 @@ def encode_emitted_move(line: str) -> int | None:
     destination_is_64 = destination_kind == _EMITTED_REG_X
 
     if mnemonic == "mov":
+        if rest.startswith("#"):
+            if destination_kind != _EMITTED_REG_W or destination_token == "wsp":
+                return None
+            immediate = _emitted_immediate_span(rest, 0, len(rest))
+            if immediate is None or immediate < -0x80000000 or immediate > 0xFFFFFFFF:
+                return None
+            try:
+                # Preserve the text lane's MOVZ-before-MOVN alias selection.
+                return _enc_mov_immediate(destination_number, immediate, False, line)
+            except EncodeError:
+                return None
         if "," in rest or " " in rest:
             return None
         source_code = _emitted_register_code(rest)
@@ -1623,7 +1634,10 @@ def append_emitted_instruction_record(
         memory_start = register_end + 2
         if register_end < 0 or memory_start >= len(line):
             return EMITTED_INSTRUCTION_FALLBACK
-        register = _emitted_register_code_span(line, register_start, register_end)
+        if load_store_prefix == "  str " and line.startswith("q", register_start, register_end):
+            register = _emitted_register_code(line[register_start:register_end])
+        else:
+            register = _emitted_register_code_span(line, register_start, register_end)
         if register < 0 or line[memory_start] != "[" or line[-1] != "]":
             return EMITTED_INSTRUCTION_FALLBACK
         inner_start = memory_start + 1
@@ -1657,6 +1671,15 @@ def append_emitted_instruction_record(
                 return EMITTED_INSTRUCTION_FALLBACK
             immediate = parsed
         kind = register >> 6
+        if kind == _EMITTED_REG_Q:
+            if (
+                line[inner_start:base_end] == "xzr"
+                or immediate % 16 or immediate // 16 > 0xFFF
+            ):
+                return EMITTED_INSTRUCTION_FALLBACK
+            word = 0x3D800000 | ((immediate // 16) << 10) | ((base & 63) << 5) | (register & 63)
+            records.append4(line_index, word, STRUCTURED_RELOCATION_NONE, -1)
+            return EMITTED_INSTRUCTION_SCALAR
         vector = 0
         if load_store_size < 0:
             if kind == _EMITTED_REG_X:
@@ -1873,6 +1896,32 @@ def append_emitted_instruction_record(
             | (variable_shift_op2 << 10)
             | ((second & 63) << 5)
             | (first & 63)
+        )
+        records.append4(line_index, word, STRUCTURED_RELOCATION_NONE, -1)
+        return EMITTED_INSTRUCTION_SCALAR
+
+    if line.startswith("  lsl "):
+        first_end = line.find(", ", 6)
+        if first_end < 0:
+            return EMITTED_INSTRUCTION_FALLBACK
+        second_start = first_end + 2
+        second_end = line.find(", ", second_start)
+        if second_end < 0:
+            return EMITTED_INSTRUCTION_FALLBACK
+        first = _emitted_register_code_span(line, 6, first_end)
+        second = _emitted_register_code_span(line, second_start, second_end)
+        shift = _emitted_immediate_span(line, second_end + 2, len(line))
+        if (
+            first < 0 or first >> 6 != _EMITTED_REG_W
+            or second < 0 or second >> 6 != _EMITTED_REG_W
+            or line[6:first_end] == "wsp" or line[second_start:second_end] == "wsp"
+            or shift is None or shift < 0 or shift > 31
+        ):
+            return EMITTED_INSTRUCTION_FALLBACK
+        # UBFM Wd, Wn, #(32-shift)%32, #(31-shift).
+        word = (
+            0x53000000 | (((32 - shift) % 32) << 16)
+            | ((31 - shift) << 10) | ((second & 63) << 5) | (first & 63)
         )
         records.append4(line_index, word, STRUCTURED_RELOCATION_NONE, -1)
         return EMITTED_INSTRUCTION_SCALAR
