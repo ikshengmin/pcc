@@ -52,6 +52,17 @@ def _start_resource_worker(specs, index):
         return pid
     argv, vector = specs[index]
     env = dict(item.split("=", 1) for item in vector)
+    if sys.platform == "win32" and sys.implementation.name == "cpython":
+        base = str(getattr(sys, "_base_executable", "") or "")
+        executable = sys.executable
+        if (base and os.path.normcase(base) != os.path.normcase(executable)
+                and os.path.normcase(argv[0]) == os.path.normcase(executable)):
+            # Windows venv python.exe is a redirector with a different PID
+            # from the interpreter publishing RSS. Use CPython's own spawn
+            # protocol to retain the venv prefix, imports and sys.executable
+            # while owning the actual interpreter PID, including for retries.
+            argv = [base, *argv[1:]]
+            env["__PYVENV_LAUNCHER__"] = executable
     process = (subprocess.Popen(argv, env=env, creationflags=512)
                if sys.platform == "win32"
                else subprocess.Popen(argv, env=env, process_group=0))

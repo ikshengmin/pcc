@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import site
 import sys
 
 import pytest
@@ -68,6 +69,9 @@ def _run(prefix, case, directory, owner, collector):
     expected_attempts = 3 if case == "width" else 4
     starts = sorted(directory.glob("started.*"))
     assert len(starts) == expected_attempts
+    admissions = [line.split("\t") for line in (directory / "admission.tsv").read_text().splitlines()
+                  if line.startswith("start\t")]
+    assert len(admissions) == expected_attempts
     actual_collectors = []
     pids, tokens = [], []
     for path in starts:
@@ -76,6 +80,9 @@ def _run(prefix, case, directory, owner, collector):
         pids.append(int(fields[0]))
         tokens.append(fields[1])
         actual_collectors.append(int(fields[3]))
+        _, index, attempt = path.name.split(".")
+        launched = [row for row in admissions if row[1] == index]
+        assert int(launched[int(attempt) - 1][2]) == int(fields[0]), "launcher PID differs from worker PID"
     assert len(set(pids)) == expected_attempts and len(set(tokens)) == expected_attempts
     assert actual_collectors == [collector] * expected_attempts
     record["observed_child_collectors"] = actual_collectors
@@ -89,6 +96,72 @@ def _run(prefix, case, directory, owner, collector):
 @pytest.mark.pcc_gate(env="PCC_WORKER_TREE_BUDGET_BYTES")
 def test_size_prior_real_host_processes(case, tmp_path):
     _run([sys.executable, "-B", str(DRIVER)], case, tmp_path / case, "cpython", 0)
+
+
+@pytest.mark.pcc_gate(env="PCC_WORKER_TREE_BUDGET_BYTES")
+def test_resource_host_self_spawn_preserves_interpreter_identity_and_venv(tmp_path):
+    script = tmp_path / "host_identity.py"
+    script.write_text('''
+import json
+import os
+from pathlib import Path
+import shlex
+import site
+import sys
+
+import pytest
+from pcc.frontends.python import worker_process_pool as pool
+
+
+def main():
+    root, depth = Path(sys.argv[1]), int(sys.argv[2])
+    sites = [os.path.normcase(path) for path in site.getsitepackages()]
+    record = {
+        "pid": os.getpid(), "executable": sys.executable,
+        "base_executable": sys._base_executable,
+        "prefix": sys.prefix, "base_prefix": sys.base_prefix,
+        "site_packages": [path for path in sys.path if os.path.normcase(path) in sites],
+        "pytest_origin": pytest.__file__,
+        "environment_value": os.environ["PCC_TEST_ENVIRONMENT_VALUE"],
+    }
+    if depth < 2:
+        command = shlex.join([sys.executable, "-B", __file__, str(root), str(depth + 1)])
+        pid = pool._start_resource_worker([pool._command_spec(command)], 0)
+        record["child_pid"] = pid
+        try:
+            assert pool._HOST_WORKERS[pid].wait(timeout=6) == 0
+            pool._retire_resource_worker(pid)
+        finally:
+            if pid in pool._HOST_WORKERS:
+                pool._stop_resource_worker(pid)
+        assert pool._HOST_WORKERS == {}
+    (root / ("identity." + str(depth) + ".json")).write_text(json.dumps(record))
+
+
+main()
+''', encoding="utf-8")
+    environment = _environment("cpython", 0)
+    environment["PCC_TEST_ENVIRONMENT_VALUE"] = "unchanged= value"
+    result = run_process_group_timeout(
+        [sys.executable, "-B", str(script), str(tmp_path), "0"],
+        env=environment, timeout=20,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", ""), result
+    identities = [json.loads((tmp_path / ("identity." + str(depth) + ".json")).read_text())
+                  for depth in range(3)]
+    sites = [os.path.normcase(path) for path in site.getsitepackages()]
+    expected = {
+        "executable": sys.executable, "base_executable": sys._base_executable,
+        "prefix": sys.prefix, "base_prefix": sys.base_prefix,
+        "site_packages": [path for path in sys.path if os.path.normcase(path) in sites],
+        "pytest_origin": pytest.__file__, "environment_value": "unchanged= value",
+    }
+    assert expected["site_packages"], "host dependency path must be exercised"
+    assert len({record["pid"] for record in identities}) == 3
+    for depth, record in enumerate(identities):
+        assert {key: record[key] for key in expected} == expected
+        if depth < 2:
+            assert record["child_pid"] == identities[depth + 1]["pid"]
 
 
 @pytest.mark.integration

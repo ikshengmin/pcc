@@ -21,7 +21,7 @@ CLOSURE_TEST = "tests/integration/test_worker_size_prior_closed_world.py"
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST)
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (68, 2, 58, 0)
+HOST_COUNTS = (77, 3, 58, 0)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

@@ -13,6 +13,64 @@ from pcc.frontends.python import worker_resource_plan as policy
 MIB = 1024 * 1024
 
 
+@pytest.mark.parametrize("mode", [
+    "venv", "venv-case", "other-python", "wrapper", "native-command",
+    "non-windows", "system-python", "no-base", "other-owner",
+])
+def test_resource_start_owns_windows_venv_interpreter_without_changing_environment(monkeypatch, mode):
+    import ntpath
+    from types import SimpleNamespace
+    from pcc.frontends.python import worker_process_pool as pool
+
+    executable = r"C:\project venv\Scripts\python.exe"
+    base = r"C:\Python313\python.exe"
+    requested = executable
+    platform = "linux" if mode == "non-windows" else "win32"
+    owner = "pypy" if mode == "other-owner" else "cpython"
+    if mode == "venv-case":
+        requested = executable.upper()
+    elif mode == "other-python":
+        requested = r"C:\other venv\Scripts\python.exe"
+    elif mode == "wrapper":
+        requested = "wrapper.exe"
+    elif mode == "native-command":
+        requested = r"C:\project\pcc1.exe"
+    elif mode == "system-python":
+        base = executable
+    system = SimpleNamespace(platform=platform, executable=executable,
+                             implementation=SimpleNamespace(name=owner))
+    if mode != "no-base":
+        system._base_executable = base
+    monkeypatch.setattr(pool, "sys", system)
+    monkeypatch.setattr(pool, "os", SimpleNamespace(path=ntpath))
+    monkeypatch.setattr(pool, "_HOST_WORKERS", {})
+    argv = [requested, "-B", "worker with spaces.py", "", "quote'word"]
+    environment = {"PCC_TEST_VALUE": "value=with spaces",
+                   policy.RESOURCE_REPORT_ENV: r"C:\reports\worker.rss",
+                   policy.RESOURCE_TOKEN_ENV: "a" * 64,
+                   "__PYVENV_LAUNCHER__": "inherited-launcher"}
+    specs = [(argv, [key + "=" + value for key, value in environment.items()])]
+    original = copy.deepcopy(specs)
+    captured = []
+    process = SimpleNamespace(pid=1234)
+
+    def popen(arguments, **options):
+        captured.append((arguments, options))
+        return process
+
+    monkeypatch.setattr(pool.subprocess, "Popen", popen)
+    assert pool._start_resource_worker(specs, 0) == process.pid
+    assert pool._HOST_WORKERS == {process.pid: process}
+    assert specs == original
+    rewritten = mode in ("venv", "venv-case")
+    expected = dict(environment)
+    if rewritten:
+        expected["__PYVENV_LAUNCHER__"] = executable
+    options = {"env": expected}
+    options.update({"creationflags": 512} if platform == "win32" else {"process_group": 0})
+    assert captured == [([base if rewritten else requested, *argv[1:]], options)]
+
+
 def task(model="host-indexed-frontend-v1", source=100, ast=200, exports=300):
     return {
         "class": "private-run:host", "estimate_bytes": 0,
