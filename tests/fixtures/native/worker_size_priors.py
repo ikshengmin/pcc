@@ -125,9 +125,12 @@ def make_task(root, index, source_bytes):
 
 
 def command(root, case, index, growth):
+    _windows_stage1_phase(root, "abspath")
     executable = os.path.abspath(sys.argv[0])
+    _windows_stage1_phase(root, "argv")
     prefix = [executable] if sys.implementation.name == "pcc" else [sys.executable, "-B", executable]
     argv = prefix + ["child", root, case, str(index), str(growth)]
+    _windows_stage1_phase(root, "quote")
     return " ".join([shlex.quote(value) for value in argv])
 
 

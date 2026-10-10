@@ -86,7 +86,14 @@ def test_failed_process_fixture_keeps_bounded_synthetic_protocol_evidence(tmp_pa
                   and isinstance(node.value.func, ast.Name)
                   and node.value.func.id == "_windows_stage1_phase"]
     assert boundaries == ["owner", "model", "rss-current", "rss-peak", "command", "budget"]
-    assert max(len(value) + 1 for value in boundaries) <= 12
+    command = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                   and node.name == "command")
+    command_boundaries = [ast.literal_eval(node.value.args[1]) for node in command.body
+                          if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                          and isinstance(node.value.func, ast.Name)
+                          and node.value.func.id == "_windows_stage1_phase"]
+    assert command_boundaries == ["abspath", "argv", "quote"]
+    assert max(len(value) + 1 for value in boundaries + command_boundaries) <= 12
 
 
 @pytest.mark.parametrize("valid_token", [False, True])
