@@ -18,10 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 PROCESS_TEST = "tests/python/test_worker_size_prior_processes.py"
 CLOSURE_TEST = "tests/integration/test_worker_size_prior_closed_world.py"
+EXIT_TEST = "tests/python/test_owned_windows_exit.py"
+EXIT_INPUTS = (EXIT_TEST, "tests/c/test_owned_linux_c_exports.py",
+               "tests/c/fixtures/owned_linux_c_exports/exit_lifecycle.c",
+               "tests/c/fixtures/owned_linux_c_exports/immediate_bypass.c")
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST)
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 58, 0)
+HOST_COUNTS = (80, 3, 64, 0)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -44,7 +48,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS,
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),
                        "version": sys.version}
@@ -302,6 +306,9 @@ def run(out, phase):
                     out / "runtime-build", 1200, build_env)
             receipt["runtime"] = runtime_identity(archive)
             env.update(PCC_RUNTIME_ARCHIVE=str(archive), PCC_TEST_NO_NATIVE_PROVISIONING="1")
+            if sys.platform == "win32":
+                run_pytest(out, "windows-exit-host", [EXIT_TEST], env, counts=(8,))
+                run_pytest(out, "windows-exit-native", [EXIT_TEST], env, integration=True, counts=(6,))
             native_gate(out, "pcc0", env)
             run_pytest(out, "strict-closure", [CLOSURE_TEST + "::test_worker_size_prior_modules_strict_target_emission"],
                        env, integration=True)

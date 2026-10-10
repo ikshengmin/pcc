@@ -402,3 +402,91 @@ def test_other_platform_entry_keeps_the_original_full_gc_matrix_once():
     constants = [item.value for item in commands[0].elts if isinstance(item, ast.Constant)]
     assert constants[:5] == ["scripts/bootstrap_platform.py", "--gc", "all", "--stage", "3"]
     assert "--runtime-archive" in constants and "2400" in constants and "17179869184" in constants
+
+
+@pytest.mark.parametrize("target,failing", [
+    ("win32", None), ("linux", None), ("darwin", None),
+    ("win32", "windows-exit-host"), ("win32", "windows-exit-native"),
+])
+def test_windows_exit_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, monkeypatch, target, failing):
+    out = tmp_path / "preflight"
+    archive = out / "runtime/libpy_runtime_pcc_py.a"
+    source, runtime = {"source": "fixed"}, {"runtime": "matched"}
+    events = []
+    monkeypatch.setattr(gate, "sys", SimpleNamespace(platform=target, executable="chosen-python"))
+    monkeypatch.setattr(gate, "platform", SimpleNamespace(machine=lambda: "arm64" if target == "darwin" else "x86_64"))
+    monkeypatch.setattr(gate, "source_identity", lambda: source)
+    monkeypatch.setattr(gate, "environment", lambda: {"PCC_RUNTIME_ARCHIVE": "stale", "PCC_TEST_NO_NATIVE_PROVISIONING": "1"})
+
+    def guarded(command, directory, timeout, env):
+        assert command == ["chosen-python", "-m", "pcc.frontends.python.owned_runtime_build", "--output", str(archive)]
+        assert directory == out / "runtime-build" and timeout == 1200
+        assert "PCC_RUNTIME_ARCHIVE" not in env and "PCC_TEST_NO_NATIVE_PROVISIONING" not in env
+        events.append("runtime-build")
+
+    def identity(path):
+        assert path == archive
+        events.append("runtime-identity")
+        return runtime
+
+    def pytest_gate(directory, name, nodes, env, *, integration=False, counts=None):
+        assert directory == out
+        events.append(name)
+        if name.startswith("windows-exit-"):
+            assert target == "win32" and nodes == [gate.EXIT_TEST]
+            assert env["PCC_RUNTIME_ARCHIVE"] == str(archive)
+            assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+            assert integration == (name == "windows-exit-native")
+            assert counts == ((6,) if integration else (8,))
+            assert "runtime-identity" in events
+        elif name == "default-xdist":
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 64, 0) and not integration
+        else:
+            assert name == "strict-closure" and integration
+        if name == failing:
+            raise RuntimeError("original exit gate failure")
+
+    def native(directory, owner, env):
+        assert directory == out and owner == "pcc0"
+        assert env["PCC_RUNTIME_ARCHIVE"] == str(archive)
+        events.append("native-pcc0")
+
+    monkeypatch.setattr(gate, "guarded", guarded)
+    monkeypatch.setattr(gate, "runtime_identity", identity)
+    monkeypatch.setattr(gate, "run_pytest", pytest_gate)
+    monkeypatch.setattr(gate, "native_gate", native)
+    expected = ["default-xdist", "runtime-build", "runtime-identity"]
+    if target == "win32":
+        expected += ["windows-exit-host", "windows-exit-native"]
+    expected += ["native-pcc0", "strict-closure", "runtime-identity"]
+    if failing:
+        with pytest.raises(RuntimeError, match="original exit gate failure"):
+            gate.run(out, "preflight")
+        expected = expected[:expected.index(failing) + 1]
+    else:
+        gate.run(out, "preflight")
+    assert events == expected
+    receipt = json.loads((out / "preflight.json").read_text())
+    assert receipt["status"] == ("FAIL" if failing else "PASS")
+    assert receipt["source"] == source and receipt["runtime"] == runtime
+
+
+def test_windows_exit_changed_shape_inputs_are_bound_and_trigger_ci():
+    assert gate.EXIT_INPUTS == (
+        "tests/python/test_owned_windows_exit.py",
+        "tests/c/test_owned_linux_c_exports.py",
+        "tests/c/fixtures/owned_linux_c_exports/exit_lifecycle.c",
+        "tests/c/fixtures/owned_linux_c_exports/immediate_bypass.c",
+    )
+    tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
+    identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "source_identity")
+    hashes = next(node.value for node in identity.body if isinstance(node, ast.Assign)
+                  and isinstance(node.targets[0], ast.Subscript)
+                  and isinstance(node.targets[0].slice, ast.Constant)
+                  and node.targets[0].slice.value == "test_inputs")
+    assert isinstance(hashes, ast.DictComp)
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "EXIT_INPUTS" for node in hashes.generators[0].iter.elts)
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    for name in gate.EXIT_INPUTS:
+        assert workflow.count('      - "' + name + '"') == 2

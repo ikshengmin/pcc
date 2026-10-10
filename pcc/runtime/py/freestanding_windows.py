@@ -13,9 +13,11 @@ from pcc.unsafe import (
     load_i8, load_i32, load_i64, load_ptr, store_i8, store_i32, store_i64,
     store_ptr, malloc, free, cstr,
     define_global_ptr_null, define_global_i64, define_global_i8,
+    define_global_i32, define_global_null_ptr_array,
     define_thread_local_i32, define_thread_local_ptr_null,
     global_addr, global_load_ptr, global_store_ptr,
     atomic_load_i64, atomic_store_i64, atomic_test_and_set, atomic_clear,
+    atomic_cas_i32, atomic_store_i32, call_void_ptr0, ptr_diff,
     f64_div,
     i64_to_float,
 )
@@ -66,6 +68,17 @@ GetProcAddress = extern("GetProcAddress", (c_ptr, c_ptr), c_ptr)
 FreeLibrary = extern("FreeLibrary", (c_ptr,), c_int)
 GetEnvironmentStringsW = extern("GetEnvironmentStringsW", (), c_ptr)
 FreeEnvironmentStringsW = extern("FreeEnvironmentStringsW", (c_ptr,), c_int)
+c_fflush = extern("fflush", (c_ptr,), c_int32)
+
+
+# Match the owned Linux C lifecycle; no CRT participates on Windows.
+# atexit node: next@0, callback@8, dynamically_allocated@16; 24-byte x64 layout.
+# C requires at least 32 registrations: provide that many without allocation.
+define_global_null_ptr_array("pcc_c_atexit_reserve", 96)
+define_global_i64("pcc_c_atexit_reserve_used", 0)
+define_global_ptr_null("pcc_c_atexit_head")
+define_global_i32("pcc_c_atexit_lock", 0)
+define_global_i32("pcc_c_exit_started", 0)
 
 
 @c_abi_export("pcc_win_error")
@@ -514,6 +527,95 @@ def cpu_query(buffer: c_ptr, size: i64) -> i64:
 @c_abi_export("pcc_win_process_exit")
 def process_exit(status: i64) -> None:
     ExitProcess(status)
+
+
+@c_abi_typed_export("_Exit", "void", ("i32",))
+def immediate_exit(status: i64) -> None:
+    # Immediate exit bypasses callbacks, finalizers and owned stdio buffers.
+    while True:
+        process_exit(status)
+
+
+@c_abi_typed_export("_exit", "void", ("i32",))
+def posix_immediate_exit(status: i64) -> None:
+    immediate_exit(status)
+
+
+@c_abi_export("pcc_c_atexit_acquire")
+def _atexit_acquire() -> None:
+    lock = global_addr("pcc_c_atexit_lock")
+    while atomic_cas_i32(lock, 0, 0, 1, "acquire", "relaxed") != 0:
+        pass
+
+
+@c_abi_export("pcc_c_atexit_release")
+def _atexit_release() -> None:
+    atomic_store_i32(global_addr("pcc_c_atexit_lock"), 0, 0, "release")
+
+
+@c_abi_typed_export("atexit", "i32", ("ptr",))
+def atexit_c(callback: c_ptr) -> i64:
+    # Callbacks are void(void) native function pointers. Registration is
+    # serialized, and callbacks execute outside this lock so they may register
+    # another callback, which becomes the next callback to run.
+    _atexit_acquire()
+    used: i64 = load_i64(global_addr("pcc_c_atexit_reserve_used"), 0)
+    dynamic: i64 = 0
+    if used < 32:
+        node = ptr_add(global_addr("pcc_c_atexit_reserve"), used * 24)
+        store_i64(global_addr("pcc_c_atexit_reserve_used"), 0, used + 1)
+    else:
+        node = malloc(24)
+        if ptr_is_null(node):
+            _atexit_release()
+            return -1
+        dynamic = 1
+    store_ptr(node, 0, load_ptr(global_addr("pcc_c_atexit_head"), 0))
+    store_ptr(node, 8, callback)
+    store_i64(node, 16, dynamic)
+    store_ptr(global_addr("pcc_c_atexit_head"), 0, node)
+    _atexit_release()
+    return 0
+
+
+@c_abi_export("pcc_c_run_exit_callbacks")
+def _run_exit_callbacks() -> None:
+    while True:
+        _atexit_acquire()
+        node = load_ptr(global_addr("pcc_c_atexit_head"), 0)
+        if ptr_is_null(node):
+            _atexit_release()
+            break
+        store_ptr(global_addr("pcc_c_atexit_head"), 0, load_ptr(node, 0))
+        callback = load_ptr(node, 8)
+        dynamic: i64 = load_i64(node, 16)
+        _atexit_release()
+        if dynamic != 0:
+            free(node)
+        call_void_ptr0(callback)
+
+
+@c_abi_typed_export("exit", "void", ("i32",))
+def exit_c(status: i64) -> None:
+    # A second/recursive exit is outside this C lifecycle contract; ensure it
+    # cannot run the same callback twice or deadlock in a callback-held lock.
+    if atomic_cas_i32(global_addr("pcc_c_exit_started"), 0, 0, 1,
+                      "acq_rel", "acquire") != 0:
+        immediate_exit(status)
+    _run_exit_callbacks()
+    # The owned PE linker supplies these bounds, including for empty arrays.
+    # Both direct exit and return from C main reach this same finalizer path.
+    finalizers = global_addr("__fini_array_start")
+    remaining: i64 = ptr_diff(global_addr("__fini_array_end"), finalizers) // 8
+    while remaining > 0:
+        remaining = remaining - 1
+        call_void_ptr0(load_ptr(finalizers, remaining * 8))
+    # A finalizer may register an atexit callback, just like an exit callback.
+    _run_exit_callbacks()
+    c_fflush(null())
+    # ExitProcess closes native handles; flushing owned FILE buffers is
+    # part of normal exit only. A flush error does not change the status.
+    immediate_exit(status)
 
 
 define_thread_local_i32("pcc_win_loader_error", 0)

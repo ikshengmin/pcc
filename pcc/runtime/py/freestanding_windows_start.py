@@ -10,6 +10,7 @@ GetCommandLineW = extern("GetCommandLineW", (), c_ptr)
 CommandLineToArgvW = extern("CommandLineToArgvW", (c_ptr, c_ptr), c_ptr)
 LocalFree = extern("LocalFree", (c_ptr,), c_ptr)
 ExitProcess = extern("ExitProcess", (c_int,), c_void)
+c_exit = extern("exit", (c_int,), c_void)
 utf8 = extern("pcc_win_utf8", (c_ptr,), c_ptr)
 initial_environ = extern("pcc_win_initial_environ", (), c_ptr)
 env_init = extern("pcc_platform_env_init", (c_ptr,), c_int)
@@ -50,9 +51,6 @@ def pcc_windows_start() -> None:
         call_void_ptr0(load_ptr(initializers, index * 8))
         index = index + 1
     status: i64 = main(argc, argv, env)
-    finalizers = global_addr("__fini_array_start")
-    count = ptr_diff(global_addr("__fini_array_end"), finalizers) // 8
-    while count > 0:
-        count = count - 1
-        call_void_ptr0(load_ptr(finalizers, count * 8))
-    ExitProcess(status)
+    # Normal return shares the owned C lifecycle with an explicit exit call.
+    # Startup failures above and the process_exit intrinsic stay immediate.
+    c_exit(status)
