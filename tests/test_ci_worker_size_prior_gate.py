@@ -35,7 +35,7 @@ def put(directory, rows):
 
 
 def test_default_command_retains_project_xdist(tmp_path):
-    assert gate.HOST_FILES[-4:] == (
+    assert gate.HOST_FILES[10:14] == (
         "tests/python/test_host_indexed_process_split.py",
         "tests/python/test_dynamic_handoff_slots.py",
         "tests/python/test_indexed_phase_timing.py",
@@ -47,7 +47,21 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17)
+    assert gate.HOST_COUNTS == (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5)
+    assert gate.HOST_FILES[-2:] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST)
+    assert sum(gate.HOST_COUNTS) == 763 and sum(gate.HOST_COUNTS[:-2]) == 754
+    for path, count in ((gate.X87_PREFIX_TEST, 4), (gate.X87_ENCODING_TEST, 5)):
+        nodes = [node for node in ast.parse((ROOT / path).read_text()).body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
+        assert len(nodes) == count and all(not node.decorator_list for node in nodes)
+    identity_tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
+    identity = next(node for node in identity_tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "source_identity")
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "X87_INPUTS" for node in ast.walk(identity))
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    for path in gate.X87_INPUTS[:5]:
+        assert workflow.count('      - "' + path + '"') == 2
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -57,10 +71,24 @@ def test_default_command_retains_project_xdist(tmp_path):
 
 
 def test_integration_selects_one_owner_without_changing_workers(tmp_path):
-    node = gate.PROCESS_TEST + "::test_size_prior_native_processes_five_collectors[pcc0]"
-    command = gate.pytest_command(tmp_path, [node], integration=True)
-    assert command[-3:] == ["-m", "integration", node]
-    assert "-n0" not in command and "-o" not in command
+    native_tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
+    function = next(node for node in native_tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "native_gate")
+    # Execute only the selector assignments with fake names. Stop before the
+    # first call, filesystem read, guard, import or receipt verification.
+    setup = function.body[:next(index for index, node in enumerate(function.body)
+                               if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call))]
+    assert all(isinstance(node, ast.Assign) for node in setup)
+    for owner in ("pcc0", "pcc1"):
+        scope = {"PROCESS_TEST": gate.PROCESS_TEST, "X87_NATIVE_TEST": gate.X87_NATIVE_TEST, "owner": owner}
+        exec(compile(ast.Module(body=setup, type_ignores=[]), "<native-node-selection-only>", "exec"), scope)
+        worker = gate.PROCESS_TEST + "::test_size_prior_native_processes_five_collectors[" + owner + "]"
+        expected = ([gate.X87_NATIVE_TEST + "::test_x87_tables_native_five_gc[pcc0]", worker]
+                    if owner == "pcc0" else [worker])
+        assert scope["nodes"] == expected
+        command = gate.pytest_command(tmp_path, expected, integration=True)
+        assert command[-len(expected) - 2:] == ["-m", "integration", *expected]
+        assert "-n0" not in command and "-o" not in command
 
 
 @pytest.mark.parametrize(("nodes", "summary"), [
@@ -535,7 +563,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -697,7 +725,8 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
         "worker_resource_plan", "pipeline_frontend_workers",
         "pipeline_frontend_indexed_stage", "pipeline_indexed_handoff", "worker_process_pool",
     )) + ("pcc.backend.self_backend_aarch64_darwin_regalloc",
-          "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
+          "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
+          "pcc.backend.x86_64_encode")
     source = ROOT / ("pcc.backend.self_backend_aarch64_darwin_regalloc".replace(".", "/") + ".py")
     definitions = [node.name for node in ast.parse(source.read_text()).body
                    if isinstance(node, ast.FunctionDef)]
@@ -713,6 +742,47 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     assert "verify_ir_text(section)" in calls
     assert "require_object_symbols(obj.read_bytes(), target, required)" in calls
     assert "emit_indexed_module_file(str(sidecar), str(obj), 'PCO', optimize=False)" in calls
+    assert MODULES[-1] == "pcc.backend.x86_64_encode"
+    changed = next(node for node in module_loop.body if isinstance(node, ast.If)
+                   and ast.unparse(node.test) == "name == 'pcc.backend.x86_64_encode'")
+    strings = [node.value for node in ast.walk(changed) if isinstance(node, ast.Constant)
+               and isinstance(node.value, str)]
+    assert "_pcc_py_module_top_pcc_backend_x86_64_encode" in strings
+    assert "_X87_FIXED" in strings and "_X87_STACK" in strings
+    assert any("py_dict_new" in value for value in strings)
+    assert any("py_bytes_new" in value for value in strings)
+    assert any("py_module_attr_set" in value for value in strings)
+    assert "required.append(initializer)" in calls
+    from tests.integration import test_worker_size_prior_closed_world as control
+    initializer = "_pcc_py_module_top_pcc_backend_x86_64_encode"
+    globals_text = "".join('@".modvar.pcc_backend_x86_64_encode.' + table + '" = global ptr null\n'
+                           for table in ("_X87_FIXED", "_X87_STACK"))
+    body = ("  call ptr @py_dict_new_presized(i64 10)\n" * 2
+            + "  call ptr @py_bytes_new(ptr null, i64 2)\n" * 16
+            + "  call void @py_module_attr_set(ptr null)\n"
+            + '  store ptr null, ptr @".modvar.pcc_backend_x86_64_encode._X87_FIXED"\n'
+            + '  store ptr null, ptr @".modvar.pcc_backend_x86_64_encode._X87_STACK"\n')
+    valid = globals_text + "define void @" + initializer + "() {\n" + body + "  ret void\n}\n"
+    # Dependency-replaced IR-text control only: no parser, compiler or emitter.
+    variants = (valid,
+                valid.replace("py_dict_new_presized", "other", 1),
+                valid.replace("py_bytes_new", "other", 1),
+                valid.replace("_X87_STACK", "wrong_table"),
+                valid.replace("py_module_attr_set", "other"),
+                valid.replace("py_module_attr_set", "py_cpy_unowned"),
+                globals_text)
+    for index, section in enumerate(variants):
+        scope = {"name": "pcc.backend.x86_64_encode", "section": section,
+                 "required": [], "definition_bodies": control._index_definition_bodies(section),
+                 "require_definition": control.require_definition,
+                 "_DEFINITION_BODY": control._DEFINITION_BODY, "re": re}
+        code = compile(ast.Module(body=[changed], type_ignores=[]), "<fake-x87-module-init-text>", "exec")
+        if index == 0:
+            exec(code, scope)
+            assert scope["required"] == [initializer]
+        else:
+            with pytest.raises(AssertionError):
+                exec(code, scope)
 
 
 def test_elf_input_sources_strict_modules_and_workflow_are_bound():
@@ -728,7 +798,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         "tests/python/test_pipeline_self_backend_link_owner.py::"
         "test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
     )
-    assert MODULES[-2:] == ("pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
+    assert MODULES[-3:-1] == ("pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
     tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
     identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "source_identity")
@@ -1041,7 +1111,7 @@ def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypa
             assert json.loads(path.read_text()) == receipt
             assert receipt["progress"][-1] == {"phase": phase, "state": state,
                                                 "module": module, "elapsed_s": 1.25}
-    assert len(publications) == 8 + 4 * len(closure.MODULES) == 40
+    assert len(publications) == 8 + 4 * len(closure.MODULES) == 44
     assert receipt["status"] == "RUNNING" and receipt["sources"] == {"original": "sha"}
     assert receipt["codegen_sha256"] == "original-codegen"
     assert receipt["modules"] == {"done": {"object_sha256": "bytes"}}

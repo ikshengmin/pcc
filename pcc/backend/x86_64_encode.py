@@ -141,6 +141,24 @@ _SET_CONDITIONS = {
 }
 
 
+_X87_FIXED = {
+    "faddp": b"\xde\xc1", "fsubp": b"\xde\xe9",
+    "fmulp": b"\xde\xc9", "fdivp": b"\xde\xf9",
+    "fchs": b"\xd9\xe0", "fabs": b"\xd9\xe1",
+    "fsqrt": b"\xd9\xfa", "fprem": b"\xd9\xf8",
+    "frndint": b"\xd9\xfc", "fldz": b"\xd9\xee",
+}
+
+_X87_STACK = {
+    ("fxch", "st(1)"): b"\xd9\xc9",
+    ("fld", "st(0)"): b"\xd9\xc0",
+    ("fstp", "st(0)"): b"\xdd\xd8",
+    ("fstp", "st(1)"): b"\xdd\xd9",
+    ("fucomip", "st(0), st(1)"): b"\xdf\xe9",
+    ("fnstsw", "ax"): b"\xdf\xe0",
+}
+
+
 def _parse_int(text: str) -> int:
     try:
         return int(text.strip(), 0)
@@ -1068,27 +1086,12 @@ def _encode_instruction_uncached(
     mnemonic = mnemonic.lower()
     # x87 register-stack operations have implicit operands.  Keep the owned
     # dialect finite: these exact spellings are emitted by the fp80 lowering.
-    x87_fixed = {
-        "faddp": b"\xde\xc1", "fsubp": b"\xde\xe9",
-        "fmulp": b"\xde\xc9", "fdivp": b"\xde\xf9",
-        "fchs": b"\xd9\xe0", "fabs": b"\xd9\xe1",
-        "fsqrt": b"\xd9\xfa", "fprem": b"\xd9\xf8",
-        "frndint": b"\xd9\xfc", "fldz": b"\xd9\xee",
-    }
-    if mnemonic in x87_fixed:
+    if mnemonic in _X87_FIXED:
         if rest.strip():
             raise X86EncodeError(f"{mnemonic} takes no operands in the owned dialect")
-        return EncodedInstruction(x87_fixed[mnemonic])
-    x87_stack = {
-        ("fxch", "st(1)"): b"\xd9\xc9",
-        ("fld", "st(0)"): b"\xd9\xc0",
-        ("fstp", "st(0)"): b"\xdd\xd8",
-        ("fstp", "st(1)"): b"\xdd\xd9",
-        ("fucomip", "st(0), st(1)"): b"\xdf\xe9",
-        ("fnstsw", "ax"): b"\xdf\xe0",
-    }
-    if (mnemonic, rest.strip()) in x87_stack:
-        return EncodedInstruction(x87_stack[(mnemonic, rest.strip())])
+        return EncodedInstruction(_X87_FIXED[mnemonic])
+    if (mnemonic, rest.strip()) in _X87_STACK:
+        return EncodedInstruction(_X87_STACK[(mnemonic, rest.strip())])
     if mnemonic == "lock":
         nested_mnemonic = rest.strip().partition(" ")[0].lower()
         if nested_mnemonic not in ("xadd", "cmpxchg"):

@@ -1,4 +1,4 @@
-"""Public eight-module strict closure and real host-target object emission."""
+"""Public nine-module strict closure and real host-target object emission."""
 
 import ast
 from collections import Counter
@@ -17,7 +17,8 @@ MODULES = tuple("pcc.frontends.python." + name for name in (
     "pipeline_frontend_indexed_stage", "pipeline_indexed_handoff",
     "worker_process_pool",
 )) + ("pcc.backend.self_backend_aarch64_darwin_regalloc",
-      "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
+      "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
+      "pcc.backend.x86_64_encode")
 SECTION = re.compile(r"^; ---- module: ([A-Za-z_][\w.]*) ----$", re.M)
 DEFINITION = re.compile(r'^define[^\n]*@"?([A-Za-z_][\w.$]*)"?\(', re.M)
 
@@ -218,7 +219,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
     primary_failed = False
     receipt = {"status": "RUNNING", "target": target, "sources": digests,
                "codegen_sha256": codegen_checksum(), "modules": {},
-               "scope": "public strict full closure and eight actual target objects",
+               "scope": "public strict full closure and nine actual target objects",
                "native_execution": False,
                "compile_profile": _bounded_compile_profile(compile_profile, complete=False)}
     output = tmp_path / "closed-world.ll"
@@ -266,6 +267,26 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
             section = sections.pop(name)
             required = ["user_" + name.replace(".", "_") + "_" + function for function in declared]
             definition_bodies = _index_definition_bodies(section)
+            if name == "pcc.backend.x86_64_encode":
+                initializer = "_pcc_py_module_top_pcc_backend_x86_64_encode"
+                required.append(initializer)
+                require_definition(section, initializer, bodies=definition_bodies)
+                matches = (definition_bodies.get(initializer, []) if definition_bodies is not None
+                           else [match for match in _DEFINITION_BODY.finditer(section)
+                                 if match.group("symbol") == initializer])
+                assert len(matches) == 1
+                initialization = matches[0].group("body")
+                # Actual production globals must be initialized in the owned
+                # module body, not only present as dormant declarations.
+                for table in ("_X87_FIXED", "_X87_STACK"):
+                    symbol = ".modvar.pcc_backend_x86_64_encode." + table
+                    assert re.search(r'^@"?' + re.escape(symbol) + r'"?\s*=\s*[^\n]*\bglobal ptr\b',
+                                     section, re.M), symbol
+                    assert symbol in initialization, symbol
+                assert len(re.findall(r'\bcall\b[^\n]*@"?py_dict_new(?:_presized)?"?\(', initialization)) >= 2
+                assert len(re.findall(r'\bcall\b[^\n]*@"?py_bytes_new"?\(', initialization)) >= 16
+                assert re.search(r'\bcall\b[^\n]*@"?py_module_attr_set"?\(', initialization)
+                del matches, initialization
             for symbol in required:
                 require_definition(section, symbol, bodies=definition_bodies)
             del definition_bodies

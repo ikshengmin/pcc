@@ -58,6 +58,13 @@ REGALLOC_NATIVE_NODES = tuple(
     REGALLOC_TEST + "::test_aarch64_call_result_executes_through_indexed_emission[" + mode + "]"
     for mode in REGALLOC_MODES
 )
+X87_PREFIX_TEST = "tests/python/test_x86_64_x87_table_prefix.py"
+X87_ENCODING_TEST = "tests/python/test_x86_64_x87_table_encoding.py"
+X87_NATIVE_TEST = "tests/python/test_x86_64_x87_table_native.py"
+X87_INPUTS = (X87_PREFIX_TEST, X87_ENCODING_TEST, X87_NATIVE_TEST,
+              "tests/x86_64_x87_reference.py", "tests/x86_64_x87_source.py",
+              "pcc/backend/x86_64_encode.py", "pcc/backend/x86_64_asm_driver.py",
+              "tests/python/owned_regression_support.py")
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_worker_guard_cadence.py",
@@ -69,9 +76,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_host_indexed_process_split.py",
               "tests/python/test_dynamic_handoff_slots.py",
               "tests/python/test_indexed_phase_timing.py",
-              "tests/python/test_x86_64_windows_packed_stackmaps.py")
-# Exact frozen host inventory; packed COFF object regressions do not execute native code.
-HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17)
+              "tests/python/test_x86_64_windows_packed_stackmaps.py",
+              X87_PREFIX_TEST, X87_ENCODING_TEST)
+# Existing 754 nodes remain; four fake-prefix and five real encoder/object
+# controls run inside the same bounded default invocation (763 nodes total).
+HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -94,7 +103,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS,
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),
@@ -227,7 +236,13 @@ def runtime_identity(archive):
 def native_gate(out, owner, env):
     node = PROCESS_TEST + "::test_size_prior_native_processes_five_collectors[" + owner + "]"
     name = "native-" + owner
-    run_pytest(out, name, [node], env, integration=True)
+    # The small changed-shape program shares the existing pcc0 invocation and
+    # watchdog. Give it selection priority; the unchanged xdist scheduler may
+    # still run both nodes concurrently and -x may stop in-flight work.
+    # Native-pcc1 scope stays the original worker control.
+    nodes = ([X87_NATIVE_TEST + "::test_x87_tables_native_five_gc[pcc0]", node]
+             if owner == "pcc0" else [node])
+    run_pytest(out, name, nodes, env, integration=True)
     files = list((out / name).rglob("native-worker-size-priors.json"))
     assert len(files) == 1
     receipt = json.loads(files[0].read_text())
