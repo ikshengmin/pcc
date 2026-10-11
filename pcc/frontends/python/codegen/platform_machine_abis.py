@@ -78,6 +78,7 @@ PLATFORM_MACHINE_ABIS = {
     'ResumeThread': ('(c_ptr,)', 'c_int'),
     'RtlGetVersion': ('(c_ptr,)', 'c_int'),
     'SetFileAttributesW': ('(c_ptr,c_int)', 'c_int'),
+    'SetFileTime': ('(c_ptr,c_ptr,c_ptr,c_ptr)', 'c_int'),
     'SetFilePointerEx': ('(c_ptr,c_int64,c_ptr,c_int)', 'c_int'),
     'SetHandleInformation': ('(c_ptr,c_int,c_int)', 'c_int'),
     'SetInformationJobObject': ('(c_ptr,c_int,c_ptr,c_int)', 'c_int'),

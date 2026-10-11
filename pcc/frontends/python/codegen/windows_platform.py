@@ -15,6 +15,7 @@ _SIGNATURES = {
     "access": ("i", "pi"), "mkdir": ("i", "pi"),
     "unlinkat": ("i", "pi"), "rename_file": ("i", "pp"),
     "chmod_file": ("i", "pi"), "clock_gettime": ("i", "ip"),
+    "utime_file": ("i", "pp"),
     "nanosleep": ("i", "pp"), "cpu_query": ("i", "pi"),
     "process_exit": ("v", "i"), "initial_environ": ("p", ""),
     "getenv": ("p", "p"), "setenv": ("i", "ppi"), "unsetenv": ("i", "p"),

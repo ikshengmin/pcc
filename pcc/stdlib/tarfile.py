@@ -15,13 +15,13 @@ import io
 import lzma
 import os
 
-from pcc.extern import c_int32, c_ptr, extern, c_rawptr
-from pcc.unsafe import free, malloc, ptr_is_null, store_i64
+from pcc.extern import c_ptr, extern, c_rawptr
+from pcc.unsafe import (
+    chmod_file, free, malloc, ptr_is_null, store_i64, utime_file,
+)
 
 
 _py_str_utf8: "extern" = extern("py_str_utf8", (c_ptr,), c_rawptr)
-_chmod: "extern" = extern("chmod", (c_ptr, c_int32), c_int32)
-_utime: "extern" = extern("utime", (c_ptr, c_ptr), c_int32)
 
 NUL = b"\0"
 BLOCKSIZE = 512
@@ -625,16 +625,28 @@ class TarFile:
         # Ownership changes and special permission bits are outside this
         # content-only extractor.  Never materialize setuid/setgid/sticky bits
         # from an untrusted archive, even when they are present in the header.
-        if _chmod(_py_str_utf8(target), int(member.mode) & 0o777) != 0:
+        if "\0" in target:
+            raise ExtractError("tar member target contains NUL")
+        if chmod_file(_py_str_utf8(target), int(member.mode) & 0o777) != 0:
             raise ExtractError("could not apply tar member mode")
         times = malloc(16)
         if ptr_is_null(times):
             raise MemoryError("unable to allocate tar timestamp state")
         try:
             timestamp = int(member.mtime)
+            # Check the Python integer before narrowing into the existing
+            # LP64 utimbuf. Windows applies its narrower FILETIME range in
+            # the owned leaf; neither boundary may wrap a large timestamp.
+            if timestamp < -9223372036854775808 or timestamp > 9223372036854775807:
+                raise ExtractError("could not apply tar member timestamp")
             store_i64(times, 0, timestamp)
             store_i64(times, 8, timestamp)
-            if _utime(_py_str_utf8(target), times) != 0:
+            status = utime_file(_py_str_utf8(target), times)
+            if status == 1:
+                raise ExtractError(
+                    "tar member timestamp was applied but its handle could not be closed"
+                )
+            if status != 0:
                 raise ExtractError("could not apply tar member timestamp")
         finally:
             free(times)

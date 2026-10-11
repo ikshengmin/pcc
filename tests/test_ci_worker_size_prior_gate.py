@@ -47,7 +47,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -57,8 +57,10 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[23:25] == (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST)
     assert gate.HOST_FILES[25:27] == (gate.PARSE_BUFFER_TEST, gate.PARSE_BUFFER_OBJECT_TEST)
     assert gate.HOST_FILES[27:28] == (gate.ARM_CALL_VENEERS_TEST,)
-    assert gate.HOST_FILES[28:] == (gate.TREE_RECOVERY_TEST, gate.TREE_RECOVERY_GUARD_TEST)
-    assert sum(gate.HOST_COUNTS) == 1447 and sum(gate.HOST_COUNTS[:28]) == 1351
+    assert gate.HOST_FILES[28:30] == (gate.TREE_RECOVERY_TEST, gate.TREE_RECOVERY_GUARD_TEST)
+    assert gate.HOST_FILES[30:] == (gate.TAR_ATTRIBUTES_TEST, gate.TAR_STRICT_ORACLE_TEST)
+    assert sum(gate.HOST_COUNTS) == 1569 and sum(gate.HOST_COUNTS[:30]) == 1447
+    assert sum(gate.HOST_COUNTS[:28]) == 1351
     assert sum(gate.HOST_COUNTS[:27]) == 1296
     assert sum(gate.HOST_COUNTS[:25]) == 1196
     assert sum(gate.HOST_COUNTS[:23]) == 1041
@@ -668,11 +670,12 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
         assert directory == out and timeout == (1800 if name == "strict-closure" else 300)
         events.append(name)
         if name.startswith("windows-exit-"):
-            assert target == "win32" and nodes == [gate.EXIT_TEST]
+            assert target == "win32"
+            assert nodes == ([gate.EXIT_TEST, gate.TAR_ATTRIBUTES_TEST] if integration else [gate.EXIT_TEST])
             assert env["PCC_RUNTIME_ARCHIVE"] == str(archive)
             assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
             assert integration == (name == "windows-exit-native")
-            assert counts == ((6,) if integration else (8,))
+            assert counts == ((6, 2) if integration else (8,))
             assert "runtime-identity" in events
         elif name.startswith("linux-arm-transport-"):
             assert target == "linux" and machine in ("aarch64", "arm64")
@@ -709,7 +712,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -769,6 +772,20 @@ def test_windows_exit_changed_shape_inputs_are_bound_and_trigger_ci():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     for name in gate.EXIT_INPUTS:
         assert workflow.count('      - "' + name + '"') == 2
+    assert gate.TAR_ATTRIBUTES_INPUTS == (
+        gate.TAR_ATTRIBUTES_TEST, gate.TAR_STRICT_ORACLE_TEST, "tests/tar_attribute_strict_oracle.py",
+        "pcc/backend/pe_x86_64.py", "pcc/frontends/python/codegen/platform_machine_abis.py",
+        "pcc/frontends/python/codegen/unsafe_lowering.py", "pcc/frontends/python/codegen/windows_platform.py",
+        "pcc/frontends/python/pipeline_freestanding.py", "pcc/frontends/python/type_infer.py",
+        "pcc/runtime/py/freestanding_windows.py", "pcc/stdlib/tarfile.py", "pcc/unsafe/__init__.py",
+        "tests/python/owned_regression_support.py", "tests/python/process_timeout.py",
+    )
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "TAR_ATTRIBUTES_INPUTS" for node in hashes.generators[0].iter.elts)
+    for name in gate.TAR_ATTRIBUTES_INPUTS:
+        assert workflow.count('      - "' + name + '"') == 2
+    # Appended coverage uses the existing native call and unchanged CI budget.
+    assert workflow.count("--strict-closure-timeout 1800") == 2
 
 
 def test_linux_arm_transport_inputs_markers_and_exact_inventory_are_bound():
@@ -866,6 +883,7 @@ def test_aarch64_regalloc_gates_keep_tree_and_execution_bounds(tmp_path, monkeyp
 
 def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     from tests.integration.test_worker_size_prior_closed_world import MODULES
+    from tests.tar_attribute_strict_oracle import TAR_COMPILER_MODULES
 
     assert MODULES == tuple("pcc.frontends.python." + name for name in (
         "worker_resource_plan", "pipeline_frontend_workers",
@@ -889,7 +907,12 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
           "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
           "pcc.backend.elf_aarch64_relocations",
           "pcc.backend.x86_64_asm_driver",
-          "pcc.backend.x86_64_encode")
+          "pcc.backend.x86_64_encode") + TAR_COMPILER_MODULES
+    assert TAR_COMPILER_MODULES == (
+        "pcc.backend.pe_x86_64", "pcc.frontends.python.codegen.platform_machine_abis",
+        "pcc.frontends.python.codegen.unsafe_lowering", "pcc.frontends.python.codegen.windows_platform",
+        "pcc.frontends.python.pipeline_freestanding", "pcc.frontends.python.type_infer",
+    )
     source = ROOT / ("pcc.backend.self_backend_aarch64_darwin_regalloc".replace(".", "/") + ".py")
     definitions = [node.name for node in ast.parse(source.read_text()).body
                    if isinstance(node, ast.FunctionDef)]
@@ -897,7 +920,7 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     reference = json.loads((ROOT / "tests/scalar_arena_projection_reference.json").read_text())
     changed_modules = {site["path"][:-3].replace("/", ".") for site in reference["sites"]}
     assert len(changed_modules) == 10 and changed_modules <= set(MODULES)
-    assert len(MODULES) == 26
+    assert len(MODULES) == 32
     assert "pcc.backend.stackmap_host_budget" not in MODULES
     assert "pcc.frontends.python.worker_resource_host_recovery" not in MODULES
     gate_tree = ast.parse((ROOT / gate.CLOSURE_TEST).read_text())
@@ -908,11 +931,12 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     calls = {ast.unparse(node) for node in ast.walk(module_loop) if isinstance(node, ast.Call)}
     assert "_index_definition_bodies(section)" in calls
     assert "require_definition(section, symbol, bodies=definition_bodies)" in calls
+    assert "require_tar_attribute_module(name, source.read_text(), section, sections, require_definition, bodies=definition_bodies)" in calls
     assert "verify_ir_text(section)" in calls
     assert "require_object_symbols(obj.read_bytes(), target, required)" in calls
     assert "emit_indexed_module_file(str(sidecar), str(obj), 'PCO', optimize=False)" in calls
-    assert MODULES[-1] == "pcc.backend.x86_64_encode"
-    assert MODULES[-2] == "pcc.backend.x86_64_asm_driver"
+    assert MODULES[25] == "pcc.backend.x86_64_encode"
+    assert MODULES[24] == "pcc.backend.x86_64_asm_driver"
     rss = next(node for node in module_loop.body if isinstance(node, ast.If)
                and ast.unparse(node.test) == "name == 'pcc.frontends.python.worker_resource_plan'")
     rss_strings = {node.value for node in ast.walk(rss) if isinstance(node, ast.Constant)
@@ -1318,7 +1342,7 @@ def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypa
             assert json.loads(path.read_text()) == receipt
             assert receipt["progress"][-1] == {"phase": phase, "state": state,
                                                 "module": module, "elapsed_s": 1.25}
-    assert len(publications) == 8 + 4 * len(closure.MODULES) == 112
+    assert len(publications) == 8 + 4 * len(closure.MODULES) == 136
     assert receipt["status"] == "RUNNING" and receipt["sources"] == {"original": "sha"}
     assert receipt["codegen_sha256"] == "original-codegen"
     assert receipt["modules"] == {"done": {"object_sha256": "bytes"}}

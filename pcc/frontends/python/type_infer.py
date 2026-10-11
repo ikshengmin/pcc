@@ -728,6 +728,7 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "mkdir_at": TYPE_INT,
     "rename_file": TYPE_INT,
     "chmod_file": TYPE_INT,
+    "utime_file": TYPE_INT,
     "sync_file": TYPE_INT,
     "socket_open": TYPE_INT,
     "socket_connect": TYPE_INT,

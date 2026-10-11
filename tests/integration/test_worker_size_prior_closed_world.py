@@ -1,4 +1,4 @@
-"""Public nineteen-module strict closure and real host-target object emission."""
+"""Public compiler strict closure and real host-target object emission."""
 
 import ast
 from collections import Counter
@@ -10,6 +10,10 @@ import re
 import time
 
 import pytest
+
+from tests.tar_attribute_strict_oracle import (
+    TAR_COMPILER_MODULES, CONSTANT_ONLY_MODULE, require_tar_attribute_module,
+)
 
 
 MODULES = tuple("pcc.frontends.python." + name for name in (
@@ -35,7 +39,7 @@ MODULES = tuple("pcc.frontends.python." + name for name in (
       "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
       "pcc.backend.elf_aarch64_relocations",
       "pcc.backend.x86_64_asm_driver",
-      "pcc.backend.x86_64_encode")
+      "pcc.backend.x86_64_encode") + TAR_COMPILER_MODULES
 SECTION = re.compile(r"^; ---- module: ([A-Za-z_][\w.]*) ----$", re.M)
 DEFINITION = re.compile(r'^define[^\n]*@"?([A-Za-z_][\w.$]*)"?\(', re.M)
 
@@ -283,7 +287,10 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
             _record_closed_world_progress(receipt_path, receipt, started, "module-verify", "started", name)
             declared = [node.name for node in ast.parse(source.read_bytes()).body
                         if isinstance(node, ast.FunctionDef)]
-            assert declared and len(declared) == len(set(declared))
+            if name == CONSTANT_ONLY_MODULE:
+                assert declared == [], "constant-table module acquired unqualified functions"
+            else:
+                assert declared and len(declared) == len(set(declared))
             section = sections.pop(name)
             required = ["user_" + name.replace(".", "_") + "_" + function for function in declared]
             definition_bodies = _index_definition_bodies(section)
@@ -330,6 +337,10 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
                 del matches, initialization
             for symbol in required:
                 require_definition(section, symbol, bodies=definition_bodies)
+            required.extend(require_tar_attribute_module(
+                name, source.read_text(), section, sections,
+                require_definition, bodies=definition_bodies,
+            ))
             del definition_bodies
             module = verify_ir_text(section)
             assert module.triple == target

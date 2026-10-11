@@ -19,6 +19,20 @@ sys.path.insert(0, str(ROOT))
 PROCESS_TEST = "tests/python/test_worker_size_prior_processes.py"
 CLOSURE_TEST = "tests/integration/test_worker_size_prior_closed_world.py"
 EXIT_TEST = "tests/python/test_owned_windows_exit.py"
+TAR_ATTRIBUTES_TEST = "tests/python/test_windows_tar_attributes.py"
+TAR_STRICT_ORACLE_TEST = "tests/test_tar_attribute_strict_oracle.py"
+TAR_ATTRIBUTES_INPUTS = (
+    TAR_ATTRIBUTES_TEST, TAR_STRICT_ORACLE_TEST, "tests/tar_attribute_strict_oracle.py",
+    "pcc/backend/pe_x86_64.py",
+    "pcc/frontends/python/codegen/platform_machine_abis.py",
+    "pcc/frontends/python/codegen/unsafe_lowering.py",
+    "pcc/frontends/python/codegen/windows_platform.py",
+    "pcc/frontends/python/pipeline_freestanding.py",
+    "pcc/frontends/python/type_infer.py",
+    "pcc/runtime/py/freestanding_windows.py", "pcc/stdlib/tarfile.py",
+    "pcc/unsafe/__init__.py", "tests/python/owned_regression_support.py",
+    "tests/python/process_timeout.py",
+)
 EXIT_INPUTS = (EXIT_TEST, "tests/c/test_owned_linux_c_exports.py",
                "tests/c/fixtures/owned_linux_c_exports/exit_lifecycle.c",
                "tests/c/fixtures/owned_linux_c_exports/immediate_bypass.c")
@@ -136,10 +150,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST, RSS_PUBLISHER_TEST,
               ELF_RELOCATION_CONTEXT_TEST, STACKMAP_BUDGET_TEST, STACKMAP_HOST_BUDGET_TEST,
               PARSE_BUFFER_TEST, PARSE_BUFFER_OBJECT_TEST, ARM_CALL_VENEERS_TEST,
-              TREE_RECOVERY_TEST, TREE_RECOVERY_GUARD_TEST)
-# All existing 1349 nodes remain. Virtual recovery and sampler controls
-# share this invocation; strict keeps its 26 owned modules.
-HOST_COUNTS = (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12)
+              TREE_RECOVERY_TEST, TREE_RECOVERY_GUARD_TEST,
+              TAR_ATTRIBUTES_TEST, TAR_STRICT_ORACLE_TEST)
+# All existing 1447 nodes remain. Tar metadata models/object controls and
+# the strict-oracle fake controls share this unchanged default-xdist invocation.
+HOST_COUNTS = (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -162,7 +177,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS, *TREE_RECOVERY_INPUTS,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS, *TREE_RECOVERY_INPUTS, *TAR_ATTRIBUTES_INPUTS,
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),
@@ -440,7 +455,8 @@ def run(out, phase, *, strict_closure_timeout=300):
                 run_pytest(out, "aarch64-regalloc-native", REGALLOC_NATIVE_NODES, env)
             if sys.platform == "win32":
                 run_pytest(out, "windows-exit-host", [EXIT_TEST], env, counts=(8,))
-                run_pytest(out, "windows-exit-native", [EXIT_TEST], env, integration=True, counts=(6,))
+                run_pytest(out, "windows-exit-native", [EXIT_TEST, TAR_ATTRIBUTES_TEST],
+                           env, integration=True, counts=(6, 2))
             elif sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64"):
                 run_pytest(out, "linux-arm-transport-host", [ARM_TRANSPORT_TEST], env, counts=(7,))
                 run_pytest(out, "linux-arm-transport-routes", [ARM_TRANSPORT_TEST], env, integration=True, counts=(8,))

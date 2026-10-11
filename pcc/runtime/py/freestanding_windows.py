@@ -44,6 +44,7 @@ GetTickCount64 = extern("GetTickCount64", (), c_int64)
 socket_nonblocking = extern("pcc_win_socket_nonblocking", (c_int64, c_int64), c_int64)
 socket_poll = extern("pcc_win_socket_poll", (c_int64, c_int64, c_int64), c_int64)
 CreateFileW = extern("CreateFileW", (c_ptr, c_int, c_int, c_ptr, c_int, c_int, c_ptr), c_ptr)
+SetFileTime = extern("SetFileTime", (c_ptr, c_ptr, c_ptr, c_ptr), c_int)
 SetFilePointerEx = extern("SetFilePointerEx", (c_ptr, c_int64, c_ptr, c_int), c_int)
 FlushFileBuffers = extern("FlushFileBuffers", (c_ptr,), c_int)
 GetCurrentProcessId = extern("GetCurrentProcessId", (), c_int)
@@ -440,6 +441,66 @@ def chmod_file(path: c_ptr, mode: i64) -> i64:
             status = error()
     free(wide)
     return status
+
+
+@c_abi_export("pcc_win_filetime_from_seconds")
+def filetime_from_seconds(seconds: i64) -> i64:
+    # This leaf owns positive signed-i64 FILETIME ticks, not the entire
+    # unsigned FILETIME domain. Check before either fixed-width operation.
+    # floor((I64_MAX - 116444736000000000) / 10000000) = 910692730085.
+    # The 1601 epoch itself gives zero, SetFileTime's do-not-change sentinel.
+    if seconds <= -11644473600 or seconds > 910692730085:
+        return -75
+    return seconds * 10000000 + 116444736000000000
+
+
+@c_abi_export("pcc_win_utime_file")
+def utime_file(path: c_ptr, times: c_ptr) -> i64:
+    # Internal tar-reader ABI: two explicit signed-i64 Unix seconds, as on
+    # the existing LP64 POSIX path. No CRT, NULL/current-time or public
+    # os.utime surface is provided. The string caller rejects embedded NUL.
+    # 0 = success; -1 + errno = failure; 1 + errno = timestamps committed,
+    # but CloseHandle failed. The caller must not describe that as unchanged.
+    if ptr_is_null(path) or ptr_is_null(times):
+        pcc_errno_set(22)
+        return -1
+    access_ticks: i64 = filetime_from_seconds(load_i64(times, 0))
+    write_ticks: i64 = filetime_from_seconds(load_i64(times, 8))
+    if access_ticks < 0 or write_ticks < 0:
+        pcc_errno_set(75)
+        return -1
+    wide = utf16(path)
+    if ptr_is_null(wide):
+        pcc_errno_set(22)
+        return -1
+    # Metadata-only, shared, noninheritable existing-file/directory handle.
+    # BACKUP_SEMANTICS permits directories; no privileges are enabled here.
+    handle = CreateFileW(wide, 256, 7, null(), 3, 33554432, null())
+    if ptr_to_int(handle) == -1:
+        status: i64 = error()
+        free(wide)
+        pcc_errno_set(0 - status)
+        return -1
+    free(wide)
+    # FILETIME has low/high DWORDs, not a guaranteed aligned i64 pointer.
+    filetimes = stack_alloc(16)
+    store_i32(filetimes, 0, access_ticks & 4294967295)
+    store_i32(filetimes, 4, access_ticks >> 32)
+    store_i32(filetimes, 8, write_ticks & 4294967295)
+    store_i32(filetimes, 12, write_ticks >> 32)
+    status: i64 = 0
+    if SetFileTime(handle, null(), filetimes, ptr_add(filetimes, 8)) == 0:
+        status = error()
+    closed: i64 = CloseHandle(handle)
+    if status != 0:
+        # Preserve the primary SetFileTime error even if close also failed.
+        pcc_errno_set(0 - status)
+        return -1
+    if closed == 0:
+        status = error()
+        pcc_errno_set(0 - status)
+        return 1
+    return 0
 
 
 @c_abi_export("pcc_win_getcwd")

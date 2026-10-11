@@ -165,6 +165,7 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "mkdir_at": ("mkdirat", "__error"),
         "rename_file": ("rename", "__error"),
         "chmod_file": ("chmod", "__error"),
+        "utime_file": ("utime",),
         "sync_file": ("fsync", "__error"),
         "socket_open": ("socket", "__error"),
         "socket_connect": ("connect", "__error"),

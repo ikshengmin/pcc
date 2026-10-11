@@ -425,6 +425,17 @@ def chmod_file(path: Any, mode: int) -> int:
     _trap("chmod_file")
 
 
+def utime_file(path: Any, times: Any) -> int:
+    """Apply two signed-i64 Unix seconds from a non-null LP64 time buffer.
+
+    Returns zero on success, -1 on failure. Windows may return 1 when the
+    timestamps were applied but handle cleanup failed. This owned boundary
+    is distinct from the standard C utime ABI; it is not public os.utime.
+    The caller must reject embedded NUL before exposing its path as a C string.
+    """
+    _trap("utime_file")
+
+
 def sync_file(fd: int) -> int:
     """Synchronize one open file descriptor's data and metadata."""
     _trap("sync_file")
@@ -1262,6 +1273,7 @@ __all__ = [
     "mkdir_at",
     "rename_file",
     "chmod_file",
+    "utime_file",
     "sync_file",
     "socket_open",
     "socket_connect",

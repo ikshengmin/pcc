@@ -104,6 +104,7 @@ UNSAFE_INTRINSICS = frozenset(
         "mkdir_at",
         "rename_file",
         "chmod_file",
+        "utime_file",
         "sync_file",
         "socket_open",
         "socket_connect",
@@ -344,6 +345,7 @@ _UNSAFE_INTRINSIC_FAMILIES = (
         'mkdir_at',
         'rename_file',
         'chmod_file',
+        'utime_file',
         'sync_file',
     ),
     (
@@ -3158,6 +3160,21 @@ class UnsafeIntrinsicMixin:
             raise NotImplementedError(
                 "pcc.unsafe.chmod_file supports Darwin libSystem and Linux x86_64 raw syscalls"
             )
+        if intrinsic == "utime_file":
+            self._unsafe_expect_arity(intrinsic, expr, 2)
+            if self._target_sys_platform_text() not in ("darwin", "linux"):
+                raise NotImplementedError(
+                    "pcc.unsafe.utime_file supports owned Windows/Linux and Darwin libSystem"
+                )
+            # Windows is selected above through windows_platform, with its
+            # distinct owned result contract. Preserve the existing LP64
+            # utime call and 0/-1 result on Linux and Darwin.
+            path = self._unsafe_ptr_arg(expr.args[0])
+            times = self._unsafe_ptr_arg(expr.args[1])
+            function = self._declare_external_function("utime", _I32, [_CSTR, _CSTR])
+            raw = self.builder.call(function, [path, times],
+                                    name=self._fresh("unsafe.utime_file.i32"))
+            return self.builder.sext(raw, _I64, name=self._fresh("unsafe.utime_file"))
         if intrinsic == "sync_file":
             self._unsafe_expect_arity(intrinsic, expr, 1)
             fd = self._unsafe_i32_arg(expr.args[0])
