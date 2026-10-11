@@ -28,10 +28,12 @@ ARM_TRANSPORT_INPUTS = (ARM_TRANSPORT_TEST, ARM_TRANSPORT_NATIVE_TEST)
 ELF_FORMAT_TEST = "tests/python/test_elf_x86_64.py"
 ELF_STAGING_TEST = "tests/python/test_owned_elf_staging.py"
 ELF_OWNER_TEST = "tests/python/test_pipeline_self_backend_link_owner.py"
+ELF_RELOCATION_CONTEXT_TEST = "tests/python/test_aarch64_relocation_error_context.py"
 ELF_OWNER_NODE = ELF_OWNER_TEST + "::test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
 ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
               "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
-              "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py")
+              "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py",
+              ELF_RELOCATION_CONTEXT_TEST)
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 REGALLOC_FACTS_TEST = "tests/python/test_aarch64_regalloc_single_seed.py"
 SCALAR_PROJECTION_TEST = "tests/python/test_scalar_arena_projections.py"
@@ -94,10 +96,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST,
-              RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST, RSS_PUBLISHER_TEST)
-# All existing 968 nodes remain, including the reader/publication and scalar
-# controls. Forty-two publisher controls share this invocation and its limits.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42)
+              RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST, RSS_PUBLISHER_TEST,
+              ELF_RELOCATION_CONTEXT_TEST)
+# All existing 1010 nodes remain, including the reader/publication, scalar and
+# publisher controls. Sixteen pure relocation controls share this invocation.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42, 16)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

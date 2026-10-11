@@ -1,4 +1,4 @@
-"""Public eighteen-module strict closure and real host-target object emission."""
+"""Public nineteen-module strict closure and real host-target object emission."""
 
 import ast
 from collections import Counter
@@ -27,6 +27,7 @@ MODULES = tuple("pcc.frontends.python." + name for name in (
       "pcc.backend.self_backend_aarch64_darwin_prologue",
       "pcc.backend.self_backend_aarch64_darwin_returns",
       "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
+      "pcc.backend.elf_aarch64_relocations",
       "pcc.backend.x86_64_encode")
 SECTION = re.compile(r"^; ---- module: ([A-Za-z_][\w.]*) ----$", re.M)
 DEFINITION = re.compile(r'^define[^\n]*@"?([A-Za-z_][\w.$]*)"?\(', re.M)
@@ -228,7 +229,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
     primary_failed = False
     receipt = {"status": "RUNNING", "target": target, "sources": digests,
                "codegen_sha256": codegen_checksum(), "modules": {},
-               "scope": "public strict full closure and eighteen actual target objects",
+               "scope": "public strict full closure and nineteen actual target objects",
                "native_execution": False,
                "compile_profile": _bounded_compile_profile(compile_profile, complete=False)}
     output = tmp_path / "closed-world.ll"

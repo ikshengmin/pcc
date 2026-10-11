@@ -929,6 +929,46 @@ def _write_int(image: bytearray, offset: int, value: int, bits: int, signed: boo
     )
 
 
+def _aarch64_relocation_error_context(
+    object_index: int, section_index: int, section_name: str,
+    relocation_offset: int, relocation_type: int,
+    symbol_index: int, symbol_name: str, resolved_symbol_name: str,
+    symbol_address: int, addend: int, target_base: int, place: int,
+    section_file_offset: int, section_address: int,
+    section_size: int, image_size: int,
+) -> str:
+    """Format resident metadata only after a relocation has already failed."""
+    # Units describe the relocation type, not a second evaluation of its check.
+    # The original _signed exception supplies the actual checked value and bits.
+    units = "not-signed-pcrel"
+    if relocation_type in (282, 283):
+        units = "4-byte-instruction-words"
+    elif relocation_type in (275, 311, 541):
+        units = "4096-byte-pages"
+    elif relocation_type in (260, 261, 274):
+        units = "bytes"
+    return (
+        "; rtype=" + str(relocation_type)
+        + "; relocation_units=" + units
+        + "; object_index=" + str(object_index)
+        + "; section_index=" + str(section_index)
+        + "; section=" + repr(section_name)
+        + "; relocation_offset=" + str(relocation_offset)
+        + "; symbol_index=" + str(symbol_index)
+        + "; symbol=" + repr(symbol_name)
+        + "; resolved_symbol=" + repr(resolved_symbol_name)
+        + "; S=" + str(symbol_address)
+        + "; A=" + str(addend)
+        + "; target_base=" + str(target_base)
+        + "; effective_target=" + str(target_base + addend)
+        + "; P=" + str(place)
+        + "; section_file_offset=" + str(section_file_offset)
+        + "; section_address=" + str(section_address)
+        + "; section_size=" + str(section_size)
+        + "; image_size=" + str(image_size)
+    )
+
+
 def link_static_executable(
     objects: list[ElfObject],
     *,
@@ -1231,7 +1271,15 @@ def _link_static_executable_image(
                     apply_relocation(image, patch, relocation.type,
                                      target + relocation.addend, place)
                 except ValueError as exc:
-                    raise ElfError(str(exc)) from exc
+                    raise ElfError(str(exc) + _aarch64_relocation_error_context(
+                        object_index, section_index, section.name,
+                        relocation.offset, relocation.type,
+                        relocation.symbol_index,
+                        objects[object_index].symbols[relocation.symbol_index].name,
+                        _symbol.name, symbol_address, relocation.addend, target, place,
+                        placement.file_offset, placement.address,
+                        section.size, image_size,
+                    )) from exc
             elif relocation.type == R_X86_64_64:
                 _write_int(image, patch, symbol_address + relocation.addend, 64, False)
             elif relocation.type in (R_X86_64_PC32, R_X86_64_PLT32):

@@ -47,13 +47,15 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42, 16)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
     assert gate.HOST_FILES[20] == gate.SCALAR_PROJECTION_TEST
     assert gate.HOST_FILES[21] == gate.RSS_PUBLISHER_TEST
-    assert sum(gate.HOST_COUNTS) == 1010 and sum(gate.HOST_COUNTS[:21]) == 968
+    assert gate.HOST_FILES[22] == gate.ELF_RELOCATION_CONTEXT_TEST
+    assert sum(gate.HOST_COUNTS) == 1026 and sum(gate.HOST_COUNTS[:22]) == 1010
+    assert sum(gate.HOST_COUNTS[:21]) == 968
     assert sum(gate.HOST_COUNTS[:20]) == 879
     assert sum(gate.HOST_COUNTS[:18]) == 844
     assert sum(gate.HOST_COUNTS[:17]) == 812 and sum(gate.HOST_COUNTS[:16]) == 764
@@ -595,7 +597,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42, 16) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -767,6 +769,7 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
           "pcc.backend.self_backend_aarch64_darwin_prologue",
           "pcc.backend.self_backend_aarch64_darwin_returns",
           "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
+          "pcc.backend.elf_aarch64_relocations",
           "pcc.backend.x86_64_encode")
     source = ROOT / ("pcc.backend.self_backend_aarch64_darwin_regalloc".replace(".", "/") + ".py")
     definitions = [node.name for node in ast.parse(source.read_text()).body
@@ -775,7 +778,7 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     reference = json.loads((ROOT / "tests/scalar_arena_projection_reference.json").read_text())
     changed_modules = {site["path"][:-3].replace("/", ".") for site in reference["sites"]}
     assert len(changed_modules) == 10 and changed_modules <= set(MODULES)
-    assert len(MODULES) == 18
+    assert len(MODULES) == 19
     gate_tree = ast.parse((ROOT / gate.CLOSURE_TEST).read_text())
     closure = next(node for node in gate_tree.body if isinstance(node, ast.FunctionDef)
                    and node.name == "test_worker_size_prior_modules_strict_target_emission")
@@ -850,12 +853,15 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         "tests/python/test_pipeline_self_backend_link_owner.py",
         "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
         "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py",
+        "tests/python/test_aarch64_relocation_error_context.py",
     )
     assert gate.ELF_OWNER_NODE == (
         "tests/python/test_pipeline_self_backend_link_owner.py::"
         "test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
     )
-    assert MODULES[-3:-1] == ("pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
+    assert MODULES[-4:-2] == ("pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
+    assert MODULES[-2] == "pcc.backend.elf_aarch64_relocations"
+    assert gate.ELF_RELOCATION_CONTEXT_TEST in gate.HOST_FILES
     tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
     identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "source_identity")
@@ -871,7 +877,8 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
     # This control reads the final test source; it neither imports the ELF
     # test modules nor calls their object emitters or native probes.
     for path, expected, native_count in ((gate.ELF_FORMAT_TEST, 67, 0),
-                                          (gate.ELF_STAGING_TEST, 69, 2)):
+                                          (gate.ELF_STAGING_TEST, 69, 2),
+                                          (gate.ELF_RELOCATION_CONTEXT_TEST, 16, 0)):
         total = gated = 0
         for node in ast.parse((ROOT / path).read_text()).body:
             if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
@@ -1168,7 +1175,7 @@ def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypa
             assert json.loads(path.read_text()) == receipt
             assert receipt["progress"][-1] == {"phase": phase, "state": state,
                                                 "module": module, "elapsed_s": 1.25}
-    assert len(publications) == 8 + 4 * len(closure.MODULES) == 80
+    assert len(publications) == 8 + 4 * len(closure.MODULES) == 84
     assert receipt["status"] == "RUNNING" and receipt["sources"] == {"original": "sha"}
     assert receipt["codegen_sha256"] == "original-codegen"
     assert receipt["modules"] == {"done": {"object_sha256": "bytes"}}

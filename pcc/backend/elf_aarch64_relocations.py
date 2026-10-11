@@ -46,7 +46,10 @@ def relocation_width(kind: int) -> int:
 
 def _signed(value: int, bits: int) -> int:
     if value < -(1 << (bits - 1)) or value >= (1 << (bits - 1)):
-        raise ValueError("AArch64 relocation out of range: " + str(value))
+        raise ValueError(
+            "AArch64 relocation out of range: " + str(value)
+            + "; signed_bits=" + str(bits)
+        )
     return value & ((1 << bits) - 1)
 
 
