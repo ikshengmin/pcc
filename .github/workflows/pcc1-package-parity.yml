@@ -66,6 +66,7 @@ on:
       - "tests/owned_ir_validation.py"
       - "tests/python/test_worker_resource_publication.py"
       - "tests/python/test_worker_resource_reader.py"
+      - "tests/python/test_worker_resource_publisher.py"
       - "tests/test_ci_worker_size_prior_gate.py"
       - "scripts/ci_worker_size_prior_gate.py"
       - "tests/python/test_indexed_process_split_real.py"
@@ -158,6 +159,7 @@ on:
       - "tests/owned_ir_validation.py"
       - "tests/python/test_worker_resource_publication.py"
       - "tests/python/test_worker_resource_reader.py"
+      - "tests/python/test_worker_resource_publisher.py"
       - "tests/test_ci_worker_size_prior_gate.py"
       - "scripts/ci_worker_size_prior_gate.py"
       - "tests/python/test_indexed_process_split_real.py"
@@ -442,7 +444,7 @@ jobs:
       - name: Verify Windows RSS publication with a held reader
         timeout-minutes: 2
         # This isolated test needs no POSIX-only repository conftest fixtures.
-        run: python -m pytest --noconftest -o "addopts=" -x -vv --tb=short tests/python/test_worker_resource_publication.py tests/python/test_worker_resource_reader.py
+        run: python -m pytest --noconftest -o "addopts=" -x -vv --tb=short tests/python/test_worker_resource_publication.py tests/python/test_worker_resource_reader.py tests/python/test_worker_resource_publisher.py
 
   other-platform-native-wheel:
     name: Native wheel / ${{ matrix.platform }}

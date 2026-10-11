@@ -76,7 +76,8 @@ ASSEMBLY_PROFILE_TEST = "tests/python/test_host_assembly_profile.py"
 ASSEMBLY_PROFILE_INPUTS = (ASSEMBLY_PROFILE_TEST, "scripts/host_assembly_profile.py")
 RSS_READER_TEST = "tests/python/test_worker_resource_reader.py"
 RSS_PUBLICATION_TEST = "tests/python/test_worker_resource_publication.py"
-RSS_READER_INPUTS = (RSS_READER_TEST, RSS_PUBLICATION_TEST,
+RSS_PUBLISHER_TEST = "tests/python/test_worker_resource_publisher.py"
+RSS_READER_INPUTS = (RSS_READER_TEST, RSS_PUBLICATION_TEST, RSS_PUBLISHER_TEST,
                      "pcc/frontends/python/worker_resource_plan.py",
                      "pcc/frontends/python/worker_resource_host_windows.py",
                      "pcc/frontends/python/pipeline_import_scan.py")
@@ -93,10 +94,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST,
-              RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST)
-# All existing 879 nodes remain, including the 35 Windows reader/publication
-# controls. Eighty-nine scalar controls share this invocation and its limits.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89)
+              RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST, RSS_PUBLISHER_TEST)
+# All existing 968 nodes remain, including the reader/publication and scalar
+# controls. Forty-two publisher controls share this invocation and its limits.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

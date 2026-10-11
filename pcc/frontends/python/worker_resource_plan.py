@@ -496,6 +496,20 @@ def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
                 pass  # Optional evidence must never change the reader outcome.
 
 
+def _replace_worker_resource(temporary: str, path: str) -> None:
+    # The host adapter needs extended Windows replacement semantics. Preserve
+    # the adjacent local binding/simple guard for native dependency discovery.
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if execution_runtime.platform == "win32":
+            from pcc.frontends.python.worker_resource_host_windows import (
+                replace_worker_resource,
+            )
+            replace_worker_resource(temporary, path)
+            return
+    os.replace(temporary, path)
+
+
 def publish_worker_resource(phase: str) -> None:
     """Publish self high-water RSS at existing worker phase boundaries."""
     path = str(os.environ.get(RESOURCE_REPORT_ENV, "") or "")
@@ -525,7 +539,7 @@ def publish_worker_resource(phase: str) -> None:
     try:
         while True:
             try:
-                os.replace(temporary, path)
+                _replace_worker_resource(temporary, path)
                 break
             except PermissionError as error:
                 remaining = deadline - time.monotonic()

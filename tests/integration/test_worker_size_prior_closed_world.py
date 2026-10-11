@@ -280,10 +280,13 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
             if name == "pcc.frontends.python.worker_resource_plan":
                 # Compile the actual dispatcher and reader in the existing
                 # native strict gate. The host Win32 adapter cannot leak in.
-                assert {"_open_worker_resource", "read_worker_resource"} <= set(declared)
+                assert {"_open_worker_resource", "read_worker_resource",
+                        "_replace_worker_resource", "publish_worker_resource"} <= set(declared)
                 assert "worker_resource_host_windows" not in section
                 for function, callee in (("_open_worker_resource", "py_file_open_options"),
-                                         ("read_worker_resource", "_open_worker_resource")):
+                                         ("read_worker_resource", "_open_worker_resource"),
+                                         ("publish_worker_resource", "_replace_worker_resource"),
+                                         ("_replace_worker_resource", "py_os_replace")):
                     symbol = "user_" + name.replace(".", "_") + "_" + function
                     require_definition(section, symbol, bodies=definition_bodies)
                     matches = (definition_bodies.get(symbol, []) if definition_bodies is not None

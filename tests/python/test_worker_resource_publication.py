@@ -31,7 +31,7 @@ def report(tmp_path, monkeypatch):
 
 def test_publication_waits_for_open_reader_without_partial_report(report, monkeypatch):
     """Use real Windows sharing rules there; emulate only the OS denial elsewhere."""
-    original_replace = os.replace
+    original_replace = policy._replace_worker_resource
     reader_open = threading.Event()
     first_denial = threading.Event()
     errors = []
@@ -47,7 +47,7 @@ def test_publication_waits_for_open_reader_without_partial_report(report, monkey
             first_denial.set()
             raise
 
-    monkeypatch.setattr(policy.os, "replace", replace)
+    monkeypatch.setattr(policy, "_replace_worker_resource", replace)
     before = report.read_bytes()
 
     def publish():
@@ -85,14 +85,14 @@ def test_publication_waits_for_open_reader_without_partial_report(report, monkey
 def test_production_reader_allows_first_replace_and_retains_old_snapshot(report, monkeypatch):
     """Real production opener: Win32 delete sharing is exercised on Windows."""
     before = report.read_text(encoding="utf-8")
-    original_replace = os.replace
+    original_replace = policy._replace_worker_resource
     calls = []
 
     def replace(source, destination):
         calls.append((source, destination))
         return original_replace(source, destination)
 
-    monkeypatch.setattr(policy.os, "replace", replace)
+    monkeypatch.setattr(policy, "_replace_worker_resource", replace)
     monkeypatch.setattr(policy, "time", SimpleNamespace(
         monotonic=lambda: 0,
         sleep=lambda _seconds: pytest.fail("production reader must not require a retry"),
@@ -134,7 +134,7 @@ def test_persistent_windows_denial_is_bounded_and_preserves_old_report(report, m
         sleeps.append(seconds)
         clock[0] += seconds
 
-    monkeypatch.setattr(policy.os, "replace", replace)
+    monkeypatch.setattr(policy, "_replace_worker_resource", replace)
     monkeypatch.setattr(policy, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep))
     with pytest.raises(PermissionError) as caught:
         policy.publish_worker_resource("complete")
@@ -160,7 +160,7 @@ def test_unrelated_replace_errors_are_not_retried(report, monkeypatch, failure):
         calls.append(1)
         raise failure
 
-    monkeypatch.setattr(policy.os, "replace", replace)
+    monkeypatch.setattr(policy, "_replace_worker_resource", replace)
     monkeypatch.setattr(policy, "time", SimpleNamespace(
         monotonic=lambda: 0,
         sleep=lambda _seconds: pytest.fail("unrelated error must not retry"),
@@ -182,7 +182,7 @@ def test_interrupted_retry_preserves_previous_report_and_cleans_temporary(report
     def interrupt(_seconds):
         raise KeyboardInterrupt()
 
-    monkeypatch.setattr(policy.os, "replace", replace)
+    monkeypatch.setattr(policy, "_replace_worker_resource", replace)
     monkeypatch.setattr(policy, "time", SimpleNamespace(monotonic=lambda: 0, sleep=interrupt))
     with pytest.raises(KeyboardInterrupt):
         policy.publish_worker_resource("complete")
@@ -200,7 +200,7 @@ def test_cleanup_failure_does_not_hide_publication_error(report, monkeypatch):
     def unlink(_path):
         raise PermissionError(errno.EACCES, "cleanup denied")
 
-    monkeypatch.setattr(policy.os, "replace", replace)
+    monkeypatch.setattr(policy, "_replace_worker_resource", replace)
     monkeypatch.setattr(policy.os, "unlink", unlink)
     with pytest.raises(PermissionError) as caught:
         policy.publish_worker_resource("complete")
@@ -218,8 +218,10 @@ def test_windows_ci_checks_real_reader_contention_independently_of_bootstrap():
     assert 'python -m pytest --noconftest -o "addopts=" -x -vv --tb=short' in publication
     assert "tests/python/test_worker_resource_publication.py" in publication
     assert "tests/python/test_worker_resource_reader.py" in publication
+    assert "tests/python/test_worker_resource_publisher.py" in publication
     assert "--phase stage1" not in publication
     assert "Verify Windows RSS publication" not in bootstrap
     assert "--phase stage1" in bootstrap
     assert "needs:" not in bootstrap + publication
     assert text.count('      - "tests/python/test_worker_resource_publication.py"') == 2
+    assert text.count('      - "tests/python/test_worker_resource_publisher.py"') == 2
