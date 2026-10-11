@@ -68,7 +68,7 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_host_indexed_process_split.py",
               "tests/python/test_dynamic_handoff_slots.py")
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 145, 0, 4, 12, 25, 7, 11, 20, 21)
+HOST_COUNTS = (80, 3, 145, 0, 4, 29, 25, 7, 11, 20, 21)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

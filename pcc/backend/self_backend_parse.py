@@ -1966,7 +1966,15 @@ def _iter_function_defs(ir_text: str) -> list[tuple[str, str]]:
     in_header = False
     in_body = False
     paren_depth = 0
-    for line in ir_text.splitlines():
+    retire_lines = type(ir_text) is str
+    lines = ir_text.splitlines() if retire_lines else []
+    line_index = 0
+    for line in (lines if retire_lines else ir_text.splitlines()):
+        if retire_lines:
+            # Exact str owns this fresh list. Keep its slots, but release
+            # consumed strings once header/body builders no longer need them.
+            lines[line_index] = ""
+            line_index += 1
         if not in_header and not in_body:
             if not line.startswith("define "):
                 continue

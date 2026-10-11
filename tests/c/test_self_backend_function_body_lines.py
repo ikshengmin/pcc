@@ -200,3 +200,228 @@ def test_parser_retires_consumed_definitions_and_frozen_seed(monkeypatch):
     first, second = (function.indexed_kernel for function in module.functions)
     assert first.block_names == second.block_names == ["entry"]
     assert first.block_fact(0).second == 1 and second.block_fact(0).second == 0
+
+
+def _original_function_prescan(ir_text: str) -> list[tuple[str, str]]:
+    """Split ``define`` bodies from module text.
+
+    The emitted layout opens the body at the end of the header line and
+    closes it on a line of its own; that stays a line-at-a-time scan.  A
+    header line that does not end in ``{`` is scanned for braces outside
+    quoted strings, so a body opened mid-line, or written on the same line
+    (``define i32 @f() { ret i32 42 }``), is found; a struct type in the
+    parameter list sits inside parentheses and is not mistaken for it.
+    """
+    defs: list[tuple[str, str]] = []
+    header_lines: list[str] = []
+    body_lines: list[str] = []
+    in_header = False
+    in_body = False
+    paren_depth = 0
+    for line in ir_text.splitlines():
+        if not in_header and not in_body:
+            if not line.startswith("define "):
+                continue
+            header_lines = []
+            paren_depth = 0
+            in_header = True
+        if in_header:
+            if line.rstrip().endswith("{"):
+                header_lines.append(line)
+                in_header = False
+                in_body = True
+                continue
+            scanned = parser._scan_function_line(line, paren_depth, 0)
+            paren_depth = scanned[0]
+            open_index = scanned[2]
+            if open_index < 0:
+                header_lines.append(line)
+                continue
+            header_lines.append(line[: open_index + 1])
+            close_index = scanned[3]
+            if close_index >= 0:
+                defs.append(
+                    (
+                        "\n".join(header_lines),
+                        line[open_index + 1 : close_index].strip(),
+                    )
+                )
+                header_lines = []
+                in_header = False
+                continue
+            rest = line[open_index + 1 :].strip()
+            body_lines = [rest] if rest else []
+            in_header = False
+            in_body = True
+            continue
+        if line == "}":
+            defs.append(("\n".join(header_lines), "\n".join(body_lines)))
+            header_lines = []
+            body_lines = []
+            in_body = False
+            continue
+        body_lines.append(line)
+    if in_header or in_body:
+        raise BackendUnavailable("self backend saw unterminated function body")
+    return defs
+
+
+_PRESCAN_SHAPES = (
+    _TWO_FUNCTION_IR,
+    'define i32 @one() { ret i32 42 }\ndefine void @two() { ret void }',
+    'define void @mid() { entry:\n  ret void\n}',
+    'define void @"brace{.name}"(ptr %"arg}name") {\nentry:\n ret void\n}',
+    'define {i64, i64} @pair(\n {i64, i64} %value\n) {\nentry:\n ret {i64, i64} %value\n}',
+    'define void @nested() {\nentry:\n ; { nested comment }\n %x = call { i64, i64 } @pair()\n ret void\n}',
+    '; define void @ignored() {\n@text = constant [4 x i8] c"{}\\00"\n'
+    'define void @ok() {\nentry:\n ; } and { are comments\n ret void\n}',
+    '; no functions\n@global = global i64 9',
+    'define void @incomplete(\n i64 %value',
+    'define void @early() { ret void }\ndefine void @late() {\nentry:\n ret void',
+)
+_LINE_BOUNDARIES = ("\n", "\r", "\r\n", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
+
+
+def _prescan_result(scan, text):
+    try:
+        return ("definitions", scan(text))
+    except BackendUnavailable as error:
+        return ("error", type(error), str(error))
+
+
+@pytest.mark.parametrize("text", _PRESCAN_SHAPES, ids=(
+    "multiline", "inline", "midline", "quoted-braces", "aggregate-header",
+    "nested-body", "comments", "empty", "unterminated-header", "unterminated-body",
+))
+def test_function_prescan_retirement_preserves_all_splitlines_boundaries(text):
+    for boundary in _LINE_BOUNDARIES:
+        for trailing in (False, True):
+            sample = boundary.join(text.splitlines()) + (boundary if trailing else "")
+            actual = _prescan_result(_iter_function_defs, sample)
+            expected = _prescan_result(_original_function_prescan, sample)
+            assert actual == expected
+            if actual[0] == "definitions":
+                assert [(header.encode("utf-8"), body.encode("utf-8"))
+                        for header, body in actual[1]] == [
+                    (header.encode("utf-8"), body.encode("utf-8")) for header, body in expected[1]
+                ]
+            else:
+                assert actual[2] == "self backend saw unterminated function body"
+
+
+@pytest.mark.parametrize("kind", ("shared-list", "custom-list", "iterator", "ephemeral-iterable", "split-error", "next-error"))
+def test_function_prescan_subclass_keeps_original_iteration_and_shared_list(kind):
+    def exercise(scan):
+        events = []
+        shared = ["define void @f() {", "entry:", " ret void", "}"]
+        original = tuple(shared)
+        failure = RuntimeError("split-or-next sentinel")
+
+        class CustomList(list):
+            def __iter__(self):
+                events.append("iter")
+                for item in super().__iter__():
+                    events.append(("next", item))
+                    yield item
+            def __setitem__(self, key, value):
+                raise AssertionError("caller-owned list must not be mutated")
+
+        class Text(str):
+            def splitlines(self):
+                events.append("splitlines")
+                if kind == "split-error":
+                    raise failure
+                if kind == "shared-list":
+                    return shared
+                if kind == "custom-list":
+                    return CustomList(shared)
+                def stream():
+                    events.append("iter")
+                    for index, item in enumerate(shared):
+                        if kind == "next-error" and index == 2:
+                            events.append("next-error")
+                            raise failure
+                        events.append(("next", item))
+                        yield item
+                if kind == "ephemeral-iterable":
+                    class Ephemeral:
+                        def __iter__(self):
+                            events.append("iterable-iter")
+                            return stream()
+                        def __del__(self):
+                            events.append("iterable-released")
+                    return Ephemeral()
+                return stream()
+
+        try:
+            result = ("definitions", scan(Text("unused overridden source")))
+        except RuntimeError as error:
+            assert error is failure
+            result = ("error", type(error), str(error))
+        assert tuple(shared) == original
+        if kind == "ephemeral-iterable":
+            assert events[:4] == ["splitlines", "iterable-iter", "iterable-released", "iter"]
+        return result, events
+
+    assert exercise(_iter_function_defs) == exercise(_original_function_prescan)
+
+
+def _prescan_with_observed_splitlines(scan, splitlines):
+    # Replace just the allocation expression to observe otherwise-private
+    # line owners. The actual ownership predicate and scanner stay intact.
+    tree = ast.parse(inspect.getsource(scan))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and ast.unparse(node) == "ir_text.splitlines()"]
+    assert len(calls) == (2 if scan is _iter_function_defs else 1)
+    for call in calls:
+        call.func = ast.Name(id="observed_splitlines", ctx=ast.Load())
+        call.args = [ast.Name(id="ir_text", ctx=ast.Load())]
+    ast.fix_missing_locations(tree)
+    scope = dict(scan.__globals__)
+    scope["observed_splitlines"] = splitlines
+    exec(compile(tree, "<observed-function-prescan-lines>", "exec"), scope)
+    return scope[scan.__name__]
+
+
+def test_function_prescan_retires_consumed_line_owners_before_scan_finishes():
+    text = ("; ignored preface\ndefine void @first() {\nentry:\n ret void\n}\n"
+            "define void @second() {\nentry:\n ret void\n}\n")
+
+    def exercise(scan):
+        refs, visits, writes, held, completed_owners = [], [], [], [], []
+
+        class Line(str):
+            pass
+
+        class Lines(list):
+            def __iter__(self):
+                for index in range(len(self)):
+                    visits.append((index, sum(bool(item) for item in self[:index])))
+                    if index == 5:
+                        completed_owners.append(sum(reference() is not None for reference in refs[:4]))
+                    yield self[index]
+            def __setitem__(self, index, value):
+                writes.append((index, value))
+                super().__setitem__(index, value)
+
+        def splitlines(source):
+            assert type(source) is str and source == text
+            lines = Lines(Line(line) for line in source.splitlines())
+            refs.extend(weakref.ref(line) for line in lines[:])
+            held.append(lines)
+            return lines
+
+        observed = _prescan_with_observed_splitlines(scan, splitlines)
+        result = observed(text)
+        assert len(held) == 1
+        return result, visits, writes, held[0], [reference() is not None for reference in refs], completed_owners
+
+    actual, original = exercise(_iter_function_defs), exercise(_original_function_prescan)
+    count = len(text.splitlines())
+    assert actual[0] == original[0]
+    assert actual[1] == [(index, 0) for index in range(count)]
+    assert original[1] == [(index, index) for index in range(count)]
+    assert actual[2] == [(index, "") for index in range(count)] and original[2] == []
+    assert actual[3] == [""] * count and len(original[3]) == count
+    assert not any(actual[4]) and all(original[4])
+    assert actual[5] == [0] and original[5] == [4]
