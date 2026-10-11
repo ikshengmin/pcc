@@ -271,10 +271,17 @@ def test_packed_coff_keeps_phase_timing_assembly_encode_boundary(enabled):
             assert started == 1
             self.ids.append(phase)
 
+        def begin_assembly(self, phase):
+            assert phase in (13, 14, 15)
+            return self.start()
+
+        def complete_assembly(self, phase, started):
+            self.add(phase, started)
+
     timing = Probe() if enabled else None
     actual = encode_assembly_object(
         assembly, TARGET, stack_map_plans=plans, phase_timing=timing,
     )
     assert actual == expected
     if enabled:
-        assert timing.ids == [9, 10]
+        assert timing.ids == [13, 14, 15, 9, 10]

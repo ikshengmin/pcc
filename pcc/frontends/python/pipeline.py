@@ -1666,32 +1666,60 @@ def _run_self_link_command(
     semantic_layout_policy: Optional[str] = None,
     link_profile_path: Optional[str] = None,
     target_triple: Optional[str] = None,
+    coordinator_timing=None,
 ) -> None:
     try:
-        _pipeline_self_backend_link.run_link_command(
-            cmd,
-            asm_path,
-            tmp_out_path,
-            runtime_archive,
-            extra_link_inputs,
-            verbose,
-            extra_link_args=extra_link_args,
-            needs_libpython=needs_libpython,
-            needs_native_extension_exports=needs_native_extension_exports,
-            pcc_asm_inputs=pcc_asm_inputs,
-            pcc_native_object_inputs=pcc_native_object_inputs,
-            pcc_internal_input_manifest=pcc_internal_input_manifest,
-            semantic_layout_policy=semantic_layout_policy,
-            link_profile_path=link_profile_path,
-            target_triple=target_triple,
-            resolve_self_link_mode=_resolve_self_link_mode,
-            validate_pcc_self_link_surface=_validate_pcc_self_link_surface,
-            repo_root_for_link=_repo_root_for_link,
-            host_python_command=_host_python_command,
-            build_pcc_link_command=_pipeline_self_link.build_pcc_link_command,
-            log=_log,
-            join_strings=_join_strings,
-        )
+        if coordinator_timing is None:
+            _pipeline_self_backend_link.run_link_command(
+                cmd,
+                asm_path,
+                tmp_out_path,
+                runtime_archive,
+                extra_link_inputs,
+                verbose,
+                extra_link_args=extra_link_args,
+                needs_libpython=needs_libpython,
+                needs_native_extension_exports=needs_native_extension_exports,
+                pcc_asm_inputs=pcc_asm_inputs,
+                pcc_native_object_inputs=pcc_native_object_inputs,
+                pcc_internal_input_manifest=pcc_internal_input_manifest,
+                semantic_layout_policy=semantic_layout_policy,
+                link_profile_path=link_profile_path,
+                target_triple=target_triple,
+                resolve_self_link_mode=_resolve_self_link_mode,
+                validate_pcc_self_link_surface=_validate_pcc_self_link_surface,
+                repo_root_for_link=_repo_root_for_link,
+                host_python_command=_host_python_command,
+                build_pcc_link_command=_pipeline_self_link.build_pcc_link_command,
+                log=_log,
+                join_strings=_join_strings,
+            )
+        else:
+            _pipeline_self_backend_link.run_link_command(
+                cmd,
+                asm_path,
+                tmp_out_path,
+                runtime_archive,
+                extra_link_inputs,
+                verbose,
+                extra_link_args=extra_link_args,
+                needs_libpython=needs_libpython,
+                needs_native_extension_exports=needs_native_extension_exports,
+                pcc_asm_inputs=pcc_asm_inputs,
+                pcc_native_object_inputs=pcc_native_object_inputs,
+                pcc_internal_input_manifest=pcc_internal_input_manifest,
+                semantic_layout_policy=semantic_layout_policy,
+                link_profile_path=link_profile_path,
+                target_triple=target_triple,
+                resolve_self_link_mode=_resolve_self_link_mode,
+                validate_pcc_self_link_surface=_validate_pcc_self_link_surface,
+                repo_root_for_link=_repo_root_for_link,
+                host_python_command=_host_python_command,
+                build_pcc_link_command=_pipeline_self_link.build_pcc_link_command,
+                log=_log,
+                join_strings=_join_strings,
+                coordinator_timing=coordinator_timing,
+            )
     except _pipeline_self_backend_link.SelfBackendLinkError as exc:
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
 
@@ -1983,6 +2011,7 @@ def _link_with_self_backend_direct_artifacts(
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
     profile: Optional[dict] = None,
+    coordinator_timing=None,
 ) -> None:
     """Link ordered worker-owned ASM/PCO paths without coordinator copies."""
     if _macho_semantic_layout_enabled():
@@ -2047,19 +2076,35 @@ def _link_with_self_backend_direct_artifacts(
         cmd = [cc] + [path for _kind, path in ordered]
         cmd += list(extra_link_inputs) + ["-o", tmp_out_path]
         started = _profile_begin(profile)
-        _run_self_link_command(
-            cmd,
-            None,
-            tmp_out_path,
-            runtime_archive,
-            extra_link_inputs,
-            verbose,
-            extra_link_args=extra_link_args,
-            needs_libpython=needs_libpython,
-            needs_native_extension_exports=needs_native_extension_exports,
-            pcc_internal_input_manifest=input_manifest,
-            link_profile_path=link_profile_path,
-        )
+        if coordinator_timing is None:
+            _run_self_link_command(
+                cmd,
+                None,
+                tmp_out_path,
+                runtime_archive,
+                extra_link_inputs,
+                verbose,
+                extra_link_args=extra_link_args,
+                needs_libpython=needs_libpython,
+                needs_native_extension_exports=needs_native_extension_exports,
+                pcc_internal_input_manifest=input_manifest,
+                link_profile_path=link_profile_path,
+            )
+        else:
+            _run_self_link_command(
+                cmd,
+                None,
+                tmp_out_path,
+                runtime_archive,
+                extra_link_inputs,
+                verbose,
+                extra_link_args=extra_link_args,
+                needs_libpython=needs_libpython,
+                needs_native_extension_exports=needs_native_extension_exports,
+                pcc_internal_input_manifest=input_manifest,
+                link_profile_path=link_profile_path,
+                coordinator_timing=coordinator_timing,
+            )
         all_native = all(kind == "PCO" for kind, _path in ordered)
         _profile_end(
             profile,
@@ -2072,12 +2117,17 @@ def _link_with_self_backend_direct_artifacts(
         )
         if link_profile_path is not None:
             _record_macho_link_profile(profile, link_profile_path)
+        publish_started = 0
+        if coordinator_timing is not None:
+            publish_started = coordinator_timing.begin("executable_publish")
         _finish_self_backend_executable(
             tmp_out_path,
             out_path,
             profile,
             signature_owned_by_pcc=True,
         )
+        if coordinator_timing is not None:
+            coordinator_timing.complete("executable_publish", publish_started)
 
 
 def _link_with_self_backend_native_objects(
@@ -3211,6 +3261,7 @@ def _compile_python_multi_codegen_parallel(
     verbose: bool,
     profile: Optional[dict] = None,
     artifact_dir: str = "",
+    coordinator_timing=None,
 ) -> Optional[
     tuple[
         list[tuple[str, str]],
@@ -3221,32 +3272,61 @@ def _compile_python_multi_codegen_parallel(
         Optional[list[tuple[str, str]]],
     ]
 ]:
-    return _pipeline_frontend_parallel.compile_parallel(
-        src_paths,
-        module_names,
-        jobs=jobs,
-        entry_module=entry_module,
-        sibling_inits=sibling_inits,
-        libpython_mode=libpython_mode,
-        ir_scaffold_mode=ir_scaffold_mode,
-        verbose=verbose,
-        profile=profile,
-        artifact_dir=artifact_dir,
-        can_spawn_worker=_can_spawn_python_frontend_worker,
-        worker_command_prefix=_python_frontend_worker_command_prefix,
-        compile_uncached=_compile_python_multi_codegen_parallel_uncached,
-        plan_cache=plan_python_frontend_ir_cache,
-        load_cache=load_python_frontend_ir_cache,
-        acquire_cache=acquire_python_frontend_ir_cache,
-        wait_cache=wait_python_frontend_ir_cache,
-        publish_cache=publish_python_frontend_ir_cache,
-        release_cache=release_python_frontend_ir_cache,
-        host_python_command=_host_python_command,
-        source_root=_pcc_source_root_for_host_subprocess,
-        profile_begin=_profile_begin,
-        profile_end=_profile_end,
-        profile_counter=_profile_counter,
-    )
+    if coordinator_timing is None:
+        return _pipeline_frontend_parallel.compile_parallel(
+            src_paths,
+            module_names,
+            jobs=jobs,
+            entry_module=entry_module,
+            sibling_inits=sibling_inits,
+            libpython_mode=libpython_mode,
+            ir_scaffold_mode=ir_scaffold_mode,
+            verbose=verbose,
+            profile=profile,
+            artifact_dir=artifact_dir,
+            can_spawn_worker=_can_spawn_python_frontend_worker,
+            worker_command_prefix=_python_frontend_worker_command_prefix,
+            compile_uncached=_compile_python_multi_codegen_parallel_uncached,
+            plan_cache=plan_python_frontend_ir_cache,
+            load_cache=load_python_frontend_ir_cache,
+            acquire_cache=acquire_python_frontend_ir_cache,
+            wait_cache=wait_python_frontend_ir_cache,
+            publish_cache=publish_python_frontend_ir_cache,
+            release_cache=release_python_frontend_ir_cache,
+            host_python_command=_host_python_command,
+            source_root=_pcc_source_root_for_host_subprocess,
+            profile_begin=_profile_begin,
+            profile_end=_profile_end,
+            profile_counter=_profile_counter,
+        )
+    else:
+        return _pipeline_frontend_parallel.compile_parallel(
+            src_paths,
+            module_names,
+            jobs=jobs,
+            entry_module=entry_module,
+            sibling_inits=sibling_inits,
+            libpython_mode=libpython_mode,
+            ir_scaffold_mode=ir_scaffold_mode,
+            verbose=verbose,
+            profile=profile,
+            artifact_dir=artifact_dir,
+            can_spawn_worker=_can_spawn_python_frontend_worker,
+            worker_command_prefix=_python_frontend_worker_command_prefix,
+            compile_uncached=_compile_python_multi_codegen_parallel_uncached,
+            plan_cache=plan_python_frontend_ir_cache,
+            load_cache=load_python_frontend_ir_cache,
+            acquire_cache=acquire_python_frontend_ir_cache,
+            wait_cache=wait_python_frontend_ir_cache,
+            publish_cache=publish_python_frontend_ir_cache,
+            release_cache=release_python_frontend_ir_cache,
+            host_python_command=_host_python_command,
+            source_root=_pcc_source_root_for_host_subprocess,
+            profile_begin=_profile_begin,
+            profile_end=_profile_end,
+            profile_counter=_profile_counter,
+            coordinator_timing=coordinator_timing,
+        )
 
 
 def _python_frontend_action_dependencies(
@@ -3368,6 +3448,7 @@ def _compile_python_multi_codegen_parallel_uncached(
     profile: Optional[dict] = None,
     action_cache_plan=None,
     artifact_dir: str = "",
+    coordinator_timing=None,
 ) -> Optional[
     tuple[
         list[tuple[str, str]],
@@ -3388,43 +3469,83 @@ def _compile_python_multi_codegen_parallel_uncached(
         # populate this shared map from those ASTs inside build_shared_exports;
         # avoid a second textual import scan in the pcc1 coordinator.
         module_dependency_map = {}
-    return _pipeline_frontend_parallel.compile_parallel_uncached(
-        src_paths,
-        module_names,
-        jobs=jobs,
-        entry_module=entry_module,
-        sibling_inits=sibling_inits,
-        libpython_mode=libpython_mode,
-        ir_scaffold_mode=ir_scaffold_mode,
-        verbose=verbose,
-        profile=profile,
-        action_cache_plan=action_cache_plan,
-        artifact_dir=artifact_dir,
-        can_spawn_worker=_can_spawn_python_frontend_worker,
-        worker_command_prefix=_python_frontend_worker_command_prefix,
-        chunk_count_for_workers=_python_frontend_codegen_chunk_count,
-        codegen_chunks=_python_frontend_codegen_chunks,
-        ast_wire_enabled=_python_frontend_ast_wire_enabled,
-        build_shared_exports_callback=(
-            _build_python_frontend_shared_exports_parallel
-        ),
-        write_manifest=_write_python_frontend_worker_manifest,
-        shell_quote_arg=_shell_quote_arg,
-        worker_arg=_PY_FRONTEND_WORKER_ARG,
-        worker_env_prefix=_python_frontend_worker_env_prefix,
-        join_strings=_join_strings,
-        run_worker_commands=_run_python_frontend_worker_commands,
-        profiled_gc_collect=_profiled_gc_collect,
-        read_worker_ir=_read_python_frontend_worker_ir,
-        profile_begin=_profile_begin,
-        profile_end=_profile_end,
-        profile_counter=_profile_counter,
-        build_action_state=_build_python_frontend_action_state,
-        module_dependency_map=module_dependency_map,
-        pipeline_error=PyPipelineError,
-        auto_source_lanes=auto_source_lanes,
-        run_worker_manifest_in_process=run_python_multi_codegen_worker,
-    )
+    if coordinator_timing is None:
+        return _pipeline_frontend_parallel.compile_parallel_uncached(
+            src_paths,
+            module_names,
+            jobs=jobs,
+            entry_module=entry_module,
+            sibling_inits=sibling_inits,
+            libpython_mode=libpython_mode,
+            ir_scaffold_mode=ir_scaffold_mode,
+            verbose=verbose,
+            profile=profile,
+            action_cache_plan=action_cache_plan,
+            artifact_dir=artifact_dir,
+            can_spawn_worker=_can_spawn_python_frontend_worker,
+            worker_command_prefix=_python_frontend_worker_command_prefix,
+            chunk_count_for_workers=_python_frontend_codegen_chunk_count,
+            codegen_chunks=_python_frontend_codegen_chunks,
+            ast_wire_enabled=_python_frontend_ast_wire_enabled,
+            build_shared_exports_callback=(
+                _build_python_frontend_shared_exports_parallel
+            ),
+            write_manifest=_write_python_frontend_worker_manifest,
+            shell_quote_arg=_shell_quote_arg,
+            worker_arg=_PY_FRONTEND_WORKER_ARG,
+            worker_env_prefix=_python_frontend_worker_env_prefix,
+            join_strings=_join_strings,
+            run_worker_commands=_run_python_frontend_worker_commands,
+            profiled_gc_collect=_profiled_gc_collect,
+            read_worker_ir=_read_python_frontend_worker_ir,
+            profile_begin=_profile_begin,
+            profile_end=_profile_end,
+            profile_counter=_profile_counter,
+            build_action_state=_build_python_frontend_action_state,
+            module_dependency_map=module_dependency_map,
+            pipeline_error=PyPipelineError,
+            auto_source_lanes=auto_source_lanes,
+            run_worker_manifest_in_process=run_python_multi_codegen_worker,
+        )
+    else:
+        return _pipeline_frontend_parallel.compile_parallel_uncached(
+            src_paths,
+            module_names,
+            jobs=jobs,
+            entry_module=entry_module,
+            sibling_inits=sibling_inits,
+            libpython_mode=libpython_mode,
+            ir_scaffold_mode=ir_scaffold_mode,
+            verbose=verbose,
+            profile=profile,
+            action_cache_plan=action_cache_plan,
+            artifact_dir=artifact_dir,
+            can_spawn_worker=_can_spawn_python_frontend_worker,
+            worker_command_prefix=_python_frontend_worker_command_prefix,
+            chunk_count_for_workers=_python_frontend_codegen_chunk_count,
+            codegen_chunks=_python_frontend_codegen_chunks,
+            ast_wire_enabled=_python_frontend_ast_wire_enabled,
+            build_shared_exports_callback=(
+                _build_python_frontend_shared_exports_parallel
+            ),
+            write_manifest=_write_python_frontend_worker_manifest,
+            shell_quote_arg=_shell_quote_arg,
+            worker_arg=_PY_FRONTEND_WORKER_ARG,
+            worker_env_prefix=_python_frontend_worker_env_prefix,
+            join_strings=_join_strings,
+            run_worker_commands=_run_python_frontend_worker_commands,
+            profiled_gc_collect=_profiled_gc_collect,
+            read_worker_ir=_read_python_frontend_worker_ir,
+            profile_begin=_profile_begin,
+            profile_end=_profile_end,
+            profile_counter=_profile_counter,
+            build_action_state=_build_python_frontend_action_state,
+            module_dependency_map=module_dependency_map,
+            pipeline_error=PyPipelineError,
+            auto_source_lanes=auto_source_lanes,
+            run_worker_manifest_in_process=run_python_multi_codegen_worker,
+            coordinator_timing=coordinator_timing,
+        )
 
 
 _COMPILED_MODULE_IMPORT_PREFIXES = (
@@ -3626,6 +3747,7 @@ def compile_python_multi(
     total_ir_bytes_before_passes = 0
     parallel_codegen_result = None
     direct_native_object_dir = ""
+    coordinator_timing = None
     frontend_jobs = _python_frontend_jobs_for_sources(src_paths)
     _profile_counter(profile, "multi_frontend_jobs", frontend_jobs)
     _profile_counter(
@@ -3649,20 +3771,51 @@ def compile_python_multi(
             direct_native_object_dir = _prepare_direct_native_object_dir(
                 out_path
             )
+            try:
+                if (
+                    sys.platform.startswith("linux")
+                    and _python_frontend_worker_timing_enabled()
+                    and not str(
+                        os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or ""
+                    ).strip()
+                    and not str(
+                        os.environ.get("PCC_DEFER_FRONTEND_CODEGEN_PLAN", "") or ""
+                    ).strip()
+                ):
+                    from pcc.backend.indexed_phase_timing import CoarsePhaseTiming
+                    coordinator_timing = CoarsePhaseTiming()
+            except BaseException:
+                # Optional diagnostics cannot prevent the existing build.
+                pass
         t = _profile_begin(profile)
         try:
-            parallel_codegen_result = _compile_python_multi_codegen_parallel(
-                src_paths,
-                module_names,
-                jobs=frontend_jobs,
-                entry_module=entry_module,
-                sibling_inits=sibling_inits,
-                libpython_mode=libpython_mode,
-                ir_scaffold_mode=ir_scaffold_mode,
-                verbose=verbose,
-                profile=profile,
-                artifact_dir=direct_native_object_dir,
-            )
+            if coordinator_timing is None:
+                parallel_codegen_result = _compile_python_multi_codegen_parallel(
+                    src_paths,
+                    module_names,
+                    jobs=frontend_jobs,
+                    entry_module=entry_module,
+                    sibling_inits=sibling_inits,
+                    libpython_mode=libpython_mode,
+                    ir_scaffold_mode=ir_scaffold_mode,
+                    verbose=verbose,
+                    profile=profile,
+                    artifact_dir=direct_native_object_dir,
+                )
+            else:
+                parallel_codegen_result = _compile_python_multi_codegen_parallel(
+                    src_paths,
+                    module_names,
+                    jobs=frontend_jobs,
+                    entry_module=entry_module,
+                    sibling_inits=sibling_inits,
+                    libpython_mode=libpython_mode,
+                    ir_scaffold_mode=ir_scaffold_mode,
+                    verbose=verbose,
+                    profile=profile,
+                    artifact_dir=direct_native_object_dir,
+                    coordinator_timing=coordinator_timing,
+                )
         except Exception:
             _remove_direct_native_object_dir(direct_native_object_dir)
             raise
@@ -3881,12 +4034,17 @@ def compile_python_multi(
             needs_libpython=False,
             needs_native_extension_exports=any_needs_native_extension_exports,
         )
+        runtime_started = 0
+        if coordinator_timing is not None:
+            runtime_started = coordinator_timing.begin("runtime_verify")
         if runtime_archive is not None:
             runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
         elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
             runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
         else:
             runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
+        if coordinator_timing is not None:
+            coordinator_timing.complete("runtime_verify", runtime_started)
         _validate_stage1_checkpoint_link(
             module_direct_artifacts, runtime, any_needs_libpython,
             any_needs_native_extension_exports, total_ir_bytes_before_passes,
@@ -3916,23 +4074,48 @@ def compile_python_multi(
             sum(len(ir_text) for _module_name, ir_text in module_ir_texts),
         )
         try:
-            _link_with_self_backend_direct_artifacts(
-                module_direct_artifacts,
-                out_path,
-                runtime,
-                verbose,
-                needs_libpython=False,
-                needs_native_extension_exports=(
-                    any_needs_native_extension_exports
-                ),
-                extra_link_args=tuple(link_args),
-                profile=profile,
-            )
+            link_started = 0
+            if coordinator_timing is not None:
+                link_started = coordinator_timing.begin("artifact_link")
+            if coordinator_timing is None:
+                _link_with_self_backend_direct_artifacts(
+                    module_direct_artifacts,
+                    out_path,
+                    runtime,
+                    verbose,
+                    needs_libpython=False,
+                    needs_native_extension_exports=(
+                        any_needs_native_extension_exports
+                    ),
+                    extra_link_args=tuple(link_args),
+                    profile=profile,
+                )
+            else:
+                _link_with_self_backend_direct_artifacts(
+                    module_direct_artifacts,
+                    out_path,
+                    runtime,
+                    verbose,
+                    needs_libpython=False,
+                    needs_native_extension_exports=(
+                        any_needs_native_extension_exports
+                    ),
+                    extra_link_args=tuple(link_args),
+                    profile=profile,
+                    coordinator_timing=coordinator_timing,
+                )
+            if coordinator_timing is not None:
+                coordinator_timing.complete("artifact_link", link_started)
         finally:
             if not str(
                 os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or ""
             ).strip():
+                cleanup_started = 0
+                if coordinator_timing is not None:
+                    cleanup_started = coordinator_timing.begin("artifact_cleanup")
                 _remove_direct_native_object_dir(direct_native_object_dir)
+                if coordinator_timing is not None:
+                    coordinator_timing.complete("artifact_cleanup", cleanup_started)
         _profile_end(profile, "compile_python_multi_total", total_start)
         return
     if module_native_object_paths is not None:

@@ -52,6 +52,7 @@ def encode_assembly_object(
             assembly, stack_map_plans,
             function_symbol=_asm_symbol, block_label=_block_label,
             consume_stack_map_plans=consume_stack_map_plans,
+            phase_timing=phase_timing,
         )
         phase_timing.add(9, started)
         started = phase_timing.start()
@@ -64,7 +65,7 @@ def encode_assembly_object(
         if phase_timing is None:
             return emit_relocatable(assemble(assembly, target))
         started = phase_timing.start()
-        obj = assemble(assembly, target)
+        obj = assemble(assembly, target, phase_timing=phase_timing)
         phase_timing.add(9, started)
         started = phase_timing.start()
         encoded = emit_relocatable(obj)

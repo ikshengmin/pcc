@@ -201,6 +201,7 @@ def _unwind_source(text):
 
 def assemble(
     text: str, *, stack_map_plans=None, consume_stack_map_plans=False,
+    phase_timing=None,
 ) -> CoffObject:
     from .x86_64_asm_driver import assemble_file_keeping_labels
     from .elf_x86_64 import SHF_EXECINSTR, SHF_WRITE, SHF_TLS, STB_LOCAL, STT_FUNC
@@ -212,18 +213,29 @@ def assemble(
         markers.update(label for label, _op, _args in actions)
         markers.update((prolog_end, end))
     if stack_map_plans is None:
-        elf = assemble_file_keeping_labels(clean, markers)
+        if phase_timing is None:
+            elf = assemble_file_keeping_labels(clean, markers)
+        else:
+            elf = assemble_file_keeping_labels(clean, markers, phase_timing=phase_timing)
     else:
         from .x86_64_asm_driver import assemble_file_with_stack_maps_keeping_labels
         from .self_backend_x86_64_linux import _asm_symbol, _block_label
 
         # Reuse the owned target-final packer before the unchanged ELF-to-COFF
         # relocation conversion. SEH labels remain available to _append_unwind.
-        elf = assemble_file_with_stack_maps_keeping_labels(
-            clean, stack_map_plans, markers,
-            function_symbol=_asm_symbol, block_label=_block_label,
-            consume_stack_map_plans=consume_stack_map_plans,
-        )
+        if phase_timing is None:
+            elf = assemble_file_with_stack_maps_keeping_labels(
+                clean, stack_map_plans, markers,
+                function_symbol=_asm_symbol, block_label=_block_label,
+                consume_stack_map_plans=consume_stack_map_plans,
+            )
+        else:
+            elf = assemble_file_with_stack_maps_keeping_labels(
+                clean, stack_map_plans, markers,
+                function_symbol=_asm_symbol, block_label=_block_label,
+                consume_stack_map_plans=consume_stack_map_plans,
+                phase_timing=phase_timing,
+            )
     symbols = [CoffSymbol(sym.name, sym.section_index, sym.value,
                           sym.binding != STB_LOCAL, sym.type == STT_FUNC) for sym in elf.symbols[1:]]
     sections = []
@@ -343,11 +355,20 @@ def assemble_object(
 ) -> bytes:
     started = phase_timing.start() if phase_timing is not None else 0
     if stack_map_plans is None:
-        obj = assemble(text)
+        if phase_timing is None:
+            obj = assemble(text)
+        else:
+            obj = assemble(text, phase_timing=phase_timing)
+    elif phase_timing is None:
+        obj = assemble(
+            text, stack_map_plans=stack_map_plans,
+            consume_stack_map_plans=consume_stack_map_plans,
+        )
     else:
         obj = assemble(
             text, stack_map_plans=stack_map_plans,
             consume_stack_map_plans=consume_stack_map_plans,
+            phase_timing=phase_timing,
         )
     if phase_timing is not None:
         phase_timing.add(9, started)

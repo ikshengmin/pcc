@@ -67,9 +67,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/c/test_self_backend_text_index.py",
               "tests/c/test_self_backend_type_parser.py",
               "tests/python/test_host_indexed_process_split.py",
-              "tests/python/test_dynamic_handoff_slots.py")
-# Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21)
+              "tests/python/test_dynamic_handoff_slots.py",
+              "tests/python/test_indexed_phase_timing.py",
+              "tests/python/test_x86_64_windows_packed_stackmaps.py")
+# Exact frozen host inventory; packed COFF object regressions do not execute native code.
+HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

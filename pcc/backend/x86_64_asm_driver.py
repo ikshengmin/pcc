@@ -617,57 +617,80 @@ def _measure_sections(plans, order, symbols, operand_cache=None):
     return labels, section_sizes
 
 
-def assemble_file(asm_text: str) -> ElfObject:
+def assemble_file(asm_text: str, *, phase_timing=None) -> ElfObject:
     """Assemble one complete self-backend file into a validated ElfObject."""
-    return assemble_file_keeping_labels(asm_text, ())
+    if phase_timing is None:
+        return assemble_file_keeping_labels(asm_text, ())
+    return assemble_file_keeping_labels(asm_text, (), phase_timing=phase_timing)
 
 
-def assemble_file_keeping_labels(asm_text: str, keep_labels) -> ElfObject:
+def assemble_file_keeping_labels(asm_text: str, keep_labels, *, phase_timing=None) -> ElfObject:
     """``assemble_file``, also publishing the named unreferenced local labels.
 
     The COFF writer reads its unwind markers from .symtab.  No default
     argument: pcc's closed-world frontend compiles this module into pcc1.
     """
-    return _assemble_file(asm_text, keep_labels, None, None, None)
+    if phase_timing is None:
+        return _assemble_file(asm_text, keep_labels, None, None, None)
+    return _assemble_file(
+        asm_text, keep_labels, None, None, None, phase_timing=phase_timing,
+    )
 
 
 def assemble_file_with_stack_maps(
     asm_text: str, stack_map_plans, *, function_symbol, block_label,
-    consume_stack_map_plans: bool = False,
+    consume_stack_map_plans: bool = False, phase_timing=None,
 ) -> ElfObject:
     """Assemble code plus structured maps, retaining the ordinary ELF checks."""
+    if phase_timing is None:
+        return _assemble_file(
+            asm_text, (), stack_map_plans, function_symbol, block_label,
+            consume_stack_map_plans,
+        )
     return _assemble_file(
         asm_text, (), stack_map_plans, function_symbol, block_label,
-        consume_stack_map_plans,
+        consume_stack_map_plans, phase_timing=phase_timing,
     )
 
 
 def assemble_file_with_stack_maps_keeping_labels(
     asm_text: str, stack_map_plans, keep_labels, *, function_symbol, block_label,
-    consume_stack_map_plans: bool = False,
+    consume_stack_map_plans: bool = False, phase_timing=None,
 ) -> ElfObject:
     """Assemble structured maps while retaining the requested local labels.
 
     COFF consumers retain the same unreferenced SEH marker labels as their
     text-only path; packed metadata still resolves at final machine offsets.
     """
+    if phase_timing is None:
+        return _assemble_file(
+            asm_text, keep_labels, stack_map_plans, function_symbol, block_label,
+            consume_stack_map_plans,
+        )
     return _assemble_file(
         asm_text, keep_labels, stack_map_plans, function_symbol, block_label,
-        consume_stack_map_plans,
+        consume_stack_map_plans, phase_timing=phase_timing,
     )
 
 
 def _assemble_file(
     asm_text: str, keep_labels, stack_map_plans, function_symbol, block_label,
-    consume_stack_map_plans: bool = False,
+    consume_stack_map_plans: bool = False, phase_timing=None,
 ) -> ElfObject:
     if consume_stack_map_plans and not isinstance(stack_map_plans, list):
         raise X86EncodeError("consuming stack maps require a mutable plan list")
+    started = phase_timing.begin_assembly(13) if phase_timing is not None else 0
     plans, order, symbol_meta = _parse_file(asm_text, compact_instructions=True)
+    if phase_timing is not None:
+        phase_timing.complete_assembly(13, started)
     operand_cache = _OperandParseCache()
+    started = phase_timing.begin_assembly(14) if phase_timing is not None else 0
     labels, measured_sizes = _measure_sections(
         plans, order, symbol_meta, operand_cache=operand_cache,
     )
+    if phase_timing is not None:
+        phase_timing.complete_assembly(14, started)
+        started = phase_timing.begin_assembly(15)
     pending: list[_PendingRelocation] = []
     if stack_map_plans:
         from .self_backend_precise_stackmaps import build_x86_64_stack_map_payload
@@ -862,4 +885,7 @@ def _assemble_file(
             measured_sizes[name] if plan.type == SHT_NOBITS else 0,
             tuple(relocations_by_section[name]),
         ))
-    return ElfObject(tuple(sections), tuple(all_symbols))
+    result = ElfObject(tuple(sections), tuple(all_symbols))
+    if phase_timing is not None:
+        phase_timing.complete_assembly(15, started)
+    return result

@@ -39,11 +39,13 @@ def _image_sha256(image: bytearray) -> str:
     return digest.hexdigest()
 
 
-def assemble(text: str, target: str):
+def assemble(text: str, target: str, *, phase_timing=None):
     if is_aarch64_linux_triple(target):
         from .arm64_elf_driver import assemble_file
     elif is_x86_64_linux_triple(target):
         from .x86_64_asm_driver import assemble_file
+        if phase_timing is not None:
+            return assemble_file(text, phase_timing=phase_timing)
     else:
         raise ElfError("unsupported owned ELF target: " + target)
     return assemble_file(text)
@@ -76,7 +78,7 @@ pcc_linux_set_thread_pointer:
 
 def link_inputs(*, target: str, output: str, assembly=(), objects=(),
                 archives=(), manifest: str = "", entry: str = "_start",
-                map_path: str = "") -> None:
+                map_path: str = "", coordinator_timing=None) -> None:
     if not (is_aarch64_linux_triple(target) or is_x86_64_linux_triple(target)):
         raise ElfError("unsupported owned ELF target: " + target)
     archives = list(archives)
@@ -97,6 +99,9 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
            for candidate in (output, output + ".pcc-link.tmp")
            for path in protected_inputs):
         raise ElfError("link output aliases an input")
+    stage_started = 0
+    if coordinator_timing is not None:
+        stage_started = coordinator_timing.begin("elf_stage_inputs")
     store = ElfInputStore(target, archives)
     inputs = [store.stage(path, kind=kind) for kind, path in ordered]
     if not inputs:
@@ -107,17 +112,29 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     inputs.append(_thread_pointer_object(target))
     from .linux_thread_intrinsics import assembly as thread_assembly
     inputs.append(assemble(thread_assembly(expected == EM_AARCH64), target))
+    if coordinator_timing is not None:
+        coordinator_timing.complete("elf_stage_inputs", stage_started)
     selections = [] if map_path else None
+    image_started = 0
+    if coordinator_timing is not None:
+        image_started = coordinator_timing.begin("elf_link_image")
     try:
         image = _link_static_executable_image(
             inputs, entry=entry, archive_selections=selections, _input_store=store,
         )
+        if coordinator_timing is not None:
+            coordinator_timing.complete("elf_link_image", image_started)
     finally:
+        verify_started = 0
+        if coordinator_timing is not None:
+            verify_started = coordinator_timing.begin("elf_verify_inputs")
         store.clear()
     store.verify()
     if manifest and file_sha256(manifest) != manifest_hash:
         raise ElfError("staged ELF manifest identity changed: " + manifest)
     parse_static_executable(image)
+    if coordinator_timing is not None:
+        coordinator_timing.complete("elf_verify_inputs", verify_started)
     map_text = ""
     if map_path:
         # These names come from the very selection that produced the image.
@@ -133,6 +150,9 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
                          + " member_sha256=" + store.member_hashes[index][member])
         map_text = "\n".join(lines) + "\n"
     temporary = output + ".pcc-link.tmp"
+    write_started = 0
+    if coordinator_timing is not None:
+        write_started = coordinator_timing.begin("elf_write_image")
     try:
         with open(temporary, "wb") as stream:
             _write_image_chunks(stream, image)
@@ -150,3 +170,5 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+    if coordinator_timing is not None:
+        coordinator_timing.complete("elf_write_image", write_started)

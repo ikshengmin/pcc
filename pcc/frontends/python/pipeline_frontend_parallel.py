@@ -807,6 +807,7 @@ def compile_parallel(
     verbose: bool,
     profile: Optional[dict] = None,
     artifact_dir: str = "",
+    coordinator_timing=None,
     can_spawn_worker,
     worker_command_prefix,
     compile_uncached,
@@ -827,19 +828,35 @@ def compile_parallel(
         os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", "") or ""
     ).strip().lower() in ("1", "true", "yes", "on")
     if direct_assembly:
-        return compile_uncached(
-            src_paths,
-            module_names,
-            jobs=jobs,
-            entry_module=entry_module,
-            sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
-            ir_scaffold_mode=ir_scaffold_mode,
-            verbose=verbose,
-            profile=profile,
-            action_cache_plan=None,
-            artifact_dir=artifact_dir,
-        )
+        if coordinator_timing is None:
+            return compile_uncached(
+                src_paths,
+                module_names,
+                jobs=jobs,
+                entry_module=entry_module,
+                sibling_inits=sibling_inits,
+                libpython_mode=libpython_mode,
+                ir_scaffold_mode=ir_scaffold_mode,
+                verbose=verbose,
+                profile=profile,
+                action_cache_plan=None,
+                artifact_dir=artifact_dir,
+            )
+        else:
+            return compile_uncached(
+                src_paths,
+                module_names,
+                jobs=jobs,
+                entry_module=entry_module,
+                sibling_inits=sibling_inits,
+                libpython_mode=libpython_mode,
+                ir_scaffold_mode=ir_scaffold_mode,
+                verbose=verbose,
+                profile=profile,
+                action_cache_plan=None,
+                artifact_dir=artifact_dir,
+                coordinator_timing=coordinator_timing,
+            )
     if jobs < 1 or not can_spawn_worker():
         return compile_uncached(
             src_paths,
@@ -949,6 +966,7 @@ def compile_parallel_uncached(
     profile: Optional[dict] = None,
     action_cache_plan=None,
     artifact_dir: str = "",
+    coordinator_timing=None,
     can_spawn_worker,
     worker_command_prefix,
     chunk_count_for_workers,
@@ -1564,6 +1582,9 @@ def compile_parallel_uncached(
         except subprocess.CalledProcessError as exc:
             raise pipeline_error("parallel frontend codegen worker failed") from exc
 
+        result_started = 0
+        if coordinator_timing is not None:
+            result_started = coordinator_timing.begin("result_read")
         started = profile_begin(profile)
         worker_parse_sum_ms = 0
         worker_parse_max_ms = 0
@@ -1821,6 +1842,8 @@ def compile_parallel_uncached(
             total_ir_bytes_before_passes,
             libpython_modules,
         )
+        if coordinator_timing is not None:
+            coordinator_timing.complete("result_read", result_started)
         if module_direct_artifacts is None:
             return result
         return result + (

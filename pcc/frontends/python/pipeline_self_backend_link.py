@@ -286,6 +286,7 @@ def run_link_command(
     semantic_layout_policy: Optional[str] = None,
     link_profile_path: Optional[str] = None,
     target_triple: Optional[str] = None,
+    coordinator_timing=None,
     resolve_self_link_mode,
     validate_pcc_self_link_surface,
     repo_root_for_link,
@@ -343,9 +344,15 @@ def run_link_command(
                 (assembly if kind == "ASM" else object_paths).append(path)
             pcc_internal_input_manifest = None
         if linux_elf:
-            link_elf_inputs(target=selected_target, output=str(tmp_out_path),
-                            assembly=assembly, objects=object_paths, archives=archive_paths,
-                            manifest=pcc_internal_input_manifest or "")
+            if coordinator_timing is None:
+                link_elf_inputs(target=selected_target, output=str(tmp_out_path),
+                                assembly=assembly, objects=object_paths, archives=archive_paths,
+                                manifest=pcc_internal_input_manifest or "")
+            else:
+                link_elf_inputs(target=selected_target, output=str(tmp_out_path),
+                                assembly=assembly, objects=object_paths, archives=archive_paths,
+                                manifest=pcc_internal_input_manifest or "",
+                                coordinator_timing=coordinator_timing)
         else:
             link_pe_inputs(output=str(tmp_out_path), assembly=assembly,
                            objects=object_paths, archives=archive_paths,
