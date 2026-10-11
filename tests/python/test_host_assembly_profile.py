@@ -139,12 +139,23 @@ def _clean_host(monkeypatch):
     monkeypatch.setattr(adapter.sys, "monitoring", SimpleNamespace(
         PROFILER_ID=2, get_tool=lambda tool_id: None), raising=False)
     monkeypatch.delitem(sys.modules, "sitecustomize", raising=False)
-    monkeypatch.setattr(adapter.importlib.util, "find_spec", lambda name: None)
-    monkeypatch.setattr(adapter.importlib.machinery.PathFinder, "find_spec", lambda *args: None)
+    # These are process-global import helpers. Fake only the startup hook;
+    # unrelated lazy imports (including encodings.ascii on 3.13) must work.
+    util_find_spec = adapter.importlib.util.find_spec
+    path_find_spec = adapter.importlib.machinery.PathFinder.find_spec
+    monkeypatch.setattr(adapter.importlib.util, "find_spec",
+                        lambda name, *args, **kwargs: None if name == "sitecustomize"
+                        else util_find_spec(name, *args, **kwargs))
+    monkeypatch.setattr(adapter.importlib.machinery.PathFinder, "find_spec",
+                        lambda fullname, *args, **kwargs: None if fullname == "sitecustomize"
+                        else path_find_spec(fullname, *args, **kwargs))
 
 
 def test_disabled_prepare_has_no_installation_or_import_disturbance(tmp_path, monkeypatch):
-    monkeypatch.setattr(adapter.importlib.util, "find_spec", lambda name: pytest.fail("lookup while disabled"))
+    util_find_spec = adapter.importlib.util.find_spec
+    monkeypatch.setattr(adapter.importlib.util, "find_spec",
+                        lambda name, *args, **kwargs: pytest.fail("lookup while disabled")
+                        if name == "sitecustomize" else util_find_spec(name, *args, **kwargs))
     env = {"KEEP": "value"}
     before = tuple(sys.modules)
     assert adapter.prepare_environment(tmp_path, tmp_path / "absent", env, {}, {}, "", "") is env
@@ -165,10 +176,20 @@ def test_loaded_sitecustomize_is_never_shadowed(tmp_path, monkeypatch):
 def test_discoverable_sitecustomize_and_uninspected_path_fail_closed(tmp_path, monkeypatch):
     _clean_host(monkeypatch)
     env = {adapter.FLAG: "1", "PYTHONPATH": adapter.os.environ.get("PYTHONPATH", "")}
-    monkeypatch.setattr(adapter.importlib.machinery.PathFinder, "find_spec", lambda *args: object())
+    path_find_spec = adapter.importlib.machinery.PathFinder.find_spec
+    monkeypatch.setattr(adapter.importlib.machinery.PathFinder, "find_spec",
+                        lambda fullname, *args, **kwargs: object() if fullname == "sitecustomize"
+                        else path_find_spec(fullname, *args, **kwargs))
+    # Exercise delegation even when another test has already cached this codec.
+    assert adapter.importlib.util.find_spec("encodings.ascii").name == "encodings.ascii"
+    assert adapter.importlib.machinery.PathFinder.find_spec(
+        "encodings.ascii", sys.modules["encodings"].__path__).name == "encodings.ascii"
+    assert adapter.importlib.machinery.PathFinder.find_spec(
+        fullname="encodings.ascii", path=sys.modules["encodings"].__path__,
+        target=None).name == "encodings.ascii"
     assert adapter.prepare_environment(tmp_path, tmp_path / "capture", env, {}, {}, "", adapter.TARGET) is env
     assert json.loads((tmp_path / "capture/install-status.json").read_text())["status"] == "SITECUSTOMIZE_CONFLICT"
-    monkeypatch.setattr(adapter.importlib.machinery.PathFinder, "find_spec", lambda *args: None)
+    monkeypatch.setattr(adapter.importlib.machinery.PathFinder, "find_spec", path_find_spec)
     changed = dict(env, PYTHONPATH="uninspected")
     assert adapter.prepare_environment(tmp_path, tmp_path / "changed", changed, {}, {}, "", adapter.TARGET) is changed
     assert json.loads((tmp_path / "changed/install-status.json").read_text())["status"] == "STARTUP_PATH_CONFLICT"
