@@ -253,6 +253,7 @@ def _validate_object(obj: ElfObject) -> None:
         raise ElfError("ELF object exceeds the finite section/symbol limit")
     names: set[str] = set()
     saw_global = False
+    relocation_widths: dict[int, int] = {}
     for index, section in enumerate(obj.sections, start=1):
         if not section.name or "\0" in section.name or section.name in names:
             raise ElfError(f"invalid or duplicate section name {section.name!r}")
@@ -268,12 +269,37 @@ def _validate_object(obj: ElfObject) -> None:
                 raise ElfError(f"NOBITS section {section.name!r} carries file data")
         elif section.mem_size not in (0, len(section.data)):
             raise ElfError(f"file-backed section {section.name!r} has size drift")
+        # Only the owned immutable ARM records can reuse successful widths.
+        # Decide after this section's original checks: custom earlier sections
+        # may have changed the object, and keep their ordinary protocol path.
+        cache_widths = (
+            type(obj) is ElfObject
+            and type(obj.sections) is tuple
+            and type(obj.symbols) is tuple
+            and type(section) is ElfSection
+            and type(section.data) is bytes
+            and type(section.relocations) is _PackedElfRelocations
+            and type(section.relocations.payload) is bytes
+            and type(section.relocations.offset) is int
+            and type(section.relocations.size) is int
+            and type(obj.machine) is int
+            and obj.machine == EM_AARCH64
+        )
         for relocation in section.relocations:
             if relocation.symbol_index < 0 or relocation.symbol_index >= len(obj.symbols):
                 raise ElfError(
                     f"section {section.name!r} relocation has invalid symbol index"
                 )
-            width = _relocation_width(relocation.type, obj.machine)
+            if cache_widths:
+                width = relocation_widths.get(relocation.type)
+                if width is None:
+                    width = _relocation_width(relocation.type, obj.machine)
+                    # The current ARM helper accepts 21 types, including NONE.
+                    # A future extension still validates through the helper.
+                    if len(relocation_widths) < 21:
+                        relocation_widths[relocation.type] = width
+            else:
+                width = _relocation_width(relocation.type, obj.machine)
             if relocation.offset < 0 or relocation.offset + width > len(section.data):
                 raise ElfError(
                     f"section {section.name!r} relocation is outside its payload"

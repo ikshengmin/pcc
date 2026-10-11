@@ -30,7 +30,8 @@ ELF_STAGING_TEST = "tests/python/test_owned_elf_staging.py"
 ELF_OWNER_TEST = "tests/python/test_pipeline_self_backend_link_owner.py"
 ELF_OWNER_NODE = ELF_OWNER_TEST + "::test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
 ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
-              "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py")
+              "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
+              "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py")
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 CALLEE_SAVED_TEST = "tests/c/test_self_backend_aarch64_callee_saved.py"
 BRANCH_PARITY_TEST = "tests/python/test_aarch64_branch_layout_parity.py"
@@ -81,9 +82,9 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST)
-# All existing 787 nodes remain. Ten ARM adapter tests add only fake modules
-# and a fake profiler, within this same bounded default invocation.
-HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34)
+# All existing 797 nodes remain. One width-cache source contract adds only
+# AST/text checks, within this same bounded default invocation.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -392,7 +393,7 @@ def run(out, phase, *, strict_closure_timeout=300):
                            + "::test_linux_aarch64_transport_executes_tls_varargs_and_managed_reload"],
                            env, integration=True)
             if sys.platform.startswith("linux"):
-                run_pytest(out, "linux-elf-format", [ELF_FORMAT_TEST], env, counts=(31,))
+                run_pytest(out, "linux-elf-format", [ELF_FORMAT_TEST], env, counts=(67,))
                 # Match the staging test's actual pcc_gate predicate exactly.
                 # ARM deselects two x86 executable probes at collection; skips
                 # in any selected case still fail verify_pytest.

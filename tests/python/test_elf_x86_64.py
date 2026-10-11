@@ -642,3 +642,375 @@ def test_owned_x86_assembler_fails_closed_on_dialect_growth():
             raise AssertionError(
                 "unknown x86 assembly shape was silently accepted"
             )
+
+
+# Host-only validation controls: raw RELA bytes and data classes, never an ELF
+# emitter/parser, linker, compiler, runtime, FFI or native executable.
+def _raw_validation_object(rows, *, second_rows=(), machine=elf.EM_AARCH64):
+    def section(name, records):
+        payload = b"".join(elf._RELA.pack(offset, (symbol << 32) | kind, 0)
+                           for offset, symbol, kind in records)
+        return ElfSection(name, SHT_PROGBITS, SHF_ALLOC, 8, b"\0" * 16,
+                          relocations=elf._PackedElfRelocations(payload))
+
+    obj = object.__new__(ElfObject)
+    object.__setattr__(obj, "sections", (section(".data", rows),
+                                         section(".more", second_rows)))
+    object.__setattr__(obj, "symbols", (ElfSymbol.null(),
+                                         ElfSymbol("target", elf.SHN_UNDEF, 0, 0,
+                                                   STB_GLOBAL, STT_OBJECT)))
+    object.__setattr__(obj, "machine", machine)
+    return obj
+
+
+def _validation_outcome(validate, obj):
+    try:
+        result = validate(obj)
+    except Exception as exc:
+        cause = exc.__cause__
+        return (type(exc), str(exc), None if cause is None else (type(cause), str(cause)))
+    return result
+
+
+@pytest.mark.parametrize("rows,second_rows,diagnostic", [
+    ([(0, 1, 257), (8, 1, 257), (16, 1, 0), (16, 1, 0)], [], None),
+    ([], [], None),
+    ([(100, 2, 0xFFFFFFFF)], [], "invalid symbol index"),
+    ([(100, 1, 0xFFFFFFFF)], [], "unsupported AArch64 ELF relocation: 4294967295"),
+    ([(15, 1, 257), (0, 1, 0xFFFFFFFF)], [], "outside its payload"),
+    ([(0, 1, 257), (100, 2, 257)], [], "invalid symbol index"),
+    ([(0, 1, 257), (15, 1, 257)], [], "outside its payload"),
+    ([(16, 1, 0), (17, 1, 0)], [], "outside its payload"),
+    ([(16, 1, 0), (17, 2, 0)], [], "invalid symbol index"),
+    ([(0, 1, 257)], [(15, 1, 257)], "outside its payload"),
+    ([(0, 1, 257)], [(100, 2, 0xFFFFFFFF)], "invalid symbol index"),
+    ([(0, 1, 257)], [(100, 1, 0xFFFFFFFF)], "unsupported AArch64 ELF relocation: 4294967295"),
+])
+def test_arm_packed_width_cache_preserves_first_error(rows, second_rows, diagnostic):
+    from tests.elf_validate_object_preimage import original_validator
+
+    obj = _raw_validation_object(rows, second_rows=second_rows)
+    sections, symbols = obj.sections, obj.symbols
+    frozen = tuple((section.data, section.relocations, section.relocations.payload)
+                   for section in sections)
+    before = _validation_outcome(original_validator(elf), obj)
+    after = _validation_outcome(elf._validate_object, obj)
+    assert after == before
+    assert obj.sections is sections and obj.symbols is symbols and obj.machine == elf.EM_AARCH64
+    for section, (data, relocations, payload) in zip(obj.sections, frozen):
+        assert section.data is data and section.relocations is relocations
+        assert relocations.payload is payload
+    if diagnostic is None:
+        assert after is None
+    else:
+        assert after[0] is ElfError and diagnostic in after[1]
+
+
+def test_arm_packed_width_cache_reuses_all_legal_types_per_object(monkeypatch):
+    from tests.elf_validate_object_preimage import original_validator
+
+    # Independent finite ARM corpus, covering every 0/4/8-byte width.
+    kinds = (0, 257, 258, 260, 261, 274, 275, 277, 278, 282, 283,
+             284, 285, 286, 299, 311, 312, 541, 542, 549, 551)
+    rows = [(16 if kind == 0 else 0, 1, kind) for kind in kinds * 2]
+    obj = _raw_validation_object(rows, second_rows=rows)
+    original = original_validator(elf)
+    helper = elf._relocation_width
+    calls = []
+
+    def width(kind, machine):
+        calls.append((kind, machine))
+        return helper(kind, machine)
+
+    original.__globals__["_relocation_width"] = width
+    monkeypatch.setattr(elf, "_relocation_width", width)
+    assert original(obj) is None and len(calls) == 84
+    calls.clear()
+    assert elf._validate_object(obj) is None
+    assert calls == [(kind, elf.EM_AARCH64) for kind in kinds]
+    # No global cache survives an object validation, even for the same object.
+    assert elf._validate_object(obj) is None
+    assert calls == [(kind, elf.EM_AARCH64) for kind in kinds] * 2
+
+
+def test_arm_packed_width_cache_does_not_cache_failure(monkeypatch):
+    obj = _raw_validation_object([(16, 1, 0), (0, 1, 0xFFFFFFFF)])
+    helper = elf._relocation_width
+    calls = []
+
+    def width(kind, machine):
+        calls.append(kind)
+        return helper(kind, machine)
+
+    monkeypatch.setattr(elf, "_relocation_width", width)
+    for _ in range(2):
+        with pytest.raises(ElfError, match="unsupported AArch64 ELF relocation") as caught:
+            elf._validate_object(obj)
+        assert type(caught.value.__cause__) is ValueError
+    assert calls == [0, 0xFFFFFFFF, 0, 0xFFFFFFFF]
+
+
+def test_arm_packed_width_cache_remains_bounded_on_helper_extension(monkeypatch):
+    # Simulate a future successful helper extension without extending today's
+    # production relocation table. Entries beyond 21 still use the helper.
+    calls = []
+
+    def width(kind, machine):
+        calls.append(kind)
+        assert machine == elf.EM_AARCH64
+        return 0
+
+    monkeypatch.setattr(elf, "_relocation_width", width)
+    rows = [(0, 1, kind) for kind in tuple(range(24)) * 2]
+    assert elf._validate_object(_raw_validation_object(rows)) is None
+    assert calls == list(range(24)) + [21, 22, 23]
+
+
+@pytest.mark.parametrize("shape", [
+    "object-subclass", "custom-object", "sections-list", "symbols-list",
+    "section-subclass", "data-subclass", "packed-subclass", "packed-payload-subclass",
+    "packed-offset-subclass", "packed-size-subclass", "machine-subclass",
+    "relocations-list", "relocations-tuple", "custom-relocations", "x86",
+])
+def test_arm_packed_width_cache_keeps_fallback_helper_calls(monkeypatch, shape):
+    from types import SimpleNamespace
+    from tests.elf_validate_object_preimage import original_validator
+
+    class ObjectSubclass(ElfObject):
+        pass
+
+    class SectionSubclass(ElfSection):
+        pass
+
+    class PackedSubclass(elf._PackedElfRelocations):
+        pass
+
+    class IntSubclass(int):
+        pass
+
+    class BytesSubclass(bytes):
+        pass
+
+    class CustomRelocations:
+        def __iter__(self):
+            return iter((ElfRelocation(0, 1, 0), ElfRelocation(0, 1, 0)))
+
+    obj = _raw_validation_object([(0, 1, 0), (0, 1, 0)])
+    section = obj.sections[0]
+    packed = section.relocations
+    if shape in ("object-subclass", "custom-object"):
+        replacement = (object.__new__(ObjectSubclass) if shape == "object-subclass"
+                       else SimpleNamespace())
+        for name in ("sections", "symbols", "machine"):
+            object.__setattr__(replacement, name, getattr(obj, name))
+        obj = replacement
+    elif shape in ("sections-list", "symbols-list"):
+        name = shape.split("-")[0]
+        object.__setattr__(obj, name, list(getattr(obj, name)))
+    elif shape == "section-subclass":
+        replacement = SectionSubclass(section.name, section.type, section.flags,
+                                      section.align, section.data, section.mem_size, packed)
+        object.__setattr__(obj, "sections", (replacement,))
+    elif shape == "data-subclass":
+        object.__setattr__(section, "data", BytesSubclass(section.data))
+    elif shape == "packed-subclass":
+        object.__setattr__(section, "relocations", PackedSubclass(packed.payload))
+    elif shape == "packed-payload-subclass":
+        object.__setattr__(packed, "payload", BytesSubclass(packed.payload))
+    elif shape in ("packed-offset-subclass", "packed-size-subclass"):
+        name = shape.split("-")[1]
+        object.__setattr__(packed, name, IntSubclass(getattr(packed, name)))
+    elif shape == "machine-subclass":
+        object.__setattr__(obj, "machine", IntSubclass(elf.EM_AARCH64))
+    elif shape == "x86":
+        object.__setattr__(obj, "machine", elf.EM_X86_64)
+    else:
+        rows = tuple(packed)
+        value = (list(rows) if shape == "relocations-list" else rows
+                 if shape == "relocations-tuple" else CustomRelocations())
+        object.__setattr__(section, "relocations", value)
+    helper = elf._relocation_width
+    calls = []
+
+    def width(kind, machine):
+        calls.append((kind, machine))
+        return helper(kind, machine)
+
+    original = original_validator(elf)
+    original.__globals__["_relocation_width"] = width
+    monkeypatch.setattr(elf, "_relocation_width", width)
+    assert original(obj) is None
+    before = calls[:]
+    calls.clear()
+    assert elf._validate_object(obj) is None
+    assert calls == before and len(calls) == 2
+
+
+def test_arm_packed_width_cache_preserves_custom_machine_reads(monkeypatch):
+    from tests.elf_validate_object_preimage import original_validator
+
+    events = []
+
+    class CustomObject(ElfObject):
+        def __getattribute__(self, name):
+            if name == "machine":
+                events.append(name)
+            return super().__getattribute__(name)
+
+    obj = _raw_validation_object([(0, 1, 0), (0, 1, 0)])
+    custom = object.__new__(CustomObject)
+    for name in ("sections", "symbols", "machine"):
+        object.__setattr__(custom, name, getattr(obj, name))
+    assert original_validator(elf)(custom) is None
+    before = events[:]
+    events.clear()
+    assert elf._validate_object(custom) is None
+    assert events == before == ["machine"] * 3
+    events.clear()
+
+    class CustomSection(ElfSection):
+        def __getattribute__(self, name):
+            if name == "relocations":
+                events.append(name)
+            return super().__getattribute__(name)
+
+    section = obj.sections[0]
+    custom_section = CustomSection(section.name, section.type, section.flags,
+                                   section.align, section.data, section.mem_size,
+                                   section.relocations)
+    object.__setattr__(obj, "sections", (custom_section,))
+    assert original_validator(elf)(obj) is None
+    before = events[:]
+    events.clear()
+    assert elf._validate_object(obj) is None
+    assert events == before == ["relocations"]
+
+    # A property-returned temporary must not be retained in a new local: its
+    # finalizer's original placement relative to row checks is observable.
+    class TemporaryRows:
+        def __iter__(self):
+            events.append("iter")
+            return iter((ElfRelocation(0, 1, 0), ElfRelocation(0, 1, 0)))
+
+        def __del__(self):
+            events.append("del")
+
+    class TemporarySection(ElfSection):
+        def __getattribute__(self, name):
+            if name == "relocations":
+                return TemporaryRows()
+            return super().__getattribute__(name)
+
+    temporary = TemporarySection(section.name, section.type, section.flags,
+                                 section.align, section.data)
+    object.__setattr__(obj, "sections", (temporary,))
+    helper = elf._relocation_width
+
+    def width(kind, machine):
+        events.append("width")
+        return helper(kind, machine)
+
+    original = original_validator(elf)
+    original.__globals__["_relocation_width"] = width
+    monkeypatch.setattr(elf, "_relocation_width", width)
+    events.clear()
+    assert original(obj) is None
+    before = events[:]
+    events.clear()
+    assert elf._validate_object(obj) is None
+    assert events == before == ["iter", "del", "width", "width"]
+
+
+def test_arm_packed_width_cache_rechecks_machine_after_custom_section():
+    from tests.elf_validate_object_preimage import original_validator
+
+    class MutatingRelocations:
+        def __init__(self, obj):
+            self.obj = obj
+
+        def __iter__(self):
+            object.__setattr__(self.obj, "machine", elf.EM_X86_64)
+            return iter(())
+
+    def make_object():
+        obj = _raw_validation_object([(0, 1, 257)], second_rows=[(0, 1, 257)])
+        middle = ElfSection(".custom", SHT_PROGBITS, SHF_ALLOC, 8, b"",
+                            relocations=MutatingRelocations(obj))
+        object.__setattr__(obj, "sections", (obj.sections[0], middle, obj.sections[1]))
+        return obj
+
+    before = _validation_outcome(original_validator(elf), make_object())
+    after = _validation_outcome(elf._validate_object, make_object())
+    assert after == before
+    assert after[:2] == (ElfError, "x86_64 relocation type 257 is not supported")
+
+
+def test_arm_packed_width_cache_same_input_alternating_receipt(tmp_path):
+    # CI-only bounded observation in the existing Linux ELF host invocation.
+    # It neither asserts speedup nor invokes a profiler or any native boundary.
+    import json
+    import platform
+    import sys
+    import time
+    from pathlib import Path
+    from tests.elf_validate_object_preimage import (
+        ORIGINAL_VALIDATE_OBJECT_SOURCE,
+        original_validator,
+    )
+
+    kinds = (0, 257, 258, 260, 261, 274, 275, 277, 278, 282, 283,
+             284, 285, 286, 299, 311, 312, 541, 542, 549, 551)
+    rows = [(0, 1, kind) for kind in kinds * 128]
+    obj = _raw_validation_object(rows, second_rows=rows)
+    frozen = tuple((section.data, section.relocations.payload) for section in obj.sections)
+    validators = {"original": original_validator(elf), "candidate": elf._validate_object}
+    rounds = []
+    for round_index, order in enumerate(("original candidate", "candidate original",
+                                         "original candidate", "candidate original")):
+        for name in order.split():
+            started = time.perf_counter_ns()
+            assert validators[name](obj) is None
+            elapsed = time.perf_counter_ns() - started
+            rounds.append({"round": round_index, "validator": name, "elapsed_ns": elapsed})
+    assert frozen == tuple((section.data, section.relocations.payload) for section in obj.sections)
+    assert len(rounds) == 8 and all(row["elapsed_ns"] >= 0 for row in rounds)
+    root = Path(__file__).resolve().parents[2]
+    receipt = {
+        "schema": "pcc.arm-packed-width-cache-ab.v1",
+        "scope": "same frozen synthetic ARM RELA object; host validation only",
+        "input": {"sha256": hashlib.sha256(b"".join(data + rela for data, rela in frozen)).hexdigest(),
+                  "relocations": len(rows) * 2, "sections": len(obj.sections), "legal_types": len(kinds)},
+        "source": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
+            "pcc/backend/elf_x86_64.py", "pcc/backend/elf_aarch64_relocations.py",
+            "tests/elf_validate_object_preimage.py", "tests/python/test_elf_x86_64.py")},
+        "original_function_sha256": hashlib.sha256(ORIGINAL_VALIDATE_OBJECT_SOURCE.encode()).hexdigest(),
+        "runtime": {"implementation": platform.python_implementation(), "version": sys.version,
+                    "executable": sys.executable,
+                    "executable_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
+                    "platform": sys.platform, "machine": platform.machine()},
+        "rounds": rounds,
+        "timing_threshold": None,
+    }
+    output = tmp_path / "arm-packed-width-cache-ab.json"
+    output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    assert output.stat().st_size <= 4096
+    assert json.loads(output.read_text()) == receipt
+
+
+@pytest.mark.parametrize("shape", ["negative-offset", "negative-type", "unhashable-type"])
+def test_arm_packed_width_cache_preserves_generic_row_errors(shape):
+    from tests.elf_validate_object_preimage import original_validator
+
+    class UnhashableInt(int):
+        __hash__ = None
+
+    offset = -1 if shape == "negative-offset" else 0
+    kind = -1 if shape == "negative-type" else UnhashableInt(0)
+    obj = _raw_validation_object([])
+    object.__setattr__(obj.sections[0], "relocations", (ElfRelocation(offset, 1, kind),))
+    before = _validation_outcome(original_validator(elf), obj)
+    assert _validation_outcome(elf._validate_object, obj) == before
+    if shape == "unhashable-type":
+        assert before is None
+    else:
+        assert before[0] is ElfError

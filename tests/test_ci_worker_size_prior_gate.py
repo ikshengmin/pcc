@@ -47,10 +47,10 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34)
     assert gate.HOST_FILES[-3:] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
-    assert sum(gate.HOST_COUNTS) == 797 and sum(gate.HOST_COUNTS[:-1]) == 763
-    assert sum(gate.HOST_COUNTS[:-3]) == 754
+    assert sum(gate.HOST_COUNTS) == 798 and sum(gate.HOST_COUNTS[:-1]) == 764
+    assert sum(gate.HOST_COUNTS[:-3]) == 755
     for path, count in ((gate.X87_PREFIX_TEST, 4), (gate.X87_ENCODING_TEST, 5),
                         (gate.ASSEMBLY_PROFILE_TEST, 34)):
         nodes = [node for node in ast.parse((ROOT / path).read_text()).body
@@ -559,7 +559,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
             assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
             assert "runtime-identity" in events
             if name == "linux-elf-format":
-                assert nodes == [gate.ELF_FORMAT_TEST] and counts == (31,)
+                assert nodes == [gate.ELF_FORMAT_TEST] and counts == (67,)
             elif name == "linux-elf-staging":
                 assert nodes == [gate.ELF_STAGING_TEST]
                 assert counts == ((69,) if machine in ("x86_64", "amd64") else (67,))
@@ -567,7 +567,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -797,6 +797,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         "tests/python/test_owned_elf_staging.py",
         "tests/python/test_pipeline_self_backend_link_owner.py",
         "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
+        "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py",
     )
     assert gate.ELF_OWNER_NODE == (
         "tests/python/test_pipeline_self_backend_link_owner.py::"
@@ -817,7 +818,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         assert workflow.count('      - "' + path + '"') == 2, path
     # This control reads the final test source; it neither imports the ELF
     # test modules nor calls their object emitters or native probes.
-    for path, expected, native_count in ((gate.ELF_FORMAT_TEST, 31, 0),
+    for path, expected, native_count in ((gate.ELF_FORMAT_TEST, 67, 0),
                                           (gate.ELF_STAGING_TEST, 69, 2)):
         total = gated = 0
         for node in ast.parse((ROOT / path).read_text()).body:
@@ -841,7 +842,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
 
 
 @pytest.mark.parametrize("name,nodes,counts", [
-    ("linux-elf-format", [gate.ELF_FORMAT_TEST], (31,)),
+    ("linux-elf-format", [gate.ELF_FORMAT_TEST], (67,)),
     ("linux-elf-staging", [gate.ELF_STAGING_TEST], (69,)),
     ("linux-elf-staging", [gate.ELF_STAGING_TEST], (67,)),
     ("linux-elf-owner", [gate.ELF_OWNER_NODE], None),
@@ -1915,3 +1916,72 @@ def test_pcc1_requires_only_successful_matching_stage1_and_never_builds(tmp_path
     assert calls == ([] if fault else ["native-pcc1"])
     assert json.loads((tmp_path / "pcc1.json").read_text())["status"] == ("FAIL" if fault else "PASS")
     assert not (tmp_path / "preflight.json").exists()
+
+
+def test_arm_packed_width_cache_source_and_observation_contract():
+    # Source-only control: no import or execution of either ELF validator.
+    import copy
+    import hashlib
+
+    oracle_tree = ast.parse((ROOT / "tests/elf_validate_object_preimage.py").read_text())
+    original = ast.literal_eval(next(node.value for node in oracle_tree.body
+                                    if isinstance(node, ast.Assign)
+                                    and node.targets[0].id == "ORIGINAL_VALIDATE_OBJECT_SOURCE"))
+    assert hashlib.sha256(original.encode()).hexdigest() == (
+        "77c35a2eca9f99889622a6423b294885c0df22feeabce0694b61499b9d9533ae")
+    source = (ROOT / "pcc/backend/elf_x86_64.py").read_text()
+    tree = ast.parse(source)
+    candidate = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "_validate_object")
+    restored = copy.deepcopy(candidate)
+    cache = next(node for node in restored.body if isinstance(node, ast.AnnAssign)
+                 and isinstance(node.target, ast.Name) and node.target.id == "relocation_widths")
+    assert ast.unparse(cache) == "relocation_widths: dict[int, int] = {}"
+    restored.body.remove(cache)
+    sections = next(node for node in restored.body if isinstance(node, ast.For)
+                    and ast.unparse(node.target) == "(index, section)")
+    guard = next(node for node in sections.body if isinstance(node, ast.Assign)
+                 and node.targets[0].id == "cache_widths")
+    expected_guard = ast.parse(
+        "type(obj) is ElfObject and type(obj.sections) is tuple and type(obj.symbols) is tuple "
+        "and type(section) is ElfSection and type(section.data) is bytes "
+        "and type(section.relocations) is _PackedElfRelocations "
+        "and type(section.relocations.payload) is bytes "
+        "and type(section.relocations.offset) is int and type(section.relocations.size) is int "
+        "and type(obj.machine) is int and obj.machine == EM_AARCH64", mode="eval").body
+    assert ast.dump(guard.value, include_attributes=False) == ast.dump(
+        expected_guard, include_attributes=False)
+    index = sections.body.index(guard)
+    relocations = sections.body[index + 1]
+    assert isinstance(relocations, ast.For) and ast.unparse(relocations.iter) == "section.relocations"
+    branch = relocations.body[1]
+    assert isinstance(branch, ast.If) and ast.unparse(branch.test) == "cache_widths"
+    expected = ast.parse("""if cache_widths:
+    width = relocation_widths.get(relocation.type)
+    if width is None:
+        width = _relocation_width(relocation.type, obj.machine)
+        if len(relocation_widths) < 21:
+            relocation_widths[relocation.type] = width
+else:
+    width = _relocation_width(relocation.type, obj.machine)
+""").body[0]
+    assert ast.dump(branch) == ast.dump(expected)
+    sections.body.remove(guard)
+    relocations.body[1:2] = branch.orelse
+    # Removing only the declared optimization exactly restores the frozen
+    # validator, including row order, symbol validation and stack-map checks.
+    assert ast.dump(restored) == ast.dump(ast.parse(original).body[0])
+    elf_tests = ast.parse((ROOT / gate.ELF_FORMAT_TEST).read_text())
+    observation = next(node for node in elf_tests.body if isinstance(node, ast.FunctionDef)
+                       and node.name == "test_arm_packed_width_cache_same_input_alternating_receipt")
+    order = next(node for node in ast.walk(observation) if isinstance(node, ast.For)
+                 and isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Name)
+                 and node.iter.func.id == "enumerate")
+    assert ast.literal_eval(order.iter.args[0]) == (
+        "original candidate", "candidate original", "original candidate", "candidate original")
+    text = ast.get_source_segment((ROOT / gate.ELF_FORMAT_TEST).read_text(), observation)
+    assert 'assert output.stat().st_size <= 4096' in text
+    assert '"timing_threshold": None' in text and 'kinds * 128' in text
+    assert all(not isinstance(node, (ast.Import, ast.ImportFrom))
+               or not any(alias.name in ("cProfile", "profile", "subprocess", "ctypes")
+                          for alias in node.names) for node in ast.walk(observation))
