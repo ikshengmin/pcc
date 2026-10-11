@@ -274,7 +274,12 @@ def _parse_operand(text: str):
         return _Imm(int(text.strip(), 0))
     except ValueError:
         name = text.strip()
-        if not name or any(char.isspace() for char in name):
+        # Only an exact input guarantees that strip removed edge whitespace.
+        # Subclasses can return arbitrary names or override their iteration.
+        if not name or (
+            len(name.split(None, 1)) > 1 if type(text) is str
+            else any(char.isspace() for char in name)
+        ):
             raise X86EncodeError(f"bad operand {text!r}")
         return _Target(name)
 

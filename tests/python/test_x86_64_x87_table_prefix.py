@@ -1,13 +1,15 @@
 """Dependency-replaced dispatch controls; no encoder, emitter or PCC imports.
 
 Only the source-derived x87 prefix executes. Result construction and the
-ordinary operand boundary are fakes. These are not real encoding evidence.
+ordinary operand boundary are fakes. The operand-whitespace addition is
+checked structurally here. These are not real encoding evidence.
 """
 from __future__ import annotations
 
 import ast
 import copy
 
+from tests.x86_64_operand_whitespace import assert_source_contract
 from tests.x86_64_x87_reference import (
     leaf, old_function, prefix_length, source_tree, table_nodes,
 )
@@ -61,6 +63,7 @@ def _call(function, line, cache=None):
 
 
 def test_x87_prefix_fake_preserves_literal_results_and_boundaries():
+    assert_source_contract()
     old, new = _prefix_pair()
     cache = object()
     lines = (

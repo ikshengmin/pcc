@@ -1,8 +1,10 @@
-"""Native lifetime checks for the source-derived changed x87 prefix.
+"""Native checks for the source-derived x87 prefix and whitespace predicate.
 
 Production tables, result classes, function ABI and changed lookup branches
 are copied from source. Unrelated encoder paths are explicitly excluded, so
 these controls do not claim a complete native encoder or self-host fixed point.
+The actual operand-name predicate and same-runtime preimage share this one
+compilation and existing five-collector execution; no extra native node runs.
 """
 
 import pytest

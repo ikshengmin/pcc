@@ -63,6 +63,7 @@ X87_ENCODING_TEST = "tests/python/test_x86_64_x87_table_encoding.py"
 X87_NATIVE_TEST = "tests/python/test_x86_64_x87_table_native.py"
 X87_INPUTS = (X87_PREFIX_TEST, X87_ENCODING_TEST, X87_NATIVE_TEST,
               "tests/x86_64_x87_reference.py", "tests/x86_64_x87_source.py",
+              "tests/x86_64_operand_whitespace.py",
               "pcc/backend/x86_64_encode.py", "pcc/backend/x86_64_asm_driver.py",
               "tests/python/owned_regression_support.py")
 ASSEMBLY_PROFILE_TEST = "tests/python/test_host_assembly_profile.py"

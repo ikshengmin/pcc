@@ -64,7 +64,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
                and node.value.id == "ASSEMBLY_PROFILE_INPUTS" for node in ast.walk(identity))
-    for path in (*gate.X87_INPUTS[:5], *gate.ASSEMBLY_PROFILE_INPUTS):
+    for path in (*gate.X87_INPUTS[:6], *gate.ASSEMBLY_PROFILE_INPUTS):
         assert workflow.count('      - "' + path + '"') == 2
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]

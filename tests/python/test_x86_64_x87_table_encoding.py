@@ -1,10 +1,20 @@
-"""CI-only real encoder and object-byte controls for the two-table hoist."""
+"""Real encoder controls for x87 tables and the operand-whitespace fast path.
+
+Whitespace controls extend the existing nodes and bounded CI invocation.
+"""
 from __future__ import annotations
+
+from unittest.mock import patch
 
 from pcc.backend import x86_64_encode as encoder
 from pcc.backend import x86_64_asm_driver as assembler
 from pcc.backend.elf_x86_64 import emit_relocatable, parse_relocatable
 from tests.x86_64_x87_reference import old_encoder
+from tests.x86_64_operand_whitespace import (
+    old_operand_parser,
+    record_whitespace_operation_ab,
+    target_cases,
+)
 
 
 # Independent frozen byte expectations cover every literal moved to globals.
@@ -35,6 +45,143 @@ def _result(call, line, pc, labels, section, cache=None):
         return type(error), str(error)
 
 
+def _operand_result(call, text):
+    try:
+        return ("return", call(text))
+    except Exception as error:
+        context = error.__context__
+        cause = error.__cause__
+        return ("raise", type(error), str(error),
+                type(context), str(context), type(cause), str(cause),
+                error.__suppress_context__)
+
+
+def _check_operand_whitespace_results():
+    before = old_operand_parser(vars(encoder))
+    cases = target_cases() + [
+        "rax", "XMM3", "-17", "0xff", "0b101", "3.14", "nan",
+        "QWORD PTR [rbp - 8]", "QWORD PTR data[rip]", "QWORD PTR fs:0",
+        "QWORD PTR [rax + rdx * 3]", "[]", "[rax + rbx + rcx]",
+    ]
+    for text in cases:
+        assert _operand_result(encoder._parse_operand, text) == _operand_result(before, text)
+    # Whitespace removal must not substitute a split piece for the target name.
+    text = "ordinary_target_" + "x" * 257
+    assert encoder._parse_operand(text).name is text
+    lines = ("call target", "jmp .Ltarget", "jne target", "call left right",
+             "call left\u2003right", "call \u2003target\u2003", "call 7",
+             "mov rax, QWORD PTR data[rip]", "lock ret")
+    for line in lines:
+        for pc, labels, section in CONTEXTS:
+            for cached in (False, True):
+                actual = _result(encoder.encode_instruction, line, pc, labels, section,
+                                 encoder._OperandParseCache() if cached else None)
+                with patch.object(encoder, "_parse_operand", before):
+                    expected = _result(encoder.encode_instruction, line, pc, labels, section,
+                                       encoder._OperandParseCache() if cached else None)
+                assert actual == expected
+
+
+def _check_operand_whitespace_protocols():
+    before = old_operand_parser(vars(encoder))
+    for mode in ("untrimmed", "plain", "self", "iter_error", "space_error", "short_circuit", "falsy"):
+        observed = []
+        for call in (before, encoder._parse_operand):
+            events = []
+
+            class Character:
+                def __init__(self, value):
+                    self.value = value
+
+                def isspace(self):
+                    events.append(("isspace", self.value))
+                    if self.value == "error":
+                        raise LookupError("character whitespace failure")
+                    return self.value
+
+            class Name(str):
+                def __len__(self):
+                    events.append("name.len")
+                    return 0 if mode == "falsy" else str.__len__(self)
+
+                def split(self, *args):
+                    raise AssertionError("subclass name must not use split")
+
+                def __iter__(self):
+                    events.append("name.iter")
+                    if mode in ("iter_error", "falsy"):
+                        raise RuntimeError("name iteration failure")
+                    if mode == "space_error":
+                        return iter((Character("error"),))
+                    if mode == "short_circuit":
+                        return iter((Character(False), Character(True), Character("error")))
+                    return iter((Character(False),))
+
+            name = " target " if mode == "untrimmed" else "target" if mode == "plain" else Name("target")
+
+            class Input(str):
+                def strip(self):
+                    events.append("input.strip")
+                    return name if events.count("input.strip") == 4 else "target"
+
+                def __hash__(self):
+                    raise AssertionError("operand input must not be hashed")
+
+                def __repr__(self):
+                    events.append("input.repr")
+                    return "<operand-input>"
+
+            result = _operand_result(call, Input("target"))
+            assert events.count("input.strip") == 4
+            if result[0] == "return":
+                assert result[1].name is name
+            else:
+                # The failed int conversion stays the implicit exception context.
+                assert result[3] is ValueError
+            if mode == "short_circuit":
+                assert ("isspace", "error") not in events
+            if mode == "falsy":
+                assert "name.iter" not in events
+            if mode == "untrimmed":
+                assert result[0:3] == ("raise", encoder.X86EncodeError,
+                                       "bad operand <operand-input>")
+            observed.append((result, events))
+        assert observed[0] == observed[1]
+
+    # A stateful original subclass returning itself must also retain all calls.
+    for call in (before, encoder._parse_operand):
+        events = []
+
+        class SelfReturning(str):
+            def strip(self):
+                events.append("strip")
+                return self
+
+            def split(self, *args):
+                raise AssertionError("original subclass must not use split")
+
+        text = SelfReturning("target")
+        assert call(text).name is text
+        assert events == ["strip"] * 4
+
+
+def _check_operand_whitespace_object_bytes():
+    assembly = (
+        ".intel_syntax noprefix\n.text\n.globl probe\n.type probe, @function\n"
+        "probe:\n  call external\n  jne .Ltarget\n  jmp .L目标\n"
+        ".Ltarget:\n  mov rax, QWORD PTR data[rip]\n"
+        ".L目标:\n  ret\n.size probe, .-probe\n.data\ndata:\n  .quad 42\n"
+    )
+    actual = emit_relocatable(assembler.assemble_file(assembly))
+    before = old_operand_parser(vars(encoder))
+    with patch.object(encoder, "_parse_operand", before):
+        expected = emit_relocatable(assembler.assemble_file(assembly))
+    assert actual == expected
+    obj = parse_relocatable(actual)
+    section = next(section for section in obj.sections if section.name == ".text")
+    assert {obj.symbols[item.symbol_index].name for item in section.relocations} == {"external", "data"}
+
+
 def test_x87_all_sixteen_forms_have_exact_bytes_and_fresh_results():
     cache = encoder._OperandParseCache()
     for line, expected in CASES:
@@ -49,7 +196,8 @@ def test_x87_all_sixteen_forms_have_exact_bytes_and_fresh_results():
             assert line not in cache.instruction_encodings
 
 
-def test_x87_real_encoding_matches_frozen_preimage_results_and_errors():
+def test_x87_real_encoding_matches_frozen_preimage_results_and_errors(tmp_path):
+    _check_operand_whitespace_results()
     before = old_encoder(vars(encoder))
     lines = [line for line, _ in CASES]
     lines += ["  " + line.partition(" ")[0].upper() + (" " + line.partition(" ")[2] if " " in line else "") + "  "
@@ -66,9 +214,11 @@ def test_x87_real_encoding_matches_frozen_preimage_results_and_errors():
                 assert _result(before, line, pc, labels, section, cache_type()) == _result(
                     encoder._encode_instruction_uncached, line, pc, labels, section, cache_type(),
                 )
+    record_whitespace_operation_ab(tmp_path)
 
 
 def test_x87_real_error_order_and_custom_cache_protocols():
+    _check_operand_whitespace_protocols()
     class CustomCache:
         def __init__(self):
             self.calls = []
@@ -99,6 +249,7 @@ def test_x87_real_error_order_and_custom_cache_protocols():
 
 
 def test_x87_assembled_object_matches_preimage_and_contains_exact_x87_bytes(monkeypatch):
+    _check_operand_whitespace_object_bytes()
     assembly = ".intel_syntax noprefix\n.text\n.globl probe\n.type probe, @function\nprobe:\n"
     assembly += "\n".join("  " + line for line, _ in CASES)
     assembly += "\n  mov rax, 42\n  call external\n  jne .Lnext\n  mov rax, QWORD PTR data[rip]\n.Lnext:\n  ret\n.size probe, .-probe\n.data\ndata:\n  .quad 42\n"

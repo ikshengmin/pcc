@@ -3,6 +3,8 @@
 Only the unchanged encoder prefix through the two x87 returns is included.
 The full encoder and assembly/error-order differentials have separate tests.
 No implementation of a changed branch is replaced with a test imitation.
+The native program also executes the source-derived operand-name predicate;
+that addition does not claim native execution of the complete operand parser.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.x86_64_operand_whitespace import native_whitespace_source
 
 PRODUCTION_SOURCE = (
     Path(__file__).resolve().parents[1] / "pcc/backend/x86_64_encode.py"
@@ -107,7 +110,7 @@ def x87_native_program() -> str:
         "    check(" + repr(line) + ", " + repr(expected) + ")\n"
         for line, expected in X87_CASES
     )
-    return x87_provider_source() + '''
+    return x87_provider_source() + native_whitespace_source() + '''
 import gc
 
 def check(line: str, expected: bytes):
@@ -140,6 +143,9 @@ def main():
     gc.collect()
     check("faddp", b"\\xde\\xc1")
     check("fxch st(1)", b"\\xd9\\xc9")
+    check_operand_whitespace()
+    gc.collect()
+    check_operand_whitespace()
     print("X87_TABLE_GLOBALS_OK")
 
 main()
