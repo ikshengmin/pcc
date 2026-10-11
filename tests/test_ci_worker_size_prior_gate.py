@@ -945,8 +945,13 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         "tests/python/test_pipeline_self_backend_link_owner.py::"
         "test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
     )
-    assert MODULES[-4:-2] == ("pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64")
-    assert MODULES[-2] == "pcc.backend.elf_aarch64_relocations"
+    elf_modules = (
+        "pcc.backend.owned_elf_inputs",
+        "pcc.backend.elf_x86_64",
+        "pcc.backend.elf_aarch64_relocations",
+    )
+    elf_start = MODULES.index(elf_modules[0])
+    assert MODULES[elf_start:elf_start + len(elf_modules)] == elf_modules
     assert gate.ELF_RELOCATION_CONTEXT_TEST in gate.HOST_FILES
     tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
     identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
