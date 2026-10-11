@@ -98,9 +98,9 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST,
               RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST, RSS_PUBLISHER_TEST,
               ELF_RELOCATION_CONTEXT_TEST)
-# All existing 1010 nodes remain, including the reader/publication, scalar and
-# publisher controls. Sixteen pure relocation controls share this invocation.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42, 16)
+# All existing 1026 nodes remain. Thirteen native report ABI controls extend
+# the publisher file within this same invocation; strict stays at19 modules.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

@@ -259,12 +259,30 @@ def test_only_windows_cpython_dispatches_to_extended_rename(monkeypatch, impleme
     def ordinary(source, destination):
         calls.append(("ordinary", source, destination))
 
+    def native(source, destination):
+        calls.append(("native", source, destination))
+
+    native_types = SimpleNamespace(c_obj=object(), c_int64=object())
+
+    def declare(symbol, arguments, result):
+        if symbol == "py_os_replace":
+            assert arguments == (native_types.c_obj, native_types.c_obj)
+            assert result is native_types.c_obj
+            return native
+        assert symbol == "py_err_occurred" and arguments == ()
+        assert result is native_types.c_int64
+        return lambda: 0
+
+    native_types.extern = declare
+
     def importing(name, *args, **options):
         imports.append(name)
         if name == "sys":
             return SimpleNamespace(implementation=SimpleNamespace(name=implementation), platform=platform)
         if name == HOST_MODULE:
             return SimpleNamespace(replace_worker_resource=rename)
+        if name == "pcc.extern":
+            return native_types
         assert name != "ctypes" and not name.startswith("pcc.")
         return original_import(name, *args, **options)
 
@@ -273,8 +291,9 @@ def test_only_windows_cpython_dispatches_to_extended_rename(monkeypatch, impleme
         selected.setattr(builtins, "__import__", importing)
         assert policy._replace_worker_resource("worker.rss.tmp", "worker.rss") is None
     host = (implementation, platform) == ("cpython", "win32")
-    assert calls == [("host" if host else "ordinary", "worker.rss.tmp", "worker.rss")]
-    assert imports == (["sys", HOST_MODULE] if host else ["sys"])
+    native = implementation == "pcc"
+    assert calls == [("host" if host else "native" if native else "ordinary", "worker.rss.tmp", "worker.rss")]
+    assert imports == (["sys", HOST_MODULE] if host else ["sys", "pcc.extern"] if native else ["sys"])
 
 
 def test_actual_publisher_dispatcher_preserves_native_import_boundary():
@@ -290,7 +309,22 @@ def test_actual_publisher_dispatcher_preserves_native_import_boundary():
     assert ast.unparse(dispatch.body[0]) == "import sys as execution_runtime"
     assert ast.unparse(dispatch.body[1].test) == "execution_runtime.implementation.name == 'cpython'"
     assert ast.unparse(dispatch.body[1].body[0].test) == "execution_runtime.platform == 'win32'"
-    assert ast.unparse(dispatch.body[-1]) == "os.replace(temporary, path)"
+    ordinary = dispatch.body[2]
+    assert ast.unparse(ordinary.test) == "execution_runtime.implementation.name != 'pcc'"
+    assert ast.unparse(ordinary.body[0]) == "os.replace(temporary, path)"
+    assert isinstance(ordinary.body[1], ast.Return)
+    native_import = next(node for node in dispatch.body if isinstance(node, ast.ImportFrom))
+    assert native_import.module == "pcc.extern"
+    assert [name.name for name in native_import.names] == ["c_int64", "c_obj", "extern"]
+    assert all(isinstance(node, ast.If) for node in dispatch.body[3:5])
+    assert dispatch.body[4].end_lineno < native_import.lineno
+    tail = [ast.unparse(node) for node in dispatch.body[-5:]]
+    assert tail == [
+        "native_replace = extern('py_os_replace', (c_obj, c_obj), c_obj)",
+        "native_error_pending = extern('py_err_occurred', (), c_int64)",
+        "result = native_replace(temporary, path)",
+        "if native_error_pending():\n    raise", "del result",
+    ]
     publisher = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                      and node.name == "publish_worker_resource")
     write = next(node for node in publisher.body if isinstance(node, ast.With))
@@ -301,3 +335,110 @@ def test_actual_publisher_dispatcher_preserves_native_import_boundary():
                    and node.func.id == "_replace_worker_resource" for node in ast.walk(write))
     assert "deadline = time.monotonic() + 1.0" in source
     assert 'getattr(error, "winerror", 0) not in (5, 32)' in source
+
+
+def _native_import_control(policy, events, *, platform="linux", pending=False, call_error=None):
+    """Inert declaration provider; never imports PCC or calls a native symbol."""
+    original_import = builtins.__import__
+    types = SimpleNamespace(c_obj=object(), c_int64=object())
+
+    class Result:
+        def __del__(self):
+            events.append(("release",))
+
+    def replace(source, destination):
+        events.append(("replace", source, destination))
+        if call_error is not None:
+            raise call_error
+        return Result()
+
+    def error_pending():
+        events.append(("pending",))
+        assert ("release",) not in events
+        return int(pending)
+
+    def declare(symbol, arguments, result):
+        events.append(("declare", symbol))
+        if symbol == "py_os_replace":
+            assert arguments == (types.c_obj, types.c_obj) and result is types.c_obj
+            return replace
+        assert symbol == "py_err_occurred" and arguments == () and result is types.c_int64
+        return error_pending
+
+    types.extern = declare
+
+    def importing(name, *args, **options):
+        events.append(("import", name))
+        if name == "sys":
+            return SimpleNamespace(implementation=SimpleNamespace(name="pcc"), platform=platform)
+        if name == "pcc.extern":
+            return types
+        assert name != "ctypes" and not name.startswith("pcc.")
+        return original_import(name, *args, **options)
+
+    return importing
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32", "darwin"])
+@pytest.mark.parametrize("pending", [False, True])
+def test_native_report_abi_retains_result_until_pending_check(monkeypatch, platform, pending):
+    policy = _load_leaf(POLICY_PATH)
+    events = []
+    importing = _native_import_control(policy, events, platform=platform, pending=pending)
+    failure = OSError(errno.EACCES, "mock pending native error")
+    if pending:
+        # CPython's active exception models the native pending-error register
+        # for this bare-raise control. No real TLS/FFI operation is performed.
+        with pytest.raises(OSError) as caught:
+            try:
+                raise failure
+            except OSError:
+                with monkeypatch.context() as selected:
+                    selected.setattr(builtins, "__import__", importing)
+                    policy._replace_worker_resource("worker.rss.tmp", "worker.rss")
+        assert caught.value is failure
+    else:
+        with monkeypatch.context() as selected:
+            selected.setattr(builtins, "__import__", importing)
+            assert policy._replace_worker_resource("worker.rss.tmp", "worker.rss") is None
+        assert events[-1] == ("release",) and events.count(("release",)) == 1
+    assert events[:6] == [
+        ("import", "sys"), ("import", "pcc.extern"),
+        ("declare", "py_os_replace"), ("declare", "py_err_occurred"),
+        ("replace", "worker.rss.tmp", "worker.rss"), ("pending",),
+    ]
+
+
+@pytest.mark.parametrize("temporary,path,error", [
+    (b"worker.rss.tmp", "worker.rss", TypeError),
+    ("worker.rss.tmp", b"worker.rss", TypeError),
+    (None, "worker.rss", TypeError), ("worker.rss.tmp", None, TypeError),
+    ("worker\0.rss.tmp", "worker.rss", ValueError),
+    ("worker.rss.tmp", "worker\0.rss", ValueError),
+])
+def test_native_report_invalid_paths_fail_before_declaration_or_rename(monkeypatch, temporary, path, error):
+    policy = _load_leaf(POLICY_PATH)
+    events = []
+    importing = _native_import_control(policy, events)
+    with pytest.raises(error):
+        with monkeypatch.context() as selected:
+            selected.setattr(builtins, "__import__", importing)
+            policy._replace_worker_resource(temporary, path)
+    assert events == [("import", "sys")]
+
+
+def test_native_report_raised_call_is_not_retried_or_replaced(monkeypatch):
+    policy = _load_leaf(POLICY_PATH)
+    events = []
+    failure = PermissionError(errno.EACCES, "mock rename failure")
+    importing = _native_import_control(policy, events, call_error=failure)
+    with pytest.raises(PermissionError) as caught:
+        with monkeypatch.context() as selected:
+            selected.setattr(builtins, "__import__", importing)
+            policy._replace_worker_resource("worker.rss.tmp", "worker.rss")
+    assert caught.value is failure
+    assert events == [
+        ("import", "sys"), ("import", "pcc.extern"),
+        ("declare", "py_os_replace"), ("declare", "py_err_occurred"),
+        ("replace", "worker.rss.tmp", "worker.rss"),
+    ]

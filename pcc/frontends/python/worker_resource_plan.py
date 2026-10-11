@@ -507,7 +507,25 @@ def _replace_worker_resource(temporary: str, path: str) -> None:
             )
             replace_worker_resource(temporary, path)
             return
-    os.replace(temporary, path)
+    if execution_runtime.implementation.name != "pcc":
+        os.replace(temporary, path)
+        return
+    # This internal native operation deliberately selects the owned primitive,
+    # not a mutable os-provider attribute. Its inputs are report path strings.
+    if not isinstance(temporary, str) or not isinstance(path, str):
+        raise TypeError("worker RSS publication paths must be strings")
+    if "\0" in temporary or "\0" in path:
+        raise ValueError("worker RSS publication path contains a null character")
+    from pcc.extern import c_int64, c_obj, extern
+
+    native_replace = extern("py_os_replace", (c_obj, c_obj), c_obj)
+    native_error_pending = extern("py_err_occurred", (), c_int64)
+    result = native_replace(temporary, path)
+    if native_error_pending():
+        raise
+    # c_obj owns a managed result (the immortal None on success). Keep it
+    # rooted until the pending-error check; never use a raw address lane.
+    del result
 
 
 def publish_worker_resource(phase: str) -> None:

@@ -47,14 +47,14 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42, 16)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
     assert gate.HOST_FILES[20] == gate.SCALAR_PROJECTION_TEST
     assert gate.HOST_FILES[21] == gate.RSS_PUBLISHER_TEST
     assert gate.HOST_FILES[22] == gate.ELF_RELOCATION_CONTEXT_TEST
-    assert sum(gate.HOST_COUNTS) == 1026 and sum(gate.HOST_COUNTS[:22]) == 1010
+    assert sum(gate.HOST_COUNTS) == 1039 and sum(gate.HOST_COUNTS[:22]) == 1023
     assert sum(gate.HOST_COUNTS[:21]) == 968
     assert sum(gate.HOST_COUNTS[:20]) == 879
     assert sum(gate.HOST_COUNTS[:18]) == 844
@@ -597,7 +597,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 42, 16) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
