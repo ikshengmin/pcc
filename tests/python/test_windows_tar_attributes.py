@@ -25,17 +25,153 @@ TARFILE = ROOT / "pcc/stdlib/tarfile.py"
 TARGET = "x86_64-pc-windows-msvc"
 
 
+_TAR_CONTROL_FUNCTIONS = '''
+def _tar_control_report(first_error, label, case_id, member_id, operation, status, number):
+    try:
+        if label == 'TAR_CONTROL_STATUS':
+            print(label, case_id, member_id, operation, status, number, flush=True)
+        else:
+            print(label, case_id, member_id, operation, flush=True)
+    except BaseException as output_error:
+        if first_error is None:
+            return output_error
+    return first_error
+
+
+def _tar_control_case(archive, member, member_id, case_id, operation, target,
+                      seconds_override, expected_status, expected_errno, first_error):
+    first_error = _tar_control_report(first_error, 'TAR_CONTROL_BEGIN', case_id,
+                                      member_id, operation, 0, 0)
+    try:
+        if operation == 'chmod':
+            mode = int(member.mode) & 0o777
+            status = chmod_file(_control_utf8(target), mode)
+            # Retain a managed use after the borrowed UTF-8 call returns.
+            if not target:
+                raise AssertionError('controlled target must not be empty')
+            if status != expected_status and first_error is None:
+                first_error = AssertionError('unexpected controlled chmod status')
+            first_error = _tar_control_report(first_error, 'TAR_CONTROL_STATUS', case_id,
+                                              member_id, operation, status, 0)
+        elif operation == 'utime':
+            seconds = int(member.mtime) if case_id < 6 else seconds_override
+            if seconds < -9223372036854775808 or seconds > 9223372036854775807:
+                raise AssertionError('control seconds exceed signed i64')
+            times = malloc(16)
+            if ptr_is_null(times):
+                raise MemoryError('unable to allocate controlled timestamps')
+            result_ready = False
+            try:
+                try:
+                    store_i64(times, 0, seconds)
+                    store_i64(times, 8, seconds)
+                    status = utime_file(_control_utf8(target), times)
+                    number = _control_errno()
+                    if not target:
+                        raise AssertionError('controlled target must not be empty')
+                    reported_errno = number if status != 0 else 0
+                    if (status != expected_status or reported_errno != expected_errno) and first_error is None:
+                        first_error = AssertionError('unexpected controlled utime status or errno')
+                    result_ready = True
+                except BaseException as operation_error:
+                    if first_error is None:
+                        first_error = operation_error
+                    first_error = _tar_control_report(first_error, 'TAR_CONTROL_ERROR', case_id,
+                                                      member_id, operation, 0, 0)
+            finally:
+                try:
+                    free(times)
+                except BaseException as cleanup_error:
+                    if first_error is None:
+                        first_error = cleanup_error
+                    first_error = _tar_control_report(first_error, 'TAR_CONTROL_CLEANUP_ERROR', case_id,
+                                                      member_id, operation, 0, 0)
+            if result_ready:
+                first_error = _tar_control_report(first_error, 'TAR_CONTROL_STATUS', case_id,
+                                                  member_id, operation, status, reported_errno)
+        else:
+            if case_id == 13:
+                try:
+                    archive._set_attrs(member, target)
+                except _TarExtractError:
+                    first_error = _tar_control_report(first_error, 'TAR_CONTROL_EXPECTED_ERROR', case_id,
+                                                      member_id, operation, 0, 0)
+                else:
+                    raise AssertionError('controlled NUL target did not fail')
+            else:
+                archive._set_attrs(member, target)
+                first_error = _tar_control_report(first_error, 'TAR_CONTROL_WRAPPER_OK', case_id,
+                                                  member_id, operation, 0, 0)
+    except BaseException as control_error:
+        if first_error is None:
+            first_error = control_error
+        first_error = _tar_control_report(first_error, 'TAR_CONTROL_ERROR', case_id,
+                                          member_id, operation, 0, 0)
+    return first_error
+
+
+'''
+
+_TAR_CONTROL_CASES = (
+    (0, 'chmod', 'leaf0', 0, 0, 0),
+    (0, 'utime', 'leaf0', 0, 0, 0),
+    (1, 'chmod', 'leaf1', 0, 0, 0),
+    (1, 'utime', 'leaf1', 0, 0, 0),
+    (2, 'chmod', 'leaf2', 0, 0, 0),
+    (2, 'utime', 'leaf2', 0, 0, 0),
+    (0, 'set_attrs', 'wrapper0', 0, 0, 0),
+    (1, 'set_attrs', 'wrapper1', 0, 0, 0),
+    (2, 'set_attrs', 'wrapper2', 0, 0, 0),
+    (0, 'chmod', 'missing', 0, -2, 0),
+    (0, 'utime', 'missing', 0, -1, 2),
+    (0, 'utime', 'negative', -11644473600, -1, 75),
+    (0, 'utime', 'negative', 910692730086, -1, 75),
+    (0, 'set_attrs', 'nul', 0, 0, 0),
+)
+
+_TAR_CONTROL_SUCCESS_STDOUT = (
+    'TAR_CONTROL_BEGIN 0 0 chmod\nTAR_CONTROL_STATUS 0 0 chmod 0 0\n'
+    'TAR_CONTROL_BEGIN 1 0 utime\nTAR_CONTROL_STATUS 1 0 utime 0 0\n'
+    'TAR_CONTROL_BEGIN 2 1 chmod\nTAR_CONTROL_STATUS 2 1 chmod 0 0\n'
+    'TAR_CONTROL_BEGIN 3 1 utime\nTAR_CONTROL_STATUS 3 1 utime 0 0\n'
+    'TAR_CONTROL_BEGIN 4 2 chmod\nTAR_CONTROL_STATUS 4 2 chmod 0 0\n'
+    'TAR_CONTROL_BEGIN 5 2 utime\nTAR_CONTROL_STATUS 5 2 utime 0 0\n'
+    'TAR_CONTROL_BEGIN 6 0 set_attrs\nTAR_CONTROL_WRAPPER_OK 6 0 set_attrs\n'
+    'TAR_CONTROL_BEGIN 7 1 set_attrs\nTAR_CONTROL_WRAPPER_OK 7 1 set_attrs\n'
+    'TAR_CONTROL_BEGIN 8 2 set_attrs\nTAR_CONTROL_WRAPPER_OK 8 2 set_attrs\n'
+    'TAR_CONTROL_BEGIN 9 0 chmod\nTAR_CONTROL_STATUS 9 0 chmod -2 0\n'
+    'TAR_CONTROL_BEGIN 10 0 utime\nTAR_CONTROL_STATUS 10 0 utime -1 2\n'
+    'TAR_CONTROL_BEGIN 11 0 utime\nTAR_CONTROL_STATUS 11 0 utime -1 75\n'
+    'TAR_CONTROL_BEGIN 12 0 utime\nTAR_CONTROL_STATUS 12 0 utime -1 75\n'
+    'TAR_CONTROL_BEGIN 13 0 set_attrs\nTAR_CONTROL_EXPECTED_ERROR 13 0 set_attrs\n'
+    'TAR_CONTROLS_OK\n'
+)
+
+
+def _tar_control_program(paths):
+    text = _TAR_CONTROL_FUNCTIONS + 'def _tar_run_controls(archive):\n'
+    text += '    members = archive.getmembers()\n    first_error = None\n'
+    for case_id, (member_id, operation, key, seconds, status, number) in enumerate(_TAR_CONTROL_CASES):
+        text += (f'    first_error = _tar_control_case(archive, members[{member_id}], '
+                 f'{member_id}, {case_id}, {operation!r}, {str(paths[key])!r}, '
+                 f'{seconds}, {status}, {number}, first_error)\n')
+    text += ('    if first_error is not None:\n        raise first_error\n'
+             "    print('TAR_CONTROLS_OK', flush=True)\n\n")
+    return text
+
+
 _TAR_NATIVE_SUCCESS_STDOUT = (
     "TAR_OPEN_BEGIN\nTAR_OPEN_OK\n"
     "TAR_PREFLIGHT_BEGIN 0\nTAR_PREFLIGHT_OK 0\n"
     "TAR_PREFLIGHT_BEGIN 1\nTAR_PREFLIGHT_OK 1\n"
     "TAR_PREFLIGHT_BEGIN 2\nTAR_PREFLIGHT_OK 2\n"
     "TAR_EXTRACT_BEGIN\nTAR_EXTRACT_OK\n"
+    + _TAR_CONTROL_SUCCESS_STDOUT +
     "TAR_CLOSE_BEGIN\nTAR_CLOSE_OK\nTAR_METADATA_OK\n"
 )
 
 
-def _tar_attrs_native_program(import_style, source_tar, destination):
+def _tar_attrs_native_program(import_style, source_tar, destination, control_paths=None):
     """One full extraction, with read-only preflight and observable phases.
 
     OPEN includes __enter__. The extra data_filter pass does not materialize
@@ -47,10 +183,20 @@ def _tar_attrs_native_program(import_style, source_tar, destination):
                "from tarfile import open as tar_open, data_filter as tar_data_filter\n\n")
     opener = "tarfile.open" if import_style == "module" else "tar_open"
     preflight = "tarfile.data_filter" if import_style == "module" else "tar_data_filter"
-    return (imports +
+    if control_paths is None:
+        control_paths = {key: key for key in ("leaf0", "leaf1", "leaf2", "wrapper0", "wrapper1",
+                                             "wrapper2", "negative", "missing")}
+        control_paths["nul"] = "negative\0suffix"
+    scaffold = ("from tarfile import ExtractError as _TarExtractError\n"
+                "from pcc.extern import c_int, c_ptr, c_rawptr, extern\n"
+                "from pcc.unsafe import (chmod_file, utime_file, malloc, free, ptr_is_null, store_i64)\n"
+                '_control_utf8: "extern" = extern("py_str_utf8", (c_ptr,), c_rawptr)\n'
+                '_control_errno: "extern" = extern("pcc_errno_get", (), c_int)\n\n')
+    return (imports + scaffold + _tar_control_program(control_paths) +
             "def main():\n"
             "    phase = 'OPEN'\n"
             "    primary_error = None\n"
+            "    extract_attempted = False\n"
             "    print('TAR_OPEN_BEGIN', flush=True)\n"
             "    try:\n"
             f"        with {opener}({str(source_tar)!r}) as archive:\n"
@@ -65,6 +211,7 @@ def _tar_attrs_native_program(import_style, source_tar, destination):
             "                    index += 1\n"
             "                phase = 'EXTRACT'\n"
             "                print('TAR_EXTRACT_BEGIN', flush=True)\n"
+            "                extract_attempted = True\n"
             f"                archive.extractall({str(destination)!r})\n"
             "                print('TAR_EXTRACT_OK', flush=True)\n"
             "            except BaseException as error:\n"
@@ -73,7 +220,17 @@ def _tar_attrs_native_program(import_style, source_tar, destination):
             "                    print('TAR_FAILURE', phase, flush=True)\n"
             "                except BaseException:\n"
             "                    pass\n"
+            "                try:\n"
+            "                    if extract_attempted:\n"
+            "                        _tar_run_controls(archive)\n"
+            "                except BaseException:\n"
+            "                    try:\n"
+            "                        print('TAR_CONTROLS_FAILED_AFTER_EXTRACT', flush=True)\n"
+            "                    except BaseException:\n"
+            "                        pass\n"
             "                raise\n"
+            "            phase = 'CONTROLS'\n"
+            "            _tar_run_controls(archive)\n"
             "            print('TAR_CLOSE_BEGIN', flush=True)\n"
             "            phase = 'CLOSE'\n"
             "    except BaseException as error:\n"
@@ -93,7 +250,7 @@ def _check_tar_attrs_native_phase_witness():
     """Execute only the generated main over explicit memory-only fake owners."""
     for import_style in ("module", "static"):
         program = ast.parse(_tar_attrs_native_program(import_style, "metadata.tar", "extracted"))
-        main = next(node for node in program.body if isinstance(node, ast.FunctionDef))
+        main = next(node for node in program.body if isinstance(node, ast.FunctionDef) and node.name == "main")
         calls = [node for node in ast.walk(main) if isinstance(node, ast.Call)]
         extract_calls = [node for node in calls if isinstance(node.func, ast.Attribute)
                          and node.func.attr == "extractall"]
@@ -110,7 +267,7 @@ def _check_tar_attrs_native_phase_witness():
         for failure, marker_failure in (
             (stage, broken) for stage in (
                 None, "open", "enter", "members", "preflight:0", "preflight:1",
-                "preflight:2", "extract", "close", "extract+close",
+                "preflight:2", "extract_begin", "extract", "close", "extract+close",
             ) for broken in (False, True)
         ):
             events, lines = [], []
@@ -164,18 +321,25 @@ def _check_tar_attrs_native_phase_witness():
 
             def marker(*values, flush=False):
                 assert flush is True
+                if failure == "extract_begin" and values[0] == "TAR_EXTRACT_BEGIN":
+                    raise original
                 if marker_failure and values[0] in ("TAR_FAILURE", "TAR_CLOSE_FAILED_AFTER_ERROR"):
                     raise diagnostic
                 lines.append(" ".join(str(value) for value in values))
 
+            def controls(archive):
+                events.append("controls")
+                lines.extend(_TAR_CONTROL_SUCCESS_STDOUT.splitlines())
+
             namespace = {"tarfile": SimpleNamespace(open=opener, data_filter=preflight),
-                         "tar_open": opener, "tar_data_filter": preflight, "print": marker}
+                         "tar_open": opener, "tar_data_filter": preflight, "print": marker,
+                         "_tar_run_controls": controls}
             exec(compile(ast.Module(body=[main], type_ignores=[]), "<tar-phase-model>", "exec"), namespace)
             if failure is None:
                 namespace["main"]()
                 assert "\n".join(lines) + "\n" == _TAR_NATIVE_SUCCESS_STDOUT
                 assert events == ["open", "enter", "members", ("preflight", 0),
-                                  ("preflight", 1), ("preflight", 2), "extractall", ("exit", None)]
+                                  ("preflight", 1), ("preflight", 2), "extractall", "controls", ("exit", None)]
                 continue
             with pytest.raises(BaseException) as caught:
                 namespace["main"]()
@@ -195,13 +359,19 @@ def _check_tar_attrs_native_phase_witness():
                 if failure == "members" or failure.startswith("preflight:"):
                     expected.append("TAR_FAILURE PREFLIGHT")
                     assert "extractall" not in events
+                elif failure == "extract_begin":
+                    expected.append("TAR_FAILURE EXTRACT")
+                    assert "extractall" not in events and "controls" not in events
                 else:
                     expected.append("TAR_EXTRACT_BEGIN")
                     assert events.count("extractall") == 1
                     if failure == "close":
-                        expected.extend(("TAR_EXTRACT_OK", "TAR_CLOSE_BEGIN", "TAR_FAILURE CLOSE"))
+                        expected.append("TAR_EXTRACT_OK")
+                        expected.extend(_TAR_CONTROL_SUCCESS_STDOUT.splitlines())
+                        expected.extend(("TAR_CLOSE_BEGIN", "TAR_FAILURE CLOSE"))
                     else:
                         expected.append("TAR_FAILURE EXTRACT")
+                        expected.extend(_TAR_CONTROL_SUCCESS_STDOUT.splitlines())
                         if failure == "extract+close":
                             expected.append("TAR_CLOSE_FAILED_AFTER_ERROR")
                 assert events[-1] == ("exit", None if failure == "close" else original)
@@ -209,6 +379,252 @@ def _check_tar_attrs_native_phase_witness():
                 expected = [line for line in expected if not line.startswith(("TAR_FAILURE", "TAR_CLOSE_FAILED_AFTER_ERROR"))]
             assert lines == expected
             assert "TAR_METADATA_OK" not in lines
+
+
+def _check_tar_metadata_control_models():
+    paths = {key: key for key in ("leaf0", "leaf1", "leaf2", "wrapper0", "wrapper1",
+                                 "wrapper2", "negative", "missing")}
+    paths["nul"] = "negative\0suffix"
+    tree = ast.parse(_tar_control_program(paths))
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    assert [node.name for node in functions] == ["_tar_control_report", "_tar_control_case", "_tar_run_controls"]
+    case = functions[1]
+    calls = [node for node in ast.walk(case) if isinstance(node, ast.Call)]
+    for name in ("chmod_file", "utime_file"):
+        call = next(node for node in calls if isinstance(node.func, ast.Name) and node.func.id == name)
+        assert isinstance(call.args[0], ast.Call) and call.args[0].func.id == "_control_utf8"
+    assert [(ast.literal_eval(node.args[1]),) for node in calls
+            if isinstance(node.func, ast.Name) and node.func.id == "store_i64"] == [(0,), (8,)]
+    # Source-bound direct calls, not imported project code or interpreted FFI.
+    scenarios = ("success", "chmod_status", "utime_primary", "utime_committed_close",
+                 "missing_chmod_status", "missing_utime_status", "sentinel_status", "upper_status",
+                 "nul_missing_error", "nul_wrong_error", "wrapper_error", "allocation_null",
+                 "allocation_error", "store_error", "utf8_error", "utime_error", "errno_error",
+                 "free_error", "utime_and_free", "errno_and_free", "report_begin", "report_status",
+                 "utime_error_report", "final_report", "mtime_overflow", "chmod_status_report",
+                 "utime_primary_report", "utime_primary_free", "utime_committed_free")
+    assert len(scenarios) == 29 and len(_TAR_CONTROL_CASES) == 14
+    for scenario in scenarios:
+        events, lines, buffers = [], [], {}
+        state = SimpleNamespace(case=-1, number=777, next_pointer=100)
+        original = RuntimeError("first controlled operation failure")
+        cleanup = RuntimeError("controlled cleanup failure")
+        diagnostic = RuntimeError("controlled output failure")
+        members = [SimpleNamespace(mode=0o640, mtime=-1), SimpleNamespace(mode=0o444, mtime=0),
+                   SimpleNamespace(mode=0o755, mtime=123456789)]
+        if scenario == "mtime_overflow":
+            members[0].mtime = 9223372036854775808
+        before_members = [(member.mode, member.mtime) for member in members]
+
+        class StatusFailure(AssertionError):
+            def __init__(self, message):
+                events.append(("status_failure", state.case))
+                super().__init__(message)
+
+        def marker(*values, flush=False):
+            assert flush is True
+            if values[0] == "TAR_CONTROL_BEGIN":
+                state.case = values[1]
+            events.append(("print", state.case, values[0]))
+            state.number = 999  # A print would overwrite an uncaptured errno.
+            if ((scenario == "report_begin" and values[:2] == ("TAR_CONTROL_BEGIN", 0))
+                    or (scenario == "report_status" and values[:2] == ("TAR_CONTROL_STATUS", 1))
+                    or (scenario == "utime_error_report" and values[:2] == ("TAR_CONTROL_ERROR", 1))
+                    or (scenario == "chmod_status_report" and values[:2] == ("TAR_CONTROL_STATUS", 0))
+                    or (scenario == "utime_primary_report" and values[:2] == ("TAR_CONTROL_STATUS", 1))
+                    or (scenario == "final_report" and values[0] == "TAR_CONTROLS_OK")):
+                raise diagnostic
+            lines.append(" ".join(str(value) for value in values))
+
+        def utf8(target):
+            assert isinstance(target, str) and "\0" not in target
+            events.append(("utf8", state.case, target))
+            if scenario == "utf8_error" and state.case == 1:
+                raise original
+            return target
+
+        def allocate(size):
+            assert size == 16
+            events.append(("malloc", state.case))
+            if state.case == 1 and scenario == "allocation_error":
+                raise original
+            if state.case == 1 and scenario == "allocation_null":
+                return 0
+            state.next_pointer += 1
+            buffers[state.next_pointer] = [None, None]
+            return state.next_pointer
+
+        def store(pointer, offset, value):
+            assert offset in (0, 8) and -9223372036854775808 <= value <= 9223372036854775807
+            events.append(("store", state.case, offset, value))
+            if scenario == "store_error" and state.case == 1:
+                raise original
+            buffers[pointer][offset // 8] = value
+
+        def release(pointer):
+            assert pointer in buffers
+            del buffers[pointer]
+            events.append(("free", state.case))
+            state.number = 888  # Snapshot must precede cleanup, too.
+            if state.case == 1 and scenario in ("free_error", "utime_and_free", "errno_and_free",
+                                               "utime_primary_free", "utime_committed_free"):
+                raise cleanup
+
+        def chmod(target, mode):
+            events.append(("chmod", state.case, target, mode))
+            assert mode == (int(members[_TAR_CONTROL_CASES[state.case][0]].mode) & 0o777)
+            if scenario in ("chmod_status", "chmod_status_report") and state.case == 0:
+                return -13
+            if state.case == 9:
+                return 0 if scenario == "missing_chmod_status" else -2
+            return 0
+
+        def utime(target, pointer):
+            seconds = buffers[pointer]
+            assert seconds[0] == seconds[1]
+            events.append(("utime", state.case, target, seconds[0]))
+            if state.case == 1:
+                if scenario in ("utime_error", "utime_and_free", "utime_error_report"):
+                    raise original
+                if scenario in ("utime_primary", "utime_primary_report", "utime_primary_free"):
+                    state.number = 13
+                    return -1
+                if scenario in ("utime_committed_close", "utime_committed_free"):
+                    state.number = 9
+                    return 1
+            expected = {10: (-1, 2), 11: (-1, 75), 12: (-1, 75)}
+            status, state.number = expected.get(state.case, (0, 777))
+            if (state.case, scenario) in ((10, "missing_utime_status"), (11, "sentinel_status"),
+                                          (12, "upper_status")):
+                return 0
+            return status
+
+        def errno():
+            events.append(("errno", state.case, state.number))
+            if state.case == 1 and scenario in ("errno_error", "errno_and_free"):
+                raise original
+            return state.number
+
+        class Archive:
+            def getmembers(self):
+                return list(members)
+
+            def _set_attrs(self, member, target):
+                events.append(("wrapper", state.case, target))
+                assert member is members[_TAR_CONTROL_CASES[state.case][0]]
+                if state.case == 6 and scenario == "wrapper_error":
+                    raise original
+                if state.case == 13:
+                    assert target == paths["nul"]
+                    if scenario == "nul_missing_error":
+                        return
+                    if scenario == "nul_wrong_error":
+                        raise original
+                    raise _ExtractError("expected NUL rejection")
+
+        namespace = {"print": marker, "_control_utf8": utf8, "chmod_file": chmod,
+                     "utime_file": utime, "_control_errno": errno, "malloc": allocate,
+                     "free": release, "ptr_is_null": lambda pointer: pointer == 0,
+                     "store_i64": store, "_TarExtractError": _ExtractError, "AssertionError": StatusFailure}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "<tar-control-model>", "exec"), namespace)
+        if scenario == "success":
+            namespace["_tar_run_controls"](Archive())
+            assert "\n".join(lines) + "\n" == _TAR_CONTROL_SUCCESS_STDOUT
+        else:
+            with pytest.raises(BaseException) as caught:
+                namespace["_tar_run_controls"](Archive())
+            if scenario in ("wrapper_error", "allocation_error", "store_error", "utf8_error", "utime_error",
+                            "errno_error", "utime_and_free", "errno_and_free", "utime_error_report", "nul_wrong_error"):
+                assert caught.value is original
+            elif scenario == "free_error":
+                assert caught.value is cleanup
+            elif scenario in ("report_begin", "report_status", "final_report"):
+                assert caught.value is diagnostic
+            elif scenario == "allocation_null":
+                assert isinstance(caught.value, MemoryError)
+            else:
+                assert isinstance(caught.value, AssertionError)
+            assert "TAR_CONTROLS_OK" not in lines
+        assert [event[1] for event in events if event[0] == "print" and event[2] == "TAR_CONTROL_BEGIN"] == list(range(14))
+        assert not buffers and [(member.mode, member.mtime) for member in members] == before_members
+        for case_id in (1, 3, 5, 10, 11, 12):
+            subset = [event[0] for event in events if event[1] == case_id and event[0] != "print"]
+            assert subset.count("free") == (0 if case_id == 1 and scenario in (
+                "allocation_null", "allocation_error", "mtime_overflow") else 1)
+            if "errno" in subset:
+                assert subset.index("utime") < subset.index("errno") < subset.index("free")
+            if "status_failure" in subset and "free" in subset:
+                assert subset.index("status_failure") < subset.index("free")
+            if "utime" in subset:
+                assert subset[subset.index("utime") - 1] == "utf8"
+        if scenario == "success":
+            values = [event[3] for event in events if event[0] == "utime"]
+            assert values == [-1, 0, 123456789, 0, -11644473600, 910692730086]
+        if scenario == "utime_primary":
+            assert "TAR_CONTROL_STATUS 1 0 utime -1 13" in lines
+        if scenario == "utime_committed_close":
+            assert "TAR_CONTROL_STATUS 1 0 utime 1 9" in lines
+
+
+def _check_tar_control_failure_priority():
+    # The real generated main runs over fake owners. The real control helper
+    # bodies are exercised above; no embedded imports are executed here.
+    for import_style in ("module", "static"):
+        tree = ast.parse(_tar_attrs_native_program(import_style, "metadata.tar", "extracted"))
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+        for original_fails in (False, True):
+            for controls_fail in (False, True):
+                for report_fails in (False, True):
+                    for close_fails in (False, True):
+                        events = []
+                        original = RuntimeError("original extraction failure")
+                        controlled = RuntimeError("independent control failure")
+                        closing = RuntimeError("archive close failure")
+                        reporting = RuntimeError("diagnostic print failure")
+
+                        class Archive:
+                            def __enter__(self):
+                                return self
+
+                            def __exit__(self, kind, error, traceback):
+                                events.append(("close", error))
+                                if close_fails:
+                                    raise closing
+                                return False
+
+                            def getmembers(self):
+                                return [0, 1, 2]
+
+                            def extractall(self, destination):
+                                assert destination == "extracted"
+                                events.append("extract")
+                                if original_fails:
+                                    raise original
+
+                        def controls(archive):
+                            events.append("controls")
+                            if controls_fail:
+                                raise controlled
+
+                        def marker(*values, flush=False):
+                            assert flush is True
+                            if report_fails and values[0] in ("TAR_FAILURE", "TAR_CONTROLS_FAILED_AFTER_EXTRACT",
+                                                             "TAR_CLOSE_FAILED_AFTER_ERROR"):
+                                raise reporting
+
+                        namespace = {"tarfile": SimpleNamespace(open=lambda path: Archive(), data_filter=lambda *args: None),
+                                     "tar_open": lambda path: Archive(), "tar_data_filter": lambda *args: None,
+                                     "print": marker, "_tar_run_controls": controls}
+                        exec(compile(ast.Module(body=[main], type_ignores=[]), "<tar-priority-model>", "exec"), namespace)
+                        expected = closing if close_fails else original if original_fails else controlled if controls_fail else None
+                        if expected is None:
+                            namespace["main"]()
+                        else:
+                            with pytest.raises(BaseException) as caught:
+                                namespace["main"]()
+                            assert caught.value is expected
+                        assert events[:2] == ["extract", "controls"]
+                        assert events[2] == ("close", original if original_fails else controlled if controls_fail else None)
 
 
 class _ExtractError(Exception):
@@ -516,6 +932,8 @@ def test_windows_tar_time_model_utf16_conversion_owns_one_buffer(fail):
 
 def test_tar_attrs_model_source_dispatch_is_finite_and_owned():
     _check_tar_attrs_native_phase_witness()
+    _check_tar_metadata_control_models()
+    _check_tar_control_failure_priority()
 
     def assignment(path, name):
         tree = ast.parse((ROOT / path).read_text())
@@ -668,8 +1086,35 @@ def test_windows_tar_attrs_native_files_directories_unicode_and_negative_epoch(
             pytest.fail("Windows timestamp fixture requires filesystem support for "
                         f"Unix second {seconds}: {error}")
         expected[name] = oracle.stat()
+    # Controls own disjoint files. They never materialize or modify the
+    # original extraction destination, and run only after extractall attempts it.
+    control_root = tmp_path / "metadata-controls"
+    control_root.mkdir()
+    control_paths, control_expected = {}, {}
+    for group in ("leaf", "wrapper"):
+        directory = control_root / group
+        directory.mkdir()
+        for index, (name, mode, seconds) in enumerate(entries):
+            target = directory / name
+            if name == "directory":
+                target.mkdir()
+            else:
+                target.write_bytes(b"controlled metadata")
+            os.chmod(target, 0o666)
+            os.utime(target, (123000000, 123000000))
+            key = group + str(index)
+            control_paths[key] = str(target)
+            control_expected[key] = expected[name]
+    negative = control_root / "unchanged.txt"
+    negative.write_bytes(b"negative controls must not mutate this file")
+    os.chmod(negative, 0o600)
+    os.utime(negative, (123000000, 123000000))
+    negative_before = negative.stat()
+    control_paths["negative"] = str(negative)
+    control_paths["missing"] = str(control_root / "absent.txt")
+    control_paths["nul"] = str(negative) + "\0suffix"
     source = tmp_path / "metadata.py"
-    source.write_text(_tar_attrs_native_program(import_style, source_tar, destination), encoding="utf-8")
+    source.write_text(_tar_attrs_native_program(import_style, source_tar, destination, control_paths), encoding="utf-8")
     executable = tmp_path / "metadata.exe"
     compile_python(str(source), str(executable), backend="self", libpython_mode="off",
                    ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime))
@@ -683,7 +1128,33 @@ def test_windows_tar_attrs_native_files_directories_unicode_and_negative_epoch(
     (tmp_path / "execution.stdout").write_text(result.stdout)
     (tmp_path / "execution.stderr").write_text(result.stderr)
     observed = (result.returncode, result.stdout, result.stderr)
-    assert observed == (0, _TAR_NATIVE_SUCCESS_STDOUT, ""), observed
+    # Record read-only control state even when the original extraction failed.
+    # A diagnostic stat failure must not replace its captured process result.
+    control_state, control_failures = {}, []
+    for key, wanted in (*control_expected.items(), ("negative", negative_before)):
+        try:
+            actual = Path(control_paths[key]).stat()
+            found = (actual.st_mtime_ns, actual.st_atime_ns, bool(actual.st_mode & stat.S_IWRITE))
+            required = (wanted.st_mtime_ns, wanted.st_atime_ns, bool(wanted.st_mode & stat.S_IWRITE))
+            if key == "negative":
+                found = (actual.st_mode, actual.st_size, actual.st_mtime_ns,
+                         actual.st_atime_ns, actual.st_ctime_ns)
+                required = (wanted.st_mode, wanted.st_size, wanted.st_mtime_ns,
+                            wanted.st_atime_ns, wanted.st_ctime_ns)
+            control_state[key] = found
+            if found != required:
+                control_failures.append((key, found, required))
+        except OSError as error:
+            control_failures.append((key, "stat failed", str(error)))
+    try:
+        missing_exists = Path(control_paths["missing"]).exists()
+        control_state["missing_exists"] = missing_exists
+        if missing_exists:
+            control_failures.append(("missing", "unexpectedly created"))
+    except OSError as error:
+        control_failures.append(("missing", "stat failed", str(error)))
+    assert observed == (0, _TAR_NATIVE_SUCCESS_STDOUT, ""), (observed, control_state, control_failures)
+    assert not control_failures, (observed, control_state, control_failures)
     for name, mode, seconds in entries:
         actual = (destination / name).stat()
         assert actual.st_mtime_ns == expected[name].st_mtime_ns
