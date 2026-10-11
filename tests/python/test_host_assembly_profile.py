@@ -287,11 +287,45 @@ def test_nonselected_install_never_imports_pcc_or_profiler(tmp_path, monkeypatch
     monkeypatch.setenv(adapter.CONFIG, str(setup))
     monkeypatch.setenv(adapter.SOURCE_ROOT, str(fake.root))
     monkeypatch.setattr(sys, "orig_argv", _argv(manifest))
-    monkeypatch.setattr(adapter.importlib, "import_module", lambda name: pytest.fail("nonselected import"))
-    before = (tuple(sys.modules), tuple(sys.meta_path), tuple(sys.orig_argv))
+    imported = []
+
+    def unexpected_import(name):
+        imported.append(name)
+        pytest.fail("nonselected import")
+
+    monkeypatch.setattr(adapter.importlib, "import_module", unexpected_import)
+
+    def assert_admission_modules(before, after):
+        # Reading the ASCII setup can lazily import precisely this codec.
+        # No other addition, removal, reordering or replacement is allowed.
+        assert set(after).difference(before) <= {"encodings.ascii"}
+        assert tuple(name for name in after if name in before) == tuple(before)
+        assert all(after[name] is module for name, module in before.items())
+
+    modules_before = dict(sys.modules)
+    before = (tuple(sys.meta_path), tuple(sys.orig_argv))
     adapter.install()
-    assert before == (tuple(sys.modules), tuple(sys.meta_path), tuple(sys.orig_argv))
-    assert fake.events == []
+    assert_admission_modules(modules_before, dict(sys.modules))
+    assert before == (tuple(sys.meta_path), tuple(sys.orig_argv))
+    assert imported == [] and fake.events == []
+
+    # Pure snapshots exercise both cache states without touching codec caches.
+    first, second, codec = object(), object(), object()
+    baseline = {"first": first, "second": second}
+    assert_admission_modules(baseline, dict(baseline))
+    with_codec = dict(baseline, **{"encodings.ascii": codec})
+    assert_admission_modules(baseline, with_codec)
+    assert_admission_modules(with_codec, dict(with_codec))
+    for name in ("unexpected_dependency", "pcc", "pcc.unexpected", "cProfile",
+                 "_lsprof", "pstats", "profile", "encodings.utf_16"):
+        with pytest.raises(AssertionError):
+            assert_admission_modules(baseline, dict(baseline, **{name: object()}))
+    for changed in ({"first": first}, {"second": second, "first": first},
+                    {"first": object(), "second": second}):
+        with pytest.raises(AssertionError):
+            assert_admission_modules(baseline, changed)
+    with pytest.raises(AssertionError):
+        assert_admission_modules(with_codec, dict(with_codec, **{"encodings.ascii": object()}))
 
 
 def test_selected_install_uses_only_verified_fake_module_origins(tmp_path, monkeypatch):
