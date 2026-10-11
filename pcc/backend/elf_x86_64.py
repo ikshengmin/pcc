@@ -1064,24 +1064,61 @@ def _link_static_executable_image(
     if machine == EM_AARCH64:
         got_reloc_types = {311, 312, 541, 542}
     for object_index, section_index, section in alloc_sections:
-        for relocation in section.relocations:
-            if (machine == EM_AARCH64 and relocation.type == 283
-                    and section.flags & SHF_EXECINSTR
-                    and not section.flags & SHF_WRITE):
-                slots = branch_slots.setdefault((object_index, section_index), {})
-                branch_key = (object_index, relocation.symbol_index, relocation.addend)
-                if branch_key not in slots:
-                    slots[branch_key] = len(slots)
-            if relocation.type not in got_reloc_types:
-                continue
-            identity = _symbol_identity(
-                objects, definitions, object_index, relocation.symbol_index
-            )
-            kind = "tpoff" if relocation.type in ((541, 542) if machine == EM_AARCH64 else (R_X86_64_GOTTPOFF,)) else "address"
-            key = (identity, kind)
-            if key not in got_seen:
-                got_seen.add(key)
-                got_identities.append(key)
+        relocations = section.relocations
+        if type(machine) is int and machine == EM_AARCH64 and type(relocations) is _PackedElfRelocations:
+            try:
+                # Keep the iterator's exact range and per-row payload reads. Only
+                # its transient frozen record is unnecessary during classification.
+                for position in range(relocations.offset, relocations.offset + relocations.size, _RELA.size):
+                    _offset, info, addend = _RELA.unpack_from(relocations.payload, position)
+                    symbol_index, relocation_type = info >> 32, info & 0xFFFFFFFF
+                    # The ordinary loop overwrites its previous row here. Release
+                    # a preceding custom row at the same boundary before callbacks.
+                    relocation = None
+                    if (machine == EM_AARCH64 and relocation_type == 283
+                            and section.flags & SHF_EXECINSTR
+                            and not section.flags & SHF_WRITE):
+                        slots = branch_slots.setdefault((object_index, section_index), {})
+                        branch_key = (object_index, symbol_index, addend)
+                        if branch_key not in slots:
+                            slots[branch_key] = len(slots)
+                    if relocation_type not in got_reloc_types:
+                        continue
+                    identity = _symbol_identity(
+                        objects, definitions, object_index, symbol_index
+                    )
+                    kind = "tpoff" if relocation_type in ((541, 542) if machine == EM_AARCH64 else (R_X86_64_GOTTPOFF,)) else "address"
+                    key = (identity, kind)
+                    if key not in got_seen:
+                        got_seen.add(key)
+                        got_identities.append(key)
+            finally:
+                # An exception traceback must not retain this source's view.
+                del relocations
+        else:
+            # Transfer the temporary iterable directly to for's one GET_ITER.
+            # The exact list is empty before callbacks or exceptions can run.
+            relocation_sources = [relocations]
+            del relocations
+            for relocation in relocation_sources.pop():
+                if (machine == EM_AARCH64 and relocation.type == 283
+                        and section.flags & SHF_EXECINSTR
+                        and not section.flags & SHF_WRITE):
+                    slots = branch_slots.setdefault((object_index, section_index), {})
+                    branch_key = (object_index, relocation.symbol_index, relocation.addend)
+                    if branch_key not in slots:
+                        slots[branch_key] = len(slots)
+                if relocation.type not in got_reloc_types:
+                    continue
+                identity = _symbol_identity(
+                    objects, definitions, object_index, relocation.symbol_index
+                )
+                kind = "tpoff" if relocation.type in ((541, 542) if machine == EM_AARCH64 else (R_X86_64_GOTTPOFF,)) else "address"
+                key = (identity, kind)
+                if key not in got_seen:
+                    got_seen.add(key)
+                    got_identities.append(key)
+            del relocation_sources
 
     metadata_sections = [
         item for item in alloc_sections
