@@ -81,9 +81,9 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST)
-# All existing 763 nodes remain. The appended adapter tests use fake modules
+# All existing 787 nodes remain. Ten ARM adapter tests add only fake modules
 # and a fake profiler, within this same bounded default invocation.
-HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 24)
+HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

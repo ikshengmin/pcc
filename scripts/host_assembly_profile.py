@@ -1,6 +1,6 @@
-"""Opt-in host-only profile of one cli_bootstrap x86 assembly call.
+"""Opt-in host-only profile of one cli_bootstrap assembly or ARM PCO stage.
 
-Only the nominated ordinary Stage1 worker imports PCC. No production module
+Only the admitted Stage1 worker/coordinator imports PCC. No production module
 imports this adapter. The profiler observes Python and C calls: its overhead
 and internal memory are not bounded by the bounded report. This is never a
 baseline performance measurement. A killed attempt may leave only claim.json.
@@ -21,6 +21,12 @@ MODULE = "pcc.driver.cli_bootstrap"
 TARGET = "x86_64-unknown-linux-gnu"
 ROUTE = "indexed-assembly"
 FLAG = "PCC_HOST_ASSEMBLY_PROFILE"
+ELF_FLAG = "PCC_HOST_ELF_STAGE_PROFILE"
+ELF_ARGV = "PCC_HOST_ELF_STAGE_PROFILE_ARGV"
+ELF_TARGET = "aarch64-unknown-linux-gnu"
+ELF_SCHEMA = "pcc.host-elf-stage-function-profile.v1"
+ELF_OWNERS = ("pcc.frontends.python.pipeline", "pcc.backend.owned_elf_inputs",
+              "pcc.backend.owned_elf_link", "pcc.backend.elf_x86_64")
 CONFIG = "PCC_HOST_ASSEMBLY_PROFILE_CONFIG"
 SOURCE_ROOT = "PCC_HOST_ASSEMBLY_PROFILE_ROOT"
 SCHEMA = "pcc.host-assembly-function-profile.v1"
@@ -60,9 +66,28 @@ def _observer_conflict():
         return True
 
 
-def prepare_environment(root, directory, environment, source, runtime, compiler_sha256, target):
+def _elf_environment(environment):
+    expected = {"PCC_SELF_LINK": "pcc", "PCC_SELF_OBJ": "pcc",
+                "PCC_DIRECT_INDEXED_KERNEL_CAPTURE": "1", "PCC_DIRECT_INDEXED_KERNEL_EMIT": "1",
+                "PCC_DEFER_FRONTEND_CODEGEN": "0", "PCC_DEFER_FRONTEND_CODEGEN_PLAN": "",
+                "PCC_DEFER_FRONTEND_OUTPUT": "", "PCC_DEFER_SELF_LINK_PLAN": ""}
+    return all(environment.get(name) == value for name, value in expected.items())
+
+
+def _elf_command(command, root):
+    return (type(command) in (list, tuple) and len(command) == 11
+            and all(type(item) is str for item in command)
+            and list(command[:8]) == [sys.executable, "-m", "pcc", "--backend", "self",
+                                      "--python-libpython", "off", "--ir-scaffold=on"]
+            and command[8] == str(Path(root) / "pcc/__main__.py") and command[9] == "-o"
+            and bool(command[10]))
+
+
+def prepare_environment(root, directory, environment, source, runtime, compiler_sha256, target,
+                        *, command=None):
     """Configure only the existing Stage1 command; never launch a process."""
-    if environment.get(FLAG) != "1":
+    elf_mode = environment.get(ELF_FLAG) == "1"
+    if environment.get(FLAG) != "1" and not elf_mode:
         return environment
     directory = Path(directory)
     owned = False
@@ -70,10 +95,18 @@ def prepare_environment(root, directory, environment, source, runtime, compiler_
     try:
         directory.mkdir(parents=True, exist_ok=False)
         owned = True
+        status = "PROFILE_MODE_CONFLICT"
+        if elf_mode and environment.get(FLAG) == "1":
+            raise ValueError(status)
         status = "UNSUPPORTED_HOST"
+        machines = ("aarch64", "arm64") if elf_mode else ("x86_64", "amd64")
         if (sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 13)
-                or sys.platform != "linux" or platform.machine().lower() not in ("x86_64", "amd64")
-                or target != TARGET):
+                or sys.platform != "linux" or platform.machine().lower() not in machines
+                or target != (ELF_TARGET if elf_mode else TARGET)):
+            raise ValueError(status)
+        status = "COORDINATOR_ADMISSION_CONFLICT"
+        if elf_mode and (not _elf_environment(environment) or not _elf_command(command, root)
+                         or len(json.dumps(command, separators=(",", ":"))) > 16384):
             raise ValueError(status)
         status = "PROFILE_HOOK_CONFLICT"
         if _observer_conflict():
@@ -102,21 +135,26 @@ def prepare_environment(root, directory, environment, source, runtime, compiler_
             "adapter_sha256": hashlib.sha256(adapter).hexdigest(),
             "owner_sources": {name.replace(".", "/") + ".py":
                               _digest(Path(root) / (name.replace(".", "/") + ".py"))
-                              for name in (*OWNERS, MODULE)},
+                              for name in (*(ELF_OWNERS if elf_mode else OWNERS), MODULE)},
         }
+        if elf_mode:
+            identity["capture"] = "ElfInputStore.stage"
         # Paths stay in the child environment, not uploaded diagnostic JSON.
         _write(directory / "setup.json", {"identity": identity})
         result = environment.copy()
         result[CONFIG] = str(directory / "setup.json")
         result[SOURCE_ROOT] = str(root)
+        if elf_mode:
+            result[ELF_ARGV] = json.dumps(command, separators=(",", ":"))
         result["PYTHONPATH"] = str(directory) + os.pathsep + environment.get("PYTHONPATH", "")
         return result
     except BaseException:
         # Conflicts disable only observation, never the ordinary Stage1 job.
         if owned:
             try:
-                _write(directory / "install-status.json", {"schema": SCHEMA, "status": status,
-                                                           "module": MODULE, "target": TARGET})
+                _write(directory / "install-status.json", {
+                    "schema": ELF_SCHEMA if elf_mode else SCHEMA, "status": status,
+                    "module": MODULE, "target": ELF_TARGET if elf_mode else TARGET})
             except BaseException:
                 pass
         return environment
@@ -174,7 +212,7 @@ def _labels(modules):
     return labels
 
 
-def _summary(entries, root, labels, key_codes):
+def _summary(entries, root, labels, key_codes, *, pinned_edges=None, attribution=None):
     rows, ids, all_edges = [], {}, []
     for entry in entries:
         code = entry.code
@@ -200,7 +238,7 @@ def _summary(entries, root, labels, key_codes):
     # Pin both encode callers first. Remaining slots show direct key-owner
     # edges only. Shared deeper helpers' self remains combined across passes.
     root_code, measure, encode, parse = key_codes
-    pinned = {(root_code, encode), (measure, encode)}
+    pinned = ({(root_code, encode), (measure, encode)} if pinned_edges is None else set(pinned_edges))
     key_edges = [edge for edge in all_edges if edge[0] in key_codes]
     eligible = [edge for edge in key_edges if edge[0] in ids and edge[1] in ids]
     eligible.sort(key=lambda edge: ((edge[0], edge[1]) not in pinned,
@@ -226,7 +264,7 @@ def _summary(entries, root, labels, key_codes):
                      "key_edges_identity_unresolved": len(key_edges) - len(eligible),
                      "edges_shown": len(edges), "edges_omitted": len(all_edges) - len(edges)},
         "limits": {"top_per_ranking": TOP, "key_edges": EDGE_LIMIT, "report_bytes": REPORT_LIMIT},
-        "attribution": "Direct encode caller edges separate measure and emit; deeper helper self is combined. Cumulative times overlap and must not be summed.",
+        "attribution": attribution or "Direct encode caller edges separate measure and emit; deeper helper self is combined. Cumulative times overlap and must not be summed.",
         "edge_identity": "Raw code identity only. Unresolved edge identities, including any separately materialized builtin labels, are counted as omitted; labels are never merged.",
     }
 
@@ -374,8 +412,298 @@ def _attach(config, manifest_sha256, assembly, timing, encoder, elf):
         raise
 
 
+def _elf_selected_path(artifacts):
+    # Inspect only the owner's existing exact containers/strings. Never
+    # consume an iterator, call a user conversion, or inspect input files.
+    if type(artifacts) is not list or not 1 <= len(artifacts) <= 4096:
+        return None
+    paths, selected = [], []
+    for row in artifacts:
+        if (type(row) is not tuple or len(row) != 3
+                or any(type(value) is not str for value in row) or len(row[2]) > 4096):
+            return None
+        module, kind, raw_path = row
+        path = os.path.abspath(raw_path)
+        paths.append(path)
+        if module == MODULE:
+            if kind != "PCO":
+                return None
+            selected.append(path)
+    if len(selected) != 1 or paths.count(selected[0]) != 1:
+        return None
+    return selected[0]
+
+
+def _attach_elf(config, pipeline, inputs, linker, elf):
+    original_link = pipeline._link_with_self_backend_direct_artifacts
+    store_type = inputs.ElfInputStore
+    original_stage = store_type.stage
+    state = {"link_seen": False, "used": False, "active": False}
+    directory = Path(config["directory"])
+    base = {"schema": ELF_SCHEMA, "identity": config["identity"],
+            "scope": "one real cli_bootstrap PCO ElfInputStore.stage; profiled overhead, not baseline performance",
+            "selection": "unique module/kind/path in the original artifacts list; unchanged input order",
+            "selected_coordinator_startup": "ordinary eager PCC import after exact argv admission; perturbed",
+            "publication": "immediate after the selected call; report overhead and return-object lifetime are included in coordinator timing",
+            "observer_failure": "Partial enable/disable may leave profiling active beyond stage; invalid captures publish no stats. Arbitrary same-name monitoring takeover is not guaranteed safe.",
+            "strong_kill": "the selected stage may not return; claim.json may exist without stats"}
+
+    def selection_status(status):
+        try:
+            _write(directory / "selection-status.json", dict(base, status=status))
+        except BaseException:
+            pass
+
+    def restore_stage():
+        try:
+            if store_type.stage is selected_stage:
+                store_type.stage = original_stage
+            return True
+        except BaseException:
+            return False
+
+    def restore_link():
+        try:
+            if pipeline._link_with_self_backend_direct_artifacts is selected_link:
+                pipeline._link_with_self_backend_direct_artifacts = original_link
+            return True
+        except BaseException:
+            return False
+
+    def selected_stage(*args, **kwargs):
+        store = args[0] if args else None
+        path = args[1] if len(args) == 2 else kwargs.get("path")
+        kind = kwargs.get("kind", "PCO")
+        offset = kwargs.get("offset", 0)
+        label = kwargs.get("label", "")
+        try:
+            bypass = (not state["active"] or state["used"] or len(args) not in (1, 2)
+                or (len(args) == 2 and "path" in kwargs)
+                or set(kwargs) - {"path", "kind", "offset", "size", "label"}
+                or type(store) is not store_type or type(store.target) is not str
+                or store.target != ELF_TARGET or type(path) is not str or path != state.get("path")
+                or type(kind) is not str or kind != "PCO" or type(offset) is not int or offset != 0
+                or kwargs.get("size") is not None or type(label) is not str or label != "")
+        except BaseException:
+            bypass = True
+        if bypass:
+            return original_stage(*args, **kwargs)
+        state["used"] = True
+        try:
+            _write(directory / "claim.json", dict(base, status="CLAIMED"))
+        except BaseException:
+            return original_stage(*args, **kwargs)
+        errors = []
+        profiler = None
+        disabled = False
+        status = "STAGE_RAISED"
+        source_count = None
+
+        def note(value):
+            try:
+                if len(errors) < 8:
+                    errors.append(value)
+            except BaseException:
+                pass
+
+        try:
+            source_count = len(store.sources)
+            if _observer_conflict():
+                note("profile_hook_conflict")
+            else:
+                from cProfile import Profile
+                profiler = Profile(subcalls=True, builtins=True)
+                if _observer_conflict():
+                    profiler = None
+                    note("profile_hook_conflict")
+                else:
+                    try:
+                        profiler.enable()
+                    except BaseException:
+                        note("enable_failed")
+        except BaseException:
+            note("profile_setup_failed")
+        try:
+            result = original_stage(*args, **kwargs)
+            status = "STAGE_RETURNED"
+            return result
+        finally:
+            # Everything below is observational; original return/BaseException
+            # wins. No store, result or traceback is saved in adapter state.
+            try:
+                if profiler is not None:
+                    try:
+                        if sys.getprofile() is not None:
+                            note("foreign_legacy_hook_preserved")
+                        slot = sys.monitoring.get_tool(sys.monitoring.PROFILER_ID)
+                        if slot not in (None, "cProfile"):
+                            note("foreign_monitoring_slot_preserved")
+                        else:
+                            profiler.disable()
+                            disabled = sys.monitoring.get_tool(sys.monitoring.PROFILER_ID) is None
+                            if not disabled:
+                                note("profile_state_not_restored")
+                    except BaseException:
+                        note("disable_failed_state_not_restored")
+                    if errors or not disabled:
+                        global _FAILED_PROFILER
+                        _FAILED_PROFILER = profiler
+                if not restore_stage():
+                    note("stage_wrapper_restore_failed")
+                value = dict(base, status=status, diagnostic_errors=errors,
+                             capture_valid=profiler is not None and disabled and not errors)
+                if status == "STAGE_RETURNED":
+                    # Use the actual source appended by this stage; no reopen,
+                    # payload/relocation property access or return-object walk.
+                    if (source_count is not None and len(store.sources) == source_count + 1):
+                        source = store.sources[source_count]
+                        if (source.path == path and source.kind == "PCO" and source.whole_file
+                                and type(source.size) is int and source.size >= 0
+                                and type(source.sha256) is str
+                                and re.fullmatch(r"[0-9a-f]{64}", source.sha256)):
+                            value["input"] = {"module": MODULE, "kind": "PCO",
+                                              "bytes": source.size, "sha256": source.sha256}
+                        else:
+                            raise ValueError("stage source identity differs")
+                    else:
+                        raise ValueError("stage source count differs")
+                if value["capture_valid"]:
+                    keys = (id(original_stage.__code__), id(store_type._read.__code__),
+                            id(elf._parse_relocatable_indexed.__code__), id(elf._parse_relocatable.__code__))
+                    value.update(_summary(
+                        profiler.getstats(), Path(config["root"]), _labels((inputs, elf)), keys,
+                        pinned_edges=((keys[0], keys[1]), (keys[0], keys[2]), (keys[2], keys[3])),
+                        attribution="Direct stage/read/indexed-parse edges describe this one PCO input. Shared helper self is combined; cumulative times overlap and must not be summed."))
+                _write(directory / "result.json", value)
+            except BaseException:
+                try:
+                    _write(directory / "result.json", dict(base, status="PROFILE_REPORT_FAILED",
+                                                           stage_status=status, capture_valid=False))
+                except BaseException:
+                    pass
+            finally:
+                if profiler is not None and disabled:
+                    try:
+                        profiler.clear()
+                    except BaseException:
+                        pass
+
+    def selected_link(*args, **kwargs):
+        if state["link_seen"]:
+            return original_link(*args, **kwargs)
+        state["link_seen"] = True
+        attached = False
+        try:
+            artifacts = args[0] if args else kwargs.get("artifacts")
+            selected = _elf_selected_path(artifacts)
+            if selected is None or _observer_conflict():
+                selection_status("SELECTION_OR_PROFILE_CONFLICT")
+            elif store_type.stage is not original_stage:
+                selection_status("STAGE_OWNER_CHANGED")
+            else:
+                state["path"] = selected
+                state["active"] = True
+                store_type.stage = selected_stage
+                attached = True
+        except BaseException:
+            state["active"] = False
+            restore_stage()
+            selection_status("SELECTION_SETUP_FAILED")
+        try:
+            return original_link(*args, **kwargs)
+        finally:
+            state["active"] = False
+            stage_restored = restore_stage()
+            link_restored = restore_link()
+            if not stage_restored or not link_restored:
+                selection_status("OWNER_RESTORE_FAILED")
+            elif attached and not state["used"]:
+                selection_status("SELECTED_STAGE_NOT_REACHED")
+            state.pop("path", None)
+
+    try:
+        pipeline._link_with_self_backend_direct_artifacts = selected_link
+    except BaseException:
+        restore_link()
+        raise
+
+
+def _install_elf():
+    # The opt-in reaches child workers through the environment, but they must
+    # return before PCC imports or any wrapper installation.
+    if (os.environ.get(FLAG) == "1" or not os.environ.get(CONFIG)
+            or sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 13)
+            or sys.platform != "linux" or platform.machine().lower() not in ("aarch64", "arm64")
+            or not _elf_environment(os.environ)):
+        return
+    argv = getattr(sys, "orig_argv", ())
+    expected = os.environ.get(ELF_ARGV, "")
+    if (len(expected) > 16384 or not _elf_command(argv, os.environ.get(SOURCE_ROOT, ""))
+            or json.dumps(argv, separators=(",", ":")) != expected):
+        return
+    status = "SETUP_UNREADABLE"
+    config = None
+    try:
+        with open(os.environ[CONFIG], encoding="ascii") as stream:
+            raw = stream.read(REPORT_LIMIT + 1)
+        if len(raw) > REPORT_LIMIT:
+            return
+        config = json.loads(raw)
+        config.update(root=os.environ[SOURCE_ROOT], directory=str(Path(os.environ[CONFIG]).parent))
+        status = "ADAPTER_IDENTITY_MISMATCH"
+        if (config["identity"]["adapter_sha256"] != _digest(__file__)
+                or config["identity"]["target"] != ELF_TARGET
+                or config["identity"].get("capture") != "ElfInputStore.stage"):
+            return
+        status = "PROFILE_HOOK_CONFLICT"
+        if _observer_conflict():
+            return
+        status = "OWNER_IMPORT_FAILED"
+        loaded = [importlib.import_module(name) for name in ELF_OWNERS]
+        status = "OWNER_IDENTITY_MISMATCH"
+        for module, name in zip(loaded, ELF_OWNERS):
+            path = Path(config["root"]) / (name.replace(".", "/") + ".py")
+            if (Path(module.__file__).resolve() != path
+                    or _digest(path) != config["identity"]["owner_sources"][name.replace(".", "/") + ".py"]):
+                return
+        pipeline, inputs, linker, elf = loaded
+        status = "OWNER_HOOK_CONFLICT"
+        if type(inputs.ElfInputStore) is not type or linker.ElfInputStore is not inputs.ElfInputStore:
+            return
+        for function, module, name in (
+                (pipeline._link_with_self_backend_direct_artifacts, pipeline, "_link_with_self_backend_direct_artifacts"),
+                (inputs.ElfInputStore.stage, inputs, "ElfInputStore.stage")):
+            if (function.__module__ != module.__name__ or function.__qualname__ != name
+                    or Path(function.__code__.co_filename).resolve() != Path(module.__file__).resolve()):
+                return
+        status = "PROFILE_HOOK_CONFLICT"
+        if _observer_conflict():
+            return
+        status = "ATTACH_FAILED"
+        _attach_elf(config, pipeline, inputs, linker, elf)
+        status = "INSTALLED"
+    except BaseException:
+        return
+    finally:
+        try:
+            _write(Path(os.environ[CONFIG]).parent / "install-status.json", {
+                "schema": ELF_SCHEMA, "status": status,
+                "identity": config["identity"] if config is not None else {},
+                "scope": "exact admitted ARM Stage1 coordinator; observation only"})
+        except BaseException:
+            pass
+
+
 def install():
     """sitecustomize entry; no hooks, PCC imports or profiler for other jobs."""
+    if os.environ.get(ELF_FLAG) == "1":
+        try:
+            _install_elf()
+        except BaseException:
+            # A failure before exact coordinator admission must not alter
+            # ordinary startup or publish evidence for an unselected worker.
+            pass
+        return
     if (os.environ.get(FLAG) != "1" or not os.environ.get(CONFIG)
             or sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 13)
             or sys.platform != "linux"

@@ -464,10 +464,11 @@ jobs:
 
       - name: Qualify all five GC self-host chains and Stage1 admission metrics
         env:
-          # Explicit marker opts in only this push commit and Linux x86 Stage1.
+          # Explicit marker opts in only this push commit and Linux ARM Stage1.
           # PRs and later unmarked commits stay off. These times include
           # deterministic profiling overhead, never baseline timings.
-          PCC_HOST_ASSEMBLY_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-x86_64' && contains(github.event.head_commit.message, '[stage1-assembly-profile]') && '1' || '0' }}
+          PCC_HOST_ASSEMBLY_PROFILE: "0"
+          PCC_HOST_ELF_STAGE_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-aarch64' && contains(github.event.head_commit.message, '[stage1-arm-elf-profile]') && '1' || '0' }}
         run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1
 
       - name: Verify the new pcc1 on native prior worker shapes

@@ -627,8 +627,13 @@ def test_stage1_wiring_is_opt_in_surgical_and_uses_existing_report_boundary():
     worker = (root / "pcc/frontends/python/pipeline_frontend_worker_execution.py").read_text()
     assert worker.index("codegen_ms = int((time.monotonic() - codegen_started)") < worker.index("phase_timing.report(sys.stderr, phase_timing_complete)")
     workflow = (root / ".github/workflows/pcc1-package-parity.yml").read_text()
-    assert "PCC_HOST_ASSEMBLY_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-x86_64' && contains(github.event.head_commit.message, '[stage1-assembly-profile]') && '1' || '0' }}" in workflow
+    stage1 = workflow.split("      - name: Qualify all five GC self-host chains and Stage1 admission metrics\n", 1)[1].split("\n      - name:", 1)[0]
+    assert 'PCC_HOST_ASSEMBLY_PROFILE: "0"' in stage1
+    assert "PCC_HOST_ELF_STAGE_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-aarch64' && contains(github.event.head_commit.message, '[stage1-arm-elf-profile]') && '1' || '0' }}" in stage1
+    assert "--out-dir build/worker-prior-gate --phase stage1" in stage1
     assert workflow.count("PCC_HOST_ASSEMBLY_PROFILE:") == 1
+    assert workflow.count("PCC_HOST_ELF_STAGE_PROFILE:") == 1
+    assert "[stage1-assembly-profile]" not in workflow
     assert workflow.count("--out-dir build/worker-prior-gate --phase stage1") == 2
     tree = ast.parse(Path(adapter.__file__).read_text())
     top_imports = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
@@ -636,3 +641,759 @@ def test_stage1_wiring_is_opt_in_surgical_and_uses_existing_report_boundary():
                    for node in top_imports if isinstance(node, ast.ImportFrom))
     assert not any(alias.name.startswith(("pcc", "cProfile", "_lsprof"))
                    for node in top_imports if isinstance(node, ast.Import) for alias in node.names)
+
+
+def _elf_ordinary_environment():
+    return {adapter.ELF_FLAG: "1", "PCC_SELF_LINK": "pcc", "PCC_SELF_OBJ": "pcc",
+            "PCC_DIRECT_INDEXED_KERNEL_CAPTURE": "1", "PCC_DIRECT_INDEXED_KERNEL_EMIT": "1",
+            "PCC_DEFER_FRONTEND_CODEGEN": "0", "PCC_DEFER_FRONTEND_CODEGEN_PLAN": "",
+            "PCC_DEFER_FRONTEND_OUTPUT": "", "PCC_DEFER_SELF_LINK_PLAN": "",
+            "PYTHONPATH": adapter.os.environ.get("PYTHONPATH", "")}
+
+
+def _elf_argv(root):
+    return [sys.executable, "-m", "pcc", "--backend", "self", "--python-libpython", "off",
+            "--ir-scaffold=on", str(root / "pcc/__main__.py"), "-o", str(root / "stage1")]
+
+
+def _elf_owned_function(function, module, qualname):
+    code = function.__code__.replace(co_filename=module.__file__,
+                                     co_name=qualname.rsplit(".", 1)[-1], co_qualname=qualname)
+    owned = FunctionType(code, function.__globals__, code.co_name,
+                         function.__defaults__, function.__closure__)
+    owned.__kwdefaults__ = function.__kwdefaults__
+    owned.__module__, owned.__qualname__ = module.__name__, qualname
+    return owned
+
+
+def _elf_fake(tmp_path, monkeypatch):
+    """Build only owned Python fakes; no PCC import, payload IO or real profiler."""
+    _clean_host(monkeypatch)
+    fake = _fake(tmp_path, monkeypatch)
+    monkeypatch.setattr(adapter.platform, "machine", lambda: "aarch64")
+    monkeypatch.delenv(adapter.FLAG, raising=False)
+    monkeypatch.delenv(adapter.ELF_FLAG, raising=False)
+    modules = [ModuleType(name) for name in adapter.ELF_OWNERS]
+    for module in modules:
+        path = fake.root / (module.__name__.replace(".", "/") + ".py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fake ARM owner source identity only\n")
+        module.__file__ = str(path)
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    module_source = fake.root / "pcc/driver/cli_bootstrap.py"
+    module_source.parent.mkdir(parents=True, exist_ok=True)
+    module_source.write_text("# fake nominated module identity only\n")
+    pipeline, inputs, linker, elf = modules
+    control, events = fake.control, fake.events
+    control.stage_error = control.stage_callback = control.link_callback = None
+    control.source_factory = control.result_factory = control.store_observer = None
+    control.source_count_delta, control.stage_result = 1, None
+    control.link_result = object()
+
+    class Result:
+        @property
+        def data(self):
+            pytest.fail("adapter must not read a result payload")
+
+        @property
+        def relocations(self):
+            pytest.fail("adapter must not read result relocations")
+
+        @property
+        def sections(self):
+            pytest.fail("adapter must not traverse result sections")
+
+    class Store:
+        def __init__(self, target=adapter.ELF_TARGET):
+            self.target, self.sources = target, []
+            if control.store_observer is not None:
+                control.store_observer(self)
+
+        def stage(self, path, *, kind="PCO", offset=0, size=None, label=""):
+            events.append(("stage", id(self), path, kind, offset, size, label, control.slot))
+            if control.stage_callback is not None:
+                control.stage_callback(self, path, kind, offset, size, label)
+            if control.stage_error is not None:
+                raise control.stage_error
+            for _ in range(control.source_count_delta):
+                if control.source_factory is None:
+                    source = SimpleNamespace(path=path, kind=kind, whole_file=size is None,
+                                             size=37, sha256="d" * 64)
+                else:
+                    source = control.source_factory(path, kind, offset, size, label)
+                self.sources.append(source)
+            if control.result_factory is not None:
+                return control.result_factory()
+            return control.stage_result if control.stage_result is not None else Result()
+
+        def _read(self, source):
+            pytest.fail("fake stage never reads a file")
+
+    Store.__module__, Store.__qualname__ = inputs.__name__, "ElfInputStore"
+    Store.stage = _elf_owned_function(Store.stage, inputs, "ElfInputStore.stage")
+    Store._read = _elf_owned_function(Store._read, inputs, "ElfInputStore._read")
+    inputs.ElfInputStore = linker.ElfInputStore = Store
+
+    def parse_indexed(data):
+        pytest.fail("fake stage never parses ELF")
+
+    def parse(data):
+        pytest.fail("fake stage never parses ELF")
+
+    elf._parse_relocatable_indexed = _elf_owned_function(parse_indexed, elf, "_parse_relocatable_indexed")
+    elf._parse_relocatable = _elf_owned_function(parse, elf, "_parse_relocatable")
+
+    def link(*args, **kwargs):
+        events.append(("link", tuple(map(id, args)), {key: id(value) for key, value in kwargs.items()}))
+        if control.link_callback is not None:
+            return control.link_callback(*args, **kwargs)
+        artifacts = args[0] if args else kwargs["artifacts"]
+        store = Store()
+        for _module, kind, path in artifacts:
+            store.stage(adapter.os.path.abspath(path), kind=kind)
+            events.append(("after_stage", path, (fake.directory / "result.json").exists()))
+        events.append(("link_return",))
+        return control.link_result
+
+    pipeline._link_with_self_backend_direct_artifacts = _elf_owned_function(
+        link, pipeline, "_link_with_self_backend_direct_artifacts")
+    original_link, original_stage = pipeline._link_with_self_backend_direct_artifacts, Store.stage
+
+    def getstats(self):
+        events.append(("getstats",))
+        if control.stats_error is not None:
+            raise control.stats_error
+        read, indexed, parsed = (Store._read.__code__, elf._parse_relocatable_indexed.__code__,
+                                 elf._parse_relocatable.__code__)
+        return [_entry(original_stage.__code__, [_entry(read, count=2), _entry(indexed, count=1)]),
+                _entry(read), _entry(indexed, [_entry(parsed, count=1)]), _entry(parsed)]
+
+    monkeypatch.setattr(sys.modules["cProfile"].Profile, "getstats", getstats)
+    fake.modules, fake.pipeline, fake.inputs, fake.linker, fake.elf = modules, pipeline, inputs, linker, elf
+    fake.store_type, fake.original_link, fake.original_stage = Store, original_link, original_stage
+    fake.config["identity"].update(
+        target=adapter.ELF_TARGET, capture="ElfInputStore.stage",
+        owner_sources={name.replace(".", "/") + ".py":
+                       adapter._digest(fake.root / (name.replace(".", "/") + ".py"))
+                       for name in (*adapter.ELF_OWNERS, adapter.MODULE)})
+    fake.artifacts = [("first", "PCO", str(fake.root / "first.pco")),
+                      (adapter.MODULE, "PCO", str(fake.root / "selected.pco")),
+                      ("last", "ASM", str(fake.root / "last.s"))]
+    return fake
+
+
+def _elf_install_environment(fake, monkeypatch):
+    setup = fake.directory / "setup.json"
+    setup.write_text(json.dumps({"identity": fake.config["identity"]}))
+    for key, value in _elf_ordinary_environment().items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv(adapter.FLAG, raising=False)
+    monkeypatch.setenv(adapter.CONFIG, str(setup))
+    monkeypatch.setenv(adapter.SOURCE_ROOT, str(fake.root))
+    command = _elf_argv(fake.root)
+    monkeypatch.setenv(adapter.ELF_ARGV, json.dumps(command, separators=(",", ":")))
+    monkeypatch.setattr(sys, "orig_argv", command)
+    return command
+
+
+def _elf_call(fake, **kwargs):
+    return fake.pipeline._link_with_self_backend_direct_artifacts(
+        fake.artifacts, "ordinary-output", None, False, **kwargs)
+
+
+def test_arm_disabled_workers_mismatched_argv_and_occupied_hooks_never_import(tmp_path, monkeypatch):
+    cases = ("disabled", "worker", "changed_output", "changed_command", "long_argv", "both_modes",
+             "wrong_host", "wrong_python", "nonordinary", "legacy", "monitoring")
+    for case in cases:
+        directory = tmp_path / case
+        directory.mkdir()
+        with monkeypatch.context() as patch:
+            fake = _elf_fake(directory, patch)
+            command = _elf_install_environment(fake, patch)
+            if case == "disabled":
+                patch.delenv(adapter.ELF_FLAG)
+            elif case == "worker":
+                patch.setattr(sys, "orig_argv", _argv(directory / "never-open-manifest"))
+            elif case == "changed_output":
+                patch.setattr(sys, "orig_argv", command[:-1] + ["different-output"])
+            elif case == "changed_command":
+                patch.setattr(sys, "orig_argv", command + ["--extra"])
+            elif case == "long_argv":
+                long_command = command[:-1] + ["x" * 16385]
+                patch.setattr(sys, "orig_argv", long_command)
+                patch.setenv(adapter.ELF_ARGV, json.dumps(long_command, separators=(",", ":")))
+            elif case == "both_modes":
+                patch.setenv(adapter.FLAG, "1")
+            elif case == "wrong_host":
+                patch.setattr(adapter.platform, "machine", lambda: "x86_64")
+            elif case == "wrong_python":
+                patch.setattr(sys, "version_info", (3, 14, 0, "final", 0))
+            elif case == "nonordinary":
+                patch.setenv("PCC_DEFER_SELF_LINK_PLAN", "a-plan")
+            elif case == "legacy":
+                fake.control.active = object()
+            elif case == "monitoring":
+                fake.control.slot = "foreign-profiler"
+            imported = []
+
+            def forbidden_import(name):
+                imported.append(name)
+                pytest.fail("rejected ARM coordinator imported a module")
+
+            patch.setattr(adapter.importlib, "import_module", forbidden_import)
+            before = dict(sys.modules)
+            hooks, argv, active, slot = (tuple(sys.meta_path), tuple(sys.orig_argv),
+                                        fake.control.active, fake.control.slot)
+            adapter.install()
+            after = dict(sys.modules)
+            assert set(after).difference(before) <= {"encodings.ascii"}
+            assert tuple(name for name in after if name in before) == tuple(before)
+            assert all(after[name] is module for name, module in before.items())
+            assert tuple(sys.meta_path) == hooks and tuple(sys.orig_argv) == argv
+            assert fake.control.active is active and fake.control.slot == slot
+            assert imported == [] and fake.events == []
+            assert fake.pipeline._link_with_self_backend_direct_artifacts is fake.original_link
+            assert fake.store_type.stage is fake.original_stage
+            assert not (fake.directory / "claim.json").exists()
+            if case in ("legacy", "monitoring"):
+                assert json.loads((fake.directory / "install-status.json").read_text())["status"] == "PROFILE_HOOK_CONFLICT"
+
+
+def test_arm_prepare_requires_exclusive_mode_exact_command_environment_and_sources(tmp_path, monkeypatch):
+    fake = _elf_fake(tmp_path, monkeypatch)
+    env, command = _elf_ordinary_environment(), _elf_argv(fake.root)
+    env["KEEP"] = "ordinary"
+    before = dict(env)
+    directory = tmp_path / "prepared"
+    prepared = adapter.prepare_environment(fake.root, directory, env, {"commit": "a" * 40},
+                                            {"path": "/private/runtime", "sha256": "b" * 64},
+                                            "c" * 64, adapter.ELF_TARGET, command=command)
+    assert prepared is not env and env == before and prepared["KEEP"] == "ordinary"
+    assert json.loads(prepared[adapter.ELF_ARGV]) == command
+    assert prepared[adapter.SOURCE_ROOT] == str(fake.root)
+    assert prepared["PYTHONPATH"] == str(directory) + adapter.os.pathsep + env["PYTHONPATH"]
+    setup = (directory / "setup.json").read_text()
+    identity = json.loads(setup)["identity"]
+    assert str(fake.root) not in setup and "/private" not in setup
+    assert identity["capture"] == "ElfInputStore.stage" and identity["target"] == adapter.ELF_TARGET
+    assert set(identity["owner_sources"]) == {name.replace(".", "/") + ".py"
+                                              for name in (*adapter.ELF_OWNERS, adapter.MODULE)}
+    assert (directory / "_pcc_host_assembly_profile.py").read_bytes() == Path(adapter.__file__).read_bytes()
+    rejected = [(dict(env, **{adapter.FLAG: "1"}), command, "PROFILE_MODE_CONFLICT"),
+                (env, None, "COORDINATOR_ADMISSION_CONFLICT"),
+                (env, command + ["--extra"], "COORDINATOR_ADMISSION_CONFLICT"),
+                (env, command[:6] + ["on"] + command[7:], "COORDINATOR_ADMISSION_CONFLICT"),
+                (env, command[:8] + ["foreign-main.py"] + command[9:], "COORDINATOR_ADMISSION_CONFLICT"),
+                (env, command[:-1] + [""], "COORDINATOR_ADMISSION_CONFLICT"),
+                (env, command[:-1] + ["x" * 16385], "COORDINATOR_ADMISSION_CONFLICT")]
+    for name in ("PCC_SELF_LINK", "PCC_SELF_OBJ", "PCC_DIRECT_INDEXED_KERNEL_CAPTURE",
+                 "PCC_DIRECT_INDEXED_KERNEL_EMIT", "PCC_DEFER_FRONTEND_CODEGEN",
+                 "PCC_DEFER_FRONTEND_CODEGEN_PLAN", "PCC_DEFER_FRONTEND_OUTPUT", "PCC_DEFER_SELF_LINK_PLAN"):
+        missing = dict(env)
+        del missing[name]
+        rejected.append((missing, command, "COORDINATOR_ADMISSION_CONFLICT"))
+    for index, (environment, argv, status) in enumerate(rejected):
+        blocked = tmp_path / ("rejected-" + str(index))
+        assert adapter.prepare_environment(fake.root, blocked, environment, {}, {}, "", adapter.ELF_TARGET,
+                                           command=argv) is environment
+        assert json.loads((blocked / "install-status.json").read_text())["status"] == status
+        assert not (blocked / "sitecustomize.py").exists()
+    for kind in ("legacy", "monitoring", "startup"):
+        with monkeypatch.context() as patch:
+            if kind == "legacy":
+                patch.setattr(fake.control, "active", object())
+            elif kind == "monitoring":
+                patch.setattr(fake.control, "slot", "occupied")
+            else:
+                patch.setitem(sys.modules, "sitecustomize", ModuleType("sitecustomize"))
+            blocked = tmp_path / kind
+            assert adapter.prepare_environment(fake.root, blocked, env, {}, {}, "", adapter.ELF_TARGET,
+                                               command=command) is env
+            expected = "SITECUSTOMIZE_CONFLICT" if kind == "startup" else "PROFILE_HOOK_CONFLICT"
+            assert json.loads((blocked / "install-status.json").read_text())["status"] == expected
+    for kind in ("machine", "python", "platform", "target"):
+        with monkeypatch.context() as patch:
+            target = adapter.ELF_TARGET
+            if kind == "machine":
+                patch.setattr(adapter.platform, "machine", lambda: "x86_64")
+            elif kind == "python":
+                patch.setattr(sys, "version_info", (3, 14, 0, "final", 0))
+            elif kind == "platform":
+                patch.setattr(sys, "platform", "win32")
+            else:
+                target = adapter.TARGET
+            blocked = tmp_path / kind
+            assert adapter.prepare_environment(fake.root, blocked, env, {}, {}, "", target,
+                                               command=command) is env
+            assert json.loads((blocked / "install-status.json").read_text())["status"] == "UNSUPPORTED_HOST"
+    assert fake.events == []
+
+
+def test_arm_install_verifies_fake_owner_origins_hashes_and_original_function_identity(tmp_path, monkeypatch):
+    cases = ("origin", "sha", "link_module", "link_qualname", "link_filename",
+             "stage_module", "stage_qualname", "stage_filename", "store_alias", "valid")
+    for case in cases:
+        directory = tmp_path / case
+        directory.mkdir()
+        with monkeypatch.context() as patch:
+            fake = _elf_fake(directory, patch)
+            _elf_install_environment(fake, patch)
+            if case == "origin":
+                fake.elf.__file__ = str(directory / "foreign.py")
+            elif case == "sha":
+                Path(fake.linker.__file__).write_text("# changed fake owner\n")
+            elif case == "store_alias":
+                fake.linker.ElfInputStore = type("OtherStore", (), {})
+            elif case != "valid":
+                function = fake.original_link if case.startswith("link_") else fake.original_stage
+                if case.endswith("module"):
+                    function.__module__ = "foreign.module"
+                elif case.endswith("qualname"):
+                    function.__qualname__ = "foreign_wrapper"
+                else:
+                    function.__code__ = function.__code__.replace(co_filename=str(directory / "foreign.py"))
+            imported = []
+            owners = dict(zip(adapter.ELF_OWNERS, fake.modules))
+
+            def load(name):
+                imported.append(name)
+                return owners[name]
+
+            patch.setattr(adapter.importlib, "import_module", load)
+            adapter.install()
+            status = json.loads((fake.directory / "install-status.json").read_text())["status"]
+            assert imported == list(adapter.ELF_OWNERS) and fake.events == []
+            assert fake.store_type.stage is fake.original_stage
+            if case == "valid":
+                assert status == "INSTALLED"
+                assert fake.pipeline._link_with_self_backend_direct_artifacts is not fake.original_link
+                assert _elf_call(fake) is fake.control.link_result
+                assert _result(fake)["capture_valid"]
+            else:
+                assert status == ("OWNER_IDENTITY_MISMATCH" if case in ("origin", "sha") else "OWNER_HOOK_CONFLICT")
+                assert fake.pipeline._link_with_self_backend_direct_artifacts is fake.original_link
+                assert not (fake.directory / "claim.json").exists()
+
+
+def test_arm_selection_uses_exact_containers_and_rejects_selected_path_aliases(tmp_path, monkeypatch):
+    selected, first = str(tmp_path / "selected.pco"), str(tmp_path / "first.pco")
+    valid = [("first", "PCO", first), (adapter.MODULE, "PCO", selected)]
+    touched = []
+
+    class Iterator:
+        def __iter__(self):
+            touched.append("iter")
+            raise AssertionError("custom iterator consumed")
+
+    class List(list):
+        def __iter__(self):
+            touched.append("list_iter")
+            raise AssertionError("custom list consumed")
+
+    class Tuple(tuple):
+        pass
+
+    class Text(str):
+        def __str__(self):
+            touched.append("str")
+            raise AssertionError("custom text converted")
+
+    class PathLike:
+        def __fspath__(self):
+            touched.append("fspath")
+            raise AssertionError("custom path converted")
+
+    def forbidden_file_read(*args, **kwargs):
+        touched.append("file")
+        raise AssertionError("selection inspected an input file")
+
+    monkeypatch.setattr(Path, "open", forbidden_file_read)
+    monkeypatch.setattr(adapter.os.path, "isfile", forbidden_file_read)
+    assert adapter._elf_selected_path(valid) == selected
+    assert adapter._elf_selected_path(valid + [("other", "PCO", first)]) == selected
+    invalid = [Iterator(), List(valid), tuple(valid), [],
+               [Tuple(valid[1])], [[adapter.MODULE, "PCO", selected]],
+               [(Text(adapter.MODULE), "PCO", selected)], [(adapter.MODULE, Text("PCO"), selected)],
+               [(adapter.MODULE, "PCO", Text(selected))], [(adapter.MODULE, "PCO", PathLike())],
+               [(adapter.MODULE, "PCO", "x" * 4097)],
+               [(adapter.MODULE, "ASM", selected)], valid + [valid[1]],
+               valid + [("alias", "ASM", str(tmp_path / "alias" / ".." / "selected.pco"))],
+               [("other", "PCO", selected)], valid + [("broken", "PCO")],
+               [("other", "PCO", first)] * 4096 + [valid[1]]]
+    for artifacts in invalid:
+        assert adapter._elf_selected_path(artifacts) is None
+    assert touched == []
+
+
+def test_arm_only_nominated_natural_stage_is_profiled_and_published_before_link_finishes(tmp_path, monkeypatch):
+    fake = _elf_fake(tmp_path, monkeypatch)
+    marker, profile, runtime, output = object(), object(), object(), object()
+    fake.control.stage_result = marker
+    before_artifacts = list(fake.artifacts)
+    selected = fake.artifacts[1][2]
+    calls = []
+
+    def ordinary_link(artifacts, out_path, runtime_archive, verbose, **kwargs):
+        assert artifacts is fake.artifacts and out_path is output and runtime_archive is runtime
+        assert verbose is True and kwargs == {"profile": profile, "extra_link_args": ("ordinary",)}
+        store = fake.store_type()
+        assert store.stage(fake.artifacts[0][2], kind="PCO") is marker
+        assert not (fake.directory / "claim.json").exists()
+        rejected_calls = [((selected,), {"kind": "ASM"}), ((selected,), {"offset": 1}),
+                          ((selected,), {"offset": False}), ((selected,), {"size": 0}),
+                          ((selected,), {"label": "archive-member"})]
+        for args, keywords in rejected_calls:
+            assert store.stage(*args, **keywords) is marker
+            assert not (fake.directory / "claim.json").exists()
+        assert fake.store_type(adapter.TARGET).stage(selected) is marker
+        Derived = type("Derived", (fake.store_type,), {})
+        assert Derived().stage(selected) is marker
+        assert not (fake.directory / "claim.json").exists()
+        count = len(store.sources)
+        assert store.stage(path=selected, kind="PCO", offset=0, size=None, label="") is marker
+        calls.append(count)
+        assert (fake.directory / "result.json").exists()
+        assert _result(fake)["input"] == {"module": adapter.MODULE, "kind": "PCO", "bytes": 37, "sha256": "d" * 64}
+        assert fake.store_type.stage is fake.original_stage
+        assert store.stage(fake.artifacts[2][2], kind="ASM") is marker
+        return marker
+
+    fake.control.link_callback = ordinary_link
+    adapter._attach_elf(fake.config, *fake.modules)
+    assert fake.pipeline._link_with_self_backend_direct_artifacts(
+        fake.artifacts, output, runtime, True, profile=profile, extra_link_args=("ordinary",)) is marker
+    assert fake.artifacts == before_artifacts and calls == [6]
+    assert fake.pipeline._link_with_self_backend_direct_artifacts is fake.original_link
+    names = [row[0] for row in fake.events]
+    assert names.count("construct") == names.count("enable") == names.count("disable") == 1
+    assert names.count("getstats") == names.count("clear") == 1
+    stages = [row for row in fake.events if row[0] == "stage"]
+    assert [row[2] for row in stages] == [fake.artifacts[0][2]] + [selected] * 8 + [fake.artifacts[2][2]]
+    assert [row[-1] for row in stages] == [None] * 8 + ["cProfile", None]
+    result = _result(fake)
+    assert result["status"] == "STAGE_RETURNED" and result["capture_valid"]
+    assert "PCO input" in result["attribution"] and "must not be summed" in result["attribution"]
+    assert sorted(edge["calls"] for edge in result["key_caller_edges"]) == [1, 1, 2]
+    assert len(result["functions"]) <= 2 * adapter.TOP
+    assert (fake.directory / "result.json").stat().st_size <= adapter.REPORT_LIMIT
+
+
+def test_arm_original_baseexception_identity_survives_immediate_report_failures(tmp_path, monkeypatch):
+    for index, error in enumerate((ValueError("ordinary"), KeyboardInterrupt(), SystemExit(7), GeneratorExit())):
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        with monkeypatch.context() as patch:
+            fake = _elf_fake(directory, patch)
+            fake.artifacts = [fake.artifacts[1]]
+            fake.control.stage_error = error
+            if index % 2:
+                fake.control.stats_error = SystemExit(9)
+            adapter._attach_elf(fake.config, *fake.modules)
+            with pytest.raises(type(error)) as caught:
+                _elf_call(fake)
+            assert caught.value is error
+            assert [row[0] for row in fake.events].count("stage") == 1
+            result = _result(fake)
+            if index % 2:
+                assert result["status"] == "PROFILE_REPORT_FAILED" and result["stage_status"] == "STAGE_RAISED"
+                assert not result["capture_valid"] and "functions" not in result
+            else:
+                assert result["status"] == "STAGE_RAISED"
+            assert ("disable",) in fake.events and ("clear",) in fake.events
+            assert fake.store_type.stage is fake.original_stage
+            assert fake.pipeline._link_with_self_backend_direct_artifacts is fake.original_link
+
+
+def test_arm_claim_prevents_retry_capture_and_unreached_call_leaves_no_stats(tmp_path, monkeypatch):
+    fake = _elf_fake(tmp_path, monkeypatch)
+    fake.artifacts = [fake.artifacts[1]]
+    write = adapter._write
+
+    def unavailable_publication(path, value):
+        if Path(path).name == "result.json":
+            raise SystemExit("simulated publication loss; no process is killed")
+        return write(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(adapter, "_write", unavailable_publication)
+        adapter._attach_elf(fake.config, *fake.modules)
+        assert _elf_call(fake) is fake.control.link_result
+    claim = (fake.directory / "claim.json").read_bytes()
+    assert not (fake.directory / "result.json").exists()
+    retry_path = tmp_path / "retry"
+    retry_path.mkdir()
+    retry = _elf_fake(retry_path, monkeypatch)
+    retry.config["directory"] = str(fake.directory)
+    retry.artifacts = [retry.artifacts[1]]
+    adapter._attach_elf(retry.config, *retry.modules)
+    assert _elf_call(retry) is retry.control.link_result
+    assert [row[0] for row in retry.events].count("stage") == 1
+    assert ("construct", True, True) not in retry.events
+    assert (fake.directory / "claim.json").read_bytes() == claim
+    assert not (fake.directory / "result.json").exists()
+    assert retry.store_type.stage is retry.original_stage
+    missing_path = tmp_path / "unreached"
+    missing_path.mkdir()
+    missing = _elf_fake(missing_path, monkeypatch)
+    missing.control.link_callback = lambda *args, **kwargs: missing.control.link_result
+    adapter._attach_elf(missing.config, *missing.modules)
+    assert _elf_call(missing) is missing.control.link_result
+    assert json.loads((missing.directory / "selection-status.json").read_text())["status"] == "SELECTED_STAGE_NOT_REACHED"
+    assert not (missing.directory / "claim.json").exists() and not (missing.directory / "result.json").exists()
+    assert missing.store_type.stage is missing.original_stage
+    assert missing.pipeline._link_with_self_backend_direct_artifacts is missing.original_link
+
+
+def test_arm_profile_failures_and_foreign_hooks_never_change_stage_outcome_or_clear_foreign_slots(tmp_path, monkeypatch):
+    cases = ("constructor", "missing_profile", "enable", "disable", "occupied_legacy",
+             "occupied_monitoring", "foreign_legacy", "foreign_monitoring")
+    for case in cases:
+        directory = tmp_path / case
+        directory.mkdir()
+        with monkeypatch.context() as patch:
+            fake = _elf_fake(directory, patch)
+            fake.artifacts = [fake.artifacts[1]]
+            marker, hook = object(), object()
+            fake.control.stage_result = marker
+            forbidden = []
+            patch.setattr(sys, "setprofile", lambda *args: forbidden.append("setprofile"))
+            patch.setattr(sys.monitoring, "free_tool_id", lambda *args: forbidden.append("free_tool_id"), raising=False)
+            patch.setattr(sys.monitoring, "set_events", lambda *args: forbidden.append("set_events"), raising=False)
+            patch.setattr(sys.monitoring, "register_callback", lambda *args: forbidden.append("register_callback"), raising=False)
+            if case == "constructor":
+                fake.control.construct_error = KeyboardInterrupt()
+            elif case == "missing_profile":
+                patch.delattr(sys.modules["cProfile"], "Profile")
+            elif case == "enable":
+                fake.control.enable_error = SystemExit(3)
+            elif case == "disable":
+                fake.control.disable_error = SystemExit(4)
+
+            def ordinary_link(artifacts, *args, **kwargs):
+                if case == "occupied_legacy":
+                    fake.control.active = hook
+                elif case == "occupied_monitoring":
+                    fake.control.slot = "foreign-profiler"
+                return fake.store_type().stage(artifacts[0][2], kind="PCO")
+
+            def during_stage(*args):
+                if case == "foreign_legacy":
+                    fake.control.active = hook
+                elif case == "foreign_monitoring":
+                    fake.control.slot = "foreign-profiler"
+
+            fake.control.link_callback, fake.control.stage_callback = ordinary_link, during_stage
+            adapter._attach_elf(fake.config, *fake.modules)
+            assert _elf_call(fake) is marker
+            result = _result(fake)
+            assert result["status"] == "STAGE_RETURNED" and not result["capture_valid"]
+            assert "functions" not in result and ("getstats",) not in fake.events
+            assert [row[0] for row in fake.events].count("stage") == 1 and forbidden == []
+            errors = result["diagnostic_errors"]
+            if case in ("constructor", "missing_profile"):
+                assert "profile_setup_failed" in errors and ("enable",) not in fake.events
+            elif case.startswith("occupied_"):
+                assert "profile_hook_conflict" in errors and ("construct", True, True) not in fake.events
+            elif case == "enable":
+                assert "enable_failed" in errors and "profile_state_not_restored" in errors
+            elif case == "disable":
+                assert "disable_failed_state_not_restored" in errors
+            elif case == "foreign_legacy":
+                assert "foreign_legacy_hook_preserved" in errors
+                assert fake.control.active is hook and fake.control.slot is None and ("disable",) in fake.events
+            else:
+                assert "foreign_monitoring_slot_preserved" in errors and ("disable",) not in fake.events
+            if case in ("enable", "disable", "foreign_monitoring"):
+                assert adapter._FAILED_PROFILER is not None and ("clear",) not in fake.events
+            if case in ("occupied_monitoring", "foreign_monitoring"):
+                assert fake.control.slot == "foreign-profiler"
+            if case == "occupied_legacy":
+                assert fake.control.active is hook
+            assert fake.store_type.stage is fake.original_stage
+            assert fake.pipeline._link_with_self_backend_direct_artifacts is fake.original_link
+
+
+def test_arm_metadata_and_report_failures_are_bounded_and_restore_only_owned_wrappers(tmp_path, monkeypatch):
+    cases = ("count_zero", "count_two", "path", "kind", "whole_file", "size", "sha", "stats", "foreign_wrappers")
+    for case in cases:
+        directory = tmp_path / case
+        directory.mkdir()
+        with monkeypatch.context() as patch:
+            fake = _elf_fake(directory, patch)
+            fake.artifacts = [fake.artifacts[1]]
+            if case in ("count_zero", "count_two"):
+                fake.control.source_count_delta = 0 if case == "count_zero" else 2
+            elif case == "stats":
+                fake.control.stats_error = KeyboardInterrupt()
+            elif case != "foreign_wrappers":
+                def source_factory(path, kind, offset, size, label):
+                    values = dict(path=path, kind=kind, whole_file=True, size=37, sha256="d" * 64)
+                    values[case] = {"path": "other", "kind": "ASM", "whole_file": False,
+                                    "size": True, "sha": "not-a-digest"}[case]
+                    if case == "sha":
+                        values["sha256"] = values.pop("sha")
+                    return SimpleNamespace(**values)
+                fake.control.source_factory = source_factory
+            foreign_stage = lambda *args, **kwargs: None
+            foreign_link = lambda *args, **kwargs: None
+            if case == "foreign_wrappers":
+                def replace_wrappers(*args):
+                    fake.store_type.stage = foreign_stage
+                    fake.pipeline._link_with_self_backend_direct_artifacts = foreign_link
+                fake.control.stage_callback = replace_wrappers
+            adapter._attach_elf(fake.config, *fake.modules)
+            assert _elf_call(fake) is fake.control.link_result
+            result = _result(fake)
+            if case == "foreign_wrappers":
+                assert result["status"] == "STAGE_RETURNED" and result["capture_valid"]
+                assert fake.store_type.stage is foreign_stage
+                assert fake.pipeline._link_with_self_backend_direct_artifacts is foreign_link
+            else:
+                assert result["status"] == "PROFILE_REPORT_FAILED" and not result["capture_valid"]
+                assert result["stage_status"] == "STAGE_RETURNED" and "functions" not in result
+                assert fake.store_type.stage is fake.original_stage
+                assert fake.pipeline._link_with_self_backend_direct_artifacts is fake.original_link
+            assert [row[0] for row in fake.events].count("stage") == 1
+            assert ("clear",) in fake.events
+            assert (fake.directory / "result.json").stat().st_size <= adapter.REPORT_LIMIT
+
+    predicate_path = tmp_path / "predicate_baseexception"
+    predicate_path.mkdir()
+    with monkeypatch.context() as patch:
+        fake = _elf_fake(predicate_path, patch)
+        marker = object()
+        fake.control.stage_result = marker
+
+        class RaisingTarget(fake.store_type):
+            @property
+            def target(self):
+                raise KeyboardInterrupt("observation-only target lookup")
+
+            @target.setter
+            def target(self, value):
+                self._ordinary_target = value
+
+        fake.inputs.ElfInputStore = fake.linker.ElfInputStore = RaisingTarget
+        fake.control.link_callback = lambda *args, **kwargs: RaisingTarget().stage(fake.artifacts[1][2])
+        adapter._attach_elf(fake.config, *fake.modules)
+        assert _elf_call(fake) is marker
+        assert [row[0] for row in fake.events].count("stage") == 1
+        assert ("construct", True, True) not in fake.events
+        assert not (fake.directory / "claim.json").exists() and not (fake.directory / "result.json").exists()
+        assert RaisingTarget.stage is fake.original_stage
+        assert fake.pipeline._link_with_self_backend_direct_artifacts is fake.original_link
+        assert json.loads((fake.directory / "selection-status.json").read_text())["status"] == "SELECTED_STAGE_NOT_REACHED"
+
+    restore_path = tmp_path / "restore_failure"
+    restore_path.mkdir()
+    with monkeypatch.context() as patch:
+        fake = _elf_fake(restore_path, patch)
+        marker, restoration = object(), {"deny": False}
+        fake.control.stage_result = marker
+        original_stage = fake.original_stage
+
+        class GuardedType(type):
+            def __setattr__(cls, name, value):
+                if name == "stage" and value is original_stage and restoration["deny"]:
+                    raise SystemExit("fake owner refuses wrapper restoration")
+                return super().__setattr__(name, value)
+
+        GuardedStore = GuardedType("GuardedStore", (fake.store_type,), {"stage": original_stage})
+        fake.inputs.ElfInputStore = fake.linker.ElfInputStore = GuardedStore
+        saved = []
+
+        def link_without_selected_call(*args, **kwargs):
+            saved.append(GuardedStore.stage)
+            restoration["deny"] = True
+            return marker
+
+        fake.control.link_callback = link_without_selected_call
+        adapter._attach_elf(fake.config, *fake.modules)
+        assert _elf_call(fake) is marker
+        assert fake.pipeline._link_with_self_backend_direct_artifacts is fake.original_link
+        assert GuardedStore.stage is saved[0] and saved[0] is not original_stage
+        assert json.loads((fake.directory / "selection-status.json").read_text())["status"] == "OWNER_RESTORE_FAILED"
+        # The first link never claimed. Its failed restoration must not let
+        # the leftover wrapper capture a later call after its path is dropped.
+        store, selected = GuardedStore(), fake.artifacts[1][2]
+        assert store.stage(selected, kind="PCO") is marker
+        assert saved[0](store, path=selected, kind="PCO") is marker
+        restoration["deny"] = False
+        GuardedStore.stage = original_stage
+        assert saved[0](store, selected) is marker
+        assert [row[0] for row in fake.events].count("stage") == 3
+        assert ("construct", True, True) not in fake.events
+        assert not (fake.directory / "claim.json").exists() and not (fake.directory / "result.json").exists()
+
+
+def test_arm_adapter_retains_no_store_source_result_or_original_traceback(tmp_path, monkeypatch):
+    fake = _elf_fake(tmp_path, monkeypatch)
+    fake.artifacts = [fake.artifacts[1]]
+    refs = []
+
+    class Source:
+        pass
+
+    class Result:
+        @property
+        def data(self):
+            pytest.fail("payload property was inspected")
+
+        @property
+        def relocations(self):
+            pytest.fail("relocations property was inspected")
+
+        @property
+        def sections(self):
+            pytest.fail("sections property was inspected")
+
+    def source_factory(path, kind, offset, size, label):
+        source = Source()
+        source.path, source.kind, source.whole_file = path, kind, True
+        source.size, source.sha256 = 91, "e" * 64
+        refs.append(weakref.ref(source))
+        return source
+
+    def result_factory():
+        result = Result()
+        refs.append(weakref.ref(result))
+        return result
+
+    fake.control.source_factory, fake.control.result_factory = source_factory, result_factory
+    fake.control.store_observer = lambda store: refs.append(weakref.ref(store))
+    adapter._attach_elf(fake.config, *fake.modules)
+    wrapper = fake.pipeline._link_with_self_backend_direct_artifacts
+    assert _elf_call(fake) is fake.control.link_result
+    assert len(refs) == 3 and all(reference() is None for reference in refs)
+    assert _result(fake)["input"]["bytes"] == 91
+    # Keep the detached wrapper alive: its closure must still retain no inputs.
+    assert wrapper is not fake.original_link
+    failure_path = tmp_path / "exception"
+    failure_path.mkdir()
+    failure = _elf_fake(failure_path, monkeypatch)
+    failure.artifacts = [failure.artifacts[1]]
+    failure_refs = []
+
+    class Failure(BaseException):
+        pass
+
+    def raise_original(store, *args):
+        local = Source()
+        failure_refs.extend((weakref.ref(store), weakref.ref(local)))
+        raise Failure("ordinary failure")
+
+    failure.control.stage_callback = raise_original
+    adapter._attach_elf(failure.config, *failure.modules)
+    failed_wrapper = failure.pipeline._link_with_self_backend_direct_artifacts
+    try:
+        _elf_call(failure)
+    except Failure as error:
+        # Clear only the caller-owned traceback after checking identity/type;
+        # any adapter-held traceback would still retain its frame locals.
+        error.__traceback__ = None
+    else:
+        pytest.fail("ordinary BaseException was swallowed")
+    assert len(failure_refs) == 2 and all(reference() is None for reference in failure_refs)
+    assert failed_wrapper is not failure.original_link
+    assert failure.store_type.stage is failure.original_stage
+    assert _result(failure)["status"] == "STAGE_RAISED"

@@ -302,14 +302,18 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                     profile_directory = None
                     profile_fresh = False
                     profile_installed = False
+                    elf_profile = stage_env.get("PCC_HOST_ELF_STAGE_PROFILE") == "1"
                     if stage == 1 and stage_env.get("PCC_HOST_ASSEMBLY_PROFILE") == "1":
+                        profile_directory = out_dir / "assembly-function-profile"
+                    elif stage == 1 and elf_profile:
+                        profile_directory = out_dir / "elf-stage-function-profile"
+                    if profile_directory is not None:
                         from scripts.host_assembly_profile import prepare_environment
 
-                        profile_directory = out_dir / "assembly-function-profile"
                         profile_fresh = not profile_directory.exists()
                         profiled_env = prepare_environment(
                             ROOT, profile_directory, stage_env, source,
-                            runtime_identity, compiler_digest, target,
+                            runtime_identity, compiler_digest, target, command=command,
                         )
                         profile_installed = profiled_env is not stage_env
                         stage_env = profiled_env
@@ -319,7 +323,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                     if profile_directory is not None:
                         # A killed worker may have claimed the sole attempt but
                         # left no terminal stats. Never call this baseline data.
-                        record["assembly_function_profile"] = {
+                        record["elf_stage_function_profile" if elf_profile else "assembly_function_profile"] = {
                             "scope": "profiled overhead, not baseline performance",
                             "installation_applied": profile_installed,
                             "output_directory_preexisted": not profile_fresh,
