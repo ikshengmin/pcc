@@ -1049,6 +1049,10 @@ def _link_static_executable_image(
                 raise ElfError(f"TLS section {section.name!r} must be writable")
             alloc_sections.append((object_index, section_index, section))
 
+    # Reserve by input identity and RELA addend, never symbol name. Do not
+    # resolve branch symbols during classification: a later bad symbol must
+    # not displace the first relocation failure in application order.
+    branch_slots: dict[tuple[int, int], dict[tuple[int, int, int], int]] = {}
     got_identities: list[tuple[tuple[str, object], str]] = []
     got_seen: set[tuple[tuple[str, object], str]] = set()
     got_reloc_types = {
@@ -1061,6 +1065,13 @@ def _link_static_executable_image(
         got_reloc_types = {311, 312, 541, 542}
     for object_index, section_index, section in alloc_sections:
         for relocation in section.relocations:
+            if (machine == EM_AARCH64 and relocation.type == 283
+                    and section.flags & SHF_EXECINSTR
+                    and not section.flags & SHF_WRITE):
+                slots = branch_slots.setdefault((object_index, section_index), {})
+                branch_key = (object_index, relocation.symbol_index, relocation.addend)
+                if branch_key not in slots:
+                    slots[branch_key] = len(slots)
             if relocation.type not in got_reloc_types:
                 continue
             identity = _symbol_identity(
@@ -1114,11 +1125,32 @@ def _link_static_executable_image(
     header_bytes = _ELF_HEADER.size + phnum * _PROGRAM_HEADER.size
     placements: dict[tuple[int, int], _Placement] = {}
 
+    branch_pools: dict[tuple[int, int], tuple[int, int]] = {}
+    veneer_pools: list[tuple[int, int]] = []
+    veneer_padding: list[tuple[int, int]] = []
+    if branch_slots:
+        from .elf_aarch64_relocations import veneer_pool_end
     cursor = _align(header_bytes, _PAGE)
     for object_index, section_index, section in rx_sections:
-        cursor = _align(cursor, section.align)
-        placements[(object_index, section_index)] = _Placement(cursor, base_address + cursor)
+        section_key = (object_index, section_index)
+        slot_count = len(branch_slots.get(section_key, {}))
+        if slot_count:
+            before_pool = _align(cursor, 8)
+            veneer_padding.append((cursor, before_pool))
+            veneer_pools.append((before_pool, slot_count))
+            cursor = veneer_pool_end(before_pool, slot_count)
+        aligned = _align(cursor, section.align)
+        if branch_slots and section.flags & SHF_EXECINSTR:
+            veneer_padding.append((cursor, aligned))
+        cursor = aligned
+        placements[section_key] = _Placement(cursor, base_address + cursor)
         cursor += section.size
+        if slot_count:
+            after_pool = _align(cursor, 8)
+            veneer_padding.append((cursor, after_pool))
+            veneer_pools.append((after_pool, slot_count))
+            cursor = veneer_pool_end(after_pool, slot_count)
+            branch_pools[section_key] = (before_pool, after_pool)
     rx_file_end = cursor
 
     rw_start = _align(rx_file_end, _PAGE) if has_rw else 0
@@ -1187,6 +1219,17 @@ def _link_static_executable_image(
             continue
         placement = placements[(object_index, section_index)]
         image[placement.file_offset:placement.file_offset + section.size] = section.data
+
+    if veneer_pools:
+        from .elf_aarch64_relocations import initialize_veneer_pool
+        for padding_start, padding_end in veneer_padding:
+            # Complete instructions only; a pre-existing partial instruction
+            # at a section end is not made executable by linker padding.
+            padding_start = _align(padding_start, 4)
+            for padding_offset in range(padding_start, padding_end - 3, 4):
+                struct.pack_into("<I", image, padding_offset, 0xD503201F)
+        for pool_start, slot_count in veneer_pools:
+            initialize_veneer_pool(image, pool_start, slot_count)
 
     boundaries = {}
     for family in ("init", "fini"):
@@ -1259,7 +1302,11 @@ def _link_static_executable_image(
                 object_index, relocation.symbol_index
             )
             if machine == EM_AARCH64:
-                from .elf_aarch64_relocations import apply_relocation
+                from .elf_aarch64_relocations import (
+                    apply_call26_with_veneer,
+                    apply_relocation,
+                    veneer_slot_offset,
+                )
                 target = symbol_address
                 if relocation.type in (311, 312, 541, 542):
                     identity = _symbol_identity(objects, definitions, object_index, relocation.symbol_index)
@@ -1268,8 +1315,22 @@ def _link_static_executable_image(
                 elif relocation.type in (549, 551):
                     target = tls_offset(object_index, relocation.symbol_index)
                 try:
-                    apply_relocation(image, patch, relocation.type,
-                                     target + relocation.addend, place)
+                    if (relocation.type == 283 and _symbol.type == STT_FUNC
+                            and _symbol.section_index != SHN_UNDEF
+                            and not -(1 << 27) <= target + relocation.addend - place < (1 << 27)
+                            and (object_index, section_index) in branch_pools):
+                        slot_index = branch_slots[(object_index, section_index)][
+                            (object_index, relocation.symbol_index, relocation.addend)
+                        ]
+                        pool_starts = branch_pools[(object_index, section_index)]
+                        veneer_offsets = tuple(veneer_slot_offset(pool, slot_index)
+                                               for pool in pool_starts)
+                        apply_call26_with_veneer(image, patch,
+                                                target + relocation.addend, place,
+                                                veneer_offsets)
+                    else:
+                        apply_relocation(image, patch, relocation.type,
+                                         target + relocation.addend, place)
                 except ValueError as exc:
                     raise ElfError(str(exc) + _aarch64_relocation_error_context(
                         object_index, section_index, section.name,

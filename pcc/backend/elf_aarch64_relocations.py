@@ -53,6 +53,94 @@ def _signed(value: int, bits: int) -> int:
     return value & ((1 << bits) - 1)
 
 
+# Each guarded chunk is less than 1 MiB, so fallthrough can skip it with B.
+# Chunking also keeps very large numeric layout plans within branch26 reach.
+_VENEERS_PER_CHUNK = 65535
+_VENEER_SIZE = 16
+_VENEER_GUARD_SIZE = 8
+
+
+def branch26_fits(target: int, place: int) -> bool:
+    delta = target - place
+    return not (delta & 3) and -(1 << 27) <= delta < (1 << 27)
+
+
+def veneer_pool_end(start: int, count: int) -> int:
+    """Plan reserved RX bytes without allocating a section-sized buffer."""
+    if start < 0 or start & 7 or count < 0:
+        raise ValueError("invalid AArch64 veneer pool layout")
+    chunks = (count + _VENEERS_PER_CHUNK - 1) // _VENEERS_PER_CHUNK
+    return start + count * _VENEER_SIZE + chunks * _VENEER_GUARD_SIZE
+
+
+def veneer_slot_offset(start: int, index: int) -> int:
+    """Return the exact slot, including every preceding chunk's guard."""
+    if start < 0 or start & 7 or index < 0:
+        raise ValueError("invalid AArch64 veneer slot layout")
+    guards = 1 + index // _VENEERS_PER_CHUNK
+    return start + index * _VENEER_SIZE + guards * _VENEER_GUARD_SIZE
+
+
+def initialize_veneer_pool(image: bytearray, start: int, count: int) -> None:
+    """Guard reserved slots, including unused slots, against fallthrough."""
+    end = veneer_pool_end(start, count)
+    if end > len(image):
+        raise ValueError("AArch64 veneer pool outside image")
+    cursor = start
+    remaining = count
+    while remaining:
+        chunk_count = min(remaining, _VENEERS_PER_CHUNK)
+        chunk_end = cursor + _VENEER_GUARD_SIZE + chunk_count * _VENEER_SIZE
+        # B skips all literals and lands on the next guard or after the pool.
+        immediate = _signed((chunk_end - cursor) >> 2, 26)
+        struct.pack_into("<II", image, cursor, 0x14000000 | immediate, 0xD503201F)
+        cursor = chunk_end
+        remaining -= chunk_count
+
+
+def apply_call26_with_veneer(image: bytearray, offset: int,
+                             target: int, place: int,
+                             veneer_offsets: tuple[int, ...]) -> None:
+    """Relax only a proven STT_FUNC CALL26 into a pre-reserved boundary slot.
+
+    The linker supplies the resolved symbol-type proof. AAELF64 5.7.7 and
+    AAPCS64 6.5.1 allow IP0/x16 clobber here. BR, rather than BLR, preserves
+    the original call's LR=P+4. No layout or allocation changes happen here.
+    """
+    delta = target - place
+    if -(1 << 27) <= delta < (1 << 27):
+        apply_relocation(image, offset, R_AARCH64_CALL26, target, place)
+        return
+    # Do not convert malformed original instructions or targets into success.
+    if offset < 0 or offset + 4 > len(image):
+        raise ValueError("AArch64 relocation outside image")
+    if offset & 3:
+        raise ValueError("unaligned AArch64 instruction relocation")
+    if delta & 3 or target & 3 or place & 3:
+        raise ValueError("unaligned AArch64 branch target")
+    if target < 0 or target >= 1 << 64 or place < 0 or place >= 1 << 64:
+        raise ValueError("AArch64 branch address outside unsigned 64-bit range")
+    word = struct.unpack_from("<I", image, offset)[0]
+    if word & 0xFC000000 != 0x94000000:
+        raise ValueError("AArch64 CALL26 relocation requires a BL instruction")
+    for veneer_offset in veneer_offsets:
+        veneer_address = place - offset + veneer_offset
+        # Test the actual slot address, not its pool's beginning.
+        if not branch26_fits(veneer_address, place):
+            continue
+        if (veneer_offset < 0 or veneer_offset + _VENEER_SIZE > len(image)
+                or veneer_offset & 7 or veneer_address & 7
+                or veneer_address < 0 or veneer_address >= 1 << 64):
+            raise ValueError("invalid AArch64 reserved veneer slot")
+        apply_relocation(image, offset, R_AARCH64_CALL26, veneer_address, place)
+        # LDR x16, [PC, #8]; BR x16; full-width absolute S+A literal.
+        struct.pack_into("<IIQ", image, veneer_offset, 0x58000050, 0xD61F0200, target)
+        return
+    # Giant input sections are kept continuous. Fail only when this actual
+    # overflowing call cannot reach either of its exact reserved slots.
+    apply_relocation(image, offset, R_AARCH64_CALL26, target, place)
+
+
 def apply_relocation(image: bytearray, offset: int, kind: int,
                      target: int, place: int) -> None:
     """Apply S+A (or GOT/TP offset+A) to a validated instruction/data site."""

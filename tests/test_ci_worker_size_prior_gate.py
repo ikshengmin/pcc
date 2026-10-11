@@ -47,7 +47,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -55,8 +55,10 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[21] == gate.RSS_PUBLISHER_TEST
     assert gate.HOST_FILES[22] == gate.ELF_RELOCATION_CONTEXT_TEST
     assert gate.HOST_FILES[23:25] == (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST)
-    assert gate.HOST_FILES[25:] == (gate.PARSE_BUFFER_TEST, gate.PARSE_BUFFER_OBJECT_TEST)
-    assert sum(gate.HOST_COUNTS) == 1294 and sum(gate.HOST_COUNTS[:25]) == 1194
+    assert gate.HOST_FILES[25:27] == (gate.PARSE_BUFFER_TEST, gate.PARSE_BUFFER_OBJECT_TEST)
+    assert gate.HOST_FILES[27:] == (gate.ARM_CALL_VENEERS_TEST,)
+    assert sum(gate.HOST_COUNTS) == 1349 and sum(gate.HOST_COUNTS[:27]) == 1294
+    assert sum(gate.HOST_COUNTS[:25]) == 1194
     assert sum(gate.HOST_COUNTS[:23]) == 1039
     assert sum(gate.HOST_COUNTS[:22]) == 1023
     assert sum(gate.HOST_COUNTS[:21]) == 968
@@ -670,7 +672,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -940,6 +942,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
         "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py",
         "tests/python/test_aarch64_relocation_error_context.py",
+        "tests/python/test_aarch64_elf_call_veneers.py",
     )
     assert gate.ELF_OWNER_NODE == (
         "tests/python/test_pipeline_self_backend_link_owner.py::"
@@ -953,6 +956,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
     elf_start = MODULES.index(elf_modules[0])
     assert MODULES[elf_start:elf_start + len(elf_modules)] == elf_modules
     assert gate.ELF_RELOCATION_CONTEXT_TEST in gate.HOST_FILES
+    assert gate.ARM_CALL_VENEERS_TEST in gate.HOST_FILES
     tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
     identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "source_identity")
@@ -969,7 +973,8 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
     # test modules nor calls their object emitters or native probes.
     for path, expected, native_count in ((gate.ELF_FORMAT_TEST, 67, 0),
                                           (gate.ELF_STAGING_TEST, 69, 2),
-                                          (gate.ELF_RELOCATION_CONTEXT_TEST, 16, 0)):
+                                          (gate.ELF_RELOCATION_CONTEXT_TEST, 16, 0),
+                                          (gate.ARM_CALL_VENEERS_TEST, 55, 0)):
         total = gated = 0
         for node in ast.parse((ROOT / path).read_text()).body:
             if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):

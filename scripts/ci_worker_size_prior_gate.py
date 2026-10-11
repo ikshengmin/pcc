@@ -29,11 +29,12 @@ ELF_FORMAT_TEST = "tests/python/test_elf_x86_64.py"
 ELF_STAGING_TEST = "tests/python/test_owned_elf_staging.py"
 ELF_OWNER_TEST = "tests/python/test_pipeline_self_backend_link_owner.py"
 ELF_RELOCATION_CONTEXT_TEST = "tests/python/test_aarch64_relocation_error_context.py"
+ARM_CALL_VENEERS_TEST = "tests/python/test_aarch64_elf_call_veneers.py"
 ELF_OWNER_NODE = ELF_OWNER_TEST + "::test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
 ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
               "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
               "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py",
-              ELF_RELOCATION_CONTEXT_TEST)
+              ELF_RELOCATION_CONTEXT_TEST, ARM_CALL_VENEERS_TEST)
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 REGALLOC_FACTS_TEST = "tests/python/test_aarch64_regalloc_single_seed.py"
 SCALAR_PROJECTION_TEST = "tests/python/test_scalar_arena_projections.py"
@@ -121,10 +122,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST,
               RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST, RSS_PUBLISHER_TEST,
               ELF_RELOCATION_CONTEXT_TEST, STACKMAP_BUDGET_TEST, STACKMAP_HOST_BUDGET_TEST,
-              PARSE_BUFFER_TEST, PARSE_BUFFER_OBJECT_TEST)
-# All existing 1194 nodes remain. Parser source/data and exact host-object
-# controls share this invocation; strict includes the actual assembler module.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23)
+              PARSE_BUFFER_TEST, PARSE_BUFFER_OBJECT_TEST, ARM_CALL_VENEERS_TEST)
+# All existing 1294 nodes remain. The 55 tiny ARM relocation/layout controls
+# share this invocation; both changed production modules remain strict targets.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
