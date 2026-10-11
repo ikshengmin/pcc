@@ -475,8 +475,8 @@ def utime_file(path: c_ptr, times: c_ptr) -> i64:
         return -1
     # Metadata-only, shared, noninheritable existing-file/directory handle.
     # BACKUP_SEMANTICS permits directories; no privileges are enabled here.
-    handle = CreateFileW(wide, 256, 7, null(), 3, 33554432, null())
-    if ptr_to_int(handle) == -1:
+    metadata_handle = CreateFileW(wide, 256, 7, null(), 3, 33554432, null())
+    if ptr_to_int(metadata_handle) == -1:
         status: i64 = error()
         free(wide)
         pcc_errno_set(0 - status)
@@ -489,9 +489,9 @@ def utime_file(path: c_ptr, times: c_ptr) -> i64:
     store_i32(filetimes, 8, write_ticks & 4294967295)
     store_i32(filetimes, 12, write_ticks >> 32)
     status: i64 = 0
-    if SetFileTime(handle, null(), filetimes, ptr_add(filetimes, 8)) == 0:
+    if SetFileTime(metadata_handle, null(), filetimes, ptr_add(filetimes, 8)) == 0:
         status = error()
-    closed: i64 = CloseHandle(handle)
+    closed: i64 = CloseHandle(metadata_handle)
     if status != 0:
         # Preserve the primary SetFileTime error even if close also failed.
         pcc_errno_set(0 - status)

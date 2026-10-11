@@ -930,7 +930,152 @@ def test_windows_tar_time_model_utf16_conversion_owns_one_buffer(fail):
         assert ("malloc", len(expected)) in events
 
 
+def _check_windows_tar_time_handle_binding():
+    """Source/dispatcher-fragment model, not compiler or native execution.
+
+    The current extern c_ptr fast path can prefer a module function over a
+    same-named local. Keep the shim outside that unresolved generic defect,
+    and retain an explicit old-name counterexample rather than modeling the
+    Python interpreter's different binding behavior as native evidence.
+    """
+    tree = ast.parse(WINDOWS.read_text())
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    target = functions["utime_file"]
+    original_function = functions["handle"]
+    assert any(isinstance(decorator, ast.Call)
+               and isinstance(decorator.func, ast.Name)
+               and decorator.func.id == "c_abi_export"
+               and ast.literal_eval(decorator.args[0]) == "pcc_win_fd_handle"
+               for decorator in original_function.decorator_list)
+    module_bindings = set(functions)
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            module_bindings.update(item.asname or item.name.split(".")[0] for item in node.names)
+        elif isinstance(node, ast.Assign):
+            module_bindings.update(item.id for item in node.targets if isinstance(item, ast.Name))
+    assert "metadata_handle" not in module_bindings
+    # This raw shim has no hidden class/closure or star-import registration.
+    # Its explicit scaffold imports cannot introduce an unlisted short name.
+    assert sum(isinstance(node, ast.FunctionDef) for node in ast.walk(tree)) == len(functions)
+    assert not any(isinstance(node, (ast.ClassDef, ast.Lambda, ast.Import)) for node in ast.walk(tree))
+    imports = [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+    assert [node.module for node in imports] == ["pcc", "pcc.extern", "pcc.unsafe"]
+    assert all(node in tree.body for node in imports)
+    assert not any(item.name == "*" for node in imports for item in node.names)
+    handle_names = [node for node in ast.walk(target)
+                    if isinstance(node, ast.Name) and node.id in ("handle", "metadata_handle")]
+    assert len(handle_names) == 4 and all(node.id == "metadata_handle" for node in handle_names)
+    assert sum(isinstance(node.ctx, ast.Store) for node in handle_names) == 1
+    calls = {name: [node for node in ast.walk(target) if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name) and node.func.id == name]
+             for name in ("CreateFileW", "ptr_to_int", "SetFileTime", "CloseHandle")}
+    assert all(len(items) == 1 for items in calls.values())
+    created = next(node for node in target.body if isinstance(node, ast.Assign)
+                   and node.value is calls["CreateFileW"][0])
+    assert len(created.targets) == 1 and created.targets[0].id == "metadata_handle"
+    for name in ("ptr_to_int", "SetFileTime", "CloseHandle"):
+        assert isinstance(calls[name][0].args[0], ast.Name)
+        assert calls[name][0].args[0].id == "metadata_handle"
+    assert (calls["CreateFileW"][0].lineno < calls["ptr_to_int"][0].lineno
+            < calls["SetFileTime"][0].lineno < calls["CloseHandle"][0].lineno)
+
+    declarations = ast.parse((ROOT / "pcc/frontends/python/codegen/user_function_decl_lowering.py").read_text())
+    registration = ast.parse("self.functions[fd.name] = fn").body[0]
+    assert any(ast.dump(node) == ast.dump(registration) for node in ast.walk(declarations)
+               if isinstance(node, ast.Assign))
+    lowering = ast.parse((ROOT / "pcc/frontends/python/codegen/extern_lowering.py").read_text())
+    method = next(node for node in ast.walk(lowering)
+                  if isinstance(node, ast.FunctionDef) and node.name == "_emit_extern_call_impl")
+    # Execute the unchanged parameter loop only, over fake IR values/boundaries.
+    # No module imports, function declaration, compiler call or emitted IR runs.
+    loop = next(node for node in method.body if isinstance(node, ast.For)
+                and ast.dump(node.iter) == ast.dump(ast.parse("enumerate(args)", mode="eval").body))
+    fragment = ast.Module(body=[loop], type_ignores=[])
+    code = compile(ast.fix_missing_locations(fragment), "<extern-argument-binding-model>", "exec")
+
+    class BindingName:
+        def __init__(self, ident):
+            self.ident = ident
+            self.ty = None
+
+    class BindingExpression:
+        def __init__(self, value):
+            self.value = value
+            self.ty = None
+
+    class Boundary:
+        def __init__(self, locals_):
+            self.functions = {name: object() for name in functions}
+            self.locals = locals_
+            self.events = []
+            self.builder = SimpleNamespace(bitcast=self.bitcast)
+            self._EXTERN_CTYPE_IR = {"c_ptr": "fake-pointer-type"}
+            self._try_err_block = None
+
+        def bitcast(self, value, want, name=None):
+            self.events.append(("function-pointer", value))
+            assert want == "fake-pointer-type"
+            return value
+
+        def _fresh(self, name):
+            return name
+
+        def _emit_expr_with_cpy_operand_cleanup(self, expr, unused, **keywords):
+            assert unused == () and keywords == {"as_object": False, "rooted_pcc_lifetimes": ()}
+            self.events.append(("evaluate", expr))
+            return self.locals[expr.ident] if isinstance(expr, BindingName) else expr.value
+
+        def _raw_addresses_are_ints(self):
+            return False
+
+        def _current_try_err_block(self):
+            return None
+
+        def _coerce_to_extern(self, value, source_type, want, ctype):
+            assert source_type is None and want == "fake-pointer-type" and ctype == "c_ptr"
+            return value
+
+    scenarios = 0
+    for api in ("SetFileTime", "CloseHandle"):
+        declaration = next(node.value for node in tree.body if isinstance(node, ast.Assign)
+                           and any(isinstance(item, ast.Name) and item.id == api for item in node.targets))
+        argtypes = tuple(item.id for item in declaration.args[1].elts)
+        assert argtypes == ("c_ptr",) * len(calls[api][0].args)
+        for local_name in ("metadata_handle", "handle"):
+            created_handle = object()
+            owner = Boundary({local_name: created_handle})
+            first = BindingName(local_name)
+            rest = tuple(BindingExpression(object()) for _ in argtypes[1:])
+            namespace = {"self": owner, "args": (first,) + rest, "argtype_names": argtypes,
+                         "ir_args": [], "object_roots": [], "object_arg_indices": [],
+                         "Name": BindingName, "_CSTR": "fake-pointer-type", "ir": SimpleNamespace(Value=object)}
+            exec(code, namespace)
+            if local_name == "metadata_handle":
+                assert namespace["ir_args"][0] is created_handle
+                assert owner.events[0] == ("evaluate", first)
+                assert not any(event[0] == "function-pointer" for event in owner.events)
+            else:
+                assert namespace["ir_args"][0] is owner.functions["handle"]
+                assert namespace["ir_args"][0] is not created_handle
+                assert owner.events[0] == ("function-pointer", owner.functions["handle"])
+                assert ("evaluate", first) not in owner.events
+            assert namespace["ir_args"][1:] == [item.value for item in rest]
+            assert namespace["object_roots"] == [] and namespace["object_arg_indices"] == []
+            scenarios += 1
+    # A true unshadowed callback still takes this existing raw function lane.
+    owner = Boundary({})
+    namespace = {"self": owner, "args": (BindingName("handle"),), "argtype_names": ("c_ptr",),
+                 "ir_args": [], "object_roots": [], "object_arg_indices": [],
+                 "Name": BindingName, "_CSTR": "fake-pointer-type", "ir": SimpleNamespace(Value=object)}
+    exec(code, namespace)
+    assert namespace["ir_args"] == [owner.functions["handle"]]
+    assert owner.events == [("function-pointer", owner.functions["handle"])]
+    scenarios += 1
+    assert scenarios == 5
+
+
 def test_tar_attrs_model_source_dispatch_is_finite_and_owned():
+    _check_windows_tar_time_handle_binding()
     _check_tar_attrs_native_phase_witness()
     _check_tar_metadata_control_models()
     _check_tar_control_failure_priority()
