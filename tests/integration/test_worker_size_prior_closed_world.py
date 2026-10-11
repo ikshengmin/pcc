@@ -244,6 +244,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         markers = list(SECTION.finditer(text))
         names = [match.group(1) for match in markers]
         assert len(names) == len(set(names)) and set(MODULES) <= set(names)
+        assert "pcc.frontends.python.worker_resource_host_windows" not in names
         whole = verify_ir_text(
             text, progress=lambda phase, state: _record_closed_world_progress(
                 receipt_path, receipt, started,
@@ -267,6 +268,21 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
             section = sections.pop(name)
             required = ["user_" + name.replace(".", "_") + "_" + function for function in declared]
             definition_bodies = _index_definition_bodies(section)
+            if name == "pcc.frontends.python.worker_resource_plan":
+                # Compile the actual dispatcher and reader in the existing
+                # native strict gate. The host Win32 adapter cannot leak in.
+                assert {"_open_worker_resource", "read_worker_resource"} <= set(declared)
+                assert "worker_resource_host_windows" not in section
+                for function, callee in (("_open_worker_resource", "py_file_open_options"),
+                                         ("read_worker_resource", "_open_worker_resource")):
+                    symbol = "user_" + name.replace(".", "_") + "_" + function
+                    require_definition(section, symbol, bodies=definition_bodies)
+                    matches = (definition_bodies.get(symbol, []) if definition_bodies is not None
+                               else [match for match in _DEFINITION_BODY.finditer(section)
+                                     if match.group("symbol") == symbol])
+                    assert len(matches) == 1
+                    assert re.search(r'\bcall\b[^\n]*' + re.escape(callee), matches[0].group("body"))
+                    del matches
             if name == "pcc.backend.x86_64_encode":
                 initializer = "_pcc_py_module_top_pcc_backend_x86_64_encode"
                 required.append(initializer)

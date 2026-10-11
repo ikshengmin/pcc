@@ -344,11 +344,24 @@ def choose_task(pending, tasks, observations, active_reservations,
     return -1, 0, False
 
 
+def _open_worker_resource(path: str):
+    # The adjacent local binding and simple implementation guard are also the
+    # native dependency scanner's boundary. Keep the Win32 adapter host-only.
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if execution_runtime.platform == "win32":
+            from pcc.frontends.python.worker_resource_host_windows import (
+                open_worker_resource,
+            )
+            return open_worker_resource(path)
+    return open(path, "r", encoding="utf-8")
+
+
 def read_worker_resource(path: str, expected_pid: int, expected_token: str = ""):
     if not path:
         return None
     try:
-        with open(path, "r", encoding="utf-8") as stream:
+        with _open_worker_resource(path) as stream:
             rows = stream.read().splitlines()
         if len(rows) != 6 or rows[0] != RESOURCE_REPORT_SCHEMA or rows[5] != expected_token:
             return None

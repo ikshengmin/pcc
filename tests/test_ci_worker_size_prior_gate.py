@@ -47,11 +47,13 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32)
-    assert gate.HOST_FILES[-4:-1] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
-    assert gate.HOST_FILES[-1] == gate.REGALLOC_FACTS_TEST
-    assert sum(gate.HOST_COUNTS) == 844 and sum(gate.HOST_COUNTS[:-1]) == 812
-    assert sum(gate.HOST_COUNTS[:-2]) == 764 and sum(gate.HOST_COUNTS[:-4]) == 755
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11)
+    assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
+    assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
+    assert gate.HOST_FILES[18:] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
+    assert sum(gate.HOST_COUNTS) == 879 and sum(gate.HOST_COUNTS[:18]) == 844
+    assert sum(gate.HOST_COUNTS[:17]) == 812 and sum(gate.HOST_COUNTS[:16]) == 764
+    assert sum(gate.HOST_COUNTS[:14]) == 755
     facts_tree = ast.parse((ROOT / gate.REGALLOC_FACTS_TEST).read_text())
     facts_nodes = [node for node in facts_tree.body
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
@@ -72,6 +74,16 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
                and node.value.id == "ASSEMBLY_PROFILE_INPUTS" for node in ast.walk(identity))
     for path in (*gate.X87_INPUTS[:6], *gate.ASSEMBLY_PROFILE_INPUTS):
+        assert workflow.count('      - "' + path + '"') == 2
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "RSS_READER_INPUTS" for node in ast.walk(identity))
+    assert gate.RSS_READER_INPUTS == (
+        gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST,
+        "pcc/frontends/python/worker_resource_plan.py",
+        "pcc/frontends/python/worker_resource_host_windows.py",
+        "pcc/frontends/python/pipeline_import_scan.py",
+    )
+    for path in (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST):
         assert workflow.count('      - "' + path + '"') == 2
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
@@ -574,7 +586,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -754,6 +766,16 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     assert "require_object_symbols(obj.read_bytes(), target, required)" in calls
     assert "emit_indexed_module_file(str(sidecar), str(obj), 'PCO', optimize=False)" in calls
     assert MODULES[-1] == "pcc.backend.x86_64_encode"
+    rss = next(node for node in module_loop.body if isinstance(node, ast.If)
+               and ast.unparse(node.test) == "name == 'pcc.frontends.python.worker_resource_plan'")
+    rss_strings = {node.value for node in ast.walk(rss) if isinstance(node, ast.Constant)
+                   and isinstance(node.value, str)}
+    assert {"_open_worker_resource", "read_worker_resource", "py_file_open_options"} <= rss_strings
+    assert "worker_resource_host_windows" in rss_strings
+    assert "pcc.frontends.python.worker_resource_host_windows" in {
+        node.value for node in ast.walk(closure) if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+    }
     changed = next(node for node in module_loop.body if isinstance(node, ast.If)
                    and ast.unparse(node.test) == "name == 'pcc.backend.x86_64_encode'")
     strings = [node.value for node in ast.walk(changed) if isinstance(node, ast.Constant)

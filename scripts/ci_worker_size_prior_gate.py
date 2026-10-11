@@ -71,6 +71,12 @@ X87_INPUTS = (X87_PREFIX_TEST, X87_ENCODING_TEST, X87_NATIVE_TEST,
               "tests/python/owned_regression_support.py")
 ASSEMBLY_PROFILE_TEST = "tests/python/test_host_assembly_profile.py"
 ASSEMBLY_PROFILE_INPUTS = (ASSEMBLY_PROFILE_TEST, "scripts/host_assembly_profile.py")
+RSS_READER_TEST = "tests/python/test_worker_resource_reader.py"
+RSS_PUBLICATION_TEST = "tests/python/test_worker_resource_publication.py"
+RSS_READER_INPUTS = (RSS_READER_TEST, RSS_PUBLICATION_TEST,
+                     "pcc/frontends/python/worker_resource_plan.py",
+                     "pcc/frontends/python/worker_resource_host_windows.py",
+                     "pcc/frontends/python/pipeline_import_scan.py")
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_worker_guard_cadence.py",
@@ -83,10 +89,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_dynamic_handoff_slots.py",
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
-              X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST)
-# All existing 812 nodes remain. Thirty-two finite fake-CFG/oracle controls
-# share this bounded invocation; no compiler/emitter or new job is added.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32)
+              X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST,
+              RSS_READER_TEST, RSS_PUBLICATION_TEST)
+# All existing 844 nodes remain. The 24 bounded reader controls and 11
+# publication controls share this invocation; no new job or timeout is added.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -109,7 +116,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS,
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),

@@ -82,6 +82,41 @@ def test_publication_waits_for_open_reader_without_partial_report(report, monkey
     assert not Path(str(report) + ".tmp").exists()
 
 
+def test_production_reader_allows_first_replace_and_retains_old_snapshot(report, monkeypatch):
+    """Real production opener: Win32 delete sharing is exercised on Windows."""
+    before = report.read_text(encoding="utf-8")
+    original_replace = os.replace
+    calls = []
+
+    def replace(source, destination):
+        calls.append((source, destination))
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(policy.os, "replace", replace)
+    monkeypatch.setattr(policy, "time", SimpleNamespace(
+        monotonic=lambda: 0,
+        sleep=lambda _seconds: pytest.fail("production reader must not require a retry"),
+    ))
+    with policy._open_worker_resource(str(report)) as old_reader:
+        assert not os.get_inheritable(old_reader.fileno())
+        # Do not pre-read: this must remain the old underlying file snapshot,
+        # rather than bytes buffered before replacement.
+        policy.publish_worker_resource("complete")
+        assert calls == [(str(report) + ".tmp", str(report))]
+        assert old_reader.read() == before
+        with policy._open_worker_resource(str(report)) as new_reader:
+            rows = new_reader.read().splitlines()
+        assert rows == [policy.RESOURCE_REPORT_SCHEMA, str(os.getpid()), "complete",
+                        "100", "120", "attempt-token"]
+        assert policy.read_worker_resource(str(report), os.getpid(), "attempt-token") == (
+            "complete", 100, 120,
+        )
+        old_reader.seek(0)
+        assert old_reader.read() == before
+    assert old_reader.closed and new_reader.closed
+    assert not Path(str(report) + ".tmp").exists()
+
+
 @pytest.mark.parametrize("code", [5, 32])
 def test_persistent_windows_denial_is_bounded_and_preserves_old_report(report, monkeypatch, code):
     before = report.read_bytes()
@@ -182,6 +217,7 @@ def test_windows_ci_checks_real_reader_contention_independently_of_bootstrap():
     assert "timeout-minutes: 10" in publication and "timeout-minutes: 2" in publication
     assert 'python -m pytest --noconftest -o "addopts=" -x -vv --tb=short' in publication
     assert "tests/python/test_worker_resource_publication.py" in publication
+    assert "tests/python/test_worker_resource_reader.py" in publication
     assert "--phase stage1" not in publication
     assert "Verify Windows RSS publication" not in bootstrap
     assert "--phase stage1" in bootstrap
