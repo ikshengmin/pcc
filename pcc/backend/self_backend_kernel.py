@@ -1865,7 +1865,6 @@ class IndexedFunctionKernel:
                         phi_type_header_scalar = self.type_scalars.get_unchecked(
                             phi_type_header_scalar_id * 12 + 0
                         )
-                        phi_type_header = None
                     else:
                         phi_type_header: CompilerInt4 = self.type_header(phi_type_header_scalar_id)
                 else:
@@ -1903,7 +1902,6 @@ class IndexedFunctionKernel:
                         phi_type_header_scalar = self.type_scalars.get_unchecked(
                             phi_type_header_scalar_id * 12 + 0
                         )
-                        phi_type_header = None
                     else:
                         phi_type_header: CompilerInt4 = self.type_header(phi_type_header_scalar_id)
                 else:
@@ -2121,7 +2119,6 @@ class IndexedFunctionKernel:
                 header_scalar = self.terminator_scalars.get_unchecked(
                     header_scalar_id * 8 + 0
                 )
-                header = None
             else:
                 header: CompilerInt4 = self.terminator_header(header_scalar_id)
         else:
@@ -2141,7 +2138,6 @@ class IndexedFunctionKernel:
                     span_scalar = self.terminator_scalars.get_unchecked(
                         span_scalar_id * 8 + 6
                     )
-                    span = None
                 else:
                     span: CompilerInt4 = self.terminator_span(span_scalar_id)
             else:
@@ -2251,7 +2247,6 @@ class IndexedFunctionKernel:
                 return_type_header_scalar = self.type_scalars.get_unchecked(
                     return_type_header_scalar_id * 12 + 0
                 )
-                return_type_header = None
             else:
                 return_type_header: CompilerInt4 = self.type_header(return_type_header_scalar_id)
         else:
@@ -2273,7 +2268,6 @@ class IndexedFunctionKernel:
                     arg_type_header_scalar = self.type_scalars.get_unchecked(
                         arg_type_header_scalar_id * 12 + 0
                     )
-                    arg_type_header = None
                 else:
                     arg_type_header: CompilerInt4 = self.type_header(arg_type_header_scalar_id)
             else:
@@ -2299,7 +2293,6 @@ class IndexedFunctionKernel:
                         phi_type_header_scalar = self.type_scalars.get_unchecked(
                             phi_type_header_scalar_id * 12 + 0
                         )
-                        phi_type_header = None
                     else:
                         phi_type_header: CompilerInt4 = self.type_header(phi_type_header_scalar_id)
                 else:
@@ -2386,7 +2379,6 @@ class IndexedFunctionKernel:
                 metadata_scalar = self.instruction_metadata.get_unchecked(
                     metadata_scalar_id * 4 + 1
                 )
-                metadata = None
             else:
                 metadata: CompilerInt4 = self.instruction_metadata_by_id(metadata_scalar_id)
         else:
@@ -3345,7 +3337,6 @@ class IndexedFunctionKernel:
                 header_scalar = self.value_scalars.get_unchecked(
                     header_scalar_id * 8 + 2
                 )
-                header = None
             else:
                 header: CompilerInt4 = self.value_header(header_scalar_id)
         else:
@@ -3363,7 +3354,6 @@ class IndexedFunctionKernel:
                 header_scalar = self.value_scalars.get_unchecked(
                     header_scalar_id * 8 + 2
                 )
-                header = None
             else:
                 header: CompilerInt4 = self.value_header(header_scalar_id)
         else:
@@ -3385,7 +3375,6 @@ class IndexedFunctionKernel:
                 header_scalar = self.value_scalars.get_unchecked(
                     header_scalar_id * 8 + 2
                 )
-                header = None
             else:
                 header: CompilerInt4 = self.value_header(header_scalar_id)
         else:
@@ -3426,7 +3415,6 @@ class IndexedFunctionKernel:
                 header_scalar = self.value_scalars.get_unchecked(
                     header_scalar_id * 8 + 3
                 )
-                header = None
             else:
                 header: CompilerInt4 = self.value_header(header_scalar_id)
         else:
@@ -3446,7 +3434,6 @@ class IndexedFunctionKernel:
                 state_scalar = self.value_scalars.get_unchecked(
                     state_scalar_id * 8 + 4
                 )
-                state = None
             else:
                 state: CompilerInt4 = self.value_state(state_scalar_id)
         else:
@@ -3476,7 +3463,6 @@ class IndexedFunctionKernel:
                 state_scalar = self.value_scalars.get_unchecked(
                     state_scalar_id * 8 + 5
                 )
-                state = None
             else:
                 state: CompilerInt4 = self.value_state(state_scalar_id)
         else:
@@ -3498,7 +3484,6 @@ class IndexedFunctionKernel:
                     state_scalar = self.value_scalars.get_unchecked(
                         state_scalar_id * 8 + 5
                     )
-                    state = None
                 else:
                     state: CompilerInt4 = self.value_state(state_scalar_id)
             else:

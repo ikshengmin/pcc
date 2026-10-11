@@ -313,7 +313,6 @@ def emit_memory_instruction_by_id(
                             alloca_type_header_scalar = indexed_kernel.type_scalars.get_unchecked(
                                 alloca_type_header_scalar_id * 12 + 0
                             )
-                            alloca_type_header = None
                         else:
                             alloca_type_header: CompilerInt4 = indexed_kernel.type_header(alloca_type_header_scalar_id)
                     else:
@@ -658,7 +657,6 @@ def emit_memory_instruction_by_id(
                             alloca_type_header_scalar = indexed_kernel.type_scalars.get_unchecked(
                                 alloca_type_header_scalar_id * 12 + 0
                             )
-                            alloca_type_header = None
                         else:
                             alloca_type_header: CompilerInt4 = indexed_kernel.type_header(alloca_type_header_scalar_id)
                     else:

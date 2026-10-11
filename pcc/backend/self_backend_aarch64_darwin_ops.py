@@ -73,7 +73,6 @@ def emit_binop_indexed(
             header_scalar = kernel.type_scalars.get_unchecked(
                 header_scalar_id * 12 + 0
             )
-            header = None
         else:
             header: CompilerInt4 = kernel.type_header(header_scalar_id)
     else:

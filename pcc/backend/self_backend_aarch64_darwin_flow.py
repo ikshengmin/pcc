@@ -606,7 +606,6 @@ def _emit_phi_assignments_indexed(
                     victim_header_scalar = kernel.type_scalars.get_unchecked(
                         victim_header_scalar_id * 12 + 0
                     )
-                    victim_header = None
                 else:
                     victim_header: CompilerInt4 = kernel.type_header(victim_header_scalar_id)
             else:
@@ -756,7 +755,6 @@ def emit_phi_assignments(
                     indexed_phi_type_scalar = kernel.type_scalars.get_unchecked(
                         indexed_phi_type_scalar_id * 12 + 0
                     )
-                    indexed_phi_type = None
                 else:
                     indexed_phi_type: CompilerInt4 = kernel.type_header(indexed_phi_type_scalar_id)
             else:

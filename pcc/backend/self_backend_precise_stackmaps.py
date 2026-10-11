@@ -3723,7 +3723,6 @@ def _native_pointer_aliases(
                         src_type_scalar = kernel.type_scalars.get_unchecked(
                             src_type_scalar_id * 12 + 0
                         )
-                        src_type = None
                     else:
                         src_type: CompilerInt4 = kernel.type_header(src_type_scalar_id)
                 else:
@@ -3738,7 +3737,6 @@ def _native_pointer_aliases(
                         dst_type_scalar = kernel.type_scalars.get_unchecked(
                             dst_type_scalar_id * 12 + 0
                         )
-                        dst_type = None
                     else:
                         dst_type: CompilerInt4 = kernel.type_header(dst_type_scalar_id)
                 else:
@@ -4119,7 +4117,6 @@ def _native_managed_origins(
                     phi_type_scalar = kernel.type_scalars.get_unchecked(
                         phi_type_scalar_id * 12 + 0
                     )
-                    phi_type = None
                 else:
                     phi_type: CompilerInt4 = kernel.type_header(phi_type_scalar_id)
             else:
@@ -4148,7 +4145,6 @@ def _native_managed_origins(
                     fact_scalar = kernel.instruction_facts.get_unchecked(
                         fact_scalar_id * 4 + 0
                     )
-                    fact = None
                 else:
                     fact: CompilerInt4 = kernel.instruction_fact_by_id(fact_scalar_id)
             else:
@@ -4171,7 +4167,6 @@ def _native_managed_origins(
                     value_type_header_scalar = kernel.type_scalars.get_unchecked(
                         value_type_header_scalar_id * 12 + 0
                     )
-                    value_type_header = None
                 else:
                     value_type_header: CompilerInt4 = kernel.type_header(value_type_header_scalar_id)
             else:
@@ -4214,7 +4209,6 @@ def _native_managed_origins(
                         cast_source_type_scalar = kernel.type_scalars.get_unchecked(
                             cast_source_type_scalar_id * 12 + 0
                         )
-                        cast_source_type = None
                     else:
                         cast_source_type: CompilerInt4 = kernel.type_header(cast_source_type_scalar_id)
                 else:
@@ -4647,7 +4641,6 @@ def _native_plan_reloads(
                 slot_type_scalar = kernel.type_scalars.get_unchecked(
                     slot_type_scalar_id * 12 + 0
                 )
-                slot_type = None
             else:
                 slot_type: CompilerInt4 = kernel.type_header(slot_type_scalar_id)
         else:

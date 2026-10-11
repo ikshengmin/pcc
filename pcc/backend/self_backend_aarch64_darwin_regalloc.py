@@ -202,7 +202,6 @@ def _candidate_indexed_definition_type_id(
                 header_scalar = kernel.type_scalars.get_unchecked(
                     header_scalar_id * 12 + 0
                 )
-                header = None
             else:
                 header: CompilerInt4 = kernel.type_header(header_scalar_id)
         else:
@@ -223,7 +222,6 @@ def _candidate_indexed_definition_type_id(
                 binop_type_scalar = kernel.type_scalars.get_unchecked(
                     binop_type_scalar_id * 12 + 0
                 )
-                binop_type = None
             else:
                 binop_type: CompilerInt4 = kernel.type_header(binop_type_scalar_id)
         else:
@@ -244,7 +242,6 @@ def _candidate_indexed_definition_type_id(
                 compared_scalar = kernel.type_scalars.get_unchecked(
                     compared_scalar_id * 12 + 0
                 )
-                compared = None
             else:
                 compared: CompilerInt4 = kernel.type_header(compared_scalar_id)
         else:
@@ -263,7 +260,6 @@ def _candidate_indexed_definition_type_id(
                 src_header_scalar = kernel.type_scalars.get_unchecked(
                     src_header_scalar_id * 12 + 0
                 )
-                src_header = None
             else:
                 src_header: CompilerInt4 = kernel.type_header(src_header_scalar_id)
         else:
@@ -278,7 +274,6 @@ def _candidate_indexed_definition_type_id(
                 dst_header_scalar = kernel.type_scalars.get_unchecked(
                     dst_header_scalar_id * 12 + 0
                 )
-                dst_header = None
             else:
                 dst_header: CompilerInt4 = kernel.type_header(dst_header_scalar_id)
         else:
@@ -301,7 +296,6 @@ def _candidate_indexed_definition_type_id(
             result_header_scalar = kernel.type_scalars.get_unchecked(
                 result_header_scalar_id * 12 + 0
             )
-            result_header = None
         else:
             result_header: CompilerInt4 = kernel.type_header(result_header_scalar_id)
     else:
@@ -329,7 +323,6 @@ def _register_type_ids_match(
             left_scalar = kernel.type_scalars.get_unchecked(
                 left_scalar_id * 12 + 0
             )
-            left = None
         else:
             left: CompilerInt4 = kernel.type_header(left_scalar_id)
     else:
@@ -344,7 +337,6 @@ def _register_type_ids_match(
             right_scalar = kernel.type_scalars.get_unchecked(
                 right_scalar_id * 12 + 0
             )
-            right = None
         else:
             right: CompilerInt4 = kernel.type_header(right_scalar_id)
     else:
@@ -626,7 +618,6 @@ def _function_level_facts(
                     metadata_scalar = kernel.instruction_metadata.get_unchecked(
                         metadata_scalar_id * 4 + 0
                     )
-                    metadata = None
                 else:
                     metadata: CompilerInt4 = kernel.instruction_metadata_by_id(metadata_scalar_id)
             else:
@@ -650,7 +641,6 @@ def _function_level_facts(
                     metadata_scalar = kernel.instruction_metadata.get_unchecked(
                         metadata_scalar_id * 4 + 0
                     )
-                    metadata = None
                 else:
                     metadata = kernel.instruction_metadata_by_id(metadata_scalar_id)
             else:
@@ -671,7 +661,6 @@ def _function_level_facts(
                     instruction_fact_scalar = kernel.instruction_facts.get_unchecked(
                         instruction_fact_scalar_id * 4 + 0
                     )
-                    instruction_fact = None
                 else:
                     instruction_fact: CompilerInt4 = kernel.instruction_fact_by_id(instruction_fact_scalar_id)
             else:
@@ -1189,7 +1178,6 @@ def _append_phi_intervals(
                 header_scalar = kernel.type_scalars.get_unchecked(
                     header_scalar_id * 12 + 0
                 )
-                header = None
             else:
                 header: CompilerInt4 = kernel.type_header(header_scalar_id)
         else:
@@ -1672,7 +1660,6 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                         gep_type_scalar = kernel.type_scalars.get_unchecked(
                             gep_type_scalar_id * 12 + 0
                         )
-                        gep_type = None
                     else:
                         gep_type: CompilerInt4 = kernel.type_header(gep_type_scalar_id)
                 else:

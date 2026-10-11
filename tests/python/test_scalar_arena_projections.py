@@ -183,13 +183,56 @@ def _probe(site, namespace, *, original=False):
     return namespace["probe"]
 
 
+def _reference_text_sha256(content):
+    # Git checkouts can use CRLF; only that newline spelling is equivalent.
+    # Keep lone CR bytes and every other byte significant to the frozen hash.
+    return hashlib.sha256(content.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def test_frozen_source_oracle_and_complete_site_inventory():
-    assert hashlib.sha256(REFERENCE.read_bytes()).hexdigest() == REFERENCE_SHA256
+    reference = REFERENCE.read_bytes()
+    assert _reference_text_sha256(reference) == REFERENCE_SHA256
+    lf = reference.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    assert _reference_text_sha256(lf) == _reference_text_sha256(crlf) == REFERENCE_SHA256
+    for changed in (lf + b" ", lf.replace(b"\n", b"\r", 1), lf.replace(b"1afe", b"0afe", 1)):
+        assert changed != lf
+        assert _reference_text_sha256(changed) != REFERENCE_SHA256
     assert [sum(site["group"] == group for site in SITES) for group in "ABC"] == [5, 40, 10]
     assert len({site["path"] for site in SITES}) == 10
     for site in SITES:
         assert site["window_offset"] in (0, 4)
         assert site["window_offset"] <= site["cell_offset"] <= site["window_offset"] + 3
+    # Keep snapshot locals on their original four-cell representation. The
+    # native frontend inventories the first value-bearing local assignment;
+    # a fast-path None store before the fallback allocates an object slot.
+    owners = {(site["path"], site["owner"]) for site in SITES}
+    projections = 0
+    bindings = 0
+    for path, owner in owners:
+        function = _function(path, owner)
+        guards = [node for node in ast.walk(function)
+                  if isinstance(node, ast.If) and isinstance(node.test, ast.Name)
+                  and node.test.id.endswith("_is_scalar")]
+        names = {node.test.id.removesuffix("_is_scalar") for node in guards}
+        for guard in guards:
+            assert len(guard.body) == 1
+            scalar_read = guard.body[0]
+            assert isinstance(scalar_read, ast.Assign)
+            assert ast.unparse(scalar_read.targets[0]) == guard.test.id.removesuffix("_is_scalar") + "_scalar"
+            assert isinstance(scalar_read.value, ast.Call)
+            assert scalar_read.value.func.attr == "get_unchecked"
+            projections += 1
+        for node in ast.walk(function):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in names:
+                    assert isinstance(node.value, ast.Call)
+                    assert isinstance(node.value.func, ast.Attribute)
+                    bindings += 1
+    assert (len(owners), projections, bindings) == (35, 55, 111)
 
 
 @pytest.mark.parametrize("site", SITES, ids=lambda site: site["group"] + "-" + Path(site["path"]).stem + "-" + str(site["line"]))
@@ -443,39 +486,46 @@ def test_real_list_arena_facts_reduce_payload_reads_without_changing_cfg(shape):
     assert new[2] == 3 * new[3]
 
 
-def test_fallback_snapshot_is_released_at_next_fast_assignment():
-    import weakref
-
+def test_mixed_fallback_and_scalar_reads_keep_real_snapshots_fresh():
+    # A previous version monkeypatched the exact kernel to return a custom
+    # weakref-observed object and required its temporary local to be released
+    # by the next scalar read. That is not the CompilerInt4 snapshot contract.
+    # Keep real retained snapshots fresh/frozen without introducing a None
+    # binding (or extra ownership flags) into native aggregate local storage.
     namespace = _namespace()
     site = next(site for site in SITES if site["path"].endswith("verify.py") and site["line"] == 166)
     _probe(site, namespace)
     function = _function(site["path"], site["owner"])
     flag, guard = function.body[:2]
-    # This is the exact guarded assignment reused in a finite loop. A custom
-    # integer forces its first iteration through the old snapshot accessor.
+    # This is the exact guarded assignment reused in a finite loop. Integer
+    # subclasses force selected iterations through the original accessor.
     guard.body[0].value = ast.Name(id="type_id", ctx=ast.Load())
     loop = ast.For(target=ast.Name(id="type_id", ctx=ast.Store()),
                    iter=ast.Name(id="ids", ctx=ast.Load()),
-                   body=[flag, guard, ast.parse("observed.append(alive())").body[0]], orelse=[])
-    probe = ast.parse("def repeated(kernel, ids, observed, alive):\n    pass\n").body[0]
+                   body=[flag, guard, *ast.parse(
+                       "if not header_is_scalar:\n"
+                       "    retained.append(header)\n"
+                       "observed.append(header_scalar if header_is_scalar else header.first)\n"
+                       "kernel.type_scalars.set_unchecked(0, len(observed) + 10)\n"
+                   ).body], orelse=[])
+    probe = ast.parse("def repeated(kernel, ids, observed, retained):\n    pass\n").body[0]
     probe.body = [loop]
     _execute_nodes([probe], namespace)
     kernel = _kernel(namespace)
-    references = []
-
-    class Record:
-        first = 1
-
-    def snapshot(self, type_id):
-        record = Record()
-        references.append(weakref.ref(record))
-        return record
-
-    namespace["IndexedFunctionKernel"].type_header = snapshot
+    kernel.type_scalars.set_unchecked(0, 7)
 
     class Id(int):
         pass
 
     observed = []
-    namespace["repeated"](kernel, [Id(0), 0], observed, lambda: references[0]() is not None)
-    assert observed == [True, False]
+    retained = []
+    namespace["repeated"](kernel, [0, Id(0), 0, Id(0)], observed, retained)
+    assert observed == [7, 11, 12, 13]
+    assert len(retained) == 2 and retained[0] is not retained[1]
+    assert all(type(record) is namespace["CompilerInt4"] for record in retained)
+    assert [record.first for record in retained] == [11, 13]
+    assert kernel.type_header(0).first == 14
+    assert [record.first for record in retained] == [11, 13]
+    for record in retained:
+        with pytest.raises(FrozenInstanceError):
+            record.first = 99

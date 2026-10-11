@@ -168,7 +168,6 @@ def _type_ids_match(
             left_scalar = kernel.type_scalars.get_unchecked(
                 left_scalar_id * 12 + 0
             )
-            left = None
         else:
             left: CompilerInt4 = kernel.type_header(left_scalar_id)
     else:
@@ -183,7 +182,6 @@ def _type_ids_match(
             right_scalar = kernel.type_scalars.get_unchecked(
                 right_scalar_id * 12 + 0
             )
-            right = None
         else:
             right: CompilerInt4 = kernel.type_header(right_scalar_id)
     else:
@@ -202,7 +200,6 @@ def _type_id_is_int(kernel: IndexedFunctionKernel, type_id: int) -> bool:
             header_scalar = kernel.type_scalars.get_unchecked(
                 header_scalar_id * 12 + 0
             )
-            header = None
         else:
             header: CompilerInt4 = kernel.type_header(header_scalar_id)
     else:
@@ -226,7 +223,6 @@ def _type_id_is_int_lane(kernel: IndexedFunctionKernel, type_id: int) -> bool:
             child_scalar = kernel.type_scalars.get_unchecked(
                 child_scalar_id * 12 + 0
             )
-            child = None
         else:
             child: CompilerInt4 = kernel.type_header(child_scalar_id)
     else:
@@ -250,7 +246,6 @@ def _type_id_is_fp_lane(kernel: IndexedFunctionKernel, type_id: int) -> bool:
             child_scalar = kernel.type_scalars.get_unchecked(
                 child_scalar_id * 12 + 0
             )
-            child = None
         else:
             child: CompilerInt4 = kernel.type_header(child_scalar_id)
     else:
@@ -565,7 +560,6 @@ def _build_definitions(
                     instruction_fact_scalar = kernel.instruction_facts.get_unchecked(
                         instruction_fact_scalar_id * 4 + 0
                     )
-                    instruction_fact = None
                 else:
                     instruction_fact: CompilerInt4 = kernel.instruction_fact_by_id(instruction_fact_scalar_id)
             else:
@@ -647,7 +641,6 @@ def _build_definitions(
                     result_type_header_scalar = kernel.type_scalars.get_unchecked(
                         result_type_header_scalar_id * 12 + 0
                     )
-                    result_type_header = None
                 else:
                     result_type_header: CompilerInt4 = kernel.type_header(result_type_header_scalar_id)
             else:
@@ -1019,7 +1012,6 @@ def _verify_call_instruction_types_indexed(
                 definition_type_scalar = kernel.type_scalars.get_unchecked(
                     definition_type_scalar_id * 12 + 0
                 )
-                definition_type = None
             else:
                 definition_type: CompilerInt4 = kernel.type_header(definition_type_scalar_id)
         else:
@@ -1104,7 +1096,6 @@ def _verify_fixed_instruction_types_indexed(
                 ptr_type_scalar = kernel.type_scalars.get_unchecked(
                     ptr_type_scalar_id * 12 + 0
                 )
-                ptr_type = None
             else:
                 ptr_type: CompilerInt4 = kernel.type_header(ptr_type_scalar_id)
         else:
@@ -1134,7 +1125,6 @@ def _verify_fixed_instruction_types_indexed(
                 ptr_type_scalar = kernel.type_scalars.get_unchecked(
                     ptr_type_scalar_id * 12 + 0
                 )
-                ptr_type = None
             else:
                 ptr_type: CompilerInt4 = kernel.type_header(ptr_type_scalar_id)
         else:
@@ -1168,7 +1158,6 @@ def _verify_fixed_instruction_types_indexed(
                 value_type_header_scalar = kernel.type_scalars.get_unchecked(
                     value_type_header_scalar_id * 12 + 0
                 )
-                value_type_header = None
             else:
                 value_type_header: CompilerInt4 = kernel.type_header(value_type_header_scalar_id)
         else:
@@ -1243,7 +1232,6 @@ def _verify_gep_instruction_types_indexed(
             ptr_type_scalar = kernel.type_scalars.get_unchecked(
                 ptr_type_scalar_id * 12 + 0
             )
-            ptr_type = None
         else:
             ptr_type: CompilerInt4 = kernel.type_header(ptr_type_scalar_id)
     else:

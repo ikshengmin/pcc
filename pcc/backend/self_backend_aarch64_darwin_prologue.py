@@ -162,7 +162,6 @@ def emit_function_prologue(
                     arg_header_scalar = kernel.type_scalars.get_unchecked(
                         arg_header_scalar_id * 12 + 0
                     )
-                    arg_header = None
                 else:
                     arg_header = kernel.type_header(arg_header_scalar_id)
             else:

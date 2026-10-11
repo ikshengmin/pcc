@@ -2394,7 +2394,6 @@ def emit_call_instruction_indexed(
                 slot_header_scalar = kernel.type_scalars.get_unchecked(
                     slot_header_scalar_id * 12 + 0
                 )
-                slot_header = None
             else:
                 slot_header: CompilerInt4 = kernel.type_header(slot_header_scalar_id)
         else:
