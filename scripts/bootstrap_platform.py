@@ -299,9 +299,35 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                     record["seconds"] = 0
                     record["peak_tree_rss"] = 0
                 else:
+                    profile_directory = None
+                    profile_fresh = False
+                    profile_installed = False
+                    if stage == 1 and stage_env.get("PCC_HOST_ASSEMBLY_PROFILE") == "1":
+                        from scripts.host_assembly_profile import prepare_environment
+
+                        profile_directory = out_dir / "assembly-function-profile"
+                        profile_fresh = not profile_directory.exists()
+                        profiled_env = prepare_environment(
+                            ROOT, profile_directory, stage_env, source,
+                            runtime_identity, compiler_digest, target,
+                        )
+                        profile_installed = profiled_env is not stage_env
+                        stage_env = profiled_env
                     output.unlink(missing_ok=True)
                     record = guarded(command, cwd=ROOT, env=stage_env, log_path=out_dir / f"stage{stage}.log",
                                  timeout=timeout, rss_limit=rss_limit, native=stage > 1)
+                    if profile_directory is not None:
+                        # A killed worker may have claimed the sole attempt but
+                        # left no terminal stats. Never call this baseline data.
+                        record["assembly_function_profile"] = {
+                            "scope": "profiled overhead, not baseline performance",
+                            "installation_applied": profile_installed,
+                            "output_directory_preexisted": not profile_fresh,
+                            "installation_status_present": profile_fresh and (profile_directory / "install-status.json").is_file(),
+                            "claimed": profile_installed and (profile_directory / "claim.json").is_file(),
+                            "result_present": profile_installed and (profile_directory / "result.json").is_file(),
+                            "strong_kill_may_leave_no_stats": True,
+                        }
                     if not output.is_file() or output.stat().st_size == 0:
                         raise RuntimeError("stage exited successfully without producing a compiler")
                 if source_identity(allow_dirty) != source:

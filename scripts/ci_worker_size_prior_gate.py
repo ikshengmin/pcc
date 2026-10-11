@@ -65,6 +65,8 @@ X87_INPUTS = (X87_PREFIX_TEST, X87_ENCODING_TEST, X87_NATIVE_TEST,
               "tests/x86_64_x87_reference.py", "tests/x86_64_x87_source.py",
               "pcc/backend/x86_64_encode.py", "pcc/backend/x86_64_asm_driver.py",
               "tests/python/owned_regression_support.py")
+ASSEMBLY_PROFILE_TEST = "tests/python/test_host_assembly_profile.py"
+ASSEMBLY_PROFILE_INPUTS = (ASSEMBLY_PROFILE_TEST, "scripts/host_assembly_profile.py")
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_worker_guard_cadence.py",
@@ -77,10 +79,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_dynamic_handoff_slots.py",
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
-              X87_PREFIX_TEST, X87_ENCODING_TEST)
-# Existing 754 nodes remain; four fake-prefix and five real encoder/object
-# controls run inside the same bounded default invocation (763 nodes total).
-HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5)
+              X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST)
+# All existing 763 nodes remain. The appended adapter tests use fake modules
+# and a fake profiler, within this same bounded default invocation.
+HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 24)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -103,7 +105,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS,
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),
