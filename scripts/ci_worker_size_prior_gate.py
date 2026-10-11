@@ -82,9 +82,9 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST)
-# All existing 797 nodes remain. One width-cache source contract adds only
-# AST/text checks, within this same bounded default invocation.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34)
+# All existing 798 nodes remain. Fourteen ARM backend observer controls add
+# only fake-module/profiler or AST/text checks to this bounded invocation.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

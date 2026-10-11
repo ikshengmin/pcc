@@ -47,12 +47,12 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48)
     assert gate.HOST_FILES[-3:] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
-    assert sum(gate.HOST_COUNTS) == 798 and sum(gate.HOST_COUNTS[:-1]) == 764
+    assert sum(gate.HOST_COUNTS) == 812 and sum(gate.HOST_COUNTS[:-1]) == 764
     assert sum(gate.HOST_COUNTS[:-3]) == 755
     for path, count in ((gate.X87_PREFIX_TEST, 4), (gate.X87_ENCODING_TEST, 5),
-                        (gate.ASSEMBLY_PROFILE_TEST, 34)):
+                        (gate.ASSEMBLY_PROFILE_TEST, 48)):
         nodes = [node for node in ast.parse((ROOT / path).read_text()).body
                  if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
         assert len(nodes) == count and all(not node.decorator_list for node in nodes)
@@ -567,7 +567,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 34) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

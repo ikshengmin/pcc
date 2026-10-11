@@ -629,7 +629,10 @@ def test_stage1_wiring_is_opt_in_surgical_and_uses_existing_report_boundary():
     workflow = (root / ".github/workflows/pcc1-package-parity.yml").read_text()
     stage1 = workflow.split("      - name: Qualify all five GC self-host chains and Stage1 admission metrics\n", 1)[1].split("\n      - name:", 1)[0]
     assert 'PCC_HOST_ASSEMBLY_PROFILE: "0"' in stage1
-    assert "PCC_HOST_ELF_STAGE_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-aarch64' && contains(github.event.head_commit.message, '[stage1-arm-elf-profile]') && '1' || '0' }}" in stage1
+    assert 'PCC_HOST_ELF_STAGE_PROFILE: "0"' in stage1
+    assert "PCC_HOST_ARM_BACKEND_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-aarch64' && contains(github.event.head_commit.message, '[stage1-arm-backend-profile]') && '1' || '0' }}" in stage1
+    assert workflow.count("PCC_HOST_ARM_BACKEND_PROFILE:") == 1
+    assert "[stage1-arm-elf-profile]" not in workflow
     assert "--out-dir build/worker-prior-gate --phase stage1" in stage1
     assert workflow.count("PCC_HOST_ASSEMBLY_PROFILE:") == 1
     assert workflow.count("PCC_HOST_ELF_STAGE_PROFILE:") == 1
@@ -1397,3 +1400,581 @@ def test_arm_adapter_retains_no_store_source_result_or_original_traceback(tmp_pa
     assert failed_wrapper is not failure.original_link
     assert failure.store_type.stage is failure.original_stage
     assert _result(failure)["status"] == "STAGE_RAISED"
+
+
+def _arm_environment():
+    env = _elf_ordinary_environment()
+    del env[adapter.ELF_FLAG]
+    env[adapter.ARM_FLAG] = "1"
+    return env
+
+
+def _arm_fake(tmp_path, monkeypatch):
+    _clean_host(monkeypatch)
+    fake = _fake(tmp_path, monkeypatch)
+    monkeypatch.setattr(adapter.platform, "machine", lambda: "aarch64")
+    for flag in (adapter.FLAG, adapter.ELF_FLAG, adapter.ARM_FLAG):
+        monkeypatch.delenv(flag, raising=False)
+    modules = [ModuleType(name) for name in adapter.ARM_OWNERS]
+    for module in modules:
+        path = fake.root / (module.__name__.replace(".", "/") + ".py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fake ARM backend owner only\n")
+        module.__file__ = str(path)
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    backend, timing, prologue, regalloc, stackmaps = modules
+    selected = fake.root / "pcc/driver/cli_bootstrap.py"
+    selected.parent.mkdir(parents=True, exist_ok=True)
+    selected.write_text("# selected fake worker module only\n")
+    control, events = fake.control, fake.events
+    control.backend_error = control.backend_callback = control.result_factory = None
+    control.backend_result = object()
+
+    def transport(*args, **kwargs):
+        events.append(("backend", tuple(id(arg) for arg in args),
+                       {name: id(value) for name, value in kwargs.items()}, control.slot))
+        if control.backend_callback is not None:
+            control.backend_callback(*args, **kwargs)
+        if control.backend_error is not None:
+            raise control.backend_error
+        return control.result_factory() if control.result_factory is not None else control.backend_result
+
+    def placeholder(*args, **kwargs):
+        pass
+
+    for module, names in ((backend, (adapter.ARM_CAPTURE, "_emit_prepared_aarch64_darwin_lines_active",
+                                    "_emit_function", "_emit_dense_indexed_function_blocks")),
+                          (prologue, ("emit_function_prologue",)),
+                          (regalloc, ("allocate_aarch64_block_registers", "note_aarch64_reload_destinations")),
+                          (stackmaps, ("build_stack_map_plans",))):
+        for name in names:
+            setattr(module, name, _elf_owned_function(transport if name == adapter.ARM_CAPTURE else placeholder,
+                                                      module, name))
+    backend._prologue_emit_function_prologue = prologue.emit_function_prologue
+    prologue.allocate_aarch64_block_registers = regalloc.allocate_aarch64_block_registers
+    backend.note_aarch64_reload_destinations = regalloc.note_aarch64_reload_destinations
+    backend.build_stack_map_plans = stackmaps.build_stack_map_plans
+    timing.ModulePhaseTiming = fake.timing.ModulePhaseTiming
+    timing.ModulePhaseTiming.__module__ = timing.__name__
+    timing.ModulePhaseTiming.report = _elf_owned_function(timing.ModulePhaseTiming.report, timing,
+                                                         "ModulePhaseTiming.report")
+    phase = timing.ModulePhaseTiming(target=adapter.ARM_TARGET, route=adapter.ARM_ROUTE)
+    fake.config["identity"].update(target=adapter.ARM_TARGET, capture=adapter.ARM_CAPTURE,
+        owner_sources={name.replace(".", "/") + ".py": adapter._digest(fake.root / (name.replace(".", "/") + ".py"))
+                       for name in (*adapter.ARM_OWNERS, adapter.MODULE)})
+    fake.modules, fake.backend, fake.timing = modules, backend, timing
+    fake.prologue, fake.regalloc, fake.stackmaps, fake.phase = prologue, regalloc, stackmaps, phase
+    fake.original = backend.emit_aarch64_darwin_indexed_transport
+    fake.original_report = timing.ModulePhaseTiming.report
+    codes = [fake.original.__code__, backend._emit_prepared_aarch64_darwin_lines_active.__code__,
+             backend._emit_function.__code__, prologue.emit_function_prologue.__code__,
+             stackmaps.build_stack_map_plans.__code__, regalloc.note_aarch64_reload_destinations.__code__,
+             backend._emit_dense_indexed_function_blocks.__code__, regalloc.allocate_aarch64_block_registers.__code__]
+
+    def stats(self):
+        events.append(("getstats",))
+        if control.stats_error is not None:
+            raise control.stats_error
+        links = {0: (1,), 1: (4, 2), 2: (5, 3, 6), 3: (7,)}
+        return [_entry(code, [_entry(codes[index]) for index in links.get(i, ())])
+                for i, code in enumerate(codes)]
+
+    monkeypatch.setattr(sys.modules["cProfile"].Profile, "getstats", stats)
+    return fake
+
+
+def _arm_attach(fake):
+    adapter._attach_arm(fake.config, "a" * 64, *fake.modules)
+
+
+def _arm_call(fake, module=None):
+    return fake.backend.emit_aarch64_darwin_indexed_transport(
+        module, optimize=False, structured_instructions=True, phase_timing=fake.phase)
+
+
+def _arm_startup(fake, monkeypatch, text=None):
+    setup = fake.directory / "setup.json"
+    setup.write_text(json.dumps({"identity": fake.config["identity"]}))
+    manifest = fake.directory / "worker"
+    manifest.write_text(_manifest(fake.root) if text is None else text)
+    for name, value in _arm_environment().items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv(adapter.CONFIG, str(setup))
+    monkeypatch.setenv(adapter.SOURCE_ROOT, str(fake.root))
+    monkeypatch.setattr(sys, "orig_argv", _argv(manifest))
+    return manifest
+
+
+def test_arm_backend_prepare_preserves_identity_and_rejects_conflicts(tmp_path, monkeypatch):
+    fake = _arm_fake(tmp_path, monkeypatch)
+    env = _arm_environment()
+    prepared = adapter.prepare_environment(fake.root, tmp_path / "prepared", env,
+        {"commit": "a" * 40}, {"sha256": "b" * 64, "path": "/private/runtime"}, "c" * 64,
+        adapter.ARM_TARGET)
+    assert prepared is not env and adapter.CONFIG not in env
+    identity = json.loads(Path(prepared[adapter.CONFIG]).read_text())["identity"]
+    assert identity["capture"] == adapter.ARM_CAPTURE and identity["target"] == adapter.ARM_TARGET
+    assert set(identity["owner_sources"]) == set(fake.config["identity"]["owner_sources"])
+    assert identity["runtime"] == {"sha256": "b" * 64}
+    assert identity["python"]["executable_sha256"] == "c" * 64
+    assert adapter.ELF_ARGV not in prepared
+    assert (tmp_path / "prepared/_pcc_host_assembly_profile.py").read_bytes() == Path(adapter.__file__).read_bytes()
+    cases = [(dict(env, **{flag: "1"}), adapter.ARM_TARGET, "PROFILE_MODE_CONFLICT")
+             for flag in (adapter.FLAG, adapter.ELF_FLAG)]
+    cases += [(env, adapter.TARGET, "UNSUPPORTED_HOST"),
+              (dict(env, PCC_DEFER_FRONTEND_CODEGEN="1"), adapter.ARM_TARGET, "WORKER_ENVIRONMENT_CONFLICT"),
+              (dict(env, PYTHONPATH="uninspected"), adapter.ARM_TARGET, "STARTUP_PATH_CONFLICT")]
+    for index, (environment, target, status) in enumerate(cases):
+        directory = tmp_path / str(index)
+        assert adapter.prepare_environment(fake.root, directory, environment, {}, {}, "", target) is environment
+        assert json.loads((directory / "install-status.json").read_text())["status"] == status
+        assert not (directory / "sitecustomize.py").exists()
+    hook = ModuleType("sitecustomize")
+    monkeypatch.setitem(sys.modules, "sitecustomize", hook)
+    assert adapter.prepare_environment(fake.root, tmp_path / "hook", env, {}, {}, "", adapter.ARM_TARGET) is env
+    assert sys.modules["sitecustomize"] is hook and not (tmp_path / "hook/sitecustomize.py").exists()
+
+
+def test_arm_backend_nonselected_startup_never_imports_pcc_or_profiler(tmp_path, monkeypatch):
+    cases = ("disabled", "coordinator", "native", "export", "summary", "v5", "wrong_index",
+             "wrong_path", "multiple", "legacy", "monitoring", "x86", "python", "os", "deferred", "conflict")
+    for case in cases:
+        with monkeypatch.context() as patch:
+            fake = _arm_fake(tmp_path / case, patch)
+            manifest = _arm_startup(fake, patch)
+            lines = manifest.read_text().splitlines()
+            if case == "disabled":
+                patch.delenv(adapter.ARM_FLAG)
+            elif case == "coordinator":
+                patch.setattr(sys, "orig_argv", _elf_argv(fake.root))
+            elif case == "native":
+                patch.setattr(sys, "orig_argv", ["pcc1", *_argv(manifest)[3:]])
+            elif case in ("export", "summary"):
+                lines[4] = case
+            elif case == "v5":
+                lines[0] = "pcc.frontends.python.codegen_worker.v5"
+            elif case == "wrong_index":
+                lines = _manifest(fake.root, (adapter.MODULE, "other"), 1).splitlines()
+            elif case == "wrong_path":
+                lines[12] = "0\t" + adapter.MODULE + "\t" + str(fake.root / "other.py")
+            elif case == "multiple":
+                lines[-2:] = ["2", "0", "1"]
+            elif case == "legacy":
+                fake.control.active = object()
+            elif case == "monitoring":
+                fake.control.slot = "foreign"
+            elif case == "x86":
+                patch.setattr(adapter.platform, "machine", lambda: "x86_64")
+            elif case == "python":
+                patch.setattr(sys, "version_info", (3, 14, 0))
+            elif case == "os":
+                patch.setattr(sys, "platform", "darwin")
+            elif case == "deferred":
+                patch.setenv("PCC_DEFER_FRONTEND_CODEGEN", "1")
+            elif case == "conflict":
+                patch.setenv(adapter.ELF_FLAG, "1")
+            manifest.write_text("\n".join(lines) + "\n")
+            patch.setattr(adapter.importlib, "import_module", lambda name: pytest.fail("unselected PCC import"))
+            before = dict(sys.modules)
+            hooks, argv = tuple(sys.meta_path), tuple(sys.orig_argv)
+            adapter.install()
+            after = dict(sys.modules)
+            assert set(after).difference(before) <= {"encodings.ascii"}
+            assert tuple(name for name in after if name in before) == tuple(before)
+            assert all(after[name] is module for name, module in before.items())
+            assert tuple(sys.meta_path) == hooks and tuple(sys.orig_argv) == argv
+            assert fake.events == [] and fake.backend.emit_aarch64_darwin_indexed_transport is fake.original
+            assert not (fake.directory / "claim.json").exists()
+
+
+def test_arm_backend_selected_startup_binds_manifest_sources_and_callable_owners(tmp_path, monkeypatch):
+    for case in ("valid", "adapter", "capture", "target", "module", "source", "owner", "callable", "alias"):
+        with monkeypatch.context() as patch:
+            fake = _arm_fake(tmp_path / case, patch)
+            identity = fake.config["identity"]
+            if case in ("adapter", "capture", "target", "module"):
+                identity[{"adapter": "adapter_sha256"}.get(case, case)] = "wrong"
+            elif case == "source":
+                (fake.root / "pcc/driver/cli_bootstrap.py").write_text("# changed\n")
+            elif case == "owner":
+                Path(fake.backend.__file__).write_text("# changed owner\n")
+            elif case == "callable":
+                fake.backend.emit_aarch64_darwin_indexed_transport = lambda *args, **kwargs: None
+            elif case == "alias":
+                fake.backend.build_stack_map_plans = lambda *args: None
+            manifest = _arm_startup(fake, patch, _manifest(fake.root, ("other", adapter.MODULE), 1))
+            imports = []
+
+            def imported(name):
+                assert fake.control.active is None and fake.control.slot is None
+                imports.append(name)
+                assert name in adapter.ARM_OWNERS
+                return sys.modules[name]
+
+            patch.setattr(adapter.importlib, "import_module", imported)
+            adapter.install()
+            status = json.loads((fake.directory / "install-status.json").read_text())
+            assert status["worker_manifest_sha256"] == adapter._digest(manifest)
+            if case == "valid":
+                assert status["status"] == "INSTALLED" and imports == list(adapter.ARM_OWNERS)
+                assert _arm_call(fake) is fake.control.backend_result
+                fake.phase.report(None, True)
+                assert _result(fake)["capture_valid"]
+            else:
+                assert status["status"] in ("ADAPTER_IDENTITY_MISMATCH", "OWNER_IDENTITY_MISMATCH", "OWNER_HOOK_CONFLICT")
+                assert fake.events == [] and not (fake.directory / "claim.json").exists()
+
+
+def test_arm_backend_preserves_arguments_result_and_delays_publication_until_report(tmp_path, monkeypatch):
+    for positional in (0, 1, 2, 3):
+        with monkeypatch.context() as patch:
+            fake = _arm_fake(tmp_path / str(positional), patch)
+            module, marker = object(), object()
+            fake.control.backend_result = marker
+            values = (module, False, True)
+            args = values[:positional]
+            kwargs = dict(zip(("module", "optimize", "structured_instructions")[positional:], values[positional:]),
+                          phase_timing=fake.phase)
+            _arm_attach(fake)
+            wrapped = fake.backend.emit_aarch64_darwin_indexed_transport
+            assert wrapped(*args, **kwargs) is marker
+            row = next(row for row in fake.events if row[0] == "backend")
+            assert row[1] == tuple(map(id, args)) and row[2] == {k: id(v) for k, v in kwargs.items()}
+            assert row[3] == "cProfile"
+            assert fake.backend.emit_aarch64_darwin_indexed_transport is fake.original
+            assert not (fake.directory / "result.json").exists() and ("getstats",) not in fake.events
+            other = fake.timing.ModulePhaseTiming(target=adapter.ARM_TARGET, route=adapter.ARM_ROUTE)
+            assert other.report(None, True) == "ordinary-report-result"
+            assert not (fake.directory / "result.json").exists()
+            assert fake.phase.report(None, True) == "ordinary-report-result"
+            assert fake.timing.ModulePhaseTiming.report is fake.original_report
+            result = _result(fake)
+            assert result["status"] == "BACKEND_RETURNED" and result["capture_valid"]
+            assert result["worker_manifest_sha256"] == "a" * 64
+            assert [row[0] for row in fake.events] == ["construct", "enable", "backend", "disable", "ordinary_report", "ordinary_report", "getstats", "clear"]
+
+
+def test_arm_backend_call_selection_is_exact_and_never_coerces_inputs(tmp_path, monkeypatch):
+    fake = _arm_fake(tmp_path, monkeypatch)
+    _arm_attach(fake)
+    wrapped = fake.backend.emit_aarch64_darwin_indexed_transport
+    class Hostile:
+        def __bool__(self):
+            pytest.fail("input was coerced")
+        def __eq__(self, other):
+            pytest.fail("input was compared")
+    base = {"optimize": False, "structured_instructions": True, "phase_timing": fake.phase}
+    variants = [dict(base, optimize=value) for value in (True, 0, Hostile())]
+    variants += [dict(base, structured_instructions=value) for value in (False, 1, Hostile())]
+    variants += [dict(base, phase_timing=value) for value in (None, Hostile(), SimpleNamespace(
+        module_name=adapter.MODULE, target=adapter.ARM_TARGET, route=adapter.ARM_ROUTE))]
+    variants += [dict(base, unexpected=object()), dict(base, module=object())]
+    for kwargs in variants:
+        assert wrapped(object(), **kwargs) is fake.control.backend_result
+    for name, value in (("module_name", "other"), ("target", adapter.TARGET), ("route", "indexed-assembly")):
+        old = getattr(fake.phase, name)
+        setattr(fake.phase, name, value)
+        assert wrapped(object(), **base) is fake.control.backend_result
+        setattr(fake.phase, name, old)
+    assert ("construct", True, True) not in fake.events and not (fake.directory / "claim.json").exists()
+    assert _arm_call(fake) is fake.control.backend_result
+    fake.phase.report(None, True)
+    assert _result(fake)["capture_valid"]
+
+
+def test_arm_backend_claim_is_exclusive_and_retries_never_recapture(tmp_path, monkeypatch):
+    fake = _arm_fake(tmp_path, monkeypatch)
+    _arm_attach(fake)
+    wrapper = fake.backend.emit_aarch64_darwin_indexed_transport
+    _arm_call(fake)
+    claim = (fake.directory / "claim.json").read_bytes()
+    fake.phase.report(None, True)
+    result = (fake.directory / "result.json").read_bytes()
+    wrapper(None, optimize=False, phase_timing=fake.phase)
+    _arm_attach(fake)
+    _arm_call(fake)
+    fake.phase.report(None, True)
+    assert (fake.directory / "claim.json").read_bytes() == claim
+    assert (fake.directory / "result.json").read_bytes() == result
+    assert [row[0] for row in fake.events].count("backend") == 3
+    assert [row[0] for row in fake.events].count("construct") == 1
+    assert fake.backend.emit_aarch64_darwin_indexed_transport is fake.original
+
+
+def test_arm_backend_business_baseexceptions_keep_identity_and_order(tmp_path, monkeypatch):
+    for index, error in enumerate((KeyboardInterrupt("stop"), SystemExit(7), BaseException("business"))):
+        with monkeypatch.context() as patch:
+            fake = _arm_fake(tmp_path / str(index), patch)
+            fake.control.backend_error = error
+            fake.control.disable_error = SystemExit("observer")
+            _arm_attach(fake)
+            with pytest.raises(BaseException) as raised:
+                _arm_call(fake)
+            assert raised.value is error
+            fake.phase.report(None, False)
+            result = _result(fake)
+            assert result["status"] == "BACKEND_RAISED" and not result["capture_valid"]
+            assert [row[0] for row in fake.events].count("backend") == 1
+            assert fake.events.index(("disable",)) > next(i for i, row in enumerate(fake.events) if row[0] == "backend")
+            assert fake.backend.emit_aarch64_darwin_indexed_transport is fake.original
+
+
+def test_arm_backend_observer_failures_never_replace_return_or_business_exception(tmp_path, monkeypatch):
+    for case in ("construct", "enable", "disable", "legacy", "monitoring", "post_construct", "claim"):
+        for fails in (False, True):
+            with monkeypatch.context() as patch:
+                fake = _arm_fake(tmp_path / (case + str(fails)), patch)
+                error = BaseException("business")
+                fake.control.backend_error = error if fails else None
+                if case in ("construct", "enable", "disable"):
+                    setattr(fake.control, case + "_error", SystemExit("observer"))
+                elif case == "legacy":
+                    fake.control.active = object()
+                elif case == "monitoring":
+                    fake.control.slot = "foreign"
+                elif case == "post_construct":
+                    original_init = sys.modules["cProfile"].Profile.__init__
+                    def occupied(self, **kwargs):
+                        original_init(self, **kwargs)
+                        fake.control.slot = "foreign"
+                    patch.setattr(sys.modules["cProfile"].Profile, "__init__", occupied)
+                elif case == "claim":
+                    (fake.directory / "claim.json").write_text("preexisting")
+                _arm_attach(fake)
+                if fails:
+                    with pytest.raises(BaseException) as raised:
+                        _arm_call(fake)
+                    assert raised.value is error
+                else:
+                    assert _arm_call(fake) is fake.control.backend_result
+                fake.phase.report(None, not fails)
+                assert [row[0] for row in fake.events].count("backend") == 1
+                assert fake.backend.emit_aarch64_darwin_indexed_transport is fake.original
+                if case == "claim":
+                    assert not (fake.directory / "result.json").exists()
+                else:
+                    result = _result(fake)
+                    assert not result["capture_valid"] and "functions" not in result
+                if case in ("enable", "disable"):
+                    assert adapter._FAILED_PROFILER is not None and ("clear",) not in fake.events
+                if case in ("legacy", "monitoring", "claim"):
+                    assert ("construct", True, True) not in fake.events
+
+
+def test_arm_backend_report_failures_preserve_original_report_outcome(tmp_path, monkeypatch):
+    for case in ("stats", "write", "clear", "ordinary_report"):
+        with monkeypatch.context() as patch:
+            fake = _arm_fake(tmp_path / case, patch)
+            _arm_attach(fake)
+            assert _arm_call(fake) is fake.control.backend_result
+            error = BaseException("report")
+            if case == "stats":
+                fake.control.stats_error = error
+            elif case == "write":
+                original_write = adapter._write
+                def failed_stats(path, value):
+                    if "functions" in value:
+                        raise error
+                    original_write(path, value)
+                patch.setattr(adapter, "_write", failed_stats)
+            elif case == "clear":
+                def failed_clear(self):
+                    raise error
+                patch.setattr(sys.modules["cProfile"].Profile, "clear", failed_clear)
+            else:
+                fake.control.report_error = error
+            if case == "ordinary_report":
+                with pytest.raises(BaseException) as raised:
+                    fake.phase.report(None, True)
+                assert raised.value is error
+            else:
+                assert fake.phase.report(None, True) == "ordinary-report-result"
+            assert fake.timing.ModulePhaseTiming.report is fake.original_report
+            result = _result(fake)
+            if case in ("stats", "write"):
+                assert result["status"] == "PROFILE_REPORT_FAILED" and not result["capture_valid"]
+            else:
+                assert result["capture_valid"]
+
+
+def test_arm_backend_foreign_hooks_are_preserved_at_capture_and_disable(tmp_path, monkeypatch):
+    for kind in ("legacy", "monitoring"):
+        with monkeypatch.context() as patch:
+            fake = _arm_fake(tmp_path / kind, patch)
+            foreign = object()
+            def takeover(*args, **kwargs):
+                if kind == "legacy":
+                    fake.control.active = foreign
+                else:
+                    fake.control.slot = "foreign"
+            fake.control.backend_callback = takeover
+            patch.setattr(sys, "setprofile", lambda value: pytest.fail("legacy hook mutation"))
+            patch.setattr(sys.monitoring, "free_tool_id", lambda value: pytest.fail("slot free"), raising=False)
+            _arm_attach(fake)
+            assert _arm_call(fake) is fake.control.backend_result
+            fake.phase.report(None, True)
+            assert not _result(fake)["capture_valid"] and adapter._FAILED_PROFILER is not None
+            if kind == "legacy":
+                assert fake.control.active is foreign
+            else:
+                assert fake.control.slot == "foreign" and ("disable",) not in fake.events
+
+
+def test_arm_backend_partial_install_and_restore_only_touch_owned_wrappers(tmp_path, monkeypatch):
+    fake = _arm_fake(tmp_path, monkeypatch)
+    original_report = fake.original_report
+    class Guarded(type):
+        def __setattr__(cls, name, value):
+            if name == "report" and value is not original_report:
+                raise BaseException("cannot install report")
+            return super().__setattr__(name, value)
+    phase_type = Guarded("Phase", (fake.timing.ModulePhaseTiming,), {"report": original_report})
+    fake.timing.ModulePhaseTiming = phase_type
+    with pytest.raises(BaseException, match="cannot install"):
+        _arm_attach(fake)
+    assert fake.backend.emit_aarch64_darwin_indexed_transport is fake.original
+    assert phase_type.report is original_report
+    # A later foreign owner must not be overwritten by backend/report cleanup.
+    with monkeypatch.context() as patch:
+        other = _arm_fake(tmp_path / "foreign", patch)
+        foreign_backend, foreign_report = lambda *a, **k: None, lambda *a, **k: None
+        _arm_attach(other)
+        report = other.timing.ModulePhaseTiming.report
+        def takeover(*args, **kwargs):
+            other.backend.emit_aarch64_darwin_indexed_transport = foreign_backend
+            other.timing.ModulePhaseTiming.report = foreign_report
+        other.control.backend_callback = takeover
+        assert _arm_call(other) is other.control.backend_result
+        assert report(other.phase, None, True) == "ordinary-report-result"
+        assert other.backend.emit_aarch64_darwin_indexed_transport is foreign_backend
+        assert other.timing.ModulePhaseTiming.report is foreign_report
+
+
+    # Refused restoration invalidates observation but preserves the business result.
+    for owner in ("backend", "report"):
+        with monkeypatch.context() as patch:
+            other = _arm_fake(tmp_path / owner, patch)
+            denied = {"active": False}
+            original = other.original
+            old_report = other.original_report
+            class GuardedModule(ModuleType):
+                def __setattr__(self, name, value):
+                    if name == adapter.ARM_CAPTURE and value is original and denied["active"]:
+                        raise BaseException("cannot restore backend")
+                    return super().__setattr__(name, value)
+            class GuardedPhase(type):
+                def __setattr__(cls, name, value):
+                    if name == "report" and value is old_report and denied["active"]:
+                        raise BaseException("cannot restore report")
+                    return super().__setattr__(name, value)
+            if owner == "backend":
+                guarded = GuardedModule(other.backend.__name__)
+                guarded.__dict__.update(vars(other.backend))
+                other.modules[0] = other.backend = guarded
+            else:
+                guarded = GuardedPhase("Phase", (other.timing.ModulePhaseTiming,), {"report": old_report})
+                other.timing.ModulePhaseTiming = guarded
+                other.phase = guarded(target=adapter.ARM_TARGET, route=adapter.ARM_ROUTE)
+            def refuse(*args, **kwargs):
+                denied["active"] = True
+            other.control.backend_callback = refuse
+            _arm_attach(other)
+            wrapper = other.backend.emit_aarch64_darwin_indexed_transport
+            assert _arm_call(other) is other.control.backend_result
+            other.phase.report(None, True)
+            assert not _result(other)["capture_valid"]
+            assert owner + "_wrapper_restore_failed" in _result(other)["diagnostic_errors"]
+            wrapper(None, optimize=False, phase_timing=other.phase)
+            assert [row[0] for row in other.events].count("construct") == 1
+            denied["active"] = False
+            other.backend.emit_aarch64_darwin_indexed_transport = original
+            other.timing.ModulePhaseTiming.report = old_report
+
+
+def test_arm_backend_does_not_retain_ir_phase_result_or_traceback(tmp_path, monkeypatch):
+    for fails in (False, True):
+        with monkeypatch.context() as patch:
+            fake = _arm_fake(tmp_path / str(fails), patch)
+            class Payload:
+                pass
+            module, phase = Payload(), fake.phase
+            module_ref, phase_ref = weakref.ref(module), weakref.ref(phase)
+            refs = []
+            def result_factory():
+                value = Payload()
+                refs.append(weakref.ref(value))
+                return value
+            fake.control.result_factory = result_factory
+            if fails:
+                def raise_without_retaining(*args, **kwargs):
+                    raise BaseException("business")
+                fake.control.backend_callback = raise_without_retaining
+            _arm_attach(fake)
+            if fails:
+                try:
+                    _arm_call(fake, module)
+                except BaseException:
+                    pass
+            else:
+                result = _arm_call(fake, module)
+                del result
+                assert refs[0]() is None
+            del module
+            assert module_ref() is None  # Before the later ordinary report.
+            phase.report(None, not fails)
+            fake.phase = None
+            del phase
+            assert phase_ref() is None
+
+
+def test_arm_backend_raw_stats_pin_owner_edges_and_remain_bounded(tmp_path, monkeypatch):
+    fake = _arm_fake(tmp_path, monkeypatch)
+    _arm_attach(fake)
+    _arm_call(fake)
+    fake.phase.report(None, True)
+    result = _result(fake)
+    edges = {(edge["caller"]["name"], edge["callee"]["name"]) for edge in result["key_caller_edges"]}
+    assert {("_emit_prepared_aarch64_darwin_lines_active", "build_stack_map_plans"),
+            ("_emit_prepared_aarch64_darwin_lines_active", "_emit_function"),
+            ("_emit_function", "note_aarch64_reload_destinations"),
+            ("_emit_function", "emit_function_prologue"),
+            ("_emit_function", "_emit_dense_indexed_function_blocks"),
+            ("emit_function_prologue", "allocate_aarch64_block_registers")} <= edges
+    assert "must not be summed" in result["attribution"]
+    assert len(result["functions"]) <= 40 and len(result["key_caller_edges"]) <= 12
+    assert all(len(row["name"]) <= 160 for row in result["functions"])
+    assert (fake.directory / "result.json").stat().st_size <= 65536
+    assert result["coverage"]["functions_total"] == 8
+    assert "overhead" in result["scope"] and "not guaranteed safe" in result["observer_failure"]
+
+
+def test_arm_backend_source_bindings_use_real_worker_call_and_existing_report_boundary():
+    root = Path(__file__).resolve().parents[2]
+    worker = (root / "pcc/frontends/python/pipeline_frontend_worker_execution.py").read_text()
+    tree = ast.parse(worker)
+    imports = [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+               and node.module == "pcc.backend.self_backend_aarch64_darwin"
+               and any(alias.name == adapter.ARM_CAPTURE for alias in node.names)]
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id == adapter.ARM_CAPTURE]
+    assert len(imports) == len(calls) == 1 and imports[0].lineno < calls[0].lineno
+    assert {item.arg: ast.literal_eval(item.value) for item in calls[0].keywords
+            if item.arg != "phase_timing"} == {"optimize": False, "structured_instructions": True}
+    assert 'phase_timing.route = "indexed-native-sections"' in worker
+    assert worker.index("codegen_ms = int((time.monotonic() - codegen_started)") < worker.index("phase_timing.report(sys.stderr, phase_timing_complete)")
+    backend = ast.parse((root / "pcc/backend/self_backend_aarch64_darwin.py").read_text())
+    function = next(node for node in backend.body if isinstance(node, ast.FunctionDef) and node.name == adapter.ARM_CAPTURE)
+    assert [arg.arg for arg in function.args.args] == ["module", "optimize", "structured_instructions"]
+    assert [arg.arg for arg in function.args.kwonlyargs] == ["phase_timing"]
+    source = (root / "scripts/bootstrap_platform.py").read_text()
+    assert 'elif stage == 1 and arm_profile:' in source and '"arm-backend-function-profile"' in source
+    assert '"arm_backend_function_profile"' in source and source.count("prepare_environment(") == 1
+    implementation = Path(adapter.__file__).read_text()
+    arm = next(node for node in ast.parse(implementation).body if isinstance(node, ast.FunctionDef) and node.name == "_attach_arm")
+    measured = next(node for node in arm.body if isinstance(node, ast.FunctionDef) and node.name == "measured")
+    measured_source = ast.get_source_segment(implementation, measured)
+    assert "getstats" not in measured_source and "result.json" not in measured_source
+    assert "setprofile" not in ast.get_source_segment(implementation, arm)
+    assert "free_tool_id" not in ast.get_source_segment(implementation, arm)
+    assert not any(isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(("pcc", "cProfile", "_lsprof"))
+                   for node in ast.parse(implementation).body)

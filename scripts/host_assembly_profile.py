@@ -1,4 +1,4 @@
-"""Opt-in host-only profile of one cli_bootstrap assembly or ARM PCO stage.
+"""Opt-in host-only profile of one cli_bootstrap assembly, ARM backend or PCO stage.
 
 Only the admitted Stage1 worker/coordinator imports PCC. No production module
 imports this adapter. The profiler observes Python and C calls: its overhead
@@ -22,6 +22,16 @@ TARGET = "x86_64-unknown-linux-gnu"
 ROUTE = "indexed-assembly"
 FLAG = "PCC_HOST_ASSEMBLY_PROFILE"
 ELF_FLAG = "PCC_HOST_ELF_STAGE_PROFILE"
+ARM_FLAG = "PCC_HOST_ARM_BACKEND_PROFILE"
+ARM_SCHEMA = "pcc.host-arm-backend-function-profile.v1"
+ARM_TARGET = "aarch64-unknown-linux-gnu"
+ARM_ROUTE = "indexed-native-sections"
+ARM_CAPTURE = "emit_aarch64_darwin_indexed_transport"
+ARM_OWNERS = ("pcc.backend.self_backend_aarch64_darwin",
+              "pcc.backend.indexed_phase_timing",
+              "pcc.backend.self_backend_aarch64_darwin_prologue",
+              "pcc.backend.self_backend_aarch64_darwin_regalloc",
+              "pcc.backend.self_backend_precise_stackmaps")
 ELF_ARGV = "PCC_HOST_ELF_STAGE_PROFILE_ARGV"
 ELF_TARGET = "aarch64-unknown-linux-gnu"
 ELF_SCHEMA = "pcc.host-elf-stage-function-profile.v1"
@@ -87,7 +97,8 @@ def prepare_environment(root, directory, environment, source, runtime, compiler_
                         *, command=None):
     """Configure only the existing Stage1 command; never launch a process."""
     elf_mode = environment.get(ELF_FLAG) == "1"
-    if environment.get(FLAG) != "1" and not elf_mode:
+    arm_mode = environment.get(ARM_FLAG) == "1"
+    if environment.get(FLAG) != "1" and not elf_mode and not arm_mode:
         return environment
     directory = Path(directory)
     owned = False
@@ -96,17 +107,20 @@ def prepare_environment(root, directory, environment, source, runtime, compiler_
         directory.mkdir(parents=True, exist_ok=False)
         owned = True
         status = "PROFILE_MODE_CONFLICT"
-        if elf_mode and environment.get(FLAG) == "1":
+        if sum(environment.get(flag) == "1" for flag in (FLAG, ELF_FLAG, ARM_FLAG)) != 1:
             raise ValueError(status)
         status = "UNSUPPORTED_HOST"
-        machines = ("aarch64", "arm64") if elf_mode else ("x86_64", "amd64")
+        machines = ("aarch64", "arm64") if elf_mode or arm_mode else ("x86_64", "amd64")
         if (sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 13)
                 or sys.platform != "linux" or platform.machine().lower() not in machines
-                or target != (ELF_TARGET if elf_mode else TARGET)):
+                or target != (ARM_TARGET if arm_mode else ELF_TARGET if elf_mode else TARGET)):
             raise ValueError(status)
         status = "COORDINATOR_ADMISSION_CONFLICT"
         if elf_mode and (not _elf_environment(environment) or not _elf_command(command, root)
                          or len(json.dumps(command, separators=(",", ":"))) > 16384):
+            raise ValueError(status)
+        status = "WORKER_ENVIRONMENT_CONFLICT"
+        if arm_mode and not _elf_environment(environment):
             raise ValueError(status)
         status = "PROFILE_HOOK_CONFLICT"
         if _observer_conflict():
@@ -135,8 +149,10 @@ def prepare_environment(root, directory, environment, source, runtime, compiler_
             "adapter_sha256": hashlib.sha256(adapter).hexdigest(),
             "owner_sources": {name.replace(".", "/") + ".py":
                               _digest(Path(root) / (name.replace(".", "/") + ".py"))
-                              for name in (*(ELF_OWNERS if elf_mode else OWNERS), MODULE)},
+                              for name in (*(ARM_OWNERS if arm_mode else ELF_OWNERS if elf_mode else OWNERS), MODULE)},
         }
+        if arm_mode:
+            identity["capture"] = ARM_CAPTURE
         if elf_mode:
             identity["capture"] = "ElfInputStore.stage"
         # Paths stay in the child environment, not uploaded diagnostic JSON.
@@ -153,8 +169,8 @@ def prepare_environment(root, directory, environment, source, runtime, compiler_
         if owned:
             try:
                 _write(directory / "install-status.json", {
-                    "schema": ELF_SCHEMA if elf_mode else SCHEMA, "status": status,
-                    "module": MODULE, "target": ELF_TARGET if elf_mode else TARGET})
+                    "schema": ARM_SCHEMA if arm_mode else ELF_SCHEMA if elf_mode else SCHEMA, "status": status,
+                    "module": MODULE, "target": ARM_TARGET if arm_mode else ELF_TARGET if elf_mode else TARGET})
             except BaseException:
                 pass
         return environment
@@ -412,6 +428,170 @@ def _attach(config, manifest_sha256, assembly, timing, encoder, elf):
         raise
 
 
+def _attach_arm(config, manifest_sha256, backend, timing, prologue, regalloc, stackmaps):
+    original = backend.emit_aarch64_darwin_indexed_transport
+    phase_type = timing.ModulePhaseTiming
+    original_report = phase_type.report
+    # No IR module, invocation arguments, result, phase or traceback is retained.
+    state = {"used": False, "owned": False, "profiler": None, "timing_id": None,
+             "status": "NOT_CAPTURED", "diagnostic_errors": [], "disabled": False}
+    directory = Path(config["directory"])
+    base = {"schema": ARM_SCHEMA, "identity": config["identity"],
+            "worker_manifest_sha256": manifest_sha256,
+            "scope": "one real cli_bootstrap ARM indexed transport backend; profiled overhead, not baseline performance",
+            "selected_worker_startup": "ordinary eager PCC import after singleton admission; perturbed",
+            "publication": "ordinary phase report after codegen stopwatch stops; no backend-return serialization",
+            "observer_failure": "Partial enable/disable may leave profiling active beyond backend; invalid captures publish no stats. Arbitrary same-name monitoring takeover is not guaranteed safe.",
+            "strong_kill": "may leave claim.json without stats; no completion is inferred"}
+
+    def note(value):
+        try:
+            if len(state["diagnostic_errors"]) < 8:
+                state["diagnostic_errors"].append(value)
+        except BaseException:
+            pass
+
+    def restore_backend():
+        try:
+            if backend.emit_aarch64_darwin_indexed_transport is measured:
+                backend.emit_aarch64_darwin_indexed_transport = original
+        except BaseException:
+            note("backend_wrapper_restore_failed")
+
+    def measured(*args, **kwargs):
+        # Exact signature/owned phase only. No user conversions, IR inspection,
+        # input replay, keyword rewriting or iterator consumption.
+        try:
+            phase = kwargs.get("phase_timing")
+            optimize = args[1] if len(args) > 1 else kwargs.get("optimize", True)
+            structured = args[2] if len(args) > 2 else kwargs.get("structured_instructions", True)
+            bypass = (state["used"] or len(args) > 3
+                or bool(args) == ("module" in kwargs)
+                or (len(args) > 1 and "optimize" in kwargs)
+                or (len(args) > 2 and "structured_instructions" in kwargs)
+                or set(kwargs) - {"module", "optimize", "structured_instructions", "phase_timing"}
+                or type(phase) is not phase_type
+                or type(phase.module_name) is not str or phase.module_name != MODULE
+                or type(phase.target) is not str or phase.target != ARM_TARGET
+                or type(phase.route) is not str or phase.route != ARM_ROUTE
+                or optimize is not False or structured is not True)
+        except BaseException:
+            bypass = True
+        if bypass:
+            return original(*args, **kwargs)
+        state["used"] = True
+        state["timing_id"] = id(phase)
+        profiler = None
+        try:
+            try:
+                _write(directory / "claim.json", dict(base, status="CLAIMED"))
+                state["owned"] = True
+                if _observer_conflict():
+                    state["status"] = "PROFILE_HOOK_CONFLICT"
+                else:
+                    from cProfile import Profile
+                    profiler = Profile(subcalls=True, builtins=True)
+                    if _observer_conflict():
+                        profiler = None
+                        state["status"] = "PROFILE_HOOK_CONFLICT"
+                    else:
+                        state["profiler"] = profiler
+                        try:
+                            profiler.enable()
+                        except BaseException:
+                            note("enable_failed")
+            except BaseException:
+                state["status"] = "PROFILE_SETUP_FAILED"
+            # Even a failed claim/setup/enable calls the same business function
+            # exactly once. Its BaseException is never caught or replaced.
+            if profiler is not None:
+                state["status"] = "BACKEND_RAISED"
+            result = original(*args, **kwargs)
+            if profiler is not None:
+                state["status"] = "BACKEND_RETURNED"
+            return result
+        finally:
+            if profiler is not None:
+                # Official API only, once; no slot freeing or hook clearing.
+                # A slot name cannot identify arbitrary same-name takeovers.
+                try:
+                    if sys.getprofile() is not None:
+                        note("foreign_legacy_hook_preserved")
+                    slot = sys.monitoring.get_tool(sys.monitoring.PROFILER_ID)
+                    if slot not in (None, "cProfile"):
+                        note("foreign_monitoring_slot_preserved")
+                    else:
+                        profiler.disable()
+                        state["disabled"] = sys.monitoring.get_tool(sys.monitoring.PROFILER_ID) is None
+                        if not state["disabled"]:
+                            note("profile_state_not_restored")
+                except BaseException:
+                    note("disable_failed_state_not_restored")
+                if state["diagnostic_errors"] or not state["disabled"]:
+                    global _FAILED_PROFILER
+                    _FAILED_PROFILER = profiler
+            restore_backend()
+
+    def report(phase, *args, **kwargs):
+        try:
+            return original_report(phase, *args, **kwargs)
+        finally:
+            if state["timing_id"] == id(phase):
+                profiler = state.pop("profiler", None)
+                try:
+                    if phase_type.report is report:
+                        phase_type.report = original_report
+                except BaseException:
+                    note("report_wrapper_restore_failed")
+                restore_backend()
+                try:
+                    if state["owned"]:
+                        value = dict(base, status=state["status"],
+                                     diagnostic_errors=state["diagnostic_errors"],
+                                     capture_valid=profiler is not None and state["disabled"]
+                                     and not state["diagnostic_errors"])
+                        if value["capture_valid"]:
+                            keys = (id(original.__code__),
+                                    id(backend._emit_prepared_aarch64_darwin_lines_active.__code__),
+                                    id(backend._emit_function.__code__),
+                                    id(prologue.emit_function_prologue.__code__))
+                            value.update(_summary(
+                                profiler.getstats(), Path(config["root"]),
+                                _labels((backend, prologue, regalloc, stackmaps)), keys,
+                                pinned_edges=((keys[1], id(stackmaps.build_stack_map_plans.__code__)),
+                                              (keys[1], keys[2]),
+                                              (keys[2], id(backend.note_aarch64_reload_destinations.__code__)),
+                                              (keys[2], keys[3]),
+                                              (keys[2], id(backend._emit_dense_indexed_function_blocks.__code__)),
+                                              (keys[3], id(regalloc.allocate_aarch64_block_registers.__code__))),
+                                attribution="Backend transport includes prepare, planning, function emission and finalization. Function emission includes reload/prologue setup and bodies; prologue includes regalloc. Direct owner edges overlap these inclusive scopes; shared helper self is combined. Cumulative times must not be summed."))
+                        _write(directory / "result.json", value)
+                except BaseException:
+                    try:
+                        _write(directory / "result.json", dict(base, status="PROFILE_REPORT_FAILED",
+                                                               backend_status=state["status"], capture_valid=False))
+                    except BaseException:
+                        pass
+                finally:
+                    if profiler is not None and state["disabled"]:
+                        try:
+                            profiler.clear()
+                        except BaseException:
+                            pass
+
+    try:
+        backend.emit_aarch64_darwin_indexed_transport = measured
+        phase_type.report = report
+    except BaseException:
+        restore_backend()
+        try:
+            if phase_type.report is report:
+                phase_type.report = original_report
+        except BaseException:
+            pass
+        raise
+
+
 def _elf_selected_path(artifacts):
     # Inspect only the owner's existing exact containers/strings. Never
     # consume an iterator, call a user conversion, or inspect input files.
@@ -631,7 +811,8 @@ def _attach_elf(config, pipeline, inputs, linker, elf):
 def _install_elf():
     # The opt-in reaches child workers through the environment, but they must
     # return before PCC imports or any wrapper installation.
-    if (os.environ.get(FLAG) == "1" or not os.environ.get(CONFIG)
+    if (os.environ.get(FLAG) == "1" or os.environ.get(ARM_FLAG) == "1"
+            or not os.environ.get(CONFIG)
             or sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 13)
             or sys.platform != "linux" or platform.machine().lower() not in ("aarch64", "arm64")
             or not _elf_environment(os.environ)):
@@ -704,10 +885,14 @@ def install():
             # ordinary startup or publish evidence for an unselected worker.
             pass
         return
-    if (os.environ.get(FLAG) != "1" or not os.environ.get(CONFIG)
+    arm_mode = os.environ.get(ARM_FLAG) == "1"
+    if (arm_mode and os.environ.get(FLAG) == "1"):
+        return
+    if ((os.environ.get(FLAG) != "1" and not arm_mode) or not os.environ.get(CONFIG)
             or sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 13)
             or sys.platform != "linux"
-            or platform.machine().lower() not in ("x86_64", "amd64")):
+            or platform.machine().lower() not in (("aarch64", "arm64") if arm_mode else ("x86_64", "amd64"))
+            or (arm_mode and not _elf_environment(os.environ))):
         return
     argv = getattr(sys, "orig_argv", ())
     if (len(argv) != 5 or list(argv[:4]) != [sys.executable, "-m", "pcc",
@@ -720,7 +905,7 @@ def install():
         if manifest is not None:
             try:
                 _write(Path(config["directory"]) / "install-status.json", {
-                    "schema": SCHEMA, "status": status,
+                    "schema": ARM_SCHEMA if arm_mode else SCHEMA, "status": status,
                     "scope": "first admitted worker installation; retries do not replace this record",
                     "identity": config["identity"], "worker_manifest_sha256": manifest,
                 })
@@ -738,22 +923,59 @@ def install():
         if manifest is None:
             return
         status = "ADAPTER_IDENTITY_MISMATCH"
-        if config["identity"]["adapter_sha256"] != _digest(__file__):
+        if (config["identity"]["adapter_sha256"] != _digest(__file__)
+                or (arm_mode and (config["identity"].get("target") != ARM_TARGET
+                    or config["identity"].get("module") != MODULE
+                    or config["identity"].get("capture") != ARM_CAPTURE))):
             return
         status = "PROFILE_HOOK_CONFLICT"
         if _observer_conflict():
             return
         status = "OWNER_IMPORT_FAILED"
-        loaded = [importlib.import_module(name) for name in OWNERS]
+        owners = ARM_OWNERS if arm_mode else OWNERS
+        loaded = [importlib.import_module(name) for name in owners]
         status = "OWNER_IDENTITY_MISMATCH"
-        for module, name in zip(loaded, OWNERS):
+        for module, name in zip(loaded, owners):
             path = Path(config["root"]) / (name.replace(".", "/") + ".py")
             if (Path(module.__file__).resolve() != path
                     or _digest(path) != config["identity"]["owner_sources"][name.replace(".", "/") + ".py"]):
                 return
-        assembly, timing, encoder, elf = loaded
-        status = "ATTACH_FAILED"
-        _attach(config, manifest, assembly, timing, encoder, elf)
+        if arm_mode:
+            # Check the selected input source and exact existing callable owners.
+            relative = MODULE.replace(".", "/") + ".py"
+            if _digest(Path(config["root"]) / relative) != config["identity"]["owner_sources"][relative]:
+                return
+            backend, timing, prologue, regalloc, stackmaps = loaded
+            status = "OWNER_HOOK_CONFLICT"
+            if type(timing.ModulePhaseTiming) is not type:
+                return
+            for function, module, name in (
+                    (backend.emit_aarch64_darwin_indexed_transport, backend, ARM_CAPTURE),
+                    (timing.ModulePhaseTiming.report, timing, "ModulePhaseTiming.report"),
+                    (backend._emit_prepared_aarch64_darwin_lines_active, backend, "_emit_prepared_aarch64_darwin_lines_active"),
+                    (backend._emit_function, backend, "_emit_function"),
+                    (prologue.emit_function_prologue, prologue, "emit_function_prologue"),
+                    (backend._emit_dense_indexed_function_blocks, backend, "_emit_dense_indexed_function_blocks"),
+                    (regalloc.note_aarch64_reload_destinations, regalloc, "note_aarch64_reload_destinations"),
+                    (regalloc.allocate_aarch64_block_registers, regalloc, "allocate_aarch64_block_registers"),
+                    (stackmaps.build_stack_map_plans, stackmaps, "build_stack_map_plans")):
+                if (function.__module__ != module.__name__ or function.__qualname__ != name
+                        or Path(function.__code__.co_filename).resolve() != Path(module.__file__).resolve()):
+                    return
+            if (backend._prologue_emit_function_prologue is not prologue.emit_function_prologue
+                    or backend.build_stack_map_plans is not stackmaps.build_stack_map_plans
+                    or backend.note_aarch64_reload_destinations is not regalloc.note_aarch64_reload_destinations
+                    or prologue.allocate_aarch64_block_registers is not regalloc.allocate_aarch64_block_registers):
+                return
+            status = "PROFILE_HOOK_CONFLICT"
+            if _observer_conflict():
+                return
+            status = "ATTACH_FAILED"
+            _attach_arm(config, manifest, *loaded)
+        else:
+            assembly, timing, encoder, elf = loaded
+            status = "ATTACH_FAILED"
+            _attach(config, manifest, assembly, timing, encoder, elf)
         status = "INSTALLED"
     except BaseException:
         # Startup diagnostics never replace the worker's ordinary import/error.
