@@ -33,10 +33,12 @@ ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
               "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
               "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py")
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
+REGALLOC_FACTS_TEST = "tests/python/test_aarch64_regalloc_single_seed.py"
 CALLEE_SAVED_TEST = "tests/c/test_self_backend_aarch64_callee_saved.py"
 BRANCH_PARITY_TEST = "tests/python/test_aarch64_branch_layout_parity.py"
 REGALLOC_INPUTS = (REGALLOC_TEST, CALLEE_SAVED_TEST, BRANCH_PARITY_TEST,
                   "tests/aarch64_regalloc_scan_reference.py",
+                  "tests/aarch64_regalloc_facts_reference.py", REGALLOC_FACTS_TEST,
                   "tests/python/test_precise_stackmap_abi.py",
                   "tests/python/test_unsafe_syscall6.py")
 REGALLOC_MODES = ("default", "function", "local")
@@ -81,10 +83,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_dynamic_handoff_slots.py",
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
-              X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST)
-# All existing 798 nodes remain. Fourteen ARM backend observer controls add
-# only fake-module/profiler or AST/text checks to this bounded invocation.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48)
+              X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST)
+# All existing 812 nodes remain. Thirty-two finite fake-CFG/oracle controls
+# share this bounded invocation; no compiler/emitter or new job is added.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

@@ -627,17 +627,56 @@ def _function_level_facts(
     # the back edge); a value live into a block is live from its first
     # position -- layout order need not follow dominance, so such a block may
     # precede the definition.
+    # The -1 value ID aliases the unvisited stamp and depends on previous
+    # values' walks.  Custom IDs/seeds can expose hash, equality or indexing
+    # calls.  In either case retain the original traversal for every value.
+    cache_enabled = len(use_blocks) > 1
+    if cache_enabled:
+        for value_id in def_block:
+            if type(value_id) is not int:
+                cache_enabled = False
+                break
+        for value_id in use_blocks:
+            if type(value_id) is not int or value_id == -1:
+                cache_enabled = False
+                break
+    if cache_enabled:
+        for value_id in use_blocks:
+            for seed in use_blocks[value_id]:
+                if type(seed) is not int:
+                    cache_enabled = False
+                    break
+    # Home is -1 or a block index, so this pair has a collision-free integer
+    # key: (home + 1) * block_count + seed.  Keep at most block_count entries;
+    # once full, new keys take the old walk without evicting useful summaries.
+    graph_low: dict[int, int] = {}
+    graph_high: dict[int, int] = {}
     first_live: dict[int, int] = {}
     visited: list[int] = [-1] * len(successors)
     pending: list[int] = []
     for value_id in use_blocks:
         home = def_block.get(value_id, -1)
         lowest = -1
-        highest = last_use[value_id]
+        textual_highest = last_use[value_id]
+        highest = textual_highest
+        if cache_enabled:
+            highest = -1
         for block_id in use_blocks[value_id]:
             if block_id != home and visited[block_id] != value_id:
                 visited[block_id] = value_id
                 pending.append(block_id)
+        cache_key = -1
+        cache_miss = False
+        if cache_enabled and len(pending) == 1:
+            seed = pending[0]
+            cache_key = (home + 1) * len(successors) + seed
+            cached_low = graph_low.get(cache_key, -1)
+            if cached_low >= 0:
+                lowest = cached_low
+                highest = graph_high[cache_key]
+                pending.pop()
+            elif len(graph_low) < len(successors):
+                cache_miss = True
         while pending:
             block_id = pending.pop()
             base = block_base[block_id]
@@ -650,6 +689,13 @@ def _function_level_facts(
                 if predecessor != home and visited[predecessor] != value_id:
                     visited[predecessor] = value_id
                     pending.append(predecessor)
+        if cache_miss:
+            # Cache only graph extrema: different values at this same seed
+            # can have different textual or PHI last-use positions.
+            graph_low[cache_key] = lowest
+            graph_high[cache_key] = highest
+        if cache_enabled and textual_highest > highest:
+            highest = textual_highest
         last_use[value_id] = highest
         if lowest >= 0:
             first_live[value_id] = lowest

@@ -362,12 +362,15 @@ def test_scan_reuse_preserves_callee_saved_assembly_and_frames(monkeypatch, mode
     from pcc.backend import self_backend_aarch64_darwin_regalloc as regalloc
     from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_asm
     from tests.aarch64_regalloc_scan_reference import (
-        allocation_state, old_scan_allocator, select_mode,
+        allocation_state, counted_function_facts, old_scan_allocator, select_mode,
     )
 
     select_mode(monkeypatch, mode)
     outputs = []
-    for allocator in (old_scan_allocator(), regalloc.allocate_aarch64_block_registers):
+    graph_counts = [dict(pops=0, edges=0, hits=0) for _ in range(2)]
+    reference = old_scan_allocator(facts_counts=graph_counts[0])
+    counted_facts = counted_function_facts(regalloc._function_level_facts, graph_counts[1])
+    for index, allocator in enumerate((reference, regalloc.allocate_aarch64_block_registers)):
         states = {}
 
         def allocate(func):
@@ -376,6 +379,8 @@ def test_scan_reuse_preserves_callee_saved_assembly_and_frames(monkeypatch, mode
 
         with monkeypatch.context() as patch:
             patch.setattr(prologue, "allocate_aarch64_block_registers", allocate)
+            if index == 1:
+                patch.setattr(regalloc, "_function_level_facts", counted_facts)
             assembly = emit_aarch64_darwin_asm(IR, optimize=False)
         assert set(states) == {"pressure", "loop_calls", "fib", "narrow", "tagged"}
         if mode == "default":
@@ -384,3 +389,8 @@ def test_scan_reuse_preserves_callee_saved_assembly_and_frames(monkeypatch, mode
             assert not any(state["callee_saved"] for state in states.values())
         outputs.append((assembly, states))
     assert outputs[0] == outputs[1]
+    if mode != "local":
+        assert graph_counts[1]["hits"] > 0
+        assert graph_counts[1]["pops"] < graph_counts[0]["pops"]
+    else:
+        assert graph_counts == [dict(pops=0, edges=0, hits=0)] * 2

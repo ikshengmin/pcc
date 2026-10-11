@@ -186,7 +186,9 @@ def test_aarch64_call_result_executes_through_indexed_emission(tmp_path, monkeyp
     if sys.platform != "darwin" or platform.machine() != "arm64":
         pytest.skip("AArch64 Darwin execution")
     from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
-    from tests.aarch64_regalloc_scan_reference import old_scan_allocator, select_mode
+    from tests.aarch64_regalloc_scan_reference import (
+        counted_function_facts, old_scan_allocator, select_mode,
+    )
 
     select_mode(monkeypatch, mode)
     source = _TRIPLE + '''
@@ -195,6 +197,8 @@ define i64 @two_calls(i64 %arg) {
 entry:
   %first = call i64 @opaque(i64 %arg)
   %second = call i64 @opaque(i64 7)
+  br label %tail
+tail:
   %result = add i64 %first, %second
   ret i64 %result
 }
@@ -219,9 +223,14 @@ _opaque:
     helper = NativeObject.from_sections(helper_sections, undefined=helper_undefined)
     for optimize in (False, True):
         outputs = []
-        for index, allocator in enumerate((old_scan_allocator(), allocate_aarch64_block_registers)):
+        graph_counts = [dict(pops=0, edges=0, hits=0) for _ in range(2)]
+        reference = old_scan_allocator(facts_counts=graph_counts[0])
+        counted_facts = counted_function_facts(aarch64_regalloc._function_level_facts, graph_counts[1])
+        for index, allocator in enumerate((reference, allocate_aarch64_block_registers)):
             with monkeypatch.context() as patch:
                 patch.setattr(prologue, "allocate_aarch64_block_registers", allocator)
+                if index == 1:
+                    patch.setattr(aarch64_regalloc, "_function_level_facts", counted_facts)
                 module = parse_self_backend_module(source)
                 transport = emit_aarch64_darwin_indexed_transport(module, optimize=optimize)
             sections, undefined = transport.assemble_sections()
@@ -234,6 +243,12 @@ _opaque:
             result = subprocess.run([str(executable)], capture_output=True, timeout=10)
             assert result.returncode == 0, result.stderr
         assert outputs[0] == outputs[1]
+        if mode != "local":
+            assert graph_counts[1]["hits"] > 0
+            assert graph_counts[1]["pops"] < graph_counts[0]["pops"]
+            assert graph_counts[1]["edges"] < graph_counts[0]["edges"]
+        else:
+            assert graph_counts == [dict(pops=0, edges=0, hits=0)] * 2
 
 
 def test_aarch64_linear_scan_spills_farthest_interval_under_pressure():
@@ -508,7 +523,10 @@ def _scan_reuse_function(monkeypatch, shape):
             "safe": """define i64 @probe(i64 %arg) {
 entry:
   %first = add i64 %arg, 1
-  %result = xor i64 %first, 2
+  %second = xor i64 %arg, 2
+  br label %tail
+tail:
+  %result = add i64 %first, %second
   ret i64 %result
 }""",
             "call": """declare i64 @opaque(i64)
@@ -601,11 +619,14 @@ def test_aarch64_regalloc_reuses_function_facts_without_changing_state(
     monkeypatch, shape, mode, call_results,
 ):
     from tests.aarch64_regalloc_scan_reference import (
-        allocation_state, old_scan_allocator, removed_metadata_reads, select_mode,
+        allocation_state, counted_function_facts, old_scan_allocator,
+        removed_metadata_reads, select_mode,
     )
 
     select_mode(monkeypatch, mode, call_results=call_results)
-    reference = old_scan_allocator()
+    graph_counts = [dict(pops=0, edges=0, hits=0) for _ in range(2)]
+    reference = old_scan_allocator(facts_counts=graph_counts[0])
+    counted_facts = counted_function_facts(aarch64_regalloc._function_level_facts, graph_counts[1])
     funcs = [_scan_reuse_function(monkeypatch, shape) for _ in range(2)]
     kernels = [get_indexed_function_kernel(func) for func in funcs]
     planes = ("instruction_metadata", "instruction_facts", "instruction_record_scalars",
@@ -631,7 +652,14 @@ def test_aarch64_regalloc_reuses_function_facts_without_changing_state(
     with monkeypatch.context() as patch:
         patch.setattr(type(kernels[0]), "instruction_metadata_by_id", counted)
         reference(funcs[0])
+        patch.setattr(aarch64_regalloc, "_function_level_facts", counted_facts)
         allocate_aarch64_block_registers(funcs[1])
+    assert graph_counts[1]["pops"] <= graph_counts[0]["pops"]
+    assert graph_counts[1]["edges"] <= graph_counts[0]["edges"]
+    if shape == "safe" and mode != "local":
+        assert graph_counts[1]["hits"] > 0
+        assert graph_counts[1]["pops"] < graph_counts[0]["pops"]
+        assert graph_counts[1]["edges"] < graph_counts[0]["edges"]
     assert counts[0] - counts[1] == expected_removed
     if shape not in ("empty", "vararg") and mode != "local":
         assert expected_removed > 0

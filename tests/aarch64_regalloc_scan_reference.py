@@ -56,11 +56,16 @@ def restore_redundant_scans(tree):
     return ast.fix_missing_locations(tree)
 
 
-def old_scan_allocator():
+def old_scan_allocator(*, facts_counts=None):
     tree = restore_redundant_scans(ast.parse(inspect.getsource(
         regalloc.allocate_aarch64_block_registers
     )))
+    from tests.aarch64_regalloc_facts_reference import old_function_level_facts
     namespace = dict(vars(regalloc))
+    facts = old_function_level_facts(regalloc)
+    if facts_counts is not None:
+        facts = counted_function_facts(facts, facts_counts)
+    namespace["_function_level_facts"] = facts
     exec(compile(tree, "<aarch64-original-metadata-scans>", "exec"), namespace)
     return namespace["allocate_aarch64_block_registers"]
 
@@ -97,3 +102,43 @@ def removed_metadata_reads(func):
         else:
             count += block.second
     return count
+
+
+def counted_function_facts(function, counts):
+    """Test-only graph visits; the cache-hit pending.pop is not a graph visit."""
+    class Count(ast.NodeTransformer):
+        pops = 0
+        edges = 0
+
+        def increment(self, name):
+            return ast.parse("_facts_counts[" + repr(name) + "] += 1").body[0]
+
+        def visit_While(self, node):
+            self.generic_visit(node)
+            if isinstance(node.test, ast.Name) and node.test.id == "pending":
+                node.body.insert(0, self.increment("pops"))
+                self.pops += 1
+            return node
+
+        def visit_For(self, node):
+            self.generic_visit(node)
+            if (ast.unparse(node.target) == "predecessor"
+                    and ast.unparse(node.iter) == "predecessors[block_id]"):
+                node.body.insert(0, self.increment("edges"))
+                self.edges += 1
+            return node
+
+        def visit_If(self, node):
+            self.generic_visit(node)
+            if ast.unparse(node.test) == "cached_low >= 0":
+                node.body.insert(0, self.increment("hits"))
+            return node
+
+    tree = ast.parse(inspect.getsource(function))
+    counter = Count()
+    tree = counter.visit(tree)
+    assert (counter.pops, counter.edges) == (1, 1)
+    namespace = dict(function.__globals__)
+    namespace["_facts_counts"] = counts
+    exec(compile(ast.fix_missing_locations(tree), "<counted-facts-graph-visits>", "exec"), namespace)
+    return namespace["_function_level_facts"]
