@@ -69,7 +69,7 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_host_indexed_process_split.py",
               "tests/python/test_dynamic_handoff_slots.py")
 # Updated with the exact frozen pure-control inventory; real tests remain separate.
-HOST_COUNTS = (80, 3, 145, 0, 4, 29, 25, 7, 11, 49, 20, 21)
+HOST_COUNTS = (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -206,9 +206,9 @@ def verify_pytest(directory, expected, file_counts=None):
     return nodes
 
 
-def run_pytest(out, name, nodes, env, *, integration=False, counts=None):
+def run_pytest(out, name, nodes, env, *, integration=False, counts=None, timeout=300):
     directory = out / name
-    guarded(pytest_command(directory, nodes, integration), directory, 300, env)
+    guarded(pytest_command(directory, nodes, integration), directory, timeout, env)
     return verify_pytest(directory, nodes, counts)
 
 
@@ -326,14 +326,25 @@ def admission_metrics(text, compile_wall):
             "scope": "original event durations; incomplete attempts excluded from area until terminal; no CPU inference"}
 
 
-def run(out, phase):
+def prepare_runtime(out, archive, env):
+    """Build once per independent job, then verify the complete provenance."""
+    build_env = dict(env)
+    build_env.pop("PCC_TEST_NO_NATIVE_PROVISIONING", None)
+    build_env.pop("PCC_RUNTIME_ARCHIVE", None)
+    guarded([sys.executable, "-m", "pcc.frontends.python.owned_runtime_build", "--output", str(archive)],
+            out / "runtime-build", 1200, build_env)
+    return runtime_identity(archive)
+
+
+def run(out, phase, *, strict_closure_timeout=300):
     assert phase in PHASES
+    assert strict_closure_timeout > 0
     assert ((sys.platform == "darwin" and platform.machine().lower() == "arm64")
             or (sys.platform.startswith("linux") and platform.machine().lower() in ("x86_64", "aarch64", "arm64"))
             or (sys.platform == "win32" and platform.machine().lower() in ("amd64", "x86_64")))
     out = out.resolve()
-    if phase == "preflight":
-        assert not out.exists(), "preflight requires a fresh output root"
+    if phase in ("preflight", "stage1"):
+        assert not out.exists(), phase + " requires a fresh output root"
     receipt_path = out / (phase + ".json")
     assert not receipt_path.exists(), "refuse stale phase receipt"
     source = source_identity()
@@ -344,12 +355,7 @@ def run(out, phase):
     try:
         if phase == "preflight":
             run_pytest(out, "default-xdist", HOST_FILES, env, counts=HOST_COUNTS)
-            build_env = dict(env)
-            build_env.pop("PCC_TEST_NO_NATIVE_PROVISIONING", None)
-            build_env.pop("PCC_RUNTIME_ARCHIVE", None)
-            guarded([sys.executable, "-m", "pcc.frontends.python.owned_runtime_build", "--output", str(archive)],
-                    out / "runtime-build", 1200, build_env)
-            receipt["runtime"] = runtime_identity(archive)
+            receipt["runtime"] = prepare_runtime(out, archive, env)
             env.update(PCC_RUNTIME_ARCHIVE=str(archive), PCC_TEST_NO_NATIVE_PROVISIONING="1")
             if sys.platform == "darwin":
                 # Each exact node retains the six-worker default and the 300s
@@ -378,12 +384,17 @@ def run(out, phase):
                 run_pytest(out, "linux-elf-owner", [ELF_OWNER_NODE], env)
             native_gate(out, "pcc0", env)
             run_pytest(out, "strict-closure", [CLOSURE_TEST + "::test_worker_size_prior_modules_strict_target_emission"],
-                       env, integration=True)
+                       env, integration=True, timeout=strict_closure_timeout)
         else:
-            previous = json.loads((out / "preflight.json").read_text())
-            assert previous["status"] == "PASS" and previous["source"] == source
-            assert runtime_identity(archive) == previous["runtime"]
-            receipt["runtime"] = previous["runtime"]
+            if phase == "stage1":
+                # Runtime preparation is a build prerequisite, not a validation
+                # gate. Never wait for the independent preflight job/artifact.
+                receipt["runtime"] = prepare_runtime(out, archive, env)
+            else:
+                stage = json.loads((out / "stage1.json").read_text())
+                assert stage["status"] == "PASS" and stage["source"] == source
+                assert runtime_identity(archive) == stage["runtime"]
+                receipt["runtime"] = stage["runtime"]
             env.update(PCC_RUNTIME_ARCHIVE=str(archive), PCC_TEST_NO_NATIVE_PROVISIONING="1",
                        PCC_PY_FRONTEND_WORKER_TIMING="1")
             if phase == "stage1":
@@ -444,8 +455,6 @@ def run(out, phase):
                 if sys.platform == "darwin":
                     assert wall < 1800 and receipt["metrics"]["average_workers"] >= 2, receipt["metrics"]
             else:
-                stage = json.loads((out / "stage1.json").read_text())
-                assert stage["status"] == "PASS" and stage["source"] == source and stage["runtime"] == previous["runtime"]
                 assert sha(stage["compiler"]["path"]) == stage["compiler"]["sha256"]
                 env["PCC_CURRENT_PCC1"] = stage["compiler"]["path"]
                 receipt["compiler"] = stage["compiler"]
@@ -465,8 +474,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--phase", choices=PHASES, required=True)
+    parser.add_argument("--strict-closure-timeout", type=int, default=300,
+                        help="strict closure watchdog seconds (local default: 300; CI sets its own budget)")
     args = parser.parse_args(argv)
-    run(args.out_dir, args.phase)
+    if args.strict_closure_timeout <= 0:
+        parser.error("--strict-closure-timeout must be positive")
+    run(args.out_dir, args.phase, strict_closure_timeout=args.strict_closure_timeout)
 
 
 if __name__ == "__main__":

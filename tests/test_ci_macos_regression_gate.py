@@ -145,7 +145,7 @@ def test_workflow_keeps_stage1_configuration_and_evidence_separate():
     assert "--darwin-preflight-reserve-bytes 536870912" in smoke
     assert "path: build/macos-regressions/evidence/" in smoke
     assert "actions/download-artifact" not in smoke + stage1
-    assert "timeout-minutes: 45" in stage1
+    assert "timeout-minutes: 90" in stage1
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"' in stage1
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in stage1
     assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in stage1
@@ -538,7 +538,7 @@ def test_indexed_receipts_are_retained_without_assembly_or_objects(tmp_path):
         assert gzip.decompress(actual.read_bytes()) == (work / name).read_bytes()
 
 
-def test_indexed_split_workflow_gates_only_macos_stage1_opt_in():
+def test_indexed_split_workflow_is_independent_of_macos_stage1_opt_in():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     job = _workflow_job(workflow, "macos-pcc0-indexed-split")
     stage1 = _workflow_job(workflow, "pcc1-package-parity")
@@ -554,13 +554,13 @@ def test_indexed_split_workflow_gates_only_macos_stage1_opt_in():
     assert job.count("if: always()") == 2
     assert "needs:" not in job and "actions/download-artifact" not in job
     assert "env -u LC_ALL" not in job
-    assert "needs: macos-pcc0-indexed-split" in stage1
+    assert "needs:" not in stage1
     assert stage1.count('PCC_HOST_INDEXED_PROCESS_SPLIT: "1"') == 1
     assert ('      - name: Build current pcc1\n        env:\n'
-            '          # Opt in only this Stage1 build, after the independent gate passed.\n'
-            '          PCC_HOST_INDEXED_PROCESS_SPLIT: "1"\n        run: |') in stage1
+            '          # Opt in only this Stage1 build; the bridge gate runs independently.\n'
+            '          PCC_HOST_INDEXED_PROCESS_SPLIT: "1"\n        run: uv run') in stage1
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"' in stage1
-    assert "timeout-minutes: 45" in stage1
+    assert "timeout-minutes: 90" in stage1
     assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in other
     assert "needs:" not in other
     for name in ("indexed-split", "indexed-handoff-closure"):
@@ -677,7 +677,7 @@ def test_handoff_default_xdist_preserves_failure_logs_and_receipt(tmp_path, monk
     assert "executed_nodes" not in receipt
 
 
-def test_handoff_default_xdist_workflow_is_bounded_and_keeps_stage1_dependency():
+def test_handoff_default_xdist_workflow_is_bounded_without_stage1_dependency():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     job = _workflow_job(workflow, "macos-pcc0-indexed-split")
     step = job.split("      - name: Verify handoff contracts", 1)[1].split("      - name:", 1)[0]
@@ -690,4 +690,4 @@ def test_handoff_default_xdist_workflow_is_bounded_and_keeps_stage1_dependency()
     assert job.index("--handoff-xdist") < job.index("--profile indexed-split")
     assert "timeout-minutes: 25" in job
     assert workflow.count('      - "tests/python/test_pipeline_indexed_handoff.py"') == 2
-    assert "needs: macos-pcc0-indexed-split" in _workflow_job(workflow, "pcc1-package-parity")
+    assert "needs:" not in _workflow_job(workflow, "pcc1-package-parity")

@@ -173,14 +173,17 @@ def test_cleanup_failure_does_not_hide_publication_error(report, monkeypatch):
     assert report.read_bytes() == before
 
 
-def test_windows_ci_checks_real_reader_contention_before_bootstrap():
+def test_windows_ci_checks_real_reader_contention_independently_of_bootstrap():
     workflow = Path(__file__).resolve().parents[2] / ".github/workflows/pcc1-package-parity.yml"
     text = workflow.read_text(encoding="utf-8")
-    start = text.index("      - name: Verify Windows RSS publication with a held reader\n")
-    end = text.index("      - name: Qualify all five GC self-host chains\n", start)
-    step = text[start:end]
-    assert "if: matrix.platform == 'windows-x86_64'" in step
-    assert "timeout-minutes: 2" in step
-    assert 'python -m pytest --noconftest -o "addopts=" -x -vv --tb=short' in step
-    assert "tests/python/test_worker_resource_publication.py" in step
-    assert "python scripts/bootstrap_platform.py --gc all" in text[end:]
+    publication = text.split("  windows-rss-publication:\n", 1)[1].split("  other-platform-native-wheel:\n", 1)[0]
+    bootstrap = text.split("  other-platform-native-wheel:\n", 1)[1].split("  pcc1-package-parity:\n", 1)[0]
+    assert "runs-on: windows-2022" in publication
+    assert "timeout-minutes: 10" in publication and "timeout-minutes: 2" in publication
+    assert 'python -m pytest --noconftest -o "addopts=" -x -vv --tb=short' in publication
+    assert "tests/python/test_worker_resource_publication.py" in publication
+    assert "--phase stage1" not in publication
+    assert "Verify Windows RSS publication" not in bootstrap
+    assert "--phase stage1" in bootstrap
+    assert "needs:" not in bootstrap + publication
+    assert text.count('      - "tests/python/test_worker_resource_publication.py"') == 2

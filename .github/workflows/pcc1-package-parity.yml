@@ -49,6 +49,7 @@ on:
       - "tests/fixtures/native/worker_size_priors.py"
       - "tests/integration/test_worker_size_prior_closed_world.py"
       - "tests/owned_ir_validation.py"
+      - "tests/python/test_worker_resource_publication.py"
       - "tests/test_ci_worker_size_prior_gate.py"
       - "scripts/ci_worker_size_prior_gate.py"
       - "tests/python/test_indexed_process_split_real.py"
@@ -122,6 +123,7 @@ on:
       - "tests/fixtures/native/worker_size_priors.py"
       - "tests/integration/test_worker_size_prior_closed_world.py"
       - "tests/owned_ir_validation.py"
+      - "tests/python/test_worker_resource_publication.py"
       - "tests/test_ci_worker_size_prior_gate.py"
       - "scripts/ci_worker_size_prior_gate.py"
       - "tests/python/test_indexed_process_split_real.py"
@@ -156,7 +158,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
     # Separate from Stage1: these exact programs use a threaded/atomic runtime.
-    # The existing Stage1 configuration and its 45-minute budget stay unchanged.
+    # Stage1 has its own runtime and deadline, independent of these tests.
     steps:
       - uses: actions/checkout@v4
 
@@ -317,6 +319,95 @@ jobs:
           if-no-files-found: warn
           path: build/macos-indexed-split/evidence/
 
+  worker-prior-preflight:
+    name: Worker prior and changed-module gate / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    # Separate hosted runners: no needs, artifact download or shared concurrency
+    # group may put this gate on the Stage1 critical path.
+    # Budget: 20 min runtime + up to 40 min bounded tests + 30 min strict
+    # closure + 30 min setup/receipts. Failures remain hard job failures.
+    timeout-minutes: 120
+    env:
+      PCC_BUILD_BACKEND: self
+      PCC_RUNTIME_CC: pcc
+      PCC_RUNTIME_HIGH: py
+      PCC_PY_FRONTEND_WORKER_TIMING: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: macos-arm64, runner: macos-15 }
+          - { platform: linux-x86_64, runner: ubuntu-24.04 }
+          - { platform: linux-aarch64, runner: ubuntu-24.04-arm }
+          - { platform: windows-x86_64, runner: windows-2022 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install locked macOS development dependencies
+        if: matrix.platform == 'macos-arm64'
+        run: uv sync --frozen --dev
+
+      - name: Install locked other-platform development dependencies
+        if: matrix.platform != 'macos-arm64'
+        run: uv sync --frozen --dev --python 3.13
+
+      # fa62fbd9 receipts: compile alone took 189-278s; the 634 MB whole
+      # parse was still incomplete at 300s. class_gen emission alone is
+      # reported at ~150s on a fast Mac. 1800s is a conservative CI budget,
+      # NOT a measured whole-gate completion time. Retain phase receipts to
+      # establish that time without blocking Stage1. Local default stays 300s.
+      - name: Validate macOS default xdist, native prior workers, and changed-module emission
+        if: matrix.platform == 'macos-arm64'
+        run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 1800
+
+      - name: Validate other-platform default xdist, native prior workers, and changed-module emission
+        if: matrix.platform != 'macos-arm64'
+        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 1800
+
+      - name: Preserve independent preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-prior-preflight-${{ matrix.platform }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/worker-prior-preflight/**/*.json
+            build/worker-prior-preflight/**/*.jsonl
+            build/worker-prior-preflight/**/*.log
+            build/worker-prior-preflight/**/*.stdout
+            build/worker-prior-preflight/**/*.stderr
+            build/worker-prior-preflight/**/*.tsv
+            build/worker-prior-preflight/**/*.xml
+
+  windows-rss-publication:
+    name: Windows RSS publication with a held reader
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Windows publication test tools
+        run: python -m pip install pytest
+
+      - name: Verify Windows RSS publication with a held reader
+        timeout-minutes: 2
+        # This isolated test needs no POSIX-only repository conftest fixtures.
+        run: python -m pytest --noconftest -o "addopts=" -x -vv --tb=short tests/python/test_worker_resource_publication.py
+
   other-platform-native-wheel:
     name: Native wheel / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
@@ -350,19 +441,6 @@ jobs:
 
       - name: Install locked development dependencies
         run: uv sync --frozen --dev --python 3.13
-
-      - name: Validate default xdist, native prior workers, and changed-module emission
-        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase preflight
-
-      - name: Install Windows publication test tools
-        if: matrix.platform == 'windows-x86_64'
-        run: python -m pip install pytest
-
-      - name: Verify Windows RSS publication with a held reader
-        if: matrix.platform == 'windows-x86_64'
-        timeout-minutes: 2
-        # This isolated test needs no POSIX-only repository conftest fixtures.
-        run: python -m pytest --noconftest -o "addopts=" -x -vv --tb=short tests/python/test_worker_resource_publication.py
 
       - name: Qualify all five GC self-host chains and Stage1 admission metrics
         run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1
@@ -421,10 +499,11 @@ jobs:
         run: python scripts/ci_native_wheel_gate.py dist
 
   pcc1-package-parity:
-    needs: macos-pcc0-indexed-split
     name: macOS arm64 native pcc1 and installed wheel
     runs-on: macos-15
-    timeout-minutes: 45
+    # 20 min runtime + 40 min Stage1 + setup, native checks, wheel and receipts.
+    # This outer allowance does not change the 2400s Stage1 watchdog.
+    timeout-minutes: 90
     env:
       PCC_REQUIRE_CURRENT_PCC1: "1"
       PCC_BOOTSTRAP_OUT_DIR: "${{ github.workspace }}/build/bootstrap"
@@ -461,12 +540,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --dev
 
-      - name: Validate default xdist, native prior workers, and changed-module emission
-        run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase preflight
-
       - name: Build current pcc1
         env:
-          # Opt in only this Stage1 build, after the independent gate passed.
+          # Opt in only this Stage1 build; the bridge gate runs independently.
           PCC_HOST_INDEXED_PROCESS_SPLIT: "1"
         run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1
 

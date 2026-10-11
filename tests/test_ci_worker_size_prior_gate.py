@@ -45,7 +45,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 145, 0, 4, 29, 25, 7, 11, 49, 20, 21)
+    assert gate.HOST_COUNTS == (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -306,7 +306,6 @@ def test_pcc1_compiler_is_rechecked_after_native_use(tmp_path, monkeypatch):
     source, runtime = {"source": "fixed"}, {"runtime": "fixed"}
     stage = {"status": "PASS", "source": source, "runtime": runtime,
              "compiler": {"path": str(binary), "sha256": gate.sha(binary)}}
-    gate.save(tmp_path / "preflight.json", {"status": "PASS", "source": source, "runtime": runtime})
     gate.save(tmp_path / "stage1.json", stage)
     monkeypatch.setattr(gate, "source_identity", lambda: source)
     monkeypatch.setattr(gate, "environment", lambda: {})
@@ -381,29 +380,62 @@ def test_preload_module_only_pages_keep_duration_without_source_double_count():
     assert result["source_bytes_total"] == result["source_bytes_complete"] == 10
 
 
-def test_workflow_reuses_existing_jobs_in_required_order_and_limits():
+def workflow_job(text, name):
+    match = re.search(r"(?ms)^  " + name + r":\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)", text)
+    assert match is not None
+    return match.group(1)
+
+
+def test_workflow_starts_stage1_without_independent_validation_dependencies():
     text = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     for path in (*gate.HOST_FILES, "tests/fixtures/native/worker_size_priors.py",
-                 "scripts/ci_worker_size_prior_gate.py", "conftest.py", "uv.lock", ".python-version"):
+                 "scripts/ci_worker_size_prior_gate.py", "conftest.py", "uv.lock", ".python-version",
+                 "tests/python/test_worker_resource_publication.py"):
         assert text.count('      - "' + path + '"') == 2, path
-    other = text.split("  other-platform-native-wheel:", 1)[1].split("  pcc1-package-parity:", 1)[0]
-    mac = text.split("  pcc1-package-parity:", 1)[1]
-    assert "timeout-minutes: 360" in other and "timeout-minutes: 45" in mac
+    other = workflow_job(text, "other-platform-native-wheel")
+    mac = workflow_job(text, "pcc1-package-parity")
+    preflight = workflow_job(text, "worker-prior-preflight")
+    publication = workflow_job(text, "windows-rss-publication")
+    assert "timeout-minutes: 360" in other and "timeout-minutes: 90" in mac
     assert other.count("- { platform:") == 3
     assert "uv sync --frozen --dev --python 3.13" in other
     assert "uv sync --frozen --dev\n" in mac
     for body in (other, mac):
-        assert body.index("--phase preflight") < body.index("--phase stage1") < body.index("--phase pcc1")
-        assert body.count("--phase preflight") == body.count("--phase stage1") == body.count("--phase pcc1") == 1
+        assert "--phase preflight" not in body
+        assert "worker-prior-preflight" not in body
+        assert "Verify Windows RSS publication" not in body
+        assert body.index("--phase stage1") < body.index("--phase pcc1")
+        assert body.count("--phase stage1") == body.count("--phase pcc1") == 1
         assert "build/worker-prior-gate/**/*.json" in body
+        assert "needs:" not in body and "actions/download-artifact" not in body
+    for body in (preflight, publication):
+        assert "needs:" not in body and "actions/download-artifact" not in body
+        assert "--phase stage1" not in body and "--phase pcc1" not in body
+    assert "fail-fast: false" in preflight
+    assert "timeout-minutes: 120" in preflight
+    for platform, runner in (("macos-arm64", "macos-15"), ("linux-x86_64", "ubuntu-24.04"),
+                             ("linux-aarch64", "ubuntu-24.04-arm"), ("windows-x86_64", "windows-2022")):
+        assert "- { platform: " + platform + ", runner: " + runner + " }" in preflight
+    assert preflight.count("--phase preflight --strict-closure-timeout 1800") == 2
+    assert "if: matrix.platform == 'macos-arm64'" in preflight
+    assert "if: matrix.platform != 'macos-arm64'" in preflight
+    assert "uv sync --frozen --dev\n" in preflight
+    assert "uv sync --frozen --dev --python 3.13\n" in preflight
+    assert "uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py" in preflight
+    assert "uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py" in preflight
+    assert "name: worker-prior-preflight-${{ matrix.platform }}" in preflight
+    for suffix in ("json", "jsonl", "log", "stdout", "stderr", "tsv", "xml"):
+        assert "build/worker-prior-preflight/**/*." + suffix in preflight
+    assert "if: always()" in preflight
+    assert "name: bootstrap-${{ matrix.platform }}" in other
+    assert "name: bootstrap-macos-arm64" in mac
+    assert "continue-on-error:" not in text and "concurrency:" not in text and "max-parallel:" not in text
     for name in ("macos-pcc0-regressions", "macos-pcc0-float-doc-regressions", "macos-pcc0-indexed-split"):
-        match = re.search(r"(?ms)^  " + name + r":\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)", text)
-        assert match is not None
-        body = match.group(1)
+        body = workflow_job(text, name)
         assert "timeout-minutes: 25" in body and "scripts/ci_macos_regression_gate.py" in body
-        assert "ci_worker_size_prior_gate.py" not in body
-    assert "PCC_BOOTSTRAP_STAGE_TIMEOUT: \"2400\"" in mac
-    assert "PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: \"4294967296\"" in mac
+        assert "ci_worker_size_prior_gate.py" not in body and "needs:" not in body
+    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"' in mac
+    assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in mac
 
 
 def test_other_platform_entry_keeps_the_original_full_gc_matrix_once():
@@ -456,8 +488,8 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
             raise RuntimeError("original platform gate failure")
         return runtime
 
-    def pytest_gate(directory, name, nodes, env, *, integration=False, counts=None):
-        assert directory == out
+    def pytest_gate(directory, name, nodes, env, *, integration=False, counts=None, timeout=300):
+        assert directory == out and timeout == (1800 if name == "strict-closure" else 300)
         events.append(name)
         if name.startswith("windows-exit-"):
             assert target == "win32" and nodes == [gate.EXIT_TEST]
@@ -501,7 +533,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 145, 0, 4, 29, 25, 7, 11, 49, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 172, 0, 4, 29, 25, 7, 11, 49, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -528,10 +560,10 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
     expected += ["native-pcc0", "strict-closure", "runtime-identity"]
     if failing:
         with pytest.raises(RuntimeError, match="original platform gate failure"):
-            gate.run(out, "preflight")
+            gate.run(out, "preflight", strict_closure_timeout=1800)
         expected = expected[:expected.index(failing) + 1]
     else:
-        gate.run(out, "preflight")
+        gate.run(out, "preflight", strict_closure_timeout=1800)
     assert events == expected
     receipt = json.loads((out / "preflight.json").read_text())
     assert receipt["status"] == ("FAIL" if failing else "PASS")
@@ -1613,3 +1645,197 @@ def test_parser_input_lifetimes_release_only_after_successful_freeze(retaining, 
         assert scan_refs[0]() is None
         assert all(item.indexed_kernel.arena is arena for item, arena in zip(result, arenas))
     assert visits == ["first", "second"]
+
+
+@pytest.mark.parametrize("timeout", (300, 1800))
+def test_strict_closure_budget_reaches_existing_guard_without_changing_xdist(tmp_path, monkeypatch, timeout):
+    nodes = [gate.CLOSURE_TEST + "::test_worker_size_prior_modules_strict_target_emission"]
+    calls = []
+    env = {"PCC_RUNTIME_ARCHIVE": "verified.a"}
+    monkeypatch.setattr(gate, "guarded", lambda *args: calls.append(args))
+    monkeypatch.setattr(gate, "verify_pytest", lambda directory, actual, counts: actual)
+    assert gate.run_pytest(tmp_path, "strict-closure", nodes, env,
+                           integration=True, timeout=timeout) == nodes
+    command, directory, actual_timeout, actual_env = calls[0]
+    assert actual_timeout == timeout and actual_env is env
+    assert directory == tmp_path / "strict-closure"
+    assert command == gate.pytest_command(directory, nodes, integration=True)
+    assert "-n0" not in command and "-o" not in command
+
+
+@pytest.mark.parametrize("arguments,expected", (([], 300), (["--strict-closure-timeout", "1800"], 1800)))
+def test_cli_keeps_local_strict_budget_and_accepts_explicit_ci_budget(tmp_path, monkeypatch, arguments, expected):
+    calls = []
+    monkeypatch.setattr(gate, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    gate.main(["--out-dir", str(tmp_path), "--phase", "preflight", *arguments])
+    assert calls == [((tmp_path, "preflight"), {"strict_closure_timeout": expected})]
+
+
+@pytest.mark.parametrize("timeout", ("0", "-1"))
+def test_cli_rejects_unbounded_or_negative_strict_budget(tmp_path, monkeypatch, timeout):
+    monkeypatch.setattr(gate, "run", lambda *args, **kwargs: pytest.fail("invalid budget launched a gate"))
+    with pytest.raises(SystemExit) as caught:
+        gate.main(["--out-dir", str(tmp_path), "--phase", "preflight", "--strict-closure-timeout", timeout])
+    assert caught.value.code == 2
+
+
+@pytest.mark.parametrize("target,machine", (("darwin", "arm64"), ("linux", "x86_64"),
+                                             ("linux", "aarch64"), ("win32", "amd64")))
+@pytest.mark.parametrize("independent_preflight", ("missing", "failed"))
+def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, target, machine, independent_preflight):
+    root, out = tmp_path / "repo", tmp_path / "stage1"
+    archive = out / "runtime/libpy_runtime_pcc_py.a"
+    root.mkdir()
+    independent = tmp_path / "worker-prior-preflight"
+    if independent_preflight == "failed":
+        gate.save(independent / "preflight.json", {"status": "FAIL", "error": "native node or strict timeout"})
+    source, runtime = {"source": "fixed"}, {"runtime": "verified"}
+    calls = []
+    monkeypatch.setattr(gate, "ROOT", root)
+    monkeypatch.setattr(gate, "sys", SimpleNamespace(platform=target, executable="chosen-python"))
+    monkeypatch.setattr(gate, "platform", SimpleNamespace(machine=lambda: machine))
+    monkeypatch.setattr(gate, "source_identity", lambda: source)
+    monkeypatch.setattr(gate, "environment", lambda: {"PCC_RUNTIME_ARCHIVE": "stale", "PCC_TEST_NO_NATIVE_PROVISIONING": "1"})
+    monkeypatch.setattr(gate, "run_pytest", lambda *args, **kwargs: pytest.fail("Stage1 ran a preflight test"))
+    monkeypatch.setattr(gate, "native_gate", lambda *args: pytest.fail("Stage1 ran a prior-worker gate"))
+
+    def guarded(command, directory, timeout, env):
+        assert command == ["chosen-python", "-m", "pcc.frontends.python.owned_runtime_build", "--output", str(archive)]
+        assert directory == out / "runtime-build" and timeout == 1200
+        assert "PCC_RUNTIME_ARCHIVE" not in env and "PCC_TEST_NO_NATIVE_PROVISIONING" not in env
+        calls.append("runtime-build")
+
+    def identity(path):
+        assert path == archive
+        calls.append("runtime-identity")
+        return runtime
+
+    def bootstrap(command, *, cwd, env, stdout, stderr):
+        assert calls == ["runtime-build", "runtime-identity"]
+        assert cwd == root and env["PCC_RUNTIME_ARCHIVE"] == str(archive)
+        assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+        assert env["PCC_PY_FRONTEND_WORKER_TIMING"] == "1"
+        assert not (out / "preflight.json").exists()
+        destination = root / "build" / ("bootstrap" if target == "darwin" else "platform-qualification")
+        if target == "darwin":
+            assert command == ["chosen-python", "scripts/bootstrap.py", "--backend", "self", "--stage", "1", "--out-dir", str(destination)]
+            assert env["PCC_HOST_INDEXED_PROCESS_SPLIT"] == "1"
+            assert env["PCC_BOOTSTRAP_STAGE_TIMEOUT"] == "2400"
+            assert env["PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES"] == "4294967296"
+            assert env["PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES"] == "2147483648"
+            assert env["PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES"] == "536870912"
+            gate.save(out / "profile/stage1.result.json", {"compile_wall_ms": 1000, "returncode": 0,
+                                                           "publish_barrier_returncode": 0})
+            gate.save(destination / "stage1.process.test/result.json", {
+                "status": "COMPLETE", "returncode": 0, "timeout_s": 2400,
+                "max_tree_rss_bytes": 3221225472, "peak_tree_rss_bytes": 2147483648,
+                "darwin_preflight_reserve_bytes": 536870912,
+            })
+            (destination / "stage1.process.test/target.stderr").write_text("original diagnostics")
+            binary = destination / "pcc1"
+        else:
+            assert command == ["chosen-python", "scripts/bootstrap_platform.py", "--gc", "all", "--stage", "3",
+                               "--out-dir", str(destination), "--runtime-archive", str(archive),
+                               "--timeout", "2400", "--rss-limit", "17179869184", "--cpu-budget", "4"]
+            assert env["PCC_HOST_INDEXED_PROCESS_SPLIT"] == "0"
+            gate.save(destination / "shared/receipt.json", {"stages": [{"seconds": 1}]})
+            (destination / "shared/stage1.log").write_text("original diagnostics")
+            binary = destination / "shared" / ("pcc1.exe" if target == "win32" else "pcc1")
+        binary.write_bytes(b"new compiler")
+        calls.append("bootstrap")
+        return SimpleNamespace(returncode=0)
+
+    def metrics(text, wall):
+        assert text == "original diagnostics" and wall == 1
+        return {"open_attempts": 0, "source_bytes_complete": 10, "source_bytes_total": 10,
+                "completed_modules": 1, "planned_modules": 1, "average_workers": 2}
+
+    monkeypatch.setattr(gate, "guarded", guarded)
+    monkeypatch.setattr(gate, "runtime_identity", identity)
+    monkeypatch.setattr(gate.subprocess, "run", bootstrap)
+    monkeypatch.setattr(gate, "admission_metrics", metrics)
+    gate.run(out, "stage1")
+    assert calls == ["runtime-build", "runtime-identity", "bootstrap", "runtime-identity"]
+    receipt = json.loads((out / "stage1.json").read_text())
+    assert receipt["status"] == "PASS" and receipt["source"] == source and receipt["runtime"] == runtime
+    assert receipt["compiler"]["sha256"] == gate.sha(receipt["compiler"]["path"])
+    assert not (out / "preflight.json").exists()
+
+
+@pytest.mark.parametrize("fault", ("runtime-build", "source", "codegen", "target", "configuration", "bootstrap"))
+def test_stage1_stops_at_runtime_or_bootstrap_failure_without_preflight(tmp_path, monkeypatch, fault):
+    from tests import runtime_fixture_provenance
+    out = tmp_path / "stage1"
+    calls = []
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    monkeypatch.setattr(gate, "sys", SimpleNamespace(platform="linux", executable="chosen-python"))
+    monkeypatch.setattr(gate, "platform", SimpleNamespace(machine=lambda: "x86_64"))
+    monkeypatch.setattr(gate, "source_identity", lambda: {"source": "fixed"})
+    monkeypatch.setattr(gate, "environment", lambda: {})
+    def build(*args):
+        calls.append("runtime-build")
+        if fault == "runtime-build":
+            raise RuntimeError("runtime-build rejected")
+    def reject(archive, *, threads):
+        assert threads is False
+        calls.append("runtime-identity")
+        raise ValueError(fault + " rejected")
+    def bootstrap(*args, **kwargs):
+        calls.append("bootstrap")
+        return SimpleNamespace(returncode=7)
+    monkeypatch.setattr(gate, "guarded", build)
+    monkeypatch.setattr(runtime_fixture_provenance, "_verified_test_runtime_archive", reject)
+    if fault == "bootstrap":
+        monkeypatch.setattr(gate, "runtime_identity", lambda archive: {"runtime": "verified"})
+    monkeypatch.setattr(gate.subprocess, "run", bootstrap)
+    with pytest.raises((RuntimeError, ValueError, gate.subprocess.CalledProcessError)):
+        gate.run(out, "stage1")
+    assert calls == (["runtime-build"] if fault == "runtime-build" else
+                     ["runtime-build", "bootstrap"] if fault == "bootstrap" else
+                     ["runtime-build", "runtime-identity"])
+    receipt = json.loads((out / "stage1.json").read_text())
+    assert receipt["status"] == "FAIL"
+    if fault == "bootstrap":
+        assert receipt["returncode"] == 7
+    assert not (out / "preflight.json").exists()
+
+
+def test_stage1_requires_fresh_outputs_before_any_build(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "source_identity", lambda: pytest.fail("stale outputs admitted"))
+    with pytest.raises(AssertionError, match="stage1 requires a fresh output root"):
+        gate.run(tmp_path, "stage1")
+
+
+@pytest.mark.parametrize("fault", (None, "missing", "status", "source", "runtime", "compiler"))
+def test_pcc1_requires_only_successful_matching_stage1_and_never_builds(tmp_path, monkeypatch, fault):
+    binary = tmp_path / "pcc1"
+    binary.write_bytes(b"compiler")
+    source, runtime = {"source": "fixed"}, {"runtime": "matched"}
+    stage = {"status": "PASS", "source": source, "runtime": runtime,
+             "compiler": {"path": str(binary), "sha256": gate.sha(binary)}}
+    if fault in ("status", "source", "runtime"):
+        stage[fault] = "wrong"
+    elif fault == "compiler":
+        stage["compiler"]["sha256"] = "wrong"
+    if fault != "missing":
+        gate.save(tmp_path / "stage1.json", stage)
+    calls = []
+    monkeypatch.setattr(gate, "source_identity", lambda: source)
+    monkeypatch.setattr(gate, "environment", lambda: {})
+    monkeypatch.setattr(gate, "runtime_identity", lambda archive: runtime)
+    monkeypatch.setattr(gate, "prepare_runtime", lambda *args: pytest.fail("pcc1 reprovisioned runtime"))
+    def native(directory, owner, env):
+        assert directory == tmp_path and owner == "pcc1"
+        assert env["PCC_CURRENT_PCC1"] == str(binary)
+        assert env["PCC_RUNTIME_ARCHIVE"] == str(tmp_path / "runtime/libpy_runtime_pcc_py.a")
+        assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+        calls.append("native-pcc1")
+    monkeypatch.setattr(gate, "native_gate", native)
+    if fault:
+        with pytest.raises((AssertionError, FileNotFoundError)):
+            gate.run(tmp_path, "pcc1")
+    else:
+        gate.run(tmp_path, "pcc1")
+    assert calls == ([] if fault else ["native-pcc1"])
+    assert json.loads((tmp_path / "pcc1.json").read_text())["status"] == ("FAIL" if fault else "PASS")
+    assert not (tmp_path / "preflight.json").exists()
