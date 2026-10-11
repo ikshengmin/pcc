@@ -152,9 +152,9 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               PARSE_BUFFER_TEST, PARSE_BUFFER_OBJECT_TEST, ARM_CALL_VENEERS_TEST,
               TREE_RECOVERY_TEST, TREE_RECOVERY_GUARD_TEST,
               TAR_ATTRIBUTES_TEST, TAR_STRICT_ORACLE_TEST)
-# All existing 1447 nodes remain. Tar metadata models/object controls and
-# the strict-oracle fake controls share this unchanged default-xdist invocation.
-HOST_COUNTS = (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71)
+# All existing 1569 nodes remain. Catch-only exception controls join the
+# same default-xdist invocation, including the tar metadata/strict controls.
+HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -178,6 +178,7 @@ def source_identity():
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
     value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS, *TREE_RECOVERY_INPUTS, *TAR_ATTRIBUTES_INPUTS,
+                           "tests/strict_exception_oracle.py", "tests/fixtures/strict_stackmap_catch.ll",
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),

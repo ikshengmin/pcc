@@ -1,6 +1,7 @@
 """Pure command/report controls; actual native/xdist gates run in CI."""
 
 import ast
+import hashlib
 import importlib.util
 import json
 import re
@@ -47,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71)
+    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -59,17 +60,17 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[27:28] == (gate.ARM_CALL_VENEERS_TEST,)
     assert gate.HOST_FILES[28:30] == (gate.TREE_RECOVERY_TEST, gate.TREE_RECOVERY_GUARD_TEST)
     assert gate.HOST_FILES[30:] == (gate.TAR_ATTRIBUTES_TEST, gate.TAR_STRICT_ORACLE_TEST)
-    assert sum(gate.HOST_COUNTS) == 1569 and sum(gate.HOST_COUNTS[:30]) == 1447
-    assert sum(gate.HOST_COUNTS[:28]) == 1351
-    assert sum(gate.HOST_COUNTS[:27]) == 1296
-    assert sum(gate.HOST_COUNTS[:25]) == 1196
-    assert sum(gate.HOST_COUNTS[:23]) == 1041
-    assert sum(gate.HOST_COUNTS[:22]) == 1025
-    assert sum(gate.HOST_COUNTS[:21]) == 970
-    assert sum(gate.HOST_COUNTS[:20]) == 881
-    assert sum(gate.HOST_COUNTS[:18]) == 846
-    assert sum(gate.HOST_COUNTS[:17]) == 814 and sum(gate.HOST_COUNTS[:16]) == 766
-    assert sum(gate.HOST_COUNTS[:14]) == 757
+    assert sum(gate.HOST_COUNTS) == 1649 and sum(gate.HOST_COUNTS[:30]) == 1527
+    assert sum(gate.HOST_COUNTS[:28]) == 1431
+    assert sum(gate.HOST_COUNTS[:27]) == 1376
+    assert sum(gate.HOST_COUNTS[:25]) == 1276
+    assert sum(gate.HOST_COUNTS[:23]) == 1121
+    assert sum(gate.HOST_COUNTS[:22]) == 1105
+    assert sum(gate.HOST_COUNTS[:21]) == 1050
+    assert sum(gate.HOST_COUNTS[:20]) == 961
+    assert sum(gate.HOST_COUNTS[:18]) == 926
+    assert sum(gate.HOST_COUNTS[:17]) == 894 and sum(gate.HOST_COUNTS[:16]) == 846
+    assert sum(gate.HOST_COUNTS[:14]) == 837
     facts_tree = ast.parse((ROOT / gate.REGALLOC_FACTS_TEST).read_text())
     facts_nodes = [node for node in facts_tree.body
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
@@ -86,7 +87,15 @@ def test_default_command_retains_project_xdist(tmp_path):
                     and node.name == "source_identity")
     assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
                and node.value.id == "X87_INPUTS" for node in ast.walk(identity))
+    exception_inputs = ("tests/strict_exception_oracle.py", "tests/fixtures/strict_stackmap_catch.ll")
+    for path in exception_inputs:
+        assert any(isinstance(node, ast.Constant) and node.value == path
+                   for node in ast.walk(identity))
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    push_filters, pull_request_filters = workflow.split('\n  pull_request:', 1)
+    for path in exception_inputs:
+        assert push_filters.count('      - "' + path + '"') == 1
+        assert pull_request_filters.count('      - "' + path + '"') == 1
     assert gate.STACKMAP_BUDGET_INPUTS == (
         'tests/python/test_compact_stackmap_processing_budget.py',
         'tests/python/test_stackmap_host_budget.py',
@@ -300,6 +309,163 @@ def test_strict_body_rejects_fallback_or_missing_definition(replacement):
     following = "\ndefine ptr @user_next() {\nentry:\n call void @x()\n ret ptr null\n}\n"
     with pytest.raises(AssertionError):
         require_definition(replacement + following, "user_test")
+
+
+_STRICT_CATCH_BODY = '''entry:
+ %class.slot = alloca ptr
+ %empty.slot = alloca ptr
+ store ptr null, ptr %class.slot
+ store ptr null, ptr %empty.slot
+ %frame.slot = bitcast ptr %class.slot to ptr
+ call void (ptr, ptr) @pcc_gc_frame_enter(ptr @frame_map, ptr %frame.slot)
+ %exc.cls.NotImplementedError.1 = call ptr (i64) @py_exc_builtin_class(i64 11)
+ %class.store = bitcast ptr %class.slot to ptr
+ call void (ptr, ptr) @pcc_gc_store_root(ptr %class.store, ptr %exc.cls.NotImplementedError.1)
+ %class.load = bitcast ptr %class.slot to ptr
+ %class.live = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %class.load)
+ %matched = call i64 (ptr, ptr) @py_exc_match_handler(ptr %exception, ptr %class.live)
+ %cleanup.slot = select i1 %owned, ptr %class.slot, ptr %empty.slot
+ call void (ptr, ptr) @pcc_gc_store_root(ptr %cleanup.slot, ptr null)
+ call void (ptr) @pcc_gc_frame_leave(ptr %frame.slot)
+ ret ptr null
+'''
+
+
+def _strict_catch_fixture_body(payload):
+    # Git text checkouts may use CRLF. Normalize only that exact byte pair for
+    # the fixture oracle; source_identity continues to hash raw checkout bytes.
+    canonical = payload.replace(b'\r\n', b'\n')
+    assert hashlib.sha256(canonical).hexdigest() == '1cddc4156315ca7a7411bac5ec27bd8d26dc42657812cc7a8a391bc697acd3a7'
+    return canonical.decode()
+
+
+@pytest.mark.parametrize('shape', ('lf', 'crlf', 'changed-body', 'lone-cr'))
+def test_strict_catch_fixture_allows_only_checkout_newlines(shape):
+    canonical = (ROOT / 'tests/fixtures/strict_stackmap_catch.ll').read_bytes().replace(b'\r\n', b'\n')
+    payload = canonical
+    if shape == 'crlf':
+        payload = canonical.replace(b'\n', b'\r\n')
+    elif shape == 'changed-body':
+        payload = canonical.replace(b'@py_exc_builtin_class(i64 11)', b'@py_exc_builtin_class(i64 10)')
+        assert payload != canonical
+    elif shape == 'lone-cr':
+        payload = canonical.replace(b'\n', b'\r', 1)
+    if shape in ('lf', 'crlf'):
+        assert _strict_catch_fixture_body(payload) == canonical.decode()
+    else:
+        with pytest.raises(AssertionError):
+            _strict_catch_fixture_body(payload)
+
+
+def _strict_check_body(body, indexed, *, actual=False):
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    symbol = 'user_pcc_backend_precise_stackmap__native_record_reads_available' if actual else 'user_test'
+    header = ('define i1 @' + symbol + '()' if actual
+              else 'define ptr @' + symbol + '(ptr %exception, i1 %owned)')
+    text = header + ' {\n' + body + '}\n'
+    if actual:
+        with pytest.raises(AssertionError):
+            _original_require_definition(text, symbol)
+    bodies = closure._index_definition_bodies(text) if indexed else None
+    closure.require_definition(text, symbol, bodies=bodies)
+
+
+@pytest.mark.parametrize('indexed', (False, True))
+@pytest.mark.parametrize('shape', ('direct', 'rooted', 'quoted', 'anonymous', 'restore-current', 'actual-source-ir'))
+def test_strict_body_accepts_only_catch_class_references(indexed, shape):
+    body = _STRICT_CATCH_BODY
+    if shape == 'direct':
+        body = '''entry:
+ %exc.cls.NotImplementedError.1 = call ptr @py_exc_builtin_class(i64 11)
+ %matched = call i64 @py_exc_match_handler(ptr %exception, ptr %exc.cls.NotImplementedError.1)
+ ret ptr null
+'''
+    elif shape == 'quoted':
+        body = re.sub(r'([@%])([\w.$]+)', r'\1"\2"', body)
+    elif shape == 'anonymous':
+        body = body.replace('exc.cls.NotImplementedError.1', 'anonymous')
+    elif shape == 'restore-current':
+        body = body.replace(' ret ptr null', ''' %current = call ptr @py_current_exception()
+ call void @py_raise(ptr %current)
+ ret ptr null''')
+    elif shape == 'actual-source-ir':
+        # Exact emitted helper from the strict x86-64 CI failure. Original
+        # failure-evidence SHA256:
+        # e213e654e8e5b7196821593a96534f3c438c8f50e405ba16a4370b9685729582
+        # The body includes owned class roots and a separate exception restore.
+        payload = (ROOT / 'tests/fixtures/strict_stackmap_catch.ll').read_bytes()
+        body = _strict_catch_fixture_body(payload)
+        source = ast.parse((ROOT / 'pcc/backend/precise_stackmap.py').read_bytes())
+        function = next(node for node in source.body if isinstance(node, ast.FunctionDef)
+                        and node.name == '_native_record_reads_available')
+        expected = ast.parse('''def _native_record_reads_available() -> bool:
+    try:
+        return ptr_is_null(null()) != 0
+    except NotImplementedError:
+        return False
+''').body[0]
+        assert ast.dump(function, include_attributes=False) == ast.dump(expected, include_attributes=False)
+    _strict_check_body(body, indexed, actual=shape == 'actual-source-ir')
+
+
+@pytest.mark.parametrize('indexed', (False, True))
+@pytest.mark.parametrize('constructor', ('py_exc_new', 'py_exc_new_with_value'))
+@pytest.mark.parametrize('quoted', (False, True))
+@pytest.mark.parametrize('opcode', ('call', 'invoke'))
+def test_strict_body_rejects_literal_exception_constructors(indexed, constructor, quoted, opcode):
+    callee = '@"' + constructor + '"' if quoted else '@' + constructor
+    body = 'entry:\n %anonymous = ' + opcode + ' ptr ' + callee + '(i64 11, ptr null)\n ret ptr null\n'
+    with pytest.raises(AssertionError):
+        _strict_check_body(body, indexed)
+
+
+@pytest.mark.parametrize('indexed', (False, True))
+@pytest.mark.parametrize('shape', (
+    'with-class', 'object-call', 'slot-call', 'raise-class', 'raise-loaded',
+    'return-class', 'root-escape', 'global-store', 'wrong-match-operand',
+    'second-unused-class', 'second-class-constructor', 'no-match',
+    'cache-slot', 'cache-get', 'cache-global', 'select-load',
+    'unknown-transform', 'nonlocal-root', 'unproved-name',
+    'catch-and-new-value', 'catch-and-stub', 'catch-and-cpy',
+    'unparsed-match-operand', 'unparsed-frame-operand',
+))
+def test_strict_body_rejects_class_construction_or_escape(indexed, shape):
+    body = _STRICT_CATCH_BODY
+    additions = {
+        'with-class': ' %bad = call ptr @py_exc_new_with_class(ptr %exc.cls.NotImplementedError.1, ptr null)\n',
+        'object-call': ' %bad = call ptr @py_obj_call(ptr %exc.cls.NotImplementedError.1, ptr null, ptr null)\n',
+        'slot-call': ' call i64 @py_obj_call_slots(ptr %class.slot, ptr null, ptr null, ptr null)\n',
+        'raise-class': ' call void @py_raise(ptr %exc.cls.NotImplementedError.1)\n',
+        'raise-loaded': ' call void @py_raise_owned(ptr %class.live)\n',
+        'root-escape': ' call void @unowned_sink(ptr %class.load)\n',
+        'global-store': ' store ptr %exc.cls.NotImplementedError.1, ptr @escaped\n',
+        'second-unused-class': ' %other = call ptr @py_exc_builtin_class(i64 11)\n',
+        'second-class-constructor': ' %other = call ptr @py_exc_builtin_class(i64 11)\n %bad = call ptr @py_exc_new_with_class(ptr %other, ptr null)\n',
+        'cache-slot': ' %cache = call ptr @py_subs_exc_cache_slot(i64 11)\n call void @pcc_gc_root_copy_lease(ptr %class.slot, ptr %cache)\n',
+        'cache-get': ' %cached = call ptr @py_subs_exc_cache_get(i64 11)\n',
+        'cache-global': ' %cached = load ptr, ptr @py_exc_classes\n',
+        'select-load': ' %selected = call ptr @pcc_gc_load_ptr(ptr null, ptr %cleanup.slot)\n %match2 = call i64 @py_exc_match_handler(ptr %exception, ptr %selected)\n',
+        'unknown-transform': ' %bad = getelementptr i8, ptr %class.live, i64 0\n',
+        'unproved-name': ' call void @NotImplementedError()\n',
+        'catch-and-new-value': ' %anonymous = call ptr @py_exc_new_with_value(i64 11, ptr null)\n',
+        'catch-and-stub': 'strict.nolib.stub:\n call void @real()\n',
+        'catch-and-cpy': ' call void @"py_cpy_import"(ptr null)\n',
+        'unparsed-match-operand': ' %match2 = call i64 @py_exc_match_handler(ptr noundef %class.live, ptr %class.live)\n',
+        'unparsed-frame-operand': ' call void @pcc_gc_frame_enter(ptr noundef %class.live, ptr %class.slot)\n',
+    }
+    if shape == 'return-class':
+        body = body.replace('ret ptr null', 'ret ptr %class.live')
+    elif shape == 'wrong-match-operand':
+        body = body.replace('ptr %exception, ptr %class.live', 'ptr %class.live, ptr %exception')
+    elif shape == 'no-match':
+        body = body.replace(' %matched = call i64 (ptr, ptr) @py_exc_match_handler(ptr %exception, ptr %class.live)\n', '')
+    elif shape == 'nonlocal-root':
+        body = body.replace(' %class.slot = alloca ptr\n', '')
+    else:
+        body = body.replace(' ret ptr null', additions[shape] + ' ret ptr null')
+    with pytest.raises(AssertionError):
+        _strict_check_body(body, indexed)
 
 
 def load_file(name, path, monkeypatch):
@@ -712,7 +878,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -1182,6 +1348,31 @@ def _original_require_object_symbols(payload, target, required):
     return {"machine": machine, "required_defined_symbols": list(required)}
 
 
+def _plain_assertion_oracle(function):
+    # Compare the unchanged explicit assertion payloads, not pytest's injected
+    # presentation. Compile both source ASTs normally: the new exception helper
+    # is not assertion-rewritten, while both test modules ordinarily are.
+    path = Path(function.__code__.co_filename)
+    tree = ast.parse(path.read_bytes())
+    node = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                and node.name == function.__name__)
+    assert not node.decorator_list
+    namespace = dict(function.__globals__)
+    code = compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec',
+                   dont_inherit=True, optimize=0)
+    exec(code, namespace)
+    plain = namespace[function.__name__]
+    # Bind the materialized function to the exact source AST and dependencies;
+    # no assertion/message edits or substitute implementation are permitted.
+    bound = next(item for item in ast.parse(Path(plain.__code__.co_filename).read_bytes()).body
+                 if isinstance(item, ast.FunctionDef) and item.name == plain.__name__
+                 and item.lineno == plain.__code__.co_firstlineno)
+    assert ast.dump(bound, include_attributes=False) == ast.dump(node, include_attributes=False)
+    assert all(namespace[name] is value for name, value in function.__globals__.items()
+               if name != function.__name__)
+    return plain
+
+
 def _strict_check_result(check):
     try:
         return "return", check()
@@ -1197,6 +1388,8 @@ def _strict_check_result(check):
 def test_strict_definition_index_matches_original_failures(shape):
     from tests.integration import test_worker_size_prior_closed_world as closure
 
+    current = _plain_assertion_oracle(closure.require_definition)
+    original = _plain_assertion_oracle(_original_require_definition)
     body = " call ptr @real()\n ret ptr null\n"
     text = "define ptr @user_test() {\n" + body + "}\n"
     symbol = "user_test"
@@ -1233,8 +1426,8 @@ def test_strict_definition_index_matches_original_failures(shape):
         ambiguous = text.replace("@user_test()", "@user_test(ptr @other())")
         text = ambiguous if shape == "multi-symbol-header" else text + ambiguous
     indexed = closure._index_definition_bodies(text)
-    assert _strict_check_result(lambda: closure.require_definition(text, symbol, bodies=indexed)) == (
-        _strict_check_result(lambda: _original_require_definition(text, symbol))
+    assert _strict_check_result(lambda: current(text, symbol, bodies=indexed)) == (
+        _strict_check_result(lambda: original(text, symbol))
     )
 
 
@@ -1242,6 +1435,8 @@ def test_strict_definition_index_matches_original_failures(shape):
 def test_strict_symbol_index_matches_original_failures(monkeypatch, kind):
     from tests.integration.test_worker_size_prior_closed_world import require_object_symbols
 
+    current = _plain_assertion_oracle(require_object_symbols)
+    original = _plain_assertion_oracle(_original_require_object_symbols)
     module_name, reader, target = {
         "pco": ("native_object", "decode_native_object", "arm64-apple-darwin"),
         "elf": ("elf_x86_64", "parse_relocatable", "x86_64-unknown-linux-gnu"),
@@ -1266,8 +1461,8 @@ def test_strict_symbol_index_matches_original_failures(monkeypatch, kind):
         elif fault == "wrong-section": section.sectname = "__data"; section.flags = 0
         elif fault == "wrong-machine": obj.machine = 183
         setattr(module, reader, lambda payload: obj)
-        actual = _strict_check_result(lambda: require_object_symbols(b"reader-owned", target, ["user_test"]))
-        expected = _strict_check_result(lambda: _original_require_object_symbols(b"reader-owned", target, ["user_test"]))
+        actual = _strict_check_result(lambda: current(b"reader-owned", target, ["user_test"]))
+        expected = _strict_check_result(lambda: original(b"reader-owned", target, ["user_test"]))
         assert actual == expected, (kind, fault)
 
 

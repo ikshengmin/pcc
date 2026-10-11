@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+from tests.strict_exception_oracle import require_no_notimplemented_stub
 from tests.tar_attribute_strict_oracle import (
     TAR_COMPILER_MODULES, CONSTANT_ONLY_MODULE, require_tar_attribute_module,
 )
@@ -169,8 +170,7 @@ def require_definition(text, symbol, *, bodies=None):
     body = matches[0].group("body")
     assert not re.search(r"^define\b", body, re.M), (symbol, "cross-function match")
     assert "strict.nolib" not in body and "@py_cpy_" not in body and '@"py_cpy_' not in body
-    assert not re.search(r'@"?py_exc_new"?\(\s*i64\s+11\s*,', body), symbol
-    assert "NotImplementedError" not in body, symbol
+    require_no_notimplemented_stub(body, symbol)
     assert re.search(r"\bcall\b", body), (symbol, "empty/return-only replacement")
 
 
