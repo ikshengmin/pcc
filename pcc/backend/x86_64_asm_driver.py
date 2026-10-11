@@ -246,39 +246,29 @@ _INSTRUCTION_SPAN_MIN_RUN = 5
 _NUMERIC_DATA_BATCH_BYTES = 8192
 
 
-def _append_instruction_span(entries: list[object], span: int) -> None:
-    # Keep short runs in their original representation. On the supported host
-    # five spans are the first bytearray payload smaller than its boxed ints,
-    # even before the removed list slots. Labels/directives stop promotion.
-    if (
-        entries
-        and isinstance(entries[-1], bytearray)
-        and len(entries[-1]) < _INSTRUCTION_SPAN_CHUNK_BYTES
-    ):
-        run = entries[-1]
-    else:
-        preceding = _INSTRUCTION_SPAN_MIN_RUN - 1
-        promote = (
-            len(entries) >= preceding
-            and _INSTRUCTION_SPAN_MIN_RUN * _INSTRUCTION_SPAN_CODEC.size
-            <= _INSTRUCTION_SPAN_CHUNK_BYTES
-        )
-        offset = 1
-        while promote and offset <= preceding:
-            previous = entries[-offset]
-            if not isinstance(previous, int) or previous >= 0:
-                promote = False
-            offset += 1
-        if not promote:
+def _flush_instruction_spans(entries: list[object], pending: list[int]) -> None:
+    # Publish only completed runs. Native bytearray.extend currently returns a
+    # replacement object, so growing a buffer already held by entries would
+    # leave that entry on the old allocation. Short runs keep their boxed form.
+    if len(pending) < _INSTRUCTION_SPAN_MIN_RUN:
+        for span in pending:
             entries.append(span)
-            return
-        run = bytearray()
-        for offset in range(preceding, 0, -1):
-            run.extend(_INSTRUCTION_SPAN_CODEC.pack(entries[-offset]))
-        for offset in range(preceding):
-            entries.pop()
-        entries.append(run)
-    run.extend(_INSTRUCTION_SPAN_CODEC.pack(span))
+    else:
+        fragments: list[bytes] = []
+        for span in pending:
+            fragments.append(_INSTRUCTION_SPAN_CODEC.pack(span))
+        entries.append(bytearray(b"".join(fragments)))
+    pending.clear()
+
+
+def _append_instruction_span(
+    entries: list[object], pending: list[int], span: int,
+) -> None:
+    pending.append(span)
+    # The scratch list belongs to this parse, never to a published plan. Keep
+    # at most one chunk live and retain the final bytearray/clear protocol.
+    if len(pending) >= _INSTRUCTION_SPAN_CHUNK_BYTES // _INSTRUCTION_SPAN_CODEC.size:
+        _flush_instruction_spans(entries, pending)
 
 
 def _iter_plan_entries(plan: _SectionPlan, *, consume: bool = False):
@@ -315,16 +305,32 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
     symbols: dict[str, _SymbolMeta] = {}
     current: _SectionPlan | None = None
     saw_syntax = False
-    pending_data = bytearray()
+    pending_data: list[bytes] = []
+    pending_data_size = 0
+    pending_instructions: list[int] = []
+    # Section switches alone do not insert a record in the old section.
+    # Keep its unfinished run private until that section reaches a boundary.
+    pending_instruction_plan: _SectionPlan | None = None
     data_batch_bytes = _NUMERIC_DATA_BATCH_BYTES
 
-    def flush_data() -> None:
-        if pending_data:
+    def flush_instructions(plan) -> None:
+        if pending_instructions and plan is pending_instruction_plan:
+            assert plan is not None
+            _flush_instruction_spans(plan.entries, pending_instructions)
+
+    def flush_data(pending: list[bytes]) -> None:
+        nonlocal pending_data_size
+        # Passing the scratch list keeps append/clear on typed list receivers;
+        # a captured CELL_READ would produce an owned dynamic temporary.
+        if pending:
             assert current is not None
+            flush_instructions(current)
             # Only immutable _Data enters the plan. Raw bytearray entries
             # already belong to the compact instruction-span transport.
-            current.entries.append(_Data(bytes(pending_data)))
-            pending_data.clear()
+            # A literal separator keeps this on the owned bytes.join path.
+            current.entries.append(_Data(b"".join(pending)))
+            pending.clear()
+            pending_data_size = 0
 
     def switch(name: str) -> None:
         nonlocal current
@@ -357,7 +363,7 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
         if pending_data and not line.startswith((
             ".byte ", ".short ", ".long ", ".quad ", ".float ", ".double ",
         )):
-            flush_data()
+            flush_data(pending_data)
         if line == ".intel_syntax noprefix":
             if saw_syntax or current is not None or symbols:
                 raise X86EncodeError(
@@ -406,6 +412,7 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
                 raise X86EncodeError(f"bad .size directive {line!r}")
             meta = symbols.setdefault(pieces[0], _SymbolMeta())
             if pieces[1] == ".-" + pieces[0]:
+                flush_instructions(current)
                 current.entries.append(_SizeHere(pieces[0]))
             else:
                 size = _parse_int(pieces[1])
@@ -430,6 +437,7 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
             if len(pieces) > 2 or not 0 <= fill <= 255:
                 raise X86EncodeError(f"bad .p2align fill: {line!r}")
             current.align = max(current.align, 1 << log2)
+            flush_instructions(current)
             current.entries.append(_Align(log2, fill))
             continue
         if line.startswith((".byte ", ".short ", ".long ", ".quad ")):
@@ -443,7 +451,8 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
                 except ValueError:
                     difference = re.fullmatch(r"([.$A-Za-z_][.$\w]*)\s*-\s*([.$A-Za-z_][.$\w]*)", item)
                     if difference:
-                        flush_data()
+                        flush_data(pending_data)
+                        flush_instructions(current)
                         current.entries.append(_SymbolDifference(difference.group(1), difference.group(2), width))
                         continue
                     if width != 8:
@@ -451,16 +460,19 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
                             f"symbol-valued {directive} is not proven: {line!r}"
                         )
                     symbol, addend = _symbol_plus_addend(item)
-                    flush_data()
+                    flush_data(pending_data)
+                    flush_instructions(current)
                     current.entries.append(_SymbolData(symbol, addend))
                 else:
                     payload = _integer_payload(value, width, owner=directive)
                     if data_batch_bytes > 0 and len(payload) <= data_batch_bytes:
-                        if len(pending_data) + len(payload) > data_batch_bytes:
-                            flush_data()
-                        pending_data.extend(payload)
+                        if pending_data_size + len(payload) > data_batch_bytes:
+                            flush_data(pending_data)
+                        pending_data.append(payload)
+                        pending_data_size += len(payload)
                     else:
-                        flush_data()
+                        flush_data(pending_data)
+                        flush_instructions(current)
                         current.entries.append(_Data(payload))
             continue
         if line.startswith((".float ", ".double ")):
@@ -474,11 +486,13 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
                 except (ValueError, OverflowError) as exc:
                     raise X86EncodeError(f"bad {directive} value {item!r}") from exc
                 if data_batch_bytes > 0 and len(payload) <= data_batch_bytes:
-                    if len(pending_data) + len(payload) > data_batch_bytes:
-                        flush_data()
-                    pending_data.extend(payload)
+                    if pending_data_size + len(payload) > data_batch_bytes:
+                        flush_data(pending_data)
+                    pending_data.append(payload)
+                    pending_data_size += len(payload)
                 else:
-                    flush_data()
+                    flush_data(pending_data)
+                    flush_instructions(current)
                     current.entries.append(_Data(payload))
             continue
         if line.startswith((".zero ", ".space ")):
@@ -487,6 +501,7 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
             size = _parse_int(line.split(None, 1)[1])
             if size < 0:
                 raise X86EncodeError(f"negative zero-fill {line!r}")
+            flush_instructions(current)
             current.entries.append(_Zero(size))
             continue
         if line.startswith(".") and not line.endswith(":"):
@@ -499,6 +514,7 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
                 raise X86EncodeError("empty label")
             # Labels carry no metadata by themselves. Keep their definitions
             # in the plan; only explicit declarations need a metadata entry.
+            flush_instructions(current)
             current.entries.append(_Label(name))
             continue
         if current is None or not current.flags & SHF_EXECINSTR:
@@ -507,18 +523,24 @@ def _parse_file(asm_text: str, *, compact_instructions: bool = False):
             start = raw_start + len(raw_line) - len(raw_line.lstrip())
             span = -(start * _INSTRUCTION_SPAN_BASE + len(line) + 1)
             if span >= -(1 << 63):
-                _append_instruction_span(current.entries, span)
+                if pending_instruction_plan is not current:
+                    flush_instructions(pending_instruction_plan)
+                    pending_instruction_plan = current
+                _append_instruction_span(current.entries, pending_instructions, span)
             else:
                 # Preserve arbitrarily large source offsets without wrapping
                 # them into the fixed-width private transport.
+                flush_instructions(current)
                 current.entries.append(_Instruction(line))
         else:
+            flush_instructions(current)
             current.entries.append(_Instruction(line))
     if not saw_syntax:
         raise X86EncodeError(
             "owned x86 assembly must begin with .intel_syntax noprefix"
         )
-    flush_data()
+    flush_data(pending_data)
+    flush_instructions(pending_instruction_plan)
     return plans, order, symbols
 
 

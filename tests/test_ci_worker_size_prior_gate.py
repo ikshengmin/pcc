@@ -47,15 +47,17 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
     assert gate.HOST_FILES[20] == gate.SCALAR_PROJECTION_TEST
     assert gate.HOST_FILES[21] == gate.RSS_PUBLISHER_TEST
     assert gate.HOST_FILES[22] == gate.ELF_RELOCATION_CONTEXT_TEST
-    assert gate.HOST_FILES[23:] == (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST)
-    assert sum(gate.HOST_COUNTS) == 1194 and sum(gate.HOST_COUNTS[:23]) == 1039
+    assert gate.HOST_FILES[23:25] == (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST)
+    assert gate.HOST_FILES[25:] == (gate.PARSE_BUFFER_TEST, gate.PARSE_BUFFER_OBJECT_TEST)
+    assert sum(gate.HOST_COUNTS) == 1294 and sum(gate.HOST_COUNTS[:25]) == 1194
+    assert sum(gate.HOST_COUNTS[:23]) == 1039
     assert sum(gate.HOST_COUNTS[:22]) == 1023
     assert sum(gate.HOST_COUNTS[:21]) == 968
     assert sum(gate.HOST_COUNTS[:20]) == 879
@@ -130,6 +132,38 @@ def test_default_command_retains_project_xdist(tmp_path):
     )
     for path in (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST, gate.RSS_PUBLISHER_TEST):
         assert workflow.count('      - "' + path + '"') == 2
+    assert gate.PARSE_BUFFER_INPUTS == (
+        'tests/python/test_x86_64_parse_buffer_publication.py',
+        'tests/python/test_x86_64_parse_buffer_objects.py',
+        'tests/python/test_x86_64_assembler_lifetime.py',
+        'tests/python/test_x86_64_numeric_data_batching.py',
+        'tests/python/data/x86_64_parse_buffer_before_81776.py.txt',
+        'pcc/backend/x86_64_asm_driver.py',
+    )
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "PARSE_BUFFER_INPUTS" for node in ast.walk(identity))
+    for path in gate.PARSE_BUFFER_INPUTS[:5]:
+        assert workflow.count('      - "' + path + '"') == 2
+    bundle = ast.parse((ROOT / gate.PARSE_BUFFER_OBJECT_TEST).read_text())
+    imports = [node for node in bundle.body if isinstance(node, ast.ImportFrom)]
+    expected = {'tests.python.test_x86_64_assembler_lifetime': ('test_packed_instruction_spans_bound_storage_and_preserve_entry_order', 'test_packed_span_object_matches_unpacked_parser_on_same_input', 'test_packed_span_runs_retire_during_final_encoding', 'test_packed_span_corruption_is_rejected', 'test_packed_span_signed_width_preserves_boundary', 'test_label_dense_span_storage_never_inflates_host_representation'), 'tests.python.test_x86_64_numeric_data_batching': ('test_small_or_disabled_bounds_preserve_mixed_width_complete_object', 'test_symbol_label_alignment_zero_size_and_section_barriers', 'test_full_coff_bytes_keep_symbol_relocation_stackmap_and_unwind_sections')}
+    assert {node.module: tuple(alias.name for alias in node.names) for node in imports} == expected
+    assert all(alias.asname is None for node in imports for alias in node.names)
+    assert not any(isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Import)) for node in bundle.body)
+    count = 0
+    for module, names in expected.items():
+        parsed = ast.parse((ROOT / (module.replace(".", "/") + ".py")).read_text())
+        selected = [node for node in parsed.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        assert len(selected) == len(names)
+        for node in selected:
+            assert all(arg.arg in ("monkeypatch", "text", "run_length", "limit") for arg in node.args.args)
+            cases = 1
+            for mark in node.decorator_list:
+                assert isinstance(mark, ast.Call) and isinstance(mark.func, ast.Attribute)
+                assert mark.func.attr == "parametrize" and isinstance(mark.args[1], (ast.List, ast.Tuple))
+                cases *= len(mark.args[1].elts)
+            count += cases
+    assert count == 23
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -636,7 +670,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -815,6 +849,7 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
           'pcc.frontends.python.pipeline_self_backend_link',
           "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
           "pcc.backend.elf_aarch64_relocations",
+          "pcc.backend.x86_64_asm_driver",
           "pcc.backend.x86_64_encode")
     source = ROOT / ("pcc.backend.self_backend_aarch64_darwin_regalloc".replace(".", "/") + ".py")
     definitions = [node.name for node in ast.parse(source.read_text()).body
@@ -823,7 +858,7 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     reference = json.loads((ROOT / "tests/scalar_arena_projection_reference.json").read_text())
     changed_modules = {site["path"][:-3].replace("/", ".") for site in reference["sites"]}
     assert len(changed_modules) == 10 and changed_modules <= set(MODULES)
-    assert len(MODULES) == 25
+    assert len(MODULES) == 26
     assert "pcc.backend.stackmap_host_budget" not in MODULES
     gate_tree = ast.parse((ROOT / gate.CLOSURE_TEST).read_text())
     closure = next(node for node in gate_tree.body if isinstance(node, ast.FunctionDef)
@@ -837,6 +872,7 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     assert "require_object_symbols(obj.read_bytes(), target, required)" in calls
     assert "emit_indexed_module_file(str(sidecar), str(obj), 'PCO', optimize=False)" in calls
     assert MODULES[-1] == "pcc.backend.x86_64_encode"
+    assert MODULES[-2] == "pcc.backend.x86_64_asm_driver"
     rss = next(node for node in module_loop.body if isinstance(node, ast.If)
                and ast.unparse(node.test) == "name == 'pcc.frontends.python.worker_resource_plan'")
     rss_strings = {node.value for node in ast.walk(rss) if isinstance(node, ast.Constant)
@@ -1225,7 +1261,7 @@ def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypa
             assert json.loads(path.read_text()) == receipt
             assert receipt["progress"][-1] == {"phase": phase, "state": state,
                                                 "module": module, "elapsed_s": 1.25}
-    assert len(publications) == 8 + 4 * len(closure.MODULES) == 108
+    assert len(publications) == 8 + 4 * len(closure.MODULES) == 112
     assert receipt["status"] == "RUNNING" and receipt["sources"] == {"original": "sha"}
     assert receipt["codegen_sha256"] == "original-codegen"
     assert receipt["modules"] == {"done": {"object_sha256": "bytes"}}

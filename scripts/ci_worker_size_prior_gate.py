@@ -96,6 +96,16 @@ STACKMAP_BUDGET_INPUTS = (
     'pcc/frontends/python/pipeline_self_backend_link.py',
     'pcc/backend/stackmap_host_budget.py',
 )
+PARSE_BUFFER_TEST = 'tests/python/test_x86_64_parse_buffer_publication.py'
+PARSE_BUFFER_OBJECT_TEST = 'tests/python/test_x86_64_parse_buffer_objects.py'
+PARSE_BUFFER_INPUTS = (
+    'tests/python/test_x86_64_parse_buffer_publication.py',
+    'tests/python/test_x86_64_parse_buffer_objects.py',
+    'tests/python/test_x86_64_assembler_lifetime.py',
+    'tests/python/test_x86_64_numeric_data_batching.py',
+    'tests/python/data/x86_64_parse_buffer_before_81776.py.txt',
+    'pcc/backend/x86_64_asm_driver.py',
+)
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_worker_guard_cadence.py",
@@ -110,10 +120,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST,
               RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST, RSS_PUBLISHER_TEST,
-              ELF_RELOCATION_CONTEXT_TEST, STACKMAP_BUDGET_TEST, STACKMAP_HOST_BUDGET_TEST)
-# All existing 1039 nodes remain. The explicit compact-budget data, host model
-# and complete Mach-O preparation controls share this invocation; strict has 25 modules.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19)
+              ELF_RELOCATION_CONTEXT_TEST, STACKMAP_BUDGET_TEST, STACKMAP_HOST_BUDGET_TEST,
+              PARSE_BUFFER_TEST, PARSE_BUFFER_OBJECT_TEST)
+# All existing 1194 nodes remain. Parser source/data and exact host-object
+# controls share this invocation; strict includes the actual assembler module.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -136,7 +147,7 @@ def source_identity():
     import xdist
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
-    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS,
+    value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS,
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),

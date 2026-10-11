@@ -776,11 +776,13 @@ def test_packed_span_corruption_is_rejected():
 
 def test_packed_span_signed_width_preserves_boundary():
     entries = []
-    assembler._append_instruction_span(entries, -(1 << 63))
-    assembler._append_instruction_span(entries, -1)
-    assembler._append_instruction_span(entries, -7)
-    assembler._append_instruction_span(entries, -8)
-    assembler._append_instruction_span(entries, -9)
+    pending = []
+    assembler._append_instruction_span(entries, pending, -(1 << 63))
+    assembler._append_instruction_span(entries, pending, -1)
+    assembler._append_instruction_span(entries, pending, -7)
+    assembler._append_instruction_span(entries, pending, -8)
+    assembler._append_instruction_span(entries, pending, -9)
+    assembler._flush_instruction_spans(entries, pending)
     assert len(entries) == 1 and isinstance(entries[0], bytearray)
     section = assembler._SectionPlan('.text', elf.SHT_PROGBITS, elf.SHF_ALLOC, 1)
     section.entries = entries
@@ -805,7 +807,10 @@ def test_label_dense_span_storage_never_inflates_host_representation(monkeypatch
     with monkeypatch.context() as context:
         # This is the original compact parser representation, with identical
         # source spans and label objects. It is not the larger text-record path.
-        context.setattr(assembler, '_append_instruction_span', lambda entries, span: entries.append(span))
+        context.setattr(
+            assembler, '_append_instruction_span',
+            lambda entries, pending, span: entries.append(span),
+        )
         boxed, boxed_order, _ = assembler._parse_file(text, compact_instructions=True)
     assert order == boxed_order
     def retained(plans):

@@ -34,6 +34,7 @@ MODULES = tuple("pcc.frontends.python." + name for name in (
       'pcc.frontends.python.pipeline_self_backend_link',
       "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
       "pcc.backend.elf_aarch64_relocations",
+      "pcc.backend.x86_64_asm_driver",
       "pcc.backend.x86_64_encode")
 SECTION = re.compile(r"^; ---- module: ([A-Za-z_][\w.]*) ----$", re.M)
 DEFINITION = re.compile(r'^define[^\n]*@"?([A-Za-z_][\w.$]*)"?\(', re.M)
