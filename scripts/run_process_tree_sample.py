@@ -223,9 +223,22 @@ def _process_table(
     timeouts_s: tuple[float, ...] = _PROCESS_TABLE_TIMEOUTS_S,
     include_command: bool = True,
 ) -> tuple[dict[int, tuple[int, int, str]], int]:
+    table, retry_count, _sampled_at = _timed_process_table(
+        timeouts_s=timeouts_s, include_command=include_command,
+    )
+    return table, retry_count
+
+
+def _timed_process_table(
+    *,
+    timeouts_s: tuple[float, ...] = _PROCESS_TABLE_TIMEOUTS_S,
+    include_command: bool = True,
+) -> tuple[dict[int, tuple[int, int, str]], int, float]:
+    """Return the adopted attempt's start; preserve _process_table's pair API."""
     run = None
     retry_count = 0
     for timeout_s in timeouts_s:
+        sampled_at = time.monotonic()
         try:
             run = subprocess.run(
                 (
@@ -265,7 +278,7 @@ def _process_table(
             continue
         command = fields[3] if len(fields) >= 4 else ""
         rows[pid] = (ppid, rss_bytes, command)
-    return rows, retry_count
+    return rows, retry_count, sampled_at
 
 
 def _process_command(pid: int, *, timeout_s: float = 0.25) -> str:
@@ -834,6 +847,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             raise ProcessTreeSampleError("refusing existing output: " + worker_state_path)
     started_utc = dt.datetime.now(dt.timezone.utc).isoformat()
     started = time.monotonic()
+    deadline = started + args.timeout
     payload: dict[str, object] = {
         "schema": "pcc.process_tree_sample.v1",
         "status": "RUNNING",
@@ -891,9 +905,21 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                 "resource preflight failed: " + type(exc).__name__ + ": " + str(exc)
             ) from exc
 
+    process_table_timeouts = (
+        _SAFETY_PROCESS_TABLE_TIMEOUTS_S
+        if args.max_tree_rss_bytes > 0
+        else _PROCESS_TABLE_TIMEOUTS_S
+    )
     if args.max_tree_rss_bytes > 0:
         environment["PCC_WORKER_TREE_STATE_PATH"] = worker_state_path
         environment["PCC_WORKER_TREE_BUDGET_BYTES"] = str(args.max_tree_rss_bytes)
+        # Bind recovery to this guard's actual retry policy and ORIGINAL
+        # deadline. Preflight/lock/startup time does not create a new budget.
+        environment["PCC_WORKER_TREE_RECOVERY"] = (
+            "pcc.worker-tree-recovery.v1\t"
+            + ",".join(str(value) for value in process_table_timeouts)
+            + "\t" + str(sum(process_table_timeouts)) + "\t" + str(deadline)
+        )
     payload["environment"] = _recorded_environment(environment)
     _persist(result_path, payload)
 
@@ -923,11 +949,6 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     terminal_processes: list[dict[str, object]] = []
     command_cache: dict[int, str] = {}
     command_lookup_failure_count = 0
-    process_table_timeouts = (
-        _SAFETY_PROCESS_TABLE_TIMEOUTS_S
-        if args.max_tree_rss_bytes > 0
-        else _PROCESS_TABLE_TIMEOUTS_S
-    )
     with contextlib.ExitStack() as launch_context:
         try:
             launch_context.enter_context(lock_context)
@@ -960,7 +981,6 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                 stderr=stderr_stream,
                 start_new_session=True,
             )
-            deadline = started + args.timeout
             next_progress = started
             try:
                 root_identity = _process_identity(process.pid)
@@ -968,7 +988,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                     raise ProcessTreeSampleError("cannot identify the launched process")
                 observed_processes[process.pid] = root_identity
                 while True:
-                    table, retries = _process_table(
+                    table, retries, sampled_at = _timed_process_table(
                         timeouts_s=process_table_timeouts,
                         include_command=args.max_tree_rss_bytes <= 0,
                     )
@@ -980,7 +1000,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                         state_tmp = worker_state_path + ".tmp"
                         with open(state_tmp, "w", encoding="utf-8") as state_stream:
                             state_stream.write(
-                                "pcc.worker-tree-rss.v1\n" + str(time.monotonic())
+                                "pcc.worker-tree-rss.v1\n" + str(sampled_at)
                                 + "\n" + str(args.max_tree_rss_bytes) + "\n"
                             )
                             for pid, row in tree.items():

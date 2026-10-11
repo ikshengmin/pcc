@@ -263,6 +263,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         assert len(names) == len(set(names)) and set(MODULES) <= set(names)
         assert "pcc.frontends.python.worker_resource_host_windows" not in names
         assert "pcc.backend.stackmap_host_budget" not in names
+        assert "pcc.frontends.python.worker_resource_host_recovery" not in names
         whole = verify_ir_text(
             text, progress=lambda phase, state: _record_closed_world_progress(
                 receipt_path, receipt, started,
@@ -304,6 +305,9 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
                     assert len(matches) == 1
                     assert re.search(r'\bcall\b[^\n]*' + re.escape(callee), matches[0].group("body"))
                     del matches
+            if name == "pcc.frontends.python.worker_process_pool":
+                assert "run_resource_worker_processes" in declared
+                assert "worker_resource_host_recovery" not in section
             if name == "pcc.backend.x86_64_encode":
                 initializer = "_pcc_py_module_top_pcc_backend_x86_64_encode"
                 required.append(initializer)

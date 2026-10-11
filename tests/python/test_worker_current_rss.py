@@ -10,6 +10,14 @@ import pytest
 from pcc.frontends.python import pipeline_frontend_workers as workers
 from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
+from pcc.frontends.python import worker_resource_host_recovery as host_recovery
+
+
+@pytest.fixture(autouse=True)
+def _legacy_recovery_environment(monkeypatch):
+    # Pure virtual clocks must not inherit a real enclosing guard's deadline.
+    # Cases opting in below install their own immutable synthetic envelope.
+    monkeypatch.delenv(policy.TREE_RECOVERY_ENV, raising=False)
 
 
 MIB = 1024 * 1024
@@ -554,3 +562,224 @@ def test_original_stale_guard_wrapper_forwards_optional_diagnostic(frozen_exists
         ((path, 1000, 11, [12], 0.0, False), {"diagnostic": None}),
     ]
     assert calls[0][1]["diagnostic"] is output
+
+
+def _recovery_envelope(allowance="4.0", deadline="120.0", schedule="1.0,3.0"):
+    return "pcc.worker-tree-recovery.v1\t" + schedule + "\t" + allowance + "\t" + deadline
+
+
+def test_missing_recovery_policy_preserves_legacy_two_seconds():
+    assert host_recovery.read_tree_recovery(None) == (2.0, -1.0)
+    assert policy.STATE_MAX_AGE_SECONDS == 2.0
+    assert host_recovery.read_tree_recovery(_recovery_envelope()) == (4.0, 120.0)
+    assert host_recovery.read_tree_recovery(_recovery_envelope("1.75", "103.0", "0.5,1.25")) == (1.75, 103.0)
+
+
+@pytest.mark.parametrize("raw", [
+    "", "4", "pcc.worker-tree-recovery.v2\t1,3\t4\t120",
+    _recovery_envelope("-1"), _recovery_envelope("0"),
+    _recovery_envelope("nan"), _recovery_envelope("inf"), _recovery_envelope("1e999"),
+    _recovery_envelope("5"), _recovery_envelope("4", "nan"),
+    _recovery_envelope("4", "inf"), _recovery_envelope("4", "0"),
+    _recovery_envelope("4", "-1"), _recovery_envelope(schedule="0,4"),
+    _recovery_envelope(schedule="-1,5"), _recovery_envelope(schedule="nan,3"),
+    _recovery_envelope(schedule="1e308,1e308"), _recovery_envelope(schedule=""),
+])
+def test_invalid_recovery_policy_fails_closed_before_launch(tmp_path, monkeypatch, raw):
+    monkeypatch.setenv(policy.TREE_STATE_ENV, str(tmp_path / "state"))
+    monkeypatch.setenv(policy.TREE_RECOVERY_ENV, raw)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid policy must not launch or observe a process")
+
+    monkeypatch.setattr(pool, "_start_resource_worker", forbidden)
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", forbidden)
+    with pytest.raises(policy.WorkerMemoryError, match="invalid worker tree recovery policy"):
+        pool.run_resource_worker_processes(
+            ["never-executed"], [{"class": "invalid-policy", "inputs": [1],
+                                  "estimate_bytes": 64 * MIB,
+                                  "report_path": str(tmp_path / "rss")}],
+            1, 512 * MIB, observations=[],
+        )
+
+
+@pytest.mark.parametrize("case,deadline,frames,fails", [
+    ("fresh-after-expiry", "120", [(100.01, "missing", 32, False),
+                                    (104.02, "valid", 16, False)], True),
+    ("reason-changes-do-not-reset", "120", [(100.01, "missing", 32, False),
+        (101.0, "parent", 100, False), (102.0, "zero", 64, False),
+        (103.0, "budget", 16, False), (104.02, "valid", 16, False)], True),
+    ("complete-fresh-resets", "120", [(100.01, "missing", 100, False),
+        (103.0, "valid", 16, False), (103.01, "missing", 16, False),
+        (106.5, "valid", 16, False), (106.51, "valid", 16, True)], False),
+    ("reap-barrier-does-not-reset", "120", [(100.01, "missing", 100, False),
+        (103.0, "before-barrier", 16, True), (104.02, "valid", 16, False)], True),
+    ("original-deadline-wins", "102", [(100.01, "missing", 100, False),
+                                       (102.0, "valid", 16, False)], True),
+    ("original-deadline-already-passed", "99", [], True),
+    ("legacy-late-fresh-retains-old-rule", "120", [(100.01, "missing", 100, False),
+        (104.02, "valid", 16, False), (104.03, "valid", 16, True)], False),
+    ("failure-during-outage", "120", [(100.01, "missing", 100, False),
+                                     (101.0, "missing", 16, "failure")], True),
+])
+def test_configured_recovery_requires_complete_in_window_inventory(
+    tmp_path, monkeypatch, case, deadline, frames, fails,
+):
+    owner, budget = os.getpid(), 1024 * MIB
+    tree, trace = tmp_path / "tree", tmp_path / "trace"
+    tasks = [{"class": "recovery", "inputs": [2 - index],
+              "estimate_bytes": 200 * MIB,
+              "report_path": str(tmp_path / ("rss" + str(index)))} for index in range(2)]
+    clock = SimpleNamespace(now=100.0)
+    remaining = list(frames)
+    live, starts, stopped, reaped, observations, reads = {}, [], [], [], [], []
+    frame = ["valid", 16, False]
+
+    def publish_tree(kind):
+        rows = [f"{owner}\t0\t{64 * MIB}"]
+        if kind != "missing":
+            for pid in live:
+                parent = owner + 1 if kind == "parent" else owner
+                rss = 0 if kind == "zero" else 16 * MIB
+                rows.append(f"{pid}\t{parent}\t{rss}")
+        stamp = clock.now - (0.001 if kind == "before-barrier" else 0)
+        observed_budget = budget - 1 if kind == "budget" else budget
+        tree.write_text(policy.TREE_STATE_SCHEMA + "\n" + str(stamp) + "\n"
+                        + str(observed_budget) + "\n" + "\n".join(rows) + "\n")
+
+    def report(pid, phase):
+        item = live[pid]
+        Path(tasks[item["index"]]["report_path"]).write_text(
+            policy.RESOURCE_REPORT_SCHEMA + "\n" + str(pid) + "\n" + phase
+            + "\n" + str(16 * MIB) + "\n" + str(frame[1] * MIB)
+            + "\n" + item["token"] + "\n",
+        )
+
+    def start(specs, index):
+        assert reads[-1][1] == "accepted"
+        pid = owner + 100 + index
+        live[pid] = {"index": index, "token": next(
+            value.split("=", 1)[1] for value in specs[index][1]
+            if value.startswith(policy.RESOURCE_TOKEN_ENV + "="))}
+        starts.append((index, clock.now))
+        report(pid, "started")
+        return pid
+
+    def sleep(_seconds):
+        assert remaining, "fake recovery run exhausted its bounded frames"
+        clock.now, kind, peak, complete = remaining.pop(0)
+        frame[:] = [kind, peak, complete]
+        for pid in live:
+            report(pid, "running")
+        publish_tree(kind)
+        # Mutating the environment after capture cannot renew either bound.
+        monkeypatch.setenv(policy.TREE_RECOVERY_ENV, _recovery_envelope("100", "999", "50,50"))
+
+    def poll(pid):
+        if frame[2] == "failure":
+            return 7
+        if frame[2]:
+            report(pid, "complete")
+            return 0
+        return pool._WORKER_RUNNING
+
+    def retire(pid):
+        reaped.append(pid)
+        live.pop(pid)
+
+    def stop(pid):
+        stopped.append(pid)
+        live.pop(pid)
+
+    original_reader = policy.read_tree_state
+
+    def read_state(*args, **kwargs):
+        detail = kwargs.pop("diagnostic", None)
+        if detail is None:
+            detail = {}
+        result = original_reader(*args, diagnostic=detail, **kwargs)
+        reads.append((clock.now, detail["reason"]))
+        return result
+
+    clock.monotonic, clock.sleep = lambda: clock.now, sleep
+    monkeypatch.setattr(policy, "time", clock)
+    monkeypatch.setattr(pool, "time", clock)
+    monkeypatch.setattr(policy, "read_tree_state", read_state)
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: 64 * MIB)
+    monkeypatch.setattr(pool, "_start_resource_worker", start)
+    monkeypatch.setattr(pool, "_poll_resource_worker", poll)
+    monkeypatch.setattr(pool, "_retire_resource_worker", retire)
+    monkeypatch.setattr(pool, "_stop_resource_worker", stop)
+    monkeypatch.setenv(policy.TREE_STATE_ENV, str(tree))
+    if case != "legacy-late-fresh-retains-old-rule":
+        monkeypatch.setenv(policy.TREE_RECOVERY_ENV, _recovery_envelope(deadline=deadline))
+    monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "0")
+    publish_tree("valid")
+    failure = None
+    try:
+        pool.run_resource_worker_processes(
+            ["never-executed-0", "never-executed-1"], tasks, 2, budget,
+            observations=observations, trace_path=str(trace),
+        )
+    except (policy.WorkerMemoryError, pool.subprocess.CalledProcessError) as exc:
+        failure = str(exc)
+        if case == "failure-during-outage":
+            assert isinstance(exc, pool.subprocess.CalledProcessError) and exc.returncode == 7
+    assert not live
+    assert bool(failure) == fails, (case, failure)
+    if fails:
+        if case != "failure-during-outage":
+            assert "worker tree RSS state is missing, stale, or incompatible" in failure
+        assert [index for index, _ in starts] == ([] if deadline == "99" else [0])
+        assert not remaining
+        if case == "reason-changes-do-not-reset":
+            assert {reason for _, reason in reads} >= {
+                "active_missing", "active_parent", "active_rss", "budget", "accepted"}
+        if case == "reap-barrier-does-not-reset":
+            assert reaped == [owner + 100] and not stopped
+            assert len(observations) == 1 and observations[0][2] == 100 * MIB
+            assert any(reason == "before_barrier" for _, reason in reads)
+    else:
+        assert starts == [(0, 100.0), (1, 104.02 if case == "legacy-late-fresh-retains-old-rule" else 103.0)]
+        assert reaped == [owner + 100, owner + 101] and not stopped
+        assert len(observations) == 2 and observations[0][2] == 100 * MIB
+    if trace.exists():
+        events = [row.split("\t") for row in trace.read_text().splitlines()]
+        if case == "failure-during-outage":
+            budget_event = next(row for row in events if row[0] == "failure-budget")
+            assert int(budget_event[3]) == policy.peak_reservation(100 * MIB)
+            assert int(budget_event[4]) == 0
+            assert not observations and not stopped and reaped == [owner + 100]
+        for event in events:
+            if event[:2] == ["retire", "0"]:
+                assert int(event[3]) == policy.peak_reservation(100 * MIB)
+
+
+def test_host_recovery_helper_is_excluded_from_native_import_closure():
+    from pcc.frontends.python import pipeline_import_scan as scan
+
+    source = Path(pool.__file__).read_text()
+    marker = "pcc.frontends.python.worker_resource_host_recovery"
+    assert marker in source
+    assert marker not in scan._without_inactive_runtime_imports(source)
+    assert marker in scan._without_inactive_implementation_imports(source, implementation="cpython")
+    shared = ast.parse(Path(policy.__file__).read_text())
+    assert not any(isinstance(node, ast.FunctionDef) and node.name == "read_tree_recovery"
+                   for node in shared.body)
+
+
+@pytest.mark.parametrize("change", ["compound", "rebound", "global"])
+def test_unproven_recovery_guard_keeps_host_dependency(change):
+    from pcc.frontends.python import pipeline_import_scan as scan
+
+    source = Path(pool.__file__).read_text()
+    marker = "pcc.frontends.python.worker_resource_host_recovery"
+    if change == "compound":
+        source = source.replace('if execution_runtime.implementation.name == "cpython":',
+                                'if execution_runtime.implementation.name == "cpython" and enabled:')
+    elif change == "rebound":
+        source = source.replace("    import sys as execution_runtime\n",
+                                "    import sys as execution_runtime\n    execution_runtime = other\n")
+    else:
+        source = "import sys as execution_runtime\n" + source.replace("    import sys as execution_runtime\n", "")
+    assert marker in scan._without_inactive_runtime_imports(source)

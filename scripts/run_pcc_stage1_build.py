@@ -358,6 +358,8 @@ def _run_build(args: argparse.Namespace, ab, *, run_token: str) -> dict[str, Any
     env["PCC_WORKER_TREE_BUDGET_BYTES"] = str(args.memory_budget_bytes)
     if os.environ.get("PCC_WORKER_TREE_STATE_PATH"):
         env["PCC_WORKER_TREE_STATE_PATH"] = os.environ["PCC_WORKER_TREE_STATE_PATH"]
+        if "PCC_WORKER_TREE_RECOVERY" in os.environ:
+            env["PCC_WORKER_TREE_RECOVERY"] = os.environ["PCC_WORKER_TREE_RECOVERY"]
     _set_stage1_build_modes(
         env,
         with_threads=args.with_threads,

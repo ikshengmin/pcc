@@ -210,6 +210,23 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
         vector.append(RESOURCE_REPORT_ENV + "=" + report)
         specs.append((argv, vector))
     tree_path = str(os.environ.get(TREE_STATE_ENV, "") or "")
+    recovery_allowance = STATE_MAX_AGE_SECONDS
+    guard_deadline = -1.0
+    configured_recovery = False
+    # The native scheduler retains its existing policy and import closure.
+    # Snapshot freshness and the observation schema are shared and unchanged.
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if tree_path:
+            from pcc.frontends.python.worker_resource_plan import TREE_RECOVERY_ENV
+
+            raw_recovery = os.environ.get(TREE_RECOVERY_ENV)
+            if raw_recovery is not None:
+                from pcc.frontends.python.worker_resource_host_recovery import (
+                    read_tree_recovery,
+                )
+                recovery_allowance, guard_deadline = read_tree_recovery(raw_recovery)
+                configured_recovery = True
     owner_pid = os.getpid()
     pending, bands = resource_task_order(tasks)
     active = []
@@ -219,6 +236,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     completed_tokens = {}
     handoff_slots = set()
     unavailable_since = -1.0
+    outage_expiry = -1.0
     fresh_after = time.monotonic()
     state_diagnostic = {}
     preflight_done = False
@@ -291,24 +309,41 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
             if not pending and not active:
                 break
             owner_rss = _coordinator_rss_bytes()
+            read_diagnostic = {} if unavailable_since >= 0.0 else None
             state = read_tree_state(tree_path, tree_budget, owner_pid,
                                     [item[1] for item in active], fresh_after, include_owner=True,
-                                    diagnostic=state_diagnostic if unavailable_since >= 0.0 else None)
-            if tree_path and state is None:
+                                    diagnostic=read_diagnostic)
+            if state is None and read_diagnostic is not None:
+                state_diagnostic = read_diagnostic
+            if tree_path and (state is None or configured_recovery):
                 now = time.monotonic()
-                if unavailable_since < 0.0:
+                if state is None and unavailable_since < 0.0:
                     unavailable_since = now
-                if now - unavailable_since > STATE_MAX_AGE_SECONDS:
+                    if configured_recovery:
+                        # Fix this outage once. Reaps, reports, new barriers
+                        # and changing rejection reasons cannot extend it.
+                        outage_expiry = min(now + recovery_allowance, guard_deadline)
+                if ((configured_recovery and (
+                        now >= guard_deadline
+                        or (outage_expiry >= 0.0 and now >= outage_expiry)))
+                        or (not configured_recovery and state is None
+                            and now - unavailable_since > STATE_MAX_AGE_SECONDS)):
                     raise WorkerMemoryError(
                         "worker tree RSS state is missing, stale, or incompatible"
                         + "; last_rejected_snapshot=" + repr(state_diagnostic)
                         + "; active_tasks=" + repr([(item[0], item[1]) for item in active[:16]])
                     )
-                time.sleep(0.01)
-                continue
+                if state is None:
+                    # There is no usable available capacity during recovery.
+                    # Poll/reap and valid peak collection continue above.
+                    if configured_recovery:
+                        available = 0
+                    time.sleep(0.01)
+                    continue
             # Processing/launch time before the first rejected observation
             # is not a continuous state outage. Reader freshness is separate.
             unavailable_since = -1.0
+            outage_expiry = -1.0
             outside = 0 if state is None else state[0]
             available = available_worker_bytes(tree_budget, owner_rss, outside)
             if state is not None:

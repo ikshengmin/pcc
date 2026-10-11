@@ -13,6 +13,13 @@ from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
 
 
+@pytest.fixture(autouse=True)
+def _legacy_recovery_environment(monkeypatch):
+    # Pure virtual clocks must not inherit a real enclosing guard's deadline.
+    # Cases opting in below install their own immutable synthetic envelope.
+    monkeypatch.delenv(policy.TREE_RECOVERY_ENV, raising=False)
+
+
 MIB = 1024 * 1024
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,13 +42,15 @@ def test_macos_compiler_guards_keep_the_bootstrap_publication_cadence():
     }
 
 
-@pytest.mark.parametrize("interval,frozen,fails", [
-    pytest.param(1.0, False, True, id="legacy-cadence-exhausts-continuous-outage"),
-    pytest.param(0.25, False, False, id="bootstrap-cadence-recovers-after-retirement"),
-    pytest.param(0.25, True, True, id="frozen-publication-still-fails-closed"),
+@pytest.mark.parametrize("interval,frozen,fails,recovery", [
+    pytest.param(1.0, False, True, False, id="legacy-cadence-exhausts-continuous-outage"),
+    pytest.param(0.25, False, False, False, id="bootstrap-cadence-recovers-after-retirement"),
+    pytest.param(0.25, True, True, False, id="frozen-publication-still-fails-closed"),
+    pytest.param(1.0, False, False, True, id="configured-recovery-keeps-reap-barrier"),
+    pytest.param(1.0, True, True, True, id="configured-recovery-still-expires"),
 ])
 def test_publication_between_poll_and_retirement_preserves_admission_barrier(
-    tmp_path, monkeypatch, interval, frozen, fails,
+    tmp_path, monkeypatch, interval, frozen, fails, recovery,
 ):
     # A synchronized sample can be published while the coordinator is polling
     # a child, before it observes/reaps that child's exit. Retirement advances
@@ -61,6 +70,11 @@ def test_publication_between_poll_and_retirement_preserves_admission_barrier(
     ]
     clock = SimpleNamespace(now=initial)
     period = interval + 0.02
+    # The configured successor must stay alive across a publication and a
+    # subsequent scheduler read. Its old 20ms lifetime ended before the next
+    # 1.02s publication, so that case never exercised active recovery.
+    # Keep the original legacy cadence cases' timing unchanged.
+    successor_lifetime = period + 0.02 if recovery else 0.02
     next_publication = [initial + period]
     live = {}
     starts, reaped, stopped, reads, observations = [], [], [], [], []
@@ -111,7 +125,7 @@ def test_publication_between_poll_and_retirement_preserves_admission_barrier(
             # The independent guard can publish during a scheduler pause.
             # Keep the child present until its successful exit is observed.
             advance(initial + 1.051269)
-        elif clock.now - item["started"] < 0.02:
+        elif clock.now - item["started"] < successor_lifetime:
             return pool._WORKER_RUNNING
         publish_report(item, "complete")
         return 0
@@ -145,6 +159,9 @@ def test_publication_between_poll_and_retirement_preserves_admission_barrier(
     monkeypatch.setattr(pool, "_retire_resource_worker", retire)
     monkeypatch.setattr(pool, "_stop_resource_worker", stop)
     monkeypatch.setenv(policy.TREE_STATE_ENV, str(tree))
+    if recovery:
+        monkeypatch.setenv(policy.TREE_RECOVERY_ENV,
+                           "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\t120.0")
     monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "0")
     publish_tree()
     failure = None
@@ -170,10 +187,18 @@ def test_publication_between_poll_and_retirement_preserves_admission_barrier(
         assert [index for index, _ in starts] == [0]
         assert reaped == [owner + 100] and len(observations) == 1
         first_rejected = next(at for at, record, _ in reads if record["reason"] != "accepted")
-        assert 2.0 < clock.now - first_rejected < 2.03
+        allowance = 4.0 if recovery else 2.0
+        assert allowance <= clock.now - first_rejected < allowance + 0.03
     else:
         assert failure is None
         assert [index for index, _ in starts] == [0, 1]
         assert reaped == [owner + 100, owner + 101] and len(observations) == 2
         assert starts[1][1] > initial + 1.051269
         assert any(detail["reason"] == "accepted" and active for _, detail, active in reads)
+        if recovery:
+            successor = [owner + 101]
+            rejected_at = next(at for at, detail, active in reads
+                               if active == successor and detail["reason"] != "accepted")
+            recovered_at, detail = next((at, detail) for at, detail, active in reads
+                                        if active == successor and detail["reason"] == "accepted")
+            assert starts[1][1] <= detail["sampled_at"] <= recovered_at < rejected_at + 4.0

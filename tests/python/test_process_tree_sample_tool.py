@@ -618,6 +618,8 @@ def test_safety_process_table_failure_uses_only_bounded_retries(monkeypatch):
     assert observed == list(tool._SAFETY_PROCESS_TABLE_TIMEOUTS_S)
     assert sum(observed) <= 4.0
     assert raised.value.retry_count == len(tool._SAFETY_PROCESS_TABLE_TIMEOUTS_S)
+    assert isinstance(raised.value.__cause__, subprocess.TimeoutExpired)
+    assert raised.value.__cause__.timeout == tool._SAFETY_PROCESS_TABLE_TIMEOUTS_S[-1]
 
 
 def test_preflight_rejection_persists_receipt_without_starting_target(
@@ -1092,6 +1094,8 @@ def test_mac_ci_guard_auto_selection_reaches_receipt_environment_and_state(tmp_p
     monkeypatch.setattr(tool.subprocess, "Popen", launch)
     monkeypatch.setattr(tool, "_process_identity", lambda pid: tool._ProcessIdentity(pid, 1, (1, 0)))
     tables = iter([({123: (1, 1024, "synthetic-native-worker")}, 0), ({}, 0)])
+    monkeypatch.setattr(tool, "_timed_process_table",
+                        lambda **kwargs: (*next(tables), tool.time.monotonic()))
     monkeypatch.setattr(tool, "_process_table", lambda **kwargs: next(tables))
     receipt = tool.run(_mac_ci_guard_args(tool, tmp_path))
     assert receipt["status"] == "COMPLETE" and receipt["returncode"] == 0
@@ -1123,6 +1127,7 @@ def test_mac_ci_guard_rejection_persists_observation_without_launch(
 
     monkeypatch.setattr(tool.subprocess, "Popen", forbidden_launch)
     monkeypatch.setattr(tool, "_process_table", forbidden_launch)
+    monkeypatch.setattr(tool, "_timed_process_table", forbidden_launch)
     with pytest.raises(tool.ProcessTreeSampleError, match=message):
         tool.run(_mac_ci_guard_args(tool, tmp_path, automatic=automatic))
     receipt = json.loads((tmp_path / "result.json").read_text())
@@ -1134,3 +1139,106 @@ def test_mac_ci_guard_rejection_persists_observation_without_launch(
         assert receipt["resource_preflight"]["reclaimable_bytes"] == available
         assert receipt["resource_preflight"]["reserve_bytes"] == 1024**3 // 2
     assert not (tmp_path / "result.json.worker-rss.tsv").exists()
+
+
+@pytest.mark.parametrize("first_timeout,successful_duration,identity_delay,timeouts", [
+    (False, 0.25, 0.0, (1.0, 3.0)),
+    (True, 0.25, 0.0, (1.0, 3.0)),
+    (True, 2.25, 0.0, (1.0, 3.0)),
+    (True, 0.25, 2.1, (1.0, 3.0)),
+    (True, 0.25, 0.0, (0.5, 1.25)),
+])
+def test_guard_publishes_adopted_attempt_start_and_original_recovery_deadline(
+    tmp_path, monkeypatch, first_timeout, successful_duration, identity_delay, timeouts,
+):
+    from types import SimpleNamespace
+    from pcc.frontends.python import worker_resource_plan as policy
+    from pcc.frontends.python.worker_resource_host_recovery import read_tree_recovery
+
+    tool = _load_tool_module()
+    clock = SimpleNamespace(now=100.0)
+    clock.monotonic = lambda: clock.now
+    attempts, launched, identities = [], [], []
+    monkeypatch.setattr(tool, "time", clock)
+    monkeypatch.setattr(policy, "time", clock)
+    monkeypatch.setattr(tool, "_SAFETY_PROCESS_TABLE_TIMEOUTS_S", timeouts)
+
+    def memory_observation():
+        clock.now += 0.75  # Preflight time must consume the original deadline.
+        return _mac_ci_memory_observation()
+
+    def identity(pid):
+        identities.append(pid)
+        if len(identities) > 1:
+            clock.now += identity_delay
+        return tool._ProcessIdentity(pid, 1, (1, 0))
+
+    def fake_run(command, **kwargs):
+        assert command == ["ps", "-Ao", "pid=,ppid=,rss="]
+        attempts.append((clock.now, kwargs["timeout"]))
+        if first_timeout and len(attempts) == 1:
+            clock.now += kwargs["timeout"]
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        success_index = 2 if first_timeout else 1
+        if len(attempts) == success_index:
+            clock.now += successful_duration
+            output = "123 1 64\n"
+        else:
+            output = ""  # Reaped root: unchanged pair-return cleanup path.
+        return SimpleNamespace(returncode=0, stderr="", stdout=output)
+
+    def launch(command, **kwargs):
+        launched.append(dict(kwargs["env"]))
+        return SimpleNamespace(pid=123, returncode=0, poll=lambda: 0)
+
+    def forbidden_cleanup(*args, **kwargs):
+        pytest.fail("synthetic completed child must not invoke process cleanup")
+
+    monkeypatch.setattr(tool, "_host_memory_observation", memory_observation)
+    monkeypatch.setattr(tool, "_process_identity", identity)
+    monkeypatch.setattr(tool, "_process_command", lambda pid: "synthetic")
+    monkeypatch.setattr(tool, "_terminate_owned_processes", forbidden_cleanup)
+    monkeypatch.setattr(tool.subprocess, "run", fake_run)
+    monkeypatch.setattr(tool.subprocess, "Popen", launch)
+    receipt = tool.run(_mac_ci_guard_args(tool, tmp_path))
+    assert receipt["status"] == "COMPLETE"
+    environment = launched[0]
+    allowance, deadline = read_tree_recovery(environment[policy.TREE_RECOVERY_ENV])
+    assert allowance == sum(timeouts) and deadline == 105.0
+    assert receipt["process_table_timeouts_s"] == list(timeouts)
+    assert receipt["process_table_retry_count"] == int(first_timeout)
+    state_path = Path(environment[policy.TREE_STATE_ENV])
+    rows = state_path.read_text().splitlines()
+    adopted_start = 100.75 + (timeouts[0] if first_timeout else 0)
+    assert float(rows[1]) == adopted_start
+    assert attempts[int(first_timeout)][0] == adopted_start
+    parsed = policy.read_tree_state(
+        str(state_path), int(environment["PCC_WORKER_TREE_BUDGET_BYTES"]),
+        123, [], include_owner=True,
+    )
+    # A successful slow ps or identity lookup may already be stale on publish.
+    # The 4-second nominal retry sum does not grant a 4-second admission age.
+    assert (parsed is None) == (successful_duration + identity_delay > 2.0)
+    assert policy.STATE_MAX_AGE_SECONDS == 2.0
+
+
+def test_stage1_clean_environment_forwards_recovery_only_with_guard_state():
+    # Source-only proof: no harness import, build, runtime provisioning or
+    # execution of extracted code is needed to inspect this direct forwarding.
+    import ast
+
+    path = ROOT / "scripts" / "run_pcc_stage1_build.py"
+    tree = ast.parse(path.read_text())
+    state_key, recovery_key = "PCC_WORKER_TREE_STATE_PATH", "PCC_WORKER_TREE_RECOVERY"
+    guards = [node for node in ast.walk(tree) if isinstance(node, ast.If)
+              and ast.unparse(node.test) == "os.environ.get('" + state_key + "')"]
+    assert len(guards) == 1
+    outer = guards[0]
+    assert not outer.orelse and len(outer.body) == 2
+    inner = outer.body[1]
+    assert isinstance(inner, ast.If) and not inner.orelse
+    assert ast.unparse(inner.test) == "'" + recovery_key + "' in os.environ"
+    assert len(inner.body) == 1 and isinstance(inner.body[0], ast.Assign)
+    assignment = inner.body[0]
+    assert ast.unparse(assignment.targets[0]) == "env['" + recovery_key + "']"
+    assert ast.unparse(assignment.value) == "os.environ['" + recovery_key + "']"

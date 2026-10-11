@@ -12,6 +12,7 @@ import time
 
 
 TREE_STATE_ENV = "PCC_WORKER_TREE_STATE_PATH"
+TREE_RECOVERY_ENV = "PCC_WORKER_TREE_RECOVERY"
 # v1 timestamps use the same-machine CPython monotonic clock (Python >=3.13):
 # Darwin mach_absolute_time / CLOCK_UPTIME_RAW, Linux CLOCK_MONOTONIC, and
 # Windows QueryPerformanceCounter. The native platform clock must share both

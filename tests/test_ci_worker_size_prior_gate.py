@@ -47,7 +47,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -56,16 +56,18 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[22] == gate.ELF_RELOCATION_CONTEXT_TEST
     assert gate.HOST_FILES[23:25] == (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST)
     assert gate.HOST_FILES[25:27] == (gate.PARSE_BUFFER_TEST, gate.PARSE_BUFFER_OBJECT_TEST)
-    assert gate.HOST_FILES[27:] == (gate.ARM_CALL_VENEERS_TEST,)
-    assert sum(gate.HOST_COUNTS) == 1349 and sum(gate.HOST_COUNTS[:27]) == 1294
-    assert sum(gate.HOST_COUNTS[:25]) == 1194
-    assert sum(gate.HOST_COUNTS[:23]) == 1039
-    assert sum(gate.HOST_COUNTS[:22]) == 1023
-    assert sum(gate.HOST_COUNTS[:21]) == 968
-    assert sum(gate.HOST_COUNTS[:20]) == 879
-    assert sum(gate.HOST_COUNTS[:18]) == 844
-    assert sum(gate.HOST_COUNTS[:17]) == 812 and sum(gate.HOST_COUNTS[:16]) == 764
-    assert sum(gate.HOST_COUNTS[:14]) == 755
+    assert gate.HOST_FILES[27:28] == (gate.ARM_CALL_VENEERS_TEST,)
+    assert gate.HOST_FILES[28:] == (gate.TREE_RECOVERY_TEST, gate.TREE_RECOVERY_GUARD_TEST)
+    assert sum(gate.HOST_COUNTS) == 1447 and sum(gate.HOST_COUNTS[:28]) == 1351
+    assert sum(gate.HOST_COUNTS[:27]) == 1296
+    assert sum(gate.HOST_COUNTS[:25]) == 1196
+    assert sum(gate.HOST_COUNTS[:23]) == 1041
+    assert sum(gate.HOST_COUNTS[:22]) == 1025
+    assert sum(gate.HOST_COUNTS[:21]) == 970
+    assert sum(gate.HOST_COUNTS[:20]) == 881
+    assert sum(gate.HOST_COUNTS[:18]) == 846
+    assert sum(gate.HOST_COUNTS[:17]) == 814 and sum(gate.HOST_COUNTS[:16]) == 766
+    assert sum(gate.HOST_COUNTS[:14]) == 757
     facts_tree = ast.parse((ROOT / gate.REGALLOC_FACTS_TEST).read_text())
     facts_nodes = [node for node in facts_tree.body
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
@@ -166,6 +168,41 @@ def test_default_command_retains_project_xdist(tmp_path):
                 cases *= len(mark.args[1].elts)
             count += cases
     assert count == 23
+    assert gate.TREE_RECOVERY_INPUTS == (
+        'tests/python/test_worker_current_rss.py',
+        'tests/python/test_worker_tree_recovery_guard.py',
+        'tests/python/test_process_tree_sample_tool.py',
+        'tests/python/test_worker_guard_cadence.py',
+        'pcc/frontends/python/worker_resource_plan.py',
+        'pcc/frontends/python/worker_process_pool.py',
+        'pcc/frontends/python/worker_resource_host_recovery.py',
+        'scripts/run_process_tree_sample.py',
+        'scripts/run_pcc_stage1_build.py',
+    )
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "TREE_RECOVERY_INPUTS" for node in ast.walk(identity))
+    for path in (*gate.TREE_RECOVERY_INPUTS[:4], "scripts/run_pcc_stage1_build.py"):
+        assert workflow.count('      - "' + path + '"') == 2
+    bundle = ast.parse((ROOT / gate.TREE_RECOVERY_GUARD_TEST).read_text())
+    imports = [node for node in bundle.body if isinstance(node, ast.ImportFrom)]
+    assert len(imports) == 1 and imports[0].module == "tests.python.test_process_tree_sample_tool"
+    expected = ('test_process_table_keeps_full_worker_command_and_manifest', 'test_safety_table_avoids_all_process_argv_and_queries_only_largest', 'test_safety_process_table_failure_uses_only_bounded_retries', 'test_mac_ci_guard_auto_selection_reaches_receipt_environment_and_state', 'test_mac_ci_guard_rejection_persists_observation_without_launch', 'test_guard_publishes_adopted_attempt_start_and_original_recovery_deadline', 'test_stage1_clean_environment_forwards_recovery_only_with_guard_state')
+    assert tuple(alias.name for alias in imports[0].names) == expected
+    assert all(alias.asname is None for alias in imports[0].names)
+    assert not any(isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Import))
+                   for node in bundle.body)
+    source = ast.parse((ROOT / "tests/python/test_process_tree_sample_tool.py").read_text())
+    selected = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in expected]
+    assert len(selected) == 7
+    count = 0
+    for node in selected:
+        cases = 1
+        for mark in node.decorator_list:
+            assert isinstance(mark, ast.Call) and isinstance(mark.func, ast.Attribute)
+            assert mark.func.attr == "parametrize" and isinstance(mark.args[1], (ast.List, ast.Tuple))
+            cases *= len(mark.args[1].elts)
+        count += cases
+    assert count == 12
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -672,7 +709,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -862,6 +899,7 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     assert len(changed_modules) == 10 and changed_modules <= set(MODULES)
     assert len(MODULES) == 26
     assert "pcc.backend.stackmap_host_budget" not in MODULES
+    assert "pcc.frontends.python.worker_resource_host_recovery" not in MODULES
     gate_tree = ast.parse((ROOT / gate.CLOSURE_TEST).read_text())
     closure = next(node for node in gate_tree.body if isinstance(node, ast.FunctionDef)
                    and node.name == "test_worker_size_prior_modules_strict_target_emission")
@@ -889,6 +927,15 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     assert "pcc.backend.stackmap_host_budget" in {
         node.value for node in ast.walk(closure) if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
+    }
+    assert "pcc.frontends.python.worker_resource_host_recovery" in {
+        node.value for node in ast.walk(closure) if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+    }
+    pool = next(node for node in module_loop.body if isinstance(node, ast.If)
+                and ast.unparse(node.test) == "name == 'pcc.frontends.python.worker_process_pool'")
+    assert "worker_resource_host_recovery" in {
+        node.value for node in ast.walk(pool) if isinstance(node, ast.Constant)
     }
     changed = next(node for node in module_loop.body if isinstance(node, ast.If)
                    and ast.unparse(node.test) == "name == 'pcc.backend.x86_64_encode'")
