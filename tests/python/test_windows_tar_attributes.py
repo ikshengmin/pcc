@@ -25,6 +25,192 @@ TARFILE = ROOT / "pcc/stdlib/tarfile.py"
 TARGET = "x86_64-pc-windows-msvc"
 
 
+_TAR_NATIVE_SUCCESS_STDOUT = (
+    "TAR_OPEN_BEGIN\nTAR_OPEN_OK\n"
+    "TAR_PREFLIGHT_BEGIN 0\nTAR_PREFLIGHT_OK 0\n"
+    "TAR_PREFLIGHT_BEGIN 1\nTAR_PREFLIGHT_OK 1\n"
+    "TAR_PREFLIGHT_BEGIN 2\nTAR_PREFLIGHT_OK 2\n"
+    "TAR_EXTRACT_BEGIN\nTAR_EXTRACT_OK\n"
+    "TAR_CLOSE_BEGIN\nTAR_CLOSE_OK\nTAR_METADATA_OK\n"
+)
+
+
+def _tar_attrs_native_program(import_style, source_tar, destination):
+    """One full extraction, with read-only preflight and observable phases.
+
+    OPEN includes __enter__. The extra data_filter pass does not materialize
+    files or replace extractall's own checks. A later EXTRACT failure does
+    not identify chmod, utime or committed-timestamp cleanup specifically.
+    """
+    assert import_style in ("module", "static")
+    imports = ("import tarfile\n\n" if import_style == "module" else
+               "from tarfile import open as tar_open, data_filter as tar_data_filter\n\n")
+    opener = "tarfile.open" if import_style == "module" else "tar_open"
+    preflight = "tarfile.data_filter" if import_style == "module" else "tar_data_filter"
+    return (imports +
+            "def main():\n"
+            "    phase = 'OPEN'\n"
+            "    primary_error = None\n"
+            "    print('TAR_OPEN_BEGIN', flush=True)\n"
+            "    try:\n"
+            f"        with {opener}({str(source_tar)!r}) as archive:\n"
+            "            print('TAR_OPEN_OK', flush=True)\n"
+            "            try:\n"
+            "                phase = 'PREFLIGHT'\n"
+            "                index = 0\n"
+            "                for member in archive.getmembers():\n"
+            "                    print('TAR_PREFLIGHT_BEGIN', index, flush=True)\n"
+            f"                    {preflight}(member, {str(destination)!r})\n"
+            "                    print('TAR_PREFLIGHT_OK', index, flush=True)\n"
+            "                    index += 1\n"
+            "                phase = 'EXTRACT'\n"
+            "                print('TAR_EXTRACT_BEGIN', flush=True)\n"
+            f"                archive.extractall({str(destination)!r})\n"
+            "                print('TAR_EXTRACT_OK', flush=True)\n"
+            "            except BaseException as error:\n"
+            "                primary_error = error\n"
+            "                try:\n"
+            "                    print('TAR_FAILURE', phase, flush=True)\n"
+            "                except BaseException:\n"
+            "                    pass\n"
+            "                raise\n"
+            "            print('TAR_CLOSE_BEGIN', flush=True)\n"
+            "            phase = 'CLOSE'\n"
+            "    except BaseException as error:\n"
+            "        try:\n"
+            "            if primary_error is None:\n"
+            "                print('TAR_FAILURE', phase, flush=True)\n"
+            "            elif error is not primary_error:\n"
+            "                print('TAR_CLOSE_FAILED_AFTER_ERROR', flush=True)\n"
+            "        except BaseException:\n"
+            "            pass\n"
+            "        raise\n"
+            "    print('TAR_CLOSE_OK', flush=True)\n"
+            "    print('TAR_METADATA_OK', flush=True)\n\nmain()\n")
+
+
+def _check_tar_attrs_native_phase_witness():
+    """Execute only the generated main over explicit memory-only fake owners."""
+    for import_style in ("module", "static"):
+        program = ast.parse(_tar_attrs_native_program(import_style, "metadata.tar", "extracted"))
+        main = next(node for node in program.body if isinstance(node, ast.FunctionDef))
+        calls = [node for node in ast.walk(main) if isinstance(node, ast.Call)]
+        extract_calls = [node for node in calls if isinstance(node.func, ast.Attribute)
+                         and node.func.attr == "extractall"]
+        assert len(extract_calls) == 1 and not extract_calls[0].keywords
+        assert ast.literal_eval(extract_calls[0].args[0]) == "extracted"
+        for node in calls:
+            if isinstance(node.func, ast.Name) and node.func.id == "print":
+                assert [(item.arg, ast.literal_eval(item.value)) for item in node.keywords] == [("flush", True)]
+        raises = [node for node in ast.walk(main) if isinstance(node, ast.Raise)]
+        assert len(raises) == 2 and all(node.exc is None and node.cause is None for node in raises)
+        assert not any(isinstance(node, ast.Attribute) and node.attr in ("args", "__traceback__")
+                       for node in ast.walk(main))
+
+        for failure, marker_failure in (
+            (stage, broken) for stage in (
+                None, "open", "enter", "members", "preflight:0", "preflight:1",
+                "preflight:2", "extract", "close", "extract+close",
+            ) for broken in (False, True)
+        ):
+            events, lines = [], []
+            original = RuntimeError("original failure")
+            replacement = OSError("close replacement")
+            diagnostic = RuntimeError("diagnostic output failure")
+            members = [object(), object(), object()]
+
+            class Archive:
+                def __enter__(self):
+                    events.append("enter")
+                    if failure == "enter":
+                        raise original
+                    return self
+
+                def __exit__(self, kind, error, traceback):
+                    events.append(("exit", error))
+                    if failure == "close":
+                        raise original
+                    if failure == "extract+close":
+                        assert error is original
+                        raise replacement
+                    return False
+
+                def getmembers(self):
+                    events.append("members")
+                    if failure == "members":
+                        raise original
+                    return members
+
+                def extractall(self, destination):
+                    assert destination == "extracted"
+                    events.append("extractall")
+                    if failure in ("extract", "extract+close"):
+                        raise original
+
+            def opener(source):
+                assert source == "metadata.tar"
+                events.append("open")
+                if failure == "open":
+                    raise original
+                return Archive()
+
+            def preflight(member, destination):
+                assert destination == "extracted"
+                index = members.index(member)
+                events.append(("preflight", index))
+                if failure == "preflight:" + str(index):
+                    raise original
+                return member
+
+            def marker(*values, flush=False):
+                assert flush is True
+                if marker_failure and values[0] in ("TAR_FAILURE", "TAR_CLOSE_FAILED_AFTER_ERROR"):
+                    raise diagnostic
+                lines.append(" ".join(str(value) for value in values))
+
+            namespace = {"tarfile": SimpleNamespace(open=opener, data_filter=preflight),
+                         "tar_open": opener, "tar_data_filter": preflight, "print": marker}
+            exec(compile(ast.Module(body=[main], type_ignores=[]), "<tar-phase-model>", "exec"), namespace)
+            if failure is None:
+                namespace["main"]()
+                assert "\n".join(lines) + "\n" == _TAR_NATIVE_SUCCESS_STDOUT
+                assert events == ["open", "enter", "members", ("preflight", 0),
+                                  ("preflight", 1), ("preflight", 2), "extractall", ("exit", None)]
+                continue
+            with pytest.raises(BaseException) as caught:
+                namespace["main"]()
+            assert caught.value is (replacement if failure == "extract+close" else original)
+            expected = ["TAR_OPEN_BEGIN"]
+            if failure in ("open", "enter"):
+                expected.append("TAR_FAILURE OPEN")
+                assert events == (["open"] if failure == "open" else ["open", "enter"])
+            else:
+                expected.append("TAR_OPEN_OK")
+                count = 0 if failure == "members" else 3
+                for index in range(count):
+                    expected.append("TAR_PREFLIGHT_BEGIN " + str(index))
+                    if failure == "preflight:" + str(index):
+                        break
+                    expected.append("TAR_PREFLIGHT_OK " + str(index))
+                if failure == "members" or failure.startswith("preflight:"):
+                    expected.append("TAR_FAILURE PREFLIGHT")
+                    assert "extractall" not in events
+                else:
+                    expected.append("TAR_EXTRACT_BEGIN")
+                    assert events.count("extractall") == 1
+                    if failure == "close":
+                        expected.extend(("TAR_EXTRACT_OK", "TAR_CLOSE_BEGIN", "TAR_FAILURE CLOSE"))
+                    else:
+                        expected.append("TAR_FAILURE EXTRACT")
+                        if failure == "extract+close":
+                            expected.append("TAR_CLOSE_FAILED_AFTER_ERROR")
+                assert events[-1] == ("exit", None if failure == "close" else original)
+            if marker_failure:
+                expected = [line for line in expected if not line.startswith(("TAR_FAILURE", "TAR_CLOSE_FAILED_AFTER_ERROR"))]
+            assert lines == expected
+            assert "TAR_METADATA_OK" not in lines
+
+
 class _ExtractError(Exception):
     pass
 
@@ -329,6 +515,8 @@ def test_windows_tar_time_model_utf16_conversion_owns_one_buffer(fail):
 
 
 def test_tar_attrs_model_source_dispatch_is_finite_and_owned():
+    _check_tar_attrs_native_phase_witness()
+
     def assignment(path, name):
         tree = ast.parse((ROOT / path).read_text())
         return next(node.value for node in tree.body if isinstance(node, ast.Assign)
@@ -481,13 +669,7 @@ def test_windows_tar_attrs_native_files_directories_unicode_and_negative_epoch(
                         f"Unix second {seconds}: {error}")
         expected[name] = oracle.stat()
     source = tmp_path / "metadata.py"
-    imports = "import tarfile\n\n" if import_style == "module" else "from tarfile import open as tar_open\n\n"
-    opener = "tarfile.open" if import_style == "module" else "tar_open"
-    source.write_text(imports +
-                      "def main():\n"
-                      f"    with {opener}({str(source_tar)!r}) as archive:\n"
-                      f"        archive.extractall({str(destination)!r})\n"
-                      "    print('TAR_METADATA_OK')\n\nmain()\n", encoding="utf-8")
+    source.write_text(_tar_attrs_native_program(import_style, source_tar, destination), encoding="utf-8")
     executable = tmp_path / "metadata.exe"
     compile_python(str(source), str(executable), backend="self", libpython_mode="off",
                    ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime))
@@ -500,7 +682,8 @@ def test_windows_tar_attrs_native_files_directories_unicode_and_negative_epoch(
     result = run_process_group_timeout([str(executable)], env=dict(os.environ), timeout=30)
     (tmp_path / "execution.stdout").write_text(result.stdout)
     (tmp_path / "execution.stderr").write_text(result.stderr)
-    assert (result.returncode, result.stdout, result.stderr) == (0, "TAR_METADATA_OK\n", "")
+    observed = (result.returncode, result.stdout, result.stderr)
+    assert observed == (0, _TAR_NATIVE_SUCCESS_STDOUT, ""), observed
     for name, mode, seconds in entries:
         actual = (destination / name).stat()
         assert actual.st_mtime_ns == expected[name].st_mtime_ns
