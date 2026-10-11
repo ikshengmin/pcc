@@ -117,6 +117,89 @@ _RECORD = struct.Struct("<QIIIHHBBHI")
 _LOCATION = struct.Struct("<BBHHhiI")
 
 
+class CompactStackMapBudget:
+    """Explicit host allocation estimate under an unchanged external guard.
+
+    The model describes CPython insertion-only sets, not native sets or RSS.
+    Callers provide the verified run allowance and host object-size estimates.
+    No absent budget, allocation estimate or work limit removes a wire check.
+    """
+
+    def __init__(self, limit_bytes, record_visit_limit, *, set_header_bytes,
+                 set_entry_bytes, integer_bytes, metadata_entry_bytes,
+                 allocation_quantum):
+        values = (limit_bytes, record_visit_limit, set_header_bytes,
+                  set_entry_bytes, integer_bytes, metadata_entry_bytes,
+                  allocation_quantum)
+        for value in values:
+            if type(value) is not int or value <= 0 or value > 0x7FFFFFFFFFFFFFFF:
+                raise PreciseStackMapError("invalid compact stack-map budget")
+        self.limit_bytes = limit_bytes
+        self.record_visit_limit = record_visit_limit
+        self.record_visits = 0
+        self.retained_bytes = 0
+        self.set_header_bytes = set_header_bytes
+        self.set_entry_bytes = set_entry_bytes
+        self.integer_bytes = integer_bytes
+        self.metadata_entry_bytes = metadata_entry_bytes
+        self.allocation_quantum = allocation_quantum
+        self._last_records = -1
+        self._last_set_bytes = 0
+
+    def _rounded(self, size):
+        quantum = self.allocation_quantum
+        return ((size + quantum - 1) // quantum) * quantum
+
+    def _set_bytes(self, records):
+        if records == self._last_records:
+            return self._last_set_bytes
+        # CPython 3.13 insertion-only growth: the first used count satisfying
+        # used*5 >= (capacity-1)*3 grows to a power of two STRICTLY above
+        # used*(4 if used<=50000 else 2). Include both tables at every resize.
+        capacity = 8
+        peak = self.set_header_bytes + records * self.integer_bytes
+        while True:
+            threshold = ((capacity - 1) * 3 + 4) // 5
+            if threshold > records:
+                break
+            target = threshold * (2 if threshold > 50000 else 4)
+            following = 8
+            while following <= target:
+                following *= 2
+            peak = max(peak, self.set_header_bytes
+                       + threshold * self.integer_bytes
+                       + self._rounded(capacity * self.set_entry_bytes)
+                       + self._rounded(following * self.set_entry_bytes))
+            capacity = following
+        peak = max(peak, self.set_header_bytes + records * self.integer_bytes
+                   + self._rounded(capacity * self.set_entry_bytes))
+        self._last_records = records
+        self._last_set_bytes = peak
+        return peak
+
+    def check_peak(self, raw_bytes, *, records=0, entries=0, label="stack-map"):
+        for value in (raw_bytes, records, entries, self.retained_bytes):
+            if type(value) is not int or value < 0 or value > 0x7FFFFFFFFFFFFFFF:
+                raise PreciseStackMapError("invalid compact stack-map size")
+        raw_bytes += self.retained_bytes
+        # This check is before potentially large integer products or a set
+        # capacity walk, including malformed caller-supplied counts.
+        if raw_bytes > self.limit_bytes or records > self.limit_bytes // self.integer_bytes:
+            raise PreciseStackMapError("compact stack-map byte budget exceeded: " + label)
+        if entries > self.limit_bytes // self.metadata_entry_bytes:
+            raise PreciseStackMapError("compact stack-map metadata budget exceeded: " + label)
+        estimate = raw_bytes + entries * self.metadata_entry_bytes
+        if records:
+            estimate += self._set_bytes(records)
+        if estimate > self.limit_bytes:
+            raise PreciseStackMapError("compact stack-map byte budget exceeded: " + label)
+
+    def charge_records(self, count):
+        if type(count) is not int or count < 0 or count > self.record_visit_limit - self.record_visits:
+            raise PreciseStackMapError("compact stack-map record work budget exceeded")
+        self.record_visits += count
+
+
 def _native_record_reads_available() -> bool:
     try:
         return ptr_is_null(null()) != 0
@@ -946,6 +1029,7 @@ def validate_stack_map_payload(
     *,
     expected_arch: int | None = None,
     final_image: bool = False,
+    compact_budget=None,
 ) -> None:
     """Validate one wire payload without materialising its decoded map.
 
@@ -977,6 +1061,8 @@ def validate_stack_map_payload(
         raise PreciseStackMapError("too many stack-map functions")
     if table_count > MAX_LOCATIONS:
         raise PreciseStackMapError("too many stack-map locations")
+    if compact_budget is not None:
+        compact_budget.check_peak(len(payload), entries=function_count, label="input")
 
     # Complete the fail-closed structural pass first. Semantic
     # validation below may then index the shared table without turning a
@@ -988,13 +1074,15 @@ def validate_stack_map_payload(
         )
         record_count = function_fields[4]
         total_records += record_count
-        if total_records > MAX_RECORDS:
+        if compact_budget is None and total_records > MAX_RECORDS:
             raise PreciseStackMapError(
                 "too many stack-map records: "
                 + str(total_records)
                 + " exceeds "
                 + str(MAX_RECORDS)
             )
+        if compact_budget is not None:
+            compact_budget.charge_records(record_count)
         for _ in range(record_count):
             if _NATIVE_RECORD_READS:
                 if cursor + RECORD_SIZE > len(payload):
@@ -1028,6 +1116,9 @@ def validate_stack_map_payload(
     if table_end != len(payload):
         raise PreciseStackMapError("trailing bytes after pcc stack-map payload")
 
+    if compact_budget is not None:
+        compact_budget.check_peak(len(payload), records=total_records,
+                                  entries=function_count, label="validation")
     cursor = _HEADER.size
     previous_function_id = -1
     seen_safepoints: set[int] = set()
@@ -1067,6 +1158,8 @@ def validate_stack_map_payload(
             )
 
         previous_pc = -1
+        if compact_budget is not None:
+            compact_budget.charge_records(record_count)
         for _ in range(record_count):
             if _NATIVE_RECORD_READS:
                 if cursor + RECORD_SIZE > table_start:
@@ -1132,6 +1225,10 @@ def validate_stack_map_payload(
                     "suspended flag is reserved for continuation records"
                 )
 
+            # Empty roots retain every record/ID/PC check, but have no root
+            # semantics requiring one cache entry per source index/frame.
+            if compact_budget is not None and location_count == 0:
+                continue
             slice_key = (location_index, location_count, frame_size)
             if slice_key in validated_location_slices:
                 continue
@@ -1141,6 +1238,13 @@ def validate_stack_map_payload(
             validation_locations += location_count
             if validation_locations > MAX_LOCATIONS:
                 raise PreciseStackMapError("too much stack-map location validation work")
+            if compact_budget is not None:
+                compact_budget.check_peak(
+                    len(payload) + location_count * compact_budget.integer_bytes,
+                    records=total_records,
+                    entries=function_count + len(validated_location_slices) + 1,
+                    label="validation cache",
+                )
             start = table_start + location_index * _LOCATION.size
             end = start + location_count * _LOCATION.size
             prior_flags: list[int] = []
@@ -1268,7 +1372,7 @@ def _skip_safepoint_records(
     return end
 
 
-def function_address_offsets(payload: bytes) -> tuple[int, ...]:
+def function_address_offsets(payload: bytes, *, compact_budget=None) -> tuple[int, ...]:
     """Return byte offsets which must carry function-symbol relocations.
 
     Walks the payload with the same header/function/record/location layout
@@ -1289,6 +1393,8 @@ def function_address_offsets(payload: bytes) -> tuple[int, ...]:
         raise PreciseStackMapError("too many stack-map functions")
     if table_count > MAX_LOCATIONS:
         raise PreciseStackMapError("too many stack-map locations")
+    if compact_budget is not None:
+        compact_budget.check_peak(len(payload), entries=function_count, label="input")
     offsets: list[int] = []
     total_records = 0
     for _ in range(function_count):
@@ -1303,7 +1409,7 @@ def function_address_offsets(payload: bytes) -> tuple[int, ...]:
         # function_start + 8 (the function record's second 64-bit word).
         offsets.append(function_start + 8)
         total_records += record_count
-        if total_records > MAX_RECORDS:
+        if compact_budget is None and total_records > MAX_RECORDS:
             raise PreciseStackMapError(
                 "too many stack-map records: "
                 + str(total_records)
@@ -1316,7 +1422,7 @@ def function_address_offsets(payload: bytes) -> tuple[int, ...]:
     return tuple(offsets)
 
 
-def _scan_stack_map_payload(payload: bytes):
+def _scan_stack_map_payload(payload: bytes, *, compact_budget=None):
     """Structurally scan one relocatable stack-map payload.
 
     Returns (function_count, [(function_id, fn_start, fn_end), ...],
@@ -1339,6 +1445,8 @@ def _scan_stack_map_payload(payload: bytes):
         raise PreciseStackMapError("too many stack-map functions")
     if table_count > MAX_LOCATIONS:
         raise PreciseStackMapError("too many stack-map locations")
+    if compact_budget is not None:
+        compact_budget.check_peak(len(payload), entries=function_count, label="input")
     functions: list[tuple[int, int, int]] = []
     total_records = 0
     for _ in range(function_count):
@@ -1348,7 +1456,7 @@ def _scan_stack_map_payload(payload: bytes):
         )
         function_id, _addr, _code, _frame, record_count, _flags = function_fields
         total_records += record_count
-        if total_records > MAX_RECORDS:
+        if compact_budget is None and total_records > MAX_RECORDS:
             raise PreciseStackMapError(
                 "too many stack-map records: "
                 + str(total_records)
@@ -1365,6 +1473,8 @@ def _scan_stack_map_payload(payload: bytes):
 
 def merge_stack_map_payloads(
     payloads: tuple[bytes, ...],
+    *,
+    compact_budget=None,
 ) -> tuple[bytes, tuple[tuple[int, int], ...]]:
     """Merge relocatable stack-map payloads without materializing locations.
 
@@ -1380,6 +1490,12 @@ def merge_stack_map_payloads(
     """
     if not payloads:
         raise PreciseStackMapError("cannot merge an empty stack-map collection")
+    input_bytes = 0
+    if compact_budget is not None:
+        input_bytes = sum(len(payload) for payload in payloads)
+        compact_budget.check_peak(input_bytes, entries=len(payloads), label="merge inputs")
+    function_bytes = 0
+    empty_shape_index = -1
     arch = 0
     functions: list[tuple[int, bytes]] = []
     seen_ids: set[int] = set()
@@ -1392,14 +1508,24 @@ def merge_stack_map_payloads(
     record_size = _RECORD.size
     function_size = _FUNCTION.size
     for payload in payloads:
-        _count, scanned, table_start, table_count = _scan_stack_map_payload(payload)
+        if compact_budget is None:
+            _count, scanned, table_start, table_count = _scan_stack_map_payload(payload)
+        else:
+            _count, scanned, table_start, table_count = _scan_stack_map_payload(
+                payload, compact_budget=compact_budget,
+            )
         source_arch = payload[10]
         if arch and source_arch != arch:
             raise PreciseStackMapError("cannot merge stack maps for different targets")
         arch = source_arch
-        source_table = payload[
-            table_start:table_start + table_count * location_size
-        ]
+        # The legacy path retains its original table snapshot. The explicitly
+        # budgeted path slices only unique keys from the immutable payload;
+        # native memoryview slices copy too and would not remove this copy.
+        source_table = None
+        if compact_budget is None:
+            source_table = payload[
+                table_start:table_start + table_count * location_size
+            ]
         # The source table is immutable for this payload. A record's (index,
         # count) therefore names the same byte range every time it occurs.
         # Real compiler PCOs repeat these ranges at many safepoints; avoid
@@ -1410,7 +1536,7 @@ def merge_stack_map_payloads(
                 raise PreciseStackMapError("too many stack-map functions")
             # The structural scan established these fixed-width boundaries.
             total_records += (fn_end - fn_start - function_size) // record_size
-            if total_records > MAX_RECORDS:
+            if compact_budget is None and total_records > MAX_RECORDS:
                 raise PreciseStackMapError("too many stack-map records")
             if function_id in seen_ids:
                 raise PreciseStackMapError(
@@ -1422,6 +1548,14 @@ def merge_stack_map_payloads(
             # closure's records onto one shared set of root-set shapes; it
             # rewrites the 4-byte index in place and never materializes a
             # location object.
+            function_bytes += fn_end - fn_start
+            if compact_budget is not None:
+                compact_budget.check_peak(
+                    input_bytes + 2 * (_HEADER.size + function_bytes + table_locations * location_size)
+                    + 2 * (fn_end - fn_start),
+                    entries=4 * (len(functions) + 1) + len(source_index_cache) + len(table_index),
+                    label="merge function",
+                )
             blob = bytearray(payload[fn_start:fn_end])
             # Little-endian field reads/writes are open-coded rather than
             # routed through `struct`: `struct.pack_into` and friends have no
@@ -1437,6 +1571,8 @@ def merge_stack_map_payloads(
                 | (blob[27] << 24)
             )
             cursor = function_size
+            if compact_budget is not None:
+                compact_budget.charge_records(record_count)
             for _ in range(record_count):
                 count = blob[cursor + 20] | (blob[cursor + 21] << 8)
                 index = (
@@ -1450,7 +1586,11 @@ def merge_stack_map_payloads(
                         "stack-map record names locations outside its table"
                     )
                 source_key = (index << 16) | count
-                if source_key in source_index_cache:
+                if compact_budget is not None and count == 0:
+                    if empty_shape_index < 0:
+                        empty_shape_index = table_locations
+                    merged_index = empty_shape_index
+                elif source_key in source_index_cache:
                     merged_index = source_index_cache[source_key]
                 else:
                     # Charge each distinct source range before copying/hashing.
@@ -1458,8 +1598,20 @@ def merge_stack_map_payloads(
                     merge_locations += count
                     if merge_locations > MAX_LOCATIONS:
                         raise PreciseStackMapError("too much stack-map location merge work")
+                    if compact_budget is not None:
+                        compact_budget.check_peak(
+                            input_bytes + 2 * (_HEADER.size + function_bytes
+                                               + (table_locations + count) * location_size)
+                            + 2 * len(blob) + count * location_size,
+                            entries=4 * (len(functions) + 1) + len(source_index_cache) + len(table_index) + 2,
+                            label="merge cache",
+                        )
                     start = index * location_size
-                    key = bytes(source_table[start:start + count * location_size])
+                    if compact_budget is None:
+                        key = bytes(source_table[start:start + count * location_size])
+                    else:
+                        start += table_start
+                        key = bytes(payload[start:start + count * location_size])
                     if key in table_index:
                         merged_index = table_index[key]
                     else:
@@ -1470,6 +1622,10 @@ def merge_stack_map_payloads(
                         if table_locations > MAX_LOCATIONS:
                             raise PreciseStackMapError("too many stack-map locations")
                     source_index_cache[source_key] = merged_index
+                    if compact_budget is not None:
+                        # A duplicate equal key is not owned by table_index.
+                        # Retire its transient bytes before the next record.
+                        key = None
                 blob[cursor + 28] = merged_index & 0xFF
                 blob[cursor + 29] = (merged_index >> 8) & 0xFF
                 blob[cursor + 30] = (merged_index >> 16) & 0xFF
@@ -1480,6 +1636,19 @@ def merge_stack_map_payloads(
             # repeatedly copying a mutable prefix.
             blob[8:16] = b"\0" * 8
             functions.append((function_id, bytes(blob)))
+            if compact_budget is not None:
+                del blob
+    if compact_budget is not None:
+        # These per-input owners are no longer needed at the joined-output
+        # high-water point; root chunks remain owned by table/table_index.
+        source_index_cache = None
+        scanned = None
+        key = None
+        seen_ids = None
+        compact_budget.check_peak(
+            input_bytes + 2 * (_HEADER.size + function_bytes + table_locations * location_size),
+            entries=5 * len(functions) + len(table_index), label="merge join",
+        )
     functions.sort(key=lambda item: item[0])
     total_locations = table_locations
     header = _HEADER.pack(

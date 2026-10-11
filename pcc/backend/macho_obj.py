@@ -292,7 +292,7 @@ _PROVEN_RELOCATION_SHAPES = {
 _ADDEND_MAX = 0x7FFFFF
 
 
-def _scan_stack_map_section(data: bytes) -> tuple[int, list[int]]:
+def _scan_stack_map_section(data: bytes, *, compact_budget=None) -> tuple[int, list[int]]:
     """Structurally scan a stack-map payload; return (count, address offsets).
 
     Mirrors the link's scan: validates magic/version/arch/counts/sizes and
@@ -303,9 +303,17 @@ def _scan_stack_map_section(data: bytes) -> tuple[int, list[int]]:
         _scan_stack_map_payload,
     )
 
-    count, scanned, _table_start, _table_count = _scan_stack_map_payload(
-        bytes(data)
-    )
+    if compact_budget is None:
+        count, scanned, _table_start, _table_count = _scan_stack_map_payload(
+            bytes(data)
+        )
+    else:
+        compact_budget.check_peak(
+            2 * len(data), label="Mach-O section stack-map snapshot",
+        )
+        count, scanned, _table_start, _table_count = _scan_stack_map_payload(
+            bytes(data), compact_budget=compact_budget,
+        )
     return count, [fn_start + 8 for _fid, fn_start, _fn_end in scanned]
 
 
@@ -323,7 +331,9 @@ def _align_up(value: int, align_log2: int) -> int:
     return (value + mask) & ~mask
 
 
-def _validate_section(sec: Section, *, relocations=None, relocation_count=None) -> None:
+def _validate_section(
+    sec: Section, *, relocations=None, relocation_count=None, compact_budget=None,
+) -> None:
     # Internal indexed-object validation supplies a fresh row iterator and its
     # exact count. Ordinary object emission continues to use the stored tuple.
     rows_origin = "parameter"
@@ -444,7 +454,12 @@ def _validate_section(sec: Section, *, relocations=None, relocation_count=None) 
             # (assemble worker + merge), so materializing them here dominated
             # link time.  The complete semantic decode+validation still guards
             # the merged table at the final executable boundary.
-            _scanned, address_offsets = _scan_stack_map_section(sec.data)
+            if compact_budget is None:
+                _scanned, address_offsets = _scan_stack_map_section(sec.data)
+            else:
+                _scanned, address_offsets = _scan_stack_map_section(
+                    sec.data, compact_budget=compact_budget,
+                )
         except PreciseStackMapError as exc:
             raise MachOEmitError(f"invalid __pcc_stackmaps payload: {exc}") from exc
         # A row that is not a Relocation used to surface as a bare

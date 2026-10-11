@@ -526,6 +526,7 @@ def _validate_source_sections(
     relocation_source=None,
     relocation_counts=None,
     proven_relocations=None,
+    compact_budget=None,
 ) -> None:
     # ``proven_relocations[i]`` leading records of section i were validated
     # at packed decode against their input section, and the merge that
@@ -540,7 +541,17 @@ def _validate_source_sections(
         seen: set[str] = set()
         seen_zerofill_segments: set[str] = set()
         for section_index, section in enumerate(sections):
-            if relocation_source is None:
+            if compact_budget is not None:
+                if relocation_source is None:
+                    _validate_section(section, compact_budget=compact_budget)
+                else:
+                    _validate_section(
+                        section,
+                        relocations=relocation_source(section_index),
+                        relocation_count=relocation_counts[section_index],
+                        compact_budget=compact_budget,
+                    )
+            elif relocation_source is None:
                 _validate_section(section)
             else:
                 _validate_section(
@@ -1319,16 +1330,26 @@ class OwnedMergedSourceView:
     seven-million-record relocation graph before executable layout.
     """
 
-    def __init__(self, sections, *, undefined=(), weak_undefined=(), proven_relocations=None) -> None:
+    def __init__(
+        self, sections, *, undefined=(), weak_undefined=(),
+        proven_relocations=None, compact_budget=None,
+    ) -> None:
         source_sections = tuple(sections)
         undefined_names = tuple(undefined)
         weak_names = set(weak_undefined)
         if not weak_names.issubset(undefined_names):
             raise NativeObjectError("weak references must name undefined symbols")
-        _validate_source_sections(
-            source_sections, undefined_names,
-            proven_relocations=proven_relocations,
-        )
+        if compact_budget is None:
+            _validate_source_sections(
+                source_sections, undefined_names,
+                proven_relocations=proven_relocations,
+            )
+        else:
+            _validate_source_sections(
+                source_sections, undefined_names,
+                proven_relocations=proven_relocations,
+                compact_budget=compact_budget,
+            )
         self._source_sections = source_sections
         self._payloads = [section.data for section in source_sections]
 

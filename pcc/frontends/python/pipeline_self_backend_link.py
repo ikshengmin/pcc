@@ -162,6 +162,13 @@ def _owned_macho_link_in_process(
     from pcc.backend.macho_internal_inputs import read_internal_input_manifest
 
     try:
+        compact_budget = None
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            from pcc.backend.stackmap_host_budget import (
+                host_compact_stackmap_budget,
+            )
+            compact_budget = host_compact_stackmap_budget()
         started = time.monotonic()
         phases = {"assemble_pool": 0.0, "decode_pco": 0.0, "prepare_link": 0.0,
                   "sign": 0.0, "validate": 0.0, "write": 0.0}
@@ -201,9 +208,15 @@ def _owned_macho_link_in_process(
         phases["decode_pco"] += (before_link - before_extras) * 1000.0
         # These inputs are private to this link invocation. Transfer them so
         # the merge can retire decoded graphs before constructing its result.
-        pending = [prepare_executable_object(
-            objects, archives=archives, _consume_inputs=True, _source_view=True,
-        )]
+        if compact_budget is None:
+            pending = [prepare_executable_object(
+                objects, archives=archives, _consume_inputs=True, _source_view=True,
+            )]
+        else:
+            pending = [prepare_executable_object(
+                objects, archives=archives, _consume_inputs=True, _source_view=True,
+                compact_budget=compact_budget,
+            )]
         objects.clear()
         archives.clear()
         sign_times = [0.0, 0.0]
@@ -214,15 +227,29 @@ def _owned_macho_link_in_process(
             elif event == "sign_end":
                 sign_times[1] += (time.monotonic() - sign_times[0]) * 1000.0
 
-        image = link_prepared_executable(pending.pop(), entry="_main", phase_callback=link_phase)
+        if compact_budget is None:
+            image = link_prepared_executable(
+                pending.pop(), entry="_main", phase_callback=link_phase,
+            )
+        else:
+            image = link_prepared_executable(
+                pending.pop(), entry="_main", phase_callback=link_phase,
+                compact_budget=compact_budget,
+            )
         before_validate = time.monotonic()
         phases["sign"] = sign_times[1]
         phases["prepare_link"] = (before_validate - before_link) * 1000.0 - sign_times[1]
         signature = parse_signature(image)
         if signature.identifier != b"pcc-linked" or signature.dataoff + signature.datasize != len(image):
             raise SelfBackendLinkError("owned linker produced an invalid signature boundary")
-        # A slice of the finished image would copy all of it at the link's
-        # high-water mark; hashing only reads, so view it instead.
+        # CPython can hash this view without a full image slice. Native
+        # memoryview slicing can still copy, so do not assume one buffer in
+        # the conservative raw-byte estimate.
+        if compact_budget is not None:
+            compact_budget.check_peak(
+                2 * len(image) + signature.datasize,
+                label="owned Mach-O signature verification snapshot",
+            )
         expected_signature = build_signature(
             memoryview(image)[:signature.dataoff], identifier=signature.identifier,
             exec_seg_base=signature.exec_seg_base, exec_seg_limit=signature.exec_seg_limit,

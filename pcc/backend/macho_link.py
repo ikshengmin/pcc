@@ -825,6 +825,7 @@ def _coerce_link_objects(
 def link_relocatable_native(
     objects: list[LinkInput], *, _consume_inputs: bool = False,
     _source_view: bool = False,
+    compact_budget=None,
 ):
     """Merge inputs into pcc's indexed object without a Mach-O round trip."""
     if not _consume_inputs:
@@ -843,6 +844,10 @@ def link_relocatable_native(
     # first table followed by trailing garbage.  Decode each input and rebuild
     # one deterministic table after all native symbols have been inspected.
     stack_map_payloads: list[bytes] = []
+    stack_map_snapshot_bytes = 0
+    input_raw_bytes = 0
+    if compact_budget is not None:
+        input_raw_bytes = sum(_link_input_size_hint(value) for value in objects)
     stack_map_symbol_by_function_id: dict[int, str] = {}
     # (merged section, relocation, this input's section addresses). Defer
     # section targets so rewriting never searches or removes from the large
@@ -954,13 +959,30 @@ def link_relocatable_native(
             if key == ("__DATA", "__pcc_stackmaps"):
                 if sec_flags != spec.S_REGULAR or sec_align < 3:
                     raise LinkError("input stack-map section has invalid flags/alignment")
-                payload = bytes(_section_payload(
-                    obj, sec, sec_index, section_addrs,
-                ))
                 try:
-                    _function_count, scanned, _tstart, _tcount = (
-                        _scan_stack_map_payload(payload)
-                    )
+                    if compact_budget is not None:
+                        # Keep the source, any temporary payload and the new
+                        # immutable snapshot in the known-buffer estimate.
+                        compact_budget.check_peak(
+                            input_raw_bytes
+                            + sum(part.data_size for part in merged.values())
+                            + stack_map_snapshot_bytes + 2 * sec_size,
+                            entries=len(stack_map_symbol_by_function_id),
+                            label="Mach-O input stack-map snapshot",
+                        )
+                    payload = bytes(_section_payload(
+                        obj, sec, sec_index, section_addrs,
+                    ))
+                    if compact_budget is None:
+                        _function_count, scanned, _tstart, _tcount = (
+                            _scan_stack_map_payload(payload)
+                        )
+                    else:
+                        _function_count, scanned, _tstart, _tcount = (
+                            _scan_stack_map_payload(
+                                payload, compact_budget=compact_budget,
+                            )
+                        )
                 except PreciseStackMapError as exc:
                     raise LinkError(f"input stack-map section is malformed: {exc}") from exc
                 stack_relocations = _read_relocations(
@@ -1021,6 +1043,8 @@ def link_relocatable_native(
                     )
                     referenced.add(relocation.symbol)
                 stack_map_payloads.append(payload)
+                if compact_budget is not None:
+                    stack_map_snapshot_bytes += len(payload)
                 continue
             if key not in merged:
                 merged[key] = _MergedSection(key[0], key[1], sec_flags)
@@ -1171,9 +1195,29 @@ def link_relocatable_native(
 
     if stack_map_payloads:
         try:
-            stack_payload, stack_address_offsets = merge_stack_map_payloads(
-                tuple(stack_map_payloads)
-            )
+            if compact_budget is None:
+                stack_payload, stack_address_offsets = merge_stack_map_payloads(
+                    tuple(stack_map_payloads)
+                )
+            else:
+                compact_budget.check_peak(
+                    input_raw_bytes
+                    + sum(len(section.data) for section in merged.values())
+                    + 3 * stack_map_snapshot_bytes,
+                    entries=len(stack_map_symbol_by_function_id),
+                    label="Mach-O merged stack-map buffers",
+                )
+                previous_retained_bytes = compact_budget.retained_bytes
+                compact_budget.retained_bytes = (
+                    previous_retained_bytes + input_raw_bytes
+                    + sum(len(section.data) for section in merged.values())
+                )
+                try:
+                    stack_payload, stack_address_offsets = merge_stack_map_payloads(
+                        tuple(stack_map_payloads), compact_budget=compact_budget,
+                    )
+                finally:
+                    compact_budget.retained_bytes = previous_retained_bytes
         except PreciseStackMapError as exc:
             raise LinkError(f"merged stack-map table is invalid: {exc}") from exc
         # The merged payload owns its bytes. Input table snapshots can be
@@ -1314,6 +1358,12 @@ def link_relocatable_native(
         ))
     try:
         if _source_view:
+            if compact_budget is not None:
+                return OwnedMergedSourceView(
+                    out_sections, undefined=unresolved, weak_undefined=weak_unresolved,
+                    proven_relocations=tuple(proven_relocations),
+                    compact_budget=compact_budget,
+                )
             return OwnedMergedSourceView(
                 out_sections, undefined=unresolved, weak_undefined=weak_unresolved,
                 proven_relocations=tuple(proven_relocations),

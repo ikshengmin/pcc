@@ -328,6 +328,29 @@ class _Out:
         return self.zerofill_size if self.zerofill_size else len(self.data)
 
 
+def _compact_source_raw_bytes(merged) -> int:
+    """Known retained source buffers, without projecting any payloads."""
+    if isinstance(merged, OwnedMergedSourceView):
+        return (
+            sum(len(payload) for payload in merged._payloads)
+            + sum(len(rows) for rows in merged._raw_relocations)
+        )
+    if isinstance(merged, NativeObject):
+        # The ordinary link view can normalize section-target pointers into
+        # independent mutable payloads while retaining the source object.
+        return 2 * sum(len(section.data) for section in merged.sections)
+    return 0
+
+
+def _check_compact_copy_peak(compact_budget, raw_bytes: int, label: str) -> None:
+    # A conservative sum of known buffers supplements the factory's sampled
+    # baseline. It is not a census or proof of all Python allocations/RSS.
+    try:
+        compact_budget.check_peak(raw_bytes, label=label)
+    except PreciseStackMapError as exc:
+        raise LinkError(f"Mach-O compact stack-map budget rejected: {exc}") from exc
+
+
 def _external_symbol_state(
     objects: list[LinkInput],
 ) -> tuple[set[str], set[str]]:
@@ -365,6 +388,7 @@ def prepare_executable_object(
     _consume_inputs: bool = False,
     _source_view: bool = False,
     archive_selections=None,
+    compact_budget=None,
 ):
     """Resolve a final link job into its reusable relocatable state.
 
@@ -429,11 +453,19 @@ def prepare_executable_object(
     # Even one input goes through the relocatable core: that is where CPU,
     # symbol-provenance, companion-relocation, and section-target contracts
     # are normalized and checked. A one-object fast path must not bypass them.
-    merged = link_relocatable_native(
-        resolved_objects,
-        _consume_inputs=_consume_inputs,
-        _source_view=_source_view,
-    )
+    if compact_budget is None:
+        merged = link_relocatable_native(
+            resolved_objects,
+            _consume_inputs=_consume_inputs,
+            _source_view=_source_view,
+        )
+    else:
+        merged = link_relocatable_native(
+            resolved_objects,
+            _consume_inputs=_consume_inputs,
+            _source_view=_source_view,
+            compact_budget=compact_budget,
+        )
     if semantic_manifest is not None:
         # Imported lazily so the ordinary linker path and compiled-stage
         # closure do not acquire semantic-layout policy or JSON machinery.
@@ -508,6 +540,7 @@ def link_prepared_executable(
     minos: tuple[int, int] = (12, 0),
     identifier: bytes = b"pcc-linked",
     phase_callback=None,
+    compact_budget=None,
 ) -> bytes:
     """Finalize one validated, already-merged object as an executable.
 
@@ -515,9 +548,19 @@ def link_prepared_executable(
     ``NativeObject``: external Mach-O and archive validation must happen in
     :func:`prepare_executable_object`, never be bypassed by a cache hit.
     """
-    plan = _prepare_executable_image(merged, entry=entry, minos=minos,
-                                     identifier=identifier)
-    return _finish_executable_image(plan, identifier, phase_callback)
+    if compact_budget is None:
+        plan = _prepare_executable_image(merged, entry=entry, minos=minos,
+                                         identifier=identifier)
+        return _finish_executable_image(plan, identifier, phase_callback)
+    retained_source_bytes = _compact_source_raw_bytes(merged)
+    plan = _prepare_executable_image(
+        merged, entry=entry, minos=minos, identifier=identifier,
+        compact_budget=compact_budget,
+    )
+    return _finish_executable_image(
+        plan, identifier, phase_callback, compact_budget=compact_budget,
+        retained_source_bytes=retained_source_bytes,
+    )
 
 
 def _prepare_executable_image(
@@ -527,12 +570,16 @@ def _prepare_executable_image(
     minos: tuple[int, int] = (12, 0),
     identifier: bytes = b"pcc-linked",
     link_receipt=None,
+    compact_budget=None,
 ):
     """Resolve addresses into immutable output regions, without allocating an image."""
 
     minos = _validate_minos(minos)
     if not isinstance(merged, (NativeObject, OwnedMergedSourceView)):
         raise LinkError("prepared executable input must be a NativeObject")
+    source_raw_bytes = 0
+    if compact_budget is not None:
+        source_raw_bytes = _compact_source_raw_bytes(merged)
     # The owned source view already implements the linker-facing interface.
     # Keep the two concrete routes explicit for native codegen: a union-typed
     # method call can otherwise bind NativeObject.link_view to the source view.
@@ -689,6 +736,16 @@ def _prepare_executable_image(
         # obj.data[0:size] for it would splice the mach header + __text into
         # __bss and the section's globals would read instruction bytes. It
         # occupies vm space only; dyld zeroes it.
+        if compact_budget is not None and not is_zf:
+            # Count the original buffers, mutable output accumulated so far,
+            # and both a possible payload slice and its new mutable copy.
+            _check_compact_copy_peak(
+                compact_budget,
+                source_raw_bytes
+                + sum(len(part.data) for part in text_out + data_out)
+                + 2 * sec["size"],
+                "Mach-O mutable section output",
+            )
         if source_view:
             payload = OwnedMergedSourceView.section_data(obj, sec)
         else:
@@ -1180,11 +1237,38 @@ def _prepare_executable_image(
         if (out.segname, out.sectname) != ("__DATA", "__pcc_stackmaps"):
             continue
         try:
-            validate_stack_map_payload(
-                bytes(out.data),
-                expected_arch=ARCH_AARCH64,
-                final_image=True,
-            )
+            if compact_budget is None:
+                validate_stack_map_payload(
+                    bytes(out.data),
+                    expected_arch=ARCH_AARCH64,
+                    final_image=True,
+                )
+            else:
+                surrounding_raw_bytes = (
+                    source_raw_bytes
+                    + sum(len(part.data) for part in text_sections + data_out)
+                    + len(got.data)
+                )
+                compact_budget.check_peak(
+                    surrounding_raw_bytes + len(out.data),
+                    label="Mach-O final stack-map validation snapshot",
+                )
+                previous_retained_bytes = compact_budget.retained_bytes
+                # The validator charges its new immutable snapshot once;
+                # add the already-live source and mutable output buffers so
+                # they share one allowance with the global ID-set/cache peak.
+                compact_budget.retained_bytes = (
+                    previous_retained_bytes + surrounding_raw_bytes
+                )
+                try:
+                    validate_stack_map_payload(
+                        bytes(out.data),
+                        expected_arch=ARCH_AARCH64,
+                        final_image=True,
+                        compact_budget=compact_budget,
+                    )
+                finally:
+                    compact_budget.retained_bytes = previous_retained_bytes
         except PreciseStackMapError as exc:
             raise LinkError(f"final stack-map table is invalid: {exc}") from exc
 
@@ -1560,6 +1644,21 @@ def _prepare_executable_image(
         "flags": mh_flags, "reserved": 0,
     })
 
+    if compact_budget is not None:
+        # The mutable output and all immutable OutputRegion snapshots coexist
+        # until this preparation frame returns. Source buffers are borrowed.
+        output_raw_bytes = sum(
+            len(out.data)
+            for out in text_sections + ([got] if code_imports else []) + data_out
+        )
+        metadata_raw_bytes = (
+            len(header) + len(cmds) + len(fixups) + len(nlists) + len(strtab)
+        )
+        _check_compact_copy_peak(
+            compact_budget,
+            source_raw_bytes + 2 * output_raw_bytes + 3 * metadata_raw_bytes,
+            "Mach-O OutputRegion snapshots",
+        )
     regions = [OutputRegion(0, header + bytes(cmds), "header/load commands")]
     for out in text_sections + ([got] if code_imports else []) + data_out:
         if out.zerofill_size:
@@ -1577,7 +1676,10 @@ def _prepare_executable_image(
     return sig_off, regions, sig_size, text_filesize
 
 
-def _finish_executable_image(plan, identifier, phase_callback) -> bytes:
+def _finish_executable_image(
+    plan, identifier, phase_callback, *, compact_budget=None,
+    retained_source_bytes: int = 0,
+) -> bytes:
     """Materialise, sign and return the image in one buffer.
 
     ``sig_size`` is predicted before layout is frozen -- the check below is
@@ -1589,6 +1691,13 @@ def _finish_executable_image(plan, identifier, phase_callback) -> bytes:
     the exact moment the link is already at its high-water mark.
     """
     sig_off, regions, sig_size, text_filesize = plan
+    if compact_budget is not None:
+        _check_compact_copy_peak(
+            compact_budget,
+            retained_source_bytes + 2 * sum(len(region.data) for region in regions)
+            + sig_off + sig_size,
+            "Mach-O image materialization",
+        )
     try:
         image = materialize_output_buffer(sig_off, regions, reserve=sig_size)
     except ParallelLinkError as exc:
@@ -1597,6 +1706,13 @@ def _finish_executable_image(plan, identifier, phase_callback) -> bytes:
     # allocating hash pages and the signature.
     regions.clear()
 
+    if compact_budget is not None:
+        # Do not rely on memoryview slicing being zero-copy in native code.
+        _check_compact_copy_peak(
+            compact_budget,
+            retained_source_bytes + 2 * len(image) + sig_size,
+            "Mach-O signature input snapshot",
+        )
     if phase_callback is not None:
         phase_callback("sign_begin")
     try:
@@ -1617,4 +1733,10 @@ def _finish_executable_image(plan, identifier, phase_callback) -> bytes:
     # allocation plus copy at the link's high-water mark.  Returning bytes
     # keeps the public contract -- parse_signature and spec.parse_object
     # downstream both require it.
+    if compact_budget is not None:
+        _check_compact_copy_peak(
+            compact_budget,
+            retained_source_bytes + 2 * len(image) + len(blob),
+            "Mach-O final image bytes freeze",
+        )
     return bytes(image)

@@ -47,14 +47,16 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
     assert gate.HOST_FILES[20] == gate.SCALAR_PROJECTION_TEST
     assert gate.HOST_FILES[21] == gate.RSS_PUBLISHER_TEST
     assert gate.HOST_FILES[22] == gate.ELF_RELOCATION_CONTEXT_TEST
-    assert sum(gate.HOST_COUNTS) == 1039 and sum(gate.HOST_COUNTS[:22]) == 1023
+    assert gate.HOST_FILES[23:] == (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST)
+    assert sum(gate.HOST_COUNTS) == 1194 and sum(gate.HOST_COUNTS[:23]) == 1039
+    assert sum(gate.HOST_COUNTS[:22]) == 1023
     assert sum(gate.HOST_COUNTS[:21]) == 968
     assert sum(gate.HOST_COUNTS[:20]) == 879
     assert sum(gate.HOST_COUNTS[:18]) == 844
@@ -77,6 +79,43 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
                and node.value.id == "X87_INPUTS" for node in ast.walk(identity))
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    assert gate.STACKMAP_BUDGET_INPUTS == (
+        'tests/python/test_compact_stackmap_processing_budget.py',
+        'tests/python/test_stackmap_host_budget.py',
+        'pcc/backend/precise_stackmap.py',
+        'pcc/backend/macho_link.py',
+        'pcc/backend/macho_exec.py',
+        'pcc/backend/native_object.py',
+        'pcc/backend/macho_obj.py',
+        'pcc/frontends/python/pipeline_self_backend_link.py',
+        'pcc/backend/stackmap_host_budget.py',
+    )
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "STACKMAP_BUDGET_INPUTS" for node in ast.walk(identity))
+    for path in (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST):
+        assert workflow.count('      - "' + path + '"') == 2
+    for path, expected in ((gate.STACKMAP_BUDGET_TEST, 136), (gate.STACKMAP_HOST_BUDGET_TEST, 19)):
+        count = 0
+        module = ast.parse((ROOT / path).read_text())
+        consumer_values = [node.value for node in module.body
+                           if isinstance(node, ast.Assign) and len(node.targets) == 1
+                           and isinstance(node.targets[0], ast.Name)
+                           and node.targets[0].id == "_CONSUMERS"]
+        for node in module.body:
+            if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+                continue
+            cases = 1
+            for mark in node.decorator_list:
+                assert isinstance(mark, ast.Call) and isinstance(mark.func, ast.Attribute)
+                assert mark.func.attr == "parametrize"
+                values = mark.args[1]
+                if isinstance(values, ast.Name):
+                    assert values.id == "_CONSUMERS" and len(consumer_values) == 1
+                    values = consumer_values[0]
+                assert isinstance(values, (ast.List, ast.Tuple))
+                cases *= len(values.elts)
+            count += cases
+        assert count == expected
     assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
                and node.value.id == "ASSEMBLY_PROFILE_INPUTS" for node in ast.walk(identity))
     for path in (*gate.X87_INPUTS[:6], *gate.ASSEMBLY_PROFILE_INPUTS):
@@ -597,7 +636,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -768,6 +807,12 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
           "pcc.backend.self_backend_aarch64_darwin_ops",
           "pcc.backend.self_backend_aarch64_darwin_prologue",
           "pcc.backend.self_backend_aarch64_darwin_returns",
+          'pcc.backend.precise_stackmap',
+          'pcc.backend.macho_link',
+          'pcc.backend.macho_exec',
+          'pcc.backend.native_object',
+          'pcc.backend.macho_obj',
+          'pcc.frontends.python.pipeline_self_backend_link',
           "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
           "pcc.backend.elf_aarch64_relocations",
           "pcc.backend.x86_64_encode")
@@ -778,7 +823,8 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     reference = json.loads((ROOT / "tests/scalar_arena_projection_reference.json").read_text())
     changed_modules = {site["path"][:-3].replace("/", ".") for site in reference["sites"]}
     assert len(changed_modules) == 10 and changed_modules <= set(MODULES)
-    assert len(MODULES) == 19
+    assert len(MODULES) == 25
+    assert "pcc.backend.stackmap_host_budget" not in MODULES
     gate_tree = ast.parse((ROOT / gate.CLOSURE_TEST).read_text())
     closure = next(node for node in gate_tree.body if isinstance(node, ast.FunctionDef)
                    and node.name == "test_worker_size_prior_modules_strict_target_emission")
@@ -799,6 +845,10 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
             "_replace_worker_resource", "publish_worker_resource", "py_os_replace"} <= rss_strings
     assert "worker_resource_host_windows" in rss_strings
     assert "pcc.frontends.python.worker_resource_host_windows" in {
+        node.value for node in ast.walk(closure) if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+    }
+    assert "pcc.backend.stackmap_host_budget" in {
         node.value for node in ast.walk(closure) if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
     }
@@ -1175,7 +1225,7 @@ def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypa
             assert json.loads(path.read_text()) == receipt
             assert receipt["progress"][-1] == {"phase": phase, "state": state,
                                                 "module": module, "elapsed_s": 1.25}
-    assert len(publications) == 8 + 4 * len(closure.MODULES) == 84
+    assert len(publications) == 8 + 4 * len(closure.MODULES) == 108
     assert receipt["status"] == "RUNNING" and receipt["sources"] == {"original": "sha"}
     assert receipt["codegen_sha256"] == "original-codegen"
     assert receipt["modules"] == {"done": {"object_sha256": "bytes"}}

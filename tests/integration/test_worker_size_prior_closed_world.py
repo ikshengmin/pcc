@@ -26,6 +26,12 @@ MODULES = tuple("pcc.frontends.python." + name for name in (
       "pcc.backend.self_backend_aarch64_darwin_ops",
       "pcc.backend.self_backend_aarch64_darwin_prologue",
       "pcc.backend.self_backend_aarch64_darwin_returns",
+      'pcc.backend.precise_stackmap',
+      'pcc.backend.macho_link',
+      'pcc.backend.macho_exec',
+      'pcc.backend.native_object',
+      'pcc.backend.macho_obj',
+      'pcc.frontends.python.pipeline_self_backend_link',
       "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
       "pcc.backend.elf_aarch64_relocations",
       "pcc.backend.x86_64_encode")
@@ -229,7 +235,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
     primary_failed = False
     receipt = {"status": "RUNNING", "target": target, "sources": digests,
                "codegen_sha256": codegen_checksum(), "modules": {},
-               "scope": "public strict full closure and nineteen actual target objects",
+               "scope": f"public strict full closure and {len(MODULES)} actual target objects",
                "native_execution": False,
                "compile_profile": _bounded_compile_profile(compile_profile, complete=False)}
     output = tmp_path / "closed-world.ll"
@@ -255,6 +261,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         names = [match.group(1) for match in markers]
         assert len(names) == len(set(names)) and set(MODULES) <= set(names)
         assert "pcc.frontends.python.worker_resource_host_windows" not in names
+        assert "pcc.backend.stackmap_host_budget" not in names
         whole = verify_ir_text(
             text, progress=lambda phase, state: _record_closed_world_progress(
                 receipt_path, receipt, started,
