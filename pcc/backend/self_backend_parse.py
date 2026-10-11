@@ -281,6 +281,42 @@ def _canonical_pointer_type(pointee: TypeDesc, *, type_context=None) -> TypeDesc
     return result
 
 
+def _indexed_result_pointer_type(pointee, *, type_context=None) -> TypeDesc:
+    """Reuse only leaf identities already owned by this module context."""
+    token = ""
+    if (type_context is not None and type(pointee) is TypeDesc
+            and type(pointee.kind) is str and type(pointee.width) is int):
+        if pointee.kind == "void":
+            token = "void"
+        elif pointee.kind == "int":
+            if pointee.width == 1:
+                token = "i1"
+            elif pointee.width == 8:
+                token = "i8"
+            elif pointee.width == 16:
+                token = "i16"
+            elif pointee.width == 32:
+                token = "i32"
+            elif pointee.width == 64:
+                token = "i64"
+            elif pointee.width == 128:
+                token = "i128"
+        elif pointee.kind == "fp":
+            if pointee.width == 32:
+                token = "float"
+            elif pointee.width == 64:
+                token = "double"
+            elif pointee.width == 80:
+                token = "x86_fp80"
+        elif pointee.kind == "ptr":
+            token = "ptr"
+        if token and type_context.type_cache.get(token) is pointee:
+            return _canonical_pointer_type(pointee, type_context=type_context)
+    # Fresh aggregates and non-leaf pointers must not acquire a new owner in
+    # pointer_type_cache. Keep their original construction and ID order.
+    return pointee.ptr()
+
+
 def _canonical_leaf_type(token: str, *, type_context=None) -> TypeDesc:
     """Return the per-module identity for one non-recursive LLVM type.
 
@@ -4272,7 +4308,7 @@ def _parse_indexed_hot_instruction(
         indexed_seed.publish_alloca_type_id(dest_value_id, allocated_type_id)
         indexed_seed.publish_value_type_id(
             dest_value_id,
-            indexed_seed.intern_type(alloca_type.ptr()),
+            indexed_seed.intern_type(_indexed_result_pointer_type(alloca_type, type_context=type_context)),
         )
         indexed_seed.append_instruction(
             "alloca",
@@ -4386,7 +4422,7 @@ def _parse_indexed_hot_instruction(
             raise BackendUnavailable(
                 "self backend getelementptr requires at least one index"
             )
-        result_type_id = indexed_seed.intern_type(current_type.ptr())
+        result_type_id = indexed_seed.intern_type(_indexed_result_pointer_type(current_type, type_context=type_context))
         record_id = len(indexed_seed.gep_scalars) // 8
         indexed_seed.gep_scalars.append4(
             indexed_seed.intern_type(base_type),

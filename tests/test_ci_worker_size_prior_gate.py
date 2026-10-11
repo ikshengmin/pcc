@@ -44,7 +44,8 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[6] == "tests/python/test_compiled_default_pass_tier.py"
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
-    assert gate.HOST_COUNTS == (80, 3, 145, 0, 4, 29, 25, 7, 11, 20, 21)
+    assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
+    assert gate.HOST_COUNTS == (80, 3, 145, 0, 4, 29, 25, 7, 11, 49, 20, 21)
     command = gate.pytest_command(tmp_path, gate.HOST_FILES)
     assert command[:4] == [sys.executable, "-m", "pytest", "-x"]
     assert command[-len(gate.HOST_FILES):] == list(gate.HOST_FILES)
@@ -500,7 +501,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 145, 0, 4, 29, 25, 7, 11, 20, 21) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 145, 0, 4, 29, 25, 7, 11, 49, 20, 21) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
